@@ -12,6 +12,7 @@ import { AgentRole, AgentRoleUtils } from '@/lib/ai/agent-roles';
 import { RoleSelector } from '@/components/ai/RoleSelector';
 import { conversationState } from '@/lib/ai/conversation-state';
 import { useLayoutStore } from '@/stores/useLayoutStore';
+import { useDriveStore } from '@/hooks/useDrive';
 
 
 interface ProviderSettings {
@@ -75,6 +76,14 @@ const GlobalAssistantView: React.FC = () => {
     }
   };
 
+  // Get drives from store
+  const { drives, fetchDrives } = useDriveStore();
+  
+  // Ensure drives are loaded
+  useEffect(() => {
+    fetchDrives();
+  }, [fetchDrives]);
+  
   // Extract location context from pathname
   useEffect(() => {
     const extractLocationContext = async () => {
@@ -88,34 +97,16 @@ const GlobalAssistantView: React.FC = () => {
           
           // Fetch drive information
           if (driveId) {
-            try {
-              const driveResponse = await fetch(`/api/drives/${driveId}`, {
-                credentials: 'include',
-              });
-              if (driveResponse.ok) {
-                const driveData = await driveResponse.json();
-                currentDrive = {
-                  id: driveData.id,
-                  slug: driveData.slug,
-                  name: driveData.name
-                };
-              } else {
-                // Fallback if API call fails
-                currentDrive = {
-                  slug: driveId,
-                  name: driveId.charAt(0).toUpperCase() + driveId.slice(1).replace(/-/g, ' '),
-                  id: `drive-${driveId}`
-                };
-              }
-            } catch (error) {
-              console.error('Failed to fetch drive data:', error);
-              // Fallback
+            // Get drive information from store
+            const driveData = drives.find(d => d.id === driveId);
+            if (driveData) {
               currentDrive = {
-                slug: driveId,
-                name: driveId.charAt(0).toUpperCase() + driveId.slice(1).replace(/-/g, ' '),
-                id: `drive-${driveId}`
+                id: driveData.id,
+                slug: driveData.slug,
+                name: driveData.name
               };
             }
+            // If drive not found in store, set to null (no fallback with fake data)
           }
           
           // At drive root level, no specific page is selected
@@ -135,7 +126,7 @@ const GlobalAssistantView: React.FC = () => {
     };
 
     extractLocationContext();
-  }, [pathname]);
+  }, [pathname, drives]);
 
   // Watch for URL parameter changes and load the appropriate conversation
   useEffect(() => {

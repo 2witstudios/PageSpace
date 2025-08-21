@@ -47,14 +47,9 @@ export default function MCPSettingsView() {
   const [copied, setCopied] = useState(false);
   const [selectedToken, setSelectedToken] = useState('');
   const [tokenMap, setTokenMap] = useState<Map<string, string>>(new Map());
-  const [baseUrl, setBaseUrl] = useState('');
 
   useEffect(() => {
     loadTokens();
-    // Set the base URL from the current window location
-    if (typeof window !== 'undefined') {
-      setBaseUrl(window.location.origin);
-    }
   }, []);
 
   const loadTokens = async () => {

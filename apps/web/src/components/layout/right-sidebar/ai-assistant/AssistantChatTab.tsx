@@ -10,6 +10,7 @@ import { CompactMessageRenderer } from '@/components/ai/CompactMessageRenderer';
 import { AgentRole, AgentRoleUtils } from '@/lib/ai/agent-roles';
 import { AgentRoleDropdownCompact } from '@/components/ai/AgentRoleDropdown';
 import { conversationState } from '@/lib/ai/conversation-state';
+import { useDriveStore } from '@/hooks/useDrive';
 
 
 interface ProviderSettings {
@@ -63,6 +64,14 @@ const AssistantChatTab: React.FC = () => {
     }
   };
 
+  // Get drives from store
+  const { drives, fetchDrives } = useDriveStore();
+  
+  // Ensure drives are loaded
+  useEffect(() => {
+    fetchDrives();
+  }, [fetchDrives]);
+  
   // Extract location context from pathname
   useEffect(() => {
     const extractLocationContext = async () => {
@@ -75,36 +84,17 @@ const AssistantChatTab: React.FC = () => {
           let currentPage = null;
           let currentDrive = null;
           
-          // Fetch drive information
+          // Get drive information from store
           if (driveId) {
-            try {
-              const driveResponse = await fetch(`/api/drives/${driveId}`, {
-                credentials: 'include',
-              });
-              if (driveResponse.ok) {
-                const driveData = await driveResponse.json();
-                currentDrive = {
-                  id: driveData.id,
-                  slug: driveData.slug,
-                  name: driveData.name
-                };
-              } else {
-                // Fallback if API call fails
-                currentDrive = {
-                  slug: driveId,
-                  name: driveId.charAt(0).toUpperCase() + driveId.slice(1).replace(/-/g, ' '),
-                  id: `drive-${driveId}`
-                };
-              }
-            } catch (error) {
-              console.error('Failed to fetch drive data:', error);
-              // Fallback
+            const driveData = drives.find(d => d.id === driveId);
+            if (driveData) {
               currentDrive = {
-                slug: driveId,
-                name: driveId.charAt(0).toUpperCase() + driveId.slice(1).replace(/-/g, ' '),
-                id: `drive-${driveId}`
+                id: driveData.id,
+                slug: driveData.slug,
+                name: driveData.name
               };
             }
+            // If drive not found in store, set to null (no fallback with fake data)
           }
           
           // Fetch page information if we have a page ID in the path
@@ -201,7 +191,7 @@ const AssistantChatTab: React.FC = () => {
     };
 
     extractLocationContext();
-  }, [pathname]);
+  }, [pathname, drives]);
 
   // Initialize conversation will be handled in the main initialization effect
 

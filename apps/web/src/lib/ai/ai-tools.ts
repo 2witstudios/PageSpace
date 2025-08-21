@@ -94,6 +94,7 @@ export const pageSpaceTools = {
         return {
           success: true,
           drives: uniqueDrives.map(drive => ({
+            id: drive.id,
             slug: drive.slug,
             title: drive.name,
             description: '',
@@ -105,7 +106,7 @@ export const pageSpaceTools = {
             driveNames: uniqueDrives.map(d => d.name)
           },
           nextSteps: uniqueDrives.length > 0 ? [
-            'Use list_pages to explore the structure of any workspace',
+            'Use list_pages with both driveSlug and driveId from above to explore the structure of any workspace',
             'Use read_page to examine specific documents for context'
           ] : ['Create a new workspace if needed']
         };
