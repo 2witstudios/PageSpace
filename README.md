@@ -40,7 +40,7 @@ Team Member B: *Sees the conversation and analysis in real-time*
 ### External AI edits your workspace
 ```bash
 # Install MCP server
-npm install -g pagespace-mcp
+npm install -g pagespace-mcp@latest
 
 # In Claude Desktop
 Claude: "Update all meeting notes in my PageSpace"
@@ -78,7 +78,7 @@ pnpm db:migrate
 # Start development server
 pnpm dev
 
-# Visit http://localhost:3000
+# Visit https://beta.pagespace.ai
 ```
 
 ---
@@ -90,7 +90,7 @@ PageSpace includes an MCP server that lets Claude Desktop and other AI tools dir
 ### Quick Setup
 1. **Install the MCP server**
    ```bash
-   npm install -g pagespace-mcp
+   npm install -g pagespace-mcp@latest
    ```
 
 2. **Get your token** from [beta.pagespace.ai/dashboard/settings/mcp](https://beta.pagespace.ai/dashboard/settings/mcp)
@@ -100,8 +100,8 @@ PageSpace includes an MCP server that lets Claude Desktop and other AI tools dir
    {
      "mcpServers": {
        "pagespace": {
-         "command": "node",
-         "args": ["~/.npm-global/lib/node_modules/pagespace-mcp/index.js"],
+         "command": "npx",
+         "args": ["-y", "pagespace-mcp@latest"],
          "env": {
            "PAGESPACE_API_URL": "https://beta.pagespace.ai",
            "PAGESPACE_AUTH_TOKEN": "your-mcp-token"
