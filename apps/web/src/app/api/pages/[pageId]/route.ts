@@ -1,0 +1,422 @@
+import { NextResponse } from 'next/server';
+import { pages, mentions, chatMessages, drives, db, and, eq, inArray, mcpTokens, isNull } from '@pagespace/db';
+import { decodeToken, canUserViewPage, canUserEditPage, canUserDeletePage } from '@pagespace/lib/server';
+import { parse } from 'cookie';
+import { z } from "zod/v4";
+import * as cheerio from 'cheerio';
+import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
+import { loggers } from '@pagespace/lib/logger-config';
+import { trackPageOperation } from '@pagespace/lib/activity-tracker';
+
+// Content sanitization utility
+function sanitizeEmptyContent(content: string): string {
+  if (!content || content.trim() === '') {
+    return '';
+  }
+  
+  // Check if content is the default empty TipTap document structure
+  const trimmedContent = content.trim();
+  
+  // HTML format: <p></p> or <p><br></p> or similar empty paragraph variations
+  const emptyParagraphPatterns = [
+    /^<p><\/p>$/,
+    /^<p><br><\/p>$/,
+    /^<p>\s*<\/p>$/,
+    /^<p><br\s*\/><\/p>$/
+  ];
+  
+  for (const pattern of emptyParagraphPatterns) {
+    if (pattern.test(trimmedContent)) {
+      return '';
+    }
+  }
+  
+  // JSON format: {"type":"doc","content":[{"type":"paragraph"}]} or similar
+  try {
+    const parsed = JSON.parse(trimmedContent);
+    if (parsed.type === 'doc' && 
+        Array.isArray(parsed.content) && 
+        parsed.content.length === 1 &&
+        parsed.content[0].type === 'paragraph' &&
+        (!parsed.content[0].content || parsed.content[0].content.length === 0)) {
+      return '';
+    }
+  } catch {
+    // Not JSON, continue with HTML checks
+  }
+  
+  return content;
+}
+
+type DatabaseType = typeof db;
+type TransactionType = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+// Helper to get drive id from page ID
+async function getDriveIdFromPageId(pageId: string): Promise<string | null> {
+  const result = await db.select({ id: drives.id })
+    .from(pages)
+    .leftJoin(drives, eq(pages.driveId, drives.id))
+    .where(eq(pages.id, pageId))
+    .limit(1);
+  
+  return result[0]?.id || null;
+}
+
+// Validate MCP token and return user ID
+async function validateMCPToken(token: string): Promise<string | null> {
+  try {
+    if (!token || !token.startsWith('mcp_')) {
+      return null;
+    }
+
+    const tokenData = await db.query.mcpTokens.findFirst({
+      where: and(
+        eq(mcpTokens.token, token),
+        isNull(mcpTokens.revokedAt)
+      ),
+    });
+
+    if (!tokenData) {
+      return null;
+    }
+
+    await db
+      .update(mcpTokens)
+      .set({ lastUsed: new Date() })
+      .where(eq(mcpTokens.id, tokenData.id));
+
+    return tokenData.userId;
+  } catch (error) {
+    loggers.api.error('MCP token validation error:', error as Error);
+    return null;
+  }
+}
+
+// Get user ID from either cookie or MCP token
+async function getUserId(req: Request): Promise<string | null> {
+  // Check for Bearer token (MCP authentication) first
+  const authHeader = req.headers.get('authorization');
+  if (authHeader?.startsWith('Bearer mcp_')) {
+    const mcpToken = authHeader.substring(7); // Remove "Bearer " prefix
+    const userId = await validateMCPToken(mcpToken);
+    if (userId) {
+      return userId;
+    }
+  }
+
+  // Fall back to cookie authentication
+  const cookieHeader = req.headers.get('cookie');
+  const cookies = parse(cookieHeader || '');
+  const accessToken = cookies.accessToken;
+
+  if (!accessToken) {
+    return null;
+  }
+
+  const decoded = await decodeToken(accessToken);
+  return decoded ? decoded.userId : null;
+}
+
+function findMentionNodes(content: unknown): string[] {
+  const ids: string[] = [];
+  const contentStr = Array.isArray(content) ? content.join('\n') : String(content);
+  
+  try {
+    // Parse HTML content with cheerio
+    const $ = cheerio.load(contentStr);
+    
+    // Find all <a> tags with data-page-id attribute
+    $('a[data-page-id]').each((_, element) => {
+      const pageId = $(element).attr('data-page-id');
+      if (pageId) {
+        ids.push(pageId);
+      }
+    });
+    
+  } catch (error) {
+    loggers.api.error('Error parsing HTML content for mentions:', error as Error);
+    // Fallback to original regex method for backward compatibility
+    const regex = /@\[.*?\]\((.*?)\)/g;
+    let match;
+    while ((match = regex.exec(contentStr)) !== null) {
+      ids.push(match[1]);
+    }
+  }
+  
+  return ids;
+}
+
+// Helper function to sync mentions
+async function syncMentions(sourcePageId: string, content: unknown, tx: TransactionType | DatabaseType) {
+  const mentionedPageIds = findMentionNodes(content);
+
+  const existingMentionsQuery = await tx.select({ targetPageId: mentions.targetPageId }).from(mentions).where(eq(mentions.sourcePageId, sourcePageId));
+  const existingMentionIds = new Set(existingMentionsQuery.map(m => m.targetPageId));
+
+  const toCreate = mentionedPageIds.filter(id => !existingMentionIds.has(id));
+  const toDelete = Array.from(existingMentionIds).filter(id => !mentionedPageIds.includes(id));
+
+  if (toCreate.length > 0) {
+    await tx.insert(mentions).values(toCreate.map(targetPageId => ({
+      sourcePageId,
+      targetPageId,
+    })));
+  }
+
+  if (toDelete.length > 0) {
+    await tx.delete(mentions).where(and(
+      eq(mentions.sourcePageId, sourcePageId),
+      inArray(mentions.targetPageId, toDelete)
+    ));
+  }
+}
+
+// Helper function for recursive trashing
+async function recursivelyTrash(pageId: string, tx: TransactionType | DatabaseType) {
+    const children = await tx.select({ id: pages.id }).from(pages).where(eq(pages.parentId, pageId));
+
+    for (const child of children) {
+        await recursivelyTrash(child.id, tx);
+    }
+
+    await tx.update(pages).set({ isTrashed: true, trashedAt: new Date() }).where(eq(pages.id, pageId));
+}
+
+export async function GET(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
+  const { pageId } = await params;
+  const userId = await getUserId(req);
+
+  if (!userId) {
+    return new NextResponse("Unauthorized", { status: 401 });
+  }
+
+  try {
+    // Check user permissions first
+    const canView = await canUserViewPage(userId, pageId);
+    if (!canView) {
+      return new NextResponse("Forbidden", { status: 403 });
+    }
+
+    // Fetch the primary page object
+    const page = await db.query.pages.findFirst({
+      where: eq(pages.id, pageId),
+    });
+
+    if (!page) {
+      return new NextResponse("Not Found", { status: 404 });
+    }
+
+    // Fetch related data in parallel for better performance
+    const [children, messages] = await Promise.all([
+      db.query.pages.findMany({ 
+        where: eq(pages.parentId, pageId) 
+      }),
+      db.query.chatMessages.findMany({ 
+        where: and(eq(chatMessages.pageId, pageId), eq(chatMessages.isActive, true)),
+        with: { user: true },
+        orderBy: (messages, { asc }) => [asc(messages.createdAt)],
+      })
+    ]);
+
+    const pageWithDetails = {
+      ...page,
+      content: sanitizeEmptyContent(page.content || ''),
+      children,
+      messages
+    };
+
+    return NextResponse.json(pageWithDetails);
+  } catch (error) {
+    loggers.api.error('Error fetching page details:', error as Error);
+    return NextResponse.json({ error: 'Failed to fetch page details' }, { status: 500 });
+  }
+}
+
+const patchSchema = z.object({
+  title: z.string().optional(),
+  content: z.string().optional(),
+  aiProvider: z.string().optional(),
+  aiModel: z.string().optional(),
+});
+
+export async function PATCH(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
+  const { pageId } = await params;
+  const userId = await getUserId(req);
+
+  if (!userId) {
+    return new NextResponse("Unauthorized", { status: 401 });
+  }
+
+  try {
+    // Check if user has edit permission
+    const canEdit = await canUserEditPage(userId, pageId);
+    if (!canEdit) {
+      return NextResponse.json({ 
+        error: 'You need edit permission to modify this page',
+        details: 'Contact the page owner to request edit access'
+      }, { status: 403 });
+    }
+    const body = await req.json();
+    loggers.api.debug(`--- Updating Page ${pageId} ---`);
+    loggers.api.debug('Request Body:', body);
+    const safeBody = patchSchema.parse(body);
+    loggers.api.debug('Validated Body:', safeBody);
+
+    await db.transaction(async (tx) => {
+      // Sanitize content before saving to remove empty TipTap default structures
+      const updatedBody = { ...safeBody };
+      if (updatedBody.content) {
+        const originalContent = updatedBody.content;
+        updatedBody.content = sanitizeEmptyContent(updatedBody.content);
+        loggers.api.debug('Content sanitized:', { 
+          original: originalContent.substring(0, 100) + (originalContent.length > 100 ? '...' : ''),
+          sanitized: updatedBody.content.substring(0, 100) + (updatedBody.content.length > 100 ? '...' : '')
+        });
+      }
+      
+      await tx.update(pages).set({ ...updatedBody }).where(eq(pages.id, pageId));
+      loggers.api.debug('Database Update Successful');
+
+      if (updatedBody.content) {
+        await syncMentions(pageId, updatedBody.content, tx);
+        loggers.api.debug('Mention Sync Successful');
+      }
+    });
+
+    // Refetch the page with all details to ensure the client gets the full object
+    const [updatedPage, children, messages] = await Promise.all([
+      db.query.pages.findFirst({
+        where: eq(pages.id, pageId),
+      }),
+      db.query.pages.findMany({ 
+        where: eq(pages.parentId, pageId) 
+      }),
+      db.query.chatMessages.findMany({ 
+        where: and(eq(chatMessages.pageId, pageId), eq(chatMessages.isActive, true)),
+        with: { user: true },
+        orderBy: (messages, { asc }) => [asc(messages.createdAt)],
+      })
+    ]);
+
+    const updatedPageWithDetails = {
+      ...updatedPage,
+      children,
+      messages
+    };
+
+    // Broadcast page update events
+    const driveId = await getDriveIdFromPageId(pageId);
+    if (driveId) {
+      // Broadcast title update (affects tree structure)
+      if (safeBody.title) {
+        await broadcastPageEvent(
+          createPageEventPayload(driveId, pageId, 'updated', {
+            title: safeBody.title,
+            parentId: updatedPage?.parentId
+          })
+        );
+      }
+      
+      // Broadcast content update (for document synchronization)
+      if (safeBody.content) {
+        await broadcastPageEvent(
+          createPageEventPayload(driveId, pageId, 'content-updated', {
+            title: updatedPage?.title,
+            parentId: updatedPage?.parentId
+          })
+        );
+      }
+    }
+
+    // Track page update
+    trackPageOperation(userId, 'update', pageId, {
+      updatedFields: Object.keys(safeBody),
+      hasContentUpdate: !!safeBody.content,
+      hasTitleUpdate: !!safeBody.title
+    });
+
+    return NextResponse.json(updatedPageWithDetails);
+  } catch (error) {
+    loggers.api.error('Error updating page:', error as Error);
+    if (error instanceof z.ZodError) {
+      return NextResponse.json({ error: error.issues }, { status: 400 });
+    }
+    return NextResponse.json({ error: 'Failed to update page' }, { status: 500 });
+  }
+}
+
+const deleteSchema = z.object({
+  trash_children: z.boolean().optional(),
+}).nullable();
+
+export async function DELETE(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
+  const { pageId } = await params;
+  const userId = await getUserId(req);
+
+  if (!userId) {
+    return new NextResponse("Unauthorized", { status: 401 });
+  }
+
+  try {
+    // Check if user has delete permission
+    const canDelete = await canUserDeletePage(userId, pageId);
+    if (!canDelete) {
+      return NextResponse.json({ 
+        error: 'You need delete permission to remove this page',
+        details: 'Contact the page owner to request delete access'
+      }, { status: 403 });
+    }
+    const body = await req.json();
+    const parsedBody = deleteSchema.parse(body);
+    const trashChildren = parsedBody?.trash_children ?? false;
+
+    // Get page info and drive slug before deletion
+    const pageInfo = await db.query.pages.findFirst({
+      where: eq(pages.id, pageId),
+      with: {
+        drive: {
+          columns: { id: true }
+        }
+      }
+    });
+
+    await db.transaction(async (tx) => {
+      if (trashChildren) {
+        await recursivelyTrash(pageId, tx);
+      } else {
+        const page = await tx.query.pages.findFirst({ where: eq(pages.id, pageId) });
+        await tx.update(pages).set({
+          parentId: page?.parentId,
+          originalParentId: pageId
+        }).where(eq(pages.parentId, pageId));
+
+        await tx.update(pages).set({ isTrashed: true, trashedAt: new Date() }).where(eq(pages.id, pageId));
+      }
+    });
+
+    // Broadcast page deletion event
+    if (pageInfo?.drive?.id) {
+      await broadcastPageEvent(
+        createPageEventPayload(pageInfo.drive.id, pageId, 'trashed', {
+          title: pageInfo.title,
+          parentId: pageInfo.parentId
+        })
+      );
+    }
+
+    // Track page deletion/trash
+    trackPageOperation(userId, 'trash', pageId, {
+      trashChildren: trashChildren,
+      pageTitle: pageInfo?.title,
+      pageType: pageInfo?.type
+    });
+
+    return NextResponse.json({ message: 'Page moved to trash successfully.' });
+  } catch (error) {
+    loggers.api.error('Error deleting page:', error as Error);
+    if (error instanceof z.ZodError) {
+      return NextResponse.json({ error: error.issues }, { status: 400 });
+    }
+    return NextResponse.json({ error: 'Failed to delete page' }, { status: 500 });
+  }
+}

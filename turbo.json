@@ -1,0 +1,63 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "tasks": {
+    "dev": {
+      "cache": false,
+      "persistent": true,
+      "dependsOn": ["^db:generate", "^db:migrate"]
+    },
+    "build": {
+      "dependsOn": ["^build", "^db:generate"],
+      "inputs": ["$TURBO_DEFAULT$", ".env*"],
+      "outputs": [".next/**", "!.next/cache/**", "dist/**"]
+    },
+    "lint": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", ".eslintrc*", "eslint.config.*"]
+    },
+    "db:generate": {
+      "cache": false,
+      "inputs": ["src/schema/**", "drizzle.config.ts"]
+    },
+    "db:migrate": {
+      "cache": false,
+      "dependsOn": ["db:generate"]
+    },
+    "db:seed": {
+      "cache": false,
+      "dependsOn": ["db:migrate"]
+    },
+    "start": {
+      "dependsOn": ["build"]
+    },
+    "typecheck": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", "tsconfig*.json"]
+    }
+  },
+  "globalDependencies": [
+    ".env*",
+    "docker-compose.yml",
+    "drizzle.config.ts"
+  ],
+  "globalEnv": [
+    "DATABASE_URL",
+    "JWT_SECRET",
+    "JWT_ISSUER",
+    "JWT_AUDIENCE",
+    "CSRF_SECRET",
+    "ENCRYPTION_KEY",
+    "ENCRYPTION_SALT",
+    "WEB_APP_URL",
+    "INTERNAL_REALTIME_URL",
+    "PORT",
+    "CORS_ORIGIN",
+    "OLLAMA_BASE_URL",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GOOGLE_AI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "OPENROUTER_DEFAULT_API_KEY",
+    "NEXT_PUBLIC_*"
+  ]
+}

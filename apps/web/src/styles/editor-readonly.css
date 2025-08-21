@@ -1,0 +1,50 @@
+/* Hide Monaco editor's read-only alert tooltip */
+.monaco-alert {
+  display: none !important;
+  visibility: hidden !important;
+}
+
+/* Read-only editor styles that still allow text selection */
+.editor-readonly .monaco-editor {
+  cursor: text !important;
+}
+
+.editor-readonly .monaco-editor .view-line {
+  cursor: text !important;
+  user-select: text !important;
+}
+
+/* Allow normal text selection in read-only mode */
+.editor-readonly .monaco-editor .selected-text {
+  background-color: rgba(0, 120, 215, 0.3) !important;
+}
+
+/* TipTap read-only styles - allow selection */
+.tiptap[contenteditable="false"],
+.tiptap[contenteditable="false"] * {
+  cursor: text !important;
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  -moz-user-select: text !important;
+  -ms-user-select: text !important;
+}
+
+/* ProseMirror specific - force text selection */
+.ProseMirror[contenteditable="false"],
+.ProseMirror[contenteditable="false"] * {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  -moz-user-select: text !important;
+  -ms-user-select: text !important;
+}
+
+/* Allow normal selection highlighting in read-only TipTap */
+.tiptap[contenteditable="false"] *::selection,
+.ProseMirror[contenteditable="false"] *::selection {
+  background-color: rgba(0, 120, 215, 0.3) !important;
+}
+
+.tiptap[contenteditable="false"] *::-moz-selection,
+.ProseMirror[contenteditable="false"] *::-moz-selection {
+  background-color: rgba(0, 120, 215, 0.3) !important;
+}

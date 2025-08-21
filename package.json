@@ -1,0 +1,31 @@
+{
+  "name": "pagespace-local",
+  "private": true,
+  "license": "AGPL-3.0",
+  "scripts": {
+    "dev": "turbo dev",
+    "dev:db": "docker compose up postgres migrate seed -d",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "typecheck": "turbo typecheck",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "pnpm --filter @pagespace/db db:migrate"
+  },
+  "devDependencies": {
+    "@turbo/gen": "^2.5.5",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^24.0.13",
+    "dotenv": "^17.2.0",
+    "drizzle-kit": "^0.23.2",
+    "turbo": "^2.5.5",
+    "typescript": "^5.8.3"
+  },
+  "packageManager": "pnpm@10.13.1",
+  "pnpm": {
+    "overrides": {
+      "drizzle-orm": "^0.32.2"
+    }
+  },
+  "dependencies": {
+  }
+}

@@ -1,0 +1,252 @@
+import React, { useState } from 'react';
+import { 
+  FolderOpen, 
+  Plus, 
+  Edit, 
+  Trash, 
+  Database,
+  Eye,
+  Search,
+  Move,
+  RotateCcw,
+  FilePlus,
+  FileUp,
+  FileDown,
+  ChevronRight,
+  ChevronDown,
+  CheckCircle,
+  AlertCircle,
+  Loader2,
+  Clock
+} from 'lucide-react';
+
+
+interface TreeItem {
+  path: string;
+  title: string;
+  type: string;
+  children: TreeItem[];
+}
+
+interface ToolPart {
+  type: string;
+  toolName?: string;
+  toolCallId?: string;
+  state?: 'input-streaming' | 'input-available' | 'output-available' | 'output-error' | 'done' | 'streaming';
+  input?: unknown;
+  output?: unknown;
+  errorText?: string;
+}
+
+interface CompactToolCallRendererProps {
+  part: ToolPart;
+}
+
+/**
+ * Compact tool call renderer for sidebar - minimal and space-efficient
+ */
+export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = ({ part }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
+  
+  const toolName = part.toolName || part.type?.replace('tool-', '');
+  const state = part.state;
+  const input = part.input;
+  const output = part.output;
+  const error = part.errorText;
+
+  // Tool-specific icons (smaller)
+  const getToolIcon = (toolName: string) => {
+    const iconClass = "h-3 w-3";
+    switch (toolName) {
+      case 'list_drives':
+        return <Database className={iconClass} />;
+      case 'list_pages':
+        return <FolderOpen className={iconClass} />;
+      case 'read_page':
+        return <Eye className={iconClass} />;
+      case 'replace_lines':
+      case 'insert_lines':
+      case 'delete_lines':
+        return <Edit className={iconClass} />;
+      case 'append_to_page':
+        return <FileDown className={iconClass} />;
+      case 'prepend_to_page':
+        return <FileUp className={iconClass} />;
+      case 'create_page':
+        return <Plus className={iconClass} />;
+      case 'rename_page':
+        return <FilePlus className={iconClass} />;
+      case 'trash_page':
+      case 'trash_page_with_children':
+        return <Trash className={iconClass} />;
+      case 'restore_page':
+        return <RotateCcw className={iconClass} />;
+      case 'move_page':
+        return <Move className={iconClass} />;
+      case 'list_trash':
+        return <Trash className={iconClass} />;
+      default:
+        return <Search className={iconClass} />;
+    }
+  };
+
+  // Get status icon
+  const getStatusIcon = () => {
+    const iconClass = "h-3 w-3";
+    switch (state) {
+      case 'output-available':
+      case 'done':
+        return error ? <AlertCircle className={`${iconClass} text-red-500`} /> : <CheckCircle className={`${iconClass} text-green-500`} />;
+      case 'input-available':
+      case 'streaming':
+        return <Loader2 className={`${iconClass} text-blue-500 animate-spin`} />;
+      case 'output-error':
+        return <AlertCircle className={`${iconClass} text-red-500`} />;
+      default:
+        return <Clock className={`${iconClass} text-gray-400`} />;
+    }
+  };
+
+  // Format tool name for display (shorter)
+  const formatToolName = (toolName: string) => {
+    const nameMap: Record<string, string> = {
+      'list_drives': 'List Drives',
+      'list_pages': 'List Pages',
+      'read_page': 'Read',
+      'replace_lines': 'Replace',
+      'insert_lines': 'Insert',
+      'delete_lines': 'Delete',
+      'append_to_page': 'Append',
+      'prepend_to_page': 'Prepend',
+      'create_page': 'Create',
+      'rename_page': 'Rename',
+      'trash_page': 'Trash',
+      'trash_page_with_children': 'Trash All',
+      'restore_page': 'Restore',
+      'move_page': 'Move',
+      'list_trash': 'List Trash'
+    };
+    
+    return nameMap[toolName] || toolName
+      .split('_')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
+  };
+
+  // Get compact summary
+  const getCompactSummary = (): string => {
+    if (error) return 'Failed';
+    
+    if (state === 'output-available' || state === 'done') {
+      try {
+        const result = typeof output === 'string' ? JSON.parse(output) : output;
+        
+        // Very compact summaries
+        if (toolName === 'list_drives' && result.drives) {
+          return `${result.drives.length} drives`;
+        }
+        
+        if (toolName === 'list_pages' && result.tree) {
+          const pageCount = countPages(result.tree || []);
+          return `${pageCount} pages`;
+        }
+        
+        if (toolName === 'read_page') {
+          const title = result.title || 'page';
+          return title.length > 20 ? title.substring(0, 17) + '...' : title;
+        }
+        
+        if (result.message) {
+          const msg = result.message;
+          return msg.length > 30 ? msg.substring(0, 27) + '...' : msg;
+        }
+        
+        if (result.title) {
+          return result.title.length > 20 ? result.title.substring(0, 17) + '...' : result.title;
+        }
+        
+        return 'Complete';
+      } catch {
+        return 'Done';
+      }
+    }
+    
+    if (state === 'input-available' || state === 'streaming') {
+      return 'Running...';
+    }
+    
+    return 'Pending';
+  };
+
+  // Helper function to count pages in tree structure
+  const countPages = (items: TreeItem[]): number => {
+    return items.reduce((count, item) => {
+      return count + 1 + (item.children ? countPages(item.children) : 0);
+    }, 0);
+  };
+
+  // Render compact details when expanded
+  const renderExpandedDetails = () => {
+    if (!isExpanded) return null;
+    
+    return (
+      <div className="mt-1 p-1.5 bg-gray-50 dark:bg-gray-800/50 rounded text-[10px] space-y-1">
+        {input ? (
+          <div className="space-y-0.5">
+            <div className="font-medium text-gray-600 dark:text-gray-400">Input:</div>
+            <pre className="text-gray-500 dark:text-gray-500 overflow-x-auto whitespace-pre-wrap break-all">
+              {JSON.stringify(typeof input === 'string' ? JSON.parse(input) : input, null, 2)}
+            </pre>
+          </div>
+        ) : null}
+        
+        {output ? (
+          <div className="space-y-0.5">
+            <div className="font-medium text-gray-600 dark:text-gray-400">Output:</div>
+            <pre className="text-gray-500 dark:text-gray-500 overflow-x-auto whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
+              {(() => {
+                try {
+                  const result = typeof output === 'string' ? JSON.parse(output) : output;
+                  
+                  // Special handling for read_page content
+                  if (toolName === 'read_page' && result.content) {
+                    return result.content.slice(0, 200) + (result.content.length > 200 ? '...' : '');
+                  }
+                  
+                  return JSON.stringify(result, null, 2);
+                } catch {
+                  return typeof output === 'string' ? output : JSON.stringify(output, null, 2);
+                }
+              })()}
+            </pre>
+          </div>
+        ) : null}
+        
+        {error ? (
+          <div className="p-1 bg-red-50 dark:bg-red-900/20 rounded">
+            <div className="text-red-600 dark:text-red-400">{error}</div>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
+  return (
+    <div className="bg-gray-50 dark:bg-gray-800/30 rounded p-1.5 text-[11px]">
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="w-full flex items-center space-x-1.5 text-left hover:bg-gray-100 dark:hover:bg-gray-700/30 rounded p-0.5 transition-colors"
+      >
+        {isExpanded ? <ChevronDown className="h-3 w-3 flex-shrink-0" /> : <ChevronRight className="h-3 w-3 flex-shrink-0" />}
+        {getToolIcon(toolName)}
+        <span className="font-medium truncate flex-1">{formatToolName(toolName)}</span>
+        {getStatusIcon()}
+        <span className="text-gray-500 dark:text-gray-400 truncate max-w-[80px]">
+          {getCompactSummary()}
+        </span>
+      </button>
+      
+      {renderExpandedDetails()}
+    </div>
+  );
+};

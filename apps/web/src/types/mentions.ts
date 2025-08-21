@@ -1,0 +1,52 @@
+// Enhanced mention types for the flexible mention system
+
+export type MentionType = 'page' | 'user';
+
+export interface BaseMention {
+  id: string;
+  label: string;
+  type: MentionType;
+}
+
+export interface PageMentionData {
+  pageType: 'DOCUMENT' | 'FOLDER' | 'AI_CHAT' | 'CHANNEL';
+  driveId: string;
+}
+
+// User mentions don't need additional data
+// The label (user name) is sufficient
+export type UserMentionData = Record<string, never>;
+
+export type MentionData = 
+  | PageMentionData 
+  | UserMentionData;
+
+export interface EnhancedMention extends BaseMention {
+  data: MentionData;
+}
+
+// Type-specific mention interfaces
+export interface PageMention extends BaseMention {
+  type: 'page';
+  data: PageMentionData;
+}
+
+export interface UserMention extends BaseMention {
+  type: 'user';
+  data: UserMentionData;
+}
+
+// Union type for all specific mention types
+export type TypedMention = 
+  | PageMention 
+  | UserMention;
+
+// For search results and suggestions
+export interface MentionSuggestion {
+  id: string;
+  label: string;
+  type: MentionType;
+  data: MentionData;
+  description?: string; // Optional description for search results
+}
+

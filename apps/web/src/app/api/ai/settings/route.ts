@@ -1,0 +1,283 @@
+import { NextResponse } from 'next/server';
+import { authenticateRequest } from '@/lib/auth-utils';
+import { loggers } from '@pagespace/lib/logger-config';
+import { 
+  getUserOpenRouterSettings,
+  createOpenRouterSettings,
+  getUserGoogleSettings,
+  createGoogleSettings,
+  deleteOpenRouterSettings,
+  deleteGoogleSettings,
+  getDefaultPageSpaceSettings,
+  getUserOpenAISettings,
+  createOpenAISettings,
+  deleteOpenAISettings,
+  getUserAnthropicSettings,
+  createAnthropicSettings,
+  deleteAnthropicSettings,
+  getUserXAISettings,
+  createXAISettings,
+  deleteXAISettings
+} from '@/lib/ai/ai-utils';
+import { db, users, eq } from '@pagespace/db';
+
+/**
+ * GET /api/ai/settings
+ * Returns current AI provider settings and configuration status
+ */
+export async function GET(request: Request) {
+  try {
+    const { userId, error } = await authenticateRequest(request);
+    if (error) return error;
+
+    // Get user's current provider settings
+    const [user] = await db.select().from(users).where(eq(users.id, userId));
+    
+    // Check PageSpace default settings
+    const pageSpaceSettings = await getDefaultPageSpaceSettings();
+    
+    // Check OpenRouter settings
+    const openRouterSettings = await getUserOpenRouterSettings(userId);
+    
+    // Check Google AI settings
+    const googleSettings = await getUserGoogleSettings(userId);
+    
+    // Check OpenAI settings
+    const openAISettings = await getUserOpenAISettings(userId);
+    
+    // Check Anthropic settings
+    const anthropicSettings = await getUserAnthropicSettings(userId);
+    
+    // Check xAI settings
+    const xaiSettings = await getUserXAISettings(userId);
+    
+    return NextResponse.json({
+      currentProvider: user?.currentAiProvider || 'pagespace',
+      currentModel: user?.currentAiModel || 'qwen/qwen3-coder:free',
+      providers: {
+        pagespace: {
+          isConfigured: !!pageSpaceSettings?.isConfigured,
+          hasApiKey: !!pageSpaceSettings?.apiKey,
+        },
+        openrouter: {
+          isConfigured: !!openRouterSettings?.isConfigured,
+          hasApiKey: !!openRouterSettings?.apiKey,
+        },
+        google: {
+          isConfigured: !!googleSettings?.isConfigured,
+          hasApiKey: !!googleSettings?.apiKey,
+        },
+        openai: {
+          isConfigured: !!openAISettings?.isConfigured,
+          hasApiKey: !!openAISettings?.apiKey,
+        },
+        anthropic: {
+          isConfigured: !!anthropicSettings?.isConfigured,
+          hasApiKey: !!anthropicSettings?.apiKey,
+        },
+        xai: {
+          isConfigured: !!xaiSettings?.isConfigured,
+          hasApiKey: !!xaiSettings?.apiKey,
+        },
+      },
+      isAnyProviderConfigured: !!(pageSpaceSettings?.isConfigured || openRouterSettings?.isConfigured || googleSettings?.isConfigured || openAISettings?.isConfigured || anthropicSettings?.isConfigured || xaiSettings?.isConfigured),
+    });
+  } catch (error) {
+    loggers.ai.error('Failed to get AI settings', error as Error);
+    return NextResponse.json(
+      { error: 'Failed to retrieve settings' },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * POST /api/ai/settings
+ * Saves or updates API key for specified provider
+ */
+export async function POST(request: Request) {
+  try {
+    const { userId, error } = await authenticateRequest(request);
+    if (error) return error;
+
+    const body = await request.json();
+    const { provider, apiKey } = body;
+
+    // Validate input
+    if (!provider || !['openrouter', 'google', 'openai', 'anthropic', 'xai'].includes(provider)) {
+      return NextResponse.json(
+        { error: 'Invalid provider. Must be "openrouter", "google", "openai", "anthropic", or "xai"' },
+        { status: 400 }
+      );
+    }
+
+    if (!apiKey || typeof apiKey !== 'string' || !apiKey.trim()) {
+      return NextResponse.json(
+        { error: 'API key is required' },
+        { status: 400 }
+      );
+    }
+
+    // Sanitize API key (remove whitespace)
+    const sanitizedApiKey = apiKey.trim();
+
+    // Save the API key based on provider
+    try {
+      if (provider === 'openrouter') {
+        await createOpenRouterSettings(userId, sanitizedApiKey);
+      } else if (provider === 'google') {
+        await createGoogleSettings(userId, sanitizedApiKey);
+      } else if (provider === 'openai') {
+        await createOpenAISettings(userId, sanitizedApiKey);
+      } else if (provider === 'anthropic') {
+        await createAnthropicSettings(userId, sanitizedApiKey);
+      } else if (provider === 'xai') {
+        await createXAISettings(userId, sanitizedApiKey);
+      }
+
+      // Return success with minimal information (don't echo back the key)
+      const providerName: Record<string, string> = {
+        openrouter: 'OpenRouter',
+        google: 'Google AI',
+        openai: 'OpenAI',
+        anthropic: 'Anthropic',
+        xai: 'xAI'
+      };
+      
+      return NextResponse.json(
+        { 
+          success: true,
+          provider,
+          message: `${providerName[provider]} API key saved successfully`
+        },
+        { status: 201 }
+      );
+    } catch (saveError) {
+      loggers.ai.error(`Failed to save ${provider} API key`, saveError as Error, { provider });
+      return NextResponse.json(
+        { error: `Failed to save ${provider} API key` },
+        { status: 500 }
+      );
+    }
+  } catch (error) {
+    loggers.ai.error('Failed to save API key', error as Error);
+    return NextResponse.json(
+      { error: 'Failed to save API key' },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * PATCH /api/ai/settings
+ * Updates provider and model selection
+ */
+export async function PATCH(request: Request) {
+  try {
+    const { userId, error } = await authenticateRequest(request);
+    if (error) return error;
+
+    const body = await request.json();
+    const { provider, model } = body;
+
+    // Validate input - pagespace and openrouter_free are valid providers
+    if (!provider || !['pagespace', 'openrouter', 'openrouter_free', 'google', 'openai', 'anthropic', 'xai'].includes(provider)) {
+      return NextResponse.json(
+        { error: 'Invalid provider. Must be "pagespace", "openrouter", "openrouter_free", "google", "openai", "anthropic", or "xai"' },
+        { status: 400 }
+      );
+    }
+
+    if (!model || typeof model !== 'string') {
+      return NextResponse.json(
+        { error: 'Model is required' },
+        { status: 400 }
+      );
+    }
+
+    // Update user's current provider and model selection
+    try {
+      await db
+        .update(users)
+        .set({
+          currentAiProvider: provider,
+          currentAiModel: model,
+        })
+        .where(eq(users.id, userId));
+
+      return NextResponse.json(
+        { 
+          success: true,
+          provider,
+          model,
+          message: 'Model selection updated successfully'
+        },
+        { status: 200 }
+      );
+    } catch (updateError) {
+      loggers.ai.error('Failed to update model selection', updateError as Error, { provider, model });
+      return NextResponse.json(
+        { error: 'Failed to update model selection' },
+        { status: 500 }
+      );
+    }
+  } catch (error) {
+    loggers.ai.error('Failed to update settings', error as Error);
+    return NextResponse.json(
+      { error: 'Failed to update settings' },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * DELETE /api/ai/settings
+ * Removes API key for specified provider
+ */
+export async function DELETE(request: Request) {
+  try {
+    const { userId, error } = await authenticateRequest(request);
+    if (error) return error;
+
+    const body = await request.json();
+    const { provider } = body;
+
+    // Validate input
+    if (!provider || !['openrouter', 'google', 'openai', 'anthropic', 'xai'].includes(provider)) {
+      return NextResponse.json(
+        { error: 'Invalid provider. Must be "openrouter", "google", "openai", "anthropic", or "xai"' },
+        { status: 400 }
+      );
+    }
+
+    // Delete the API key based on provider
+    try {
+      if (provider === 'openrouter') {
+        await deleteOpenRouterSettings(userId);
+      } else if (provider === 'google') {
+        await deleteGoogleSettings(userId);
+      } else if (provider === 'openai') {
+        await deleteOpenAISettings(userId);
+      } else if (provider === 'anthropic') {
+        await deleteAnthropicSettings(userId);
+      } else if (provider === 'xai') {
+        await deleteXAISettings(userId);
+      }
+
+      // Return success with 204 No Content
+      return new Response(null, { status: 204 });
+    } catch (deleteError) {
+      loggers.ai.error(`Failed to delete ${provider} API key`, deleteError as Error, { provider });
+      return NextResponse.json(
+        { error: `Failed to delete ${provider} API key` },
+        { status: 500 }
+      );
+    }
+  } catch (error) {
+    loggers.ai.error('Failed to delete API key', error as Error);
+    return NextResponse.json(
+      { error: 'Failed to delete API key' },
+      { status: 500 }
+    );
+  }
+}

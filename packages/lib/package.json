@@ -1,0 +1,32 @@
+{
+  "name": "@pagespace/lib",
+  "version": "0.1.0",
+  "license": "AGPL-3.0",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./client": "./src/client.ts",
+    "./server": "./src/server.ts",
+    "./logger": "./src/logger.ts",
+    "./logger-config": "./src/logger-config.ts",
+    "./logger-database": "./src/logger-database.ts",
+    "./activity-tracker": "./src/activity-tracker.ts",
+    "./ai-monitoring": "./src/ai-monitoring.ts"
+  },
+  "typesVersions": {
+    "*": {
+      "client": ["./src/client.ts"],
+      "server": ["./src/server.ts"],
+      "logger": ["./src/logger.ts"],
+      "logger-config": ["./src/logger-config.ts"],
+      "logger-database": ["./src/logger-database.ts"],
+      "activity-tracker": ["./src/activity-tracker.ts"],
+      "ai-monitoring": ["./src/ai-monitoring.ts"]
+    }
+  },
+  "dependencies": {
+    "jose": "^6.0.11",
+    "@paralleldrive/cuid2": "^2.2.2"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "realtime",
+  "version": "0.1.0",
+  "license": "CC-BY-NC-SA-4.0",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@pagespace/db": "workspace:*",
+    "@pagespace/lib": "workspace:*",
+    "cookie": "1.0.2",
+    "dotenv": "^17.2.0",
+    "drizzle-orm": "^0.32.2",
+    "socket.io": "^4.7.5"
+  },
+  "devDependencies": {
+    "tsx": "^4.16.2",
+    "typescript": "^5.5.2"
+  }
+}
