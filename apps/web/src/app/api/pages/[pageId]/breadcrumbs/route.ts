@@ -3,7 +3,7 @@ import { decodeToken } from '@pagespace/lib/server';
 import { parse } from 'cookie';
 import { pages, db, eq } from '@pagespace/db';
 
-type BreadcrumbPage = (typeof pages.$inferSelect) & { drive: { slug: string } | null };
+type BreadcrumbPage = (typeof pages.$inferSelect) & { drive: { id: string; slug: string; name: string } | null };
 
 async function getBreadcrumbs(pageId: string): Promise<BreadcrumbPage[]> {
   const page = await db.query.pages.findFirst({
@@ -11,7 +11,9 @@ async function getBreadcrumbs(pageId: string): Promise<BreadcrumbPage[]> {
     with: {
       drive: {
         columns: {
+          id: true,
           slug: true,
+          name: true,
         },
       },
     },

@@ -30,7 +30,7 @@ export function Breadcrumbs() {
           {index > 0 && <ChevronRight className="h-4 w-4 mx-1" />}
           {'drive' in crumb && crumb.drive ? (
             <Link
-              href={`/dashboard/${crumb.drive.slug}/${crumb.id}`}
+              href={`/dashboard/${crumb.drive.id}/${crumb.id}`}
               className="hover:underline"
             >
               {crumb.title}

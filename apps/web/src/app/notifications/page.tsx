@@ -159,8 +159,8 @@ export default function NotificationsPage() {
     if (!notification.isRead) {
       handleNotificationRead(notification.id);
     }
-    if (notification.drive?.slug) {
-      router.push(`/dashboard/${notification.drive.slug}`);
+    if (notification.drive?.id) {
+      router.push(`/dashboard/${notification.drive.id}`);
     }
   };
 

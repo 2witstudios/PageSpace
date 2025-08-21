@@ -43,7 +43,7 @@ export default function CreateDriveDialog({ isOpen, setIsOpen }: CreateDriveDial
       const newDrive = await response.json();
       addDrive(newDrive);
       setCurrentDrive(newDrive.id);
-      router.push(`/dashboard/${newDrive.slug}`);
+      router.push(`/dashboard/${newDrive.id}`);
       setDriveName("");
       setIsOpen(false);
     } catch (error) {

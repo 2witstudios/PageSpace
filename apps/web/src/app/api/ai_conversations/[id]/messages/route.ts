@@ -419,13 +419,13 @@ SMART EXPLORATION RULES:
      • User mentions something that MAY exist in the drive
      • User asks general questions about content or organization
      • You need to understand the workspace structure
-   - Start with list_pages(${locationContext?.currentDrive?.slug || 'current-drive'}) BEFORE other actions
+   - Start with list_pages(driveId: '${locationContext?.currentDrive?.id || 'current-drive-id'}') BEFORE other actions
 2. Context-first approach:
    - Default scope: Current drive/location is your primary workspace
    - Only explore OTHER drives when explicitly mentioned
    - When user says "here" or "this", they mean current context
 3. Efficient exploration pattern:
-   - FIRST: list_pages on current drive (if in a drive)
+   - FIRST: list_pages with driveId on current drive (if in a drive)
    - THEN: read specific pages as needed
    - ONLY IF NEEDED: explore other drives/workspaces
 4. Proactive assistance:

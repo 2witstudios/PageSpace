@@ -123,7 +123,7 @@ export const pageSpaceTools = {
   list_pages: tool({
     description: 'List all pages in a workspace with their paths and types. Returns hierarchical structure showing folders, documents, AI chats, channels, canvas pages, and databases.',
     inputSchema: z.object({
-      driveSlug: z.string().describe('The human-readable slug of the drive (for semantic understanding)'),
+      driveSlug: z.string().optional().describe('The human-readable slug of the drive (for semantic understanding)'),
       driveId: z.string().describe('The unique ID of the drive (used for operations)'),
     }),
     execute: async ({ driveSlug, driveId }, { experimental_context: context }) => {
@@ -166,7 +166,7 @@ export const pageSpaceTools = {
         }
 
         // Build flat list of paths with type indicators
-        const buildPageList = (parentId: string | null = null, parentPath: string = `/${driveSlug}`): string[] => {
+        const buildPageList = (parentId: string | null = null, parentPath: string = `/${driveSlug || driveId}`): string[] => {
           const pages: string[] = [];
           const currentPages = visiblePages.filter(page => page.parentId === parentId);
           
@@ -180,7 +180,7 @@ export const pageSpaceTools = {
                                  page.type === 'CHANNEL' ? '💬' : 
                                  page.type === 'CANVAS' ? '🎨' : '📄';
             
-            pages.push(`${typeIndicator} ${currentPath}`);
+            pages.push(`${typeIndicator} ID: ${page.id} Path: ${currentPath}`);
             
             // Recursively add children
             pages.push(...buildPageList(page.id, currentPath));
@@ -193,15 +193,15 @@ export const pageSpaceTools = {
 
         return {
           success: true,
-          driveSlug,
+          driveSlug: driveSlug || driveId,
           paths,
           count: paths.length,
-          summary: `Explored ${driveSlug} workspace and found ${paths.length} page${paths.length === 1 ? '' : 's'}`,
+          summary: `Explored ${driveSlug || driveId} workspace and found ${paths.length} page${paths.length === 1 ? '' : 's'}`,
           stats: {
             totalPages: paths.length,
             folderCount: paths.filter(p => p.includes('📁')).length,
             documentCount: paths.filter(p => p.includes('📄')).length,
-            workspace: driveSlug
+            workspace: driveSlug || driveId
           },
           nextSteps: paths.length > 0 ? [
             'Use read_page to examine specific documents',
@@ -210,7 +210,7 @@ export const pageSpaceTools = {
         };
       } catch (error) {
         console.error('Error reading drive tree:', error);
-        throw new Error(`Failed to read drive tree for ${driveSlug}`);
+        throw new Error(`Failed to read drive tree for ${driveSlug || driveId}`);
       }
     },
   }),
@@ -1550,7 +1550,7 @@ export const pageSpaceTools = {
             driveSlug: newDrive.slug,
           },
           nextSteps: [
-            `Use list_pages with driveSlug: "${newDrive.slug}" to explore the new workspace`,
+            `Use list_pages with driveSlug: "${newDrive.slug}" and driveId: "${newDrive.id}" to explore the new workspace`,
             'Create folders and documents to organize your content',
             'Consider creating an AI_CHAT page for workspace-specific assistance',
           ]

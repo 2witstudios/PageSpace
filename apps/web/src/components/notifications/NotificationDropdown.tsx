@@ -136,9 +136,9 @@ export default function NotificationDropdown() {
                         handleNotificationRead(notification.id);
                       }
                       // Navigate to drive if available
-                      if (notification.drive?.slug) {
+                      if (notification.drive?.id) {
                         setIsDropdownOpen(false);
-                        router.push(`/dashboard/${notification.drive.slug}`);
+                        router.push(`/dashboard/${notification.drive.id}`);
                       }
                     }}
                   >

@@ -129,6 +129,7 @@ export class RolePromptBuilder {
     contextInfo?: {
       driveName?: string;
       driveSlug?: string;
+      driveId?: string;
       pagePath?: string;
       pageType?: string;
       breadcrumbs?: string[];
@@ -157,6 +158,7 @@ export class RolePromptBuilder {
     contextInfo?: {
       driveName?: string;
       driveSlug?: string;
+      driveId?: string;
       pagePath?: string;
       pageType?: string;
       breadcrumbs?: string[];
@@ -175,7 +177,7 @@ export class RolePromptBuilder {
 
       case 'drive':
         return `📁 DRIVE CONTEXT:
-• Current Workspace: "${contextInfo.driveName}" (${contextInfo.driveSlug})
+• Current Workspace: "${contextInfo.driveName}" (ID: ${contextInfo.driveId}, Slug: ${contextInfo.driveSlug})
 • Default scope: All operations target this workspace unless specified otherwise
 • When users mention "here" or "this workspace", they mean: ${contextInfo.driveSlug}`;
 

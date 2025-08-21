@@ -426,6 +426,7 @@ export async function POST(request: Request) {
       pageContext ? {
         driveName: pageContext.driveName,
         driveSlug: pageContext.driveSlug,
+        driveId: pageContext.driveId,
         pagePath: pageContext.pagePath,
         pageType: pageContext.pageType,
         breadcrumbs: pageContext.breadcrumbs,
@@ -457,13 +458,13 @@ IMPORTANT BEHAVIOR RULES:
 1. Page-First Exploration - ALWAYS start with your context:
    - You are operating within the page "${pageContext?.pageTitle || 'current'}" in the "${pageContext?.driveName || 'current'}" drive
    - Your current location: ${pageContext?.pagePath || 'current-page'}
-   - ALWAYS use list_pages on the current drive (${pageContext?.driveSlug || 'current-drive'}) when:
+   - ALWAYS use list_pages on the current drive with driveSlug: "${pageContext?.driveSlug || 'current-drive'}" and driveId: "${pageContext?.driveId || 'current-drive-id'}" when:
      • User asks about content in this area or the drive
      • User wants to create, write, or modify ANYTHING
      • User references files/folders that might exist
      • User asks what's available or what's here
      • You need structural context for any operation
-   - Default action: list_pages with driveSlug: "${pageContext?.driveSlug || 'current-drive'}"
+   - Default action: list_pages with driveSlug: "${pageContext?.driveSlug || 'current-drive'}" and driveId: "${pageContext?.driveId || 'current-drive-id'}"
 2. Proactive exploration pattern:
    - FIRST: Always list_pages on current drive to understand structure
    - THEN: Read specific pages including THIS page if needed
@@ -488,7 +489,7 @@ WHEN TO CREATE EACH PAGE TYPE:
 
 AVAILABLE TOOLS AND WHEN TO USE THEM:
 - list_drives: Use ONLY when user explicitly asks about other workspaces
-- list_pages: ALWAYS use FIRST on current drive (${pageContext?.driveSlug || 'current-drive'}) when working with content
+- list_pages: ALWAYS use FIRST on current drive with driveSlug: "${pageContext?.driveSlug || 'current-drive'}" and driveId: "${pageContext?.driveId || 'current-drive-id'}" when working with content
 - read_page: Use to read specific content after exploring with list_pages
 - create_page: Use to create new documents, folders, AI chats, team channels, or canvas pages
 - rename_page: Use to rename existing pages (title changes only)
