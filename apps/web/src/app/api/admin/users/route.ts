@@ -11,9 +11,19 @@ import {
   count
 } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/logger-config';
+import { verifyAdminAuth } from '@/lib/auth';
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
+    // Verify user is authenticated and is an admin
+    const adminUser = await verifyAdminAuth(request);
+    
+    if (!adminUser) {
+      return Response.json(
+        { error: 'Unauthorized: Admin access required' },
+        { status: 403 }
+      );
+    }
     // Get all users
     const allUsers = await db
       .select({

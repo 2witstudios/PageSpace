@@ -2,6 +2,17 @@
 
 # PageSpace - Build and Push to GitHub Container Registry
 # Repository: 2witstudios/PageSpace
+#
+# Builds linux/amd64 images for production deployment
+#
+# Usage:
+#   Export required environment variables before running:
+#   export NEXT_PUBLIC_REALTIME_URL=http://localhost:3001
+#   export OPENROUTER_DEFAULT_API_KEY=your_api_key_here
+#   ./build-and-push.sh
+#
+# Or source from .env file:
+#   source .env && ./build-and-push.sh
 
 set -e  # Exit on any error
 
@@ -12,13 +23,17 @@ echo "🔨 Building PageSpace Docker images..."
 
 # Build all services
 echo "Building migrate service..."
-docker build -f apps/web/Dockerfile.migrate -t ghcr.io/$USERNAME/$REPO-migrate:latest .
+docker build --platform linux/amd64 -f apps/web/Dockerfile.migrate -t ghcr.io/$USERNAME/$REPO-migrate:latest .
 
 echo "Building web service..."
-docker build -f apps/web/Dockerfile -t ghcr.io/$USERNAME/$REPO-web:latest .
+# Pass environment variables as build arguments
+docker build --platform linux/amd64 -f apps/web/Dockerfile \
+  --build-arg NEXT_PUBLIC_REALTIME_URL="${NEXT_PUBLIC_REALTIME_URL}" \
+  --build-arg OPENROUTER_DEFAULT_API_KEY="${OPENROUTER_DEFAULT_API_KEY}" \
+  -t ghcr.io/$USERNAME/$REPO-web:latest .
 
 echo "Building realtime service..."
-docker build -f apps/realtime/Dockerfile -t ghcr.io/$USERNAME/$REPO-realtime:latest .
+docker build --platform linux/amd64 -f apps/realtime/Dockerfile -t ghcr.io/$USERNAME/$REPO-realtime:latest .
 
 echo "✅ All images built successfully!"
 

@@ -88,6 +88,12 @@ const AssistantSettingsTab: React.FC = () => {
   const isProviderConfigured = (provider: string): boolean => {
     if (!providerSettings?.providers) return false;
     
+    // PageSpace provider should check its own configuration directly
+    // (not the user's OpenRouter configuration)
+    if (provider === 'pagespace') {
+      return providerSettings.providers.pagespace?.isConfigured || false;
+    }
+    
     // Map UI provider to backend provider for checking configuration
     const backendProvider = getBackendProvider(provider);
     
@@ -104,10 +110,6 @@ const AssistantSettingsTab: React.FC = () => {
       case 'xai':
         return providerSettings.providers.xai?.isConfigured || false;
       default:
-        // For pagespace, check if it has configuration
-        if (provider === 'pagespace') {
-          return providerSettings.providers.pagespace?.isConfigured || false;
-        }
         return false;
     }
   };

@@ -1,49 +1,28 @@
-"use client";
+import { redirect } from 'next/navigation';
+import { cookies } from 'next/headers';
+import { verifyAdminAuth } from '@/lib/auth';
+import AdminLayoutClient from './AdminLayoutClient';
 
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import Link from "next/link";
-import { usePathname } from "next/navigation";
-
-export default function AdminLayout({
+export default async function AdminLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const pathname = usePathname();
-  const currentTab = pathname.includes('/monitoring') ? 'monitoring' : 
-                     pathname.includes('/tables') ? 'tables' : 'users';
+  // Create a request object with cookies for authentication
+  const cookieStore = await cookies();
+  const request = new Request('http://localhost', {
+    headers: {
+      cookie: cookieStore.toString(),
+    },
+  });
 
-  return (
-    <div className="min-h-screen bg-background p-6">
-      <div className="max-w-7xl mx-auto">
-        <Card className="mb-6">
-          <CardHeader>
-            <CardTitle>Admin Dashboard</CardTitle>
-            <CardDescription>
-              Monitor system performance, manage users, and visualize database schema
-            </CardDescription>
-          </CardHeader>
-        </Card>
+  // Verify user is authenticated and is an admin
+  const adminUser = await verifyAdminAuth(request);
+  
+  if (!adminUser) {
+    // Redirect non-admin users to home page
+    redirect('/');
+  }
 
-        <Tabs value={currentTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-3 max-w-[600px]">
-            <TabsTrigger value="monitoring" asChild>
-              <Link href="/admin/monitoring">Monitoring</Link>
-            </TabsTrigger>
-            <TabsTrigger value="tables" asChild>
-              <Link href="/admin/tables">Database Tables</Link>
-            </TabsTrigger>
-            <TabsTrigger value="users" asChild>
-              <Link href="/admin/users">User Management</Link>
-            </TabsTrigger>
-          </TabsList>
-
-          <div className="mt-6">
-            {children}
-          </div>
-        </Tabs>
-      </div>
-    </div>
-  );
+  return <AdminLayoutClient>{children}</AdminLayoutClient>;
 }
