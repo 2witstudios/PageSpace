@@ -1561,6 +1561,254 @@ export const pageSpaceTools = {
       }
     },
   }),
+
+  /**
+   * Rename an existing workspace/drive
+   */
+  rename_drive: tool({
+    description: 'Rename an existing workspace/drive. Only the drive owner can rename their drives.',
+    inputSchema: z.object({
+      driveId: z.string().describe('The unique ID of the drive to rename'),
+      name: z.string().describe('The new name for the drive'),
+    }),
+    execute: async ({ driveId, name }, { experimental_context: context }) => {
+      const userId = (context as ToolExecutionContext)?.userId;
+      if (!userId) {
+        throw new Error('User authentication required');
+      }
+
+      try {
+        // Validate name
+        if (!name || name.trim().length === 0) {
+          throw new Error('Drive name is required');
+        }
+        
+        if (name.toLowerCase() === 'personal') {
+          throw new Error('Cannot rename a drive to "Personal"');
+        }
+
+        // Find the drive and verify ownership
+        const drive = await db.query.drives.findFirst({
+          where: and(
+            eq(drives.id, driveId),
+            eq(drives.ownerId, userId)
+          ),
+        });
+
+        if (!drive) {
+          throw new Error('Drive not found or you do not have permission to rename it');
+        }
+
+        // Update the drive name
+        const [updatedDrive] = await db
+          .update(drives)
+          .set({
+            name: name.trim(),
+            updatedAt: new Date(),
+          })
+          .where(eq(drives.id, drive.id))
+          .returning({
+            id: drives.id,
+            name: drives.name,
+            slug: drives.slug,
+          });
+
+        // Broadcast drive update event
+        await broadcastDriveEvent(
+          createDriveEventPayload(updatedDrive.id, 'updated', {
+            name: updatedDrive.name,
+            slug: updatedDrive.slug,
+          })
+        );
+
+        return {
+          success: true,
+          drive: {
+            id: updatedDrive.id,
+            name: updatedDrive.name,
+            slug: updatedDrive.slug,
+            oldName: drive.name,
+          },
+          message: `Successfully renamed workspace from "${drive.name}" to "${updatedDrive.name}"`,
+          summary: `Renamed workspace to "${updatedDrive.name}"`,
+          stats: {
+            oldName: drive.name,
+            newName: updatedDrive.name,
+            driveSlug: updatedDrive.slug,
+          },
+          nextSteps: [
+            'The workspace slug remains the same for consistency',
+            'All pages and content remain unchanged',
+          ]
+        };
+      } catch (error) {
+        console.error('Error renaming drive:', error);
+        throw new Error(`Failed to rename drive: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+  }),
+
+  /**
+   * Move a workspace/drive to trash (soft delete)
+   */
+  trash_drive: tool({
+    description: 'Move a workspace/drive to trash. USE WITH EXTREME CAUTION - only use when explicitly requested by the user to delete or trash a drive. The drive can be restored from trash later.',
+    inputSchema: z.object({
+      driveId: z.string().describe('The unique ID of the drive to trash'),
+      confirmDriveName: z.string().describe('The exact name of the drive (for safety confirmation)'),
+    }),
+    execute: async ({ driveId, confirmDriveName }, { experimental_context: context }) => {
+      const userId = (context as ToolExecutionContext)?.userId;
+      if (!userId) {
+        throw new Error('User authentication required');
+      }
+
+      try {
+        // Find the drive and verify ownership
+        const drive = await db.query.drives.findFirst({
+          where: and(
+            eq(drives.id, driveId),
+            eq(drives.ownerId, userId)
+          ),
+        });
+
+        if (!drive) {
+          throw new Error('Drive not found or you do not have permission to delete it');
+        }
+
+        // Safety check: verify drive name matches
+        if (drive.name !== confirmDriveName) {
+          throw new Error(`Drive name confirmation failed. Expected "${drive.name}" but got "${confirmDriveName}"`);
+        }
+
+        if (drive.isTrashed) {
+          throw new Error('Drive is already in trash');
+        }
+
+        // Move drive to trash
+        await db
+          .update(drives)
+          .set({
+            isTrashed: true,
+            trashedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(drives.id, drive.id));
+
+        // Broadcast drive deletion event
+        await broadcastDriveEvent(
+          createDriveEventPayload(drive.id, 'deleted', {
+            name: drive.name,
+            slug: drive.slug,
+          })
+        );
+
+        return {
+          success: true,
+          drive: {
+            id: drive.id,
+            name: drive.name,
+            slug: drive.slug,
+          },
+          message: `Successfully moved workspace "${drive.name}" to trash`,
+          summary: `Trashed workspace "${drive.name}"`,
+          warning: 'The drive and all its pages are now inaccessible but can be restored',
+          stats: {
+            driveName: drive.name,
+            trashedAt: new Date().toISOString(),
+          },
+          nextSteps: [
+            'Use restore_drive to recover this workspace from trash',
+            'Trashed drives will be permanently deleted after 30 days',
+            'All pages within the drive remain associated and will be restored with the drive',
+          ]
+        };
+      } catch (error) {
+        console.error('Error trashing drive:', error);
+        throw new Error(`Failed to trash drive: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+  }),
+
+  /**
+   * Restore a workspace/drive from trash
+   */
+  restore_drive: tool({
+    description: 'Restore a trashed workspace/drive back to active state. Returns the drive and all its pages to normal accessibility.',
+    inputSchema: z.object({
+      driveId: z.string().describe('The unique ID of the drive to restore'),
+    }),
+    execute: async ({ driveId }, { experimental_context: context }) => {
+      const userId = (context as ToolExecutionContext)?.userId;
+      if (!userId) {
+        throw new Error('User authentication required');
+      }
+
+      try {
+        // Find the drive and verify ownership
+        const drive = await db.query.drives.findFirst({
+          where: and(
+            eq(drives.id, driveId),
+            eq(drives.ownerId, userId)
+          ),
+        });
+
+        if (!drive) {
+          throw new Error('Drive not found or you do not have permission to restore it');
+        }
+
+        if (!drive.isTrashed) {
+          throw new Error('Drive is not in trash');
+        }
+
+        // Restore drive from trash
+        const [restoredDrive] = await db
+          .update(drives)
+          .set({
+            isTrashed: false,
+            trashedAt: null,
+            updatedAt: new Date(),
+          })
+          .where(eq(drives.id, drive.id))
+          .returning({
+            id: drives.id,
+            name: drives.name,
+            slug: drives.slug,
+          });
+
+        // Broadcast drive restoration event (use 'updated' as drive is being updated from trashed to active)
+        await broadcastDriveEvent(
+          createDriveEventPayload(restoredDrive.id, 'updated', {
+            name: restoredDrive.name,
+            slug: restoredDrive.slug,
+          })
+        );
+
+        return {
+          success: true,
+          drive: {
+            id: restoredDrive.id,
+            name: restoredDrive.name,
+            slug: restoredDrive.slug,
+          },
+          message: `Successfully restored workspace "${restoredDrive.name}" from trash`,
+          summary: `Restored workspace "${restoredDrive.name}"`,
+          stats: {
+            driveName: restoredDrive.name,
+            driveSlug: restoredDrive.slug,
+            restoredAt: new Date().toISOString(),
+          },
+          nextSteps: [
+            `Use list_pages with driveSlug: "${restoredDrive.slug}" and driveId: "${restoredDrive.id}" to explore the restored workspace`,
+            'All pages and content have been restored with the drive',
+          ]
+        };
+      } catch (error) {
+        console.error('Error restoring drive:', error);
+        throw new Error(`Failed to restore drive: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+  }),
 };
 
 export type PageSpaceTools = typeof pageSpaceTools;
