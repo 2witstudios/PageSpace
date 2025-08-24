@@ -1,3 +1,13 @@
+### 2025-08-24
+
+- **Refactor**: Split `ai-tools.ts` into smaller, more manageable files.
+  - **Added**: `apps/web/src/lib/ai/types.ts` for shared AI tool types.
+  - **Added**: `apps/web/src/lib/ai/tools/drive-tools.ts` for drive-related AI tools.
+  - **Added**: `apps/web/src/lib/ai/tools/page-read-tools.ts` for page reading and listing AI tools.
+  - **Added**: `apps/web/src/lib/ai/tools/page-write-tools.ts` for page writing and modification AI tools.
+  - **Updated**: `apps/web/src/lib/ai/ai-tools.ts` to be an index file that exports all tools.
+  - **Rationale**: Improves maintainability and readability of the AI tool definitions.
+
 ### 2025-08-21
 
 - **Refactor**: Renamed API endpoints for clarity and semantic accuracy
