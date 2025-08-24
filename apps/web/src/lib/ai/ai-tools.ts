@@ -581,14 +581,13 @@ export const pageSpaceTools = {
   create_page: tool({
     description: 'Create new pages in the workspace. Supports all page types: FOLDER (hierarchical organization), DOCUMENT (text content), AI_CHAT (AI conversation spaces), CHANNEL (team discussions), CANVAS (custom HTML/CSS pages), DATABASE (deprecated). Any page type can contain any other page type as children with infinite nesting.',
     inputSchema: z.object({
-      parentPath: z.string().describe('Parent folder path using titles like "/driveSlug" for root or "/driveSlug/Folder Name" for semantic context'),
       driveId: z.string().describe('The unique ID of the drive to create the page in'),
-      parentId: z.string().optional().describe('The unique ID of the parent page (omit for root level)'),
+      parentId: z.string().optional().describe('The unique ID of the parent page from list_pages - REQUIRED when creating inside any page (folder, document, channel, etc). Only omit for root-level pages in the drive.'),
       title: z.string().describe('The title of the new page'),
       type: z.enum(['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS']).describe('The type of page to create'),
       content: z.string().optional().describe('Optional initial content for the page'),
     }),
-    execute: async ({ parentPath, driveId, parentId, title, type, content = '' }, { experimental_context: context }) => {
+    execute: async ({ driveId, parentId, title, type, content = '' }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -681,20 +680,21 @@ export const pageSpaceTools = {
 
         return {
           success: true,
-          path: `${parentPath}/${newPage.title}`,
           id: newPage.id,
           title: newPage.title,
           type: newPage.type,
+          parentId: parentId || 'root',
           message: `Successfully created ${type.toLowerCase()} page "${title}"`,
-          summary: `Created new ${type.toLowerCase()} "${title}" in ${parentPath}`,
+          summary: `Created new ${type.toLowerCase()} "${title}" in ${parentId ? `parent ${parentId}` : 'drive root'}`,
           stats: {
             pageType: newPage.type,
-            location: parentPath,
+            location: parentId ? `Parent ID: ${parentId}` : 'Drive root',
             hasContent: content.length > 0
           },
           nextSteps: [
             type === 'DOCUMENT' ? 'Add content to the new document' : 'Organize related pages in this folder',
-            'Use read_page to verify the content was created correctly'
+            'Use read_page to verify the content was created correctly',
+            `New page ID: ${newPage.id} - use this for further operations`
           ]
         };
       } catch (error) {
