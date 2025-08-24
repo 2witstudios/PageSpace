@@ -21,7 +21,7 @@ interface CreateDriveDialogProps {
 
 export default function CreateDriveDialog({ isOpen, setIsOpen }: CreateDriveDialogProps) {
   const [driveName, setDriveName] = useState("");
-  const { addDrive, setCurrentDrive } = useDriveStore();
+  const { addDrive, setCurrentDrive, fetchDrives } = useDriveStore();
   const router = useRouter();
 
   const handleCreateDrive = async () => {
@@ -41,8 +41,11 @@ export default function CreateDriveDialog({ isOpen, setIsOpen }: CreateDriveDial
       }
 
       const newDrive = await response.json();
+      // Add the drive with correct ownership flag
       addDrive(newDrive);
       setCurrentDrive(newDrive.id);
+      // Force a refresh to ensure all drives have correct data
+      await fetchDrives();
       router.push(`/dashboard/${newDrive.id}`);
       setDriveName("");
       setIsOpen(false);

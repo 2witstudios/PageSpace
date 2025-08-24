@@ -73,10 +73,19 @@ export async function GET(req: Request) {
     return new NextResponse("Unauthorized", { status: 401 });
   }
 
+  // Check if we should include trashed drives
+  const url = new URL(req.url);
+  const includeTrash = url.searchParams.get('includeTrash') === 'true';
+
   try {
     // 1. Get user's own drives
     const ownedDrives = await db.query.drives.findMany({
-      where: eq(drives.ownerId, userId),
+      where: includeTrash 
+        ? eq(drives.ownerId, userId)
+        : and(
+            eq(drives.ownerId, userId),
+            eq(drives.isTrashed, false)
+          ),
     });
 
     // 2. Get drives where user is a member (new RBAC system)
@@ -102,10 +111,16 @@ export async function GET(req: Request) {
 
     // 5. Fetch the actual drive objects, excluding ones the user already owns
     const sharedDrives = sharedDriveIds.length > 0 ? await db.query.drives.findMany({
-      where: and(
-        inArray(drives.id, sharedDriveIds),
-        not(eq(drives.ownerId, userId))
-      ),
+      where: includeTrash
+        ? and(
+            inArray(drives.id, sharedDriveIds),
+            not(eq(drives.ownerId, userId))
+          )
+        : and(
+            inArray(drives.id, sharedDriveIds),
+            not(eq(drives.ownerId, userId)),
+            eq(drives.isTrashed, false)
+          ),
     }) : [];
 
     // 6. Combine and add the isOwned flag
@@ -158,6 +173,8 @@ export async function POST(request: Request) {
       name,
       slug,
       ownerId: session.user.id,
+      isTrashed: false,
+      trashedAt: null,
       updatedAt: new Date(),
     }).returning();
 
@@ -175,7 +192,8 @@ export async function POST(request: Request) {
       slug: newDrive[0].slug
     });
 
-    return NextResponse.json(newDrive[0], { status: 201 });
+    // Return the drive with the isOwned flag set to true
+    return NextResponse.json({ ...newDrive[0], isOwned: true }, { status: 201 });
   } catch (error) {
     loggers.api.error('Error creating drive:', error as Error);
     return NextResponse.json({ error: 'Failed to create drive' }, { status: 500 });

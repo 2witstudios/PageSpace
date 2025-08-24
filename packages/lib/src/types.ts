@@ -22,6 +22,8 @@ export interface Drive {
   name: string;
   slug: string;
   ownerId: string;
+  isTrashed: boolean;
+  trashedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
   isOwned: boolean;

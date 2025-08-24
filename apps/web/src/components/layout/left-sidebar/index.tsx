@@ -32,8 +32,6 @@ export default function Sidebar() {
     const driveId = Array.isArray(driveIdParams) ? driveIdParams[0] : driveIdParams;
     const { mutate } = useSWRConfig();
 
-    const trashLinkHref = driveId ? `/dashboard/${driveId}/trash` : '/dashboard';
-
     // Get drive from store and check if user can create pages
     const drive = drives.find(d => d.id === driveId);
     const canCreatePages = drive?.isOwned || false;
@@ -95,17 +93,15 @@ export default function Sidebar() {
         </div>
         <div className="mt-auto space-y-1">
             {driveId && (
-                <>
-                    <Link href={`/dashboard/${driveId}/members`} className="flex items-center gap-2 p-2 rounded-lg hover:bg-accent hover:text-accent-foreground text-sm">
-                        <Users className="h-4 w-4" />
-                        Members
-                    </Link>
-                    <Link href={trashLinkHref} className="flex items-center gap-2 p-2 rounded-lg hover:bg-accent hover:text-accent-foreground text-sm">
-                        <Trash2 className="h-4 w-4" />
-                        Trash
-                    </Link>
-                </>
+                <Link href={`/dashboard/${driveId}/members`} className="flex items-center gap-2 p-2 rounded-lg hover:bg-accent hover:text-accent-foreground text-sm">
+                    <Users className="h-4 w-4" />
+                    Members
+                </Link>
             )}
+            <Link href={driveId ? `/dashboard/${driveId}/trash` : '/dashboard/trash'} className="flex items-center gap-2 p-2 rounded-lg hover:bg-accent hover:text-accent-foreground text-sm">
+                <Trash2 className="h-4 w-4" />
+                Trash
+            </Link>
             {!driveId && (
                 <Link href="/settings" className="flex items-center gap-2 p-2 rounded-lg hover:bg-accent hover:text-accent-foreground text-sm">
                     <Settings className="h-4 w-4" />

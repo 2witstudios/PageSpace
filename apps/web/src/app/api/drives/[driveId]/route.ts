@@ -183,3 +183,48 @@ export async function PATCH(
     return NextResponse.json({ error: 'Failed to update drive' }, { status: 500 });
   }
 }
+
+/**
+ * DELETE /api/drives/[driveId]
+ * Move drive to trash (soft delete)
+ */
+export async function DELETE(
+  request: Request,
+  context: { params: Promise<{ driveId: string }> }
+) {
+  try {
+    const { driveId } = await context.params;
+    const userId = await getUserId(request);
+    
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    // Find the drive and verify ownership
+    const drive = await db.query.drives.findFirst({
+      where: and(
+        eq(drives.id, driveId),
+        eq(drives.ownerId, userId)
+      ),
+    });
+
+    if (!drive) {
+      return NextResponse.json({ error: 'Drive not found or access denied' }, { status: 404 });
+    }
+
+    // Move drive to trash
+    await db
+      .update(drives)
+      .set({
+        isTrashed: true,
+        trashedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(drives.id, drive.id));
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    loggers.api.error('Error deleting drive:', error as Error);
+    return NextResponse.json({ error: 'Failed to delete drive' }, { status: 500 });
+  }
+}

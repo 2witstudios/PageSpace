@@ -1,38 +1,134 @@
 'use client';
 
-import { useEffect, useMemo } from "react";
-import { useParams, usePathname } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
+import { useParams, usePathname, useRouter } from "next/navigation";
 import Link from 'next/link';
 import { useDriveStore } from '@/hooks/useDrive';
 import { useGlobalDriveSocket } from '@/hooks/useGlobalDriveSocket';
 import { Skeleton } from "@/components/ui/skeleton";
 import { Drive } from "@/hooks/useDrive";
-import { Folder, Trash2 } from "lucide-react";
+import { Folder, Trash2, MoreHorizontal, Pencil, Undo2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Button } from "@/components/ui/button";
+import { RenameDialog } from "@/components/dialogs/RenameDialog";
+import { DeleteDriveDialog } from "@/components/dialogs/DeleteDriveDialog";
+import { toast } from "sonner";
 
-const DriveListItem = ({ drive, isActive }: { drive: Drive; isActive: boolean }) => (
-  <Link href={`/dashboard/${drive.id}`} key={drive.id}>
-    <div
-      className={cn(
-        "flex items-center gap-2 p-2 rounded-md text-sm font-medium",
-        isActive ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-      )}
+const DriveListItem = ({ 
+  drive, 
+  isActive, 
+  isOwned,
+  onRename,
+  onDelete,
+  onRestore,
+  onPermanentDelete
+}: { 
+  drive: Drive; 
+  isActive: boolean;
+  isOwned: boolean;
+  onRename?: (drive: Drive) => void;
+  onDelete?: (drive: Drive) => void;
+  onRestore?: (drive: Drive) => void;
+  onPermanentDelete?: (drive: Drive) => void;
+}) => {
+  const [isHovered, setIsHovered] = useState(false);
+  
+  return (
+    <div 
+      className="group relative"
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
     >
-      <Folder className="h-4 w-4" />
-      <span className="truncate">{drive.name}</span>
+      <div
+        className={cn(
+          "flex items-center gap-2 p-2 rounded-md text-sm font-medium",
+          isActive ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+        )}
+      >
+        <Link href={`/dashboard/${drive.id}`} className="flex items-center gap-2 flex-1">
+          <Folder className="h-4 w-4" />
+          <span className="truncate">{drive.name}</span>
+        </Link>
+        {isOwned && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className={cn(
+                  "h-6 w-6 transition-opacity",
+                  isHovered ? "opacity-100" : "opacity-0"
+                )}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <MoreHorizontal className="h-3 w-3" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              {drive.isTrashed ? (
+                <>
+                  {onRestore && (
+                    <DropdownMenuItem onSelect={() => onRestore(drive)}>
+                      <Undo2 className="mr-2 h-4 w-4" />
+                      <span>Restore</span>
+                    </DropdownMenuItem>
+                  )}
+                  {onPermanentDelete && (
+                    <DropdownMenuItem
+                      onSelect={() => onPermanentDelete(drive)}
+                      className="text-red-500 focus:text-red-500"
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      <span>Delete Permanently</span>
+                    </DropdownMenuItem>
+                  )}
+                </>
+              ) : (
+                <>
+                  {onRename && (
+                    <DropdownMenuItem onSelect={() => onRename(drive)}>
+                      <Pencil className="mr-2 h-4 w-4" />
+                      <span>Rename</span>
+                    </DropdownMenuItem>
+                  )}
+                  {onDelete && (
+                    <DropdownMenuItem
+                      onSelect={() => onDelete(drive)}
+                      className="text-red-500 focus:text-red-500"
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      <span>Move to Trash</span>
+                    </DropdownMenuItem>
+                  )}
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </div>
     </div>
-  </Link>
-);
+  );
+};
 
 export default function DriveList() {
   const params = useParams();
   const pathname = usePathname();
+  const router = useRouter();
   const {
     drives,
     fetchDrives,
     isLoading,
-    setCurrentDrive
+    setCurrentDrive,
+    currentDriveId
   } = useDriveStore();
+  const [renameDialogState, setRenameDialogState] = useState<{ isOpen: boolean; drive: Drive | null }>({ isOpen: false, drive: null });
+  const [deleteDialogState, setDeleteDialogState] = useState<{ isOpen: boolean; drive: Drive | null }>({ isOpen: false, drive: null });
   
   // Enable real-time drive updates
   useGlobalDriveSocket();
@@ -51,20 +147,90 @@ export default function DriveList() {
   }, [urlDriveId, drives, setCurrentDrive]);
 
   useEffect(() => {
-    fetchDrives();
+    fetchDrives(true); // Include trash to show in trash section
   }, [fetchDrives]);
 
-  const { ownedDrives, sharedDrives } = useMemo(() => {
+  const handleRenameDrive = async (newName: string) => {
+    if (!renameDialogState.drive) return;
+    const toastId = toast.loading("Renaming drive...");
+    try {
+      const response = await fetch(`/api/drives/${renameDialogState.drive.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newName }),
+      });
+      if (!response.ok) throw new Error("Failed to rename drive.");
+      await fetchDrives(true, true); // Force refresh
+      toast.success("Drive renamed.", { id: toastId });
+    } catch {
+      toast.error("Error renaming drive.", { id: toastId });
+    } finally {
+      setRenameDialogState({ isOpen: false, drive: null });
+    }
+  };
+
+  const handleDeleteDrive = async () => {
+    if (!deleteDialogState.drive) return;
+    const toastId = toast.loading("Moving drive to trash...");
+    try {
+      const response = await fetch(`/api/drives/${deleteDialogState.drive.id}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) throw new Error("Failed to move drive to trash.");
+      await fetchDrives(true, true); // Force refresh
+      if (currentDriveId === deleteDialogState.drive.id) {
+        router.push('/dashboard');
+      }
+      toast.success("Drive moved to trash.", { id: toastId });
+    } catch {
+      toast.error("Error moving drive to trash.", { id: toastId });
+    } finally {
+      setDeleteDialogState({ isOpen: false, drive: null });
+    }
+  };
+
+  const handleRestoreDrive = async (drive: Drive) => {
+    const toastId = toast.loading("Restoring drive...");
+    try {
+      const response = await fetch(`/api/drives/${drive.id}/restore`, {
+        method: "POST",
+      });
+      if (!response.ok) throw new Error("Failed to restore drive.");
+      await fetchDrives(true, true); // Force refresh
+      toast.success("Drive restored.", { id: toastId });
+    } catch {
+      toast.error("Error restoring drive.", { id: toastId });
+    }
+  };
+
+  const handlePermanentDelete = async (drive: Drive) => {
+    const toastId = toast.loading("Permanently deleting drive...");
+    try {
+      const response = await fetch(`/api/trash/drives/${drive.id}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) throw new Error("Failed to permanently delete drive.");
+      await fetchDrives(true, true); // Force refresh
+      toast.success("Drive permanently deleted.", { id: toastId });
+    } catch {
+      toast.error("Error permanently deleting drive.", { id: toastId });
+    }
+  };
+
+  const { ownedDrives, sharedDrives, trashedDrives } = useMemo(() => {
     const owned: Drive[] = [];
     const shared: Drive[] = [];
+    const trashed: Drive[] = [];
     drives.forEach((d) => {
-      if (d.isOwned) {
+      if (d.isTrashed && d.isOwned) {
+        trashed.push(d);
+      } else if (d.isOwned) {
         owned.push(d);
-      } else {
+      } else if (!d.isTrashed) {
         shared.push(d);
       }
     });
-    return { ownedDrives: owned, sharedDrives: shared };
+    return { ownedDrives: owned, sharedDrives: shared, trashedDrives: trashed };
   }, [drives]);
 
   if (isLoading) {
@@ -84,7 +250,14 @@ export default function DriveList() {
           <h3 className="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">My Drive</h3>
           <div className="space-y-1">
             {ownedDrives.map((drive) => (
-              <DriveListItem key={drive.id} drive={drive} isActive={!isTrashView && drive.id === urlDriveId} />
+              <DriveListItem 
+                key={drive.id} 
+                drive={drive} 
+                isActive={!isTrashView && drive.id === urlDriveId}
+                isOwned={true}
+                onRename={() => setRenameDialogState({ isOpen: true, drive })}
+                onDelete={() => setDeleteDialogState({ isOpen: true, drive })}
+              />
             ))}
           </div>
         </div>
@@ -94,13 +267,35 @@ export default function DriveList() {
           <h3 className="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Shared Drives</h3>
           <div className="space-y-1">
             {sharedDrives.map((drive) => (
-              <DriveListItem key={drive.id} drive={drive} isActive={!isTrashView && drive.id === urlDriveId} />
+              <DriveListItem 
+                key={drive.id} 
+                drive={drive} 
+                isActive={!isTrashView && drive.id === urlDriveId}
+                isOwned={false}
+              />
             ))}
           </div>
         </div>
       )}
        {drives.length === 0 && (
          <p className="p-2 text-sm text-gray-500">No drives found.</p>
+      )}
+      {trashedDrives.length > 0 && (
+        <div>
+          <h3 className="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Trash</h3>
+          <div className="space-y-1">
+            {trashedDrives.map((drive) => (
+              <DriveListItem 
+                key={drive.id} 
+                drive={drive} 
+                isActive={false}
+                isOwned={true}
+                onRestore={handleRestoreDrive}
+                onPermanentDelete={handlePermanentDelete}
+              />
+            ))}
+          </div>
+        </div>
       )}
       {urlDriveId && (
         <div>
@@ -112,11 +307,25 @@ export default function DriveList() {
               )}
             >
               <Trash2 className="h-4 w-4" />
-              <span className="truncate">Trash</span>
+              <span className="truncate">Page Trash</span>
             </div>
           </Link>
         </div>
       )}
+      <RenameDialog
+        isOpen={renameDialogState.isOpen}
+        onClose={() => setRenameDialogState({ isOpen: false, drive: null })}
+        onRename={handleRenameDrive}
+        initialName={renameDialogState.drive?.name || ""}
+        title="Rename Drive"
+        description="Enter a new name for your drive."
+      />
+      <DeleteDriveDialog
+        isOpen={deleteDialogState.isOpen}
+        onClose={() => setDeleteDialogState({ isOpen: false, drive: null })}
+        onConfirm={handleDeleteDrive}
+        driveName={deleteDialogState.drive?.name || ""}
+      />
     </div>
   );
 }

@@ -15,7 +15,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { useDriveStore } from "@/hooks/useDrive";
-import { useAuth } from "@/hooks/use-auth";
 import { Skeleton } from "@/components/ui/skeleton";
 import CreateDriveDialog from "@/components/layout/left-sidebar/CreateDriveDialog";
 import { Drive } from "@pagespace/lib";
@@ -31,7 +30,6 @@ export default function DriveSwitcher() {
     setCurrentDrive,
   } = useDriveStore();
   const [isCreateDriveOpen, setCreateDriveOpen] = useState(false);
-  const { user: sessionUser } = useAuth();
 
   const { driveId } = params;
   const urlDriveId = Array.isArray(driveId) ? driveId[0] : driveId;
@@ -65,14 +63,14 @@ export default function DriveSwitcher() {
     const owned: Drive[] = [];
     const shared: Drive[] = [];
     drives.forEach((d) => {
-      if (d.ownerId === sessionUser?.id) {
+      if (d.isOwned) {
         owned.push(d);
       } else {
         shared.push(d);
       }
     });
     return { ownedDrives: owned, sharedDrives: shared };
-  }, [drives, sessionUser?.id]);
+  }, [drives]);
 
   if (isLoading) {
     return <Skeleton className="h-9 w-full" />;
@@ -113,7 +111,7 @@ export default function DriveSwitcher() {
                   key={drive.id}
                   onSelect={() => handleSelectDrive(drive)}
                 >
-                  {drive.name}
+                  <span className="flex-1">{drive.name}</span>
                 </DropdownMenuItem>
               ))}
             </DropdownMenuGroup>

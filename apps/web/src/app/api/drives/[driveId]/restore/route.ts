@@ -1,0 +1,75 @@
+import { NextResponse } from 'next/server';
+import { decodeToken } from '@pagespace/lib/server';
+import { parse } from 'cookie';
+import { drives, db, eq, and } from '@pagespace/db';
+import { loggers } from '@pagespace/lib/logger-config';
+
+// Get user ID from cookie
+async function getUserId(req: Request): Promise<string | null> {
+  const cookieHeader = req.headers.get('cookie');
+  if (!cookieHeader) {
+    return null;
+  }
+
+  const cookies = parse(cookieHeader);
+  const authToken = cookies['accessToken'];
+  if (!authToken) {
+    return null;
+  }
+
+  const decoded = await decodeToken(authToken);
+  if (!decoded || !decoded.userId) {
+    return null;
+  }
+
+  return decoded.userId;
+}
+
+/**
+ * POST /api/drives/[driveId]/restore
+ * Restore drive from trash
+ */
+export async function POST(
+  request: Request,
+  context: { params: Promise<{ driveId: string }> }
+) {
+  try {
+    const { driveId } = await context.params;
+    const userId = await getUserId(request);
+    
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    // Find the drive and verify ownership
+    const drive = await db.query.drives.findFirst({
+      where: and(
+        eq(drives.id, driveId),
+        eq(drives.ownerId, userId)
+      ),
+    });
+
+    if (!drive) {
+      return NextResponse.json({ error: 'Drive not found or access denied' }, { status: 404 });
+    }
+
+    if (!drive.isTrashed) {
+      return NextResponse.json({ error: 'Drive is not in trash' }, { status: 400 });
+    }
+
+    // Restore drive from trash
+    await db
+      .update(drives)
+      .set({
+        isTrashed: false,
+        trashedAt: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(drives.id, drive.id));
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    loggers.api.error('Error restoring drive:', error as Error);
+    return NextResponse.json({ error: 'Failed to restore drive' }, { status: 500 });
+  }
+}

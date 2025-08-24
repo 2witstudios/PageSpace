@@ -8,7 +8,7 @@ interface DriveState {
   currentDriveId: string | null;
   isLoading: boolean;
   lastFetched: number;
-  fetchDrives: () => Promise<void>;
+  fetchDrives: (includeTrash?: boolean, forceRefresh?: boolean) => Promise<void>;
   addDrive: (drive: Drive) => void;
   setCurrentDrive: (driveId: string | null) => void;
 }
@@ -22,18 +22,19 @@ export const useDriveStore = create<DriveState>()(
       currentDriveId: null,
       isLoading: false,
       lastFetched: 0,
-      fetchDrives: async () => {
+      fetchDrives: async (includeTrash = false, forceRefresh = false) => {
         const state = get();
         const now = Date.now();
         
-        // Skip fetch if recently fetched and we have data
-        if (state.drives.length > 0 && (now - state.lastFetched) < CACHE_DURATION) {
+        // Skip fetch if recently fetched and we have data (unless force refresh)
+        if (!forceRefresh && state.drives.length > 0 && (now - state.lastFetched) < CACHE_DURATION) {
           return;
         }
         
         set({ isLoading: true });
         try {
-          const response = await fetch('/api/drives', {
+          const url = includeTrash ? '/api/drives?includeTrash=true' : '/api/drives';
+          const response = await fetch(url, {
             credentials: 'include',
           });
           if (!response.ok) {

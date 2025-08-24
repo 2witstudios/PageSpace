@@ -9,6 +9,8 @@ export const drives = pgTable('drives', {
   name: text('name').notNull(),
   slug: text('slug').notNull(),
   ownerId: text('ownerId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  isTrashed: boolean('isTrashed').default(false).notNull(),
+  trashedAt: timestamp('trashedAt', { mode: 'date' }),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
 }, (table) => {
