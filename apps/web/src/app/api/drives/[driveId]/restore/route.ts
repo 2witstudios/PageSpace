@@ -1,11 +1,52 @@
 import { NextResponse } from 'next/server';
 import { decodeToken } from '@pagespace/lib/server';
 import { parse } from 'cookie';
-import { drives, db, eq, and } from '@pagespace/db';
+import { drives, db, eq, and, mcpTokens, isNull } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/logger-config';
 
-// Get user ID from cookie
+// Validate MCP token and return user ID
+async function validateMCPToken(token: string): Promise<string | null> {
+  try {
+    if (!token || !token.startsWith('mcp_')) {
+      return null;
+    }
+
+    const tokenData = await db.query.mcpTokens.findFirst({
+      where: and(
+        eq(mcpTokens.token, token),
+        isNull(mcpTokens.revokedAt)
+      ),
+    });
+
+    if (!tokenData) {
+      return null;
+    }
+
+    await db
+      .update(mcpTokens)
+      .set({ lastUsed: new Date() })
+      .where(eq(mcpTokens.id, tokenData.id));
+
+    return tokenData.userId;
+  } catch (error) {
+    loggers.api.error('MCP token validation error:', error as Error);
+    return null;
+  }
+}
+
+// Get user ID from either cookie or MCP token
 async function getUserId(req: Request): Promise<string | null> {
+  // Check for Bearer token (MCP authentication) first
+  const authHeader = req.headers.get('authorization');
+  if (authHeader?.startsWith('Bearer mcp_')) {
+    const mcpToken = authHeader.substring(7); // Remove "Bearer " prefix
+    const userId = await validateMCPToken(mcpToken);
+    if (userId) {
+      return userId;
+    }
+  }
+
+  // Fallback to cookie-based authentication
   const cookieHeader = req.headers.get('cookie');
   if (!cookieHeader) {
     return null;
