@@ -4,6 +4,7 @@ import { decodeToken } from '@pagespace/lib/server';
 import { parse } from 'cookie';
 import { loggers } from '@pagespace/lib/logger-config';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
+import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
 
 // Validate MCP token and return user ID
 async function validateMCPToken(token: string): Promise<string | null> {
@@ -85,7 +86,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   }
 
   try {
-    const page = await db.query.pages.findFirst({ where: eq(pages.id, pageId) });
+    const page = await db.query.pages.findFirst({ 
+      where: eq(pages.id, pageId),
+      with: {
+        drive: {
+          columns: { id: true }
+        }
+      }
+    });
     if (!page || !page.isTrashed) {
       return NextResponse.json({ error: 'Page is not in trash' }, { status: 400 });
     }
@@ -93,6 +101,17 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     await db.transaction(async (tx) => {
       await recursivelyRestore(pageId, tx);
     });
+
+    // Broadcast page restoration event
+    if (page.drive?.id) {
+      await broadcastPageEvent(
+        createPageEventPayload(page.drive.id, pageId, 'restored', {
+          title: page.title,
+          parentId: page.parentId,
+          type: page.type
+        })
+      );
+    }
 
     // Track page restore
     trackPageOperation(userId, 'restore', pageId, {

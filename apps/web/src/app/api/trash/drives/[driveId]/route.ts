@@ -3,6 +3,7 @@ import { decodeToken } from '@pagespace/lib/server';
 import { parse } from 'cookie';
 import { drives, db, eq, and } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/logger-config';
+import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/socket-utils';
 
 // Get user ID from cookie
 async function getUserId(req: Request): Promise<string | null> {
@@ -61,6 +62,14 @@ export async function DELETE(
     await db
       .delete(drives)
       .where(eq(drives.id, drive.id));
+
+    // Broadcast drive deletion event (permanent delete)
+    await broadcastDriveEvent(
+      createDriveEventPayload(drive.id, 'deleted', {
+        name: drive.name,
+        slug: drive.slug,
+      })
+    );
 
     return NextResponse.json({ success: true });
   } catch (error) {

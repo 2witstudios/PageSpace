@@ -3,6 +3,7 @@ import { decodeToken } from '@pagespace/lib/server';
 import { parse } from 'cookie';
 import { drives, db, eq, and, mcpTokens, isNull } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/logger-config';
+import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/socket-utils';
 
 // Validate MCP token and return user ID
 async function validateMCPToken(token: string): Promise<string | null> {
@@ -107,6 +108,14 @@ export async function POST(
         updatedAt: new Date(),
       })
       .where(eq(drives.id, drive.id));
+
+    // Broadcast drive update event (restored from trash)
+    await broadcastDriveEvent(
+      createDriveEventPayload(drive.id, 'updated', {
+        name: drive.name,
+        slug: drive.slug,
+      })
+    );
 
     return NextResponse.json({ success: true });
   } catch (error) {

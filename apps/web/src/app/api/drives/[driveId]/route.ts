@@ -4,6 +4,7 @@ import { parse } from 'cookie';
 import { drives, db, eq, and, mcpTokens, isNull, driveMembers } from '@pagespace/db';
 import { z } from 'zod';
 import { loggers } from '@pagespace/lib/logger-config';
+import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/socket-utils';
 
 // Validate MCP token and return user ID
 async function validateMCPToken(token: string): Promise<string | null> {
@@ -174,6 +175,16 @@ export async function PATCH(
       where: eq(drives.id, drive.id),
     });
 
+    // Broadcast drive update event if name changed
+    if (validatedBody.name) {
+      await broadcastDriveEvent(
+        createDriveEventPayload(drive.id, 'updated', {
+          name: updatedDrive?.name,
+          slug: updatedDrive?.slug,
+        })
+      );
+    }
+
     return NextResponse.json(updatedDrive);
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -221,6 +232,14 @@ export async function DELETE(
         updatedAt: new Date(),
       })
       .where(eq(drives.id, drive.id));
+
+    // Broadcast drive deletion event
+    await broadcastDriveEvent(
+      createDriveEventPayload(drive.id, 'deleted', {
+        name: drive.name,
+        slug: drive.slug,
+      })
+    );
 
     return NextResponse.json({ success: true });
   } catch (error) {

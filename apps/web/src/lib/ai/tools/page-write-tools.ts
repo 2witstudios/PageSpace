@@ -69,19 +69,12 @@ export const pageWriteTools = {
           })
           .where(eq(pages.id, page.id));
 
-        // Get drive slug and broadcast content update
-        const [drive] = await db
-          .select({ slug: drives.slug })
-          .from(drives)
-          .where(eq(drives.id, page.driveId));
-        
-        if (drive?.slug) {
-          await broadcastPageEvent(
-            createPageEventPayload(drive.slug, page.id, 'content-updated', {
-              title: page.title
-            })
-          );
-        }
+        // Broadcast content update event
+        await broadcastPageEvent(
+          createPageEventPayload(page.driveId, page.id, 'content-updated', {
+            title: page.title
+          })
+        );
 
         return {
           success: true,
@@ -170,19 +163,12 @@ export const pageWriteTools = {
           })
           .where(eq(pages.id, page.id));
 
-        // Get drive slug and broadcast content update
-        const [drive] = await db
-          .select({ slug: drives.slug })
-          .from(drives)
-          .where(eq(drives.id, page.driveId));
-        
-        if (drive?.slug) {
-          await broadcastPageEvent(
-            createPageEventPayload(drive.slug, page.id, 'content-updated', {
-              title: page.title
-            })
-          );
-        }
+        // Broadcast content update event
+        await broadcastPageEvent(
+          createPageEventPayload(page.driveId, page.id, 'content-updated', {
+            title: page.title
+          })
+        );
 
         return {
           success: true,
@@ -270,19 +256,12 @@ export const pageWriteTools = {
           })
           .where(eq(pages.id, page.id));
 
-        // Get drive slug and broadcast content update
-        const [drive] = await db
-          .select({ slug: drives.slug })
-          .from(drives)
-          .where(eq(drives.id, page.driveId));
-        
-        if (drive?.slug) {
-          await broadcastPageEvent(
-            createPageEventPayload(drive.slug, page.id, 'content-updated', {
-              title: page.title
-            })
-          );
-        }
+        // Broadcast content update event
+        await broadcastPageEvent(
+          createPageEventPayload(page.driveId, page.id, 'content-updated', {
+            title: page.title
+          })
+        );
 
         return {
           success: true,
@@ -385,22 +364,14 @@ export const pageWriteTools = {
           })
           .returning({ id: pages.id, title: pages.title, type: pages.type });
 
-        // Get the drive slug for broadcasting
-        const [driveInfo] = await db
-          .select({ slug: drives.slug })
-          .from(drives)
-          .where(eq(drives.id, driveId));
-
         // Broadcast page creation event
-        if (driveInfo?.slug) {
-          await broadcastPageEvent(
-            createPageEventPayload(driveInfo.slug, newPage.id, 'created', {
-              parentId,
-              title: newPage.title,
-              type: newPage.type
-            })
-          );
-        }
+        await broadcastPageEvent(
+          createPageEventPayload(driveId, newPage.id, 'created', {
+            parentId,
+            title: newPage.title,
+            type: newPage.type
+          })
+        );
 
         return {
           success: true,
@@ -463,12 +434,6 @@ export const pageWriteTools = {
           throw new Error('Insufficient permissions to rename this page');
         }
 
-        // Get the drive slug for broadcasting
-        const [driveInfo] = await db
-          .select({ slug: drives.slug })
-          .from(drives)
-          .where(eq(drives.id, page.driveId));
-
         // Update the page title
         const [renamedPage] = await db
           .update(pages)
@@ -480,14 +445,12 @@ export const pageWriteTools = {
           .returning({ id: pages.id, title: pages.title, type: pages.type, parentId: pages.parentId });
 
         // Broadcast page update event for title change
-        if (driveInfo?.slug) {
-          await broadcastPageEvent(
-            createPageEventPayload(driveInfo.slug, renamedPage.id, 'updated', {
-              title: renamedPage.title,
-              parentId: renamedPage.parentId
-            })
-          );
-        }
+        await broadcastPageEvent(
+          createPageEventPayload(page.driveId, renamedPage.id, 'updated', {
+            title: renamedPage.title,
+            parentId: renamedPage.parentId
+          })
+        );
 
         return {
           success: true,
@@ -547,12 +510,6 @@ export const pageWriteTools = {
           throw new Error('Insufficient permissions to trash this page');
         }
 
-        // Get the drive slug for broadcasting
-        const [driveInfo] = await db
-          .select({ slug: drives.slug })
-          .from(drives)
-          .where(eq(drives.id, page.driveId));
-
         // Move to trash
         const [trashedPage] = await db
           .update(pages)
@@ -565,14 +522,12 @@ export const pageWriteTools = {
           .returning({ id: pages.id, title: pages.title, type: pages.type, parentId: pages.parentId });
 
         // Broadcast page deletion event
-        if (driveInfo?.slug) {
-          await broadcastPageEvent(
-            createPageEventPayload(driveInfo.slug, trashedPage.id, 'trashed', {
-              title: trashedPage.title,
-              parentId: trashedPage.parentId
-            })
-          );
-        }
+        await broadcastPageEvent(
+          createPageEventPayload(page.driveId, trashedPage.id, 'trashed', {
+            title: trashedPage.title,
+            parentId: trashedPage.parentId
+          })
+        );
 
         return {
           success: true,
@@ -636,19 +591,12 @@ export const pageWriteTools = {
           })
           .where(eq(pages.id, page.id));
 
-        // Get drive slug and broadcast content update
-        const [drive] = await db
-          .select({ slug: drives.slug })
-          .from(drives)
-          .where(eq(drives.id, page.driveId));
-        
-        if (drive?.slug) {
-          await broadcastPageEvent(
-            createPageEventPayload(drive.slug, page.id, 'content-updated', {
-              title: page.title
-            })
-          );
-        }
+        // Broadcast content update event
+        await broadcastPageEvent(
+          createPageEventPayload(page.driveId, page.id, 'content-updated', {
+            title: page.title
+          })
+        );
 
         return {
           success: true,
@@ -720,19 +668,12 @@ export const pageWriteTools = {
           })
           .where(eq(pages.id, page.id));
 
-        // Get drive slug and broadcast content update
-        const [drive] = await db
-          .select({ slug: drives.slug })
-          .from(drives)
-          .where(eq(drives.id, page.driveId));
-        
-        if (drive?.slug) {
-          await broadcastPageEvent(
-            createPageEventPayload(drive.slug, page.id, 'content-updated', {
-              title: page.title
-            })
-          );
-        }
+        // Broadcast content update event
+        await broadcastPageEvent(
+          createPageEventPayload(page.driveId, page.id, 'content-updated', {
+            title: page.title
+          })
+        );
 
         return {
           success: true,
@@ -883,12 +824,6 @@ export const pageWriteTools = {
           throw new Error('Insufficient permissions to restore this page');
         }
 
-        // Get the drive slug for broadcasting
-        const [driveInfo] = await db
-          .select({ slug: drives.slug })
-          .from(drives)
-          .where(eq(drives.id, trashedPage.driveId));
-
         // Restore the page
         const [restoredPage] = await db
           .update(pages)
@@ -901,14 +836,12 @@ export const pageWriteTools = {
           .returning({ id: pages.id, title: pages.title, type: pages.type, parentId: pages.parentId });
 
         // Broadcast page restore event
-        if (driveInfo?.slug) {
-          await broadcastPageEvent(
-            createPageEventPayload(driveInfo.slug, restoredPage.id, 'restored', {
-              title: restoredPage.title,
-              parentId: restoredPage.parentId
-            })
-          );
-        }
+        await broadcastPageEvent(
+          createPageEventPayload(trashedPage.driveId, restoredPage.id, 'restored', {
+            title: restoredPage.title,
+            parentId: restoredPage.parentId
+          })
+        );
 
         return {
           success: true,
@@ -996,21 +929,13 @@ export const pageWriteTools = {
           .where(eq(pages.id, page.id))
           .returning({ id: pages.id, title: pages.title, type: pages.type });
 
-        // Get the drive slug for broadcasting
-        const [driveInfo] = await db
-          .select({ slug: drives.slug })
-          .from(drives)
-          .where(eq(drives.id, page.driveId));
-
         // Broadcast page move event
-        if (driveInfo?.slug) {
-          await broadcastPageEvent(
-            createPageEventPayload(driveInfo.slug, movedPage.id, 'moved', {
-              parentId: newParentId,
-              title: movedPage.title
-            })
-          );
-        }
+        await broadcastPageEvent(
+          createPageEventPayload(page.driveId, movedPage.id, 'moved', {
+            parentId: newParentId,
+            title: movedPage.title
+          })
+        );
 
         return {
           success: true,

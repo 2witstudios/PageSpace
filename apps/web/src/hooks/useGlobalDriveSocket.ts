@@ -24,7 +24,7 @@ export function useGlobalDriveSocket() {
     
     revalidationTimeoutRef.current = setTimeout(() => {
       console.log('🌍 Executing debounced drives refetch');
-      fetchDrives();
+      fetchDrives(true, true); // Force refresh to bypass cache
     }, 500); // 500ms debounce
   }, [fetchDrives]);
 
