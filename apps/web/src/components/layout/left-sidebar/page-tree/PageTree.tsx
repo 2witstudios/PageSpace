@@ -24,6 +24,7 @@ import TreeNode from "./TreeNode";
 import DragOverlayItem from "./DragOverlayItem";
 import { Skeleton } from "@/components/ui/skeleton";
 import CreatePageDialog from "../CreatePageDialog";
+import { useTreeState } from "@/hooks/useUI";
 
 export type DropPosition = 'before' | 'after' | 'inside' | null;
 
@@ -52,7 +53,7 @@ export default function PageTree({ driveId, initialTree, mutate: externalMutate,
     overId: null,
     dropPosition: null
   });
-  const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(new Set());
+  const { expanded: expandedNodes, toggleExpanded } = useTreeState();
   const [createPageInfo, setCreatePageInfo] = useState<{
     isOpen: boolean;
     parentId: string | null;
@@ -99,14 +100,14 @@ export default function PageTree({ driveId, initialTree, mutate: externalMutate,
       }
       return items.reduce<string[]>((acc, item) => {
         acc.push(item.id);
-        if (item.children && !collapsedNodes.has(item.id)) {
+        if (item.children && expandedNodes.has(item.id)) {
           acc.push(...flatten(item.children));
         }
         return acc;
       }, []);
     };
     return flatten(displayedTree);
-  }, [displayedTree, collapsedNodes]);
+  }, [displayedTree, expandedNodes]);
 
   const activeNode = useMemo(() => {
     if (!activeId) return null;
@@ -115,17 +116,9 @@ export default function PageTree({ driveId, initialTree, mutate: externalMutate,
     return result?.node || null;
   }, [activeId, optimisticTree, tree]);
 
-  const handleCollapse = useCallback((id: string) => {
-    setCollapsedNodes(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-  }, []);
+  const handleToggleExpand = useCallback((id: string) => {
+    toggleExpanded(id);
+  }, [toggleExpanded]);
 
   const handleOpenCreateDialog = useCallback((parentId: string | null) => {
     setCreatePageInfo({ isOpen: true, parentId });
@@ -191,11 +184,10 @@ export default function PageTree({ driveId, initialTree, mutate: externalMutate,
     if (dragState.dropPosition === 'inside') {
       newParentId = over.id as string;
       newIndex = 0;
-      setCollapsedNodes(prev => {
-        const next = new Set(prev);
-        next.delete(over.id as string);
-        return next;
-      });
+      // Ensure the target node is expanded when dropping inside
+      if (!expandedNodes.has(over.id as string)) {
+        toggleExpanded(over.id as string);
+      }
     } else {
       newParentId = overParent ? overParent.id : driveId;
       const siblings = overParent ? overParent.children : newTree;
@@ -278,14 +270,14 @@ export default function PageTree({ driveId, initialTree, mutate: externalMutate,
               key={node.id}
               node={node}
               depth={0}
-              onCollapse={handleCollapse}
-              isCollapsed={collapsedNodes.has(node.id)}
+              onToggleExpand={handleToggleExpand}
+              isExpanded={expandedNodes.has(node.id)}
               dragState={dragState}
               activeId={activeId}
               onOpenCreateDialog={handleOpenCreateDialog}
               mutate={mutate}
               isTrashView={isTrashView}
-              collapsedNodes={collapsedNodes}
+              expandedNodes={expandedNodes}
             />
           ))}
         </nav>

@@ -36,27 +36,27 @@ import { RenameDialog } from "@/components/dialogs/RenameDialog";
 interface TreeNodeProps {
   node: TreePage;
   depth: number;
-  onCollapse: (id: string) => void;
-  isCollapsed: boolean;
+  onToggleExpand: (id: string) => void;
+  isExpanded: boolean;
   dragState: DragState;
   activeId: string | null;
   onOpenCreateDialog: (parentId: string | null) => void;
   mutate: () => void;
   isTrashView?: boolean;
-  collapsedNodes: Set<string>;
+  expandedNodes: Set<string>;
 }
 
 export default function TreeNode({
   node,
   depth,
-  onCollapse,
-  isCollapsed,
+  onToggleExpand,
+  isExpanded,
   dragState,
   activeId,
   onOpenCreateDialog,
   mutate,
   isTrashView = false,
-  collapsedNodes,
+  expandedNodes,
 }: TreeNodeProps) {
   const [isHovered, setIsHovered] = useState(false);
   const [isConfirmTrashOpen, setConfirmTrashOpen] = useState(false);
@@ -230,14 +230,14 @@ export default function TreeNode({
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                onCollapse(node.id);
+                onToggleExpand(node.id);
               }}
               className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
             >
               <ChevronRight
                 className={`
                   h-4 w-4 text-gray-500 transition-transform duration-200
-                  ${!isCollapsed ? "rotate-90" : ""}
+                  ${isExpanded ? "rotate-90" : ""}
                 `}
               />
             </button>
@@ -345,7 +345,7 @@ export default function TreeNode({
       </div>
 
       {/* Children */}
-      {hasChildren && !isCollapsed && (
+      {hasChildren && isExpanded && (
         <div className="relative">
           <SortableContext
             items={node.children.map((child) => child.id)}
@@ -356,14 +356,14 @@ export default function TreeNode({
                 key={child.id}
                 node={child}
                 depth={depth + 1}
-                onCollapse={onCollapse}
-                isCollapsed={collapsedNodes.has(child.id)}
+                onToggleExpand={onToggleExpand}
+                isExpanded={expandedNodes.has(child.id)}
                 dragState={dragState}
                 activeId={activeId}
                 onOpenCreateDialog={onOpenCreateDialog}
                 mutate={mutate}
                 isTrashView={isTrashView}
-                collapsedNodes={collapsedNodes}
+                expandedNodes={expandedNodes}
               />
             ))}
           </SortableContext>
