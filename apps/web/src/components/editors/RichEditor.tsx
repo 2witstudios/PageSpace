@@ -94,7 +94,59 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false }: RichE
       }
       
       if (value !== currentHTML) {
+        // Save current view state before updating content
+        const { from, to } = editor.state.selection;
+        const { anchor, head } = editor.state.selection;
+        
+        // Get the current view's scroll position if available
+        const editorElement = editor.view.dom;
+        const scrollTop = editorElement?.parentElement?.scrollTop || 0;
+        
+        // Update content
         editor.commands.setContent(value || '', { emitUpdate: false });
+        
+        // Restore selection and scroll position after content update
+        requestAnimationFrame(() => {
+          if (editor && !editor.isDestroyed) {
+            try {
+              // Calculate the actual position accounting for any added line breaks
+              // Tiptap's positions include text nodes + block boundaries
+              const docSize = editor.state.doc.content.size;
+              
+              // For same-line cursor preservation, we need to account for block boundaries
+              // Each block (paragraph) adds 1 to the position count
+              let adjustedFrom = from;
+              let adjustedTo = to;
+              
+              // If we're at the end of a paragraph, stay there
+              const resolvedPos = editor.state.doc.resolve(Math.min(from, docSize - 1));
+              const isAtBlockEnd = resolvedPos.node().type.name === 'paragraph' && 
+                                   resolvedPos.parentOffset === resolvedPos.parent.content.size;
+              
+              if (!isAtBlockEnd) {
+                // Normal position within text
+                adjustedFrom = Math.min(from, docSize - 1);
+                adjustedTo = Math.min(to, docSize - 1);
+              } else {
+                // At block boundary - preserve exact position
+                adjustedFrom = Math.min(from, docSize);
+                adjustedTo = Math.min(to, docSize);
+              }
+              
+              editor.commands.setTextSelection({
+                from: adjustedFrom,
+                to: adjustedTo
+              });
+              
+              // Restore scroll position
+              if (editorElement?.parentElement) {
+                editorElement.parentElement.scrollTop = scrollTop;
+              }
+            } catch (error) {
+              console.debug('Could not restore cursor position:', error);
+            }
+          }
+        });
       }
     }
   }, [value, editor]);
