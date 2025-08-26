@@ -55,7 +55,53 @@ export function useAuth(): {
     return typeof document !== 'undefined';
   }, []);
 
-  // Check authentication status
+  // Silent auth check - doesn't trigger loading states (used for background token refresh)
+  const silentCheckAuth = useCallback(async () => {
+    // Circuit breaker - skip if too many recent failures
+    if (authStoreHelpers.shouldSkipAuthCheck()) {
+      console.log('[AUTH_HOOK] Skipping silent auth check - too many recent failures (circuit breaker)');
+      return;
+    }
+
+    console.log('[AUTH_HOOK] Starting silent auth check (no loading state)');
+    
+    try {
+      const response = await fetch('/api/auth/me', {
+        credentials: 'include',
+      });
+
+      console.log(`[AUTH_HOOK] Silent auth response status: ${response.status}`);
+
+      if (response.ok) {
+        const userData = await response.json();
+        console.log(`[AUTH_HOOK] Silent auth - User data received: ${userData.email} (id: ${userData.id})`);
+        setUser(userData);
+        updateActivity();
+        // Clear any failed attempts on success
+        clearFailedAttempts();
+      } else if (response.status === 401) {
+        console.log('[AUTH_HOOK] Silent auth - 401 Unauthorized - clearing user and recording failed attempt');
+        // Record failed attempt and clear user on 401 (unauthorized)
+        recordFailedAuth();
+        setUser(null);
+      } else {
+        console.log(`[AUTH_HOOK] Silent auth - Other error ${response.status} - not clearing user state`);
+        // For other errors (network, server), don't clear user state
+      }
+    } catch (error) {
+      console.error('💥 Silent auth check failed with error:', error);
+      // Record failed attempt on network errors
+      recordFailedAuth();
+      // Only clear user on network errors if we don't have a user yet
+      if (!user) {
+        console.log('[AUTH_HOOK] Silent auth - Network error with no user - clearing state');
+        setUser(null);
+      }
+    }
+    console.log('[AUTH_HOOK] Silent auth check completed');
+  }, [setUser, updateActivity, user, recordFailedAuth, clearFailedAttempts]);
+
+  // Check authentication status (with loading state for user-initiated checks)
   const checkAuth = useCallback(async () => {
     if (isLoading) {
       console.log('[AUTH_HOOK] Skipping auth check - already loading');
@@ -251,8 +297,9 @@ export function useAuth(): {
   // Listen for auth events from the fetch wrapper
   useEffect(() => {
     const handleAuthRefreshed = () => {
-      // Token was refreshed successfully, update auth state
-      checkAuth();
+      // Token was refreshed successfully, update auth state silently (no loading state)
+      // This prevents UI disruption during automatic token refreshes
+      silentCheckAuth();
     };
 
     const handleAuthExpired = () => {
@@ -267,7 +314,7 @@ export function useAuth(): {
       window.removeEventListener('auth:refreshed', handleAuthRefreshed);
       window.removeEventListener('auth:expired', handleAuthExpired);
     };
-  }, [checkAuth, logout]);
+  }, [silentCheckAuth, logout]);
 
   // Track user activity
   useEffect(() => {
