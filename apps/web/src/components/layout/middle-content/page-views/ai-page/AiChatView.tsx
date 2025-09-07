@@ -14,8 +14,7 @@ import { UIMessage, DefaultChatTransport } from 'ai';
 import { MessageRenderer } from '@/components/ai/MessageRenderer';
 import { buildPagePath } from '@/lib/tree/tree-utils';
 import { useDriveStore } from '@/hooks/useDrive';
-import { AgentRole, AgentRoleUtils } from '@/lib/ai/agent-roles';
-import { RoleSelector } from '@/components/ai/RoleSelector';
+// Agent roles removed - AI_CHAT pages now use custom system prompts
 import { AI_PROVIDERS, getBackendProvider } from '@/lib/ai/ai-providers-config';
 import { useAuth } from '@/hooks/use-auth';
 import { toast } from 'sonner';
@@ -54,7 +53,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
   const [initialMessages, setInitialMessages] = useState<UIMessage[]>([]);
   const [input, setInput] = useState<string>('');
-  const [currentAgentRole, setCurrentAgentRole] = useState<AgentRole>(AgentRoleUtils.getDefaultRole());
+  // Agent role state removed - AI_CHAT pages use custom system prompts instead
   const [showError, setShowError] = useState(true);
   const [isReadOnly, setIsReadOnly] = useState<boolean>(false);
   const { user } = useAuth();
@@ -383,14 +382,6 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       {/* Chat Header - Keep full width */}
       <div className="flex items-center justify-between p-4 border-b bg-card">
         <div className="flex items-center space-x-3">
-          {/* Agent Role Selector */}
-          <RoleSelector
-            currentRole={currentAgentRole}
-            onRoleChange={setCurrentAgentRole}
-            disabled={status === 'streaming'}
-            size="sm"
-          />
-          
           {/* Provider Selector */}
           <div className="flex items-center space-x-2">
             <Select value={selectedProvider} onValueChange={handleProviderChange}>
@@ -572,7 +563,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                           driveName: currentDrive?.name || driveId,
                           driveSlug: currentDrive?.slug,
                         },
-                        agentRole: currentAgentRole,
+                        // Agent role not needed - custom system prompt handled server-side
                       }
                     }
                   );
@@ -617,7 +608,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                           driveName: currentDrive?.name || driveId,
                           driveSlug: currentDrive?.slug,
                         },
-                        agentRole: currentAgentRole,
+                        // Agent role not needed - custom system prompt handled server-side
                       }
                     }
                   );

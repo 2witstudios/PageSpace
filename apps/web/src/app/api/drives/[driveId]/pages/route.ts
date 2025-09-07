@@ -170,6 +170,11 @@ const createPageSchema = z.object({
   type: z.enum(pageType.enumValues),
   parentId: z.string().nullable(),
   position: z.number(),
+  // AI agent configuration fields (optional for AI_CHAT pages)
+  aiSystemPrompt: z.string().optional(),
+  aiDescription: z.string().optional(),
+  aiToolAccess: z.array(z.string()).optional(),
+  aiModelOverride: z.string().optional(),
 });
 
 export async function POST(
@@ -185,7 +190,16 @@ export async function POST(
   try {
     const { driveId } = await context.params;
     const body = await request.json();
-    const { title, type, parentId, position } = createPageSchema.parse(body);
+    const { 
+      title, 
+      type, 
+      parentId, 
+      position,
+      aiSystemPrompt,
+      aiDescription,
+      aiToolAccess,
+      aiModelOverride
+    } = createPageSchema.parse(body);
 
     const newPage = await db.transaction(async (tx) => {
       const drive = await tx.query.drives.findFirst({
@@ -211,6 +225,11 @@ export async function POST(
         position,
         driveId: drive.id,
         parentId,
+        // AI agent configuration fields
+        aiSystemPrompt: type === 'AI_CHAT' ? aiSystemPrompt : null,
+        aiDescription: type === 'AI_CHAT' ? aiDescription : null,
+        aiToolAccess: type === 'AI_CHAT' && aiToolAccess ? aiToolAccess : null,
+        aiModelOverride: type === 'AI_CHAT' ? aiModelOverride : null,
         updatedAt: new Date(),
       }).returning();
 

@@ -76,6 +76,7 @@
     "react-dom": "^19.0.0",
     "react-markdown": "^10.1.0",
     "recharts": "^3.1.2",
+    "rehype-raw": "^7.0.0",
     "slate": "^0.117.2",
     "slate-history": "^0.113.1",
     "slate-react": "^0.117.4",

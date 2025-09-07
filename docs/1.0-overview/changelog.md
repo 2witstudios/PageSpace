@@ -1,3 +1,16 @@
+### 2025-08-28
+
+- **Enhancement**: Added PageSpace Application Context to AI System Prompts
+  - **Updated**: `apps/web/src/lib/ai/role-prompts.ts` to prepend a concise description of PageSpace to the `core` prompt for all AI roles (Partner, Planner, Writer).
+  - **Rationale**: Provides the AI with a fundamental understanding of the application it operates within, improving its ability to generate relevant and context-aware responses.
+
+### 2025-08-27
+
+- **Enhancement**: Conditional AI Context Gathering
+  - **Updated**: `apps/web/src/lib/ai/role-prompts.ts` to modify the `buildSystemPrompt` function.
+  - **Logic**: The AI now conditionally uses `list_drives` and `list_pages` to gain context. If a specific page context is available, it prioritizes `read_current_page` or `read_page`. Otherwise, it performs a broader search of drives and pages.
+  - **Rationale**: Improves AI's ability to respond accurately by ensuring it always has relevant context, while prioritizing the immediate user focus.
+
 ### 2025-08-24
 
 - **Refactor**: Split `ai-tools.ts` into smaller, more manageable files.

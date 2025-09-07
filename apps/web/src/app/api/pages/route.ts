@@ -69,7 +69,17 @@ export async function POST(request: Request) {
   }
 
   try {
-    const { title, type, parentId, driveId, content } = await request.json();
+    const { 
+      title, 
+      type, 
+      parentId, 
+      driveId, 
+      content,
+      aiSystemPrompt,
+      aiDescription,
+      aiToolAccess,
+      aiModelOverride 
+    } = await request.json();
 
     if (!title || !type || !driveId) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
@@ -120,6 +130,11 @@ export async function POST(request: Request) {
         position: newPosition,
         aiProvider,
         aiModel,
+        // New AI agent configuration fields
+        aiSystemPrompt: type === 'AI_CHAT' ? aiSystemPrompt : null,
+        aiDescription: type === 'AI_CHAT' ? aiDescription : null,
+        aiToolAccess: type === 'AI_CHAT' && aiToolAccess ? aiToolAccess : null,
+        aiModelOverride: type === 'AI_CHAT' ? aiModelOverride : null,
         updatedAt: new Date(),
       }).returning();
 

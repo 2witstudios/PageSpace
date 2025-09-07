@@ -32,7 +32,6 @@ import {
 } from '@/lib/ai/assistant-utils';
 import { processMentionsInMessage, buildMentionSystemPrompt } from '@/lib/ai/mention-processor';
 import { AgentRoleUtils } from '@/lib/ai/agent-roles';
-import { RolePromptBuilder } from '@/lib/ai/role-prompts';
 import { ToolPermissionFilter } from '@/lib/ai/tool-permissions';
 import { loggers } from '@pagespace/lib/logger-config';
 import { trackFeature } from '@pagespace/lib/activity-tracker';
@@ -41,6 +40,74 @@ import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
 
 // Allow streaming responses up to 60 seconds for longer AI conversations
 export const maxDuration = 60;
+
+/**
+ * Build the base system prompt that's always present
+ * This includes technical context, tool instructions, and navigation rules
+ * User prompts are layered on top of this
+ */
+function buildBaseSystemPrompt(pageContext?: {
+  pageId: string;
+  pageTitle: string;
+  pageType: string;
+  pagePath: string;
+  parentPath: string;
+  breadcrumbs: string[];
+  driveId?: string;
+  driveName: string;
+  driveSlug: string;
+}): string {
+  const contextSection = pageContext ? `
+CURRENT CONTEXT:
+• You are operating within the page "${pageContext.pageTitle}" in the "${pageContext.driveName}" drive
+• Your current location: ${pageContext.pagePath}
+• Navigation path: ${pageContext.breadcrumbs.join(' > ')}
+• Drive ID: ${pageContext.driveId || 'current-drive'}
+• Drive slug: ${pageContext.driveSlug}
+
+LOCATION AWARENESS:
+• When users say "here", "this", or don't specify location, they mean: ${pageContext.pagePath}
+• Default scope for operations is within this location and its children
+• Always use list_pages on the current drive (driveSlug: "${pageContext.driveSlug}", driveId: "${pageContext.driveId}") when:
+  - User asks about content in this area
+  - User wants to create, write, or modify anything
+  - User references files/folders that might exist
+  - You need structural context for any operation` : `
+CURRENT CONTEXT:
+• You are operating in the PageSpace workspace system
+• Multiple drives (workspaces) may be available
+• Use list_drives to discover available workspaces`;
+
+  return `You are an AI agent in the PageSpace intelligent workspace system.
+
+PageSpace is a hierarchical document system where every piece of content exists as a "page" that can contain other pages, creating an infinitely nestable structure. Pages can be documents, folders, AI agents, channels, or custom canvas pages.
+${contextSection}
+
+CORE PRINCIPLES:
+• ALWAYS start by exploring context with list_pages to understand available content
+• Create specialized AI agents (AI_CHAT pages) for focused assistance in specific areas
+• Any page type can contain any other page type - organize by logic, not technical constraints
+• Each AI_CHAT page is an agent that can be discovered and invoked by other agents
+
+PAGE TYPES AND WHEN TO CREATE THEM:
+• FOLDER: Organize related content hierarchically
+• DOCUMENT: Create written content, notes, documentation
+• AI_CHAT: Create specialized AI agents for specific domains or tasks
+• CHANNEL: Create team discussion spaces for collaboration
+• CANVAS: Create custom HTML/CSS pages with full design control
+
+TOOL USAGE PATTERNS:
+1. EXPLORATION FIRST: Always list_pages before any operation to understand structure
+2. READ BEFORE MODIFY: Read page content before making changes
+3. AGENT CREATION: Proactively suggest creating AI agents for specialized tasks
+4. DISCOVERY: Use discover_agents to find specialized help when needed
+
+BEHAVIORAL GUIDELINES:
+• Be proactive in understanding user needs through exploration
+• Suggest creating specialized agents for recurring tasks
+• Think in terms of hierarchical organization
+• Treat every AI_CHAT page as a potential expert to consult`;
+}
 
 /**
  * Next.js 15 compatible API route for AI chat
@@ -417,27 +484,41 @@ export async function POST(request: Request) {
     // Convert UIMessages to ModelMessages for the AI model
     // First sanitize messages to remove tool parts without results (prevents "input-available" state errors)
     const sanitizedMessages = sanitizeMessagesForModel(messages);
-    const modelMessages = convertToModelMessages(sanitizedMessages);
-
-    // Build role-aware system prompt with page context
-    const systemPrompt = RolePromptBuilder.buildSystemPrompt(
-      agentRole,
-      'page',
-      pageContext ? {
-        driveName: pageContext.driveName,
-        driveSlug: pageContext.driveSlug,
-        driveId: pageContext.driveId,
-        pagePath: pageContext.pagePath,
-        pageType: pageContext.pageType,
-        breadcrumbs: pageContext.breadcrumbs,
-      } : undefined
-    );
-
-    // Filter tools based on agent role permissions
-    const roleFilteredTools = ToolPermissionFilter.filterTools(pageSpaceTools, agentRole);
+    // Build base system prompt (always present, includes technical context)
+    const baseSystemPrompt = buildBaseSystemPrompt(pageContext);
     
-    loggers.ai.debug('AI Chat API: Role-filtered tools', { toolCount: Object.keys(roleFilteredTools).length });
-    loggers.ai.info('AI Chat API: Starting streamText', { model: currentModel, agentRole });
+    // Check if first message is a user-defined system prompt
+    let userAgentPrompt = '';
+    let conversationMessages = sanitizedMessages;
+    // Use a Record type for tools to allow filtering
+    let effectiveTools: Record<string, typeof pageSpaceTools[keyof typeof pageSpaceTools]> = pageSpaceTools;
+    
+    if (pageContext?.pageType === 'AI_CHAT' && sanitizedMessages[0]?.role === 'system') {
+      // First message is the user's custom agent prompt
+      userAgentPrompt = extractMessageContent(sanitizedMessages[0]);
+      conversationMessages = sanitizedMessages.slice(1); // Skip the system message
+      loggers.ai.info('AI Chat API: Using custom agent prompt from first message', { 
+        pageId: pageContext.pageId,
+        hasCustomPrompt: true 
+      });
+      
+      // For now, AI_CHAT pages have full tool access
+      // In the future, we could encode tool restrictions in the system message itself
+    } else if (!pageContext?.pageType || pageContext.pageType !== 'AI_CHAT') {
+      // Global AI - use role-based filtering
+      effectiveTools = ToolPermissionFilter.filterTools(pageSpaceTools, agentRole);
+    }
+    
+    // Convert messages for the model (excluding system message if present)
+    const modelMessages = convertToModelMessages(conversationMessages);
+    
+    // Combine base and user prompts
+    const systemPrompt = userAgentPrompt 
+      ? `${baseSystemPrompt}\n\nYOUR SPECIALIZED ROLE:\n${userAgentPrompt}`
+      : baseSystemPrompt;
+
+    loggers.ai.debug('AI Chat API: Effective tools', { toolCount: Object.keys(effectiveTools).length });
+    loggers.ai.info('AI Chat API: Starting streamText', { model: currentModel });
     
     // Wrap streamText in try-catch for better error handling
     let result;
@@ -581,7 +662,7 @@ MENTION PROCESSING:
 • Let mentioned document content inform and enrich your response
 • Don't explicitly mention that you're reading @mentioned docs unless relevant to the conversation`,
       messages: modelMessages,
-      tools: roleFilteredTools,
+      tools: effectiveTools,
       stopWhen: stepCountIs(100), // Allow up to 100 tool calls per conversation turn
       experimental_context: { userId }, // Pass userId to tools for permission checking
       maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits

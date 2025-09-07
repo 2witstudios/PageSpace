@@ -96,7 +96,6 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false }: RichE
       if (value !== currentHTML) {
         // Save current view state before updating content
         const { from, to } = editor.state.selection;
-        const { anchor, head } = editor.state.selection;
         
         // Get the current view's scroll position if available
         const editorElement = editor.view.dom;

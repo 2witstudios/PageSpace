@@ -20,7 +20,9 @@ export interface RolePromptTemplate {
 
 export const ROLE_PROMPTS: Record<AgentRole, RolePromptTemplate> = {
   [AgentRole.PARTNER]: {
-    core: `You are a collaborative AI partner with balanced capabilities. You can explore, read, and modify content, but you prioritize conversation and explanation. Think of yourself as a knowledgeable colleague who discusses ideas before taking action.`,
+    core: `PageSpace is an intelligent workspace where AI agents collaborate alongside your team with real tools to create, edit, and organize content.
+
+You are a collaborative AI partner with balanced capabilities. You can explore, read, and modify content, but you prioritize conversation and explanation. Think of yourself as a knowledgeable colleague who discusses ideas before taking action.`,
     
     behavior: `BEHAVIORAL PRIORITIES:
 1. Engage conversationally - explain your thinking and reasoning
@@ -52,7 +54,9 @@ export const ROLE_PROMPTS: Record<AgentRole, RolePromptTemplate> = {
   },
 
   [AgentRole.PLANNER]: {
-    core: `You are a strategic planning assistant focused on analysis and planning. You have read-only access and cannot modify content. Your role is to understand, analyze, and create detailed plans that others can execute.`,
+    core: `PageSpace is an intelligent workspace where AI agents collaborate alongside your team with real tools to create, edit, and organize content.
+
+You are a strategic planning assistant focused on analysis and planning. You have read-only access and cannot modify content. Your role is to understand, analyze, and create detailed plans that others can execute.`,
     
     behavior: `PLANNING PRIORITIES:
 1. Thoroughly understand the current state before proposing changes
@@ -84,7 +88,9 @@ export const ROLE_PROMPTS: Record<AgentRole, RolePromptTemplate> = {
   },
 
   [AgentRole.WRITER]: {
-    core: `You are an execution-focused assistant. Your job is to efficiently complete tasks with minimal conversation. You have full access to modify content and should proceed confidently based on user instructions.`,
+    core: `PageSpace is an intelligent workspace where AI agents collaborate alongside your team with real tools to create, edit, and organize content.
+
+You are an execution-focused assistant. Your job is to efficiently complete tasks with minimal conversation. You have full access to modify content and should proceed confidently based on user instructions.`,
     
     behavior: `EXECUTION PRIORITIES:
 1. Execute requested actions immediately and efficiently
@@ -146,8 +152,20 @@ export class RolePromptBuilder {
       rolePrompt.constraints,
       rolePrompt.postToolExecution
     ].filter(Boolean);
-    
-    return sections.join('\n\n');
+
+    // Add a conditional instruction for searching drives and pages
+    let searchInstruction = '';
+    if (contextType === 'page' && contextInfo?.pagePath) {
+      searchInstruction = `\n\n📚 CONTEXT GATHERING:
+• Prioritize understanding the current page using 'read_current_page' or 'read_page'.
+• If the user's query is broader than the current page, use 'list_drives' and 'list_pages' to gain wider context before responding.`;
+    } else {
+      searchInstruction = `\n\n📚 CONTEXT GATHERING:
+• Before responding to any query, always use 'list_drives' and 'list_pages' to gain context about available content.
+• Treat the content of drives and pages as a codebase, similar to how you are prompted.`;
+    }
+
+    return sections.join('\n\n') + searchInstruction;
   }
 
   /**

@@ -237,6 +237,11 @@ const patchSchema = z.object({
   content: z.string().optional(),
   aiProvider: z.string().optional(),
   aiModel: z.string().optional(),
+  // AI agent configuration fields
+  aiSystemPrompt: z.string().nullable().optional(),
+  aiDescription: z.string().nullable().optional(),
+  aiToolAccess: z.array(z.string()).nullable().optional(),
+  aiModelOverride: z.string().nullable().optional(),
 });
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ pageId: string }> }) {

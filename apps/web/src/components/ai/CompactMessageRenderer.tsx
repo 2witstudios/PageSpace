@@ -61,8 +61,8 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = ({ parts, role, messag
       }`}>
         {role === 'user' ? 'You' : 'AI'}
       </div>
-      <div className="text-gray-900 dark:text-gray-100 prose prose-xs dark:prose-invert max-w-full overflow-hidden">
-        <div className="break-words overflow-wrap-anywhere">
+      <div className="w-full max-w-full overflow-x-hidden">
+        <div className="text-gray-900 dark:text-gray-100 prose prose-xs dark:prose-invert max-w-full [&_*]:max-w-full [&_*]:break-words [&_*]:overflow-wrap-anywhere [&_details]:my-2 [&_summary]:cursor-pointer [&_summary]:font-medium [&_details]:border [&_details]:rounded [&_details]:p-2 [&_details]:bg-background/50 [&_details]:overflow-x-hidden [&_details_*]:max-w-full [&_details_*]:break-words [&_pre]:overflow-x-auto [&_pre]:max-w-full [&_code]:break-all [&_p]:break-words [&_li]:break-words">
           <MemoizedMarkdown content={content} id={`${messageId}-text`} />
         </div>
       </div>
