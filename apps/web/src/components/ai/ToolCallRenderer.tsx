@@ -15,6 +15,7 @@ import {
   FileDown
 } from 'lucide-react';
 import { Task, TaskTrigger, TaskContent, TaskItem, TaskItemFile, TaskStatus } from '@/components/ai/task';
+import { TaskManagementToolRenderer } from './TaskManagementToolRenderer';
 
 interface DriveInfo {
   slug: string;
@@ -54,6 +55,38 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
   const input = part.input;
   const output = part.output;
   const error = part.errorText;
+
+  // Task management tools - render with TodoListMessage components
+  const taskManagementTools = [
+    'create_task_list',
+    'update_task_status', 
+    'add_task',
+    'get_task_list',
+    'resume_task_list',
+    'add_task_note'
+  ];
+
+  if (taskManagementTools.includes(toolName)) {
+    return (
+      <TaskManagementToolRenderer 
+        part={part} 
+        onTaskUpdate={async (taskId: string, newStatus) => {
+          // Update task status via API
+          try {
+            await fetch(`/api/ai/tasks/${taskId}/status`, {
+              method: 'PATCH',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ status: newStatus }),
+            });
+          } catch (error) {
+            console.error('Error updating task:', error);
+          }
+        }}
+      />
+    );
+  }
 
   // Convert AI SDK state to Task status
   const getTaskStatus = (): TaskStatus => {

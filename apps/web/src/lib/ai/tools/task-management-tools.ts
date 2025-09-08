@@ -1,8 +1,9 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { db, aiTasks, messages, chatMessages, eq, and, desc, asc, ne, ilike, sql } from '@pagespace/db';
+import { db, aiTasks, eq, and, desc, asc, ne, ilike, sql } from '@pagespace/db';
 import { ToolExecutionContext } from '../types';
 import { broadcastTaskEvent } from '@/lib/socket-utils';
+
 
 export const taskManagementTools = {
   /**
@@ -25,7 +26,6 @@ export const taskManagementTools = {
     execute: async ({ title, description, tasks, contextPageId, contextDriveId }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       const conversationId = (context as ToolExecutionContext)?.conversationId;
-      const pageId = (context as ToolExecutionContext)?.locationContext?.currentPage?.id;
       
       if (!userId) {
         throw new Error('User authentication required');
@@ -49,39 +49,10 @@ export const taskManagementTools = {
             },
           }).returning();
 
-          // Create todo list messages in appropriate message systems
-          let todoMessage = null;
-          let pageAiMessage = null;
-          
-          // For Global Assistant (has conversationId)
-          if (conversationId) {
-            [todoMessage] = await tx.insert(messages).values({
-              conversationId,
-              userId,
-              role: 'assistant',
-              messageType: 'todo_list',
-              content: `📋 **${title}**${description ? `\n\n${description}` : ''}\n\n*Task list created with ${tasks.length} task${tasks.length === 1 ? '' : 's'}*`,
-              createdAt: new Date(),
-            }).returning();
-          }
-          
-          // For Page AI (has pageId but no conversationId)
-          if (pageId && !conversationId) {
-            [pageAiMessage] = await tx.insert(chatMessages).values({
-              pageId,
-              userId,
-              role: 'assistant',
-              messageType: 'todo_list',
-              content: `📋 **${title}**${description ? `\n\n${description}` : ''}\n\n*Task list created with ${tasks.length} task${tasks.length === 1 ? '' : 's'}*`,
-              createdAt: new Date(),
-            }).returning();
-          }
-
           // Batch create individual tasks
           const taskValues = tasks.map((task, i) => ({
             userId,
             conversationId,
-            messageId: todoMessage?.id || pageAiMessage?.id,
             parentTaskId: taskList.id,
             title: task.title,
             description: task.description,
@@ -96,15 +67,7 @@ export const taskManagementTools = {
           
           const createdTasks = await tx.insert(aiTasks).values(taskValues).returning();
 
-          // Update the main task list with message ID
-          const messageId = todoMessage?.id || pageAiMessage?.id;
-          if (messageId) {
-            await tx.update(aiTasks)
-              .set({ messageId: messageId })
-              .where(eq(aiTasks.id, taskList.id));
-          }
-
-          return { taskList, todoMessage, createdTasks };
+          return { taskList, createdTasks };
         });
 
         const { taskList, createdTasks } = result;
@@ -122,15 +85,23 @@ export const taskManagementTools = {
 
         return {
           success: true,
-          taskListId: taskList.id,
-          title: taskList.title,
-          description: taskList.description,
+          taskList: {
+            id: taskList.id,
+            title: taskList.title,
+            description: taskList.description,
+            status: taskList.status,
+            createdAt: taskList.createdAt,
+            updatedAt: taskList.updatedAt,
+          },
           tasks: createdTasks.map(t => ({
             id: t.id,
             title: t.title,
+            description: t.description,
             status: t.status,
             priority: t.priority,
             position: t.position,
+            completedAt: t.completedAt,
+            metadata: t.metadata,
           })),
           summary: `Created task list "${title}" with ${createdTasks.length} task${createdTasks.length === 1 ? '' : 's'}`,
           stats: {
@@ -390,6 +361,57 @@ export const taskManagementTools = {
           },
         });
 
+ 
+        // Get the updated task list and all tasks to return for rendering
+        if (updatedTask.parentTaskId) {
+          try {
+            const taskList = await db.query.aiTasks.findFirst({
+              where: and(
+                eq(aiTasks.id, updatedTask.parentTaskId),
+                sql`${aiTasks.metadata}->>'type' = 'task_list'`
+              ),
+            });
+
+            const allTasks = await db
+              .select()
+              .from(aiTasks)
+              .where(and(
+                eq(aiTasks.parentTaskId, updatedTask.parentTaskId),
+                sql`${aiTasks.metadata}->>'type' = 'task_item'`
+              ))
+              .orderBy(asc(aiTasks.position));
+
+            if (taskList && allTasks) {
+              return {
+                success: true,
+                taskList: {
+                  id: taskList.id,
+                  title: taskList.title,
+                  description: taskList.description,
+                  status: taskList.status,
+                  createdAt: taskList.createdAt,
+                  updatedAt: taskList.updatedAt,
+                },
+                tasks: allTasks.map(t => ({
+                  id: t.id,
+                  title: t.title,
+                  description: t.description,
+                  status: t.status,
+                  priority: t.priority,
+                  position: t.position,
+                  completedAt: t.completedAt,
+                  metadata: t.metadata,
+                })),
+                message: `Task "${updatedTask.title}" status changed from ${task.status} to ${status}`,
+                summary: `Updated task status to ${status}`,
+              };
+            }
+          } catch (error) {
+            console.error('Error fetching updated task list:', error);
+          }
+        }
+
+        // Fallback if we can't fetch the full task list
         return {
           success: true,
           task: {
@@ -401,18 +423,6 @@ export const taskManagementTools = {
           },
           message: `Task "${updatedTask.title}" status changed from ${task.status} to ${status}`,
           summary: `Updated task status to ${status}`,
-          nextSteps: status === 'in_progress' ? [
-            'Continue working on this task',
-            'Use add_task_note to document progress',
-            'Update to completed when done',
-          ] : status === 'blocked' ? [
-            'Document what is blocking this task',
-            'Create subtasks to resolve blockers',
-            'Consider reassigning or getting help',
-          ] : status === 'completed' ? [
-            'Move on to the next pending task',
-            'Review the task list for overall progress',
-          ] : []
         };
       } catch (error) {
         console.error('Error updating task status:', error);
@@ -496,23 +506,39 @@ export const taskManagementTools = {
           },
         });
 
+ 
+        // Get all tasks to return the complete task list for rendering
+        const allTasks = await db
+          .select()
+          .from(aiTasks)
+          .where(and(
+            eq(aiTasks.parentTaskId, taskListId),
+            sql`${aiTasks.metadata}->>'type' = 'task_item'`
+          ))
+          .orderBy(asc(aiTasks.position));
+
         return {
           success: true,
-          task: {
-            id: newTask.id,
-            title: newTask.title,
-            description: newTask.description,
-            priority: newTask.priority,
-            position: newTask.position,
+          taskList: {
+            id: taskList.id,
+            title: taskList.title,
+            description: taskList.description,
+            status: taskList.status,
+            createdAt: taskList.createdAt,
+            updatedAt: taskList.updatedAt,
           },
-          taskListTitle: taskList.title,
+          tasks: allTasks.map(t => ({
+            id: t.id,
+            title: t.title,
+            description: t.description,
+            status: t.status,
+            priority: t.priority,
+            position: t.position,
+            completedAt: t.completedAt,
+            metadata: t.metadata,
+          })),
           message: `Added task "${title}" to list "${taskList.title}"`,
           summary: `Added new ${priority} priority task to the list`,
-          nextSteps: [
-            'Use update_task_status when you start working on this task',
-            'Add more tasks if needed',
-            'Use get_task_list to see the updated list',
-          ]
         };
       } catch (error) {
         console.error('Error adding task:', error);
@@ -581,6 +607,7 @@ export const taskManagementTools = {
           .where(eq(aiTasks.id, taskId))
           .returning();
 
+ 
         return {
           success: true,
           task: {
@@ -664,9 +691,6 @@ export const taskManagementTools = {
           throw new Error('No matching task list found');
         }
 
-        // Store original conversation ID for return value
-        const originalConversationId = taskList.conversationId;
-
         // Update conversation ID to current (only if actually different, handling nulls)
         const needsConversationUpdate = (taskList.conversationId || null) !== (currentConversationId || null);
         
@@ -730,8 +754,19 @@ export const taskManagementTools = {
             title: taskList.title,
             description: taskList.description,
             status: taskList.status,
-            originalConversationId: originalConversationId,
+            createdAt: taskList.createdAt,
+            updatedAt: taskList.updatedAt,
           },
+          tasks: tasks.map(t => ({
+            id: t.id,
+            title: t.title,
+            description: t.description,
+            status: t.status,
+            priority: t.priority,
+            position: t.position,
+            completedAt: t.completedAt,
+            metadata: t.metadata,
+          })),
           progress: {
             totalTasks: tasks.length,
             completedTasks,
