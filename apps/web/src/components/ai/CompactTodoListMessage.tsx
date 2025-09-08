@@ -92,35 +92,35 @@ export const CompactTodoListMessage: React.FC<CompactTodoListMessageProps> = Rea
   };
 
   return (
-    <div className="mb-3">
-      <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-md p-2">
+    <div className="mb-2 max-w-full overflow-hidden">
+      <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-md p-1.5 max-w-full">
         {/* Header */}
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-2">
-            <div className="w-1.5 h-1.5 rounded-full bg-blue-500"></div>
-            <h4 className="text-sm font-medium text-blue-900 dark:text-blue-100 truncate">
+        <div className="flex items-center justify-between mb-1.5">
+          <div className="flex items-center gap-1.5 min-w-0 flex-1">
+            <div className="w-1.5 h-1.5 rounded-full bg-blue-500 flex-shrink-0"></div>
+            <h4 className="text-xs font-medium text-blue-900 dark:text-blue-100 truncate">
               {taskList.title}
             </h4>
           </div>
-          <Badge variant="secondary" className="text-xs">
+          <Badge variant="secondary" className="text-[10px] px-1.5 py-0.5 flex-shrink-0 ml-1">
             {progress.percentage}%
           </Badge>
         </div>
 
         {/* Compact Progress Bar */}
-        <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5 mb-2">
+        <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1 mb-1.5">
           <div 
-            className="bg-blue-500 h-1.5 rounded-full transition-all duration-300"
+            className="bg-blue-500 h-1 rounded-full transition-all duration-300"
             style={{ width: `${progress.percentage}%` }}
           />
         </div>
 
         {/* Task List - Show only first 3 tasks */}
-        <div className="space-y-1">
+        <div className="space-y-0.5">
           {sortedTasks.slice(0, 3).map((task) => (
             <div
               key={task.id}
-              className={`flex items-center gap-2 p-1.5 rounded text-xs transition-all duration-200 ${
+              className={`flex items-center gap-1.5 p-1 rounded text-xs transition-all duration-200 max-w-full ${
                 task.status === 'completed' 
                   ? 'bg-green-50 dark:bg-green-950/30 opacity-75' 
                   : 'bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700'
@@ -131,7 +131,7 @@ export const CompactTodoListMessage: React.FC<CompactTodoListMessageProps> = Rea
                 {getStatusIcon(task.status)}
               </div>
               
-              <div className={`flex-grow truncate ${
+              <div className={`flex-1 min-w-0 truncate ${
                 task.status === 'completed' 
                   ? 'line-through text-gray-500' 
                   : 'text-gray-900 dark:text-gray-100'
@@ -140,28 +140,28 @@ export const CompactTodoListMessage: React.FC<CompactTodoListMessageProps> = Rea
               </div>
 
               {task.priority === 'high' && (
-                <div className="w-1.5 h-1.5 rounded-full bg-red-400"></div>
+                <div className="w-1 h-1 rounded-full bg-red-400 flex-shrink-0"></div>
               )}
             </div>
           ))}
           
           {sortedTasks.length > 3 && (
-            <div className="text-xs text-gray-500 text-center py-1">
-              +{sortedTasks.length - 3} more tasks
+            <div className="text-[10px] text-gray-500 text-center py-0.5">
+              +{sortedTasks.length - 3} more
             </div>
           )}
         </div>
 
         {/* Footer */}
         {progress.total > 0 && (
-          <div className="mt-2 pt-1.5 border-t border-blue-200 dark:border-blue-700">
-            <div className="flex justify-between items-center text-xs text-blue-700 dark:text-blue-300">
-              <span>
-                {progress.completed}/{progress.total} complete
+          <div className="mt-1.5 pt-1 border-t border-blue-200 dark:border-blue-700">
+            <div className="flex justify-between items-center text-[10px] text-blue-700 dark:text-blue-300">
+              <span className="truncate">
+                {progress.completed}/{progress.total} done
               </span>
               
               {createdAt && (
-                <span>
+                <span className="flex-shrink-0 ml-1">
                   {new Date(createdAt).toLocaleTimeString([], { 
                     hour: '2-digit', 
                     minute: '2-digit' 

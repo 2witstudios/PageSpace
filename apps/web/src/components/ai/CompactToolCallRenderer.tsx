@@ -19,6 +19,7 @@ import {
   Loader2,
   Clock
 } from 'lucide-react';
+import { CompactTaskManagementToolRenderer } from './CompactTaskManagementToolRenderer';
 
 
 interface TreeItem {
@@ -53,6 +54,38 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
   const input = part.input;
   const output = part.output;
   const error = part.errorText;
+
+  // Task management tools - render with CompactTodoListMessage components
+  const taskManagementTools = [
+    'create_task_list',
+    'update_task_status', 
+    'add_task',
+    'get_task_list',
+    'resume_task_list',
+    'add_task_note'
+  ];
+
+  if (taskManagementTools.includes(toolName)) {
+    return (
+      <CompactTaskManagementToolRenderer 
+        part={part} 
+        onTaskUpdate={async (taskId: string, newStatus) => {
+          // Update task status via API
+          try {
+            await fetch(`/api/ai/tasks/${taskId}/status`, {
+              method: 'PATCH',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ status: newStatus }),
+            });
+          } catch (error) {
+            console.error('Error updating task:', error);
+          }
+        }}
+      />
+    );
+  }
 
   // Tool-specific icons (smaller)
   const getToolIcon = (toolName: string) => {
