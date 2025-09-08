@@ -6,7 +6,7 @@ import ChatInput, { ChatInputRef } from '@/components/messages/ChatInput';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Loader2, Send, Plus } from 'lucide-react';
 import { UIMessage, DefaultChatTransport } from 'ai';
-import { CompactMessageRenderer } from '@/components/ai/CompactMessageRenderer';
+import { CompactConversationMessageRenderer } from '@/components/ai/CompactConversationMessageRenderer';
 import { AgentRole, AgentRoleUtils } from '@/lib/ai/agent-roles';
 import { AgentRoleDropdownCompact } from '@/components/ai/AgentRoleDropdown';
 import { conversationState } from '@/lib/ai/conversation-state';
@@ -476,7 +476,7 @@ const AssistantChatTab: React.FC = () => {
               </div>
             ) : (
               messages.map(message => (
-                <CompactMessageRenderer key={message.id} message={message} />
+                <CompactConversationMessageRenderer key={message.id} message={message} />
               ))
             )}
             

@@ -1,3 +1,28 @@
+### 2025-09-07
+
+- **Major Enhancement**: Enhanced AI Tools with Search, Task Management, and Batch Operations
+  - **Added**: `apps/web/src/lib/ai/tools/search-tools.ts` - Advanced search capabilities for AI assistants
+    - **regex_search**: Pattern-based content search using regular expressions with permission filtering
+    - **glob_search**: Structural discovery using glob patterns (e.g., `**/README*`, `meeting-*.md`)
+    - **multi_drive_search**: Cross-workspace search with automatic access control
+  - **Added**: `apps/web/src/lib/ai/tools/task-management-tools.ts` - Persistent task tracking system
+    - **create_task_list**: Create task lists that persist across AI conversations
+    - **get_task_list**: Monitor task progress with completion tracking
+    - **update_task_status**: Manage task status with automatic progression
+    - **add_task**: Dynamically expand task lists
+    - **add_task_note**: Document progress and preserve context
+    - **resume_task_list**: Continue tasks across different AI sessions
+  - **Added**: `apps/web/src/lib/ai/tools/batch-operations-tools.ts` - Atomic multi-operation transactions
+    - **batch_page_operations**: Execute multiple operations atomically with rollback support
+    - **bulk_move_pages**: Mass page relocation while preserving order
+    - **bulk_rename_pages**: Pattern-based bulk renaming (find/replace, prefix, suffix, template)
+    - **create_folder_structure**: Create complex nested hierarchies in single operations
+  - **Added**: `ai_tasks` table in database schema for persistent task management
+  - **Added**: Task event broadcasting via Socket.IO for real-time task updates
+  - **Enhanced**: AI tools now consistently return both pageId (for operations) and semantic paths (for human understanding)
+  - **Updated**: Documentation to reflect 13 new AI tool functions and enhanced capabilities
+  - **Rationale**: Transforms AI from simple Q&A to a collaborative partner capable of complex, multi-step operations
+
 ### 2025-08-24
 
 - **Refactor**: Split `ai-tools.ts` into smaller, more manageable files.

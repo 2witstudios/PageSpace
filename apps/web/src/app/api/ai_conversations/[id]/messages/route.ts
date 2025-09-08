@@ -386,6 +386,12 @@ export async function POST(
 
 You are the Global Assistant for PageSpace - accessible from both the dashboard and sidebar.
 
+TASK MANAGEMENT:
+• Use create_task_list for any multi-step work (3+ actions) - this creates interactive UI components in the conversation
+• Break complex requests into trackable tasks immediately upon receiving them  
+• Update task status as you progress through work - users see real-time updates
+• Task lists persist across conversations and appear as conversation messages
+
 CRITICAL NESTING PRINCIPLE:
 • NO RESTRICTIONS on what can contain what - organize based on logical user needs
 • Documents can contain AI chats, channels, folders, and canvas pages

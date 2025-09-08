@@ -12,7 +12,8 @@
     "./logger-config": "./src/logger-config.ts",
     "./logger-database": "./src/logger-database.ts",
     "./activity-tracker": "./src/activity-tracker.ts",
-    "./ai-monitoring": "./src/ai-monitoring.ts"
+    "./ai-monitoring": "./src/ai-monitoring.ts",
+    "./auth-utils": "./src/auth-utils.ts"
   },
   "typesVersions": {
     "*": {
@@ -22,7 +23,8 @@
       "logger-config": ["./src/logger-config.ts"],
       "logger-database": ["./src/logger-database.ts"],
       "activity-tracker": ["./src/activity-tracker.ts"],
-      "ai-monitoring": ["./src/ai-monitoring.ts"]
+      "ai-monitoring": ["./src/ai-monitoring.ts"],
+      "auth-utils": ["./src/auth-utils.ts"]
     }
   },
   "dependencies": {

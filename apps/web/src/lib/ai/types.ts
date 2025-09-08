@@ -5,6 +5,7 @@
 
 export interface ToolExecutionContext {
   userId: string;
+  conversationId?: string;
   locationContext?: {
     currentPage?: {
       id: string;

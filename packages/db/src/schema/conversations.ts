@@ -32,6 +32,7 @@ export const messages = pgTable('messages', {
   conversationId: text('conversationId').notNull().references(() => conversations.id, { onDelete: 'cascade' }),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
   role: text('role').notNull(), // 'user' | 'assistant'
+  messageType: text('messageType', { enum: ['standard', 'todo_list'] }).default('standard').notNull(),
   content: text('content').notNull(),
   toolCalls: jsonb('toolCalls'),
   toolResults: jsonb('toolResults'),

@@ -128,11 +128,16 @@ io.on('connection', (socket: AuthSocket) => {
   loggers.realtime.info('User connected', { socketId: socket.id });
   const user = socket.data.user;
 
-  // Auto-join user's notification room
+  // Auto-join user's notification room and task room
   if (user?.id) {
     const notificationRoom = `notifications:${user.id}`;
+    const taskRoom = `user:${user.id}:tasks`;
     socket.join(notificationRoom);
-    loggers.realtime.debug('User joined notification room', { userId: user.id, room: notificationRoom });
+    socket.join(taskRoom);
+    loggers.realtime.debug('User joined notification and task rooms', { 
+      userId: user.id, 
+      rooms: [notificationRoom, taskRoom] 
+    });
   }
 
   socket.on('join_channel', async (pageId: string) => {

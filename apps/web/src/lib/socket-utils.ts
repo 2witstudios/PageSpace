@@ -4,6 +4,7 @@
 
 export type PageOperation = 'created' | 'updated' | 'moved' | 'deleted' | 'restored' | 'trashed' | 'content-updated';
 export type DriveOperation = 'created' | 'updated' | 'deleted';
+export type TaskOperation = 'task_list_created' | 'task_added' | 'task_updated' | 'task_completed';
 
 export interface PageEventPayload {
   driveId: string;
@@ -19,6 +20,16 @@ export interface DriveEventPayload {
   operation: DriveOperation;
   name?: string;
   slug?: string;
+}
+
+export interface TaskEventPayload {
+  type: TaskOperation;
+  taskId?: string;
+  taskListId?: string;
+  userId: string;
+  data: {
+    [key: string]: unknown;
+  };
 }
 
 /**
@@ -112,4 +123,31 @@ export function createDriveEventPayload(
     operation,
     ...options,
   };
+}
+
+/**
+ * Broadcasts a task event to the realtime server
+ * @param payload - The task event payload to broadcast
+ */
+export async function broadcastTaskEvent(payload: TaskEventPayload): Promise<void> {
+  // Only broadcast if realtime URL is configured
+  if (!process.env.INTERNAL_REALTIME_URL) {
+    console.warn('INTERNAL_REALTIME_URL not configured, skipping task event broadcast');
+    return;
+  }
+
+  try {
+    await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channelId: `user:${payload.userId}:tasks`,
+        event: `task:${payload.type}`,
+        payload,
+      }),
+    });
+  } catch (error) {
+    // Log error but don't throw - broadcasting failures shouldn't break operations
+    console.error('Failed to broadcast task event:', error);
+  }
 }

@@ -11,7 +11,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Loader2, Send, Settings } from 'lucide-react';
 import { UIMessage, DefaultChatTransport } from 'ai';
-import { MessageRenderer } from '@/components/ai/MessageRenderer';
+import { ConversationMessageRenderer } from '@/components/ai/ConversationMessageRenderer';
 import { buildPagePath } from '@/lib/tree/tree-utils';
 import { useDriveStore } from '@/hooks/useDrive';
 import { AgentRole, AgentRoleUtils } from '@/lib/ai/agent-roles';
@@ -487,7 +487,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                 </div>
               ) : (
                 messages.map(message => (
-                  <MessageRenderer key={message.id} message={message} />
+                  <ConversationMessageRenderer key={message.id} message={message} />
                 ))
               )}
               
