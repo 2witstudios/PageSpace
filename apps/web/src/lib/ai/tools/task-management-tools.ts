@@ -650,27 +650,47 @@ export const taskManagementTools = {
         // Store original conversation ID for return value
         const originalConversationId = taskList.conversationId;
 
-        // Update conversation ID to current (only if different)
-        if (taskList.conversationId !== currentConversationId) {
-          await db
-            .update(aiTasks)
-            .set({
-              conversationId: currentConversationId,
-              metadata: {
-                ...(taskList.metadata as Record<string, unknown> || {}),
-                resumedAt: new Date().toISOString(),
-                resumedFrom: taskList.conversationId,
-              },
-            })
-            .where(eq(aiTasks.id, taskList.id));
+        // Update conversation ID to current (only if actually different, handling nulls)
+        const needsConversationUpdate = (taskList.conversationId || null) !== (currentConversationId || null);
+        
+        if (needsConversationUpdate && currentConversationId) {
+          try {
+            // Update parent task list
+            await db
+              .update(aiTasks)
+              .set({
+                conversationId: currentConversationId,
+                metadata: {
+                  ...(typeof taskList.metadata === 'object' && taskList.metadata !== null ? taskList.metadata : {}),
+                  resumedAt: new Date().toISOString(),
+                  resumedFrom: taskList.conversationId || null,
+                },
+              })
+              .where(eq(aiTasks.id, taskList.id));
 
-          // Also update child tasks
-          await db
-            .update(aiTasks)
-            .set({
-              conversationId: currentConversationId,
-            })
-            .where(eq(aiTasks.parentTaskId, taskList.id));
+            // Check if we have child tasks that need updating
+            const childTasks = await db
+              .select({ id: aiTasks.id, conversationId: aiTasks.conversationId })
+              .from(aiTasks)
+              .where(eq(aiTasks.parentTaskId, taskList.id));
+
+            // Only update child tasks if they exist and need conversation ID changes
+            const childTasksNeedingUpdate = childTasks.filter(child => 
+              (child.conversationId || null) !== (currentConversationId || null)
+            );
+
+            if (childTasksNeedingUpdate.length > 0) {
+              await db
+                .update(aiTasks)
+                .set({
+                  conversationId: currentConversationId,
+                })
+                .where(eq(aiTasks.parentTaskId, taskList.id));
+            }
+          } catch (error) {
+            console.error('Error updating task list conversation context:', error);
+            throw new Error(`Failed to update task list context: ${error instanceof Error ? error.message : String(error)}`);
+          }
         }
 
         // Get current status
