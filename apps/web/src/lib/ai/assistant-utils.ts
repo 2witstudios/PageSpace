@@ -45,6 +45,7 @@ interface DatabaseMessage {
   createdAt: Date;
   isActive: boolean;
   editedAt?: Date | null;
+  messageType?: 'standard' | 'todo_list';
 }
 
 
@@ -60,6 +61,7 @@ interface GlobalAssistantMessage {
   isActive: boolean;
   agentRole?: string;
   editedAt?: Date | null;
+  messageType?: 'standard' | 'todo_list';
 }
 
 /**
@@ -166,6 +168,7 @@ export function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): UIMessa
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     parts: [{ type: 'text', text: dbMessage.content || '' }] as any,
     createdAt: dbMessage.createdAt,
+    messageType: dbMessage.messageType || 'standard',
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any;
 }
@@ -244,6 +247,7 @@ function reconstructMessageFromStructuredContent(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     parts: parts.length > 0 ? (parts as any) : [{ type: 'text', text: structuredData.originalContent || '' }],
     createdAt: dbMessage.createdAt,
+    messageType: dbMessage.messageType || 'standard',
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any;
 }
@@ -346,6 +350,7 @@ export function convertGlobalAssistantMessageToUIMessage(dbMessage: GlobalAssist
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     parts: [{ type: 'text', text: dbMessage.content || '' }] as any,
     createdAt: dbMessage.createdAt,
+    messageType: dbMessage.messageType || 'standard',
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any;
 }
@@ -424,6 +429,7 @@ function reconstructGlobalAssistantMessageFromStructuredContent(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     parts: parts.length > 0 ? (parts as any) : [{ type: 'text', text: structuredData.originalContent || '' }],
     createdAt: dbMessage.createdAt,
+    messageType: dbMessage.messageType || 'standard',
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any;
 }

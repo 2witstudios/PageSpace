@@ -55,6 +55,7 @@ export const chatMessages = pgTable('chat_messages', {
   editedAt: timestamp('editedAt', { mode: 'date' }),
   userId: text('userId').references(() => users.id, { onDelete: 'cascade' }),
   agentRole: text('agentRole').default('PARTNER').notNull(),
+  messageType: text('messageType', { enum: ['standard', 'todo_list'] }).default('standard').notNull(),
 }, (table) => {
     return {
         pageIdx: index('chat_messages_page_id_idx').on(table.pageId),

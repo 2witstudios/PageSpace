@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { db, aiTasks, messages, eq, and, desc, asc, ne, ilike, sql } from '@pagespace/db';
+import { db, aiTasks, messages, chatMessages, eq, and, desc, asc, ne, ilike, sql } from '@pagespace/db';
 import { ToolExecutionContext } from '../types';
 import { broadcastTaskEvent } from '@/lib/socket-utils';
 
@@ -25,6 +25,7 @@ export const taskManagementTools = {
     execute: async ({ title, description, tasks, contextPageId, contextDriveId }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       const conversationId = (context as ToolExecutionContext)?.conversationId;
+      const pageId = (context as ToolExecutionContext)?.locationContext?.currentPage?.id;
       
       if (!userId) {
         throw new Error('User authentication required');
@@ -48,11 +49,26 @@ export const taskManagementTools = {
             },
           }).returning();
 
-          // Create a chat message for this todo list
+          // Create todo list messages in appropriate message systems
           let todoMessage = null;
+          let pageAiMessage = null;
+          
+          // For Global Assistant (has conversationId)
           if (conversationId) {
             [todoMessage] = await tx.insert(messages).values({
               conversationId,
+              userId,
+              role: 'assistant',
+              messageType: 'todo_list',
+              content: `📋 **${title}**${description ? `\n\n${description}` : ''}\n\n*Task list created with ${tasks.length} task${tasks.length === 1 ? '' : 's'}*`,
+              createdAt: new Date(),
+            }).returning();
+          }
+          
+          // For Page AI (has pageId but no conversationId)
+          if (pageId && !conversationId) {
+            [pageAiMessage] = await tx.insert(chatMessages).values({
+              pageId,
               userId,
               role: 'assistant',
               messageType: 'todo_list',
@@ -65,7 +81,7 @@ export const taskManagementTools = {
           const taskValues = tasks.map((task, i) => ({
             userId,
             conversationId,
-            messageId: todoMessage?.id,
+            messageId: todoMessage?.id || pageAiMessage?.id,
             parentTaskId: taskList.id,
             title: task.title,
             description: task.description,
@@ -81,9 +97,10 @@ export const taskManagementTools = {
           const createdTasks = await tx.insert(aiTasks).values(taskValues).returning();
 
           // Update the main task list with message ID
-          if (todoMessage) {
+          const messageId = todoMessage?.id || pageAiMessage?.id;
+          if (messageId) {
             await tx.update(aiTasks)
-              .set({ messageId: todoMessage.id })
+              .set({ messageId: messageId })
               .where(eq(aiTasks.id, taskList.id));
           }
 
