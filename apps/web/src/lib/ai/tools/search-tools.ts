@@ -35,8 +35,8 @@ export const searchTools = {
           .from(drives)
           .where(eq(drives.id, driveId));
 
-        // Create regex for PostgreSQL
-        const pgPattern = pattern.replace(/\\/g, '\\\\');
+        // Create regex for PostgreSQL - escape backslashes but preserve regex shortcuts
+        const pgPattern = pattern.replace(/\\(?![dDwWsSbBntrvfAZzGQE])/g, '\\\\');
 
         // Build where conditions based on searchIn parameter
         let whereConditions;
@@ -346,7 +346,7 @@ export const searchTools = {
           // Build search conditions
           let searchWhereConditions;
           if (searchType === 'regex') {
-            const pgPattern = searchQuery.replace(/\\/g, '\\\\');
+            const pgPattern = searchQuery.replace(/\\(?![dDwWsSbBntrvfAZzGQE])/g, '\\\\');
             searchWhereConditions = and(
               eq(pages.driveId, drive.id),
               eq(pages.isTrashed, false),

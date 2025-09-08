@@ -647,26 +647,31 @@ export const taskManagementTools = {
           throw new Error('No matching task list found');
         }
 
-        // Update conversation ID to current
-        await db
-          .update(aiTasks)
-          .set({
-            conversationId: currentConversationId,
-            metadata: {
-              ...(taskList.metadata as Record<string, unknown> || {}),
-              resumedAt: new Date().toISOString(),
-              resumedFrom: taskList.conversationId,
-            },
-          })
-          .where(eq(aiTasks.id, taskList.id));
+        // Store original conversation ID for return value
+        const originalConversationId = taskList.conversationId;
 
-        // Also update child tasks
-        await db
-          .update(aiTasks)
-          .set({
-            conversationId: currentConversationId,
-          })
-          .where(eq(aiTasks.parentTaskId, taskList.id));
+        // Update conversation ID to current (only if different)
+        if (taskList.conversationId !== currentConversationId) {
+          await db
+            .update(aiTasks)
+            .set({
+              conversationId: currentConversationId,
+              metadata: {
+                ...(taskList.metadata as Record<string, unknown> || {}),
+                resumedAt: new Date().toISOString(),
+                resumedFrom: taskList.conversationId,
+              },
+            })
+            .where(eq(aiTasks.id, taskList.id));
+
+          // Also update child tasks
+          await db
+            .update(aiTasks)
+            .set({
+              conversationId: currentConversationId,
+            })
+            .where(eq(aiTasks.parentTaskId, taskList.id));
+        }
 
         // Get current status
         const tasks = await db
@@ -688,7 +693,7 @@ export const taskManagementTools = {
             title: taskList.title,
             description: taskList.description,
             status: taskList.status,
-            originalConversationId: taskList.conversationId,
+            originalConversationId: originalConversationId,
           },
           progress: {
             totalTasks: tasks.length,
