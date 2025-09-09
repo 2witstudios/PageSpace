@@ -31,6 +31,7 @@ import {
   sanitizeMessagesForModel
 } from '@/lib/ai/assistant-utils';
 import { processMentionsInMessage, buildMentionSystemPrompt } from '@/lib/ai/mention-processor';
+import { buildTimestampSystemPrompt } from '@/lib/ai/timestamp-utils';
 import { AgentRoleUtils } from '@/lib/ai/agent-roles';
 import { RolePromptBuilder } from '@/lib/ai/role-prompts';
 import { ToolPermissionFilter } from '@/lib/ai/tool-permissions';
@@ -436,6 +437,9 @@ export async function POST(request: Request) {
     // Filter tools based on agent role permissions
     const roleFilteredTools = ToolPermissionFilter.filterTools(pageSpaceTools, agentRole);
     
+    // Build timestamp system prompt for temporal awareness
+    const timestampSystemPrompt = buildTimestampSystemPrompt();
+    
     loggers.ai.debug('AI Chat API: Role-filtered tools', { toolCount: Object.keys(roleFilteredTools).length });
     loggers.ai.info('AI Chat API: Starting streamText', { model: currentModel, agentRole });
     
@@ -444,7 +448,7 @@ export async function POST(request: Request) {
     try {
       result = streamText({
       model,
-      system: systemPrompt + mentionSystemPrompt + `
+      system: systemPrompt + mentionSystemPrompt + timestampSystemPrompt + `
 
 CRITICAL NESTING PRINCIPLE:
 • NO RESTRICTIONS on what can contain what - organize based on logical user needs

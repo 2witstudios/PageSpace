@@ -22,6 +22,7 @@ import {
   saveGlobalAssistantMessageToDatabase
 } from '@/lib/ai/assistant-utils';
 import { processMentionsInMessage, buildMentionSystemPrompt } from '@/lib/ai/mention-processor';
+import { buildTimestampSystemPrompt } from '@/lib/ai/timestamp-utils';
 import { AgentRoleUtils } from '@/lib/ai/agent-roles';
 import { RolePromptBuilder } from '@/lib/ai/role-prompts';
 import { ToolPermissionFilter } from '@/lib/ai/tool-permissions';
@@ -381,8 +382,11 @@ export async function POST(
       } : undefined
     );
 
+    // Build timestamp system prompt for temporal awareness
+    const timestampSystemPrompt = buildTimestampSystemPrompt();
+
     // Add global assistant specific instructions
-    const systemPrompt = baseSystemPrompt + mentionSystemPrompt + `
+    const systemPrompt = baseSystemPrompt + mentionSystemPrompt + timestampSystemPrompt + `
 
 You are the Global Assistant for PageSpace - accessible from both the dashboard and sidebar.
 
