@@ -13,6 +13,8 @@ interface AgentConfig {
   systemPrompt: string;
   enabledTools: string[];
   availableTools: Array<{ name: string; description: string }>;
+  aiProvider?: string;
+  aiModel?: string;
 }
 
 interface AgentSettingsTabProps {
@@ -35,6 +37,8 @@ export interface AgentSettingsTabRef {
 interface FormData {
   systemPrompt: string;
   enabledTools: string[];
+  aiProvider: string;
+  aiModel: string;
 }
 
 const AgentSettingsTab = forwardRef<AgentSettingsTabRef, AgentSettingsTabProps>(({ 
@@ -54,6 +58,8 @@ const AgentSettingsTab = forwardRef<AgentSettingsTabRef, AgentSettingsTabProps>(
     defaultValues: {
       systemPrompt: config?.systemPrompt || '',
       enabledTools: config?.enabledTools || [],
+      aiProvider: selectedProvider || '',
+      aiModel: selectedModel || '',
     }
   });
 
@@ -63,21 +69,35 @@ const AgentSettingsTab = forwardRef<AgentSettingsTabRef, AgentSettingsTabProps>(
       reset({
         systemPrompt: config.systemPrompt,
         enabledTools: config.enabledTools,
+        aiProvider: config.aiProvider || selectedProvider || '',
+        aiModel: config.aiModel || selectedModel || '',
       });
     }
-  }, [config, reset]);
+  }, [config, reset, selectedProvider, selectedModel]);
 
   const onSubmit = useCallback(async (data: FormData) => {
     setIsSaving(true);
     try {
+      // Include the current provider and model from props
+      const requestData = {
+        ...data,
+        aiProvider: selectedProvider,
+        aiModel: selectedModel,
+      };
+      
       const response = await fetch(`/api/pages/${pageId}/agent-config`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
+        body: JSON.stringify(requestData),
       });
 
       if (response.ok) {
-        const updatedConfig = { ...config, ...data } as AgentConfig;
+        const updatedConfig = { 
+          ...config, 
+          ...data,
+          aiProvider: selectedProvider,
+          aiModel: selectedModel,
+        } as AgentConfig;
         onConfigUpdate(updatedConfig);
         toast.success('Agent configuration saved successfully');
       } else {
@@ -90,7 +110,7 @@ const AgentSettingsTab = forwardRef<AgentSettingsTabRef, AgentSettingsTabProps>(
     } finally {
       setIsSaving(false);
     }
-  }, [pageId, config, onConfigUpdate]);
+  }, [pageId, config, onConfigUpdate, selectedProvider, selectedModel]);
 
   // Expose form submission to parent component
   useImperativeHandle(ref, () => ({

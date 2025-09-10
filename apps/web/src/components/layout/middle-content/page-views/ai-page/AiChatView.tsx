@@ -193,6 +193,14 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
         if (agentConfigResponse.ok) {
           const agentConfigData = await agentConfigResponse.json();
           setAgentConfig(agentConfigData);
+          
+          // Set provider and model from page config if available
+          if (agentConfigData.aiProvider) {
+            setSelectedProvider(agentConfigData.aiProvider);
+          }
+          if (agentConfigData.aiModel) {
+            setSelectedModel(agentConfigData.aiModel);
+          }
         }
         
         setIsInitialized(true);

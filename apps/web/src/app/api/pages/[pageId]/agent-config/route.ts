@@ -49,6 +49,8 @@ export async function GET(
       systemPrompt: page.systemPrompt || '',
       enabledTools: page.enabledTools as string[] || [],
       availableTools,
+      aiProvider: page.aiProvider || '',
+      aiModel: page.aiModel || '',
     });
   } catch (error) {
     loggers.api.error('Error fetching page agent configuration:', error as Error);
@@ -72,7 +74,7 @@ export async function PATCH(
 
     const { pageId } = await context.params;
     const body = await request.json();
-    const { systemPrompt, enabledTools } = body;
+    const { systemPrompt, enabledTools, aiProvider, aiModel } = body;
 
     // Check if user has permission to edit this page
     const canEdit = await canUserEditPage(userId, pageId);
@@ -116,6 +118,14 @@ export async function PATCH(
         ? enabledTools 
         : null;
     }
+    
+    if (aiProvider !== undefined) {
+      updateData.aiProvider = aiProvider.trim() || null;
+    }
+    
+    if (aiModel !== undefined) {
+      updateData.aiModel = aiModel.trim() || null;
+    }
 
     // Only update if there are changes
     if (Object.keys(updateData).length > 0) {
@@ -139,6 +149,8 @@ export async function PATCH(
       message: 'Agent configuration updated successfully',
       systemPrompt: updateData.systemPrompt,
       enabledTools: updateData.enabledTools,
+      aiProvider: updateData.aiProvider,
+      aiModel: updateData.aiModel,
     });
   } catch (error) {
     loggers.api.error('Error updating page agent configuration:', error as Error);
