@@ -32,9 +32,9 @@ import {
 } from '@/lib/ai/assistant-utils';
 import { processMentionsInMessage, buildMentionSystemPrompt } from '@/lib/ai/mention-processor';
 import { buildTimestampSystemPrompt } from '@/lib/ai/timestamp-utils';
-import { AgentRoleUtils } from '@/lib/ai/agent-roles';
 import { RolePromptBuilder } from '@/lib/ai/role-prompts';
 import { ToolPermissionFilter } from '@/lib/ai/tool-permissions';
+import { AgentRole } from '@/lib/ai/agent-roles';
 import { loggers } from '@pagespace/lib/logger-config';
 import { trackFeature } from '@pagespace/lib/activity-tracker';
 import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
@@ -89,7 +89,7 @@ export async function POST(request: Request) {
       anthropicApiKey,
       xaiApiKey,
       pageContext,
-      agentRole: roleString
+      // Note: agentRole no longer needed - handled server-side via page configuration
     }: {
       messages: UIMessage[],
       chatId?: string,
@@ -110,8 +110,7 @@ export async function POST(request: Request) {
         driveId?: string,
         driveName: string,
         driveSlug: string,
-      },
-      agentRole?: string
+      }
     } = requestBody;
 
     // Assign to outer scope variables for error handling
@@ -119,9 +118,9 @@ export async function POST(request: Request) {
     selectedProvider = requestSelectedProvider;
     selectedModel = requestSelectedModel;
 
-    // Get agent role with fallback to default
-    const agentRole = AgentRoleUtils.getRoleFromString(roleString);
-    loggers.ai.debug('AI Page Chat API: Using agent role', { agentRole });
+    // For Page AI, we'll use custom agent configuration instead of fixed roles
+    // Global assistant will continue to use the role system
+    loggers.ai.debug('AI Page Chat API: Page AI using custom agent configuration');
 
     // Validate required parameters
     if (!messages || messages.length === 0) {
@@ -164,6 +163,23 @@ export async function POST(request: Request) {
       messageCount: messages.length, 
       chatId 
     });
+
+    // Get page configuration for custom agent settings (needed early for message saving)
+    const [page] = await db.select().from(pages).where(eq(pages.id, chatId));
+    if (!page) {
+      loggers.ai.warn('AI Chat API: Page not found', { chatId });
+      return NextResponse.json({ error: 'Page not found' }, { status: 404 });
+    }
+
+    // Extract custom agent configuration from page
+    const customSystemPrompt = page.systemPrompt;
+    const enabledTools = page.enabledTools as string[] | null;
+    
+    loggers.ai.debug('AI Page Chat API: Using custom agent configuration', {
+      hasCustomSystemPrompt: !!customSystemPrompt,
+      enabledToolsCount: enabledTools?.length || 0,
+      pageName: page.title
+    });
     
     // Process @mentions in the user's message
     let mentionSystemPrompt = '';
@@ -200,7 +216,7 @@ export async function POST(request: Request) {
           toolResults: null,
           createdAt: new Date(),
           isActive: true,
-          agentRole,
+          agentRole: page.title || 'Page AI', // Use page title as agent role
         });
         
         loggers.ai.debug('AI Chat API: User message saved to database');
@@ -217,10 +233,7 @@ export async function POST(request: Request) {
     
     // Update page's AI provider/model if changed
     if (selectedProvider && selectedModel && chatId) {
-      // Get the current page settings
-      const [page] = await db.select().from(pages).where(eq(pages.id, chatId));
-      
-      if (page && (selectedProvider !== page.aiProvider || selectedModel !== page.aiModel)) {
+      if (selectedProvider !== page.aiProvider || selectedModel !== page.aiModel) {
         await db
           .update(pages)
           .set({
@@ -420,28 +433,61 @@ export async function POST(request: Request) {
     const sanitizedMessages = sanitizeMessagesForModel(messages);
     const modelMessages = convertToModelMessages(sanitizedMessages);
 
-    // Build role-aware system prompt with page context
-    const systemPrompt = RolePromptBuilder.buildSystemPrompt(
-      agentRole,
-      'page',
-      pageContext ? {
-        driveName: pageContext.driveName,
-        driveSlug: pageContext.driveSlug,
-        driveId: pageContext.driveId,
-        pagePath: pageContext.pagePath,
-        pageType: pageContext.pageType,
-        breadcrumbs: pageContext.breadcrumbs,
-      } : undefined
-    );
+    // Build system prompt for Page AI - use custom system prompt if available, otherwise use default
+    let systemPrompt: string;
+    if (customSystemPrompt) {
+      // Use custom system prompt with page context injected
+      systemPrompt = customSystemPrompt;
+      if (pageContext) {
+        systemPrompt += `\n\nYou are operating within the page "${pageContext.pageTitle}" in the "${pageContext.driveName}" drive. Your current location: ${pageContext.pagePath}`;
+      }
+    } else {
+      // Fallback to default PageSpace system prompt for compatibility
+      systemPrompt = RolePromptBuilder.buildSystemPrompt(
+        AgentRole.PARTNER, // Default fallback role for pages without custom configuration
+        'page',
+        pageContext ? {
+          driveName: pageContext.driveName,
+          driveSlug: pageContext.driveSlug,
+          driveId: pageContext.driveId,
+          pagePath: pageContext.pagePath,
+          pageType: pageContext.pageType,
+          breadcrumbs: pageContext.breadcrumbs,
+        } : undefined
+      );
+    }
 
-    // Filter tools based on agent role permissions
-    const roleFilteredTools = ToolPermissionFilter.filterTools(pageSpaceTools, agentRole);
+    // Filter tools based on custom enabled tools or use all tools if not configured
+    let filteredTools;
+    if (enabledTools && enabledTools.length > 0) {
+      // Filter tools based on the page's enabled tools configuration
+      // Simple object filtering approach to avoid complex TypeScript issues
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const filtered: Record<string, any> = {};
+      for (const toolName of enabledTools) {
+        if (toolName in pageSpaceTools) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          filtered[toolName] = (pageSpaceTools as any)[toolName];
+        }
+      }
+      filteredTools = filtered;
+      
+      loggers.ai.debug('AI Page Chat API: Filtered tools based on page configuration', {
+        totalTools: Object.keys(pageSpaceTools).length,
+        enabledTools: enabledTools.length,
+        filteredTools: Object.keys(filteredTools).length
+      });
+    } else {
+      // No tool restrictions configured, use default role-based filtering for compatibility
+      filteredTools = ToolPermissionFilter.filterTools(pageSpaceTools, AgentRole.PARTNER);
+      loggers.ai.debug('AI Page Chat API: Using default tool filtering (PARTNER role)');
+    }
     
     // Build timestamp system prompt for temporal awareness
     const timestampSystemPrompt = buildTimestampSystemPrompt();
     
-    loggers.ai.debug('AI Chat API: Role-filtered tools', { toolCount: Object.keys(roleFilteredTools).length });
-    loggers.ai.info('AI Chat API: Starting streamText', { model: currentModel, agentRole });
+    loggers.ai.debug('AI Chat API: Tools configured for Page AI', { toolCount: Object.keys(filteredTools).length });
+    loggers.ai.info('AI Chat API: Starting streamText for Page AI', { model: currentModel, pageName: page.title });
     
     // Wrap streamText in try-catch for better error handling
     let result;
@@ -585,7 +631,7 @@ MENTION PROCESSING:
 • Let mentioned document content inform and enrich your response
 • Don't explicitly mention that you're reading @mentioned docs unless relevant to the conversation`,
       messages: modelMessages,
-      tools: roleFilteredTools,
+      tools: filteredTools,
       stopWhen: stepCountIs(100), // Allow up to 100 tool calls per conversation turn
       experimental_context: { userId }, // Pass userId to tools for permission checking
       maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
@@ -663,7 +709,7 @@ MENTION PROCESSING:
               toolCalls: extractedToolCalls.length > 0 ? extractedToolCalls : undefined,
               toolResults: extractedToolResults.length > 0 ? extractedToolResults : undefined,
               uiMessage: responseMessage, // NEW: Pass complete UIMessage to preserve part ordering
-              agentRole, // NEW: Pass agent role for tracking
+              agentRole: page.title || 'Page AI', // Use page title as agent role
             });
             
             loggers.ai.debug('AI Chat API: AI response message saved to database with tools');
@@ -688,7 +734,7 @@ MENTION PROCESSING:
               driveId: pageContext?.driveId,
               success: true,
               metadata: {
-                agentRole,
+                pageName: page.title,
                 toolCallsCount: extractedToolCalls.length,
                 toolResultsCount: extractedToolResults.length,
                 hasTools: extractedToolCalls.length > 0 || extractedToolResults.length > 0

@@ -8,17 +8,17 @@ import { Save } from 'lucide-react';
 import ChatInput, { ChatInputRef } from '@/components/messages/ChatInput';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Loader2, Send, Settings } from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Loader2, Send, Settings, MessageSquare } from 'lucide-react';
 import { UIMessage, DefaultChatTransport } from 'ai';
 import { ConversationMessageRenderer } from '@/components/ai/ConversationMessageRenderer';
 import { buildPagePath } from '@/lib/tree/tree-utils';
 import { useDriveStore } from '@/hooks/useDrive';
-import { AgentRole, AgentRoleUtils } from '@/lib/ai/agent-roles';
-import { RoleSelector } from '@/components/ai/RoleSelector';
 import { AI_PROVIDERS, getBackendProvider } from '@/lib/ai/ai-providers-config';
 import { useAuth } from '@/hooks/use-auth';
 import { toast } from 'sonner';
+import AgentSettingsTab, { AgentSettingsTabRef } from '@/components/ai/AgentSettingsTab';
 
 interface AiChatViewProps {
     page: TreePage;
@@ -50,11 +50,14 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const [googleApiKey, setGoogleApiKey] = useState<string>('');
   const [showApiKeyInput, setShowApiKeyInput] = useState<boolean>(false);
   const [isInitialized, setIsInitialized] = useState<boolean>(false);
-  const [isSaving, setIsSaving] = useState<boolean>(false);
-  const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
   const [initialMessages, setInitialMessages] = useState<UIMessage[]>([]);
   const [input, setInput] = useState<string>('');
-  const [currentAgentRole, setCurrentAgentRole] = useState<AgentRole>(AgentRoleUtils.getDefaultRole());
+  const [activeTab, setActiveTab] = useState<string>('chat');
+  const [agentConfig, setAgentConfig] = useState<{
+    systemPrompt: string;
+    enabledTools: string[];
+    availableTools: Array<{ name: string; description: string }>;
+  } | null>(null);
   const [showError, setShowError] = useState(true);
   const [isReadOnly, setIsReadOnly] = useState<boolean>(false);
   const { user } = useAuth();
@@ -63,6 +66,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<ChatInputRef>(null);
+  const agentSettingsRef = useRef<AgentSettingsTabRef>(null);
   
   // Auto-scroll to bottom function
   const scrollToBottom = () => {
@@ -156,9 +160,10 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     const initializeChat = async () => {
       try {
         // Parallelize API calls for faster loading
-        const [configResponse, messagesResponse] = await Promise.all([
+        const [configResponse, messagesResponse, agentConfigResponse] = await Promise.all([
           fetch(`/api/ai/chat?pageId=${page.id}`),
-          fetch(`/api/ai/chat/messages?pageId=${page.id}`)
+          fetch(`/api/ai/chat/messages?pageId=${page.id}`),
+          fetch(`/api/pages/${page.id}/agent-config`)
         ]);
         
         // Process config data
@@ -182,6 +187,12 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
           setInitialMessages(existingMessages);
         } else {
           setInitialMessages([]);
+        }
+
+        // Process agent config data
+        if (agentConfigResponse.ok) {
+          const agentConfigData = await agentConfigResponse.json();
+          setAgentConfig(agentConfigData);
         }
         
         setIsInitialized(true);
@@ -223,38 +234,10 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     // Set default model for the selected provider
     const defaultModel = Object.keys(AI_PROVIDERS[provider as keyof typeof AI_PROVIDERS].models)[0];
     setSelectedModel(defaultModel);
-    setHasUnsavedChanges(true);
   };
   
   const handleModelChange = (model: string) => {
     setSelectedModel(model);
-    setHasUnsavedChanges(true);
-  };
-  
-  const handleSaveSettings = async () => {
-    setIsSaving(true);
-    try {
-      const response = await fetch('/api/ai/chat', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pageId: page.id,
-          provider: selectedProvider, // Don't convert - save UI provider directly
-          model: selectedModel,
-        }),
-      });
-      
-      if (response.ok) {
-        setHasUnsavedChanges(false);
-        console.log('✅ Page AI settings saved successfully');
-      } else {
-        console.error('Failed to save page AI settings');
-      }
-    } catch (error) {
-      console.error('Error saving page AI settings:', error);
-    } finally {
-      setIsSaving(false);
-    }
   };
   
   const isProviderConfigured = (provider: string): boolean => {
@@ -380,80 +363,46 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Chat Header - Keep full width */}
-      <div className="flex items-center justify-between p-4 border-b bg-card">
-        <div className="flex items-center space-x-3">
-          {/* Agent Role Selector */}
-          <RoleSelector
-            currentRole={currentAgentRole}
-            onRoleChange={setCurrentAgentRole}
-            disabled={status === 'streaming'}
-            size="sm"
-          />
-          
-          {/* Provider Selector */}
-          <div className="flex items-center space-x-2">
-            <Select value={selectedProvider} onValueChange={handleProviderChange}>
-              <SelectTrigger className="w-[140px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {Object.entries(AI_PROVIDERS).map(([key, provider]) => {
-                  const configured = isProviderConfigured(key);
-                  return (
-                    <SelectItem key={key} value={key} disabled={!configured}>
-                      <div className="flex items-center space-x-2">
-                        <span>{provider.name}</span>
-                        {!configured && <span className="text-xs text-muted-foreground">(Setup Required)</span>}
-                      </div>
-                    </SelectItem>
-                  );
-                })}
-              </SelectContent>
-            </Select>
+      {/* Tabs */}
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col h-full">
+        <div className="p-4 border-b bg-card">
+          <div className="flex items-center justify-between">
+            <TabsList className="grid grid-cols-2 max-w-md">
+              <TabsTrigger value="chat" className="flex items-center space-x-2">
+                <MessageSquare className="h-4 w-4" />
+                <span>Chat</span>
+              </TabsTrigger>
+              <TabsTrigger value="settings" className="flex items-center space-x-2">
+                <Settings className="h-4 w-4" />
+                <span>Settings</span>
+              </TabsTrigger>
+            </TabsList>
             
-            {/* Model Selector */}
-            <Select value={selectedModel} onValueChange={handleModelChange}>
-              <SelectTrigger className="w-[180px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectLabel>{AI_PROVIDERS[selectedProvider as keyof typeof AI_PROVIDERS]?.name} Models</SelectLabel>
-                  {Object.entries(AI_PROVIDERS[selectedProvider as keyof typeof AI_PROVIDERS]?.models || {}).map(([key, name]) => (
-                    <SelectItem key={key} value={key}>
-                      {name}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-            
-            {/* Save Settings Button */}
-            {hasUnsavedChanges && (
+            {/* Save Settings Button - Only show when Settings tab is active */}
+            {activeTab === 'settings' && (
               <Button 
-                onClick={handleSaveSettings} 
-                disabled={isSaving}
-                size="sm"
-                variant="outline"
-                className="ml-2"
+                onClick={() => agentSettingsRef.current?.submitForm()}
+                disabled={agentSettingsRef.current?.isSaving || false}
+                className="min-w-[120px]"
               >
-                <Save className="h-4 w-4 mr-1" />
-                {isSaving ? 'Saving...' : 'Save'}
+                {agentSettingsRef.current?.isSaving ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  <>
+                    <Save className="h-4 w-4 mr-2" />
+                    Save Settings
+                  </>
+                )}
               </Button>
             )}
           </div>
         </div>
-        
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => setShowApiKeyInput(true)}
-        >
-          <Settings className="h-4 w-4 mr-2" />
-          Settings
-        </Button>
-      </div>
+
+        {/* Chat Tab */}
+        <TabsContent value="chat" className="flex flex-col flex-1 overflow-hidden">
 
       {/* Messages Area - Apply centering pattern */}
       <div className="flex-grow overflow-hidden p-4">
@@ -572,7 +521,6 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                           driveName: currentDrive?.name || driveId,
                           driveSlug: currentDrive?.slug,
                         },
-                        agentRole: currentAgentRole,
                       }
                     }
                   );
@@ -617,7 +565,6 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                           driveName: currentDrive?.name || driveId,
                           driveSlug: currentDrive?.slug,
                         },
-                        agentRole: currentAgentRole,
                       }
                     }
                   );
@@ -640,14 +587,32 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
         </div>
       </div>
       
-      {/* Read-only indicator */}
-      {isReadOnly && (
-        <div className="mt-2 mx-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg px-4 py-2">
-          <p className="text-sm text-yellow-800 dark:text-yellow-200 text-center">
-            🔒 View Only - You do not have permission to send messages in this AI chat
-          </p>
-        </div>
-      )}
+          {/* Read-only indicator */}
+          {isReadOnly && (
+            <div className="mt-2 mx-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg px-4 py-2">
+              <p className="text-sm text-yellow-800 dark:text-yellow-200 text-center">
+                🔒 View Only - You do not have permission to send messages in this AI chat
+              </p>
+            </div>
+          )}
+        </TabsContent>
+
+        {/* Settings Tab */}
+        <TabsContent value="settings" className="flex-1 overflow-auto">
+          <AgentSettingsTab
+            ref={agentSettingsRef}
+            pageId={page.id}
+            config={agentConfig}
+            onConfigUpdate={setAgentConfig}
+            selectedProvider={selectedProvider}
+            selectedModel={selectedModel}
+            onProviderChange={handleProviderChange}
+            onModelChange={handleModelChange}
+            availableProviders={AI_PROVIDERS}
+            isProviderConfigured={isProviderConfigured}
+          />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 };

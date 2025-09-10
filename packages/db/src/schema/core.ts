@@ -29,6 +29,8 @@ export const pages = pgTable('pages', {
   isTrashed: boolean('isTrashed').default(false).notNull(),
   aiProvider: text('aiProvider'),
   aiModel: text('aiModel'),
+  systemPrompt: text('systemPrompt'),
+  enabledTools: jsonb('enabledTools'),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
   trashedAt: timestamp('trashedAt', { mode: 'date' }),
