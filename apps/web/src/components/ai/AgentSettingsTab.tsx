@@ -7,7 +7,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { useForm } from 'react-hook-form';
+import { useForm, Controller } from 'react-hook-form';
 
 interface AgentConfig {
   systemPrompt: string;
@@ -50,7 +50,7 @@ const AgentSettingsTab = forwardRef<AgentSettingsTabRef, AgentSettingsTabProps>(
 }, ref) => {
   const [isSaving, setIsSaving] = useState(false);
 
-  const { register, handleSubmit, getValues, setValue, reset } = useForm<FormData>({
+  const { register, handleSubmit, setValue, reset, control, watch } = useForm<FormData>({
     defaultValues: {
       systemPrompt: config?.systemPrompt || '',
       enabledTools: config?.enabledTools || [],
@@ -100,20 +100,6 @@ const AgentSettingsTab = forwardRef<AgentSettingsTabRef, AgentSettingsTabProps>(
     isSaving
   }), [handleSubmit, onSubmit, isSaving]);
 
-  const handleToolToggle = (toolName: string, checked: boolean) => {
-    const currentForm = getValues();
-    const currentTools = currentForm.enabledTools || [];
-    let updatedTools;
-    
-    if (checked) {
-      updatedTools = [...currentTools, toolName];
-    } else {
-      updatedTools = currentTools.filter(tool => tool !== toolName);
-    }
-    
-    setValue('enabledTools', updatedTools);
-  };
-
   const handleSelectAllTools = () => {
     const allToolNames = config?.availableTools.map(tool => tool.name) || [];
     setValue('enabledTools', allToolNames);
@@ -122,6 +108,9 @@ const AgentSettingsTab = forwardRef<AgentSettingsTabRef, AgentSettingsTabProps>(
   const handleDeselectAllTools = () => {
     setValue('enabledTools', []);
   };
+
+  // Watch enabledTools for the count display
+  const enabledTools = watch('enabledTools', []);
 
   if (!config) {
     return (
@@ -241,33 +230,43 @@ const AgentSettingsTab = forwardRef<AgentSettingsTabRef, AgentSettingsTabProps>(
               Choose which tools your AI agent can access. This controls what actions the agent can perform.
             </p>
             <ScrollArea className="h-48">
-              <div className="space-y-3">
-                {config.availableTools.map((tool) => (
-                  <div key={tool.name} className="flex items-start space-x-3 p-2 rounded-lg hover:bg-muted/50">
-                    <Checkbox
-                      id={tool.name}
-                      {...register('enabledTools')}
-                      checked={getValues('enabledTools')?.includes(tool.name) || false}
-                      onCheckedChange={(checked) => handleToolToggle(tool.name, checked as boolean)}
-                      className="mt-1"
-                    />
-                    <div className="flex-1">
-                      <label 
-                        htmlFor={tool.name}
-                        className="text-sm font-medium cursor-pointer"
-                      >
-                        {tool.name}
-                      </label>
-                      <p className="text-xs text-muted-foreground">
-                        {tool.description}
-                      </p>
-                    </div>
+              <Controller
+                name="enabledTools"
+                control={control}
+                render={({ field: { value = [], onChange } }) => (
+                  <div className="space-y-3">
+                    {config.availableTools.map((tool) => (
+                      <div key={tool.name} className="flex items-start space-x-3 p-2 rounded-lg hover:bg-muted/50">
+                        <Checkbox
+                          id={tool.name}
+                          checked={value.includes(tool.name)}
+                          onCheckedChange={(checked) => {
+                            const newValue = checked
+                              ? [...value, tool.name]
+                              : value.filter(t => t !== tool.name);
+                            onChange(newValue);
+                          }}
+                          className="mt-1"
+                        />
+                        <div className="flex-1">
+                          <label 
+                            htmlFor={tool.name}
+                            className="text-sm font-medium cursor-pointer"
+                          >
+                            {tool.name}
+                          </label>
+                          <p className="text-xs text-muted-foreground">
+                            {tool.description}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                )}
+              />
             </ScrollArea>
             <p className="text-xs text-muted-foreground mt-2">
-              Selected {getValues('enabledTools')?.length || 0} of {config.availableTools.length} tools
+              Selected {enabledTools.length} of {config.availableTools.length} tools
             </p>
           </CardContent>
         </Card>
