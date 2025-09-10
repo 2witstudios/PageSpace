@@ -104,6 +104,8 @@ The database is organized into the following schema files:
 - `isTrashed`: `boolean` (Default: false) - Whether the page is in the trash
 - `aiProvider`: `text` - AI provider for AI-enabled pages
 - `aiModel`: `text` - AI model for AI-enabled pages
+- `systemPrompt`: `text` - Custom system prompt for AI agent behavior (AI_CHAT pages)
+- `enabledTools`: `jsonb` - Array of enabled AI tools for this page's agent
 - `createdAt`: `timestamp` - When the page was created
 - `updatedAt`: `timestamp` - When the page was last updated
 - `trashedAt`: `timestamp` - When the page was trashed
@@ -115,6 +117,12 @@ The database is organized into the following schema files:
 - `pages_drive_id_idx` on `driveId`
 - `pages_parent_id_idx` on `parentId`
 - `pages_parent_id_position_idx` on `parentId, position`
+
+**AI Agent Configuration:**
+- **Agent Identity**: Uses page `title` instead of separate agentName field for simplified identity management
+- **System Prompt Architecture**: Dynamic injection per message rather than storage per conversation, allowing real-time behavior changes
+- **Tool Permissions**: JSONB array enabling granular control over which AI tools the agent can access
+- **Provider/Model Inheritance**: AI_CHAT pages can override default user AI provider/model settings
 
 ### Table: `chat_messages`
 
