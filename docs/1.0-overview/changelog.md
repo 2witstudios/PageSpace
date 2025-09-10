@@ -1,5 +1,19 @@
 ### 2025-09-10
 
+- **Major Enhancement**: AI Agent Creation System and Enhanced Page Creation Tools
+  - **Added**: `apps/web/src/lib/ai/tools/agent-tools.ts` - Dedicated AI agent creation and management tools
+    - **create_agent**: Create fully configured AI agents with system prompt, enabled tools, and provider settings in one operation
+    - **update_agent_config**: Update existing agent configuration including system prompt, enabled tools, AI provider, and model settings
+  - **Enhanced**: `create_page` tool in `page-write-tools.ts` to support agent configuration
+    - **Optional agent configuration**: systemPrompt, enabledTools, aiProvider, aiModel parameters for AI_CHAT pages
+    - **Tool validation**: Validates enabled tools against available PageSpace tools with helpful error messages
+    - **Backward compatibility**: Maintains existing behavior for non-agent page creation
+  - **Enhanced**: `/api/pages` POST endpoint to handle agent configuration in page creation
+    - **Validation**: Server-side validation of agent tools and configuration
+    - **Database integration**: Stores agent configuration in systemPrompt and enabledTools fields
+  - **Updated**: AI tools export to include new agent management capabilities
+  - **Rationale**: Enables AI to create fully configured agents in one streamlined operation, eliminating the need for manual post-creation configuration
+
 - **Major Fix**: Agent Configuration System Overhaul and Performance Optimization
   - **Fixed**: Broken agent configuration save functionality - UI/UX issue where save button was hidden by CSS overflow constraints
   - **Removed**: Redundant `agentName` field from database schema and replaced with page title-based identity

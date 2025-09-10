@@ -69,7 +69,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const { title, type, parentId, driveId, content } = await request.json();
+    const { title, type, parentId, driveId, content, systemPrompt, enabledTools, aiProvider, aiModel } = await request.json();
 
     if (!title || !type || !driveId) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
@@ -91,9 +91,32 @@ export async function POST(request: Request) {
 
     const newPosition = (lastPage?.position || 0) + 1;
 
+    // Validate agent configuration for AI_CHAT pages
+    if (type === 'AI_CHAT') {
+      // Validate enabled tools if provided
+      if (enabledTools && enabledTools.length > 0) {
+        // Import pageSpaceTools for validation
+        const { pageSpaceTools } = await import('@/lib/ai/ai-tools');
+        const availableToolNames = Object.keys(pageSpaceTools);
+        const invalidTools = enabledTools.filter((toolName: string) => !availableToolNames.includes(toolName));
+        if (invalidTools.length > 0) {
+          return NextResponse.json({ 
+            error: `Invalid tools specified: ${invalidTools.join(', ')}. Available tools: ${availableToolNames.join(', ')}` 
+          }, { status: 400 });
+        }
+      }
+    } else {
+      // Non-AI_CHAT pages should not have agent configuration
+      if (systemPrompt || enabledTools || aiProvider || aiModel) {
+        return NextResponse.json({ 
+          error: 'Agent configuration (systemPrompt, enabledTools, aiProvider, aiModel) can only be used with AI_CHAT page type' 
+        }, { status: 400 });
+      }
+    }
+
     // Get user's current AI provider settings for AI_CHAT pages
-    let aiProvider = null;
-    let aiModel = null;
+    let defaultAiProvider = null;
+    let defaultAiModel = null;
     
     if (type === 'AI_CHAT') {
       const user = await db.query.users.findFirst({
@@ -105,23 +128,52 @@ export async function POST(request: Request) {
       });
       
       if (user) {
-        aiProvider = user.currentAiProvider || 'pagespace';
-        aiModel = user.currentAiModel || 'qwen/qwen3-coder:free';
+        defaultAiProvider = user.currentAiProvider || 'pagespace';
+        defaultAiModel = user.currentAiModel || 'qwen/qwen3-coder:free';
       }
     }
 
     const newPage = await db.transaction(async (tx) => {
-      const [page] = await tx.insert(pages).values({
+      // Prepare page data with proper typing that matches database schema
+      interface APIPageInsertData {
+        title: string;
+        type: 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS';
+        parentId: string | null;
+        driveId: string;
+        content: string;
+        position: number;
+        updatedAt: Date;
+        aiProvider?: string | null;
+        aiModel?: string | null;
+        systemPrompt?: string | null;
+        enabledTools?: string[] | null;
+      }
+
+      const pageData: APIPageInsertData = {
         title,
-        type: type,
+        type: type as 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS',
         parentId,
         driveId: drive.id,
         content: content || '',
         position: newPosition,
-        aiProvider,
-        aiModel,
         updatedAt: new Date(),
-      }).returning();
+      };
+
+      // Add AI configuration for AI_CHAT pages
+      if (type === 'AI_CHAT') {
+        pageData.aiProvider = aiProvider || defaultAiProvider;
+        pageData.aiModel = aiModel || defaultAiModel;
+        
+        // Add agent-specific configuration if provided
+        if (systemPrompt) {
+          pageData.systemPrompt = systemPrompt;
+        }
+        if (enabledTools && enabledTools.length > 0) {
+          pageData.enabledTools = enabledTools;
+        }
+      }
+
+      const [page] = await tx.insert(pages).values(pageData).returning();
 
       // AI_CHAT pages now use the new AI SDK v5 system
       // No need for separate aiChats table

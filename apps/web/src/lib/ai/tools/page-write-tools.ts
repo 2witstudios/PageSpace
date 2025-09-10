@@ -4,6 +4,7 @@ import { db, pages, drives, eq, and, desc, isNull, inArray } from '@pagespace/db
 import { canUserEditPage, canUserDeletePage } from '@pagespace/lib';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
 import { ToolExecutionContext } from '../types';
+import { pageSpaceTools } from '../ai-tools';
 
 export const pageWriteTools = {
   /**
@@ -282,15 +283,20 @@ export const pageWriteTools = {
    * Create new documents, folders, or other content
    */
   create_page: tool({
-    description: 'Create new pages in the workspace. Supports all page types: FOLDER (hierarchical organization), DOCUMENT (text content), AI_CHAT (AI conversation spaces), CHANNEL (team discussions), CANVAS (custom HTML/CSS pages), DATABASE (deprecated). Any page type can contain any other page type as children with infinite nesting.',
+    description: 'Create new pages in the workspace. Supports all page types: FOLDER (hierarchical organization), DOCUMENT (text content), AI_CHAT (AI conversation spaces with optional agent configuration), CHANNEL (team discussions), CANVAS (custom HTML/CSS pages), DATABASE (deprecated). Any page type can contain any other page type as children with infinite nesting. For AI_CHAT pages, can optionally configure system prompt and enabled tools.',
     inputSchema: z.object({
       driveId: z.string().describe('The unique ID of the drive to create the page in'),
       parentId: z.string().optional().describe('The unique ID of the parent page from list_pages - REQUIRED when creating inside any page (folder, document, channel, etc). Only omit for root-level pages in the drive.'),
       title: z.string().describe('The title of the new page'),
       type: z.enum(['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS']).describe('The type of page to create'),
       content: z.string().optional().describe('Optional initial content for the page'),
+      // Agent configuration fields (only for AI_CHAT type)
+      systemPrompt: z.string().optional().describe('System prompt for AI agent behavior (only for AI_CHAT pages). Defines how the agent should behave and respond.'),
+      enabledTools: z.array(z.string()).optional().describe('Array of tool names to enable for this AI agent (only for AI_CHAT pages). Available tools include: regex_search, glob_search, read_page, create_page, etc.'),
+      aiProvider: z.string().optional().describe('AI provider override for this agent (only for AI_CHAT pages). Overrides user default provider.'),
+      aiModel: z.string().optional().describe('AI model override for this agent (only for AI_CHAT pages). Overrides user default model.'),
     }),
-    execute: async ({ driveId, parentId, title, type, content = '' }, { experimental_context: context }) => {
+    execute: async ({ driveId, parentId, title, type, content = '', systemPrompt, enabledTools, aiProvider, aiModel }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -350,18 +356,68 @@ export const pageWriteTools = {
 
         const nextPosition = siblingPages.length > 0 ? siblingPages[0].position + 1 : 1;
 
+        // Validate agent configuration for AI_CHAT pages
+        if (type === 'AI_CHAT') {
+          // Validate enabled tools if provided
+          if (enabledTools && enabledTools.length > 0) {
+            const availableToolNames = Object.keys(pageSpaceTools);
+            const invalidTools = enabledTools.filter(toolName => !availableToolNames.includes(toolName));
+            if (invalidTools.length > 0) {
+              throw new Error(`Invalid tools specified: ${invalidTools.join(', ')}. Available tools: ${availableToolNames.join(', ')}`);
+            }
+          }
+        } else {
+          // Non-AI_CHAT pages should not have agent configuration
+          if (systemPrompt || enabledTools || aiProvider || aiModel) {
+            throw new Error('Agent configuration (systemPrompt, enabledTools, aiProvider, aiModel) can only be used with AI_CHAT page type');
+          }
+        }
+
+        // Prepare page data with proper typing
+        interface PageInsertData {
+          title: string;
+          type: 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS';
+          content: string;
+          position: number;
+          driveId: string;
+          parentId: string | null;
+          isTrashed: boolean;
+          systemPrompt?: string | null;
+          enabledTools?: string[] | null;
+          aiProvider?: string | null;
+          aiModel?: string | null;
+        }
+
+        const pageData: PageInsertData = {
+          title,
+          type,
+          content,
+          position: nextPosition,
+          driveId: drive.id,
+          parentId: parentId || null,
+          isTrashed: false,
+        };
+
+        // Add agent-specific fields for AI_CHAT pages
+        if (type === 'AI_CHAT') {
+          if (systemPrompt) {
+            pageData.systemPrompt = systemPrompt;
+          }
+          if (enabledTools && enabledTools.length > 0) {
+            pageData.enabledTools = enabledTools;
+          }
+          if (aiProvider) {
+            pageData.aiProvider = aiProvider;
+          }
+          if (aiModel) {
+            pageData.aiModel = aiModel;
+          }
+        }
+
         // Create the page
         const [newPage] = await db
           .insert(pages)
-          .values({
-            title,
-            type,
-            content,
-            position: nextPosition,
-            driveId: drive.id,
-            parentId,
-            isTrashed: false,
-          })
+          .values(pageData)
           .returning({ id: pages.id, title: pages.title, type: pages.type });
 
         // Broadcast page creation event
@@ -373,25 +429,71 @@ export const pageWriteTools = {
           })
         );
 
-        return {
+        // Build response with agent configuration info if applicable
+        interface PageCreationResponse {
+          success: boolean;
+          id: string;
+          title: string;
+          type: string;
+          parentId: string;
+          message: string;
+          summary: string;
+          stats: {
+            pageType: string;
+            location: string;
+            hasContent: boolean;
+          };
+          nextSteps: string[];
+          agentConfig?: {
+            hasSystemPrompt: boolean;
+            enabledToolsCount: number;
+            enabledTools: string[];
+            aiProvider: string;
+            aiModel: string;
+          };
+        }
+
+        const response: PageCreationResponse = {
           success: true,
           id: newPage.id,
           title: newPage.title,
           type: newPage.type,
           parentId: parentId || 'root',
-          message: `Successfully created ${type.toLowerCase()} page "${title}"`,
-          summary: `Created new ${type.toLowerCase()} "${title}" in ${parentId ? `parent ${parentId}` : 'drive root'}`,
+          message: `Successfully created ${type.toLowerCase()} page "${title}"${type === 'AI_CHAT' && (systemPrompt || enabledTools) ? ' with agent configuration' : ''}`,
+          summary: `Created new ${type.toLowerCase()} "${title}" in ${parentId ? `parent ${parentId}` : 'drive root'}${type === 'AI_CHAT' && systemPrompt ? ' with custom system prompt' : ''}`,
           stats: {
             pageType: newPage.type,
             location: parentId ? `Parent ID: ${parentId}` : 'Drive root',
             hasContent: content.length > 0
           },
           nextSteps: [
-            type === 'DOCUMENT' ? 'Add content to the new document' : 'Organize related pages in this folder',
+            type === 'DOCUMENT' ? 'Add content to the new document' : 
+            type === 'AI_CHAT' ? 'Start chatting with your new AI agent' : 
+            'Organize related pages in this folder',
             'Use read_page to verify the content was created correctly',
             `New page ID: ${newPage.id} - use this for further operations`
           ]
         };
+
+        // Add agent configuration details to response if applicable
+        if (type === 'AI_CHAT') {
+          response.agentConfig = {
+            hasSystemPrompt: !!systemPrompt,
+            enabledToolsCount: enabledTools?.length || 0,
+            enabledTools: enabledTools || [],
+            aiProvider: aiProvider || 'default',
+            aiModel: aiModel || 'default'
+          };
+          
+          if (systemPrompt || enabledTools) {
+            response.nextSteps.unshift(
+              systemPrompt ? 'AI agent is configured with custom behavior' : 'AI agent created with default behavior',
+              enabledTools?.length ? `Agent has access to ${enabledTools.length} tools: ${enabledTools.join(', ')}` : 'Agent has no additional tools enabled'
+            );
+          }
+        }
+
+        return response;
       } catch (error) {
         console.error('Error creating page:', error);
         throw new Error(`Failed to create page: ${error instanceof Error ? error.message : String(error)}`);
