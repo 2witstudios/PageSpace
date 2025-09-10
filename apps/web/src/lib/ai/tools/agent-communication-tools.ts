@@ -6,7 +6,7 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createXai } from '@ai-sdk/xai';
-import { db, pages, chatMessages, eq, and, asc } from '@pagespace/db';
+import { db, pages, chatMessages, drives, eq, and, asc, sql } from '@pagespace/db';
 import { canUserViewPage } from '@pagespace/lib/server';
 import { convertDbMessageToUIMessage, sanitizeMessagesForModel } from '@/lib/ai/assistant-utils';
 import { driveTools } from './drive-tools';
@@ -155,6 +155,262 @@ async function logAgentInteraction(params: {
 }
 
 export const agentCommunicationTools = {
+  /**
+   * List all AI agents in a specific drive
+   */
+  list_agents: tool({
+    description: 'List all AI agents in a specific drive. Returns only AI_CHAT pages with their configuration.',
+    inputSchema: z.object({
+      driveId: z.string().describe('The unique ID of the drive to list agents from'),
+      driveSlug: z.string().optional().describe('The drive slug for semantic context (e.g., "marketing", "dev-tools")'),
+      includeSystemPrompt: z.boolean().optional().default(false).describe('Include the full system prompt for each agent'),
+      includeTools: z.boolean().optional().default(true).describe('Include the list of enabled tools for each agent'),
+    }),
+    execute: async ({ driveId, driveSlug, includeSystemPrompt, includeTools }, { experimental_context }) => {
+      const executionContext = experimental_context as ToolExecutionContext;
+      const userId = executionContext?.userId;
+      
+      if (!userId) {
+        throw new Error('User authentication required');
+      }
+      
+      try {
+        // Get the drive info
+        const [drive] = await db
+          .select({ id: drives.id, name: drives.name, ownerId: drives.ownerId })
+          .from(drives)
+          .where(eq(drives.id, driveId));
+        
+        if (!drive) {
+          throw new Error(`Drive with ID "${driveId}" not found`);
+        }
+        
+        // Query all AI agents in the drive
+        const agents = await db
+          .select({
+            id: pages.id,
+            title: pages.title,
+            systemPrompt: pages.systemPrompt,
+            enabledTools: pages.enabledTools,
+            aiProvider: pages.aiProvider,
+            aiModel: pages.aiModel,
+            parentId: pages.parentId,
+            createdAt: pages.createdAt,
+          })
+          .from(pages)
+          .where(and(
+            eq(pages.driveId, driveId),
+            eq(pages.type, 'AI_CHAT'),
+            eq(pages.isTrashed, false)
+          ))
+          .orderBy(pages.title);
+        
+        // Filter agents based on user permissions
+        const accessibleAgents = [];
+        for (const agent of agents) {
+          const canView = await canUserViewPage(userId, agent.id);
+          if (canView) {
+            // Check if agent has conversation history
+            const messageCount = await db
+              .select({ count: sql<number>`count(*)` })
+              .from(chatMessages)
+              .where(eq(chatMessages.pageId, agent.id));
+            
+            const hasConversationHistory = messageCount[0]?.count > 0;
+            
+            // Get parent title if exists
+            let parentTitle = undefined;
+            if (agent.parentId) {
+              const [parent] = await db
+                .select({ title: pages.title })
+                .from(pages)
+                .where(eq(pages.id, agent.parentId));
+              parentTitle = parent?.title;
+            }
+            
+            accessibleAgents.push({
+              id: agent.id,
+              title: agent.title,
+              path: `/${driveSlug || 'drive'}/${agent.title}`,
+              systemPrompt: includeSystemPrompt ? agent.systemPrompt : undefined,
+              enabledTools: includeTools ? (agent.enabledTools as string[] | null) : undefined,
+              aiProvider: agent.aiProvider,
+              aiModel: agent.aiModel,
+              hasConversationHistory,
+              parentId: agent.parentId,
+              parentTitle,
+            });
+          }
+        }
+        
+        return {
+          success: true,
+          driveId: drive.id,
+          driveName: drive.name,
+          agents: accessibleAgents,
+          count: accessibleAgents.length,
+          summary: `Found ${accessibleAgents.length} AI agent${accessibleAgents.length === 1 ? '' : 's'} in ${drive.name}`
+        };
+        
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        loggers.ai.error('Failed to list agents:', { error: errorMessage, driveId });
+        
+        return {
+          success: false,
+          error: errorMessage,
+          driveId,
+          agents: [],
+          count: 0,
+          summary: 'Failed to list agents'
+        };
+      }
+    },
+  }),
+
+  /**
+   * List all AI agents across all accessible drives
+   */
+  multi_drive_list_agents: tool({
+    description: 'List all AI agents across ALL accessible drives. Useful for discovering agents throughout your entire workspace.',
+    inputSchema: z.object({
+      includeSystemPrompt: z.boolean().optional().default(false).describe('Include the full system prompt for each agent'),
+      includeTools: z.boolean().optional().default(true).describe('Include the list of enabled tools for each agent'),
+      groupByDrive: z.boolean().optional().default(true).describe('Group results by drive for better organization'),
+    }),
+    execute: async ({ includeSystemPrompt, includeTools, groupByDrive }, { experimental_context }) => {
+      const executionContext = experimental_context as ToolExecutionContext;
+      const userId = executionContext?.userId;
+      
+      if (!userId) {
+        throw new Error('User authentication required');
+      }
+      
+      try {
+        // Get all drives the user has access to
+        const userDrives = await db
+          .select({
+            id: drives.id,
+            name: drives.name,
+            slug: drives.slug,
+          })
+          .from(drives)
+          .where(eq(drives.ownerId, userId)); // Simplified - you might want more complex permission logic
+        
+        let totalAgentCount = 0;
+        const agentsByDrive = [];
+        const allAgents = [];
+        
+        for (const drive of userDrives) {
+          // Query AI agents in this drive
+          const agents = await db
+            .select({
+              id: pages.id,
+              title: pages.title,
+              systemPrompt: pages.systemPrompt,
+              enabledTools: pages.enabledTools,
+              aiProvider: pages.aiProvider,
+              aiModel: pages.aiModel,
+              parentId: pages.parentId,
+              createdAt: pages.createdAt,
+            })
+            .from(pages)
+            .where(and(
+              eq(pages.driveId, drive.id),
+              eq(pages.type, 'AI_CHAT'),
+              eq(pages.isTrashed, false)
+            ))
+            .orderBy(pages.title);
+          
+          const driveAgents = [];
+          for (const agent of agents) {
+            const canView = await canUserViewPage(userId, agent.id);
+            if (canView) {
+              // Check for conversation history
+              const messageCount = await db
+                .select({ count: sql<number>`count(*)` })
+                .from(chatMessages)
+                .where(eq(chatMessages.pageId, agent.id));
+              
+              const hasConversationHistory = messageCount[0]?.count > 0;
+              
+              // Get parent title if exists
+              let parentTitle = undefined;
+              if (agent.parentId) {
+                const [parent] = await db
+                  .select({ title: pages.title })
+                  .from(pages)
+                  .where(eq(pages.id, agent.parentId));
+                parentTitle = parent?.title;
+              }
+              
+              const agentData = {
+                id: agent.id,
+                title: agent.title,
+                driveId: drive.id,
+                driveName: drive.name,
+                path: `/${drive.slug}/${agent.title}`,
+                systemPrompt: includeSystemPrompt ? agent.systemPrompt : undefined,
+                enabledTools: includeTools ? (agent.enabledTools as string[] | null) : undefined,
+                aiProvider: agent.aiProvider,
+                aiModel: agent.aiModel,
+                hasConversationHistory,
+                parentId: agent.parentId,
+                parentTitle,
+              };
+              
+              driveAgents.push(agentData);
+              allAgents.push(agentData);
+              totalAgentCount++;
+            }
+          }
+          
+          if (driveAgents.length > 0) {
+            agentsByDrive.push({
+              driveId: drive.id,
+              driveName: drive.name,
+              driveSlug: drive.slug,
+              agentCount: driveAgents.length,
+              agents: driveAgents
+            });
+          }
+        }
+        
+        if (groupByDrive) {
+          return {
+            success: true,
+            totalCount: totalAgentCount,
+            driveCount: agentsByDrive.length,
+            summary: `Found ${totalAgentCount} AI agent${totalAgentCount === 1 ? '' : 's'} across ${agentsByDrive.length} drive${agentsByDrive.length === 1 ? '' : 's'}`,
+            agentsByDrive
+          };
+        } else {
+          return {
+            success: true,
+            totalCount: totalAgentCount,
+            driveCount: agentsByDrive.length,
+            summary: `Found ${totalAgentCount} AI agent${totalAgentCount === 1 ? '' : 's'} across ${agentsByDrive.length} drive${agentsByDrive.length === 1 ? '' : 's'}`,
+            agents: allAgents
+          };
+        }
+        
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        loggers.ai.error('Failed to list agents across drives:', { error: errorMessage });
+        
+        return {
+          success: false,
+          error: errorMessage,
+          totalCount: 0,
+          driveCount: 0,
+          summary: 'Failed to list agents',
+          agentsByDrive: [],
+          agents: []
+        };
+      }
+    },
+  }),
+
   /**
    * Consult another AI agent in the workspace for specialized knowledge or assistance
    */
