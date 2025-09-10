@@ -17,7 +17,8 @@ import {
   CheckCircle,
   AlertCircle,
   Loader2,
-  Clock
+  Clock,
+  Bot
 } from 'lucide-react';
 import { CompactTaskManagementToolRenderer } from './CompactTaskManagementToolRenderer';
 
@@ -91,6 +92,8 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
   const getToolIcon = (toolName: string) => {
     const iconClass = "h-3 w-3";
     switch (toolName) {
+      case 'ask_agent':
+        return <Bot className={iconClass} />;
       case 'list_drives':
         return <Database className={iconClass} />;
       case 'list_pages':
@@ -143,6 +146,7 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
   // Format tool name for display (shorter)
   const formatToolName = (toolName: string) => {
     const nameMap: Record<string, string> = {
+      'ask_agent': 'Ask Agent',
       'list_drives': 'List Drives',
       'list_pages': 'List Pages',
       'read_page': 'Read',
@@ -174,6 +178,11 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
       try {
         const result = typeof output === 'string' ? JSON.parse(output) : output;
         
+        if (toolName === 'ask_agent' && result.response) {
+          const text = String(result.response);
+          return text.length > 30 ? text.substring(0, 27) + '...' : text;
+        }
+
         // Very compact summaries
         if (toolName === 'list_drives' && result.drives) {
           return `${result.drives.length} drives`;

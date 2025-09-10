@@ -12,10 +12,12 @@ import {
   RotateCcw,
   FilePlus,
   FileUp,
-  FileDown
+  FileDown,
+  Bot
 } from 'lucide-react';
 import { Task, TaskTrigger, TaskContent, TaskItem, TaskItemFile, TaskStatus } from '@/components/ai/task';
 import { TaskManagementToolRenderer } from './TaskManagementToolRenderer';
+import { AgentConversationRenderer } from './AgentConversationRenderer';
 
 interface DriveInfo {
   slug: string;
@@ -88,6 +90,11 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
     );
   }
 
+  // Ask Agent tool - render with dedicated conversation UI
+  if (toolName === 'ask_agent') {
+    return <AgentConversationRenderer part={part} />;
+  }
+
   // Convert AI SDK state to Task status
   const getTaskStatus = (): TaskStatus => {
     switch (state) {
@@ -107,6 +114,8 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
   // Tool-specific icons
   const getToolIcon = (toolName: string) => {
     switch (toolName) {
+      case 'ask_agent':
+        return <Bot className="h-4 w-4" />;
       case 'list_drives':
         return <Database className="h-4 w-4" />;
       case 'list_pages':
@@ -142,6 +151,7 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
   // Format tool name for display
   const formatToolName = (toolName: string) => {
     const nameMap: Record<string, string> = {
+      'ask_agent': 'Ask Agent',
       'list_drives': 'List Drives',
       'list_pages': 'List Pages',
       'read_page': 'Read Page',
