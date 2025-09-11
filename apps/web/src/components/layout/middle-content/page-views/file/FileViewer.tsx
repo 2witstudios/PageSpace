@@ -6,6 +6,7 @@ import { TreePage } from '@/hooks/usePageTree';
 import PDFViewer from './viewers/PDFViewer';
 import ImageViewer from './viewers/ImageViewer';
 import CodeViewer from './viewers/CodeViewer';
+import DocxViewer from './viewers/DocxViewer';
 import GenericFileViewer from './viewers/GenericFileViewer';
 
 interface FileViewerProps {
@@ -19,6 +20,7 @@ function getFileType(mimeType: string | undefined, fileName: string | undefined)
   if (mimeType.startsWith('image/')) return 'image';
   if (mimeType === 'application/pdf') return 'pdf';
   if (mimeType.startsWith('text/') || isCodeFile(fileName)) return 'code';
+  if (isWordDocument(mimeType)) return 'docx';
   if (isOfficeDocument(mimeType)) return 'office';
   
   return 'generic';
@@ -37,11 +39,18 @@ function isCodeFile(fileName: string | undefined): boolean {
   return codeExtensions.some(ext => fileName.toLowerCase().endsWith(ext));
 }
 
-// Check if file is an office document
+// Check if file is a Word document
+function isWordDocument(mimeType: string): boolean {
+  const wordTypes = [
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  ];
+  return wordTypes.includes(mimeType);
+}
+
+// Check if file is an office document (excluding Word)
 function isOfficeDocument(mimeType: string): boolean {
   const officeTypes = [
-    'application/msword',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     'application/vnd.ms-excel',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     'application/vnd.ms-powerpoint',
@@ -63,6 +72,8 @@ export default function FileViewer({ page }: FileViewerProps) {
         return <ImageViewer page={page} />;
       case 'code':
         return <CodeViewer page={page} />;
+      case 'docx':
+        return <DocxViewer page={page} />;
       default:
         return <GenericFileViewer page={page} />;
     }
