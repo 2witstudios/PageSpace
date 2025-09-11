@@ -63,17 +63,17 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
   const pageComponent = (() => {
     switch (page.type) {
       case PageType.FOLDER:
-        return <FolderView key={page.id} page={page} />;
+        return <FolderView page={page} />;
       case PageType.AI_CHAT:
-        return <AiChatView key={page.id} page={page} />;
+        return <AiChatView page={page} />;
       case PageType.CHANNEL:
-        return <ChannelView key={page.id} page={page} />;
+        return <ChannelView page={page} />;
       case PageType.DOCUMENT:
-        return <DocumentView key={page.id} page={page} />;
+        return <DocumentView page={page} />;
       case PageType.CANVAS:
-        return <CanvasPageView key={page.id} page={page} />;
+        return <CanvasPageView page={page} />;
       case PageType.FILE:
-        return <FileViewer key={page.id} page={page} />;
+        return <FileViewer page={page} />;
       default:
         return (
           <div className="p-4 text-center text-muted-foreground">

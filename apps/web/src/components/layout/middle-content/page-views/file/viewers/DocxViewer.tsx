@@ -1,13 +1,12 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { TreePage } from '@/hooks/usePageTree';
 import { Loader2, FileText, ArrowRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { useRouter } from 'next/navigation';
 import { useParams } from 'next/navigation';
-import DOMPurify from 'dompurify';
 import {
   Dialog,
   DialogContent,
@@ -24,63 +23,74 @@ interface DocxViewerProps {
 }
 
 export default function DocxViewer({ page }: DocxViewerProps) {
-  const [htmlContent, setHtmlContent] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isConverting, setIsConverting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showConvertDialog, setShowConvertDialog] = useState(false);
   const [newDocumentTitle, setNewDocumentTitle] = useState('');
+  const [docxData, setDocxData] = useState<ArrayBuffer | null>(null);
+  const previewContainerRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
   const params = useParams();
   const driveId = params.driveId as string;
 
+  // Load the DOCX file data
   useEffect(() => {
-    const loadAndConvertDocx = async () => {
-      try {
-        setIsLoading(true);
-        setError(null);
-
-        // Fetch the DOCX file
-        const response = await fetch(`/api/files/${page.id}/view`);
+    setIsLoading(true);
+    setError(null);
+    
+    fetch(`/api/files/${page.id}/view`)
+      .then(response => {
         if (!response.ok) {
-          throw new Error('Failed to load document');
+          throw new Error(`Failed to load document: ${response.status}`);
         }
-
-        // Get the file as a blob
-        const blob = await response.blob();
-        const arrayBuffer = await blob.arrayBuffer();
-
-        // Dynamically import mammoth to avoid SSR issues
-        const mammoth = (await import('mammoth')).default;
-
-        // Convert DOCX to HTML
-        const result = await mammoth.convertToHtml({ arrayBuffer });
-        
-        if (result.messages && result.messages.length > 0) {
-          console.warn('Conversion messages:', result.messages);
-        }
-
-        // Sanitize the HTML to prevent XSS
-        const sanitizedHtml = DOMPurify.sanitize(result.value, {
-          ADD_TAGS: ['style'],
-          ADD_ATTR: ['style', 'class'],
-        });
-
-        setHtmlContent(sanitizedHtml);
-        
+        return response.arrayBuffer();
+      })
+      .then(data => {
+        console.log('DOCX data loaded:', data.byteLength, 'bytes');
+        setDocxData(data);
         // Set default title for conversion
         const baseTitle = page.title.replace(/\.(docx?|DOCX?)$/, '');
         setNewDocumentTitle(baseTitle);
-      } catch (err) {
-        console.error('Failed to convert DOCX:', err);
+      })
+      .catch(err => {
+        console.error('Failed to load DOCX:', err);
         setError(err instanceof Error ? err.message : 'Failed to load document');
-      } finally {
+      })
+      .finally(() => {
         setIsLoading(false);
-      }
-    };
-
-    loadAndConvertDocx();
+      });
   }, [page.id, page.title]);
+
+  // Render the DOCX when data is ready and container exists
+  useEffect(() => {
+    if (!docxData || !previewContainerRef.current) {
+      console.log('Waiting for data or container:', { 
+        hasData: !!docxData, 
+        hasContainer: !!previewContainerRef.current 
+      });
+      return;
+    }
+
+    console.log('Rendering DOCX with container:', previewContainerRef.current);
+    
+    // Clear any existing content
+    previewContainerRef.current.innerHTML = '';
+    
+    // Import and render
+    import('docx-preview')
+      .then(({ renderAsync }) => {
+        console.log('Calling renderAsync...');
+        return renderAsync(docxData, previewContainerRef.current!);
+      })
+      .then(() => {
+        console.log('DOCX rendered successfully');
+      })
+      .catch(err => {
+        console.error('Failed to render DOCX:', err);
+        setError(err instanceof Error ? err.message : 'Failed to render document');
+      });
+  }, [docxData]);
 
   const handleConvertToDocument = async () => {
     if (!newDocumentTitle.trim()) {
@@ -125,7 +135,7 @@ export default function DocxViewer({ page }: DocxViewerProps) {
       <div className="flex items-center justify-center h-full">
         <div className="text-center">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground mx-auto mb-2" />
-          <p className="text-sm text-muted-foreground">Converting document...</p>
+          <p className="text-sm text-muted-foreground">Loading document...</p>
         </div>
       </div>
     );
@@ -149,7 +159,7 @@ export default function DocxViewer({ page }: DocxViewerProps) {
           <div className="flex items-center gap-2">
             <FileText className="h-5 w-5 text-muted-foreground" />
             <div>
-              <p className="text-sm font-medium">Word Document Preview</p>
+              <p className="text-sm font-medium">Word Document</p>
               <p className="text-xs text-muted-foreground">
                 {page.originalFileName || page.title}
               </p>
@@ -157,7 +167,6 @@ export default function DocxViewer({ page }: DocxViewerProps) {
           </div>
           <Button
             onClick={() => setShowConvertDialog(true)}
-            disabled={!htmlContent}
             size="sm"
           >
             <ArrowRight className="mr-2 h-4 w-4" />
@@ -165,16 +174,19 @@ export default function DocxViewer({ page }: DocxViewerProps) {
           </Button>
         </div>
 
-        {/* Document preview */}
-        <div className="flex-1 overflow-auto p-6 bg-background">
+        {/* Document preview container */}
+        <div className="flex-1 bg-muted/10 p-4 overflow-hidden">
           <div 
-            className="mx-auto max-w-4xl prose prose-sm dark:prose-invert"
-            dangerouslySetInnerHTML={{ __html: htmlContent || '' }}
-            style={{
-              // Add some default styles for better Word document rendering
-              lineHeight: '1.6',
-              fontSize: '14px',
+            ref={previewContainerRef}
+            className="bg-white rounded overflow-auto"
+            style={{ 
+              minHeight: '600px',
+              width: '100%',
+              height: 'calc(100vh - 200px)',
+              display: 'block',
+              position: 'relative'
             }}
+            suppressHydrationWarning={true}
           />
         </div>
       </div>

@@ -213,6 +213,9 @@ importers:
       date-fns:
         specifier: ^4.1.0
         version: 4.1.0
+      docx-preview:
+        specifier: ^0.3.6
+        version: 0.3.6
       dompurify:
         specifier: ^3.2.6
         version: 3.2.6
@@ -3053,6 +3056,9 @@ packages:
   doctrine@2.1.0:
     resolution: {integrity: sha512-35mSku4ZXK0vfCuHEDAwt55dg2jNajHZ1odvF+8SSr82EsZY4QmXfuWso8oEd8zRhVObSN18aM0CjSdoBX7zIw==}
     engines: {node: '>=0.10.0'}
+
+  docx-preview@0.3.6:
+    resolution: {integrity: sha512-gKVPE18hlpfuhQHiptsw1rbOwzQeGSwK10/w7hv1ZMEqHmjtCuTpz6AUMfu1twIPGxgpcsMXThKI6B6WsP3L1w==}
 
   dom-serializer@2.0.0:
     resolution: {integrity: sha512-wIkAryiqt/nV5EQKqQpo3SToSOV9J0DnbJqwK7Wv/Trc92zIAYZ4FlMu+JPFW1DfGFt81ZTCGgDEabffXeLyJg==}
@@ -8255,6 +8261,10 @@ snapshots:
   doctrine@2.1.0:
     dependencies:
       esutils: 2.0.3
+
+  docx-preview@0.3.6:
+    dependencies:
+      jszip: 3.10.1
 
   dom-serializer@2.0.0:
     dependencies:

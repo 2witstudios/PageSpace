@@ -59,6 +59,7 @@
     "cmdk": "^1.1.1",
     "cookie": "1.0.2",
     "date-fns": "^4.1.0",
+    "docx-preview": "^0.3.6",
     "dompurify": "^3.2.6",
     "framer-motion": "^12.23.10",
     "fuse.js": "^7.1.0",
