@@ -78,6 +78,7 @@
     "react-dom": "^19.0.0",
     "react-hook-form": "^7.62.0",
     "react-markdown": "^10.1.0",
+    "react-pdf": "^10.1.0",
     "recharts": "^3.1.2",
     "slate": "^0.117.2",
     "slate-history": "^0.113.1",

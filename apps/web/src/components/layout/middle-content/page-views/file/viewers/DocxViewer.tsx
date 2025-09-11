@@ -81,7 +81,9 @@ export default function DocxViewer({ page }: DocxViewerProps) {
     import('docx-preview')
       .then(({ renderAsync }) => {
         console.log('Calling renderAsync...');
-        return renderAsync(docxData, previewContainerRef.current!);
+        return renderAsync(docxData, previewContainerRef.current!, undefined, { 
+          inWrapper: false 
+        });
       })
       .then(() => {
         console.log('DOCX rendered successfully');
@@ -175,13 +177,14 @@ export default function DocxViewer({ page }: DocxViewerProps) {
         </div>
 
         {/* Document preview container */}
-        <div className="flex-1 bg-muted/10 p-4 overflow-hidden">
+        <div className="flex-1 p-4 overflow-hidden flex justify-center">
           <div 
             ref={previewContainerRef}
-            className="bg-white rounded overflow-auto"
+            className="bg-white rounded overflow-auto shadow-lg"
             style={{ 
               minHeight: '600px',
-              width: '100%',
+              width: 'fit-content',
+              maxWidth: '100%',
               height: 'calc(100vh - 200px)',
               display: 'block',
               position: 'relative'
