@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import {
   DndContext,
   DragEndEvent,
@@ -33,6 +33,12 @@ export type DropPosition = 'before' | 'after' | 'inside' | null;
 export interface DragState {
   overId: string | null;
   dropPosition: DropPosition;
+  isExternalFile?: boolean;
+}
+
+export interface FileDropTarget {
+  nodeId: string | null;
+  dropPosition: DropPosition;
 }
 
 import { KeyedMutator } from "swr";
@@ -60,8 +66,15 @@ export default function PageTree({ driveId, initialTree, mutate: externalMutate,
     isOpen: boolean;
     parentId: string | null;
   }>({ isOpen: false, parentId: null });
+  const [expandTimer, setExpandTimer] = useState<NodeJS.Timeout | null>(null);
   
   // File drop handling
+  const [isDraggingOverRoot, setIsDraggingOverRoot] = useState(false);
+  const [fileDropTarget, setFileDropTarget] = useState<FileDropTarget>({
+    nodeId: null,
+    dropPosition: null
+  });
+  
   const {
     isDraggingFiles,
     isUploading,
@@ -77,6 +90,44 @@ export default function PageTree({ driveId, initialTree, mutate: externalMutate,
       mutate();
     }
   });
+  
+  // Auto-expand pages when dragging files over them (if they have children)
+  useEffect(() => {
+    const targetId = isDraggingFiles ? fileDropTarget.nodeId : dragState.overId;
+    const targetDropPosition = isDraggingFiles ? fileDropTarget.dropPosition : dragState.dropPosition;
+    
+    if (targetId && targetDropPosition === 'inside') {
+      const currentTree = optimisticTree ?? tree;
+      const targetNode = findNodeAndParent(currentTree, targetId)?.node;
+      
+      // Any page with children can be expanded
+      if (targetNode && targetNode.children && targetNode.children.length > 0 && !expandedNodes.has(targetId)) {
+        // Clear any existing timer
+        if (expandTimer) {
+          clearTimeout(expandTimer);
+        }
+        
+        // Set new timer to expand after 500ms
+        const timer = setTimeout(() => {
+          toggleExpanded(targetId);
+        }, 500);
+        
+        setExpandTimer(timer);
+      }
+    } else {
+      // Clear timer if not hovering over expandable page
+      if (expandTimer) {
+        clearTimeout(expandTimer);
+        setExpandTimer(null);
+      }
+    }
+    
+    return () => {
+      if (expandTimer) {
+        clearTimeout(expandTimer);
+      }
+    };
+  }, [isDraggingFiles, fileDropTarget.nodeId, fileDropTarget.dropPosition, dragState.overId, dragState.dropPosition, tree, optimisticTree, expandedNodes, toggleExpanded, expandTimer]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -290,7 +341,21 @@ export default function PageTree({ driveId, initialTree, mutate: externalMutate,
         onDragEnter={handleDragEnter}
         onDragLeave={handleDragLeave}
         onDragOver={handleFileDragOver}
-        onDrop={(e) => handleFileDrop(e as React.DragEvent)}
+        onDrop={(e) => {
+          if (isDraggingFiles && fileDropTarget.nodeId && fileDropTarget.dropPosition === 'inside') {
+            // Drop on specific page
+            e.preventDefault();
+            e.stopPropagation();
+            handleFileDrop(e as React.DragEvent, fileDropTarget.nodeId);
+          } else if (isDraggingFiles && !fileDropTarget.nodeId) {
+            // Drop on root
+            e.preventDefault();
+            e.stopPropagation();
+            handleFileDrop(e as React.DragEvent, null);
+          }
+          setIsDraggingOverRoot(false);
+          setFileDropTarget({ nodeId: null, dropPosition: null });
+        }}
       >
         <SortableContext items={flattenedItems} strategy={verticalListSortingStrategy}>
           <nav className="px-1 py-2">
@@ -308,7 +373,8 @@ export default function PageTree({ driveId, initialTree, mutate: externalMutate,
                 isTrashView={isTrashView}
                 expandedNodes={expandedNodes}
                 isDraggingFiles={isDraggingFiles}
-                onFileDrop={(e, parentId) => handleFileDrop(e as React.DragEvent, parentId)}
+                fileDropTarget={fileDropTarget}
+                setFileDropTarget={setFileDropTarget}
               />
             ))}
           </nav>
@@ -326,13 +392,13 @@ export default function PageTree({ driveId, initialTree, mutate: externalMutate,
           driveId={driveId}
         />
         
-        {/* File upload overlay */}
-        {isDraggingFiles && (
+        {/* File upload overlay - only show when dragging over root, not folders */}
+        {isDraggingFiles && isDraggingOverRoot && (
           <div className="absolute inset-0 pointer-events-none z-50">
             <div className="absolute inset-0 bg-primary/10 border-2 border-dashed border-primary rounded-md flex items-center justify-center">
               <div className="text-center">
-                <p className="text-sm font-medium">Drop files here to upload</p>
-                <p className="text-xs text-muted-foreground mt-1">Files will be added to this drive</p>
+                <p className="text-sm font-medium">Drop files here to upload to drive root</p>
+                <p className="text-xs text-muted-foreground mt-1">Or drop on folders to upload inside them</p>
               </div>
             </div>
           </div>

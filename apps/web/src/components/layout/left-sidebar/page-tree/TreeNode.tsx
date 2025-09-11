@@ -21,7 +21,7 @@ import {
 import { useParams } from "next/navigation";
 import { TreePage } from "@/hooks/usePageTree";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { DragState } from "./PageTree";
+import { DragState, FileDropTarget } from "./PageTree";
 import { PageType } from "@pagespace/lib";
 import {
   DropdownMenu,
@@ -46,7 +46,8 @@ interface TreeNodeProps {
   isTrashView?: boolean;
   expandedNodes: Set<string>;
   isDraggingFiles?: boolean;
-  onFileDrop?: (e: React.DragEvent, parentId: string) => void;
+  fileDropTarget?: FileDropTarget;
+  setFileDropTarget?: (target: FileDropTarget) => void;
 }
 
 export default function TreeNode({
@@ -61,7 +62,8 @@ export default function TreeNode({
   isTrashView = false,
   expandedNodes,
   isDraggingFiles = false,
-  onFileDrop,
+  fileDropTarget,
+  setFileDropTarget,
 }: TreeNodeProps) {
   const [isHovered, setIsHovered] = useState(false);
   const [isConfirmTrashOpen, setConfirmTrashOpen] = useState(false);
@@ -192,8 +194,13 @@ export default function TreeNode({
 
   const isOverThisNode = dragState.overId === node.id;
   const isActiveNode = activeId === node.id;
-  const showDropIndicator = isOverThisNode && !isActiveNode;
-  const canAcceptFiles = node.type === PageType.FOLDER && !isTrashView;
+  const showDropIndicator = isOverThisNode && !isActiveNode && !isDraggingFiles;
+  // Any page can accept files (they can all act as containers), except in trash
+  const canAcceptFiles = !isTrashView;
+  
+  // Show file drop indicator when dragging files and hovering over this specific page
+  const isFileDropTarget = isDraggingFiles && fileDropTarget?.nodeId === node.id && fileDropTarget?.dropPosition === 'inside';
+  const showFileDropIndicator = isFileDropTarget && canAcceptFiles;
 
   return (
     <>
@@ -218,13 +225,8 @@ export default function TreeNode({
           className={`
             group flex items-center px-1 py-1.5 rounded-lg transition-all duration-200 cursor-grab active:cursor-grabbing
             ${
-              showDropIndicator && dragState.dropPosition === "inside"
+              (showDropIndicator && dragState.dropPosition === "inside") || showFileDropIndicator
                 ? "bg-blue-100 dark:bg-blue-900/30 ring-2 ring-blue-500 ring-inset"
-                : ""
-            }
-            ${
-              isDraggingFiles && canAcceptFiles
-                ? "bg-primary/10 border border-dashed border-primary"
                 : ""
             }
             ${
@@ -237,17 +239,30 @@ export default function TreeNode({
             }
           `}
           style={{ paddingLeft: `${depth * 16 + 4}px` }}
+          onDragEnter={(e) => {
+            if (isDraggingFiles && canAcceptFiles && setFileDropTarget) {
+              e.preventDefault();
+              e.stopPropagation();
+              setFileDropTarget({ nodeId: node.id, dropPosition: 'inside' });
+            }
+          }}
+          onDragLeave={(e) => {
+            if (isDraggingFiles && canAcceptFiles && setFileDropTarget) {
+              // Only clear if leaving to a non-child element
+              const rect = e.currentTarget.getBoundingClientRect();
+              const x = e.clientX;
+              const y = e.clientY;
+              if (x <= rect.left || x >= rect.right || y <= rect.top || y >= rect.bottom) {
+                if (fileDropTarget?.nodeId === node.id) {
+                  setFileDropTarget({ nodeId: null, dropPosition: null });
+                }
+              }
+            }
+          }}
           onDragOver={(e) => {
             if (isDraggingFiles && canAcceptFiles) {
               e.preventDefault();
               e.stopPropagation();
-            }
-          }}
-          onDrop={(e) => {
-            if (isDraggingFiles && canAcceptFiles && onFileDrop) {
-              e.preventDefault();
-              e.stopPropagation();
-              onFileDrop(e, node.id);
             }
           }}
         >
@@ -353,12 +368,12 @@ export default function TreeNode({
             </DropdownMenu>
           </div>
 
-          {/* Visual hint for drop zones */}
-          {showDropIndicator && dragState.dropPosition === "inside" && (
+          {/* Visual hint for drop zones - reuse for both internal drag and file drops */}
+          {(showDropIndicator && dragState.dropPosition === "inside") || showFileDropIndicator ? (
             <div className="absolute inset-0 pointer-events-none">
               <div className="absolute inset-x-4 inset-y-1 border-2 border-blue-500 rounded-md opacity-50" />
             </div>
-          )}
+          ) : null}
         </div>
 
         {/* Drop indicator - AFTER */}
@@ -391,7 +406,8 @@ export default function TreeNode({
                 isTrashView={isTrashView}
                 expandedNodes={expandedNodes}
                 isDraggingFiles={isDraggingFiles}
-                onFileDrop={onFileDrop}
+                fileDropTarget={fileDropTarget}
+                setFileDropTarget={setFileDropTarget}
               />
             ))}
           </SortableContext>
