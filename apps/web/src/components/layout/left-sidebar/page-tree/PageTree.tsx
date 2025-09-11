@@ -25,6 +25,8 @@ import DragOverlayItem from "./DragOverlayItem";
 import { Skeleton } from "@/components/ui/skeleton";
 import CreatePageDialog from "../CreatePageDialog";
 import { useTreeState } from "@/hooks/useUI";
+import { useFileDrop } from "@/hooks/useFileDrop";
+import { cn } from "@/lib/utils";
 
 export type DropPosition = 'before' | 'after' | 'inside' | null;
 
@@ -58,6 +60,23 @@ export default function PageTree({ driveId, initialTree, mutate: externalMutate,
     isOpen: boolean;
     parentId: string | null;
   }>({ isOpen: false, parentId: null });
+  
+  // File drop handling
+  const {
+    isDraggingFiles,
+    isUploading,
+    uploadProgress,
+    handleDragEnter,
+    handleDragLeave,
+    handleDragOver: handleFileDragOver,
+    handleFileDrop
+  } = useFileDrop({
+    driveId,
+    parentId: null,
+    onUploadComplete: () => {
+      mutate();
+    }
+  });
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -263,37 +282,75 @@ export default function PageTree({ driveId, initialTree, mutate: externalMutate,
         }
       }}
     >
-      <SortableContext items={flattenedItems} strategy={verticalListSortingStrategy}>
-        <nav className="px-1 py-2">
-          {displayedTree.map(node => (
-            <TreeNode
-              key={node.id}
-              node={node}
-              depth={0}
-              onToggleExpand={handleToggleExpand}
-              isExpanded={expandedNodes.has(node.id)}
-              dragState={dragState}
-              activeId={activeId}
-              onOpenCreateDialog={handleOpenCreateDialog}
-              mutate={mutate}
-              isTrashView={isTrashView}
-              expandedNodes={expandedNodes}
-            />
-          ))}
-        </nav>
-      </SortableContext>
-      
-      <DragOverlay>
-        {activeNode && <DragOverlayItem node={activeNode} />}
-      </DragOverlay>
+      <div 
+        className={cn(
+          "relative h-full",
+          isDraggingFiles && "bg-primary/5"
+        )}
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        onDragOver={handleFileDragOver}
+        onDrop={(e) => handleFileDrop(e as React.DragEvent)}
+      >
+        <SortableContext items={flattenedItems} strategy={verticalListSortingStrategy}>
+          <nav className="px-1 py-2">
+            {displayedTree.map(node => (
+              <TreeNode
+                key={node.id}
+                node={node}
+                depth={0}
+                onToggleExpand={handleToggleExpand}
+                isExpanded={expandedNodes.has(node.id)}
+                dragState={dragState}
+                activeId={activeId}
+                onOpenCreateDialog={handleOpenCreateDialog}
+                mutate={mutate}
+                isTrashView={isTrashView}
+                expandedNodes={expandedNodes}
+                isDraggingFiles={isDraggingFiles}
+                onFileDrop={(e, parentId) => handleFileDrop(e as React.DragEvent, parentId)}
+              />
+            ))}
+          </nav>
+        </SortableContext>
+        
+        <DragOverlay>
+          {activeNode && <DragOverlayItem node={activeNode} />}
+        </DragOverlay>
 
-     <CreatePageDialog
-       isOpen={createPageInfo.isOpen}
-       setIsOpen={(isOpen) => setCreatePageInfo({ ...createPageInfo, isOpen })}
-       parentId={createPageInfo.parentId}
-       onPageCreated={handlePageCreated}
-       driveId={driveId}
-     />
-   </DndContext>
+        <CreatePageDialog
+          isOpen={createPageInfo.isOpen}
+          setIsOpen={(isOpen) => setCreatePageInfo({ ...createPageInfo, isOpen })}
+          parentId={createPageInfo.parentId}
+          onPageCreated={handlePageCreated}
+          driveId={driveId}
+        />
+        
+        {/* File upload overlay */}
+        {isDraggingFiles && (
+          <div className="absolute inset-0 pointer-events-none z-50">
+            <div className="absolute inset-0 bg-primary/10 border-2 border-dashed border-primary rounded-md flex items-center justify-center">
+              <div className="text-center">
+                <p className="text-sm font-medium">Drop files here to upload</p>
+                <p className="text-xs text-muted-foreground mt-1">Files will be added to this drive</p>
+              </div>
+            </div>
+          </div>
+        )}
+        
+        {/* Upload progress indicator */}
+        {isUploading && (
+          <div className="absolute bottom-4 right-4 bg-background border rounded-lg p-3 shadow-lg z-50">
+            <p className="text-sm font-medium mb-2">Uploading files...</p>
+            <div className="w-48 h-2 bg-secondary rounded-full overflow-hidden">
+              <div 
+                className="h-full bg-primary transition-all duration-300" 
+                style={{ width: `${uploadProgress}%` }}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+    </DndContext>
   );
 }

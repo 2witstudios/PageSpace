@@ -45,6 +45,8 @@ interface TreeNodeProps {
   mutate: () => void;
   isTrashView?: boolean;
   expandedNodes: Set<string>;
+  isDraggingFiles?: boolean;
+  onFileDrop?: (e: React.DragEvent, parentId: string) => void;
 }
 
 export default function TreeNode({
@@ -58,6 +60,8 @@ export default function TreeNode({
   mutate,
   isTrashView = false,
   expandedNodes,
+  isDraggingFiles = false,
+  onFileDrop,
 }: TreeNodeProps) {
   const [isHovered, setIsHovered] = useState(false);
   const [isConfirmTrashOpen, setConfirmTrashOpen] = useState(false);
@@ -189,6 +193,7 @@ export default function TreeNode({
   const isOverThisNode = dragState.overId === node.id;
   const isActiveNode = activeId === node.id;
   const showDropIndicator = isOverThisNode && !isActiveNode;
+  const canAcceptFiles = node.type === PageType.FOLDER && !isTrashView;
 
   return (
     <>
@@ -218,7 +223,12 @@ export default function TreeNode({
                 : ""
             }
             ${
-              !isDragging && !showDropIndicator
+              isDraggingFiles && canAcceptFiles
+                ? "bg-primary/10 border border-dashed border-primary"
+                : ""
+            }
+            ${
+              !isDragging && !showDropIndicator && !isDraggingFiles
                 ? "hover:bg-gray-100 dark:hover:bg-gray-800"
                 : ""
             }
@@ -227,6 +237,19 @@ export default function TreeNode({
             }
           `}
           style={{ paddingLeft: `${depth * 16 + 4}px` }}
+          onDragOver={(e) => {
+            if (isDraggingFiles && canAcceptFiles) {
+              e.preventDefault();
+              e.stopPropagation();
+            }
+          }}
+          onDrop={(e) => {
+            if (isDraggingFiles && canAcceptFiles && onFileDrop) {
+              e.preventDefault();
+              e.stopPropagation();
+              onFileDrop(e, node.id);
+            }
+          }}
         >
           {/* Expand/Collapse Chevron */}
           {hasChildren && (
@@ -367,6 +390,8 @@ export default function TreeNode({
                 mutate={mutate}
                 isTrashView={isTrashView}
                 expandedNodes={expandedNodes}
+                isDraggingFiles={isDraggingFiles}
+                onFileDrop={onFileDrop}
               />
             ))}
           </SortableContext>
