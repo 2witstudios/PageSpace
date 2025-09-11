@@ -4,6 +4,7 @@ export enum PageType {
   CHANNEL = 'CHANNEL',
   AI_CHAT = 'AI_CHAT',
   CANVAS = 'CANVAS',
+  FILE = 'FILE',
 }
 
 export enum PermissionAction {

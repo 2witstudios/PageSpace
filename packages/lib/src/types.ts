@@ -15,6 +15,12 @@ export interface Page {
   originalParentId: string | null;
   isOwned?: boolean;
   accessLevel?: PermissionAction | null;
+  // File-specific fields
+  fileSize?: number;
+  mimeType?: string;
+  originalFileName?: string;
+  filePath?: string;
+  fileMetadata?: Record<string, any>;
 }
 
 export interface Drive {

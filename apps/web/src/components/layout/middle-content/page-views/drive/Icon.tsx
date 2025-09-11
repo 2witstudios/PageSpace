@@ -3,6 +3,7 @@ import {
   Folder as FolderIcon,
   MessageSquare,
   Sparkles,
+  FileIcon,
 } from 'lucide-react';
 import { PageType } from '@pagespace/lib/client';
 
@@ -26,6 +27,8 @@ function getIconComponent(type: PageType) {
       return MessageSquare;
     case PageType.AI_CHAT:
       return Sparkles;
+    case PageType.FILE:
+      return FileIcon;
     default:
       return FileText;
   }

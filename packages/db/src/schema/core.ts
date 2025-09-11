@@ -2,7 +2,7 @@ import { pgTable, text, timestamp, jsonb, real, boolean, pgEnum, primaryKey, ind
 import { relations } from 'drizzle-orm';
 import { users } from './auth';
 import { createId } from '@paralleldrive/cuid2';
-export const pageType = pgEnum('PageType', ['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS']);
+export const pageType = pgEnum('PageType', ['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'FILE']);
 
 export const drives = pgTable('drives', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
@@ -31,6 +31,12 @@ export const pages = pgTable('pages', {
   aiModel: text('aiModel'),
   systemPrompt: text('systemPrompt'),
   enabledTools: jsonb('enabledTools'),
+  // File-specific fields
+  fileSize: real('fileSize'),
+  mimeType: text('mimeType'),
+  originalFileName: text('originalFileName'),
+  filePath: text('filePath'),
+  fileMetadata: jsonb('fileMetadata'),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
   trashedAt: timestamp('trashedAt', { mode: 'date' }),

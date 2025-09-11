@@ -9,6 +9,7 @@ import FolderView from './page-views/folder/FolderView';
 import AiChatView from './page-views/ai-page/AiChatView';
 import ChannelView from './page-views/channel/ChannelView';
 import DocumentView from './page-views/document/DocumentView';
+import FileViewer from './page-views/file/FileViewer';
 import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 import { PageType } from '@pagespace/lib/client';
 import CanvasPageView from './page-views/canvas/CanvasPageView';
@@ -45,8 +46,10 @@ const PageContent = ({ pageId }: { pageId: string | null }) => {
     case PageType.DOCUMENT:
       return <DocumentView key={page.id} page={page} />;
     case PageType.CANVAS:
-        return <CanvasPageView key={page.id} page={page} />;
-        default:
+      return <CanvasPageView key={page.id} page={page} />;
+    case PageType.FILE:
+      return <FileViewer key={page.id} page={page} />;
+    default:
       return <div className="p-4">This page type is not supported.</div>;
   }
 };

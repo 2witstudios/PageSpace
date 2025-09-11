@@ -49,10 +49,13 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    volumes:
+      - file_storage:/app/storage
     env_file: .env
     environment:
       - DATABASE_URL=postgresql://user:password@postgres:5432/pagespace
       - NEXT_PUBLIC_REALTIME_URL=${NEXT_PUBLIC_REALTIME_URL}
+      - FILE_STORAGE_PATH=/app/storage
       - PORT=3000
     deploy:
       resources:
@@ -80,3 +83,4 @@ services:
 
 volumes:
   postgres_data:
+  file_storage:

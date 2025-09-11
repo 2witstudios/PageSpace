@@ -83,6 +83,7 @@ const getViewType = (pageType: string): ViewState['viewType'] => {
     case 'FOLDER': return 'folder';
     case 'CHANNEL': return 'channel';
     case 'AI_CHAT': return 'ai';
+    case 'FILE': return 'document'; // Use document view type for files
     default: return 'document';
   }
 };

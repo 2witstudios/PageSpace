@@ -57,6 +57,9 @@ ENV NODE_ENV=production
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 
+# Create storage directory with proper permissions
+RUN mkdir -p /app/storage && chown -R nextjs:nodejs /app/storage
+
 # Copy the standalone output
 COPY --from=builder /app/apps/web/.next/standalone .
 COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static

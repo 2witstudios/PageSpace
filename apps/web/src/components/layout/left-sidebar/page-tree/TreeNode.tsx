@@ -16,6 +16,7 @@ import {
   Pencil,
   Star,
   Undo2,
+  FileIcon,
 } from "lucide-react";
 import { useParams } from "next/navigation";
 import { TreePage } from "@/hooks/usePageTree";
@@ -93,6 +94,8 @@ export default function TreeNode({
         return MessageSquare;
       case PageType.AI_CHAT:
         return Sparkles;
+      case PageType.FILE:
+        return FileIcon;
       default:
         return FileText;
     }
