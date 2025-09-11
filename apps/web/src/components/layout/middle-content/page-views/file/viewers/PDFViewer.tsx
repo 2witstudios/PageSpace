@@ -2,8 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { TreePage } from '@/hooks/usePageTree';
-import { Loader2, Download } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { Loader2 } from 'lucide-react';
 
 interface PDFViewerProps {
   page: TreePage;
@@ -31,26 +30,6 @@ export default function PDFViewer({ page }: PDFViewerProps) {
     loadPdf();
   }, [page.id]);
 
-  const handleDownload = async () => {
-    try {
-      const response = await fetch(`/api/files/${page.id}/download`);
-      if (!response.ok) {
-        throw new Error('Failed to download file');
-      }
-      
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = page.originalFileName || page.title;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-    } catch (error) {
-      console.error('Download error:', error);
-    }
-  };
 
   if (isLoading) {
     return (
@@ -69,34 +48,15 @@ export default function PDFViewer({ page }: PDFViewerProps) {
   }
 
   return (
-    <div className="h-full flex flex-col">
-      {/* PDF Viewer Controls */}
-      <div className="flex items-center justify-between p-2 border-b bg-background">
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-muted-foreground">
-            {page.originalFileName || page.title}
-          </span>
-        </div>
-        <Button
-          onClick={handleDownload}
-          variant="ghost"
-          size="sm"
-        >
-          <Download className="h-4 w-4" />
-        </Button>
-      </div>
-
-      {/* PDF Display */}
-      <div className="flex-1 bg-muted/10">
-        {pdfUrl && (
-          <iframe
-            src={pdfUrl}
-            className="w-full h-full"
-            title={page.title}
-            style={{ border: 'none' }}
-          />
-        )}
-      </div>
+    <div className="h-full bg-muted/10">
+      {pdfUrl && (
+        <iframe
+          src={pdfUrl}
+          className="w-full h-full"
+          title={page.title}
+          style={{ border: 'none' }}
+        />
+      )}
     </div>
   );
 }
