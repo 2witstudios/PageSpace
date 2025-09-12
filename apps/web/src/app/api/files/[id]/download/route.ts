@@ -3,7 +3,7 @@ import { verifyAuth } from '@/lib/auth';
 import { db, pages, eq } from '@pagespace/db';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
-import { PageType } from '@pagespace/lib';
+import { PageType, isFilePage } from '@pagespace/lib';
 
 interface RouteParams {
   params: Promise<{
@@ -35,7 +35,7 @@ export async function GET(
     }
 
     // Verify it's a FILE type
-    if (page.type !== PageType.FILE) {
+    if (!isFilePage(page.type as PageType)) {
       return NextResponse.json({ error: 'Not a file' }, { status: 400 });
     }
 

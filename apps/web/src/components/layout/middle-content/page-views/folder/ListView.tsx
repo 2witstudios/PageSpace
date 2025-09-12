@@ -11,7 +11,8 @@ import {
   TableCell,
 } from '@/components/ui/table';
 import { ListViewProps, SortKey } from './types';
-import { Icon } from './Icon';
+import { PageTypeIcon } from '@/components/common/PageTypeIcon';
+import { PageType } from '@pagespace/lib';
 import { toTitleCase } from '@/lib/formatters';
 
 export function ListView({ items, sortKey, sortDirection, onSort }: ListViewProps) {
@@ -49,7 +50,7 @@ export function ListView({ items, sortKey, sortDirection, onSort }: ListViewProp
           <TableRow key={child.id} className="cursor-pointer">
             <TableCell>
               <Link href={`/dashboard/${driveId}/${child.id}`} className="flex items-center">
-                <Icon type={child.type} className="h-5 w-5" />
+                <PageTypeIcon type={child.type as PageType} className="h-5 w-5" />
               </Link>
             </TableCell>
             <TableCell>

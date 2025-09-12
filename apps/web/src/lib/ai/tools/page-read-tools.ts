@@ -1,7 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db, pages, eq, and, asc } from '@pagespace/db';
-import { buildTree, getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib';
+import { buildTree, getUserAccessLevel, getUserDriveAccess, getPageTypeEmoji, isFolderPage, PageType } from '@pagespace/lib';
 import { ToolExecutionContext } from '../types';
 
 export const pageReadTools = {
@@ -61,12 +61,7 @@ export const pageReadTools = {
           for (const page of currentPages) {
             const currentPath = `${parentPath}/${page.title}`;
             // Add type indicator emoji
-            const typeIndicator = page.type === 'FOLDER' ? '📁' : 
-                                 page.type === 'DOCUMENT' ? '📄' : 
- 
-                                 page.type === 'AI_CHAT' ? '🤖' : 
-                                 page.type === 'CHANNEL' ? '💬' : 
-                                 page.type === 'CANVAS' ? '🎨' : '📄';
+            const typeIndicator = getPageTypeEmoji(page.type as PageType);
             
             pages.push(`${typeIndicator} ID: ${page.id} Path: ${currentPath}`);
             
@@ -227,7 +222,7 @@ export const pageReadTools = {
             type: node.type,
             trashedAt: node.trashedAt,
             parentId: node.parentId,
-            isFolder: node.type === 'FOLDER',
+            isFolder: isFolderPage(node.type as PageType),
             hasChildren: node.children && node.children.length > 0,
             children: node.children ? formatForAI(node.children, depth + 1) : [],
             depth,

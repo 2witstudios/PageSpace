@@ -3,7 +3,9 @@
 import { useState, useEffect } from 'react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
-import { ChevronRight, ChevronDown, Folder, FileText, MessageSquare, Bot, Palette } from 'lucide-react';
+import { ChevronRight, ChevronDown } from 'lucide-react';
+import { PageTypeIcon } from '@/components/common/PageTypeIcon';
+import { PageType } from '@pagespace/lib';
 
 interface PageNode {
   id: string;
@@ -79,16 +81,6 @@ export function PermissionsGrid({ driveId, userId, permissions, onChange }: Perm
     setExpandedNodes(newExpanded);
   };
 
-  const getPageIcon = (type: string) => {
-    switch (type) {
-      case 'FOLDER': return <Folder className="w-4 h-4" />;
-      case 'DOCUMENT': return <FileText className="w-4 h-4" />;
-      case 'CHANNEL': return <MessageSquare className="w-4 h-4" />;
-      case 'AI_CHAT': return <Bot className="w-4 h-4" />;
-      case 'CANVAS': return <Palette className="w-4 h-4" />;
-      default: return <FileText className="w-4 h-4" />;
-    }
-  };
 
   const handlePermissionChange = (pageId: string, permType: 'canView' | 'canEdit' | 'canShare', value: boolean) => {
     const currentPerms = permissions.get(pageId) || { canView: false, canEdit: false, canShare: false };
@@ -190,7 +182,7 @@ export function PermissionsGrid({ driveId, userId, permissions, onChange }: Perm
               </button>
             )}
             <div className="flex items-center space-x-2">
-              {getPageIcon(page.type)}
+              <PageTypeIcon type={page.type as PageType} className="w-4 h-4" />
               <span className="truncate">{page.title}</span>
             </div>
             {hasChildren && (

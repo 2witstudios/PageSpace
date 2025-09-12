@@ -3,7 +3,7 @@ import { verifyAuth } from '@/lib/auth';
 import { db, pages, eq } from '@pagespace/db';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
-import { PageType } from '@pagespace/lib';
+import { PageType, canConvertToType } from '@pagespace/lib';
 import mammoth from 'mammoth';
 import { createId } from '@paralleldrive/cuid2';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
@@ -48,9 +48,9 @@ export async function POST(
       return NextResponse.json({ error: 'File not found' }, { status: 404 });
     }
 
-    // Verify it's a FILE type
-    if (filePage.type !== PageType.FILE) {
-      return NextResponse.json({ error: 'Not a file' }, { status: 400 });
+    // Verify conversion is allowed
+    if (!canConvertToType(filePage.type as PageType, PageType.DOCUMENT)) {
+      return NextResponse.json({ error: 'Cannot convert this page type to document' }, { status: 400 });
     }
 
     // Verify it's a Word document

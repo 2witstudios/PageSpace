@@ -352,7 +352,6 @@ export default function PageTree({ driveId, initialTree, mutate: externalMutate,
             
             // Calculate delta from drag start position (like native @dnd-kit)
             const deltaX = e.clientX - dragState.dragStartPos.x;
-            const deltaY = e.clientY - dragState.dragStartPos.y;
             
             // Find which element we're over
             const target = e.target as HTMLElement;

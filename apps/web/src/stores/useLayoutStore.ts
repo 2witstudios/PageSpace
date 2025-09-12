@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { getLayoutViewType, PageType } from '@pagespace/lib';
 import { toast } from 'sonner';
 
 // Types
@@ -78,14 +79,8 @@ const extractDriveId = (url: string): string | null => {
 };
 
 const getViewType = (pageType: string): ViewState['viewType'] => {
-  switch (pageType) {
-    case 'DOCUMENT': return 'document';
-    case 'FOLDER': return 'folder';
-    case 'CHANNEL': return 'channel';
-    case 'AI_CHAT': return 'ai';
-    case 'FILE': return 'document'; // Use document view type for files
-    default: return 'document';
-  }
+  // Use centralized config for layout view type
+  return getLayoutViewType(pageType as PageType) as ViewState['viewType'];
 };
 
 const fetchPage = async (pageId: string) => {

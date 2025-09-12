@@ -5,3 +5,5 @@ export * from './tree-utils';
 export * from './utils';
 export * from './enums';
 export * from './types';
+export * from './page-types.config';
+export * from './page-type-validators';

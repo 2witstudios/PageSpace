@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { PageType, Page } from '@pagespace/lib/client';
+import { PageType, Page, getDefaultContent } from '@pagespace/lib/client';
 import { toast } from 'sonner';
 import { Upload } from 'lucide-react';
 
@@ -88,14 +88,8 @@ export default function CreatePageDialog({ parentId, isOpen, setIsOpen, onPageCr
     // Handle other page types
     setIsSubmitting(true);
     try {
-      let content: Record<string, unknown> | string[] | string = {};
-      if (type === 'DOCUMENT') {
-        content = '';
-      } else if (type === 'CHANNEL' || type === 'AI_CHAT') {
-        content = { messages: [] };
-      } else if (type === 'CANVAS') {
-        content = '';
-      }
+      // Use centralized default content
+      const content = getDefaultContent(type);
 
       const response = await fetch('/api/pages', {
         method: 'POST',

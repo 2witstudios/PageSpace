@@ -6,23 +6,18 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
   ChevronRight,
-  FileText,
-  Folder,
   Plus,
   MoreHorizontal,
-  MessageSquare,
-  Sparkles,
   Trash2,
   Pencil,
   Star,
   Undo2,
-  FileIcon,
 } from "lucide-react";
 import { useParams } from "next/navigation";
 import { TreePage } from "@/hooks/usePageTree";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { DragState } from "./PageTree";
-import { PageType } from "@pagespace/lib";
+import { PageTypeIcon } from "@/components/common/PageTypeIcon";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -89,24 +84,6 @@ export default function TreeNode({
     marginTop: isDisplaced ? '10px' : undefined, // Match native displacement
   };
 
-  const getIcon = (type: PageType) => {
-    switch (type) {
-      case PageType.FOLDER:
-        return Folder;
-      case PageType.DOCUMENT:
-        return FileText;
-      case PageType.CHANNEL:
-        return MessageSquare;
-      case PageType.AI_CHAT:
-        return Sparkles;
-      case PageType.FILE:
-        return FileIcon;
-      default:
-        return FileText;
-    }
-  };
-
-  const Icon = getIcon(node.type);
 
 
   const linkHref = `/dashboard/${params.driveId}/${node.id}`;
@@ -259,7 +236,8 @@ export default function TreeNode({
 
           {/* Icon and Title */}
           <Link href={linkHref} passHref className="flex items-center flex-1 min-w-0 ml-1 cursor-pointer" onClick={(e) => e.stopPropagation()}>
-            <Icon
+            <PageTypeIcon
+              type={node.type}
               className={`
               h-4 w-4 mr-1.5 flex-shrink-0
               ${hasChildren ? "text-blue-500" : "text-gray-500"}

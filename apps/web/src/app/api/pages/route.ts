@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { decodeToken } from '@pagespace/lib/server';
 import { parse } from 'cookie';
 import { drives, pages, users, db, and, eq, desc, mcpTokens, isNull } from '@pagespace/db';
+import { validatePageCreation, validateAIChatTools, getDefaultContent, PageType as PageTypeEnum, isAIChatPage } from '@pagespace/lib';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
 import { loggers } from '@pagespace/lib/logger-config';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
@@ -91,25 +92,29 @@ export async function POST(request: Request) {
 
     const newPosition = (lastPage?.position || 0) + 1;
 
-    // Validate agent configuration for AI_CHAT pages
-    if (type === 'AI_CHAT') {
-      // Validate enabled tools if provided
-      if (enabledTools && enabledTools.length > 0) {
-        // Import pageSpaceTools for validation
-        const { pageSpaceTools } = await import('@/lib/ai/ai-tools');
-        const availableToolNames = Object.keys(pageSpaceTools);
-        const invalidTools = enabledTools.filter((toolName: string) => !availableToolNames.includes(toolName));
-        if (invalidTools.length > 0) {
-          return NextResponse.json({ 
-            error: `Invalid tools specified: ${invalidTools.join(', ')}. Available tools: ${availableToolNames.join(', ')}` 
-          }, { status: 400 });
-        }
-      }
-    } else {
-      // Non-AI_CHAT pages should not have agent configuration
-      if (systemPrompt || enabledTools || aiProvider || aiModel) {
+    // Use centralized validation
+    const validation = validatePageCreation(type as PageTypeEnum, {
+      title,
+      systemPrompt,
+      enabledTools,
+      aiProvider,
+      aiModel,
+    });
+
+    if (!validation.valid) {
+      return NextResponse.json({ 
+        error: validation.errors.join('. ') 
+      }, { status: 400 });
+    }
+
+    // Additional tool validation for AI_CHAT pages
+    if (isAIChatPage(type) && enabledTools && enabledTools.length > 0) {
+      const { pageSpaceTools } = await import('@/lib/ai/ai-tools');
+      const availableToolNames = Object.keys(pageSpaceTools);
+      const toolValidation = validateAIChatTools(enabledTools, availableToolNames);
+      if (!toolValidation.valid) {
         return NextResponse.json({ 
-          error: 'Agent configuration (systemPrompt, enabledTools, aiProvider, aiModel) can only be used with AI_CHAT page type' 
+          error: toolValidation.errors.join('. ') 
         }, { status: 400 });
       }
     }
@@ -118,7 +123,7 @@ export async function POST(request: Request) {
     let defaultAiProvider = null;
     let defaultAiModel = null;
     
-    if (type === 'AI_CHAT') {
+    if (isAIChatPage(type)) {
       const user = await db.query.users.findFirst({
         where: eq(users.id, userId),
         columns: {
@@ -154,13 +159,13 @@ export async function POST(request: Request) {
         type: type as 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS',
         parentId,
         driveId: drive.id,
-        content: content || '',
+        content: content || getDefaultContent(type as PageTypeEnum),
         position: newPosition,
         updatedAt: new Date(),
       };
 
       // Add AI configuration for AI_CHAT pages
-      if (type === 'AI_CHAT') {
+      if (isAIChatPage(type)) {
         pageData.aiProvider = aiProvider || defaultAiProvider;
         pageData.aiModel = aiModel || defaultAiModel;
         

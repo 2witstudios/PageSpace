@@ -13,7 +13,7 @@ import { useDocument } from '@/hooks/useDocument';
 import { usePageStore } from '@/hooks/usePage';
 import { Button } from '@/components/ui/button';
 import { Download } from 'lucide-react';
-import { PageType } from '@pagespace/lib/client';
+import { isDocumentPage, isFilePage } from '@pagespace/lib/client';
 
 interface ContentHeaderProps {
   children?: React.ReactNode;
@@ -29,8 +29,8 @@ export function ViewHeader({ children }: ContentHeaderProps = {}) {
   const pageResult = pageId ? findNodeAndParent(tree, pageId) : null;
   const page = pageResult?.node;
 
-  const isDocumentPage = page?.type === PageType.DOCUMENT;
-  const isFilePage = page?.type === PageType.FILE;
+  const pageIsDocument = page ? isDocumentPage(page.type) : false;
+  const pageIsFile = page ? isFilePage(page.type) : false;
 
   const {
     document,
@@ -39,7 +39,7 @@ export function ViewHeader({ children }: ContentHeaderProps = {}) {
 
   // Handle file download
   const handleDownload = async () => {
-    if (!page || !isFilePage) return;
+    if (!page || !pageIsFile) return;
     
     setIsDownloading(true);
     try {
@@ -70,11 +70,11 @@ export function ViewHeader({ children }: ContentHeaderProps = {}) {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <EditableTitle />
-          {isDocumentPage && <SaveStatusIndicator isDirty={document?.isDirty || false} isSaving={isSaving} />}
+          {pageIsDocument && <SaveStatusIndicator isDirty={document?.isDirty || false} isSaving={isSaving} />}
         </div>
         <div className="flex items-center gap-2">
-          {isDocumentPage && <EditorToggles />}
-          {isFilePage && (
+          {pageIsDocument && <EditorToggles />}
+          {pageIsFile && (
             <Button
               onClick={handleDownload}
               disabled={isDownloading}
