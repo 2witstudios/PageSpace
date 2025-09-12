@@ -1,3 +1,31 @@
+### 2025-09-11
+
+- **Major Enhancement**: Drag-and-Drop File Upload with Native @dnd-kit Behavior
+  - **Added**: External file drag-and-drop functionality that perfectly matches internal page reordering
+    - **Position tracking**: Captures drag start position to calculate delta values like native @dnd-kit
+    - **Smart drop zones**: Top 40% = before, bottom 40% = after, middle 20% = maintains state (prevents spazzing)
+    - **Delta-based "inside" detection**: Drag 30px right from start position to drop inside folders (matches native)
+    - **Smooth animations**: 10px margin displacement with 150ms cubic-bezier transitions (identical to native)
+  - **Enhanced**: `/api/upload` endpoint to support precise positioning
+    - **Added**: `position` parameter ('before' | 'after') for drop type
+    - **Added**: `afterNodeId` parameter to identify target node
+    - **Implemented**: Fractional position calculation for exact placement between items
+  - **Updated**: `useFileDrop` hook to pass position data through upload flow
+  - **Fixed**: Spazzing/flickering issues with overlapping drop zones
+    - **Element-relative positioning**: Uses position within hovered element instead of total delta
+    - **Dead zones**: Middle 20% of elements prevents rapid state changes
+  - **Enhanced**: Visual feedback system
+    - **Subtle gaps**: Reduced from 6px to 2px for cleaner appearance
+    - **Blue indicators**: Lines for before/after, ring for inside drops
+    - **File preview overlay**: Shows "Upload files" indicator following cursor
+  - **Result**: External file uploads now behave identically to native @dnd-kit draggable items
+  - **Technical approach**: Hybrid system that mimics @dnd-kit behavior without modifying the library
+  - **Files modified**: 
+    - `apps/web/src/components/layout/left-sidebar/page-tree/PageTree.tsx`
+    - `apps/web/src/components/layout/left-sidebar/page-tree/TreeNode.tsx`
+    - `apps/web/src/hooks/useFileDrop.ts`
+    - `apps/web/src/app/api/upload/route.ts`
+
 ### 2025-09-10
 
 - **Major Enhancement**: AI Agent Creation System and Enhanced Page Creation Tools
