@@ -48,11 +48,27 @@ export async function GET(
 
     // Use environment variable for storage path, fallback to /tmp for local dev
     const STORAGE_ROOT = process.env.FILE_STORAGE_PATH || '/tmp/pagespace-files';
+    
+    // Normalize the file path to handle Unicode characters properly
+    // Replace any narrow no-break spaces (U+202F) and other problematic Unicode spaces with regular spaces
+    const normalizedFilePath = page.filePath
+      .replace(/[\u202F\u00A0\u2000-\u200B\uFEFF]/g, ' ') // Replace various Unicode spaces
+      .replace(/\s+/g, ' ') // Normalize multiple spaces to single space
+      .trim();
+    
     // Construct full file path
-    const fullPath = join(STORAGE_ROOT, page.filePath);
+    const fullPath = join(STORAGE_ROOT, normalizedFilePath);
+    
+    console.log('Attempting to read file:', {
+      pageId: page.id,
+      originalFilePath: page.filePath,
+      normalizedFilePath,
+      fullPath,
+      filePathBytes: Buffer.from(page.filePath).toJSON().data,
+    });
 
     try {
-      // Read the file
+      // Read the file with UTF-8 path encoding
       const fileBuffer = await readFile(fullPath);
 
       // Set appropriate headers for inline viewing
@@ -68,8 +84,18 @@ export async function GET(
         headers,
       });
     } catch (fileError) {
-      console.error('Error reading file:', fileError);
-      return NextResponse.json({ error: 'File not accessible' }, { status: 500 });
+      console.error('Error reading file:', {
+        error: fileError,
+        pageId: page.id,
+        filePath: page.filePath,
+        normalizedPath: normalizedFilePath,
+        fullPath,
+        errorMessage: fileError instanceof Error ? fileError.message : 'Unknown error',
+      });
+      return NextResponse.json({ 
+        error: 'File not accessible',
+        details: fileError instanceof Error ? fileError.message : 'Unknown error'
+      }, { status: 500 });
     }
 
   } catch (error) {

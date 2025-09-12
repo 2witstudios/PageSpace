@@ -426,33 +426,39 @@ export default function PageTree({ driveId, initialTree, mutate: externalMutate,
           }
         }}
         onDrop={async (e) => {
-          if (isDraggingFiles && dragState.overId) {
+          if (isDraggingFiles) {
             e.preventDefault();
             e.stopPropagation();
             
             const files = e.dataTransfer.files;
             if (files.length > 0) {
               // Handle file upload based on drop position
-              const currentTree = optimisticTree ?? tree;
-              const targetInfo = findNodeAndParent(currentTree, dragState.overId);
-              
-              if (targetInfo) {
-                let parentId: string | null = null;
-                let position: 'before' | 'after' | null = null;
-                let afterNodeId: string | null = null;
+              if (dragState.overId) {
+                // Dropping on a specific node
+                const currentTree = optimisticTree ?? tree;
+                const targetInfo = findNodeAndParent(currentTree, dragState.overId);
                 
-                if (dragState.dropPosition === 'inside') {
-                  // Drop inside the target
-                  parentId = dragState.overId;
-                } else if (dragState.dropPosition === 'before' || dragState.dropPosition === 'after') {
-                  // Drop before/after - use same parent as target
-                  parentId = targetInfo.parent?.id || null;
-                  position = dragState.dropPosition;
-                  afterNodeId = dragState.overId;
+                if (targetInfo) {
+                  let parentId: string | null = null;
+                  let position: 'before' | 'after' | null = null;
+                  let afterNodeId: string | null = null;
+                  
+                  if (dragState.dropPosition === 'inside') {
+                    // Drop inside the target
+                    parentId = dragState.overId;
+                  } else if (dragState.dropPosition === 'before' || dragState.dropPosition === 'after') {
+                    // Drop before/after - use same parent as target
+                    parentId = targetInfo.parent?.id || null;
+                    position = dragState.dropPosition;
+                    afterNodeId = dragState.overId;
+                  }
+                  
+                  // Upload files with position data
+                  await handleFileDrop(e as React.DragEvent, parentId, position, afterNodeId);
                 }
-                
-                // Upload files with position data
-                await handleFileDrop(e as React.DragEvent, parentId, position, afterNodeId);
+              } else {
+                // Dropping on empty space - add to root
+                await handleFileDrop(e as React.DragEvent, null, null, null);
               }
             }
             
@@ -462,7 +468,7 @@ export default function PageTree({ driveId, initialTree, mutate: externalMutate,
         }}
       >
         <SortableContext items={flattenedItems} strategy={verticalListSortingStrategy}>
-          <nav className="px-1 py-2">
+          <nav className="px-1 py-2 min-h-[200px]">
             {displayedTree.map(node => (
               <TreeNode
                 key={node.id}
@@ -478,6 +484,21 @@ export default function PageTree({ driveId, initialTree, mutate: externalMutate,
                 expandedNodes={expandedNodes}
               />
             ))}
+            {/* Drop zone indicator for empty space */}
+            {isDraggingFiles && !dragState.overId && displayedTree.length === 0 && (
+              <div className="flex items-center justify-center py-8 px-4 border-2 border-dashed border-primary/20 rounded-lg bg-primary/5">
+                <div className="text-center">
+                  <FileIcon className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
+                  <p className="text-sm text-muted-foreground">Drop files here to upload</p>
+                </div>
+              </div>
+            )}
+            {/* Drop indicator at the bottom when dragging over empty space below items */}
+            {isDraggingFiles && !dragState.overId && displayedTree.length > 0 && (
+              <div className="mt-2 py-2 px-4 border-2 border-dashed border-primary/20 rounded-lg bg-primary/5">
+                <p className="text-sm text-muted-foreground text-center">Drop here to add to root</p>
+              </div>
+            )}
           </nav>
         </SortableContext>
         
