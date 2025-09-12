@@ -31,6 +31,8 @@ export async function POST(request: NextRequest) {
     const driveId = formData.get('driveId') as string | null;
     const parentId = formData.get('parentId') as string | null;
     const title = formData.get('title') as string | null;
+    const position = formData.get('position') as string | null;
+    const afterNodeId = formData.get('afterNodeId') as string | null;
 
     // Validate required fields
     if (!file) {
@@ -80,12 +82,73 @@ export async function POST(request: NextRequest) {
     const buffer = Buffer.from(bytes);
     await writeFile(filePath, buffer);
 
-    // Get position for new page
-    const lastPage = await db.query.pages.findFirst({
-      where: parentId ? eq(pages.parentId, parentId) : isNull(pages.parentId),
-      orderBy: (pages, { desc }) => [desc(pages.position)],
-    });
-    const position = lastPage ? lastPage.position + 1 : 0;
+    // Calculate position for new page
+    let calculatedPosition: number;
+    
+    if (position && position === 'before' && afterNodeId) {
+      // Insert before a specific node
+      const targetNode = await db.query.pages.findFirst({
+        where: eq(pages.id, afterNodeId),
+      });
+      
+      if (targetNode) {
+        // Get all siblings to find the previous one
+        const siblings = await db.query.pages.findMany({
+          where: parentId ? eq(pages.parentId, parentId) : isNull(pages.parentId),
+          orderBy: (pages, { asc }) => [asc(pages.position)],
+        });
+        
+        const targetIndex = siblings.findIndex(s => s.id === afterNodeId);
+        const prevSibling = targetIndex > 0 ? siblings[targetIndex - 1] : null;
+        
+        // Position between previous and target
+        const prevPos = prevSibling?.position || 0;
+        const targetPos = targetNode.position;
+        calculatedPosition = (prevPos + targetPos) / 2;
+      } else {
+        // Fallback to end of list
+        const lastPage = await db.query.pages.findFirst({
+          where: parentId ? eq(pages.parentId, parentId) : isNull(pages.parentId),
+          orderBy: (pages, { desc }) => [desc(pages.position)],
+        });
+        calculatedPosition = lastPage ? lastPage.position + 1 : 0;
+      }
+    } else if (position && position === 'after' && afterNodeId) {
+      // Insert after a specific node
+      const targetNode = await db.query.pages.findFirst({
+        where: eq(pages.id, afterNodeId),
+      });
+      
+      if (targetNode) {
+        // Get the next sibling
+        const siblings = await db.query.pages.findMany({
+          where: parentId ? eq(pages.parentId, parentId) : isNull(pages.parentId),
+          orderBy: (pages, { asc }) => [asc(pages.position)],
+        });
+        
+        const targetIndex = siblings.findIndex(s => s.id === afterNodeId);
+        const nextSibling = siblings[targetIndex + 1];
+        
+        // Position between target and next
+        const targetPos = targetNode.position;
+        const nextPos = nextSibling?.position || targetPos + 2;
+        calculatedPosition = (targetPos + nextPos) / 2;
+      } else {
+        // Fallback to end of list
+        const lastPage = await db.query.pages.findFirst({
+          where: parentId ? eq(pages.parentId, parentId) : isNull(pages.parentId),
+          orderBy: (pages, { desc }) => [desc(pages.position)],
+        });
+        calculatedPosition = lastPage ? lastPage.position + 1 : 0;
+      }
+    } else {
+      // Default: add at the end
+      const lastPage = await db.query.pages.findFirst({
+        where: parentId ? eq(pages.parentId, parentId) : isNull(pages.parentId),
+        orderBy: (pages, { desc }) => [desc(pages.position)],
+      });
+      calculatedPosition = lastPage ? lastPage.position + 1 : 0;
+    }
 
     // Create file metadata
     const fileMetadata: FileMetadata = {
@@ -100,7 +163,7 @@ export async function POST(request: NextRequest) {
       title: title || fileName,
       type: PageType.FILE,
       content: '', // Files don't have text content initially
-      position,
+      position: calculatedPosition,
       driveId,
       parentId: parentId || null,
       fileSize: file.size,

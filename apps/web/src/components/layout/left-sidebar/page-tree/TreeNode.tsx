@@ -21,7 +21,7 @@ import {
 import { useParams } from "next/navigation";
 import { TreePage } from "@/hooks/usePageTree";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { DragState, FileDropTarget } from "./PageTree";
+import { DragState } from "./PageTree";
 import { PageType } from "@pagespace/lib";
 import {
   DropdownMenu,
@@ -45,9 +45,6 @@ interface TreeNodeProps {
   mutate: () => void;
   isTrashView?: boolean;
   expandedNodes: Set<string>;
-  isDraggingFiles?: boolean;
-  fileDropTarget?: FileDropTarget;
-  setFileDropTarget?: (target: FileDropTarget) => void;
 }
 
 export default function TreeNode({
@@ -61,9 +58,6 @@ export default function TreeNode({
   mutate,
   isTrashView = false,
   expandedNodes,
-  isDraggingFiles = false,
-  fileDropTarget,
-  setFileDropTarget,
 }: TreeNodeProps) {
   const [isHovered, setIsHovered] = useState(false);
   const [isConfirmTrashOpen, setConfirmTrashOpen] = useState(false);
@@ -84,10 +78,15 @@ export default function TreeNode({
     data: { node, depth },
   });
 
+  // Calculate animations for external file drags
+  const isDisplaced = dragState.isExternalFile && dragState.displacedNodes?.has(node.id);
+  
+  // Use margin for external file drags, transform for internal drags
   const style = {
     transform: CSS.Transform.toString(transform),
-    transition,
+    transition: transition || (isDisplaced ? 'margin 150ms cubic-bezier(0.25, 1, 0.5, 1)' : undefined),
     opacity: isDragging ? 0 : 1,
+    marginTop: isDisplaced ? '10px' : undefined, // Match native displacement
   };
 
   const getIcon = (type: PageType) => {
@@ -194,13 +193,8 @@ export default function TreeNode({
 
   const isOverThisNode = dragState.overId === node.id;
   const isActiveNode = activeId === node.id;
-  const showDropIndicator = isOverThisNode && !isActiveNode && !isDraggingFiles;
-  // Any page can accept files (they can all act as containers), except in trash
-  const canAcceptFiles = !isTrashView;
-  
-  // Show file drop indicator when dragging files and hovering over this specific page
-  const isFileDropTarget = isDraggingFiles && fileDropTarget?.nodeId === node.id && fileDropTarget?.dropPosition === 'inside';
-  const showFileDropIndicator = isFileDropTarget && canAcceptFiles;
+  const isFileDrag = dragState.isExternalFile;
+  const showDropIndicator = isOverThisNode && (!isActiveNode || isFileDrag);
 
   return (
     <>
@@ -213,24 +207,29 @@ export default function TreeNode({
       >
         {/* Drop indicator - BEFORE */}
         {showDropIndicator && dragState.dropPosition === "before" && (
-          <div
-            className="absolute left-0 right-0 h-0.5 bg-blue-500 -top-[1px] pointer-events-none"
-            style={{ left: `${depth * 24 + 8}px` }}
-          />
+          <div className="relative">
+            <div
+              className="absolute left-0 right-0 h-0.5 bg-blue-500 -top-[1px] pointer-events-none z-10"
+              style={{ left: `${depth * 24 + 8}px` }}
+            />
+            {/* Subtle gap for visual feedback */}
+            <div className="h-0.5 w-full" />
+          </div>
         )}
-
+        
         <div
           {...attributes}
           {...listeners}
+          data-tree-node-id={node.id}
           className={`
             group flex items-center px-1 py-1.5 rounded-lg transition-all duration-200 cursor-grab active:cursor-grabbing
             ${
-              (showDropIndicator && dragState.dropPosition === "inside") || showFileDropIndicator
+              showDropIndicator && dragState.dropPosition === "inside"
                 ? "bg-blue-100 dark:bg-blue-900/30 ring-2 ring-blue-500 ring-inset"
                 : ""
             }
             ${
-              !isDragging && !showDropIndicator && !isDraggingFiles
+              !isDragging && !showDropIndicator
                 ? "hover:bg-gray-100 dark:hover:bg-gray-800"
                 : ""
             }
@@ -239,32 +238,6 @@ export default function TreeNode({
             }
           `}
           style={{ paddingLeft: `${depth * 16 + 4}px` }}
-          onDragEnter={(e) => {
-            if (isDraggingFiles && canAcceptFiles && setFileDropTarget) {
-              e.preventDefault();
-              e.stopPropagation();
-              setFileDropTarget({ nodeId: node.id, dropPosition: 'inside' });
-            }
-          }}
-          onDragLeave={(e) => {
-            if (isDraggingFiles && canAcceptFiles && setFileDropTarget) {
-              // Only clear if leaving to a non-child element
-              const rect = e.currentTarget.getBoundingClientRect();
-              const x = e.clientX;
-              const y = e.clientY;
-              if (x <= rect.left || x >= rect.right || y <= rect.top || y >= rect.bottom) {
-                if (fileDropTarget?.nodeId === node.id) {
-                  setFileDropTarget({ nodeId: null, dropPosition: null });
-                }
-              }
-            }
-          }}
-          onDragOver={(e) => {
-            if (isDraggingFiles && canAcceptFiles) {
-              e.preventDefault();
-              e.stopPropagation();
-            }
-          }}
         >
           {/* Expand/Collapse Chevron */}
           {hasChildren && (
@@ -368,8 +341,8 @@ export default function TreeNode({
             </DropdownMenu>
           </div>
 
-          {/* Visual hint for drop zones - reuse for both internal drag and file drops */}
-          {(showDropIndicator && dragState.dropPosition === "inside") || showFileDropIndicator ? (
+          {/* Visual hint for drop zones */}
+          {showDropIndicator && dragState.dropPosition === "inside" ? (
             <div className="absolute inset-0 pointer-events-none">
               <div className="absolute inset-x-4 inset-y-1 border-2 border-blue-500 rounded-md opacity-50" />
             </div>
@@ -378,10 +351,14 @@ export default function TreeNode({
 
         {/* Drop indicator - AFTER */}
         {showDropIndicator && dragState.dropPosition === "after" && (
-          <div
-            className="absolute left-0 right-0 h-0.5 bg-blue-500 -bottom-[1px] pointer-events-none"
-            style={{ left: `${depth * 24 + 8}px` }}
-          />
+          <div className="relative">
+            {/* Subtle gap for visual feedback */}
+            <div className="h-0.5 w-full" />
+            <div
+              className="absolute left-0 right-0 h-0.5 bg-blue-500 -bottom-[1px] pointer-events-none z-10"
+              style={{ left: `${depth * 24 + 8}px` }}
+            />
+          </div>
         )}
       </div>
 
@@ -405,9 +382,6 @@ export default function TreeNode({
                 mutate={mutate}
                 isTrashView={isTrashView}
                 expandedNodes={expandedNodes}
-                isDraggingFiles={isDraggingFiles}
-                fileDropTarget={fileDropTarget}
-                setFileDropTarget={setFileDropTarget}
               />
             ))}
           </SortableContext>

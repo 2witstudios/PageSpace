@@ -72,7 +72,12 @@ export function useFileDrop({
     }
   }, [isFileDrag]);
 
-  const handleFileDrop = useCallback(async (e: DragEvent, customParentId?: string | null) => {
+  const handleFileDrop = useCallback(async (
+    e: DragEvent, 
+    customParentId?: string | null,
+    position?: 'before' | 'after' | null,
+    afterNodeId?: string | null
+  ) => {
     if (!isFileDrag(e)) return;
     
     e.preventDefault();
@@ -105,6 +110,14 @@ export function useFileDrop({
         const targetParentId = customParentId !== undefined ? customParentId : parentId;
         if (targetParentId) {
           formData.append('parentId', targetParentId);
+        }
+        
+        // Add position data if provided
+        if (position) {
+          formData.append('position', position);
+        }
+        if (afterNodeId) {
+          formData.append('afterNodeId', afterNodeId);
         }
 
         const response = await fetch('/api/upload', {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useMemo, useCallback, useEffect } from "react";
+import { FileIcon } from "lucide-react";
 import {
   DndContext,
   DragEndEvent,
@@ -34,11 +35,9 @@ export interface DragState {
   overId: string | null;
   dropPosition: DropPosition;
   isExternalFile?: boolean;
-}
-
-export interface FileDropTarget {
-  nodeId: string | null;
-  dropPosition: DropPosition;
+  displacedNodes?: Set<string>; // Nodes that should animate out of the way
+  mousePosition?: { x: number; y: number }; // Track mouse for external drags
+  dragStartPos?: { x: number; y: number }; // Track drag start position for delta calculation
 }
 
 import { KeyedMutator } from "swr";
@@ -59,7 +58,8 @@ export default function PageTree({ driveId, initialTree, mutate: externalMutate,
   const [optimisticTree, setOptimisticTree] = useState<TreePage[] | null>(null);
   const [dragState, setDragState] = useState<DragState>({
     overId: null,
-    dropPosition: null
+    dropPosition: null,
+    displacedNodes: new Set()
   });
   const { expanded: expandedNodes, toggleExpanded } = useTreeState();
   const [createPageInfo, setCreatePageInfo] = useState<{
@@ -67,21 +67,12 @@ export default function PageTree({ driveId, initialTree, mutate: externalMutate,
     parentId: string | null;
   }>({ isOpen: false, parentId: null });
   const [expandTimer, setExpandTimer] = useState<NodeJS.Timeout | null>(null);
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   
-  // File drop handling
-  const [isDraggingOverRoot, setIsDraggingOverRoot] = useState(false);
-  const [fileDropTarget, setFileDropTarget] = useState<FileDropTarget>({
-    nodeId: null,
-    dropPosition: null
-  });
-  
+  // File upload handling
   const {
-    isDraggingFiles,
     isUploading,
     uploadProgress,
-    handleDragEnter,
-    handleDragLeave,
-    handleDragOver: handleFileDragOver,
     handleFileDrop
   } = useFileDrop({
     driveId,
@@ -91,17 +82,14 @@ export default function PageTree({ driveId, initialTree, mutate: externalMutate,
     }
   });
   
-  // Auto-expand pages when dragging files over them (if they have children)
+  // Auto-expand pages when dragging over them (if they have children)
   useEffect(() => {
-    const targetId = isDraggingFiles ? fileDropTarget.nodeId : dragState.overId;
-    const targetDropPosition = isDraggingFiles ? fileDropTarget.dropPosition : dragState.dropPosition;
-    
-    if (targetId && targetDropPosition === 'inside') {
+    if (dragState.overId && dragState.dropPosition === 'inside') {
       const currentTree = optimisticTree ?? tree;
-      const targetNode = findNodeAndParent(currentTree, targetId)?.node;
+      const targetNode = findNodeAndParent(currentTree, dragState.overId)?.node;
       
       // Any page with children can be expanded
-      if (targetNode && targetNode.children && targetNode.children.length > 0 && !expandedNodes.has(targetId)) {
+      if (targetNode && targetNode.children && targetNode.children.length > 0 && !expandedNodes.has(dragState.overId)) {
         // Clear any existing timer
         if (expandTimer) {
           clearTimeout(expandTimer);
@@ -109,7 +97,7 @@ export default function PageTree({ driveId, initialTree, mutate: externalMutate,
         
         // Set new timer to expand after 500ms
         const timer = setTimeout(() => {
-          toggleExpanded(targetId);
+          toggleExpanded(dragState.overId!);
         }, 500);
         
         setExpandTimer(timer);
@@ -127,7 +115,7 @@ export default function PageTree({ driveId, initialTree, mutate: externalMutate,
         clearTimeout(expandTimer);
       }
     };
-  }, [isDraggingFiles, fileDropTarget.nodeId, fileDropTarget.dropPosition, dragState.overId, dragState.dropPosition, tree, optimisticTree, expandedNodes, toggleExpanded, expandTimer]);
+  }, [dragState.overId, dragState.dropPosition, tree, optimisticTree, expandedNodes, toggleExpanded, expandTimer]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -338,23 +326,139 @@ export default function PageTree({ driveId, initialTree, mutate: externalMutate,
           "relative h-full",
           isDraggingFiles && "bg-primary/5"
         )}
-        onDragEnter={handleDragEnter}
-        onDragLeave={handleDragLeave}
-        onDragOver={handleFileDragOver}
-        onDrop={(e) => {
-          if (isDraggingFiles && fileDropTarget.nodeId && fileDropTarget.dropPosition === 'inside') {
-            // Drop on specific page
+        onDragEnter={(e) => {
+          // Check if dragging files from outside
+          if (e.dataTransfer?.types?.includes('Files')) {
             e.preventDefault();
-            e.stopPropagation();
-            handleFileDrop(e as React.DragEvent, fileDropTarget.nodeId);
-          } else if (isDraggingFiles && !fileDropTarget.nodeId) {
-            // Drop on root
-            e.preventDefault();
-            e.stopPropagation();
-            handleFileDrop(e as React.DragEvent, null);
+            setIsDraggingFiles(true);
+            // Capture drag start position
+            setDragState(prev => ({
+              ...prev,
+              dragStartPos: { x: e.clientX, y: e.clientY }
+            }));
           }
-          setIsDraggingOverRoot(false);
-          setFileDropTarget({ nodeId: null, dropPosition: null });
+        }}
+        onDragLeave={(e) => {
+          // Only reset if leaving the entire container
+          if (e.currentTarget === e.target) {
+            setIsDraggingFiles(false);
+            setDragState({ overId: null, dropPosition: null, displacedNodes: new Set() });
+          }
+        }}
+        onDragOver={(e) => {
+          if (isDraggingFiles && dragState.dragStartPos) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+            
+            // Calculate delta from drag start position (like native @dnd-kit)
+            const deltaX = e.clientX - dragState.dragStartPos.x;
+            const deltaY = e.clientY - dragState.dragStartPos.y;
+            
+            // Find which element we're over
+            const target = e.target as HTMLElement;
+            const treeNode = target.closest('[data-tree-node-id]');
+            
+            if (treeNode) {
+              const nodeId = treeNode.getAttribute('data-tree-node-id');
+              const rect = treeNode.getBoundingClientRect();
+              const relativeY = e.clientY - rect.top;
+              const heightPercent = relativeY / rect.height;
+              
+              let dropPosition: DropPosition;
+              const displacedNodes = new Set<string>();
+              
+              // Check for "inside" drop first (drag 30px right from start)
+              if (deltaX > 30) {
+                dropPosition = 'inside';
+              } else {
+                // Use position within element for before/after
+                // Top 40% = before, Bottom 40% = after, Middle 20% = default to after
+                if (heightPercent < 0.4) {
+                  dropPosition = 'before';
+                } else if (heightPercent > 0.6) {
+                  dropPosition = 'after';
+                } else {
+                  // Middle zone - use previous position to prevent flipping
+                  dropPosition = dragState.dropPosition || 'after';
+                }
+              }
+                
+              // Find nodes that should be displaced only for before/after
+              if (dropPosition !== 'inside') {
+                const currentTree = optimisticTree ?? tree;
+                const targetInfo = findNodeAndParent(currentTree, nodeId!);
+                if (targetInfo) {
+                  const siblings = targetInfo.parent?.children || currentTree;
+                  const targetIndex = siblings.findIndex((s: TreePage) => s.id === nodeId);
+                  
+                  if (dropPosition === 'before') {
+                    // All siblings from target onwards should move down
+                    for (let i = targetIndex; i < siblings.length; i++) {
+                      displacedNodes.add(siblings[i].id);
+                    }
+                  } else if (dropPosition === 'after') {
+                    // All siblings after target should move down
+                    for (let i = targetIndex + 1; i < siblings.length; i++) {
+                      displacedNodes.add(siblings[i].id);
+                    }
+                  }
+                }
+              }
+              
+              setDragState(prev => ({ 
+                ...prev,
+                overId: nodeId, 
+                dropPosition, 
+                isExternalFile: true,
+                displacedNodes,
+                mousePosition: { x: e.clientX, y: e.clientY }
+              }));
+            } else {
+              setDragState(prev => ({ 
+                ...prev,
+                overId: null, 
+                dropPosition: null, 
+                isExternalFile: true,
+                displacedNodes: new Set(),
+                mousePosition: { x: e.clientX, y: e.clientY }
+              }));
+            }
+          }
+        }}
+        onDrop={async (e) => {
+          if (isDraggingFiles && dragState.overId) {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+              // Handle file upload based on drop position
+              const currentTree = optimisticTree ?? tree;
+              const targetInfo = findNodeAndParent(currentTree, dragState.overId);
+              
+              if (targetInfo) {
+                let parentId: string | null = null;
+                let position: 'before' | 'after' | null = null;
+                let afterNodeId: string | null = null;
+                
+                if (dragState.dropPosition === 'inside') {
+                  // Drop inside the target
+                  parentId = dragState.overId;
+                } else if (dragState.dropPosition === 'before' || dragState.dropPosition === 'after') {
+                  // Drop before/after - use same parent as target
+                  parentId = targetInfo.parent?.id || null;
+                  position = dragState.dropPosition;
+                  afterNodeId = dragState.overId;
+                }
+                
+                // Upload files with position data
+                await handleFileDrop(e as React.DragEvent, parentId, position, afterNodeId);
+              }
+            }
+            
+            setIsDraggingFiles(false);
+            setDragState({ overId: null, dropPosition: null, displacedNodes: new Set() });
+          }
         }}
       >
         <SortableContext items={flattenedItems} strategy={verticalListSortingStrategy}>
@@ -372,9 +476,6 @@ export default function PageTree({ driveId, initialTree, mutate: externalMutate,
                 mutate={mutate}
                 isTrashView={isTrashView}
                 expandedNodes={expandedNodes}
-                isDraggingFiles={isDraggingFiles}
-                fileDropTarget={fileDropTarget}
-                setFileDropTarget={setFileDropTarget}
               />
             ))}
           </nav>
@@ -383,6 +484,22 @@ export default function PageTree({ driveId, initialTree, mutate: externalMutate,
         <DragOverlay>
           {activeNode && <DragOverlayItem node={activeNode} />}
         </DragOverlay>
+        
+        {/* External file drag overlay */}
+        {isDraggingFiles && dragState.mousePosition && (
+          <div
+            className="fixed pointer-events-none z-[9999]"
+            style={{
+              left: dragState.mousePosition.x + 10,
+              top: dragState.mousePosition.y - 10,
+            }}
+          >
+            <div className="flex items-center px-3 py-2 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 opacity-90">
+              <FileIcon className="h-4 w-4 text-gray-500 mr-2" />
+              <span className="text-sm font-medium">Upload files</span>
+            </div>
+          </div>
+        )}
 
         <CreatePageDialog
           isOpen={createPageInfo.isOpen}
@@ -392,15 +509,10 @@ export default function PageTree({ driveId, initialTree, mutate: externalMutate,
           driveId={driveId}
         />
         
-        {/* File upload overlay - only show when dragging over root, not folders */}
-        {isDraggingFiles && isDraggingOverRoot && (
+        {/* File upload overlay - show drop position */}
+        {isDraggingFiles && dragState.overId && (
           <div className="absolute inset-0 pointer-events-none z-50">
-            <div className="absolute inset-0 bg-primary/10 border-2 border-dashed border-primary rounded-md flex items-center justify-center">
-              <div className="text-center">
-                <p className="text-sm font-medium">Drop files here to upload to drive root</p>
-                <p className="text-xs text-muted-foreground mt-1">Or drop on folders to upload inside them</p>
-              </div>
-            </div>
+            {/* Visual indicator will be handled by TreeNode's existing drop indicators */}
           </div>
         )}
         
