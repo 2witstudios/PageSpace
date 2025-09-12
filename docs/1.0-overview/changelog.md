@@ -1,3 +1,33 @@
+### 2025-01-02
+
+- **Major Refactor**: Page Type System Centralization
+  - **Refactored**: Complete overhaul of page type handling system with centralized configuration
+  - **Created**: `packages/lib/src/page-types.config.ts` - Central configuration for all page type metadata
+    - **Metadata**: Display names, descriptions, icons, emojis, capabilities
+    - **Behavior**: Default content generation, allowed child types, UI component mapping
+    - **Validation**: API validation rules, custom validators
+  - **Created**: `packages/lib/src/page-type-validators.ts` - Centralized validation logic
+    - **validatePageCreation()**: Type-specific creation validation
+    - **validatePageUpdate()**: Update validation with type awareness
+    - **validateAIChatTools()**: AI tool validation for AI_CHAT pages
+    - **canConvertToType()**: Page type conversion rules
+  - **Created**: `apps/web/src/components/common/PageTypeIcon.tsx` - Unified icon component
+    - **Replaces**: 4 duplicate icon mapping functions across the codebase
+    - **Consistent**: AI_CHAT now uses Sparkles icon everywhere (was Bot in some places)
+  - **Updated**: Component selection to use dynamic mapping instead of switch statements
+    - **index.tsx**: Uses getPageTypeComponent() with componentMap
+    - **CenterPanel.tsx**: Uses getPageTypeComponent() with componentMap
+  - **Removed**: Duplicate code and hardcoded type checks
+    - **Deleted**: Icon.tsx wrapper files from drive/ and folder/ directories
+    - **Replaced**: All hardcoded type comparisons with helper functions
+    - **Helper functions**: isDocumentPage(), isFilePage(), isFolderPage(), isCanvasPage(), isChannelPage(), isAIChatPage()
+  - **Impact**: 
+    - **~400 lines of duplicate code removed**
+    - **Single source of truth for page type behavior**
+    - **New page types now require changes in only 2 files vs 31+**
+    - **Improved type safety with TypeScript enums throughout**
+  - **Files modified**: 31 files refactored to use centralized system
+
 ### 2025-09-11
 
 - **Major Enhancement**: Drag-and-Drop File Upload with Native @dnd-kit Behavior
