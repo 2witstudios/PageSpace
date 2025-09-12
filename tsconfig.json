@@ -12,7 +12,9 @@
     "baseUrl": ".",
     "paths": {
       "@pagespace/*": ["packages/*/src"]
-    }
+    },
+    "typeRoots": ["./node_modules/@types", "./types"]
   },
+  "include": ["types/**/*"],
   "exclude": ["node_modules"]
 }

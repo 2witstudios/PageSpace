@@ -37,6 +37,13 @@ export const pages = pgTable('pages', {
   originalFileName: text('originalFileName'),
   filePath: text('filePath'),
   fileMetadata: jsonb('fileMetadata'),
+  // Processing status fields
+  processingStatus: text('processingStatus').default('pending'),
+  processingError: text('processingError'),
+  processedAt: timestamp('processedAt', { mode: 'date' }),
+  extractionMethod: text('extractionMethod'),
+  extractionMetadata: jsonb('extractionMetadata'),
+  contentHash: text('contentHash'),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
   trashedAt: timestamp('trashedAt', { mode: 'date' }),

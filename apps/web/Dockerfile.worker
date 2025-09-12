@@ -1,0 +1,47 @@
+# Build stage - Install dependencies
+FROM node:22.17.0-alpine AS deps
+WORKDIR /app
+
+# Enable corepack for pnpm
+RUN corepack enable && corepack prepare pnpm@10.13.1 --activate
+
+# Copy package files
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages/db/package.json ./packages/db/
+COPY packages/lib/package.json ./packages/lib/
+COPY apps/web/package.json ./apps/web/
+COPY apps/realtime/package.json ./apps/realtime/
+
+# Install ALL dependencies including devDependencies (needed for tsx)
+RUN pnpm install --frozen-lockfile
+
+# Copy source code
+COPY packages ./packages
+COPY apps ./apps
+COPY tsconfig.json ./
+
+# Runtime stage
+FROM node:22.17.0-alpine AS runner
+WORKDIR /app
+
+# Install pnpm
+RUN corepack enable && corepack prepare pnpm@10.13.1 --activate
+
+# Create user for security
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 worker
+
+# Create storage directory with proper permissions
+RUN mkdir -p /app/storage && chown -R worker:nodejs /app/storage
+
+# Copy everything from deps stage (includes node_modules and source)
+COPY --from=deps --chown=worker:nodejs /app .
+
+USER worker
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+  CMD node -e "console.log('Worker health check')" || exit 1
+
+# Run the worker using tsx
+CMD ["pnpm", "tsx", "apps/web/src/workers/file-processor.ts"]

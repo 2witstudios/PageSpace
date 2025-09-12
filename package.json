@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "turbo dev",
     "dev:db": "docker compose up postgres migrate seed -d",
+    "dev:with-worker": "concurrently \"pnpm dev\" \"pnpm worker:file-processor\"",
+    "worker:file-processor": "tsx apps/web/src/workers/file-processor.ts",
     "build": "turbo build",
     "lint": "turbo lint",
     "typecheck": "turbo typecheck",
@@ -15,8 +17,10 @@
     "@turbo/gen": "^2.5.5",
     "@types/jest": "^30.0.0",
     "@types/node": "^24.0.13",
+    "concurrently": "^9.2.1",
     "dotenv": "^17.2.0",
     "drizzle-kit": "^0.23.2",
+    "tsx": "^4.20.5",
     "turbo": "^2.5.5",
     "typescript": "^5.8.3"
   },
@@ -25,7 +29,5 @@
     "overrides": {
       "drizzle-orm": "^0.32.2"
     }
-  },
-  "dependencies": {
   }
 }

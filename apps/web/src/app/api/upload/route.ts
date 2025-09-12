@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
 import { db, pages, drives, eq, isNull } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
-import { mkdir, writeFile } from 'fs/promises';
+import { mkdir, writeFile, stat } from 'fs/promises';
 import { join } from 'path';
-import { PageType } from '@pagespace/lib';
+import { PageType } from '@pagespace/lib/server';
+import { getProducerQueue } from '@pagespace/lib/job-queue';
 
 // Define allowed file types and size limits
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
@@ -161,12 +162,13 @@ export async function POST(request: NextRequest) {
       originalName: file.name, // Store original name with Unicode characters
     };
 
-    // Create page entry for the file
-    const newPage = await db.insert(pages).values({
+    // Create page entry with pending processing status
+    const [newPage] = await db.insert(pages).values({
       id: pageId,
       title: title || sanitizedFileName, // Use sanitized name for title
       type: PageType.FILE,
-      content: '', // Files don't have text content initially
+      content: '', // Will be populated by background job
+      processingStatus: 'pending',
       position: calculatedPosition,
       driveId,
       parentId: parentId || null,
@@ -179,10 +181,44 @@ export async function POST(request: NextRequest) {
       updatedAt: new Date(),
     }).returning();
 
-    return NextResponse.json({
-      success: true,
-      page: newPage[0],
-    });
+    // Enqueue processing job
+    try {
+      const jobQueue = await getProducerQueue();
+      
+      // Check file size for priority
+      const fullPath = join(STORAGE_ROOT, 'files', driveId, pageId, sanitizedFileName);
+      const fileStats = await stat(fullPath);
+      const priority = fileStats.size < 5_000_000 ? 'high' : 'normal'; // Files under 5MB get high priority
+      
+      const jobId = await jobQueue.enqueueFileProcessing(pageId, priority);
+      
+      console.log(`File uploaded: ${sanitizedFileName}, Job: ${jobId}`);
+      
+      // Return 202 Accepted to indicate async processing
+      return NextResponse.json(
+        {
+          success: true,
+          page: {
+            ...newPage,
+            processingJobId: jobId
+          },
+          message: 'File uploaded successfully. Processing in background.',
+          processingStatus: 'pending'
+        },
+        { status: 202 }
+      );
+      
+    } catch (error) {
+      console.error('Failed to enqueue processing:', error);
+      
+      // Upload succeeded but processing failed to start
+      return NextResponse.json({
+        success: true,
+        page: newPage,
+        warning: 'File uploaded but processing could not be started.',
+        processingStatus: 'failed'
+      });
+    }
 
   } catch (error) {
     console.error('Upload error:', error);

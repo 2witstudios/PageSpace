@@ -81,6 +81,28 @@ services:
         limits:
           memory: 256M
 
+  worker:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile.worker
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    volumes:
+      - file_storage:/app/storage
+    env_file: .env
+    environment:
+      - DATABASE_URL=postgresql://user:password@postgres:5432/pagespace
+      - FILE_STORAGE_PATH=/app/storage
+      - NODE_ENV=production
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   file_storage:

@@ -13,22 +13,49 @@
     "./logger-database": "./src/logger-database.ts",
     "./activity-tracker": "./src/activity-tracker.ts",
     "./ai-monitoring": "./src/ai-monitoring.ts",
-    "./auth-utils": "./src/auth-utils.ts"
+    "./auth-utils": "./src/auth-utils.ts",
+    "./scribe-processor": "./src/scribe-processor.ts",
+    "./job-queue": "./src/job-queue.ts"
   },
   "typesVersions": {
     "*": {
-      "client": ["./src/client.ts"],
-      "server": ["./src/server.ts"],
-      "logger": ["./src/logger.ts"],
-      "logger-config": ["./src/logger-config.ts"],
-      "logger-database": ["./src/logger-database.ts"],
-      "activity-tracker": ["./src/activity-tracker.ts"],
-      "ai-monitoring": ["./src/ai-monitoring.ts"],
-      "auth-utils": ["./src/auth-utils.ts"]
+      "client": [
+        "./src/client.ts"
+      ],
+      "server": [
+        "./src/server.ts"
+      ],
+      "logger": [
+        "./src/logger.ts"
+      ],
+      "logger-config": [
+        "./src/logger-config.ts"
+      ],
+      "logger-database": [
+        "./src/logger-database.ts"
+      ],
+      "activity-tracker": [
+        "./src/activity-tracker.ts"
+      ],
+      "ai-monitoring": [
+        "./src/ai-monitoring.ts"
+      ],
+      "auth-utils": [
+        "./src/auth-utils.ts"
+      ],
+      "scribe-processor": [
+        "./src/scribe-processor.ts"
+      ],
+      "job-queue": [
+        "./src/job-queue.ts"
+      ]
     }
   },
   "dependencies": {
+    "@paralleldrive/cuid2": "^2.2.2",
     "jose": "^6.0.11",
-    "@paralleldrive/cuid2": "^2.2.2"
+    "mammoth": "^1.10.0",
+    "pdf-parse-debugging-disabled": "^1.1.1",
+    "pg-boss": "^10.3.2"
   }
 }

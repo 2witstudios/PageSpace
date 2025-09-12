@@ -132,11 +132,71 @@ export const pageReadTools = {
           throw new Error('Insufficient permissions to read this document');
         }
 
+        // Handle FILE type pages
+        if (page.type === 'FILE') {
+          // Check processing status
+          switch (page.processingStatus) {
+            case 'pending':
+            case 'processing':
+              return {
+                success: false,
+                error: 'File is still being processed',
+                status: page.processingStatus,
+                path,
+                title: page.title,
+                type: page.type,
+                suggestion: 'Please try again in a moment'
+              };
+            
+            case 'visual':
+              // Pure visual content - requires multimodal AI
+              return {
+                success: true,
+                type: 'visual_reference',
+                path,
+                title: page.title,
+                fileRef: page.id, // Reference for multimodal processing
+                mimeType: page.mimeType,
+                requiresVision: true,
+                message: 'This is a visual file (image/diagram) without extractable text. Use a vision-capable AI model to analyze its content.',
+                metadata: {
+                  extractionMethod: page.extractionMethod,
+                  extractionMetadata: page.extractionMetadata
+                }
+              };
+            
+            case 'failed':
+              return {
+                success: false,
+                error: 'Failed to extract content from this file',
+                processingError: page.processingError,
+                path,
+                title: page.title,
+                type: page.type,
+                suggestion: 'Try reprocessing the file or contact support'
+              };
+            
+            case 'completed':
+              // Normal text content available - continue to process below
+              break;
+          }
+        }
+
         // Split content into numbered lines for easy reference
         const lines = page.content.split('\n');
         const numberedContent = lines
           .map((line, index) => `${index + 1}→${line}`)
           .join('\n');
+
+        // Add file-specific metadata if it's a FILE type
+        const metadata = page.type === 'FILE' ? {
+          mimeType: page.mimeType,
+          fileSize: page.fileSize,
+          originalFileName: page.originalFileName,
+          processingStatus: page.processingStatus,
+          extractionMethod: page.extractionMethod,
+          extractionMetadata: page.extractionMetadata
+        } : undefined;
 
         return {
           success: true,
@@ -152,6 +212,7 @@ export const pageReadTools = {
             wordCount: page.content.split(/\s+/).length,
             characterCount: page.content.length
           },
+          ...(metadata && { fileMetadata: metadata }),
           nextSteps: [
             'Use the content for context in creating related documents',
             'Use edit tools to modify this document if needed',
