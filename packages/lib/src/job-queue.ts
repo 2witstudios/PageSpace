@@ -1,6 +1,6 @@
 import PgBoss from 'pg-boss';
 import { db, pages, eq } from '@pagespace/db';
-import { getScribeProcessor } from './scribe-processor';
+import { getFileProcessor } from './file-processor';
 
 export type QueueMode = 'producer' | 'consumer';
 
@@ -160,8 +160,8 @@ export class JobQueue {
             .where(eq(pages.id, pageId));
           console.log(`Updated page ${pageId} status to processing`);
           
-          // Process with Scribe
-          const processor = await getScribeProcessor();
+          // Process file to extract content
+          const processor = await getFileProcessor();
           const result = await processor.processFile(pageId);
           
           // Update page with results

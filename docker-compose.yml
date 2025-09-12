@@ -57,10 +57,11 @@ services:
       - NEXT_PUBLIC_REALTIME_URL=${NEXT_PUBLIC_REALTIME_URL}
       - FILE_STORAGE_PATH=/app/storage
       - PORT=3000
+      - NODE_OPTIONS=--max-old-space-size=1024
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 1280M
 
   realtime:
     build:
@@ -97,10 +98,11 @@ services:
       - DATABASE_URL=postgresql://user:password@postgres:5432/pagespace
       - FILE_STORAGE_PATH=/app/storage
       - NODE_ENV=production
+      - NODE_OPTIONS=--max-old-space-size=384
     deploy:
       resources:
         limits:
-          memory: 256M
+          memory: 512M
     restart: unless-stopped
 
 volumes:

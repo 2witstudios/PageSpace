@@ -9,5 +9,5 @@ export * from './tree-utils';
 export * from './utils';
 export * from './enums';
 export * from './types';
-export * from './scribe-processor';
+export * from './file-processor';
 export * from './job-queue';

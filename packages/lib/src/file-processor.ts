@@ -6,13 +6,13 @@ import mammoth from 'mammoth';
 import type { ExtractionResult, ProcessingStatus, ExtractionMethod } from './types';
 
 /**
- * Lightweight document processor that uses minimal memory
+ * File processor for extracting text content from various file types
  * - PDF: pdf-parse library
  * - Word: mammoth library  
  * - Text: direct extraction
- * - Images: AI vision API for OCR
+ * - Images: AI vision API for OCR (marks as visual if OCR fails)
  */
-export class LightweightProcessor {
+export class FileProcessor {
   private STORAGE_ROOT: string;
   
   constructor() {
@@ -499,14 +499,11 @@ export class LightweightProcessor {
 }
 
 // Export singleton instance
-let processor: LightweightProcessor | null = null;
+let processor: FileProcessor | null = null;
 
-export async function getScribeProcessor(): Promise<LightweightProcessor> {
+export async function getFileProcessor(): Promise<FileProcessor> {
   if (!processor) {
-    processor = new LightweightProcessor();
+    processor = new FileProcessor();
   }
   return processor;
 }
-
-// Maintain backward compatibility
-export const ScribeProcessor = LightweightProcessor;

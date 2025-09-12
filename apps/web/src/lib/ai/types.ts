@@ -3,6 +3,8 @@
  * These types are shared across AI tools.
  */
 
+import { ModelCapabilities } from './model-capabilities';
+
 export interface ToolExecutionContext {
   userId: string;
   conversationId?: string;
@@ -20,4 +22,5 @@ export interface ToolExecutionContext {
     };
     breadcrumbs?: string[];
   };
+  modelCapabilities?: ModelCapabilities;
 }

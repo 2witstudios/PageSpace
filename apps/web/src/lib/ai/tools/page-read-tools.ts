@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { db, pages, eq, and, asc } from '@pagespace/db';
 import { buildTree, getUserAccessLevel, getUserDriveAccess, getPageTypeEmoji, isFolderPage, PageType } from '@pagespace/lib';
 import { ToolExecutionContext } from '../types';
+import { getSuggestedVisionModels } from '../model-capabilities';
+import { loadVisualContent, formatVisualContentForAI, getVisualContentDescription } from '../visual-content-utils';
 
 export const pageReadTools = {
   /**
@@ -149,21 +151,90 @@ export const pageReadTools = {
               };
             
             case 'visual':
-              // Pure visual content - requires multimodal AI
-              return {
-                success: true,
-                type: 'visual_reference',
-                path,
-                title: page.title,
-                fileRef: page.id, // Reference for multimodal processing
-                mimeType: page.mimeType,
-                requiresVision: true,
-                message: 'This is a visual file (image/diagram) without extractable text. Use a vision-capable AI model to analyze its content.',
-                metadata: {
-                  extractionMethod: page.extractionMethod,
-                  extractionMetadata: page.extractionMetadata
+              // Pure visual content - check if current model supports vision
+              const modelCapabilities = (context as ToolExecutionContext)?.modelCapabilities;
+              
+              if (!modelCapabilities?.hasVision) {
+                // Model doesn't support vision - provide helpful guidance
+                return {
+                  success: true,
+                  type: 'visual_requires_vision_model',
+                  path,
+                  title: page.title,
+                  mimeType: page.mimeType,
+                  message: `This is a visual file (${page.mimeType || 'image'}). To view its content, please switch to a vision-capable model.`,
+                  suggestedModels: getSuggestedVisionModels(),
+                  metadata: {
+                    fileType: page.mimeType,
+                    requiresVision: true
+                  }
+                };
+              }
+              
+              // Model supports vision - load and return the visual content
+              if (page.filePath) {
+                const visualResult = await loadVisualContent(
+                  page.filePath,
+                  page.mimeType || 'image/jpeg'
+                );
+                
+                if (visualResult.success && visualResult.visualContent) {
+                  // Create data URL for the image
+                  const imageDataUrl = `data:${visualResult.visualContent.mimeType};base64,${visualResult.visualContent.base64}`;
+                  
+                  // Return visual content with data URL for injection
+                  return {
+                    success: true,
+                    type: 'visual_content',
+                    path,
+                    title: page.title,
+                    content: getVisualContentDescription(
+                      page.title,
+                      visualResult.visualContent.mimeType,
+                      visualResult.visualContent.sizeBytes
+                    ),
+                    // Include the data URL for the streaming handler to inject
+                    imageDataUrl,
+                    // Also include formatted visual data for backward compatibility
+                    visualData: formatVisualContentForAI(
+                      visualResult.visualContent
+                    ),
+                    summary: `Loaded visual content: "${page.title}"`,
+                    stats: {
+                      documentType: 'VISUAL',
+                      mimeType: visualResult.visualContent.mimeType,
+                      sizeBytes: visualResult.visualContent.sizeBytes,
+                    },
+                    metadata: {
+                      requiresVisionModel: true,
+                      hasImageData: true
+                    },
+                    nextSteps: [
+                      'Analyze the visual content',
+                      'Describe what you see in the image/document',
+                      'Answer questions about the visual content'
+                    ]
+                  };
+                } else {
+                  // Failed to load visual content
+                  return {
+                    success: false,
+                    error: visualResult.error || 'Failed to load visual content',
+                    path,
+                    title: page.title,
+                    type: page.type
+                  };
                 }
-              };
+              } else {
+                // No file path available
+                return {
+                  success: false,
+                  error: 'Visual file path not found',
+                  path,
+                  title: page.title,
+                  type: page.type
+                };
+              }
             
             case 'failed':
               return {

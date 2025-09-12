@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "license": "CC-BY-NC-SA-4.0",
   "scripts": {
-    "dev": "next dev",
+    "dev": "NODE_OPTIONS='--max-old-space-size=1024' next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "NODE_OPTIONS='--max-old-space-size=1024' next start",
     "lint": "next lint"
   },
   "dependencies": {
@@ -80,6 +80,7 @@
     "react-markdown": "^10.1.0",
     "react-pdf": "^10.1.0",
     "recharts": "^3.1.2",
+    "sharp": "^0.34.3",
     "slate": "^0.117.2",
     "slate-history": "^0.113.1",
     "slate-react": "^0.117.4",

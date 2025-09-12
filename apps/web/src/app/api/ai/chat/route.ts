@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { streamText, convertToModelMessages, UIMessage, stepCountIs } from 'ai';
+import { streamText, convertToModelMessages, UIMessage, stepCountIs, createUIMessageStream, createUIMessageStreamResponse } from 'ai';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -38,6 +38,7 @@ import { AgentRole } from '@/lib/ai/agent-roles';
 import { loggers } from '@pagespace/lib/logger-config';
 import { trackFeature } from '@pagespace/lib/activity-tracker';
 import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
+import { getModelCapabilities } from '@/lib/ai/model-capabilities';
 
 
 // Allow streaming responses up to 60 seconds for longer AI conversations
@@ -489,12 +490,17 @@ export async function POST(request: Request) {
     loggers.ai.debug('AI Chat API: Tools configured for Page AI', { toolCount: Object.keys(filteredTools).length });
     loggers.ai.info('AI Chat API: Starting streamText for Page AI', { model: currentModel, pageName: page.title });
     
-    // Wrap streamText in try-catch for better error handling
+    // Create UI message stream with visual content injection support
+    // This handles the case where tools return visual content that needs to be injected into the stream
     let result;
     try {
-      result = streamText({
-      model,
-      system: systemPrompt + mentionSystemPrompt + timestampSystemPrompt + `
+      const stream = createUIMessageStream({
+        originalMessages: sanitizedMessages,
+        execute: async ({ writer }) => {
+          // Start the AI response
+          const aiResult = streamText({
+            model,
+            system: systemPrompt + mentionSystemPrompt + timestampSystemPrompt + `
 
 CRITICAL NESTING PRINCIPLE:
 • NO RESTRICTIONS on what can contain what - organize based on logical user needs
@@ -632,10 +638,205 @@ MENTION PROCESSING:
 • Don't explicitly mention that you're reading @mentioned docs unless relevant to the conversation`,
       messages: modelMessages,
       tools: filteredTools,
-      stopWhen: stepCountIs(100), // Allow up to 100 tool calls per conversation turn
-      experimental_context: { userId }, // Pass userId to tools for permission checking
-      maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
-    });
+            stopWhen: stepCountIs(100), // Allow up to 100 tool calls per conversation turn
+            experimental_context: { 
+              userId,
+              modelCapabilities: selectedModel && selectedProvider 
+                ? getModelCapabilities(selectedModel, selectedProvider)
+                : undefined
+            }, // Pass userId and model capabilities to tools
+            maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
+          });
+
+          // Create a custom stream that monitors for visual content injection
+          let hasVisualContent = false;
+          const visualContentImages: string[] = [];
+
+          // Read the AI stream and inject visual content when found
+          for await (const chunk of aiResult.toUIMessageStream()) {
+            // Check if this chunk contains tool results with visual content
+            if (chunk.type === 'tool-output-available') {
+              try {
+                // Type assertion needed as chunk.output is unknown in AI SDK types
+                const toolOutput = JSON.parse((chunk as { output: string }).output);
+                if (toolOutput.type === 'visual_content' && toolOutput.imageDataUrl) {
+                  hasVisualContent = true;
+                  visualContentImages.push(toolOutput.imageDataUrl);
+                  
+                  // Write the image as a file part to the stream
+                  // Based on AI SDK documentation, file parts have specific required fields
+                  writer.write({
+                    type: 'file',
+                    mediaType: toolOutput.imageDataUrl.split(';')[0].split(':')[1] || 'image/jpeg',
+                    url: toolOutput.imageDataUrl, // full data URL for client display
+                  } as { type: 'file'; mediaType: string; url: string });
+                }
+              } catch {
+                // Not JSON or doesn't match expected format, continue normally
+              }
+            }
+            
+            // Forward all chunks to the client
+            writer.write(chunk);
+          }
+
+          // If no visual content was detected via tool outputs, 
+          // we can also check the final AI response for visual content references
+          // This is a fallback in case the tool output parsing didn't work
+          if (!hasVisualContent) {
+            const finalResponse = await aiResult.response;
+            const allMessages = finalResponse.messages;
+            
+            for (const message of allMessages) {
+              if (message.role === 'tool' && message.content) {
+                for (const contentPart of message.content) {
+                  if (contentPart.type === 'tool-result') {
+                    try {
+                      const toolResult = JSON.parse(JSON.stringify(contentPart.output));
+                      if (toolResult.type === 'visual_content' && toolResult.imageDataUrl) {
+                        // Inject the visual content as a file part
+                        writer.write({
+                          type: 'file',
+                          mediaType: toolResult.imageDataUrl.split(';')[0].split(':')[1] || 'image/jpeg',
+                          url: toolResult.imageDataUrl, // full data URL
+                        } as { type: 'file'; mediaType: string; url: string });
+                      }
+                    } catch {
+                      // Not the expected format, continue
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        onFinish: async ({ responseMessage }) => {
+          loggers.ai.debug('AI Chat API: onFinish callback triggered for AI response');
+          
+          // Enhanced debugging: Log the complete message structure
+          loggers.ai.debug('AI Chat API: Response message structure', {
+            id: responseMessage?.id,
+            role: responseMessage?.role,
+            partsCount: responseMessage?.parts?.length || 0,
+            partTypes: responseMessage?.parts?.map(p => p.type) || [],
+          });
+          
+          // Log each part in detail
+          responseMessage?.parts?.forEach((part, index) => {
+            if (part.type === 'text') {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const text = (part as any).text || '';
+              loggers.ai.trace(`AI Chat API: Part ${index}: TEXT`, { preview: text.substring(0, 100) });
+            } else if (part.type.startsWith('tool-')) {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const toolPart = part as any;
+              loggers.ai.trace(`AI Chat API: Part ${index}: TOOL`, { type: part.type, state: toolPart.state, hasOutput: !!toolPart.output });
+            } else {
+              loggers.ai.trace(`AI Chat API: Part ${index}`, { type: part.type });
+            }
+          });
+          
+          // Save the AI's response message with tool calls and results (database-first approach)
+          if (chatId && responseMessage) {
+            try {
+              const messageId = responseMessage.id || createId();
+              const messageContent = extractMessageContent(responseMessage);
+              
+              // Extract tool calls and results from the response
+              const extractedToolCalls = extractToolCalls(responseMessage);
+              const extractedToolResults = extractToolResults(responseMessage);
+              
+              loggers.ai.debug('AI Chat API: Saving AI response message', { 
+                id: messageId, 
+                contentLength: messageContent.length,
+                contentPreview: messageContent.substring(0, 100),
+                toolCallsCount: extractedToolCalls.length,
+                toolResultsCount: extractedToolResults.length,
+                hasContent: messageContent.length > 0,
+                hasTools: extractedToolCalls.length > 0 || extractedToolResults.length > 0
+              });
+              
+              loggers.ai.trace('AI Chat API: Tool tracking', { 
+                toolCalls: extractedToolCalls.length,
+                toolResults: extractedToolResults.length 
+              });
+              
+              // Use the new helper function to save the message with complete UIMessage for chronological ordering
+              await saveMessageToDatabase({
+                messageId,
+                pageId: chatId,
+                userId: null, // AI message
+                role: 'assistant',
+                content: messageContent,
+                toolCalls: extractedToolCalls.length > 0 ? extractedToolCalls : undefined,
+                toolResults: extractedToolResults.length > 0 ? extractedToolResults : undefined,
+                uiMessage: responseMessage, // NEW: Pass complete UIMessage to preserve part ordering
+                agentRole: page.title || 'Page AI', // Use page title as agent role
+              });
+              
+              loggers.ai.debug('AI Chat API: AI response message saved to database with tools');
+              
+              // Track enhanced AI usage with token counting and cost calculation
+              const duration = Date.now() - startTime;
+              
+              // Use enhanced AI monitoring with token usage from SDK
+              await AIMonitoring.trackUsage({
+                userId: userId!,
+                provider: currentProvider,
+                model: currentModel,
+                inputTokens: undefined,
+                outputTokens: undefined, 
+                totalTokens: undefined,
+                prompt: undefined, // Last user message
+                completion: messageContent?.substring(0, 1000),
+                duration,
+                conversationId: chatId,
+                messageId,
+                pageId: chatId,
+                driveId: pageContext?.driveId,
+                success: true,
+                metadata: {
+                  pageName: page.title,
+                  toolCallsCount: extractedToolCalls.length,
+                  toolResultsCount: extractedToolResults.length,
+                  hasTools: extractedToolCalls.length > 0 || extractedToolResults.length > 0
+                }
+              });
+              
+              // Track tool usage separately for analytics
+              if (extractedToolCalls.length > 0) {
+                for (const toolCall of extractedToolCalls) {
+                  await AIMonitoring.trackToolUsage({
+                    userId: userId!,
+                    provider: currentProvider,
+                    model: currentModel,
+                    toolName: toolCall.toolName,
+                    toolId: toolCall.toolCallId,
+                    args: undefined,
+                    conversationId: chatId,
+                    pageId: chatId,
+                    success: true
+                  });
+                }
+                
+                // Also track feature usage
+                trackFeature(userId!, 'ai_tools_used', {
+                  toolCount: extractedToolCalls.length,
+                  provider: currentProvider,
+                  model: currentModel
+                });
+              }
+            } catch (error) {
+              loggers.ai.error('AI Chat API: Failed to save AI response message', error as Error);
+              // Don't fail the response - persistence errors shouldn't break the chat
+            }
+          } else {
+            loggers.ai.warn('AI Chat API: No chatId or response message provided, skipping persistence');
+          }
+        },
+      });
+
+      result = { toUIMessageStreamResponse: () => createUIMessageStreamResponse({ stream }) };
     } catch (streamError) {
       loggers.ai.error('AI Chat API: Failed to create stream', streamError as Error, {
         message: streamError instanceof Error ? streamError.message : 'Unknown error',
@@ -644,135 +845,10 @@ MENTION PROCESSING:
       throw streamError; // Re-throw to be handled by the outer catch
     }
 
-    loggers.ai.debug('AI Chat API: Returning stream response with database-first persistence');
+    loggers.ai.debug('AI Chat API: Returning visual-content-aware stream response');
     
-    // Return UI message stream response with database-first persistence
-    return result.toUIMessageStreamResponse({
-      onFinish: async ({ responseMessage }) => {
-        loggers.ai.debug('AI Chat API: onFinish callback triggered for AI response');
-        
-        // Enhanced debugging: Log the complete message structure
-        loggers.ai.debug('AI Chat API: Response message structure', {
-          id: responseMessage?.id,
-          role: responseMessage?.role,
-          partsCount: responseMessage?.parts?.length || 0,
-          partTypes: responseMessage?.parts?.map(p => p.type) || [],
-        });
-        
-        // Log each part in detail
-        responseMessage?.parts?.forEach((part, index) => {
-          if (part.type === 'text') {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const text = (part as any).text || '';
-            loggers.ai.trace(`AI Chat API: Part ${index}: TEXT`, { preview: text.substring(0, 100) });
-          } else if (part.type.startsWith('tool-')) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const toolPart = part as any;
-            loggers.ai.trace(`AI Chat API: Part ${index}: TOOL`, { type: part.type, state: toolPart.state, hasOutput: !!toolPart.output });
-          } else {
-            loggers.ai.trace(`AI Chat API: Part ${index}`, { type: part.type });
-          }
-        });
-        
-        // Save the AI's response message with tool calls and results (database-first approach)
-        if (chatId && responseMessage) {
-          try {
-            const messageId = responseMessage.id || createId();
-            const messageContent = extractMessageContent(responseMessage);
-            
-            // Extract tool calls and results from the response
-            const extractedToolCalls = extractToolCalls(responseMessage);
-            const extractedToolResults = extractToolResults(responseMessage);
-            
-            loggers.ai.debug('AI Chat API: Saving AI response message', { 
-              id: messageId, 
-              contentLength: messageContent.length,
-              contentPreview: messageContent.substring(0, 100),
-              toolCallsCount: extractedToolCalls.length,
-              toolResultsCount: extractedToolResults.length,
-              hasContent: messageContent.length > 0,
-              hasTools: extractedToolCalls.length > 0 || extractedToolResults.length > 0
-            });
-            
-            loggers.ai.trace('AI Chat API: Tool tracking', { 
-              toolCalls: extractedToolCalls.length,
-              toolResults: extractedToolResults.length 
-            });
-            
-            // Use the new helper function to save the message with complete UIMessage for chronological ordering
-            await saveMessageToDatabase({
-              messageId,
-              pageId: chatId,
-              userId: null, // AI message
-              role: 'assistant',
-              content: messageContent,
-              toolCalls: extractedToolCalls.length > 0 ? extractedToolCalls : undefined,
-              toolResults: extractedToolResults.length > 0 ? extractedToolResults : undefined,
-              uiMessage: responseMessage, // NEW: Pass complete UIMessage to preserve part ordering
-              agentRole: page.title || 'Page AI', // Use page title as agent role
-            });
-            
-            loggers.ai.debug('AI Chat API: AI response message saved to database with tools');
-            
-            // Track enhanced AI usage with token counting and cost calculation
-            const duration = Date.now() - startTime;
-            
-            // Use enhanced AI monitoring with token usage from SDK
-            await AIMonitoring.trackUsage({
-              userId: userId!,
-              provider: currentProvider,
-              model: currentModel,
-              inputTokens: undefined,
-              outputTokens: undefined, 
-              totalTokens: undefined,
-              prompt: undefined, // Last user message
-              completion: messageContent?.substring(0, 1000),
-              duration,
-              conversationId: chatId,
-              messageId,
-              pageId: chatId,
-              driveId: pageContext?.driveId,
-              success: true,
-              metadata: {
-                pageName: page.title,
-                toolCallsCount: extractedToolCalls.length,
-                toolResultsCount: extractedToolResults.length,
-                hasTools: extractedToolCalls.length > 0 || extractedToolResults.length > 0
-              }
-            });
-            
-            // Track tool usage separately for analytics
-            if (extractedToolCalls.length > 0) {
-              for (const toolCall of extractedToolCalls) {
-                await AIMonitoring.trackToolUsage({
-                  userId: userId!,
-                  provider: currentProvider,
-                  model: currentModel,
-                  toolName: toolCall.toolName,
-                  toolId: toolCall.toolCallId,
-                  args: undefined,
-                  conversationId: chatId,
-                  pageId: chatId,
-                  success: true
-                });
-              }
-              
-              // Also track feature usage
-              trackFeature(userId!, 'ai_tools_used', {
-                toolCount: extractedToolCalls.length,
-                provider: currentProvider,
-                model: currentModel
-              });
-            }
-          } catch (error) {
-            loggers.ai.error('AI Chat API: Failed to save AI response message', error as Error);
-            // Don't fail the response - persistence errors shouldn't break the chat
-          }
-        } else {
-          loggers.ai.warn('AI Chat API: No chatId or response message provided, skipping persistence');
-        }
-      },
-    });
+    // Return the enhanced UI message stream response with visual content injection
+    return result.toUIMessageStreamResponse();
 
   } catch (error) {
     loggers.ai.error('AI Chat API Error', error as Error, {
