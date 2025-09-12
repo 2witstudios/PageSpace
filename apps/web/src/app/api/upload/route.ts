@@ -67,12 +67,16 @@ export async function POST(request: NextRequest) {
 
     // Generate page ID and file path
     const pageId = createId();
-    const fileName = file.name;
+    // Sanitize filename: Replace Unicode spaces (especially U+202F from macOS screenshots) with regular spaces
+    const sanitizedFileName = file.name
+      .replace(/[\u202F\u00A0\u2000-\u200B\uFEFF]/g, ' ') // Replace various Unicode spaces with regular space
+      .replace(/\s+/g, ' ') // Normalize multiple spaces to single space
+      .trim();
     
     // Use environment variable for storage path, fallback to /tmp for local dev
     const STORAGE_ROOT = process.env.FILE_STORAGE_PATH || '/tmp/pagespace-files';
     const storagePath = join(STORAGE_ROOT, 'files', driveId, pageId);
-    const filePath = join(storagePath, fileName);
+    const filePath = join(storagePath, sanitizedFileName);
 
     // Create storage directory
     await mkdir(storagePath, { recursive: true });
@@ -154,13 +158,13 @@ export async function POST(request: NextRequest) {
     const fileMetadata: FileMetadata = {
       uploadedAt: new Date().toISOString(),
       uploadedBy: user.id,
-      originalName: fileName,
+      originalName: file.name, // Store original name with Unicode characters
     };
 
     // Create page entry for the file
     const newPage = await db.insert(pages).values({
       id: pageId,
-      title: title || fileName,
+      title: title || sanitizedFileName, // Use sanitized name for title
       type: PageType.FILE,
       content: '', // Files don't have text content initially
       position: calculatedPosition,
@@ -168,8 +172,8 @@ export async function POST(request: NextRequest) {
       parentId: parentId || null,
       fileSize: file.size,
       mimeType,
-      originalFileName: fileName,
-      filePath: join('files', driveId, pageId, fileName), // Store relative path
+      originalFileName: sanitizedFileName, // Store sanitized filename
+      filePath: join('files', driveId, pageId, sanitizedFileName), // Store relative path with sanitized name
       fileMetadata,
       createdAt: new Date(),
       updatedAt: new Date(),

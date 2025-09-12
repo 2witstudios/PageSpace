@@ -68,8 +68,28 @@ export async function GET(
     });
 
     try {
-      // Read the file with UTF-8 path encoding
-      const fileBuffer = await readFile(fullPath);
+      // Try to read the file with the normalized path first
+      let fileBuffer: Buffer;
+      let actualPath = fullPath;
+      
+      try {
+        fileBuffer = await readFile(fullPath);
+      } catch (firstError) {
+        // If the file doesn't exist with normalized path, try the original path
+        // This handles existing files that were saved with Unicode characters
+        const originalFullPath = join(STORAGE_ROOT, page.filePath);
+        console.log('First attempt failed, trying original path:', originalFullPath);
+        
+        try {
+          fileBuffer = await readFile(originalFullPath);
+          actualPath = originalFullPath;
+        } catch (secondError) {
+          // If both attempts fail, throw the original error
+          throw firstError;
+        }
+      }
+
+      console.log('Successfully read file from:', actualPath);
 
       // Set appropriate headers for inline viewing
       const headers = new Headers();
