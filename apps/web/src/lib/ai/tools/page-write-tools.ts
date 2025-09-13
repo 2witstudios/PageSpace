@@ -38,6 +38,22 @@ export const pageWriteTools = {
           throw new Error(`Page with ID "${pageId}" not found`);
         }
 
+        // Check if this is a FILE type page - these are read-only
+        if (page.type === 'FILE') {
+          return {
+            success: false,
+            error: 'Cannot edit FILE pages',
+            message: 'This is an uploaded file. File content is read-only and managed by the system.',
+            suggestion: 'To modify content, create a new document page instead of editing the uploaded file.',
+            pageInfo: {
+              pageId: page.id,
+              title: page.title,
+              type: page.type,
+              mimeType: page.mimeType
+            }
+          };
+        }
+
         // Check user permissions (need EDIT access)
         const canEdit = await canUserEditPage(userId, page.id);
         if (!canEdit) {
@@ -132,6 +148,22 @@ export const pageWriteTools = {
           throw new Error(`Page with ID "${pageId}" not found`);
         }
 
+        // Check if this is a FILE type page - these are read-only
+        if (page.type === 'FILE') {
+          return {
+            success: false,
+            error: 'Cannot edit FILE pages',
+            message: 'This is an uploaded file. File content is read-only and managed by the system.',
+            suggestion: 'To modify content, create a new document page instead of editing the uploaded file.',
+            pageInfo: {
+              pageId: page.id,
+              title: page.title,
+              type: page.type,
+              mimeType: page.mimeType
+            }
+          };
+        }
+
         // Check user permissions
         const canEdit = await canUserEditPage(userId, page.id);
         if (!canEdit) {
@@ -224,6 +256,22 @@ export const pageWriteTools = {
 
         if (!page) {
           throw new Error(`Page with ID "${pageId}" not found`);
+        }
+
+        // Check if this is a FILE type page - these are read-only
+        if (page.type === 'FILE') {
+          return {
+            success: false,
+            error: 'Cannot edit FILE pages',
+            message: 'This is an uploaded file. File content is read-only and managed by the system.',
+            suggestion: 'To modify content, create a new document page instead of editing the uploaded file.',
+            pageInfo: {
+              pageId: page.id,
+              title: page.title,
+              type: page.type,
+              mimeType: page.mimeType
+            }
+          };
         }
 
         // Check user permissions
@@ -675,6 +723,22 @@ export const pageWriteTools = {
           throw new Error(`Page with ID "${pageId}" not found`);
         }
 
+        // Check if this is a FILE type page - these are read-only
+        if (page.type === 'FILE') {
+          return {
+            success: false,
+            error: 'Cannot edit FILE pages',
+            message: 'This is an uploaded file. File content is read-only and managed by the system.',
+            suggestion: 'To modify content, create a new document page instead of editing the uploaded file.',
+            pageInfo: {
+              pageId: page.id,
+              title: page.title,
+              type: page.type,
+              mimeType: page.mimeType
+            }
+          };
+        }
+
         // Check permissions
         const canEdit = await canUserEditPage(userId, page.id);
         if (!canEdit) {
@@ -750,6 +814,22 @@ export const pageWriteTools = {
 
         if (!page) {
           throw new Error(`Page with ID "${pageId}" not found`);
+        }
+
+        // Check if this is a FILE type page - these are read-only
+        if (page.type === 'FILE') {
+          return {
+            success: false,
+            error: 'Cannot edit FILE pages',
+            message: 'This is an uploaded file. File content is read-only and managed by the system.',
+            suggestion: 'To modify content, create a new document page instead of editing the uploaded file.',
+            pageInfo: {
+              pageId: page.id,
+              title: page.title,
+              type: page.type,
+              mimeType: page.mimeType
+            }
+          };
         }
 
         // Check permissions
