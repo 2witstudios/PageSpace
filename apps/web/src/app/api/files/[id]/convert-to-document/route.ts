@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
 import { db, pages, eq } from '@pagespace/db';
-import { readFile } from 'fs/promises';
-import { join } from 'path';
 import { PageType, canConvertToType } from '@pagespace/lib';
 import mammoth from 'mammoth';
 import { createId } from '@paralleldrive/cuid2';
@@ -70,12 +68,28 @@ export async function POST(
       return NextResponse.json({ error: 'File path not found' }, { status: 500 });
     }
 
-    // Use environment variable for storage path, fallback to /tmp for local dev
-    const STORAGE_ROOT = process.env.FILE_STORAGE_PATH || '/tmp/pagespace-files';
-    const fullPath = join(STORAGE_ROOT, filePage.filePath);
+    // Fetch file from processor service using content hash
+    const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
+    const contentHash = filePage.filePath; // filePath stores the content hash
 
-    // Read the file
-    const fileBuffer = await readFile(fullPath);
+    console.log('[Convert] Fetching file from processor:', {
+      pageId: filePage.id,
+      contentHash,
+      processorUrl: `${PROCESSOR_URL}/cache/${contentHash}/original`,
+    });
+
+    // Request the original file from processor service
+    const fileResponse = await fetch(`${PROCESSOR_URL}/cache/${contentHash}/original`, {
+      signal: AbortSignal.timeout(30000), // 30 second timeout
+    });
+
+    if (!fileResponse.ok) {
+      throw new Error(`Processor returned ${fileResponse.status}: ${fileResponse.statusText}`);
+    }
+
+    // Get the file buffer from response
+    const fileBuffer = Buffer.from(await fileResponse.arrayBuffer());
+    console.log('[Convert] Successfully fetched from processor, size:', fileBuffer.length);
 
     // Convert DOCX to HTML using mammoth
     const result = await mammoth.convertToHtml({ buffer: fileBuffer });

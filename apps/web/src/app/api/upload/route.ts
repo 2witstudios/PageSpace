@@ -4,9 +4,17 @@ import { db, pages, drives, eq, isNull } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { PageType } from '@pagespace/lib/server';
 import { getProducerQueue } from '@pagespace/lib/job-queue';
+import {
+  checkStorageQuota,
+  updateStorageUsage,
+  updateActiveUploads,
+  getUserStorageQuota,
+  formatBytes
+} from '@pagespace/lib/services/storage-limits';
+import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
+import { checkMemoryMiddleware } from '@pagespace/lib/services/memory-monitor';
 
 // Define allowed file types and size limits
-const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
 
 // Type for file metadata
 interface FileMetadata {
@@ -21,12 +29,18 @@ interface FileMetadata {
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
 
 export async function POST(request: NextRequest) {
+  // Declare variables at function scope for proper cleanup
+  let uploadSlotReleased = false;
+  let uploadSlot: string | null = null;
+  let userId: string | null = null;
+
   try {
     // Verify authentication
     const user = await verifyAuth(request);
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
+    userId = user.id;
 
     // Parse form data
     const formData = await request.formData();
@@ -46,11 +60,41 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Drive ID is required' }, { status: 400 });
     }
 
-    // Validate file size
-    if (file.size > MAX_FILE_SIZE) {
-      return NextResponse.json({ 
-        error: `File size exceeds maximum of ${MAX_FILE_SIZE / (1024 * 1024)}MB` 
-      }, { status: 400 });
+    // Check memory availability first
+    const memCheck = await checkMemoryMiddleware();
+    if (!memCheck.allowed) {
+      return NextResponse.json({
+        error: memCheck.reason || 'Server is busy. Please try again later.',
+        memoryStatus: memCheck.status
+      }, { status: 503 });
+    }
+
+    // Check storage quota
+    const quotaCheck = await checkStorageQuota(user.id, file.size);
+    if (!quotaCheck.allowed) {
+      return NextResponse.json({
+        error: quotaCheck.reason,
+        storageInfo: quotaCheck.quota
+      }, { status: 413 });
+    }
+
+    // Get user's storage tier for upload slot
+    const userQuota = await getUserStorageQuota(user.id);
+    if (!userQuota) {
+      return NextResponse.json({ error: 'Could not retrieve storage quota' }, { status: 500 });
+    }
+
+    // Try to acquire upload slot
+    uploadSlot = await uploadSemaphore.acquireUploadSlot(
+      user.id,
+      userQuota.tier,
+      file.size
+    );
+    if (!uploadSlot) {
+      return NextResponse.json({
+        error: 'Too many concurrent uploads. Please wait for current uploads to complete.',
+        storageInfo: userQuota
+      }, { status: 429 });
     }
 
     // Check if mime type is allowed (with fallback for unknown types)
@@ -73,6 +117,9 @@ export async function POST(request: NextRequest) {
       .replace(/[\u202F\u00A0\u2000-\u200B\uFEFF]/g, ' ') // Replace various Unicode spaces with regular space
       .replace(/\s+/g, ' ') // Normalize multiple spaces to single space
       .trim();
+
+    // Increment active uploads counter
+    await updateActiveUploads(user.id, 1);
 
     // Forward file to processor service for streaming upload and processing
     const processorFormData = new FormData();
@@ -170,7 +217,7 @@ export async function POST(request: NextRequest) {
         contentHash, // Store content hash for deduplication
       };
 
-      // Create page entry with appropriate processing status
+      // Create page entry
       const [newPage] = await db.insert(pages).values({
         id: pageId,
         title: title || sanitizedFileName, // Use sanitized name for title
@@ -190,6 +237,18 @@ export async function POST(request: NextRequest) {
         updatedAt: new Date(),
       }).returning();
 
+      // Update user storage usage (has its own transaction internally)
+      await updateStorageUsage(user.id, file.size, {
+        pageId: newPage.id,
+        driveId,
+        eventType: 'upload'
+      });
+
+      // Release upload slot and decrement counter
+      uploadSemaphore.releaseUploadSlot(uploadSlot);
+      uploadSlotReleased = true;
+      await updateActiveUploads(user.id, -1);
+
       // If file needs any processing (text extraction, OCR, or image optimization)
       if (jobs && (jobs.textExtraction || jobs.ocr || jobs.imageOptimization)) {
         try {
@@ -199,6 +258,9 @@ export async function POST(request: NextRequest) {
           
           console.log(`File uploaded: ${sanitizedFileName}, Job: ${jobId}, ContentHash: ${contentHash}`);
           
+          // Get updated storage quota
+          const updatedQuota = await getUserStorageQuota(user.id);
+
           // Return 202 Accepted to indicate async processing
           return NextResponse.json(
             {
@@ -209,10 +271,16 @@ export async function POST(request: NextRequest) {
                 contentHash,
                 deduplicated,
               },
-              message: deduplicated 
+              message: deduplicated
                 ? 'File already exists (deduplicated). Processing may be complete.'
                 : 'File uploaded successfully. Processing in background.',
-              processingStatus: deduplicated ? 'completed' : 'pending'
+              processingStatus: deduplicated ? 'completed' : 'pending',
+              storageInfo: updatedQuota ? {
+                used: updatedQuota.usedBytes,
+                quota: updatedQuota.quotaBytes,
+                formattedUsed: formatBytes(updatedQuota.usedBytes),
+                formattedQuota: formatBytes(updatedQuota.quotaBytes)
+              } : undefined
             },
             { status: 202 }
           );
@@ -220,6 +288,9 @@ export async function POST(request: NextRequest) {
           console.error('Failed to enqueue text extraction:', error);
         }
       }
+
+      // Get updated storage quota
+      const updatedQuota = await getUserStorageQuota(user.id);
 
       // File uploaded and optimized successfully
       return NextResponse.json({
@@ -229,14 +300,26 @@ export async function POST(request: NextRequest) {
           contentHash,
           deduplicated,
         },
-        message: deduplicated 
+        message: deduplicated
           ? 'File already exists (deduplicated).'
           : 'File uploaded and processed successfully.',
-        processingStatus: 'completed'
+        processingStatus: 'completed',
+        storageInfo: updatedQuota ? {
+          used: updatedQuota.usedBytes,
+          quota: updatedQuota.quotaBytes,
+          formattedUsed: formatBytes(updatedQuota.usedBytes),
+          formattedQuota: formatBytes(updatedQuota.quotaBytes)
+        } : undefined
       });
 
     } catch (processorError) {
       console.error('Processor service error:', processorError);
+
+      // Clean up on error
+      if (!uploadSlotReleased && uploadSlot && userId) {
+        uploadSemaphore.releaseUploadSlot(uploadSlot);
+        await updateActiveUploads(userId, -1);
+      }
       
       // Fallback: Still create the page entry but mark as failed
       const fileMetadata: FileMetadata = {
@@ -273,9 +356,22 @@ export async function POST(request: NextRequest) {
 
   } catch (error) {
     console.error('Upload error:', error);
+
+    // Clean up on error
+    if (!uploadSlotReleased && uploadSlot && userId) {
+      uploadSemaphore.releaseUploadSlot(uploadSlot);
+      await updateActiveUploads(userId, -1);
+    }
+
     return NextResponse.json(
       { error: 'Failed to upload file' },
       { status: 500 }
     );
+  } finally {
+    // Ensure upload slot is always released
+    if (!uploadSlotReleased && uploadSlot && userId) {
+      uploadSemaphore.releaseUploadSlot(uploadSlot);
+      await updateActiveUploads(userId, -1);
+    }
   }
 }

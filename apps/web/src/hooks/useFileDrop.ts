@@ -2,6 +2,7 @@
 
 import { useState, useCallback, DragEvent } from 'react';
 import { toast } from 'sonner';
+import { formatBytes } from '@pagespace/lib/services/storage-limits';
 
 interface FileDropState {
   isDraggingFiles: boolean;
@@ -88,14 +89,59 @@ export function useFileDrop({
     const files = Array.from(e.dataTransfer.files);
     if (files.length === 0) return;
 
+    // Pre-validate file sizes client-side
+    const maxFileSize = parseInt(process.env.NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB || '20') * 1024 * 1024;
+    const MAX_CONCURRENT_UPLOADS = 2;
+
+    // Check for oversized files
+    const oversizedFiles = files.filter(f => f.size > maxFileSize);
+    if (oversizedFiles.length > 0) {
+      const fileNames = oversizedFiles.map(f => `${f.name} (${formatBytes(f.size)})`).join(', ');
+      toast.error(`Files exceed ${formatBytes(maxFileSize)} limit: ${fileNames}`);
+      return;
+    }
+
+    // Check storage quota before uploading
+    const totalSize = files.reduce((sum, f) => sum + f.size, 0);
+    try {
+      const quotaResponse = await fetch('/api/storage/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fileSize: totalSize })
+      });
+
+      if (!quotaResponse.ok) {
+        const quotaData = await quotaResponse.json();
+        if (quotaResponse.status === 429) {
+          toast.error('Too many uploads in progress. Please wait a moment.');
+        } else if (quotaResponse.status === 503) {
+          toast.error('Server is busy. Please try again later.');
+        } else {
+          toast.error(quotaData.reason || 'Upload not allowed');
+        }
+        return;
+      }
+    } catch (error) {
+      console.error('Storage check failed:', error);
+      // Continue with upload if check fails (graceful degradation)
+    }
+
     setState(prev => ({ ...prev, isUploading: true, uploadProgress: 0 }));
 
     try {
       const uploadedPages = [];
       const totalFiles = files.length;
+      let activeUploads = 0;
       
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
+
+        // Limit concurrent uploads
+        while (activeUploads >= MAX_CONCURRENT_UPLOADS) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+
+        activeUploads++;
         
         // Update progress
         setState(prev => ({ 
@@ -120,21 +166,56 @@ export function useFileDrop({
           formData.append('afterNodeId', afterNodeId);
         }
 
-        const response = await fetch('/api/upload', {
-          method: 'POST',
-          body: formData,
-        });
+        try {
+          const response = await fetch('/api/upload', {
+            method: 'POST',
+            body: formData,
+          });
 
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.error || `Failed to upload ${file.name}`);
+          if (!response.ok) {
+            const errorData = await response.json();
+            if (response.status === 413) {
+              toast.error(`${file.name}: ${errorData.error}`);
+              if (errorData.storageInfo) {
+                const { formattedUsed, formattedQuota } = errorData.storageInfo;
+                toast.error(`Storage: ${formattedUsed} / ${formattedQuota} used`);
+              }
+            } else if (response.status === 429) {
+              toast.error('Too many concurrent uploads. Waiting...');
+              // Wait before retrying
+              await new Promise(resolve => setTimeout(resolve, 2000));
+              i--; // Retry this file
+              continue;
+            } else if (response.status === 503) {
+              toast.error('Server busy. Waiting...');
+              await new Promise(resolve => setTimeout(resolve, 3000));
+              i--; // Retry this file
+              continue;
+            } else {
+              throw new Error(errorData.error || `Failed to upload ${file.name}`);
+            }
+          } else {
+            const result = await response.json();
+            uploadedPages.push(result.page);
+
+            // Show storage info if available
+            if (result.storageInfo) {
+              const percent = (result.storageInfo.used / result.storageInfo.quota) * 100;
+              if (percent > 80) {
+                toast.warning(`Storage ${percent.toFixed(0)}% full`);
+              }
+            }
+          }
+        } finally {
+          activeUploads--;
         }
-
-        const result = await response.json();
-        uploadedPages.push(result.page);
       }
 
-      toast.success(`Successfully uploaded ${uploadedPages.length} file(s)`);
+      if (uploadedPages.length > 0) {
+        toast.success(`Successfully uploaded ${uploadedPages.length} of ${files.length} file(s)`);
+      } else if (files.length > 0) {
+        toast.error('No files were uploaded successfully');
+      }
       onUploadComplete?.(uploadedPages);
       
     } catch (error) {

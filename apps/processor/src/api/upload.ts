@@ -15,8 +15,8 @@ const storage = multer.memoryStorage(); // We'll handle the streaming ourselves
 const upload = multer({
   storage,
   limits: {
-    fileSize: 100 * 1024 * 1024, // 100MB max
-    files: 10 // Max 10 files at once
+    fileSize: parseInt(process.env.STORAGE_MAX_FILE_SIZE_MB || '20') * 1024 * 1024, // 20MB default for VPS
+    files: 3 // Max 3 files at once (reduced for VPS)
   }
 });
 

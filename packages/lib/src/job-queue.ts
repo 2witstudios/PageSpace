@@ -55,10 +55,24 @@ export class JobQueue {
       this.mode = 'producer';
       console.log('pg-boss started successfully as PRODUCER');
       console.log('Database schema ready, can send jobs');
-      
-      // Verify connection by attempting a simple operation
-      const queueExists = await this.boss.getQueueSize('process-file').catch(() => 0);
-      console.log(`Queue 'process-file' status: ${queueExists >= 0 ? 'ready' : 'error'}`);
+
+      // Ensure queue exists (pg-boss v10 requires explicit creation)
+      try {
+        await this.boss.createQueue('process-file');
+        console.log('Queue process-file created/verified successfully');
+      } catch (err) {
+        // Queue might already exist, which is OK
+        console.log('Queue creation status:', err instanceof Error ? err.message : 'Unknown error');
+      }
+
+      // Verify we can access the queue
+      try {
+        const queueSize = await this.boss.getQueueSize('process-file');
+        console.log(`Queue 'process-file' ready with ${queueSize} pending jobs`);
+      } catch (err) {
+        console.error('ERROR: Cannot access queue - check pgboss schema exists:', err);
+        throw err; // Fatal - cannot proceed without queue access
+      }
       
     } catch (error) {
       console.error('Failed to start pg-boss as producer:', error);
@@ -82,14 +96,28 @@ export class JobQueue {
       this.mode = 'consumer';
       console.log('pg-boss started successfully as CONSUMER');
       console.log('Database schema ready, can process jobs');
-      
+
+      // Ensure queue exists (pg-boss v10 requires explicit creation)
+      try {
+        await this.boss.createQueue('process-file');
+        console.log('Queue process-file created/verified successfully');
+      } catch (err) {
+        // Queue might already exist, which is OK
+        console.log('Queue creation status:', err instanceof Error ? err.message : 'Unknown error');
+      }
+
       // Only register handlers in consumer mode
       await this.registerHandlers();
       console.log('Job handlers registered for CONSUMER');
-      
+
       // Verify we can see the queue
-      const queueSize = await this.boss.getQueueSize('process-file').catch(() => 0);
-      console.log(`Queue 'process-file' has ${queueSize} pending jobs`);
+      try {
+        const queueSize = await this.boss.getQueueSize('process-file');
+        console.log(`Queue 'process-file' has ${queueSize} pending jobs`);
+      } catch (err) {
+        console.error('ERROR: Cannot access queue - check pgboss schema exists:', err);
+        throw err; // Fatal - cannot proceed without queue access
+      }
       
     } catch (error) {
       console.error('Failed to start pg-boss as consumer:', error);

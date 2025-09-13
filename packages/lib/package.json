@@ -15,7 +15,10 @@
     "./ai-monitoring": "./src/ai-monitoring.ts",
     "./auth-utils": "./src/auth-utils.ts",
     "./scribe-processor": "./src/scribe-processor.ts",
-    "./job-queue": "./src/job-queue.ts"
+    "./job-queue": "./src/job-queue.ts",
+    "./services/storage-limits": "./src/services/storage-limits.ts",
+    "./services/upload-semaphore": "./src/services/upload-semaphore.ts",
+    "./services/memory-monitor": "./src/services/memory-monitor.ts"
   },
   "typesVersions": {
     "*": {
@@ -48,6 +51,15 @@
       ],
       "job-queue": [
         "./src/job-queue.ts"
+      ],
+      "services/storage-limits": [
+        "./src/services/storage-limits.ts"
+      ],
+      "services/upload-semaphore": [
+        "./src/services/upload-semaphore.ts"
+      ],
+      "services/memory-monitor": [
+        "./src/services/memory-monitor.ts"
       ]
     }
   },

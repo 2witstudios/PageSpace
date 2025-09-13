@@ -39,9 +39,43 @@ export class FileProcessor {
         };
       }
       
-      // Read file
-      const fullPath = join(this.STORAGE_ROOT, page.filePath);
-      const buffer = await readFile(fullPath);
+      // Fetch file - prefer HTTP from processor, fallback to local FS
+      let buffer: Buffer;
+
+      try {
+        // Primary: Fetch from processor service via HTTP
+        const processorUrl = process.env.PROCESSOR_URL || 'http://processor:3003';
+        const contentHash = page.filePath; // filePath stores the content hash
+
+        console.log(`[FileProcessor] Fetching file via HTTP: ${processorUrl}/cache/${contentHash}/original`);
+
+        const response = await fetch(`${processorUrl}/cache/${contentHash}/original`, {
+          signal: AbortSignal.timeout(15000), // 15 second timeout
+        });
+
+        if (!response.ok) {
+          throw new Error(`Processor returned ${response.status}: ${response.statusText}`);
+        }
+
+        buffer = Buffer.from(await response.arrayBuffer());
+        console.log(`[FileProcessor] Successfully fetched via HTTP, size: ${buffer.length}`);
+
+      } catch (httpError) {
+        // Fallback: Try local filesystem (for legacy records or during transition)
+        console.warn(`[FileProcessor] HTTP fetch failed, falling back to local FS: ${httpError instanceof Error ? httpError.message : 'Unknown error'}`);
+
+        try {
+          // Try with /original suffix (new structure)
+          const fullPath = join(this.STORAGE_ROOT, page.filePath, 'original');
+          buffer = await readFile(fullPath);
+          console.log(`[FileProcessor] Fallback successful - found at ${fullPath}`);
+        } catch {
+          // Try without /original suffix for very old records or different structure
+          const fullPath = join(this.STORAGE_ROOT, page.filePath);
+          buffer = await readFile(fullPath);
+          console.log(`[FileProcessor] Fallback successful - found at ${fullPath} (legacy path)`);
+        }
+      }
       
       // Calculate content hash for deduplication
       const contentHash = createHash('sha256').update(buffer).digest('hex');

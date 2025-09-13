@@ -95,6 +95,22 @@ export const pageTags = pgTable('page_tags', {
     }
 });
 
+export const storageEvents = pgTable('storage_events', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  pageId: text('pageId').references(() => pages.id, { onDelete: 'set null' }),
+  eventType: text('eventType').notNull(), // 'upload', 'delete', 'update', 'reconcile'
+  sizeDelta: real('sizeDelta').notNull(),
+  totalSizeAfter: real('totalSizeAfter').notNull(),
+  metadata: jsonb('metadata'),
+  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => {
+  return {
+    userIdx: index('storage_events_user_id_idx').on(table.userId),
+    createdAtIdx: index('storage_events_created_at_idx').on(table.createdAt),
+  }
+});
+
 export const favorites = pgTable('favorites', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),

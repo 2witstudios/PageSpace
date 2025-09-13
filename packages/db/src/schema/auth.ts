@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, integer, index, pgEnum } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, integer, index, pgEnum, real } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { chatMessages } from './core';
@@ -19,6 +19,12 @@ export const users = pgTable('users', {
   role: userRole('role').default('user').notNull(),
   currentAiProvider: text('currentAiProvider').default('pagespace').notNull(),
   currentAiModel: text('currentAiModel').default('qwen/qwen3-coder:free').notNull(),
+  // Storage tracking fields
+  storageUsedBytes: real('storageUsedBytes').default(0).notNull(),
+  storageQuotaBytes: real('storageQuotaBytes').default(524288000).notNull(), // 500MB default
+  storageTier: text('storageTier').default('free').notNull(),
+  activeUploads: integer('activeUploads').default(0).notNull(),
+  lastStorageCalculated: timestamp('lastStorageCalculated', { mode: 'date' }),
 });
 
 export const refreshTokens = pgTable('refresh_tokens', {

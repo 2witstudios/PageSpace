@@ -1,3 +1,29 @@
+### 2025-01-13
+
+- **Documentation**: File Upload and Processing Architecture
+  - **Created**: `docs/2.0-architecture/2.6-features/file-upload.md` - Comprehensive file upload system documentation
+    - **Overview**: Distributed architecture, design principles, component responsibilities
+    - **Processing**: Image optimization pipeline, text extraction pipeline
+    - **Storage**: Content-addressed storage with SHA256 hashing
+    - **AI Integration**: Vision model support, file immutability for uploaded content
+    - **Known Limitations**: Current implementation status and future enhancements
+  - **Created**: `docs/2.0-architecture/2.2-backend/processor-service.md` - Processor service architecture
+    - **Service Configuration**: Docker setup, memory management
+    - **Core Components**: Express server, content store, image processor, queue manager
+    - **API Endpoints**: Upload, serve, optimization, health check
+    - **Processing Workflows**: Image and document processing flows
+    - **Performance**: Memory management, caching strategy, concurrency control
+  - **Updated**: `docs/1.0-overview/1.4-api-routes-list.md` - Added file upload routes
+    - **POST /api/upload**: File upload endpoint documentation
+    - **GET /api/files/[id]/view**: File viewing endpoint documentation
+  - **Updated**: `docs/1.0-overview/1.5-functions-list.md` - Added file processing functions
+    - **ContentStore Functions**: File storage and retrieval functions
+    - **Image Processing Functions**: Image optimization and preset processing
+    - **Queue Manager Functions**: Job queue management for background processing
+    - **Text Extraction Functions**: Document text extraction (partially implemented)
+    - **File Upload/View Functions**: API handlers for file operations
+    - **AI Visual Content Functions**: Vision model integration utilities
+
 ### 2025-01-02
 
 - **Major Refactor**: Page Type System Centralization

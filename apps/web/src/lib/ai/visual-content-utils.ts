@@ -4,7 +4,6 @@
  * Uses the processor service for all image optimization
  */
 
-import crypto from 'crypto';
 
 /**
  * Maximum file size for visual content (10MB)

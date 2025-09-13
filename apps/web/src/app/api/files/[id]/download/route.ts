@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
 import { db, pages, eq } from '@pagespace/db';
-import { readFile } from 'fs/promises';
-import { join } from 'path';
 import { PageType, isFilePage } from '@pagespace/lib';
 
 interface RouteParams {
@@ -46,14 +44,29 @@ export async function GET(
       return NextResponse.json({ error: 'File path not found' }, { status: 500 });
     }
 
-    // Use environment variable for storage path, fallback to /tmp for local dev
-    const STORAGE_ROOT = process.env.FILE_STORAGE_PATH || '/tmp/pagespace-files';
-    // Construct full file path
-    const fullPath = join(STORAGE_ROOT, page.filePath);
+    // Fetch file from processor service using content hash
+    const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
+    const contentHash = page.filePath; // filePath stores the content hash
+
+    console.log('[Download] Fetching file from processor:', {
+      pageId: page.id,
+      contentHash,
+      processorUrl: `${PROCESSOR_URL}/cache/${contentHash}/original`,
+    });
 
     try {
-      // Read the file
-      const fileBuffer = await readFile(fullPath);
+      // Request the original file from processor service
+      const fileResponse = await fetch(`${PROCESSOR_URL}/cache/${contentHash}/original`, {
+        signal: AbortSignal.timeout(30000), // 30 second timeout for downloads
+      });
+
+      if (!fileResponse.ok) {
+        throw new Error(`Processor returned ${fileResponse.status}: ${fileResponse.statusText}`);
+      }
+
+      // Get the file buffer from response
+      const fileBuffer = Buffer.from(await fileResponse.arrayBuffer());
+      console.log('[Download] Successfully fetched from processor, size:', fileBuffer.length);
 
       // Set appropriate headers for file download
       const headers = new Headers();
