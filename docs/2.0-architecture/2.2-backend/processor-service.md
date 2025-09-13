@@ -97,38 +97,42 @@ const IMAGE_PRESETS = {
 - Quality optimization for different use cases
 
 ### 4. Queue Manager (`apps/processor/src/workers/queue-manager.ts`)
-Manages background job processing:
+Manages durable background jobs via PgBoss with unified ingestion:
 
 ```typescript
+type JobType = 'ingest-file' | 'image-optimize' | 'text-extract' | 'ocr-process';
+
 interface QueueManager {
-  addImageJob(contentHash: string, preset: string): Promise<void>
-  addTextExtractionJob(contentHash: string, mimeType: string): Promise<void>
-  addOCRJob(contentHash: string): Promise<void>
-  processJobs(): Promise<void>
+  addJob(type: JobType, data: any, options?: any): Promise<string>;
+  getJob(jobId: string): Promise<ProcessingJob | null>;
+  getQueueStatus(): Promise<Record<string, any>>;
 }
 ```
 
 **Queue Features**:
-- In-memory queue with persistence planned
-- Job prioritization by type
-- Retry logic for failed jobs
-- Concurrent processing limits
+- Durable PgBoss queues (PostgreSQL-backed)
+- Unified `ingest-file` job for all uploads (documents/images)
+- Per-job prioritization and retries with backoff
+- Controlled concurrency per worker (image/text/OCR)
 
 ### 5. Text Extractor (`apps/processor/src/workers/text-extractor.ts`)
-Extracts text content from documents:
+Extracts text content from documents and writes cache artifacts:
 
 ```typescript
-interface TextExtractor {
-  extractFromPDF(buffer: Buffer): Promise<string>
-  extractFromDOCX(buffer: Buffer): Promise<string>
-  extractFromText(buffer: Buffer): Promise<string>
-}
+// Uses pdfjs-dist for PDFs and mammoth for DOCX
+export async function extractText(data: {
+  contentHash: string;
+  fileId: string; // pageId
+  mimeType: string;
+  originalName: string;
+}): Promise<{ success: boolean; text?: string; metadata?: any }>;
 ```
 
-**Status**: ⚠️ Partially implemented
+**Status**: ✅ Implemented
 - Text files: ✅ Direct extraction
-- PDF files: ⚠️ Planned with pdf-parse
-- DOCX files: ⚠️ Planned with mammoth
+- PDF files: ✅ via pdfjs-dist
+- DOCX files: ✅ via mammoth
+- Caches to `/cache/{hash}/extracted-text.txt`
 
 ### 6. OCR Processor (`apps/processor/src/workers/ocr-processor.ts`)
 Optical character recognition for images:
@@ -140,30 +144,45 @@ interface OCRProcessor {
 }
 ```
 
-**Status**: ⚠️ Not implemented
-- Tesseract.js integration planned
-- External OCR service support planned
-- Language detection planned
+**Status**: ⚠️ Partially implemented
+- Tesseract.js and AI-vision paths available behind `ENABLE_OCR`
+- Caches to `/cache/{hash}/ocr-text.txt`
+
+## Unified Ingestion Pipeline
+
+All uploads are queued as a single `ingest-file` job. The processor classifies the file and orchestrates extraction/optimization, then updates the `pages` record.
+
+**Job Contract**
+- `type`: `ingest-file`
+- `data`: `{ pageId, contentHash, mimeType, originalName, priority?, traceId? }`
+- Idempotency: keyed by `contentHash` (+ `pageId`); checks cache before work.
+
+**Behavior**
+- Images → mark `processingStatus=visual`, `extractionMethod=visual`; queue `image-optimize` for `ai-chat` and `thumbnail`; optionally queue `ocr-process` if OCR enabled.
+- PDFs/DOCX/TXT → attempt text extraction; if text found, write to `pages.content` and set `completed`; if no text (scanned PDF), set `visual` and optionally queue `ocr-process`.
+- Failures → set `failed` with error; retries with backoff.
+
+**DB Updates (Processor-owned)**
+- Processor writes: `content`, `processingStatus`, `extractionMethod`, `extractionMetadata`, `contentHash`, `processedAt`, `processingError`.
+- Web enqueues and reads; processor is the sole updater for processing fields.
 
 ## API Endpoints
 
 ### Upload Endpoint
 ```typescript
-POST /upload
+POST /api/upload/single
 Headers: {
-  'x-filename': string,  // Original filename
-  'x-drive-id': string,  // Drive ID for permissions
-  'x-user-id': string    // User ID for tracking
+  (multipart form-data)
 }
-Body: Buffer (raw file data)
+Body: file (binary), pageId, userId
 
 Response: {
   contentHash: string,
   originalName: string,
   size: number,
   mimeType: string,
-  isNew: boolean,
-  metadata: object
+  deduplicated: boolean,
+  jobs: { ingest?: true } | { textExtraction?: true; imageOptimization?: string[]; ocr?: true }
 }
 ```
 
@@ -184,14 +203,17 @@ Response: JSON metadata
 
 ### Image Optimization Endpoint
 ```typescript
-POST /optimize-for-ai
+POST /api/optimize/prepare-for-ai
 Body: {
   contentHash: string,
   maxSize?: number,
   quality?: number
 }
 Response: {
-  data: string (base64),
+  // Either a URL to cached asset or base64 depending on provider
+  type: 'url' | 'base64',
+  url?: string,
+  data?: string,
   mimeType: string,
   size: number
 }
@@ -233,10 +255,12 @@ Response: {
 ### Cached/Processed Files
 ```
 /data/cache/{contentHash}/
-├── ai-chat.jpg       # AI-optimized version
-├── thumbnail.webp    # Thumbnail
-├── preview.jpg       # Preview image
-└── metadata.json     # Processing metadata
+├── ai-chat.jpg          # AI-optimized version
+├── thumbnail.webp       # Thumbnail
+├── preview.jpg          # Preview image
+├── extracted-text.txt   # Extracted text (if available)
+├── ocr-text.txt         # OCR text (if available)
+└── metadata.json        # Processing metadata
 ```
 
 **Cache Metadata**:
@@ -267,11 +291,13 @@ Response: {
 7. **Cache Storage**: Store processed versions
 
 ### Document Processing Flow
-1. **Upload Reception**: Receive document
+1. **Upload Reception**: Receive document via `/api/upload/single`
 2. **Hash & Store**: Calculate hash and store original
-3. **Type Detection**: Determine document type
-4. **Text Extraction**: Extract text based on type
-5. **Return Metadata**: Send processing status
+3. **Enqueue**: Queue `ingest-file { pageId, contentHash, mimeType }`
+4. **Return 202**: Web returns Accepted and shows processing state
+5. **Processor Worker**: Classify (text vs visual); extract text or set `visual`; queue OCR optionally
+6. **Persist**: Update `pages` with content/status/metadata
+7. **Artifacts**: Save `extracted-text.txt` / `ocr-text.txt` and image presets
 
 ## Error Handling
 
@@ -332,10 +358,10 @@ const response = await fetch(`${PROCESSOR_URL}/upload`, {
 ```
 
 ### Database Synchronization
-- Web app maintains file metadata in PostgreSQL
-- Processor maintains file system storage
+- Web app maintains file/page metadata and enqueues ingestion
+- Processor maintains file system storage AND updates processing fields in PostgreSQL
 - Content hash links database records to files
-- No direct database access from processor
+- Processor uses least-privileged DB access scoped to the `pages` table processing columns
 
 ### AI Service Integration
 ```typescript

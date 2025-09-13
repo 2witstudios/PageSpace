@@ -149,33 +149,7 @@ services:
         limits:
           memory: 256M
 
-  # Worker service can be removed or kept minimal for legacy support
-  # Most processing now happens in the processor service
-  worker:
-    build:
-      context: .
-      dockerfile: apps/web/Dockerfile.worker
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
-      processor:
-        condition: service_healthy
-    volumes:
-      - file_storage:/app/storage
-    env_file: .env
-    environment:
-      - DATABASE_URL=postgresql://user:password@postgres:5432/pagespace
-      - FILE_STORAGE_PATH=/app/storage
-      - PROCESSOR_URL=http://processor:3003
-      - NODE_ENV=production
-      - NODE_OPTIONS=--max-old-space-size=256
-    deploy:
-      resources:
-        limits:
-          memory: 256M
-    restart: unless-stopped
+  
 
   # Optional nginx service for efficient static file serving
   nginx:

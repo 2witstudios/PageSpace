@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db, pages, eq } from '@pagespace/db';
-import { getProducerQueue } from '@pagespace/lib/job-queue';
+const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
 import { verifyAuth } from '@/lib/auth';
 
 export async function POST(
@@ -24,9 +24,13 @@ export async function POST(
       })
       .where(eq(pages.id, pageId));
     
-    // Enqueue new job with high priority for reprocessing
-    const jobQueue = await getProducerQueue();
-    const jobId = await jobQueue.enqueueFileProcessing(pageId, 'high');
+    // Enqueue unified ingestion on processor
+    const resp = await fetch(`${PROCESSOR_URL}/api/ingest/by-page/${pageId}`, { method: 'POST' });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.error || 'Processor enqueue failed');
+    }
+    const { jobId } = await resp.json();
     
     return NextResponse.json({
       success: true,

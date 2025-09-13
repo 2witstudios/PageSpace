@@ -1,4 +1,4 @@
-FROM node:20-alpine AS base
+FROM node:22.17.0-alpine AS base
 
 # Install system dependencies for Sharp and Tesseract
 RUN apk add --no-cache \
@@ -26,7 +26,8 @@ COPY packages ./packages
 COPY apps/processor/package.json ./apps/processor/
 
 # Install all dependencies
-RUN pnpm install --frozen-lockfile
+# Install dependencies (allow lockfile update since processor deps changed)
+RUN pnpm install --no-frozen-lockfile
 
 # Copy processor source code
 COPY apps/processor ./apps/processor
@@ -36,7 +37,7 @@ WORKDIR /app/apps/processor
 RUN pnpm build
 
 # Production stage
-FROM node:20-alpine AS production
+FROM node:22.17.0-alpine AS production
 
 # Install runtime dependencies for Sharp
 RUN apk add --no-cache \

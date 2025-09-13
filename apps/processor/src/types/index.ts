@@ -36,7 +36,7 @@ export const IMAGE_PRESETS: Record<string, ImagePreset> = {
 
 export interface ProcessingJob {
   id: string;
-  type: 'image-optimize' | 'text-extract' | 'ocr-process';
+  type: 'ingest-file' | 'image-optimize' | 'text-extract' | 'ocr-process';
   fileId: string;
   contentHash: string;
   status: 'pending' | 'processing' | 'completed' | 'failed';

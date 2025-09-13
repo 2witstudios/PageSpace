@@ -5,8 +5,6 @@
   "scripts": {
     "dev": "turbo dev",
     "dev:db": "docker compose up postgres migrate seed -d",
-    "dev:with-worker": "concurrently \"pnpm dev\" \"pnpm worker:file-processor\"",
-    "worker:file-processor": "tsx apps/web/src/workers/file-processor.ts",
     "build": "turbo build",
     "lint": "turbo lint",
     "typecheck": "turbo typecheck",

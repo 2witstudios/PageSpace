@@ -1,5 +1,7 @@
 import PgBoss from 'pg-boss';
 import { ProcessingJob } from '../types';
+import { setPageCompleted, setPageFailed, setPageProcessing, setPageVisual } from '../db';
+import { needsTextExtraction } from './text-extractor';
 
 export class QueueManager {
   private boss: PgBoss | null = null;
@@ -12,6 +14,7 @@ export class QueueManager {
   async initialize(): Promise<void> {
     this.boss = new PgBoss({
       connectionString: this.connectionString,
+      migrate: true,
       schema: 'pgboss',
       application_name: 'processor-service',
       max: 10, // Connection pool size
@@ -31,14 +34,15 @@ export class QueueManager {
   private async setupQueues(): Promise<void> {
     if (!this.boss) throw new Error('Queue manager not initialized');
 
-    // High priority queue for image optimization
-    // PgBoss queues are created automatically when first used
-
-    // Normal priority queue for text extraction
-    // Queues are created on first use
-
-    // Low priority queue for OCR processing
-    // Queues are created on first use
+    try {
+      await this.boss.createQueue('ingest-file');
+      await this.boss.createQueue('image-optimize');
+      await this.boss.createQueue('text-extract');
+      await this.boss.createQueue('ocr-process');
+      console.log('PgBoss queues created/verified');
+    } catch (err) {
+      console.warn('Queue creation warning:', err instanceof Error ? err.message : err);
+    }
   }
 
   private async startWorkers(): Promise<void> {
@@ -48,6 +52,82 @@ export class QueueManager {
     const { processImage } = await import('./image-processor');
     const { extractText } = await import('./text-extractor');
     const { processOCR } = await import('./ocr-processor');
+
+    // Unified ingestion worker
+    await this.boss.work('ingest-file',
+      { batchSize: 2 },
+      async (jobs) => {
+        const job = Array.isArray(jobs) ? jobs[0] : jobs;
+        console.log(`Processing ingest-file job: ${job.id}`);
+        const data = job.data as {
+          contentHash: string;
+          fileId: string; // pageId
+          mimeType: string;
+          originalName: string;
+        };
+        const { contentHash, fileId, mimeType, originalName } = data || {} as any;
+
+        try {
+          if (!fileId || !contentHash) {
+            throw new Error('Invalid ingest-file job: missing fileId or contentHash');
+          }
+
+          // Set page status to processing
+          await setPageProcessing(fileId);
+
+          // Images → mark visual and queue optimizations
+          if (mimeType && mimeType.startsWith('image/')) {
+            await setPageVisual(fileId);
+
+            // Kick off optimizations asynchronously
+            await this.addJob('image-optimize', { contentHash, preset: 'ai-chat', fileId });
+            await this.addJob('image-optimize', { contentHash, preset: 'thumbnail', fileId });
+
+            // Optionally queue OCR for images if enabled
+            if (process.env.ENABLE_OCR === 'true') {
+              await this.addJob('ocr-process', { contentHash, fileId });
+            }
+
+            return { success: true, status: 'visual' };
+          }
+
+          // Documents → text extraction
+          if (mimeType && needsTextExtraction(mimeType)) {
+            const result = await extractText({
+              contentHash,
+              fileId,
+              mimeType,
+              originalName: originalName || 'file'
+            });
+
+            const text = (result as any)?.text || '';
+            const hasText = !!(text && text.trim().length > 0);
+
+            if (hasText) {
+              await setPageCompleted(fileId, text, (result as any)?.metadata || null, 'text');
+              return { success: true, status: 'completed', textLength: text.length };
+            }
+
+            // No text found (likely scanned PDF) → visual, optionally queue OCR
+            await setPageVisual(fileId);
+
+            if (process.env.ENABLE_OCR === 'true') {
+              await this.addJob('ocr-process', { contentHash, fileId });
+            }
+            return { success: true, status: 'visual' };
+          }
+
+          // Unsupported types → visual fallback
+          await setPageVisual(fileId);
+          return { success: true, status: 'visual' };
+
+        } catch (error) {
+          console.error(`ingest-file job failed for page ${fileId}:`, error);
+          await setPageFailed(fileId, error instanceof Error ? error.message : 'Unknown error');
+          throw error;
+        }
+      }
+    );
 
     // Image optimization worker (high concurrency)
     await this.boss.work('image-optimize', 
@@ -81,7 +161,7 @@ export class QueueManager {
   }
 
   async addJob(
-    queue: 'image-optimize' | 'text-extract' | 'ocr-process',
+    queue: 'ingest-file' | 'image-optimize' | 'text-extract' | 'ocr-process',
     data: any,
     options?: any
   ): Promise<string> {
@@ -89,7 +169,8 @@ export class QueueManager {
 
     // Set priority based on queue type
     const priority = queue === 'image-optimize' ? 100 : 
-                    queue === 'text-extract' ? 50 : 10;
+                    queue === 'text-extract' ? 50 : 
+                    queue === 'ingest-file' ? 60 : 10;
 
     const jobOptions = {
       ...options,
@@ -99,6 +180,7 @@ export class QueueManager {
     };
     
     const jobId = await this.boss.send(queue, data, jobOptions);
+    console.log(`Queued job ${jobId} on ${queue}`);
 
     return jobId as string;
   }
@@ -146,7 +228,7 @@ export class QueueManager {
   async getQueueStatus(): Promise<any> {
     if (!this.boss) throw new Error('Queue manager not initialized');
 
-    const queues = ['image-optimize', 'text-extract', 'ocr-process'];
+    const queues = ['ingest-file', 'image-optimize', 'text-extract', 'ocr-process'];
     const status: any = {};
 
     for (const queue of queues) {

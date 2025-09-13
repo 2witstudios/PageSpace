@@ -7,6 +7,7 @@ import { imageRouter } from './api/optimize';
 import { uploadRouter } from './api/upload';
 import { cacheRouter } from './api/serve';
 import { QueueManager } from './workers/queue-manager';
+import { ingestRouter } from './api/ingest';
 import dotenv from 'dotenv';
 
 // Load environment variables
@@ -43,6 +44,7 @@ app.get('/health', (req, res) => {
 // API Routes
 app.use('/api/upload', uploadRouter);
 app.use('/api/optimize', imageRouter);
+app.use('/api/ingest', ingestRouter);
 app.use('/cache', cacheRouter);
 
 // Queue status endpoint

@@ -3,7 +3,6 @@ import { verifyAuth } from '@/lib/auth';
 import { db, pages, drives, eq, isNull } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { PageType } from '@pagespace/lib/server';
-import { getProducerQueue } from '@pagespace/lib/job-queue';
 import {
   checkStorageQuota,
   updateStorageUsage,
@@ -249,14 +248,16 @@ export async function POST(request: NextRequest) {
       uploadSlotReleased = true;
       await updateActiveUploads(user.id, -1);
 
-      // If file needs any processing (text extraction, OCR, or image optimization)
-      if (jobs && (jobs.textExtraction || jobs.ocr || jobs.imageOptimization)) {
+      // If file needs any processing (ingest, text extraction, OCR, or image optimization)
+      if (jobs && (jobs.ingest || jobs.textExtraction || jobs.ocr || jobs.imageOptimization)) {
         try {
-          const jobQueue = await getProducerQueue();
-          const priority = size < 5_000_000 ? 'high' : 'normal'; // Files under 5MB get high priority
-          const jobId = await jobQueue.enqueueFileProcessing(pageId, priority);
+          let message = 'File uploaded successfully. Processing in background.';
           
-          console.log(`File uploaded: ${sanitizedFileName}, Job: ${jobId}, ContentHash: ${contentHash}`);
+          if (jobs.ingest) {
+            // Processor service already enqueued unified ingestion; do not enqueue web worker job
+            console.log(`Processor handling ingestion for page ${pageId}, contentHash ${contentHash}`);
+            message = 'File uploaded successfully. Processor is ingesting in background.';
+          }
           
           // Get updated storage quota
           const updatedQuota = await getUserStorageQuota(user.id);
@@ -267,13 +268,12 @@ export async function POST(request: NextRequest) {
               success: true,
               page: {
                 ...newPage,
-                processingJobId: jobId,
                 contentHash,
                 deduplicated,
               },
               message: deduplicated
                 ? 'File already exists (deduplicated). Processing may be complete.'
-                : 'File uploaded successfully. Processing in background.',
+                : message,
               processingStatus: deduplicated ? 'completed' : 'pending',
               storageInfo: updatedQuota ? {
                 used: updatedQuota.usedBytes,

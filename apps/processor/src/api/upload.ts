@@ -133,7 +133,7 @@ router.post('/chunk', async (req, res) => {
   res.status(501).json({ error: 'Chunked upload not yet implemented' });
 });
 
-// Helper function to queue appropriate processing jobs
+// Helper function to queue appropriate processing jobs (unified ingestion)
 async function queueProcessingJobs(
   contentHash: string,
   originalName: string,
@@ -141,63 +141,18 @@ async function queueProcessingJobs(
   pageId?: string
 ): Promise<string[]> {
   const jobIds: string[] = [];
-
-  // Queue image optimization for images
-  if (mimeType.startsWith('image/')) {
-    const jobId = await queueManager.addJob('image-optimize', {
-      contentHash,
-      preset: 'ai-chat',
-      fileId: pageId
-    });
-    jobIds.push(jobId);
-
-    // Also queue thumbnail generation
-    const thumbJobId = await queueManager.addJob('image-optimize', {
-      contentHash,
-      preset: 'thumbnail',
-      fileId: pageId
-    });
-    jobIds.push(thumbJobId);
-  }
-
-  // Queue text extraction for documents
-  if (needsTextExtraction(mimeType)) {
-    const jobId = await queueManager.addJob('text-extract', {
-      contentHash,
-      fileId: pageId,
-      mimeType,
-      originalName
-    });
-    jobIds.push(jobId);
-  }
-
-  // Queue OCR for images that might contain text
-  if (needsOCR(mimeType) && process.env.ENABLE_OCR === 'true') {
-    const jobId = await queueManager.addJob('ocr-process', {
-      contentHash,
-      fileId: pageId
-    });
-    jobIds.push(jobId);
-  }
-
+  const jobId = await queueManager.addJob('ingest-file', {
+    contentHash,
+    fileId: pageId,
+    mimeType,
+    originalName
+  });
+  jobIds.push(jobId);
   return jobIds;
 }
 
 async function getQueuedJobs(contentHash: string, mimeType: string): Promise<any> {
-  const jobs: any = {};
-
-  if (mimeType.startsWith('image/')) {
-    jobs.imageOptimization = ['ai-chat', 'thumbnail'];
-  }
-
-  if (needsTextExtraction(mimeType)) {
-    jobs.textExtraction = true;
-  }
-
-  if (needsOCR(mimeType) && process.env.ENABLE_OCR === 'true') {
-    jobs.ocr = true;
-  }
-
+  const jobs: any = { ingest: true };
   return jobs;
 }
 

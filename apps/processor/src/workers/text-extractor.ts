@@ -2,9 +2,6 @@ import * as pdfjsLib from 'pdfjs-dist';
 import mammoth from 'mammoth';
 import { contentStore } from '../server';
 
-// Initialize PDF.js worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
-
 interface TextExtractJobData {
   contentHash: string;
   fileId: string;
@@ -58,6 +55,9 @@ export async function extractText(data: TextExtractJobData): Promise<any> {
         };
     }
 
+    // Clean extracted text - remove null bytes and other invalid UTF-8 characters
+    extractedText = extractedText.replace(/\0/g, '').trim();
+
     // Save extracted text to cache
     const textCachePath = `${contentHash}/extracted-text.txt`;
     const cacheDir = require('path').dirname(await contentStore.getCachePath(contentHash, 'text'));
@@ -85,7 +85,7 @@ export async function extractText(data: TextExtractJobData): Promise<any> {
 
 async function extractPdfText(buffer: Buffer): Promise<{ text: string; metadata: any }> {
   const uint8Array = new Uint8Array(buffer);
-  const loadingTask = pdfjsLib.getDocument({ data: uint8Array });
+  const loadingTask = (pdfjsLib as any).getDocument({ data: uint8Array, disableWorker: true });
   const pdf = await loadingTask.promise;
 
   const metadata = await pdf.getMetadata();
