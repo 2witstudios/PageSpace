@@ -1,11 +1,10 @@
 /**
  * Visual Content Utilities
  * Helper functions for handling images and visual PDFs in AI conversations
+ * Uses the processor service for all image optimization
  */
 
-import { readFile } from 'fs/promises';
-import { join } from 'path';
-import sharp from 'sharp';
+import crypto from 'crypto';
 
 /**
  * Maximum file size for visual content (10MB)
@@ -14,15 +13,9 @@ import sharp from 'sharp';
 const MAX_VISUAL_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
 /**
- * Maximum dimensions for resized images
- * Images larger than this will be resized while maintaining aspect ratio
+ * Processor service URL
  */
-const MAX_IMAGE_DIMENSION = 1920; // Max width or height in pixels
-
-/**
- * JPEG compression quality for optimized images
- */
-const JPEG_QUALITY = 85;
+const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
 
 /**
  * Supported visual MIME types
@@ -44,7 +37,8 @@ const SUPPORTED_VISUAL_TYPES = [
  */
 export interface VisualContent {
   mimeType: string;
-  base64: string;
+  base64?: string;
+  url?: string;
   sizeBytes: number;
 }
 
@@ -65,24 +59,43 @@ export function isVisualMimeType(mimeType: string): boolean {
 }
 
 /**
- * Load visual content from filesystem with optimization
+ * Check if provider supports URLs instead of base64
+ */
+function providerSupportsUrls(provider?: string): boolean {
+  if (!provider) return false;
+  const urlProviders = ['openai', 'anthropic', 'google'];
+  return urlProviders.includes(provider.toLowerCase());
+}
+
+/**
+ * Load visual content from filesystem with optimization via processor service
  * @param filePath - Relative path to the file (from storage root)
  * @param mimeType - MIME type of the file
+ * @param provider - AI provider name (optional, for URL vs base64 decision)
  * @returns Visual content or error
  */
 export async function loadVisualContent(
   filePath: string,
-  mimeType: string
+  mimeType: string,
+  provider?: string
 ): Promise<LoadVisualResult> {
   try {
-    // Get storage root from environment
-    const STORAGE_ROOT = process.env.FILE_STORAGE_PATH || '/tmp/pagespace-files';
-    const fullPath = join(STORAGE_ROOT, filePath);
-    
-    // Read the file
-    let fileBuffer = await readFile(fullPath);
+    // filePath is already the content hash for files stored in processor
+    const contentHash = filePath;
+
+    // Fetch the original file from processor service
+    const fileResponse = await fetch(`${PROCESSOR_URL}/cache/${contentHash}/original`);
+
+    if (!fileResponse.ok) {
+      return {
+        success: false,
+        error: `Failed to load file from processor: ${fileResponse.statusText}`,
+      };
+    }
+
+    const fileBuffer = Buffer.from(await fileResponse.arrayBuffer());
     const originalSize = fileBuffer.length;
-    
+
     // Check file size
     if (originalSize > MAX_VISUAL_FILE_SIZE) {
       return {
@@ -90,7 +103,7 @@ export async function loadVisualContent(
         error: `File too large for visual processing (${(originalSize / 1024 / 1024).toFixed(2)}MB). Maximum size is 10MB.`,
       };
     }
-    
+
     // Check if MIME type is supported
     if (!isVisualMimeType(mimeType)) {
       return {
@@ -99,34 +112,80 @@ export async function loadVisualContent(
       };
     }
     
-    // Optimize the image to reduce memory usage
-    let finalMimeType = mimeType;
-    if (mimeType.startsWith('image/') && mimeType !== 'image/svg+xml') {
-      const optimized = await optimizeImage(fileBuffer, mimeType);
-      fileBuffer = optimized.buffer;
-      finalMimeType = optimized.mimeType;
-      
-      // Log optimization results
-      if (fileBuffer.length < originalSize) {
-        const reduction = ((1 - fileBuffer.length / originalSize) * 100).toFixed(1);
-        console.log(`Visual content optimized: ${reduction}% size reduction`);
-      }
+    // For non-image types (like PDFs), return as-is
+    if (!mimeType.startsWith('image/') || mimeType === 'image/svg+xml') {
+      return {
+        success: true,
+        visualContent: {
+          mimeType,
+          base64: fileBuffer.toString('base64'),
+          sizeBytes: originalSize,
+        },
+      };
     }
     
-    // Convert to base64
-    const base64Data = fileBuffer.toString('base64');
-    
-    // Clear the buffer to free memory immediately
-    fileBuffer = Buffer.alloc(0);
-    
-    return {
-      success: true,
-      visualContent: {
-        mimeType: finalMimeType,
-        base64: base64Data,
-        sizeBytes: base64Data.length, // Use base64 length for accurate size
-      },
-    };
+    // Request optimization from processor service
+    try {
+      const response = await fetch(`${PROCESSOR_URL}/api/optimize/prepare-for-ai`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          contentHash,
+          provider: provider || 'openai',
+          returnBase64: !providerSupportsUrls(provider),
+        }),
+      });
+      
+      if (!response.ok) {
+        // Fallback to original if processor fails
+        console.warn('Processor optimization failed, using original');
+        return {
+          success: true,
+          visualContent: {
+            mimeType,
+            base64: fileBuffer.toString('base64'),
+            sizeBytes: originalSize,
+          },
+        };
+      }
+      
+      const result = await response.json();
+      
+      if (result.type === 'url') {
+        // Provider supports URLs - return URL reference
+        return {
+          success: true,
+          visualContent: {
+            mimeType: 'image/jpeg', // Processor always returns JPEG for ai-chat preset
+            url: `${PROCESSOR_URL}${result.url}`,
+            sizeBytes: result.size,
+          },
+        };
+      } else {
+        // Provider needs base64
+        return {
+          success: true,
+          visualContent: {
+            mimeType: result.mimeType || 'image/jpeg',
+            base64: result.data,
+            sizeBytes: result.size,
+          },
+        };
+      }
+    } catch (processorError) {
+      console.warn('Processor service unavailable, using original:', processorError);
+      // Fallback to original if processor is unavailable
+      return {
+        success: true,
+        visualContent: {
+          mimeType,
+          base64: fileBuffer.toString('base64'),
+          sizeBytes: originalSize,
+        },
+      };
+    }
   } catch (error) {
     console.error('Error loading visual content:', error);
     return {
@@ -143,10 +202,18 @@ export async function loadVisualContent(
 export function formatVisualContentForAI(
   visualContent: VisualContent
 ): Record<string, unknown> {
-  const { mimeType, base64 } = visualContent;
+  const { mimeType, base64, url } = visualContent;
   
-  // Most providers use a similar format
-  // The AI SDK will handle provider-specific conversions
+  // If we have a URL, use it (for providers that support it)
+  if (url) {
+    return {
+      type: 'image',
+      mimeType,
+      image: url, // Some providers accept URLs in the image field
+    };
+  }
+  
+  // Otherwise use base64
   return {
     type: 'image',
     mimeType,
@@ -170,83 +237,36 @@ export function getVisualContentDescription(
 }
 
 /**
- * Optimize image using Sharp to reduce memory usage
- * Resizes large images and applies compression
+ * Upload and process a new image file
+ * This is for new uploads that need to be sent to the processor
  */
-export async function optimizeImage(
-  buffer: Buffer,
-  mimeType: string
-): Promise<{ buffer: Buffer; mimeType: string }> {
-  try {
-    // Skip optimization for non-image types
-    if (!mimeType.startsWith('image/') || mimeType === 'image/svg+xml') {
-      return { buffer, mimeType };
-    }
-
-    // Get image metadata
-    const metadata = await sharp(buffer).metadata();
-    
-    if (!metadata.width || !metadata.height) {
-      return { buffer, mimeType };
-    }
-
-    // Check if image needs resizing
-    const needsResize = metadata.width > MAX_IMAGE_DIMENSION || metadata.height > MAX_IMAGE_DIMENSION;
-    
-    // Initialize sharp instance
-    let sharpInstance = sharp(buffer);
-    
-    // Resize if needed
-    if (needsResize) {
-      sharpInstance = sharpInstance.resize(MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION, {
-        fit: 'inside',
-        withoutEnlargement: true,
-      });
-    }
-
-    // Apply format-specific optimizations
-    let optimizedBuffer: Buffer;
-    let outputMimeType = mimeType;
-    
-    if (mimeType === 'image/png') {
-      // Keep PNG for images with transparency
-      if (metadata.channels === 4 || metadata.hasAlpha) {
-        optimizedBuffer = await sharpInstance
-          .png({ compressionLevel: 8, quality: 90 })
-          .toBuffer();
-      } else {
-        // Convert to JPEG if no transparency
-        optimizedBuffer = await sharpInstance
-          .jpeg({ quality: JPEG_QUALITY, mozjpeg: true })
-          .toBuffer();
-        outputMimeType = 'image/jpeg';
-      }
-    } else if (mimeType === 'image/jpeg' || mimeType === 'image/jpg') {
-      optimizedBuffer = await sharpInstance
-        .jpeg({ quality: JPEG_QUALITY, mozjpeg: true })
-        .toBuffer();
-    } else if (mimeType === 'image/webp') {
-      optimizedBuffer = await sharpInstance
-        .webp({ quality: JPEG_QUALITY })
-        .toBuffer();
-    } else {
-      // For other formats, convert to JPEG
-      optimizedBuffer = await sharpInstance
-        .jpeg({ quality: JPEG_QUALITY, mozjpeg: true })
-        .toBuffer();
-      outputMimeType = 'image/jpeg';
-    }
-
-    // Only use optimized version if it's actually smaller
-    if (optimizedBuffer.length < buffer.length) {
-      console.log(`Image optimized: ${(buffer.length / 1024).toFixed(1)}KB -> ${(optimizedBuffer.length / 1024).toFixed(1)}KB`);
-      return { buffer: optimizedBuffer, mimeType: outputMimeType };
-    } else {
-      return { buffer, mimeType };
-    }
-  } catch (error) {
-    console.error('Error optimizing image:', error);
-    // Return original if optimization fails
-    return { buffer, mimeType };
+export async function uploadAndProcessImage(
+  file: Buffer,
+  originalName: string,
+  mimeType: string,
+  pageId?: string
+): Promise<{ contentHash: string; url: string }> {
+  const formData = new FormData();
+  const blob = new Blob([file], { type: mimeType });
+  formData.append('file', blob, originalName);
+  if (pageId) {
+    formData.append('pageId', pageId);
   }
+  
+  const response = await fetch(`${PROCESSOR_URL}/api/upload/single`, {
+    method: 'POST',
+    body: formData,
+  });
+  
+  if (!response.ok) {
+    throw new Error('Failed to upload and process image');
+  }
+  
+  const result = await response.json();
+  
+  // Return the URL for the optimized version
+  return {
+    contentHash: result.contentHash,
+    url: `${PROCESSOR_URL}/cache/${result.contentHash}/ai-chat`,
+  };
 }

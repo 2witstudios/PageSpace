@@ -2,8 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
 import { db, pages, drives, eq, isNull } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
-import { mkdir, writeFile, stat } from 'fs/promises';
-import { join } from 'path';
 import { PageType } from '@pagespace/lib/server';
 import { getProducerQueue } from '@pagespace/lib/job-queue';
 
@@ -15,8 +13,12 @@ interface FileMetadata {
   uploadedAt: string;
   uploadedBy: string;
   originalName: string;
-  [key: string]: string | number | boolean;
+  contentHash?: string;
+  [key: string]: string | number | boolean | undefined;
 }
+
+// Processor service URL
+const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
 
 export async function POST(request: NextRequest) {
   try {
@@ -63,161 +65,210 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    // TODO: Check user permissions for the drive
-    // For now, we'll assume if they're authenticated they have access
-
-    // Generate page ID and file path
+    // Generate page ID
     const pageId = createId();
+    
     // Sanitize filename: Replace Unicode spaces (especially U+202F from macOS screenshots) with regular spaces
     const sanitizedFileName = file.name
       .replace(/[\u202F\u00A0\u2000-\u200B\uFEFF]/g, ' ') // Replace various Unicode spaces with regular space
       .replace(/\s+/g, ' ') // Normalize multiple spaces to single space
       .trim();
-    
-    // Use environment variable for storage path, fallback to /tmp for local dev
-    const STORAGE_ROOT = process.env.FILE_STORAGE_PATH || '/tmp/pagespace-files';
-    const storagePath = join(STORAGE_ROOT, 'files', driveId, pageId);
-    const filePath = join(storagePath, sanitizedFileName);
 
-    // Create storage directory
-    await mkdir(storagePath, { recursive: true });
+    // Forward file to processor service for streaming upload and processing
+    const processorFormData = new FormData();
+    processorFormData.append('file', file);
+    processorFormData.append('pageId', pageId);
+    processorFormData.append('userId', user.id);
 
-    // Convert file to buffer and save
-    const bytes = await file.arrayBuffer();
-    const buffer = Buffer.from(bytes);
-    await writeFile(filePath, buffer);
-
-    // Calculate position for new page
-    let calculatedPosition: number;
-    
-    if (position && position === 'before' && afterNodeId) {
-      // Insert before a specific node
-      const targetNode = await db.query.pages.findFirst({
-        where: eq(pages.id, afterNodeId),
-      });
-      
-      if (targetNode) {
-        // Get all siblings to find the previous one
-        const siblings = await db.query.pages.findMany({
-          where: parentId ? eq(pages.parentId, parentId) : isNull(pages.parentId),
-          orderBy: (pages, { asc }) => [asc(pages.position)],
-        });
-        
-        const targetIndex = siblings.findIndex(s => s.id === afterNodeId);
-        const prevSibling = targetIndex > 0 ? siblings[targetIndex - 1] : null;
-        
-        // Position between previous and target
-        const prevPos = prevSibling?.position || 0;
-        const targetPos = targetNode.position;
-        calculatedPosition = (prevPos + targetPos) / 2;
-      } else {
-        // Fallback to end of list
-        const lastPage = await db.query.pages.findFirst({
-          where: parentId ? eq(pages.parentId, parentId) : isNull(pages.parentId),
-          orderBy: (pages, { desc }) => [desc(pages.position)],
-        });
-        calculatedPosition = lastPage ? lastPage.position + 1 : 0;
-      }
-    } else if (position && position === 'after' && afterNodeId) {
-      // Insert after a specific node
-      const targetNode = await db.query.pages.findFirst({
-        where: eq(pages.id, afterNodeId),
-      });
-      
-      if (targetNode) {
-        // Get the next sibling
-        const siblings = await db.query.pages.findMany({
-          where: parentId ? eq(pages.parentId, parentId) : isNull(pages.parentId),
-          orderBy: (pages, { asc }) => [asc(pages.position)],
-        });
-        
-        const targetIndex = siblings.findIndex(s => s.id === afterNodeId);
-        const nextSibling = siblings[targetIndex + 1];
-        
-        // Position between target and next
-        const targetPos = targetNode.position;
-        const nextPos = nextSibling?.position || targetPos + 2;
-        calculatedPosition = (targetPos + nextPos) / 2;
-      } else {
-        // Fallback to end of list
-        const lastPage = await db.query.pages.findFirst({
-          where: parentId ? eq(pages.parentId, parentId) : isNull(pages.parentId),
-          orderBy: (pages, { desc }) => [desc(pages.position)],
-        });
-        calculatedPosition = lastPage ? lastPage.position + 1 : 0;
-      }
-    } else {
-      // Default: add at the end
-      const lastPage = await db.query.pages.findFirst({
-        where: parentId ? eq(pages.parentId, parentId) : isNull(pages.parentId),
-        orderBy: (pages, { desc }) => [desc(pages.position)],
-      });
-      calculatedPosition = lastPage ? lastPage.position + 1 : 0;
-    }
-
-    // Create file metadata
-    const fileMetadata: FileMetadata = {
-      uploadedAt: new Date().toISOString(),
-      uploadedBy: user.id,
-      originalName: file.name, // Store original name with Unicode characters
-    };
-
-    // Create page entry with pending processing status
-    const [newPage] = await db.insert(pages).values({
-      id: pageId,
-      title: title || sanitizedFileName, // Use sanitized name for title
-      type: PageType.FILE,
-      content: '', // Will be populated by background job
-      processingStatus: 'pending',
-      position: calculatedPosition,
-      driveId,
-      parentId: parentId || null,
-      fileSize: file.size,
-      mimeType,
-      originalFileName: sanitizedFileName, // Store sanitized filename
-      filePath: join('files', driveId, pageId, sanitizedFileName), // Store relative path with sanitized name
-      fileMetadata,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    }).returning();
-
-    // Enqueue processing job
     try {
-      const jobQueue = await getProducerQueue();
+      const processorResponse = await fetch(`${PROCESSOR_URL}/api/upload/single`, {
+        method: 'POST',
+        body: processorFormData,
+      });
+
+      if (!processorResponse.ok) {
+        const errorData = await processorResponse.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Processor upload failed');
+      }
+
+      const processorResult = await processorResponse.json();
+      const { contentHash, deduplicated, size, jobs } = processorResult;
+
+      // Calculate position for new page
+      let calculatedPosition: number;
       
-      // Check file size for priority
-      const fullPath = join(STORAGE_ROOT, 'files', driveId, pageId, sanitizedFileName);
-      const fileStats = await stat(fullPath);
-      const priority = fileStats.size < 5_000_000 ? 'high' : 'normal'; // Files under 5MB get high priority
-      
-      const jobId = await jobQueue.enqueueFileProcessing(pageId, priority);
-      
-      console.log(`File uploaded: ${sanitizedFileName}, Job: ${jobId}`);
-      
-      // Return 202 Accepted to indicate async processing
-      return NextResponse.json(
-        {
-          success: true,
-          page: {
-            ...newPage,
-            processingJobId: jobId
-          },
-          message: 'File uploaded successfully. Processing in background.',
-          processingStatus: 'pending'
-        },
-        { status: 202 }
-      );
-      
-    } catch (error) {
-      console.error('Failed to enqueue processing:', error);
-      
-      // Upload succeeded but processing failed to start
+      if (position && position === 'before' && afterNodeId) {
+        // Insert before a specific node
+        const targetNode = await db.query.pages.findFirst({
+          where: eq(pages.id, afterNodeId),
+        });
+        
+        if (targetNode) {
+          // Get all siblings to find the previous one
+          const siblings = await db.query.pages.findMany({
+            where: parentId ? eq(pages.parentId, parentId) : isNull(pages.parentId),
+            orderBy: (pages, { asc }) => [asc(pages.position)],
+          });
+          
+          const targetIndex = siblings.findIndex(s => s.id === afterNodeId);
+          const prevSibling = targetIndex > 0 ? siblings[targetIndex - 1] : null;
+          
+          // Position between previous and target
+          const prevPos = prevSibling?.position || 0;
+          const targetPos = targetNode.position;
+          calculatedPosition = (prevPos + targetPos) / 2;
+        } else {
+          // Fallback to end of list
+          const lastPage = await db.query.pages.findFirst({
+            where: parentId ? eq(pages.parentId, parentId) : isNull(pages.parentId),
+            orderBy: (pages, { desc }) => [desc(pages.position)],
+          });
+          calculatedPosition = lastPage ? lastPage.position + 1 : 0;
+        }
+      } else if (position && position === 'after' && afterNodeId) {
+        // Insert after a specific node
+        const targetNode = await db.query.pages.findFirst({
+          where: eq(pages.id, afterNodeId),
+        });
+        
+        if (targetNode) {
+          // Get the next sibling
+          const siblings = await db.query.pages.findMany({
+            where: parentId ? eq(pages.parentId, parentId) : isNull(pages.parentId),
+            orderBy: (pages, { asc }) => [asc(pages.position)],
+          });
+          
+          const targetIndex = siblings.findIndex(s => s.id === afterNodeId);
+          const nextSibling = siblings[targetIndex + 1];
+          
+          // Position between target and next
+          const targetPos = targetNode.position;
+          const nextPos = nextSibling?.position || targetPos + 2;
+          calculatedPosition = (targetPos + nextPos) / 2;
+        } else {
+          // Fallback to end of list
+          const lastPage = await db.query.pages.findFirst({
+            where: parentId ? eq(pages.parentId, parentId) : isNull(pages.parentId),
+            orderBy: (pages, { desc }) => [desc(pages.position)],
+          });
+          calculatedPosition = lastPage ? lastPage.position + 1 : 0;
+        }
+      } else {
+        // Default: add at the end
+        const lastPage = await db.query.pages.findFirst({
+          where: parentId ? eq(pages.parentId, parentId) : isNull(pages.parentId),
+          orderBy: (pages, { desc }) => [desc(pages.position)],
+        });
+        calculatedPosition = lastPage ? lastPage.position + 1 : 0;
+      }
+
+      // Create file metadata with content hash
+      const fileMetadata: FileMetadata = {
+        uploadedAt: new Date().toISOString(),
+        uploadedBy: user.id,
+        originalName: file.name, // Store original name with Unicode characters
+        contentHash, // Store content hash for deduplication
+      };
+
+      // Create page entry with appropriate processing status
+      const [newPage] = await db.insert(pages).values({
+        id: pageId,
+        title: title || sanitizedFileName, // Use sanitized name for title
+        type: PageType.FILE,
+        content: '', // Will be populated by background job for text files
+        processingStatus: deduplicated ? 'completed' :
+                         (mimeType.startsWith('image/') ? 'visual' : 'pending'),
+        position: calculatedPosition,
+        driveId,
+        parentId: parentId || null,
+        fileSize: size,
+        mimeType,
+        originalFileName: sanitizedFileName, // Store sanitized filename
+        filePath: contentHash, // Store content hash as file identifier
+        fileMetadata,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }).returning();
+
+      // If file needs any processing (text extraction, OCR, or image optimization)
+      if (jobs && (jobs.textExtraction || jobs.ocr || jobs.imageOptimization)) {
+        try {
+          const jobQueue = await getProducerQueue();
+          const priority = size < 5_000_000 ? 'high' : 'normal'; // Files under 5MB get high priority
+          const jobId = await jobQueue.enqueueFileProcessing(pageId, priority);
+          
+          console.log(`File uploaded: ${sanitizedFileName}, Job: ${jobId}, ContentHash: ${contentHash}`);
+          
+          // Return 202 Accepted to indicate async processing
+          return NextResponse.json(
+            {
+              success: true,
+              page: {
+                ...newPage,
+                processingJobId: jobId,
+                contentHash,
+                deduplicated,
+              },
+              message: deduplicated 
+                ? 'File already exists (deduplicated). Processing may be complete.'
+                : 'File uploaded successfully. Processing in background.',
+              processingStatus: deduplicated ? 'completed' : 'pending'
+            },
+            { status: 202 }
+          );
+        } catch (error) {
+          console.error('Failed to enqueue text extraction:', error);
+        }
+      }
+
+      // File uploaded and optimized successfully
       return NextResponse.json({
         success: true,
-        page: newPage,
-        warning: 'File uploaded but processing could not be started.',
-        processingStatus: 'failed'
+        page: {
+          ...newPage,
+          contentHash,
+          deduplicated,
+        },
+        message: deduplicated 
+          ? 'File already exists (deduplicated).'
+          : 'File uploaded and processed successfully.',
+        processingStatus: 'completed'
       });
+
+    } catch (processorError) {
+      console.error('Processor service error:', processorError);
+      
+      // Fallback: Still create the page entry but mark as failed
+      const fileMetadata: FileMetadata = {
+        uploadedAt: new Date().toISOString(),
+        uploadedBy: user.id,
+        originalName: file.name,
+      };
+
+      const [newPage] = await db.insert(pages).values({
+        id: pageId,
+        title: title || sanitizedFileName,
+        type: PageType.FILE,
+        content: '',
+        processingStatus: 'failed',
+        position: 0,
+        driveId,
+        parentId: parentId || null,
+        fileSize: file.size,
+        mimeType,
+        originalFileName: sanitizedFileName,
+        filePath: sanitizedFileName,
+        fileMetadata,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }).returning();
+
+      return NextResponse.json({
+        success: false,
+        page: newPage,
+        error: 'File upload succeeded but processing failed.',
+        processingStatus: 'failed'
+      }, { status: 500 });
     }
 
   } catch (error) {

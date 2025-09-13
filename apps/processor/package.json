@@ -1,0 +1,33 @@
+{
+  "name": "@pagespace/processor",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@pagespace/db": "workspace:*",
+    "@pagespace/lib": "workspace:*",
+    "express": "^4.21.2",
+    "multer": "^1.4.5-lts.1",
+    "sharp": "^0.33.5",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "pg-boss": "^10.1.6",
+    "crypto": "^1.0.1",
+    "pdfjs-dist": "^4.9.155",
+    "mammoth": "^1.8.0",
+    "tesseract.js": "^5.1.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.1",
+    "@types/multer": "^1.4.12",
+    "@types/cors": "^2.8.17",
+    "@types/node": "^22.10.6",
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.3"
+  }
+}

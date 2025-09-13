@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
 import { db, pages, eq } from '@pagespace/db';
-import { readFile } from 'fs/promises';
-import { join } from 'path';
 import { PageType, isFilePage } from '@pagespace/lib';
 
 interface RouteParams {
@@ -46,50 +44,28 @@ export async function GET(
       return NextResponse.json({ error: 'File path not found' }, { status: 500 });
     }
 
-    // Use environment variable for storage path, fallback to /tmp for local dev
-    const STORAGE_ROOT = process.env.FILE_STORAGE_PATH || '/tmp/pagespace-files';
+    // Fetch file from processor service using content hash
+    const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
+    const contentHash = page.filePath; // filePath now stores the content hash
     
-    // Normalize the file path to handle Unicode characters properly
-    // Replace any narrow no-break spaces (U+202F) and other problematic Unicode spaces with regular spaces
-    const normalizedFilePath = page.filePath
-      .replace(/[\u202F\u00A0\u2000-\u200B\uFEFF]/g, ' ') // Replace various Unicode spaces
-      .replace(/\s+/g, ' ') // Normalize multiple spaces to single space
-      .trim();
-    
-    // Construct full file path
-    const fullPath = join(STORAGE_ROOT, normalizedFilePath);
-    
-    console.log('Attempting to read file:', {
+    console.log('Fetching file from processor:', {
       pageId: page.id,
-      originalFilePath: page.filePath,
-      normalizedFilePath,
-      fullPath,
-      filePathBytes: Buffer.from(page.filePath).toJSON().data,
+      contentHash,
+      processorUrl: `${PROCESSOR_URL}/cache/${contentHash}/original`,
     });
 
     try {
-      // Try to read the file with the normalized path first
-      let fileBuffer: Buffer;
-      let actualPath = fullPath;
+      // Request the original file from processor service
+      const fileResponse = await fetch(`${PROCESSOR_URL}/cache/${contentHash}/original`);
       
-      try {
-        fileBuffer = await readFile(fullPath);
-      } catch (firstError) {
-        // If the file doesn't exist with normalized path, try the original path
-        // This handles existing files that were saved with Unicode characters
-        const originalFullPath = join(STORAGE_ROOT, page.filePath);
-        console.log('First attempt failed, trying original path:', originalFullPath);
-        
-        try {
-          fileBuffer = await readFile(originalFullPath);
-          actualPath = originalFullPath;
-        } catch {
-          // If both attempts fail, throw the original error
-          throw firstError;
-        }
+      if (!fileResponse.ok) {
+        throw new Error(`Processor returned ${fileResponse.status}: ${fileResponse.statusText}`);
       }
-
-      console.log('Successfully read file from:', actualPath);
+      
+      // Get the file buffer from response
+      const fileBuffer = Buffer.from(await fileResponse.arrayBuffer());
+      
+      console.log('Successfully fetched file from processor, size:', fileBuffer.length);
 
       // Set appropriate headers for inline viewing
       const headers = new Headers();
@@ -104,12 +80,10 @@ export async function GET(
         headers,
       });
     } catch (fileError) {
-      console.error('Error reading file:', {
+      console.error('Error fetching file from processor:', {
         error: fileError,
         pageId: page.id,
-        filePath: page.filePath,
-        normalizedPath: normalizedFilePath,
-        fullPath,
+        contentHash,
         errorMessage: fileError instanceof Error ? fileError.message : 'Unknown error',
       });
       return NextResponse.json({ 
