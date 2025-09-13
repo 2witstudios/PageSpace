@@ -639,11 +639,9 @@ MENTION PROCESSING:
       messages: modelMessages,
       tools: filteredTools,
             stopWhen: stepCountIs(100), // Allow up to 100 tool calls per conversation turn
-            experimental_context: { 
+            experimental_context: {
               userId,
-              modelCapabilities: selectedModel && selectedProvider 
-                ? getModelCapabilities(selectedModel, selectedProvider)
-                : undefined
+              modelCapabilities: getModelCapabilities(currentModel, currentProvider)
             }, // Pass userId and model capabilities to tools
             maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
           });
