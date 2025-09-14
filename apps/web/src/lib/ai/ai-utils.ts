@@ -7,22 +7,34 @@ import { createId } from '@paralleldrive/cuid2';
 
 /**
  * Gets default PageSpace API settings
- * Returns the default OpenRouter API key configured for the app
+ * Returns the default Google AI API key configured for the app (Gemini 2.5 Flash)
  */
 export async function getDefaultPageSpaceSettings(): Promise<{
   apiKey: string;
   isConfigured: boolean;
+  provider: 'google' | 'openrouter';
 } | null> {
-  const defaultApiKey = process.env.OPENROUTER_DEFAULT_API_KEY;
-  
-  if (!defaultApiKey) {
-    return null;
+  // First try Google AI (new default)
+  const googleApiKey = process.env.GOOGLE_AI_DEFAULT_API_KEY;
+  if (googleApiKey && googleApiKey !== 'your_google_ai_api_key_here') {
+    return {
+      apiKey: googleApiKey,
+      isConfigured: true,
+      provider: 'google',
+    };
   }
-  
-  return {
-    apiKey: defaultApiKey,
-    isConfigured: true,
-  };
+
+  // Fallback to OpenRouter for backwards compatibility
+  const openRouterApiKey = process.env.OPENROUTER_DEFAULT_API_KEY;
+  if (openRouterApiKey) {
+    return {
+      apiKey: openRouterApiKey,
+      isConfigured: true,
+      provider: 'openrouter',
+    };
+  }
+
+  return null;
 }
 
 /**

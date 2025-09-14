@@ -7,7 +7,7 @@ export const AI_PROVIDERS = {
   pagespace: {
     name: 'PageSpace',
     models: {
-      'qwen/qwen3-coder:free': 'Default (Free)',
+      'gemini-2.5-flash': 'Default (Free)',
     },
   },
   openrouter: {
@@ -199,11 +199,14 @@ export const AI_PROVIDERS = {
 /**
  * Map UI provider to backend provider
  * Both openrouter and openrouter_free use 'openrouter' backend
- * PageSpace also uses 'openrouter' backend with default API key
+ * PageSpace now uses 'google' backend with Gemini 2.5 Flash
  * OpenAI, Anthropic, and xAI use their own backends
  */
 export function getBackendProvider(uiProvider: string): string {
-  if (uiProvider === 'openrouter_free' || uiProvider === 'pagespace') {
+  if (uiProvider === 'pagespace') {
+    return 'google';
+  }
+  if (uiProvider === 'openrouter_free') {
     return 'openrouter';
   }
   return uiProvider;
@@ -215,7 +218,7 @@ export function getBackendProvider(uiProvider: string): string {
 export function getDefaultModel(provider: string): string {
   const providerConfig = AI_PROVIDERS[provider as keyof typeof AI_PROVIDERS];
   if (!providerConfig) {
-    return 'qwen/qwen3-coder:free'; // fallback default to free model
+    return 'gemini-2.5-flash'; // fallback default to Gemini 2.5 Flash
   }
   return Object.keys(providerConfig.models)[0];
 }

@@ -230,7 +230,7 @@ export async function POST(request: Request) {
     // Get user's current AI provider settings
     const [user] = await db.select().from(users).where(eq(users.id, userId));
     const currentProvider = selectedProvider || user?.currentAiProvider || 'pagespace';
-    const currentModel = selectedModel || user?.currentAiModel || 'qwen/qwen3-coder:free';
+    const currentModel = selectedModel || user?.currentAiModel || 'gemini-2.5-flash';
     
     // Update page's AI provider/model if changed
     if (selectedProvider && selectedModel && chatId) {
@@ -250,52 +250,42 @@ export async function POST(request: Request) {
     let model;
 
     if (currentProvider === 'pagespace') {
-      // Use default PageSpace settings (app's OpenRouter key)
+      // Use default PageSpace settings (now Google AI with Gemini 2.5 Flash)
       const pageSpaceSettings = await getDefaultPageSpaceSettings();
-      
+
       if (!pageSpaceSettings) {
-        // Fall back to user's OpenRouter settings if no default key
-        let openRouterSettings = await getUserOpenRouterSettings(userId);
-        
-        if (!openRouterSettings && openRouterApiKey) {
-          await createOpenRouterSettings(userId, openRouterApiKey);
-          openRouterSettings = { apiKey: openRouterApiKey, isConfigured: true };
+        // Fall back to user's Google settings if no default key
+        let googleSettings = await getUserGoogleSettings(userId);
+
+        if (!googleSettings && googleApiKey) {
+          await createGoogleSettings(userId, googleApiKey);
+          googleSettings = { apiKey: googleApiKey, isConfigured: true };
         }
 
-        if (!openRouterSettings) {
-          return NextResponse.json({ 
-            error: 'No default API key configured. Please provide your own OpenRouter API key.' 
+        if (!googleSettings) {
+          return NextResponse.json({
+            error: 'No default API key configured. Please provide your own Google AI API key.'
           }, { status: 400 });
         }
-        
-        const openrouter = createOpenRouter({
-          apiKey: openRouterSettings.apiKey,
+
+        const googleProvider = createGoogleGenerativeAI({
+          apiKey: googleSettings.apiKey,
         });
-        model = openrouter.chat(currentModel);
+        model = googleProvider(currentModel);
       } else {
-        // Custom fetch to inject fallback models into the request
-        const openrouter = createOpenRouter({
-          apiKey: pageSpaceSettings.apiKey,
-          fetch: async (url, options) => {
-            if (options?.body) {
-              try {
-                const body = JSON.parse(options.body as string);
-                // Add fallback models for PageSpace provider (max 3 allowed by OpenRouter)
-                body.models = [
-                  'qwen/qwen3-coder:free', // Primary model
-                  'qwen/qwen3-8b:free',
-                  'qwen/qwen3-14b:free'
-                ];
-                options.body = JSON.stringify(body);
-              } catch (e) {
-                loggers.ai.error('Failed to inject fallback models', e as Error);
-              }
-            }
-            return fetch(url, options);
-          }
-        });
-        
-        model = openrouter.chat(currentModel);
+        // Use the appropriate provider based on the configuration
+        if (pageSpaceSettings.provider === 'google') {
+          const googleProvider = createGoogleGenerativeAI({
+            apiKey: pageSpaceSettings.apiKey,
+          });
+          model = googleProvider(currentModel);
+        } else {
+          // Fallback to OpenRouter for backwards compatibility
+          const openrouter = createOpenRouter({
+            apiKey: pageSpaceSettings.apiKey,
+          });
+          model = openrouter.chat(currentModel);
+        }
       }
     } else if (currentProvider === 'openrouter') {
       // Handle OpenRouter setup
