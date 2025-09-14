@@ -4,7 +4,6 @@ import { db, pages, eq, and, asc } from '@pagespace/db';
 import { buildTree, getUserAccessLevel, getUserDriveAccess, getPageTypeEmoji, isFolderPage, PageType } from '@pagespace/lib';
 import { ToolExecutionContext } from '../types';
 import { getSuggestedVisionModels } from '../model-capabilities';
-import { loadVisualContent, formatVisualContentForAI, getVisualContentDescription } from '../visual-content-utils';
 
 export const pageReadTools = {
   /**
@@ -171,70 +170,30 @@ export const pageReadTools = {
                 };
               }
               
-              // Model supports vision - load and return the visual content
-              if (page.filePath) {
-                const visualResult = await loadVisualContent(
-                  page.filePath,
-                  page.mimeType || 'image/jpeg'
-                );
-                
-                if (visualResult.success && visualResult.visualContent) {
-                  // Create data URL for the image
-                  const imageDataUrl = `data:${visualResult.visualContent.mimeType};base64,${visualResult.visualContent.base64}`;
-                  
-                  // Return visual content with data URL for injection
-                  return {
-                    success: true,
-                    type: 'visual_content',
-                    path,
-                    title: page.title,
-                    content: getVisualContentDescription(
-                      page.title,
-                      visualResult.visualContent.mimeType,
-                      visualResult.visualContent.sizeBytes
-                    ),
-                    // Include the data URL for the streaming handler to inject
-                    imageDataUrl,
-                    // Also include formatted visual data for backward compatibility
-                    visualData: formatVisualContentForAI(
-                      visualResult.visualContent
-                    ),
-                    summary: `Loaded visual content: "${page.title}"`,
-                    stats: {
-                      documentType: 'VISUAL',
-                      mimeType: visualResult.visualContent.mimeType,
-                      sizeBytes: visualResult.visualContent.sizeBytes,
-                    },
-                    metadata: {
-                      requiresVisionModel: true,
-                      hasImageData: true
-                    },
-                    nextSteps: [
-                      'Analyze the visual content',
-                      'Describe what you see in the image/document',
-                      'Answer questions about the visual content'
-                    ]
-                  };
-                } else {
-                  // Failed to load visual content
-                  return {
-                    success: false,
-                    error: visualResult.error || 'Failed to load visual content',
-                    path,
-                    title: page.title,
-                    type: page.type
-                  };
+              // Model supports vision - return metadata about the visual content
+              // Use page metadata instead of loading the full content
+              return {
+                success: true,
+                type: 'visual_content_metadata',
+                path,
+                pageId: page.id,
+                title: page.title,
+                message: `Found visual content: "${page.title}" (${page.mimeType || 'unknown type'})`,
+                mimeType: page.mimeType || 'unknown',
+                sizeBytes: page.fileSize || 0,
+                summary: `This is a visual file that requires vision capabilities to process`,
+                stats: {
+                  documentType: 'VISUAL',
+                  mimeType: page.mimeType || 'unknown',
+                  sizeBytes: page.fileSize || 0,
+                  sizeMB: page.fileSize ? (page.fileSize / 1024 / 1024).toFixed(2) : '0'
+                },
+                metadata: {
+                  requiresVisionModel: true,
+                  processingStatus: 'visual',
+                  originalFileName: page.originalFileName
                 }
-              } else {
-                // No file path available
-                return {
-                  success: false,
-                  error: 'Visual file path not found',
-                  path,
-                  title: page.title,
-                  type: page.type
-                };
-              }
+              };
             
             case 'failed':
               return {
@@ -294,7 +253,7 @@ export const pageReadTools = {
         console.error('Error reading document:', error);
         throw new Error(`Failed to read document at ${path}: ${error instanceof Error ? error.message : String(error)}`);
       }
-    },
+    }
   }),
 
   /**

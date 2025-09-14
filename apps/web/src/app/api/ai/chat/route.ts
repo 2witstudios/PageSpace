@@ -429,10 +429,38 @@ export async function POST(request: Request) {
       }, { status: 400 });
     }
 
+    // Filter tools based on custom enabled tools or use all tools if not configured
+    let filteredTools;
+    if (enabledTools && enabledTools.length > 0) {
+      // Filter tools based on the page's enabled tools configuration
+      // Simple object filtering approach to avoid complex TypeScript issues
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const filtered: Record<string, any> = {};
+      for (const toolName of enabledTools) {
+        if (toolName in pageSpaceTools) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          filtered[toolName] = (pageSpaceTools as any)[toolName];
+        }
+      }
+      filteredTools = filtered;
+
+      loggers.ai.debug('AI Page Chat API: Filtered tools based on page configuration', {
+        totalTools: Object.keys(pageSpaceTools).length,
+        enabledTools: enabledTools.length,
+        filteredTools: Object.keys(filteredTools).length
+      });
+    } else {
+      // No tool restrictions configured, use default role-based filtering for compatibility
+      filteredTools = ToolPermissionFilter.filterTools(pageSpaceTools, AgentRole.PARTNER);
+      loggers.ai.debug('AI Page Chat API: Using default tool filtering (PARTNER role)');
+    }
+
     // Convert UIMessages to ModelMessages for the AI model
     // First sanitize messages to remove tool parts without results (prevents "input-available" state errors)
     const sanitizedMessages = sanitizeMessagesForModel(messages);
-    const modelMessages = convertToModelMessages(sanitizedMessages);
+    const modelMessages = convertToModelMessages(sanitizedMessages, {
+      tools: filteredTools  // Use original tools - no wrapping needed
+    });
 
     // Build system prompt for Page AI - use custom system prompt if available, otherwise use default
     let systemPrompt: string;
@@ -456,32 +484,6 @@ export async function POST(request: Request) {
           breadcrumbs: pageContext.breadcrumbs,
         } : undefined
       );
-    }
-
-    // Filter tools based on custom enabled tools or use all tools if not configured
-    let filteredTools;
-    if (enabledTools && enabledTools.length > 0) {
-      // Filter tools based on the page's enabled tools configuration
-      // Simple object filtering approach to avoid complex TypeScript issues
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const filtered: Record<string, any> = {};
-      for (const toolName of enabledTools) {
-        if (toolName in pageSpaceTools) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          filtered[toolName] = (pageSpaceTools as any)[toolName];
-        }
-      }
-      filteredTools = filtered;
-      
-      loggers.ai.debug('AI Page Chat API: Filtered tools based on page configuration', {
-        totalTools: Object.keys(pageSpaceTools).length,
-        enabledTools: enabledTools.length,
-        filteredTools: Object.keys(filteredTools).length
-      });
-    } else {
-      // No tool restrictions configured, use default role-based filtering for compatibility
-      filteredTools = ToolPermissionFilter.filterTools(pageSpaceTools, AgentRole.PARTNER);
-      loggers.ai.debug('AI Page Chat API: Using default tool filtering (PARTNER role)');
     }
     
     // Build timestamp system prompt for temporal awareness
@@ -637,75 +639,18 @@ MENTION PROCESSING:
 • Let mentioned document content inform and enrich your response
 • Don't explicitly mention that you're reading @mentioned docs unless relevant to the conversation`,
       messages: modelMessages,
-      tools: filteredTools,
+      tools: filteredTools,  // Use original tools directly
             stopWhen: stepCountIs(100), // Allow up to 100 tool calls per conversation turn
             experimental_context: {
               userId,
               modelCapabilities: getModelCapabilities(currentModel, currentProvider)
             }, // Pass userId and model capabilities to tools
-            maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
+            maxRetries: 20 // Increase from default 2 to 20 for better handling of rate limits
           });
 
-          // Create a custom stream that monitors for visual content injection
-          let hasVisualContent = false;
-          const visualContentImages: string[] = [];
-
-          // Read the AI stream and inject visual content when found
+          // Stream the AI response directly to the client
           for await (const chunk of aiResult.toUIMessageStream()) {
-            // Check if this chunk contains tool results with visual content
-            if (chunk.type === 'tool-output-available') {
-              try {
-                // Type assertion needed as chunk.output is unknown in AI SDK types
-                const toolOutput = JSON.parse((chunk as { output: string }).output);
-                if (toolOutput.type === 'visual_content' && toolOutput.imageDataUrl) {
-                  hasVisualContent = true;
-                  visualContentImages.push(toolOutput.imageDataUrl);
-                  
-                  // Write the image as a file part to the stream
-                  // Based on AI SDK documentation, file parts have specific required fields
-                  writer.write({
-                    type: 'file',
-                    mediaType: toolOutput.imageDataUrl.split(';')[0].split(':')[1] || 'image/jpeg',
-                    url: toolOutput.imageDataUrl, // full data URL for client display
-                  } as { type: 'file'; mediaType: string; url: string });
-                }
-              } catch {
-                // Not JSON or doesn't match expected format, continue normally
-              }
-            }
-            
-            // Forward all chunks to the client
             writer.write(chunk);
-          }
-
-          // If no visual content was detected via tool outputs, 
-          // we can also check the final AI response for visual content references
-          // This is a fallback in case the tool output parsing didn't work
-          if (!hasVisualContent) {
-            const finalResponse = await aiResult.response;
-            const allMessages = finalResponse.messages;
-            
-            for (const message of allMessages) {
-              if (message.role === 'tool' && message.content) {
-                for (const contentPart of message.content) {
-                  if (contentPart.type === 'tool-result') {
-                    try {
-                      const toolResult = JSON.parse(JSON.stringify(contentPart.output));
-                      if (toolResult.type === 'visual_content' && toolResult.imageDataUrl) {
-                        // Inject the visual content as a file part
-                        writer.write({
-                          type: 'file',
-                          mediaType: toolResult.imageDataUrl.split(';')[0].split(':')[1] || 'image/jpeg',
-                          url: toolResult.imageDataUrl, // full data URL
-                        } as { type: 'file'; mediaType: string; url: string });
-                      }
-                    } catch {
-                      // Not the expected format, continue
-                    }
-                  }
-                }
-              }
-            }
           }
         },
         onFinish: async ({ responseMessage }) => {
