@@ -14,7 +14,8 @@ import {
   Users,
   ChevronRight,
   CheckCheck,
-  Bell
+  Bell,
+  MessageCircle
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -40,6 +41,8 @@ const NotificationIcon = ({ type }: { type: string }) => {
       return <UserCheck className="h-4 w-4" />;
     case 'CONNECTION_REJECTED':
       return <X className="h-4 w-4" />;
+    case 'NEW_DIRECT_MESSAGE':
+      return <MessageCircle className="h-4 w-4" />;
     case 'DRIVE_JOINED':
     case 'DRIVE_ROLE_CHANGED':
       return <Users className="h-4 w-4" />;
@@ -165,8 +168,17 @@ export default function NotificationDropdown() {
                       if (!notification.isRead) {
                         handleNotificationRead(notification.id);
                       }
-                      // Navigate to drive if available
-                      if (notification.drive?.id) {
+
+                      // Navigate based on notification type
+                      if (notification.type === 'NEW_DIRECT_MESSAGE' &&
+                          notification.metadata &&
+                          typeof notification.metadata === 'object' &&
+                          'conversationId' in notification.metadata) {
+                        // Navigate to the direct message conversation
+                        setIsDropdownOpen(false);
+                        router.push(`/dashboard/messages/${notification.metadata.conversationId}`);
+                      } else if (notification.drive?.id) {
+                        // Navigate to drive if available
                         setIsDropdownOpen(false);
                         router.push(`/dashboard/${notification.drive.id}`);
                       }

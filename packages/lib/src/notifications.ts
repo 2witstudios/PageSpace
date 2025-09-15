@@ -1,4 +1,4 @@
-import { db, notifications, users, pages, drives, eq, and, desc, count } from '@pagespace/db';
+import { db, notifications, users, pages, drives, eq, and, desc, count, sql } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 
 // Export types and guards
@@ -269,22 +269,17 @@ export async function createOrUpdateMessageNotification(
   messagePreview: string,
   triggeredByUserId: string
 ) {
-  // Check if there's an existing unread notification for this conversation
+  // Check if there's an existing unread notification for this specific conversation
   const existingNotification = await db.query.notifications.findFirst({
     where: and(
       eq(notifications.userId, targetUserId),
       eq(notifications.type, 'NEW_DIRECT_MESSAGE'),
-      eq(notifications.isRead, false)
+      eq(notifications.isRead, false),
+      sql`${notifications.metadata}->>'conversationId' = ${conversationId}`
     ),
   });
 
-  // Check if the existing notification is for the same conversation
-  if (existingNotification &&
-      existingNotification.metadata &&
-      typeof existingNotification.metadata === 'object' &&
-      'conversationId' in existingNotification.metadata &&
-      existingNotification.metadata.conversationId === conversationId) {
-
+  if (existingNotification) {
     // Update the existing notification with the new message
     const updatedNotification = await db
       .update(notifications)
