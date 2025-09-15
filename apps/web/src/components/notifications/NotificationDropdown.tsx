@@ -4,6 +4,7 @@ import { useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { formatDistanceToNow } from 'date-fns';
+import { toast } from 'sonner';
 import {
   X,
   FileText,
@@ -74,13 +75,18 @@ export default function NotificationDropdown() {
         throw new Error(`Failed to ${action} connection`);
       }
 
-      // Mark notification as read and remove it
-      handleNotificationRead(notificationId);
+      // Remove the notification immediately for visual feedback
+      handleDeleteNotification(notificationId);
 
-      // Show success message - you might want to add a toast notification here
-      // const message = action === 'accept' ? 'Connection accepted' : 'Connection rejected';
+      // Show success message
+      const message = action === 'accept'
+        ? 'Connection request accepted successfully!'
+        : 'Connection request declined.';
+
+      toast.success(message);
     } catch (error) {
       console.error(`Error ${action}ing connection:`, error);
+      toast.error(`Failed to ${action} connection request. Please try again.`);
     }
   };
 
