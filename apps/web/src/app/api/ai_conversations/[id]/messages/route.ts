@@ -29,8 +29,8 @@ import { ToolPermissionFilter } from '@/lib/ai/tool-permissions';
 import { getModelCapabilities } from '@/lib/ai/model-capabilities';
 import { loggers } from '@pagespace/lib/logger-config';
 
-// Allow streaming responses up to 60 seconds
-export const maxDuration = 60;
+// Allow streaming responses up to 5 minutes
+export const maxDuration = 300;
 
 /**
  * GET - Get all messages for a conversation

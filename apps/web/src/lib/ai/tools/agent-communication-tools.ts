@@ -544,7 +544,7 @@ export const agentCommunicationTools = {
               messages: convertToModelMessages(sanitizedMessages),
               tools: agentTools as Parameters<typeof generateText>[0]['tools'],
               experimental_context: nestedContext,
-              stopWhen: stepCountIs(5), // Enable multi-step tool execution
+              stopWhen: stepCountIs(100), // Match main conversation tool depth
               maxRetries: 3,
               onStepFinish: ({ toolCalls }) => {
                 if (toolCalls?.length > 0) {

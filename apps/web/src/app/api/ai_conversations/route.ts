@@ -4,8 +4,8 @@ import { db, conversations, eq, and, desc } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers } from '@pagespace/lib/logger-config';
 
-// Allow streaming responses up to 60 seconds
-export const maxDuration = 60;
+// Allow streaming responses up to 5 minutes
+export const maxDuration = 300;
 
 /**
  * GET - List all conversations for the authenticated user

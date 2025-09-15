@@ -41,8 +41,8 @@ import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
 import { getModelCapabilities } from '@/lib/ai/model-capabilities';
 
 
-// Allow streaming responses up to 60 seconds for longer AI conversations
-export const maxDuration = 60;
+// Allow streaming responses up to 5 minutes for complex AI agent interactions
+export const maxDuration = 300;
 
 /**
  * Next.js 15 compatible API route for AI chat
