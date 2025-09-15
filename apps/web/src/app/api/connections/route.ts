@@ -55,6 +55,7 @@ export async function GET(request: Request) {
             id: users.id,
             name: users.name,
             email: users.email,
+            image: users.image,
             username: userProfiles.username,
             displayName: userProfiles.displayName,
             bio: userProfiles.bio,

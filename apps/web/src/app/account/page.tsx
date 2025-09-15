@@ -10,17 +10,22 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { toast } from "sonner";
-import { User, Mail, Calendar, AlertTriangle, Loader2, ArrowLeft } from "lucide-react";
+import { User, Mail, Calendar, AlertTriangle, Loader2, ArrowLeft, Upload, X } from "lucide-react";
 
 export default function AccountPage() {
   const { user, isLoading: authLoading, mutate } = useAuth();
   const router = useRouter();
-  
+
   // Profile form state
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [isSavingProfile, setIsSavingProfile] = useState(false);
-  
+
+  // Avatar state
+  const [avatarFile, setAvatarFile] = useState<File | null>(null);
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
+
   // Password form state
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -32,6 +37,9 @@ export default function AccountPage() {
     if (user) {
       setName(user.name || "");
       setEmail(user.email || "");
+      if (user.image) {
+        setAvatarPreview(user.image);
+      }
     }
   }, [user]);
 
@@ -69,6 +77,95 @@ export default function AccountPage() {
       toast.error(error instanceof Error ? error.message : "Failed to update profile");
     } finally {
       setIsSavingProfile(false);
+    }
+  };
+
+  const handleAvatarSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validate file type
+    if (!file.type.startsWith('image/')) {
+      toast.error('Please select an image file');
+      return;
+    }
+
+    // Validate file size (5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error('Image must be less than 5MB');
+      return;
+    }
+
+    setAvatarFile(file);
+
+    // Create preview
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setAvatarPreview(reader.result as string);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleAvatarUpload = async () => {
+    if (!avatarFile) return;
+
+    setIsUploadingAvatar(true);
+    const formData = new FormData();
+    formData.append('file', avatarFile);
+
+    try {
+      const response = await fetch('/api/account/avatar', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to upload avatar');
+      }
+
+      await response.json();
+      toast.success('Avatar uploaded successfully');
+      setAvatarFile(null);
+
+      // Refresh user data to get new avatar URL
+      if (mutate) {
+        await mutate();
+      }
+    } catch (error) {
+      console.error('Avatar upload error:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to upload avatar');
+    } finally {
+      setIsUploadingAvatar(false);
+    }
+  };
+
+  const handleAvatarDelete = async () => {
+    setIsUploadingAvatar(true);
+
+    try {
+      const response = await fetch('/api/account/avatar', {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to delete avatar');
+      }
+
+      toast.success('Avatar deleted successfully');
+      setAvatarPreview(null);
+      setAvatarFile(null);
+
+      // Refresh user data
+      if (mutate) {
+        await mutate();
+      }
+    } catch (error) {
+      console.error('Avatar deletion error:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to delete avatar');
+    } finally {
+      setIsUploadingAvatar(false);
     }
   };
 
@@ -156,16 +253,68 @@ export default function AccountPage() {
         </CardHeader>
         <CardContent>
           <form onSubmit={handleProfileUpdate} className="space-y-4">
-            <div className="flex items-center gap-4 mb-6">
-              <Avatar className="h-20 w-20">
-                <AvatarImage src={""} />
-                <AvatarFallback>
-                  <User className="h-10 w-10" />
-                </AvatarFallback>
-              </Avatar>
-              <div>
-                <p className="text-sm text-muted-foreground">Profile picture</p>
-                <p className="text-xs text-muted-foreground">Avatar customization coming soon</p>
+            <div className="flex items-center gap-6 mb-6">
+              <div className="relative">
+                <Avatar className="h-20 w-20">
+                  <AvatarImage src={avatarPreview || user?.image || ""} />
+                  <AvatarFallback>
+                    <User className="h-10 w-10" />
+                  </AvatarFallback>
+                </Avatar>
+                {avatarPreview && (
+                  <Button
+                    size="icon"
+                    variant="destructive"
+                    className="absolute -top-2 -right-2 h-6 w-6 rounded-full"
+                    onClick={handleAvatarDelete}
+                    disabled={isUploadingAvatar}
+                  >
+                    <X className="h-3 w-3" />
+                  </Button>
+                )}
+              </div>
+              <div className="flex-1">
+                <Label>Profile Picture</Label>
+                <p className="text-sm text-muted-foreground mb-3">
+                  Upload a profile picture to personalize your account
+                </p>
+                <div className="flex gap-2">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleAvatarSelect}
+                    className="hidden"
+                    id="avatar-upload"
+                  />
+                  <Label
+                    htmlFor="avatar-upload"
+                    className="cursor-pointer inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-input bg-background hover:bg-accent hover:text-accent-foreground h-9 px-3"
+                  >
+                    <Upload className="h-4 w-4 mr-2" />
+                    Choose File
+                  </Label>
+                  {avatarFile && (
+                    <Button
+                      size="sm"
+                      onClick={handleAvatarUpload}
+                      disabled={isUploadingAvatar}
+                    >
+                      {isUploadingAvatar ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Uploading...
+                        </>
+                      ) : (
+                        'Upload'
+                      )}
+                    </Button>
+                  )}
+                </div>
+                {avatarFile && (
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Selected: {avatarFile.name}
+                  </p>
+                )}
               </div>
             </div>
 

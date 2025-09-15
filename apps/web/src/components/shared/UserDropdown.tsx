@@ -17,7 +17,7 @@ import {
   DropdownMenuPortal,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { LogOut, User as UserIcon, MessageSquare, Settings, LayoutDashboard, Sun, Moon, Monitor, HardDrive, Users } from 'lucide-react';
+import { LogOut, MessageSquare, Settings, LayoutDashboard, Sun, Moon, Monitor, HardDrive, Users } from 'lucide-react';
 import { useTheme } from "next-themes";
 import useSWR from 'swr';
 import { Progress } from "@/components/ui/progress";
@@ -52,7 +52,7 @@ export default function UserDropdown() {
         <DropdownMenuTrigger asChild>
           <Button variant="ghost" className="relative h-8 w-8 rounded-full">
             <Avatar className="h-8 w-8">
-              <AvatarImage src={''} alt={user.name || 'User'} />
+              <AvatarImage src={user.image || ''} alt={user.name || 'User'} />
               <AvatarFallback>{user.name?.charAt(0).toUpperCase()}</AvatarFallback>
             </Avatar>
           </Button>
@@ -70,10 +70,6 @@ export default function UserDropdown() {
           <DropdownMenuItem onClick={() => router.push('/dashboard/messages')}>
             <MessageSquare className="mr-2 h-4 w-4" />
             <span>Messages</span>
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => router.push('/dashboard/profile')}>
-            <UserIcon className="mr-2 h-4 w-4" />
-            <span>Profile</span>
           </DropdownMenuItem>
           <DropdownMenuItem onClick={() => router.push('/dashboard/connections')}>
             <Users className="mr-2 h-4 w-4" />

@@ -32,6 +32,7 @@ interface Connection {
     id: string;
     name: string;
     email: string;
+    image: string | null;
     username: string | null;
     displayName: string | null;
     bio: string | null;
@@ -44,6 +45,7 @@ interface SearchResult {
   id: string;
   name: string;
   email: string;
+  image: string | null;
   displayName: string | null;
   bio: string | null;
   avatarUrl: string | null;
@@ -218,7 +220,7 @@ export default function ConnectionsPage() {
                       <div key={connection.id} className="flex items-center justify-between p-4 border rounded-lg">
                         <div className="flex items-center gap-4">
                           <Avatar className="h-10 w-10">
-                            <AvatarImage src={connection.user.avatarUrl || ''} />
+                            <AvatarImage src={connection.user.image || connection.user.avatarUrl || ''} />
                             <AvatarFallback>{displayName.charAt(0).toUpperCase()}</AvatarFallback>
                           </Avatar>
                           <div>
@@ -289,7 +291,7 @@ export default function ConnectionsPage() {
                       <div key={connection.id} className="flex items-center justify-between p-4 border rounded-lg">
                         <div className="flex items-center gap-4">
                           <Avatar className="h-10 w-10">
-                            <AvatarImage src={connection.user.avatarUrl || ''} />
+                            <AvatarImage src={connection.user.image || connection.user.avatarUrl || ''} />
                             <AvatarFallback>{displayName.charAt(0).toUpperCase()}</AvatarFallback>
                           </Avatar>
                           <div>
@@ -370,7 +372,7 @@ export default function ConnectionsPage() {
                         <div key={user.id} className="flex items-center justify-between p-4 border rounded-lg">
                           <div className="flex items-center gap-4">
                             <Avatar className="h-10 w-10">
-                              <AvatarImage src={user.avatarUrl || ''} />
+                              <AvatarImage src={user.image || user.avatarUrl || ''} />
                               <AvatarFallback>{displayName.charAt(0).toUpperCase()}</AvatarFallback>
                             </Avatar>
                             <div>

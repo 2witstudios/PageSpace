@@ -33,6 +33,7 @@ interface Conversation {
     id: string;
     name: string;
     email: string;
+    image: string | null;
     username: string | null;
     displayName: string | null;
     avatarUrl: string | null;
@@ -156,7 +157,7 @@ export default function ConversationPage() {
       <div className="border-b border-border p-4">
         <div className="flex items-center gap-3">
           <Avatar className="h-10 w-10">
-            <AvatarImage src={otherUser.avatarUrl || ''} />
+            <AvatarImage src={otherUser.image || otherUser.avatarUrl || ''} />
             <AvatarFallback>{displayName.charAt(0).toUpperCase()}</AvatarFallback>
           </Avatar>
           <div>
@@ -186,7 +187,7 @@ export default function ConversationPage() {
                     </AvatarFallback>
                   ) : (
                     <>
-                      <AvatarImage src={otherUser.avatarUrl || ''} />
+                      <AvatarImage src={otherUser.image || otherUser.avatarUrl || ''} />
                       <AvatarFallback>{senderAvatar?.charAt(0).toUpperCase()}</AvatarFallback>
                     </>
                   )}
