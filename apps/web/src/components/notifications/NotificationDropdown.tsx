@@ -4,11 +4,12 @@ import { useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { formatDistanceToNow } from 'date-fns';
-import { 
-  X, 
-  FileText, 
-  Share2, 
-  UserPlus, 
+import {
+  X,
+  FileText,
+  Share2,
+  UserPlus,
+  UserCheck,
   Shield,
   Users,
   ChevronRight,
@@ -20,6 +21,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { useNotificationStore } from '@/stores/notificationStore';
 import { cn } from '@/lib/utils';
+import { isConnectionRequest } from '@pagespace/lib';
 
 const NotificationIcon = ({ type }: { type: string }) => {
   switch (type) {
@@ -32,6 +34,12 @@ const NotificationIcon = ({ type }: { type: string }) => {
       return <X className="h-4 w-4" />;
     case 'DRIVE_INVITED':
       return <UserPlus className="h-4 w-4" />;
+    case 'CONNECTION_REQUEST':
+      return <UserPlus className="h-4 w-4" />;
+    case 'CONNECTION_ACCEPTED':
+      return <UserCheck className="h-4 w-4" />;
+    case 'CONNECTION_REJECTED':
+      return <X className="h-4 w-4" />;
     case 'DRIVE_JOINED':
     case 'DRIVE_ROLE_CHANGED':
       return <Users className="h-4 w-4" />;
@@ -50,6 +58,28 @@ export default function NotificationDropdown() {
     handleDeleteNotification,
     setIsDropdownOpen,
   } = useNotificationStore();
+
+  const handleConnectionAction = async (connectionId: string, action: 'accept' | 'reject', notificationId: string) => {
+    try {
+      const response = await fetch(`/api/connections/${connectionId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to ${action} connection`);
+      }
+
+      // Mark notification as read and remove it
+      handleNotificationRead(notificationId);
+
+      // Show success message - you might want to add a toast notification here
+      // const message = action === 'accept' ? 'Connection accepted' : 'Connection rejected';
+    } catch (error) {
+      console.error(`Error ${action}ing connection:`, error);
+    }
+  };
 
   const groupedNotifications = useMemo(() => {
     const groups: Record<string, typeof notifications> = {
@@ -172,6 +202,34 @@ export default function NotificationDropdown() {
                             </>
                           )}
                         </div>
+                        {isConnectionRequest(notification) && (
+                          <div className="flex gap-2 mt-3" onClick={(e) => e.stopPropagation()}>
+                            <Button
+                              size="sm"
+                              variant="default"
+                              className="h-7"
+                              onClick={() => handleConnectionAction(
+                                notification.metadata.connectionId,
+                                'accept',
+                                notification.id
+                              )}
+                            >
+                              Accept
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7"
+                              onClick={() => handleConnectionAction(
+                                notification.metadata.connectionId,
+                                'reject',
+                                notification.id
+                              )}
+                            >
+                              Decline
+                            </Button>
+                          </div>
+                        )}
                       </div>
                       <div className="opacity-0 group-hover:opacity-100 transition-opacity">
                         <Button

@@ -3,8 +3,9 @@ import { Server, Socket } from 'socket.io';
 import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib';
 import { decodeToken } from '@pagespace/lib/server';
 import * as dotenv from 'dotenv';
-import { db, eq } from '@pagespace/db';
+import { db, eq, or } from '@pagespace/db';
 import { users } from '@pagespace/db/src/schema/auth';
+import { dmConversations } from '@pagespace/db/src/schema/social';
 import { parse } from 'cookie';
 import { loggers } from '@pagespace/lib/logger-config';
 
@@ -173,6 +174,42 @@ io.on('connection', (socket: AuthSocket) => {
     } catch (error) {
       loggers.realtime.error('Error joining drive', error as Error, { driveId });
     }
+  });
+
+  // Join a direct message conversation room after membership verification
+  socket.on('join_dm_conversation', async (conversationId: string) => {
+    const userId = user?.id;
+    if (!userId || !conversationId) return;
+
+    try {
+      const [conversation] = await db
+        .select()
+        .from(dmConversations)
+        .where(
+          eq(dmConversations.id, conversationId as string)
+        )
+        .limit(1);
+
+      if (!conversation || (conversation.participant1Id !== userId && conversation.participant2Id !== userId)) {
+        loggers.realtime.warn('DM join denied: not a participant', { userId, conversationId });
+        return;
+      }
+
+      const room = `dm:${conversationId}`;
+      socket.join(room);
+      loggers.realtime.debug('User joined DM room', { userId, room });
+    } catch (error) {
+      loggers.realtime.error('Error joining DM conversation', error as Error, { conversationId });
+    }
+  });
+
+  socket.on('leave_dm_conversation', (conversationId: string) => {
+    const userId = user?.id;
+    if (!userId || !conversationId) return;
+
+    const room = `dm:${conversationId}`;
+    socket.leave(room);
+    loggers.realtime.debug('User left DM room', { userId, room });
   });
 
   socket.on('leave_drive', (driveId: string) => {

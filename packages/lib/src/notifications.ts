@@ -1,6 +1,10 @@
 import { db, notifications, users, pages, drives, eq, and, desc, count } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 
+// Export types and guards
+export * from './notifications/types';
+export * from './notifications/guards';
+
 async function broadcastNotification(userId: string, notification: unknown) {
   try {
     const realtimeUrl = process.env.INTERNAL_REALTIME_URL || 'http://localhost:3001';
@@ -25,7 +29,11 @@ export type NotificationType =
   | 'PAGE_SHARED'
   | 'DRIVE_INVITED'
   | 'DRIVE_JOINED'
-  | 'DRIVE_ROLE_CHANGED';
+  | 'DRIVE_ROLE_CHANGED'
+  | 'CONNECTION_REQUEST'
+  | 'CONNECTION_ACCEPTED'
+  | 'CONNECTION_REJECTED'
+  | 'NEW_DIRECT_MESSAGE';
 
 interface CreateNotificationParams {
   userId: string;

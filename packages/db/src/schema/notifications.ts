@@ -7,12 +7,16 @@ import { createId } from '@paralleldrive/cuid2';
 
 export const notificationType = pgEnum('NotificationType', [
   'PERMISSION_GRANTED',
-  'PERMISSION_REVOKED', 
+  'PERMISSION_REVOKED',
   'PERMISSION_UPDATED',
   'PAGE_SHARED',
   'DRIVE_INVITED',
   'DRIVE_JOINED',
-  'DRIVE_ROLE_CHANGED'
+  'DRIVE_ROLE_CHANGED',
+  'CONNECTION_REQUEST',
+  'CONNECTION_ACCEPTED',
+  'CONNECTION_REJECTED',
+  'NEW_DIRECT_MESSAGE'
 ]);
 
 export const notifications = pgTable('notifications', {

@@ -1,30 +1,11 @@
 import { create } from 'zustand';
 import { useSocketStore } from './socketStore';
+import type { LegacyNotification } from '@pagespace/lib';
 
-interface Notification {
-  id: string;
-  userId: string;
-  type: string;
+// Use LegacyNotification type for backward compatibility
+type Notification = LegacyNotification & {
   title: string;
   message: string;
-  metadata?: Record<string, unknown>;
-  isRead: boolean;
-  createdAt: Date;
-  readAt?: Date | null;
-  pageId?: string | null;
-  driveId?: string | null;
-  triggeredByUserId?: string | null;
-  triggeredByUser?: {
-    id: string;
-    name: string | null;
-    email: string;
-    image: string | null;
-  } | null;
-  drive?: {
-    id: string;
-    slug: string;
-    name: string;
-  } | null;
 }
 
 interface NotificationStore {

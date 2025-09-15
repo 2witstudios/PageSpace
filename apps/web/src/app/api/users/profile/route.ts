@@ -29,17 +29,17 @@ export async function GET(request: Request) {
       .limit(1);
 
       return NextResponse.json({
-        userId: user.id,
-        email: userInfo[0]?.email,
-        displayName: userInfo[0]?.name || 'Unknown User',
-        username: null,
-        bio: null,
-        avatarUrl: null,
-        isPublic: false,
+        profile: {
+          userId: user.id,
+          displayName: userInfo[0]?.name || 'Unknown User',
+          bio: null,
+          avatarUrl: null,
+          isPublic: false,
+        }
       });
     }
 
-    return NextResponse.json(profile[0]);
+    return NextResponse.json({ profile: profile[0] });
   } catch (error) {
     loggers.api.error('Error fetching user profile:', error as Error);
     return NextResponse.json(
@@ -49,7 +49,7 @@ export async function GET(request: Request) {
   }
 }
 
-export async function POST(request: Request) {
+export async function PATCH(request: Request) {
   try {
     const user = await verifyAuth(request);
     if (!user) {
@@ -57,22 +57,7 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const { username, displayName, bio, avatarUrl, isPublic } = body;
-
-    // Validate username uniqueness if provided
-    if (username) {
-      const existing = await db.select()
-        .from(userProfiles)
-        .where(eq(userProfiles.username, username))
-        .limit(1);
-
-      if (existing.length > 0 && existing[0].userId !== user.id) {
-        return NextResponse.json(
-          { error: 'Username already taken' },
-          { status: 400 }
-        );
-      }
-    }
+    const { displayName, bio, avatarUrl, isPublic } = body;
 
     // Check if profile exists
     const existingProfile = await db.select()
@@ -84,7 +69,6 @@ export async function POST(request: Request) {
       // Update existing profile
       const updated = await db.update(userProfiles)
         .set({
-          username: username || existingProfile[0].username,
           displayName: displayName || existingProfile[0].displayName,
           bio: bio !== undefined ? bio : existingProfile[0].bio,
           avatarUrl: avatarUrl !== undefined ? avatarUrl : existingProfile[0].avatarUrl,
@@ -94,13 +78,13 @@ export async function POST(request: Request) {
         .where(eq(userProfiles.userId, user.id))
         .returning();
 
-      return NextResponse.json(updated[0]);
+      return NextResponse.json({ profile: updated[0] });
     } else {
       // Create new profile
       const created = await db.insert(userProfiles)
         .values({
           userId: user.id,
-          username: username || `user_${user.id.slice(0, 8)}`,
+          username: `user_${user.id.slice(0, 8)}`, // Auto-generate username, not editable
           displayName: displayName || 'Unknown User',
           bio: bio || null,
           avatarUrl: avatarUrl || null,
@@ -109,7 +93,7 @@ export async function POST(request: Request) {
         })
         .returning();
 
-      return NextResponse.json(created[0]);
+      return NextResponse.json({ profile: created[0] });
     }
   } catch (error) {
     loggers.api.error('Error updating user profile:', error as Error);
