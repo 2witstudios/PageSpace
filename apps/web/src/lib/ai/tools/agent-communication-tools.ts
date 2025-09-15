@@ -27,6 +27,7 @@ import {
 import { buildTimestampSystemPrompt } from '@/lib/ai/timestamp-utils';
 import { ToolExecutionContext } from '../types';
 import { loggers } from '@pagespace/lib/logger-config';
+import { AI_PROVIDERS, getModelDisplayName } from '@/lib/ai/ai-providers-config';
 
 // Constants
 const MAX_AGENT_DEPTH = 3;
@@ -601,8 +602,13 @@ export const agentCommunicationTools = {
             processingTime,
             messagesInHistory: historyMessages.length,
             callDepth: callDepth + 1,
-            provider: targetAgent.aiProvider || 'default',
-            model: targetAgent.aiModel || 'default',
+            // Use display names from AI_PROVIDERS config
+            provider: targetAgent.aiProvider
+              ? (AI_PROVIDERS[targetAgent.aiProvider as keyof typeof AI_PROVIDERS]?.name || targetAgent.aiProvider)
+              : AI_PROVIDERS.pagespace.name,
+            model: targetAgent.aiProvider
+              ? getModelDisplayName(targetAgent.aiProvider, targetAgent.aiModel || 'gemini-2.5-flash')
+              : 'Default (Free)',  // PageSpace default model display name
             toolsEnabled: (targetAgent.enabledTools as string[] | null)?.length || 0,
             toolCalls: response.steps?.flatMap(step => step.toolCalls || []).length || 0,
             steps: response.steps?.length || 1
