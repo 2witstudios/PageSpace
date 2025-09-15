@@ -90,10 +90,15 @@ async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: st
       if (!defaultSettings) {
         throw new Error('No AI provider configured');
       }
-      
-      // Use default provider logic
-      const openrouter = createOpenRouter({ apiKey: defaultSettings.apiKey });
-      return openrouter('anthropic/claude-3.5-sonnet');
+
+      // Only use Google AI as the default provider
+      if (defaultSettings.provider === 'google') {
+        const google = createGoogleGenerativeAI({ apiKey: defaultSettings.apiKey });
+        return google('gemini-2.5-flash');
+      }
+
+      // Should not reach here if properly configured, but throw clear error
+      throw new Error('Default AI provider must be Google AI with gemini-2.5-flash');
     }
   }
 }
