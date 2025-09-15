@@ -1,4 +1,4 @@
-import { tool } from 'ai';
+import { tool, stepCountIs } from 'ai';
 import { z } from 'zod';
 import { generateText, convertToModelMessages, UIMessage } from 'ai';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
@@ -54,7 +54,7 @@ async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: st
         throw new Error('Google AI API key not configured');
       }
       const google = createGoogleGenerativeAI({ apiKey: settings.apiKey });
-      return google(aiModel || 'gemini-1.5-pro');
+      return google(aiModel || 'gemini-2.5-flash');
     }
     
     case 'openai': {
@@ -538,18 +538,39 @@ export const agentCommunicationTools = {
               messages: convertToModelMessages(sanitizedMessages),
               tools: agentTools as Parameters<typeof generateText>[0]['tools'],
               experimental_context: nestedContext,
-              maxRetries: 3, // Limited retries for agent-to-agent calls
+              stopWhen: stepCountIs(5), // Enable multi-step tool execution
+              maxRetries: 3,
+              onStepFinish: ({ toolCalls }) => {
+                if (toolCalls?.length > 0) {
+                  loggers.ai.debug('Sub-agent tool execution:', {
+                    agentId,
+                    toolCalls: toolCalls.map(tc => tc.toolName),
+                  });
+                }
+              },
             })
           : await generateText({
               model,
               system: systemPrompt,
               messages: convertToModelMessages(sanitizedMessages),
               experimental_context: nestedContext,
-              maxRetries: 3, // Limited retries for agent-to-agent calls
+              maxRetries: 3,
             });
-        
-        // 12. Extract response text - direct access with generateText
+
+        // 12. Extract response text with error checking
         const agentResponse = response.text;
+
+        // Check for tool execution errors
+        const toolErrors = response.steps?.flatMap(step =>
+          step.content?.filter(part => part.type === 'tool-error') || []
+        ) || [];
+
+        if (toolErrors.length > 0) {
+          loggers.ai.warn('Sub-agent tool execution errors:', {
+            agentId,
+            errors: toolErrors,
+          });
+        }
         
         // 13. Log successful interaction
         await logAgentInteraction({
@@ -577,7 +598,9 @@ export const agentCommunicationTools = {
             callDepth: callDepth + 1,
             provider: targetAgent.aiProvider || 'default',
             model: targetAgent.aiModel || 'default',
-            toolsEnabled: (targetAgent.enabledTools as string[] | null)?.length || 0
+            toolsEnabled: (targetAgent.enabledTools as string[] | null)?.length || 0,
+            toolCalls: response.steps?.flatMap(step => step.toolCalls || []).length || 0,
+            steps: response.steps?.length || 1
           }
         };
         
