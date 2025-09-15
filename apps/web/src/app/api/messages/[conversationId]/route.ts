@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { db, directMessages, dmConversations, eq, and, or, desc, lt } from '@pagespace/db';
 import { verifyAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logger-config';
-import { createNotification } from '@pagespace/lib';
+import { createOrUpdateMessageNotification } from '@pagespace/lib';
 
 // GET /api/messages/[conversationId] - Get messages in a conversation
 export async function GET(
@@ -178,17 +178,12 @@ export async function POST(
       ? conversation.participant2Id
       : conversation.participant1Id;
 
-    await createNotification({
-      userId: recipientId,
-      type: 'NEW_DIRECT_MESSAGE',
-      title: 'New Direct Message',
-      message: messagePreview,
-      metadata: {
-        conversationId,
-        messageId: newMessage.id,
-      },
-      triggeredByUserId: user.id,
-    });
+    await createOrUpdateMessageNotification(
+      recipientId,
+      conversationId,
+      messagePreview,
+      user.id
+    );
 
     // Broadcast the new message to the DM room for realtime updates
     if (process.env.INTERNAL_REALTIME_URL) {

@@ -7,7 +7,6 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import ChatInput, { ChatInputRef } from '@/components/messages/ChatInput';
 import { renderMessageParts, convertToMessageParts } from '@/components/messages/MessagePartRenderer';
-import { formatDistanceToNow } from 'date-fns';
 import useSWR from 'swr';
 import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
@@ -152,7 +151,7 @@ export default function ConversationPage() {
   const displayName = otherUser.displayName || otherUser.name;
 
   return (
-    <div className="flex-1 flex flex-col">
+    <div className="flex flex-col h-full">
       {/* Header */}
       <div className="border-b border-border p-4">
         <div className="flex items-center gap-3">
@@ -170,65 +169,62 @@ export default function ConversationPage() {
       </div>
 
       {/* Messages */}
-      <ScrollArea className="flex-1 p-4" ref={scrollAreaRef}>
-        <div className="space-y-6 max-w-4xl mx-auto">
+      <div className="flex-grow overflow-hidden">
+        <ScrollArea className="h-full p-4" ref={scrollAreaRef}>
+          <div className="space-y-4 max-w-4xl mx-auto">
           {messages.map((message) => {
             const isOwnMessage = message.senderId === user?.id;
             const senderName = isOwnMessage ? 'You' : displayName;
+            const senderAvatar = isOwnMessage ? user?.name : displayName;
 
             return (
-              <div
-                key={message.id}
-                className={`flex gap-3 ${isOwnMessage ? 'flex-row-reverse' : 'flex-row'}`}
-              >
-                <Avatar className="h-9 w-9 flex-shrink-0">
-                  {!isOwnMessage && (
+              <div key={message.id} className="flex items-start gap-4">
+                <Avatar className="h-10 w-10 flex-shrink-0">
+                  {isOwnMessage ? (
+                    <AvatarFallback className="bg-primary text-primary-foreground">
+                      {senderAvatar?.charAt(0).toUpperCase()}
+                    </AvatarFallback>
+                  ) : (
                     <>
                       <AvatarImage src={otherUser.avatarUrl || ''} />
-                      <AvatarFallback>{displayName.charAt(0).toUpperCase()}</AvatarFallback>
+                      <AvatarFallback>{senderAvatar?.charAt(0).toUpperCase()}</AvatarFallback>
                     </>
-                  )}
-                  {isOwnMessage && (
-                    <AvatarFallback className="bg-primary text-primary-foreground">
-                      {user?.name?.charAt(0).toUpperCase()}
-                    </AvatarFallback>
                   )}
                 </Avatar>
 
-                <div className={`flex flex-col max-w-[70%] ${isOwnMessage ? 'items-end' : 'items-start'}`}>
-                  <div className={`flex items-center gap-2 mb-1 ${isOwnMessage ? 'flex-row-reverse' : 'flex-row'}`}>
-                    <span className="font-medium text-sm">{senderName}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="font-semibold text-sm">{senderName}</span>
                     <span className="text-xs text-muted-foreground">
-                      {formatDistanceToNow(new Date(message.createdAt), { addSuffix: true })}
+                      {new Date(message.createdAt).toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })}
                     </span>
                     {message.isEdited && (
                       <span className="text-xs text-muted-foreground italic">(edited)</span>
                     )}
+                    {message.isRead && isOwnMessage && (
+                      <span className="text-xs text-muted-foreground">• Read</span>
+                    )}
                   </div>
 
-                  <div
-                    className={`rounded-2xl px-4 py-2.5 shadow-sm ${
-                      isOwnMessage
-                        ? 'bg-primary text-primary-foreground rounded-tr-sm'
-                        : 'bg-muted rounded-tl-sm'
-                    }`}
-                  >
-                    <div className="break-words">
+                  <div className={`p-3 rounded-lg ${
+                    isOwnMessage
+                      ? 'bg-blue-50 dark:bg-blue-900/20 ml-8'
+                      : 'bg-gray-50 dark:bg-gray-800/50 mr-8'
+                  }`}>
+                    <div className="text-gray-900 dark:text-gray-100">
                       {renderMessageParts(convertToMessageParts(message.content))}
                     </div>
                   </div>
-
-                  {message.isRead && isOwnMessage && (
-                    <div className="flex items-center gap-1 mt-1">
-                      <span className="text-xs text-muted-foreground">Read</span>
-                    </div>
-                  )}
                 </div>
               </div>
             );
           })}
-        </div>
-      </ScrollArea>
+          </div>
+        </ScrollArea>
+      </div>
 
       {/* Input */}
       <div className="border-t border-border p-4">

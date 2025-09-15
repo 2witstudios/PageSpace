@@ -262,3 +262,54 @@ export async function createDriveNotification(
     triggeredByUserId,
   });
 }
+
+export async function createOrUpdateMessageNotification(
+  targetUserId: string,
+  conversationId: string,
+  messagePreview: string,
+  triggeredByUserId: string
+) {
+  // Check if there's an existing unread notification for this conversation
+  const existingNotification = await db.query.notifications.findFirst({
+    where: and(
+      eq(notifications.userId, targetUserId),
+      eq(notifications.type, 'NEW_DIRECT_MESSAGE'),
+      eq(notifications.isRead, false)
+    ),
+  });
+
+  // Check if the existing notification is for the same conversation
+  if (existingNotification &&
+      existingNotification.metadata &&
+      typeof existingNotification.metadata === 'object' &&
+      'conversationId' in existingNotification.metadata &&
+      existingNotification.metadata.conversationId === conversationId) {
+
+    // Update the existing notification with the new message
+    const updatedNotification = await db
+      .update(notifications)
+      .set({
+        message: messagePreview,
+        createdAt: new Date(), // Update timestamp to show as recent
+      })
+      .where(eq(notifications.id, existingNotification.id))
+      .returning();
+
+    // Broadcast the updated notification
+    await broadcastNotification(targetUserId, updatedNotification[0]);
+
+    return updatedNotification[0];
+  }
+
+  // Create a new notification if none exists for this conversation
+  return createNotification({
+    userId: targetUserId,
+    type: 'NEW_DIRECT_MESSAGE',
+    title: 'New Direct Message',
+    message: messagePreview,
+    metadata: {
+      conversationId,
+    },
+    triggeredByUserId,
+  });
+}

@@ -12,7 +12,7 @@ import { DebugPanel } from "./DebugPanel";
 import { useLayoutStore } from "@/stores/useLayoutStore";
 import { useHasHydrated } from "@/hooks/useHasHydrated";
 import { usePerformanceMonitor } from "@/hooks/usePerformanceMonitor";
-import { useRouter, usePathname } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useEffect, memo } from "react";
 
 interface LayoutProps {
@@ -22,7 +22,6 @@ interface LayoutProps {
 function Layout({ children }: LayoutProps) {
   const { isLoading, isAuthenticated } = useAuth();
   const router = useRouter();
-  const pathname = usePathname();
   const isMobile = useMobile();
   const {
     leftSidebarOpen,
@@ -32,8 +31,6 @@ function Layout({ children }: LayoutProps) {
   } = useLayoutStore();
   const hasHydrated = useHasHydrated();
 
-  // Check if we're on the messages route
-  const isMessagesRoute = pathname?.startsWith('/dashboard/messages');
   
   // Monitor performance
   usePerformanceMonitor();
@@ -97,16 +94,16 @@ function Layout({ children }: LayoutProps) {
         />
         
         <div className="flex flex-grow overflow-hidden relative">
-          {/* Desktop Left Sidebar - Don't show on messages routes */}
-          {leftSidebarOpen && !isMobile && !isMessagesRoute && (
+          {/* Desktop Left Sidebar */}
+          {leftSidebarOpen && !isMobile && (
             <div className="flex-shrink-0 w-80 overflow-hidden transition-all duration-200 ease-in-out">
               <MemoizedSidebar />
             </div>
           )}
 
-          {/* Mobile Left Sidebar - Don't show on messages routes */}
+          {/* Mobile Left Sidebar */}
           <AnimatePresence>
-            {isMobile && leftSidebarOpen && !isMessagesRoute && (
+            {isMobile && leftSidebarOpen && (
               <>
                 <motion.div
                   initial={{ x: -320, opacity: 0 }}
