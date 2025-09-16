@@ -8,7 +8,6 @@ import { ShadowCanvas } from '@/components/canvas/ShadowCanvas';
 import PreviewErrorBoundary from '@/components/sandbox/PreviewErrorBoundary';
 import { TreePage } from '@/hooks/usePageTree';
 import { useDocumentStore } from '@/stores/useDocumentStore';
-import { getUserAccessLevel } from '@pagespace/lib';
 import { useAuth } from '@/hooks/use-auth';
 
 interface CanvasPageViewProps {
@@ -69,9 +68,15 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
       const pageId = url.replace('pagespace://page/', '');
       if (user) {
         try {
-          const accessLevel = await getUserAccessLevel(user.id, pageId);
-          if (!accessLevel || !accessLevel.canView) {
-            toast.error('You do not have permission to view this page');
+          const response = await fetch(`/api/pages/${pageId}/permissions/check`);
+          if (response.ok) {
+            const permissions = await response.json();
+            if (!permissions.canView) {
+              toast.error('You do not have permission to view this page');
+              return;
+            }
+          } else {
+            toast.error('Failed to verify page permissions');
             return;
           }
         } catch (error) {
@@ -90,9 +95,15 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
       const [, , pageId] = dashboardMatch;
       if (user && pageId) {
         try {
-          const accessLevel = await getUserAccessLevel(user.id, pageId);
-          if (!accessLevel || !accessLevel.canView) {
-            toast.error('You do not have permission to view this page');
+          const response = await fetch(`/api/pages/${pageId}/permissions/check`);
+          if (response.ok) {
+            const permissions = await response.json();
+            if (!permissions.canView) {
+              toast.error('You do not have permission to view this page');
+              return;
+            }
+          } else {
+            toast.error('Failed to verify page permissions');
             return;
           }
         } catch (error) {

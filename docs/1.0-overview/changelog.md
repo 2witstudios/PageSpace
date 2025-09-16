@@ -1,3 +1,33 @@
+### 2025-01-16
+
+- **Canvas Dashboard System**: Functional HTML/CSS Dashboards with Navigation
+  - **Created**: `apps/web/src/components/canvas/ShadowCanvas.tsx` - Shadow DOM component for isolated rendering
+    - **Shadow DOM Isolation**: Complete style encapsulation from main app
+    - **Navigation Interception**: Clicks on links and buttons trigger PageSpace navigation
+    - **Theme Independence**: Dashboards look identical in light/dark mode
+    - **CSS Extraction**: Automatically extracts and applies embedded `<style>` tags
+    - **Security**: DOMPurify HTML sanitization, CSS JavaScript blocking
+  - **Updated**: `apps/web/src/components/layout/middle-content/page-views/canvas/CanvasPageView.tsx`
+    - **Replaced**: Iframe-based Sandbox with ShadowCanvas component
+    - **Added**: Navigation handling with permission checking
+    - **Added**: Support for PageSpace protocol (`pagespace://page/id`)
+    - **Removed**: Complex postMessage communication
+  - **Created**: `apps/web/src/lib/canvas/css-sanitizer.ts` - CSS security utilities
+    - **Blocks**: JavaScript execution (expression, -moz-binding, javascript:)
+    - **Allows**: Full creative CSS (animations, gradients, transforms)
+  - **Updated**: `apps/web/src/components/sandbox/Sandbox.tsx`
+    - **Reverted**: Removed navigation complexity, back to simple iframe
+  - **Documentation**:
+    - Created comprehensive feature documentation
+    - Created user-friendly dashboard builder guide
+    - Updated all related documentation files
+  - **Impact**:
+    - Canvas pages now have fully functional navigation
+    - Users can build custom dashboards with standard HTML/CSS
+    - AI can generate compatible dashboards naturally
+    - Improved security through Shadow DOM isolation
+    - Simplified architecture without iframe complexity
+
 ### 2025-01-14
 
 - **AI System Enhancement**: Comprehensive AI Prompt System Overhaul (Part 2 - Simplified & Adaptive)
