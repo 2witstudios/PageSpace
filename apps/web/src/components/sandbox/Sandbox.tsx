@@ -64,7 +64,7 @@ const Sandbox = ({ html, css = '' }: SandboxProps) => {
     <iframe
       srcDoc={srcDoc}
       title="sandbox"
-      sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox"
+      sandbox="allow-scripts"
       width="100%"
       height="100%"
       style={{ border: 'none' }}

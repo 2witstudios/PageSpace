@@ -1,0 +1,276 @@
+<!-- Sample Dashboard HTML for Canvas Pages -->
+<!-- Pure HTML/CSS with functional navigation - no frameworks needed -->
+
+<style>
+  /* Reset and Base Styles */
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    line-height: 1.6;
+    color: #333;
+  }
+
+  /* Dashboard Container */
+  .dashboard {
+    min-height: 100vh;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    padding: 40px 20px;
+  }
+
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+
+  /* Header */
+  h1 {
+    color: white;
+    font-size: 48px;
+    margin-bottom: 40px;
+    text-align: center;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    animation: fadeInDown 0.8s ease;
+  }
+
+  /* Card Grid */
+  .card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 30px;
+    margin-bottom: 60px;
+  }
+
+  /* Card Styles */
+  .card {
+    background: white;
+    border-radius: 12px;
+    padding: 30px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+    transition: all 0.3s ease;
+    text-decoration: none;
+    color: inherit;
+    display: block;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 4px;
+    background: linear-gradient(90deg, #667eea, #764ba2);
+    transform: translateX(-100%);
+    transition: transform 0.3s ease;
+  }
+
+  .card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 20px 60px rgba(0,0,0,0.15);
+  }
+
+  .card:hover::before {
+    transform: translateX(0);
+  }
+
+  .card h2 {
+    color: #667eea;
+    margin-bottom: 10px;
+    font-size: 24px;
+  }
+
+  .card p {
+    color: #666;
+    font-size: 16px;
+  }
+
+  .card .icon {
+    font-size: 32px;
+    margin-bottom: 15px;
+  }
+
+  /* Button Styles */
+  .button-group {
+    display: flex;
+    gap: 20px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-top: 40px;
+  }
+
+  button[data-href],
+  .btn {
+    background: white;
+    color: #667eea;
+    border: 2px solid transparent;
+    padding: 12px 30px;
+    border-radius: 50px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    text-decoration: none;
+    display: inline-block;
+  }
+
+  button[data-href]:hover,
+  .btn:hover {
+    background: transparent;
+    color: white;
+    border-color: white;
+    transform: scale(1.05);
+  }
+
+  /* Navigation Bar */
+  nav {
+    background: rgba(255,255,255,0.1);
+    backdrop-filter: blur(10px);
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 40px;
+  }
+
+  nav ul {
+    list-style: none;
+    display: flex;
+    gap: 30px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  nav a {
+    color: white;
+    text-decoration: none;
+    font-weight: 500;
+    transition: all 0.3s ease;
+    padding: 8px 16px;
+    border-radius: 20px;
+  }
+
+  nav a:hover {
+    background: rgba(255,255,255,0.2);
+    transform: translateY(-2px);
+  }
+
+  /* Animations */
+  @keyframes fadeInDown {
+    from {
+      opacity: 0;
+      transform: translateY(-30px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes fadeInUp {
+    from {
+      opacity: 0;
+      transform: translateY(30px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .card {
+    animation: fadeInUp 0.8s ease backwards;
+  }
+
+  .card:nth-child(1) { animation-delay: 0.1s; }
+  .card:nth-child(2) { animation-delay: 0.2s; }
+  .card:nth-child(3) { animation-delay: 0.3s; }
+  .card:nth-child(4) { animation-delay: 0.4s; }
+  .card:nth-child(5) { animation-delay: 0.5s; }
+  .card:nth-child(6) { animation-delay: 0.6s; }
+
+  /* Responsive */
+  @media (max-width: 768px) {
+    h1 {
+      font-size: 32px;
+    }
+
+    .card-grid {
+      grid-template-columns: 1fr;
+    }
+
+    nav ul {
+      flex-direction: column;
+      align-items: center;
+    }
+  }
+</style>
+
+<div class="dashboard">
+  <div class="container">
+    <!-- Navigation Bar -->
+    <nav>
+      <ul>
+        <li><a href="/dashboard">🏠 Home</a></li>
+        <li><a href="/dashboard/messages">💬 Messages</a></li>
+        <li><a href="/dashboard/connections">🔗 Connections</a></li>
+        <li><a href="/settings">⚙️ Settings</a></li>
+        <li><a href="/account">👤 Account</a></li>
+      </ul>
+    </nav>
+
+    <!-- Main Title -->
+    <h1>My Dashboard</h1>
+
+    <!-- Card Grid -->
+    <div class="card-grid">
+      <a href="/dashboard" class="card">
+        <div class="icon">📊</div>
+        <h2>Overview</h2>
+        <p>View your main dashboard and recent activity</p>
+      </a>
+
+      <a href="pagespace://page/YOUR_PAGE_ID" class="card">
+        <div class="icon">📄</div>
+        <h2>Documents</h2>
+        <p>Access your documents and files</p>
+      </a>
+
+      <a href="/dashboard/messages" class="card">
+        <div class="icon">💬</div>
+        <h2>Messages</h2>
+        <p>Check your conversations and chats</p>
+      </a>
+
+      <button data-href="/settings/ai" class="card">
+        <div class="icon">🤖</div>
+        <h2>AI Settings</h2>
+        <p>Configure AI assistants and models</p>
+      </button>
+
+      <button data-navigate="/dashboard/storage" class="card">
+        <div class="icon">💾</div>
+        <h2>Storage</h2>
+        <p>Manage your files and storage space</p>
+      </button>
+
+      <a href="https://github.com" target="_blank" class="card">
+        <div class="icon">🔗</div>
+        <h2>GitHub</h2>
+        <p>External link (opens in new tab)</p>
+      </a>
+    </div>
+
+    <!-- Action Buttons -->
+    <div class="button-group">
+      <button data-href="/dashboard">Dashboard</button>
+      <a href="/settings" class="btn">Settings</a>
+      <button data-href="/account">My Account</button>
+      <a href="https://docs.example.com" target="_blank" class="btn">Documentation ↗</a>
+    </div>
+  </div>
+</div>
