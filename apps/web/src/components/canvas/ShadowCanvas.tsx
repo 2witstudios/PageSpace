@@ -62,15 +62,45 @@ export function ShadowCanvas({ html, onNavigate }: ShadowCanvasProps) {
     // Build shadow DOM content with extracted styles
     shadow.innerHTML = `
       <style>
-        /* Reset styles for shadow DOM */
+        /* Reset styles for complete theme independence */
         :host {
           display: block;
           width: 100%;
           height: 100%;
+          /* Isolate from parent theme */
+          color-scheme: light;
         }
-        * {
+
+        /* Canvas root with explicit defaults */
+        .canvas-root {
+          /* Always white background unless user overrides */
+          background: white;
+          color: black;
+          min-height: 100%;
+          width: 100%;
+
+          /* Standard font stack */
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+          line-height: 1.6;
+
+          /* Ensure no bleed-through from parent */
+          isolation: isolate;
+        }
+
+        /* Reset common elements to predictable defaults */
+        .canvas-root * {
+          /* Ensure inheritance from canvas-root, not parent page */
+          color: inherit;
+          font-family: inherit;
+          line-height: inherit;
+        }
+
+        /* Box sizing for all elements */
+        *, *::before, *::after {
           box-sizing: border-box;
         }
+
+        /* User styles come after reset */
         ${sanitizedCSS}
       </style>
       <div class="canvas-root">
