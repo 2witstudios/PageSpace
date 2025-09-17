@@ -34,6 +34,15 @@ export async function incrementUsage(
   userId: string,
   providerType: ProviderType
 ): Promise<UsageTrackingResult> {
+  const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+
+  console.log('🔍 incrementUsage CALLED:', {
+    userId,
+    providerType,
+    today,
+    timestamp: new Date().toISOString()
+  });
+
   // Get user's subscription tier
   const user = await db.select({
     subscriptionTier: users.subscriptionTier
@@ -43,14 +52,24 @@ export async function incrementUsage(
     .limit(1);
 
   if (!user.length) {
+    console.error('❌ User not found:', { userId });
     throw new Error('User not found');
   }
 
   const subscriptionTier = user[0].subscriptionTier;
   const limit = getUsageLimits(subscriptionTier, providerType);
 
+  console.log('📊 User subscription info:', {
+    userId,
+    subscriptionTier,
+    providerType,
+    limit,
+    today
+  });
+
   // Unlimited usage (pro normal calls)
   if (limit === -1) {
+    console.log('✅ Unlimited usage (Pro tier):', { userId, providerType, subscriptionTier });
     return {
       success: true,
       currentCount: 0,
@@ -61,6 +80,7 @@ export async function incrementUsage(
 
   // No access (normal tier trying extra thinking)
   if (limit === 0) {
+    console.log('❌ No access (Normal tier trying extra thinking):', { userId, providerType, subscriptionTier });
     return {
       success: false,
       currentCount: 0,
@@ -69,9 +89,9 @@ export async function incrementUsage(
     };
   }
 
-  const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
-
   try {
+    console.log('🔄 Attempting atomic increment...', { userId, today, providerType, limit });
+
     // Atomic increment with limit check
     const result = await db
       .update(aiUsageDaily)
@@ -89,9 +109,19 @@ export async function incrementUsage(
       )
       .returning({ count: aiUsageDaily.count });
 
+    console.log('📈 Atomic increment result:', { result, length: result.length });
+
     if (result.length > 0) {
       // Successfully incremented
       const currentCount = result[0].count;
+      console.log('✅ Successfully incremented usage:', {
+        userId,
+        providerType,
+        currentCount,
+        limit,
+        remaining: limit - currentCount
+      });
+
       return {
         success: true,
         currentCount,
@@ -102,8 +132,10 @@ export async function incrementUsage(
 
     // Either limit reached or no existing record
     // Try to insert new record
+    console.log('🆕 No existing record found, attempting to create new record...', { userId, today, providerType });
+
     try {
-      await db
+      const insertResult = await db
         .insert(aiUsageDaily)
         .values({
           userId,
@@ -113,6 +145,15 @@ export async function incrementUsage(
         })
         .returning({ count: aiUsageDaily.count });
 
+      console.log('✅ Successfully created new usage record:', {
+        userId,
+        providerType,
+        insertResult,
+        currentCount: 1,
+        limit,
+        remaining: limit - 1
+      });
+
       return {
         success: true,
         currentCount: 1,
@@ -120,11 +161,30 @@ export async function incrementUsage(
         remainingCalls: limit - 1
       };
 
-    } catch {
+    } catch (insertError) {
+      console.log('⚠️ Insert failed (likely conflict), checking current usage...', {
+        userId,
+        providerType,
+        error: insertError instanceof Error ? insertError.message : insertError
+      });
+
       // Insert failed (likely due to conflict), check current usage
       const current = await getCurrentUsage(userId, providerType);
 
+      console.log('📊 Current usage after insert failure:', {
+        userId,
+        providerType,
+        currentUsage: current
+      });
+
       if (current.currentCount >= limit) {
+        console.log('❌ Limit reached after insert failure:', {
+          userId,
+          providerType,
+          currentCount: current.currentCount,
+          limit
+        });
+
         return {
           success: false,
           currentCount: current.currentCount,

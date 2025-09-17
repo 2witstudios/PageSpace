@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { streamText, convertToModelMessages, UIMessage, stepCountIs, createUIMessageStream, createUIMessageStreamResponse } from 'ai';
+import { incrementUsage } from '@/lib/subscription/usage-service';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -232,8 +233,8 @@ export async function POST(request: Request) {
     const currentProvider = selectedProvider || user?.currentAiProvider || 'pagespace';
     const currentModel = selectedModel || user?.currentAiModel || 'gemini-2.5-flash';
 
-    // Rate limiting check
-    const { checkAIRateLimit, createRateLimitResponse, requiresProSubscription, createSubscriptionRequiredResponse } = await import('@/lib/subscription/rate-limit-middleware');
+    // Pro subscription check for special providers
+    const { requiresProSubscription, createSubscriptionRequiredResponse } = await import('@/lib/subscription/rate-limit-middleware');
 
     // Check if provider requires Pro subscription
     if (requiresProSubscription(currentProvider) && user?.subscriptionTier !== 'pro') {
@@ -245,34 +246,12 @@ export async function POST(request: Request) {
       return createSubscriptionRequiredResponse();
     }
 
-    // Check rate limits (only for built-in PageSpace providers)
-    const shouldRateLimit = currentProvider === 'pagespace' || currentProvider === 'pagespace_extra';
-    if (shouldRateLimit) {
-      const rateLimitResult = await checkAIRateLimit(userId, currentProvider);
-      if (!rateLimitResult.allowed) {
-        loggers.ai.warn('AI Chat API: Rate limit exceeded', {
-          userId,
-          provider: currentProvider,
-          remaining: rateLimitResult.remaining,
-          limit: rateLimitResult.limit
-        });
-
-        const providerType = currentProvider === 'pagespace_extra' ? 'extra_thinking' : 'normal';
-        return createRateLimitResponse(providerType, rateLimitResult.limit);
-      }
-
-      loggers.ai.debug('AI Chat API: Rate limit check passed', {
-        userId,
-        provider: currentProvider,
-        remaining: rateLimitResult.remaining,
-        limit: rateLimitResult.limit
-      });
-    } else {
-      loggers.ai.debug('AI Chat API: Skipping rate limit check for BYO provider', {
-        userId,
-        provider: currentProvider
-      });
-    }
+    // Usage tracking will be handled in onFinish callback for PageSpace providers only
+    loggers.ai.debug('AI Chat API: Will track usage in onFinish for PageSpace providers', {
+      userId,
+      provider: currentProvider,
+      isPageSpaceProvider: currentProvider === 'pagespace' || currentProvider === 'pagespace_extra'
+    });
     
     // Update page's AI provider/model if changed
     if (selectedProvider && selectedModel && chatId) {
@@ -313,20 +292,23 @@ export async function POST(request: Request) {
         const googleProvider = createGoogleGenerativeAI({
           apiKey: googleSettings.apiKey,
         });
-        model = googleProvider(currentModel);
+        const baseModel = googleProvider(currentModel);
+        model = baseModel;
       } else {
         // Use the appropriate provider based on the configuration
         if (pageSpaceSettings.provider === 'google') {
           const googleProvider = createGoogleGenerativeAI({
             apiKey: pageSpaceSettings.apiKey,
           });
-          model = googleProvider(currentModel);
+          const baseModel = googleProvider(currentModel);
+          model = baseModel;
         } else {
           // Fallback to OpenRouter for backwards compatibility
           const openrouter = createOpenRouter({
             apiKey: pageSpaceSettings.apiKey,
           });
-          model = openrouter.chat(currentModel);
+          const baseModel = openrouter.chat(currentModel);
+          model = baseModel;
         }
       }
     } else if (currentProvider === 'pagespace_extra') {
@@ -351,13 +333,15 @@ export async function POST(request: Request) {
         const googleProvider = createGoogleGenerativeAI({
           apiKey: googleSettings.apiKey,
         });
-        model = googleProvider(currentModel);
+        const baseModel = googleProvider(currentModel);
+        model = baseModel;
       } else {
         // Use Google provider for Extra Thinking
         const googleProvider = createGoogleGenerativeAI({
           apiKey: pageSpaceSettings.apiKey,
         });
-        model = googleProvider(currentModel);
+        const baseModel = googleProvider(currentModel);
+        model = baseModel;
       }
     } else if (currentProvider === 'openrouter') {
       // Handle OpenRouter setup
@@ -780,7 +764,87 @@ MENTION PROCESSING:
               });
               
               loggers.ai.debug('AI Chat API: AI response message saved to database with tools');
-              
+
+              // Track usage for PageSpace providers only (rate limiting/quota tracking)
+              const isPageSpaceProvider = currentProvider === 'pagespace' || currentProvider === 'pagespace_extra';
+
+              loggers.ai.info('AI Chat API: USAGE TRACKING DECISION', {
+                userId,
+                currentProvider,
+                isPageSpaceProvider,
+                messageId,
+                timestamp: new Date().toISOString()
+              });
+
+              if (isPageSpaceProvider) {
+                try {
+                  const providerType = currentProvider === 'pagespace_extra' ? 'extra_thinking' : 'normal';
+
+                  loggers.ai.info('AI Chat API: CALLING incrementUsage', {
+                    userId,
+                    provider: currentProvider,
+                    providerType,
+                    messageId,
+                    timestamp: new Date().toISOString()
+                  });
+
+                  const usageResult = await incrementUsage(userId!, providerType);
+
+                  loggers.ai.info('AI Chat API: USAGE TRACKED SUCCESSFULLY', {
+                    userId,
+                    provider: currentProvider,
+                    providerType,
+                    messageId,
+                    usageResult,
+                    timestamp: new Date().toISOString()
+                  });
+
+                  // Also log to console for immediate visibility
+                  console.log('🟢 USAGE TRACKED:', {
+                    userId,
+                    provider: currentProvider,
+                    providerType,
+                    currentCount: usageResult.currentCount,
+                    limit: usageResult.limit,
+                    remaining: usageResult.remainingCalls,
+                    success: usageResult.success
+                  });
+
+                } catch (usageError) {
+                  loggers.ai.error('AI Chat API: USAGE TRACKING FAILED', usageError as Error, {
+                    userId,
+                    provider: currentProvider,
+                    messageId,
+                    timestamp: new Date().toISOString()
+                  });
+
+                  // Also log to console for immediate visibility
+                  console.error('🔴 USAGE TRACKING FAILED:', {
+                    userId,
+                    provider: currentProvider,
+                    error: usageError instanceof Error ? usageError.message : usageError,
+                    stack: usageError instanceof Error ? usageError.stack : undefined
+                  });
+
+                  // Don't fail the request - usage tracking errors shouldn't break the chat
+                }
+              } else {
+                loggers.ai.info('AI Chat API: SKIPPING usage tracking for non-PageSpace provider', {
+                  provider: currentProvider,
+                  isPageSpaceProvider,
+                  userId,
+                  messageId,
+                  timestamp: new Date().toISOString()
+                });
+
+                // Also log to console for immediate visibility
+                console.log('⚪ USAGE TRACKING SKIPPED:', {
+                  provider: currentProvider,
+                  reason: 'Not a PageSpace provider',
+                  expectedProviders: ['pagespace', 'pagespace_extra']
+                });
+              }
+
               // Track enhanced AI usage with token counting and cost calculation
               const duration = Date.now() - startTime;
               

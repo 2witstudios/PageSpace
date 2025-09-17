@@ -1,4 +1,4 @@
-import { db, eq, users } from '@pagespace/db';
+import { db, eq, ne, and, or, users } from '@pagespace/db';
 import { updateStorageTierFromSubscription } from '@pagespace/lib/services/storage-limits';
 
 export interface SubscriptionUpdateResult {
@@ -140,19 +140,19 @@ export async function findMismatchedUsers(): Promise<{
     .where(
       // Find users where subscription tier is 'pro' but storage tier is not 'pro'
       // OR where subscription tier is 'normal' but storage tier is not 'free'
-      db.or(
-        db.and(
+      or(
+        and(
           eq(users.subscriptionTier, 'pro'),
-          db.or(
-            db.ne(users.storageTier, 'pro'),
-            db.ne(users.storageQuotaBytes, 2147483648) // 2GB
+          or(
+            ne(users.storageTier, 'pro'),
+            ne(users.storageQuotaBytes, 2147483648) // 2GB
           )
         ),
-        db.and(
+        and(
           eq(users.subscriptionTier, 'normal'),
-          db.or(
-            db.ne(users.storageTier, 'free'),
-            db.ne(users.storageQuotaBytes, 524288000) // 500MB
+          or(
+            ne(users.storageTier, 'free'),
+            ne(users.storageQuotaBytes, 524288000) // 500MB
           )
         )
       )

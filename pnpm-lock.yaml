@@ -139,6 +139,9 @@ importers:
       '@ai-sdk/openai':
         specifier: ^2.0.15
         version: 2.0.15(zod@4.0.17)
+      '@ai-sdk/provider':
+        specifier: ^2.0.0
+        version: 2.0.0
       '@ai-sdk/react':
         specifier: ^2.0.12
         version: 2.0.12(react@19.1.0)(zod@4.0.17)
