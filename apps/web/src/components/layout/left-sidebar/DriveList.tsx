@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Drive } from "@/hooks/useDrive";
 import { Folder, Trash2, MoreHorizontal, Pencil, Undo2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useFileDrop } from '@/hooks/useFileDrop';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -27,7 +28,8 @@ const DriveListItem = ({
   onRename,
   onDelete,
   onRestore,
-  onPermanentDelete
+  onPermanentDelete,
+  onFilesUploaded
 }: { 
   drive: Drive; 
   isActive: boolean;
@@ -36,19 +38,40 @@ const DriveListItem = ({
   onDelete?: (drive: Drive) => void;
   onRestore?: (drive: Drive) => void;
   onPermanentDelete?: (drive: Drive) => void;
+  onFilesUploaded?: () => void;
 }) => {
   const [isHovered, setIsHovered] = useState(false);
+  
+  // File drop handling for individual drives
+  const {
+    isDraggingFiles,
+    isUploading,
+    uploadProgress,
+    handleDragEnter,
+    handleDragLeave,
+    handleDragOver,
+    handleFileDrop
+  } = useFileDrop({
+    driveId: drive.id,
+    parentId: null,
+    onUploadComplete: onFilesUploaded
+  });
   
   return (
     <div 
       className="group relative"
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={(e) => handleFileDrop(e as React.DragEvent)}
     >
       <div
         className={cn(
-          "flex items-center gap-2 p-2 rounded-md text-sm font-medium",
-          isActive ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+          "flex items-center gap-2 p-2 rounded-md text-sm font-medium transition-all",
+          isActive ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+          isDraggingFiles && !drive.isTrashed && "bg-primary/10 border border-dashed border-primary"
         )}
       >
         <Link href={`/dashboard/${drive.id}`} className="flex items-center gap-2 flex-1">
@@ -112,6 +135,19 @@ const DriveListItem = ({
           </DropdownMenu>
         )}
       </div>
+      
+      {/* Upload progress indicator for this drive */}
+      {isUploading && (
+        <div className="absolute top-full left-0 right-0 mt-1 bg-background border rounded-md p-2 shadow-sm z-50">
+          <p className="text-xs font-medium mb-1">Uploading...</p>
+          <div className="h-1 bg-secondary rounded-full overflow-hidden">
+            <div 
+              className="h-full bg-primary transition-all duration-300" 
+              style={{ width: `${uploadProgress}%` }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -257,6 +293,7 @@ export default function DriveList() {
                 isOwned={true}
                 onRename={() => setRenameDialogState({ isOpen: true, drive })}
                 onDelete={() => setDeleteDialogState({ isOpen: true, drive })}
+                onFilesUploaded={() => fetchDrives(true, true)}
               />
             ))}
           </div>
@@ -272,6 +309,7 @@ export default function DriveList() {
                 drive={drive} 
                 isActive={!isTrashView && drive.id === urlDriveId}
                 isOwned={false}
+                onFilesUploaded={() => fetchDrives(true, true)}
               />
             ))}
           </div>

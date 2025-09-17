@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { streamText, convertToModelMessages, UIMessage, stepCountIs } from 'ai';
+import { streamText, convertToModelMessages, UIMessage, stepCountIs, createUIMessageStream, createUIMessageStreamResponse } from 'ai';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -38,10 +38,11 @@ import { AgentRole } from '@/lib/ai/agent-roles';
 import { loggers } from '@pagespace/lib/logger-config';
 import { trackFeature } from '@pagespace/lib/activity-tracker';
 import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
+import { getModelCapabilities } from '@/lib/ai/model-capabilities';
 
 
-// Allow streaming responses up to 60 seconds for longer AI conversations
-export const maxDuration = 60;
+// Allow streaming responses up to 5 minutes for complex AI agent interactions
+export const maxDuration = 300;
 
 /**
  * Next.js 15 compatible API route for AI chat
@@ -229,7 +230,7 @@ export async function POST(request: Request) {
     // Get user's current AI provider settings
     const [user] = await db.select().from(users).where(eq(users.id, userId));
     const currentProvider = selectedProvider || user?.currentAiProvider || 'pagespace';
-    const currentModel = selectedModel || user?.currentAiModel || 'qwen/qwen3-coder:free';
+    const currentModel = selectedModel || user?.currentAiModel || 'gemini-2.5-flash';
     
     // Update page's AI provider/model if changed
     if (selectedProvider && selectedModel && chatId) {
@@ -249,52 +250,42 @@ export async function POST(request: Request) {
     let model;
 
     if (currentProvider === 'pagespace') {
-      // Use default PageSpace settings (app's OpenRouter key)
+      // Use default PageSpace settings (now Google AI with Gemini 2.5 Flash)
       const pageSpaceSettings = await getDefaultPageSpaceSettings();
-      
+
       if (!pageSpaceSettings) {
-        // Fall back to user's OpenRouter settings if no default key
-        let openRouterSettings = await getUserOpenRouterSettings(userId);
-        
-        if (!openRouterSettings && openRouterApiKey) {
-          await createOpenRouterSettings(userId, openRouterApiKey);
-          openRouterSettings = { apiKey: openRouterApiKey, isConfigured: true };
+        // Fall back to user's Google settings if no default key
+        let googleSettings = await getUserGoogleSettings(userId);
+
+        if (!googleSettings && googleApiKey) {
+          await createGoogleSettings(userId, googleApiKey);
+          googleSettings = { apiKey: googleApiKey, isConfigured: true };
         }
 
-        if (!openRouterSettings) {
-          return NextResponse.json({ 
-            error: 'No default API key configured. Please provide your own OpenRouter API key.' 
+        if (!googleSettings) {
+          return NextResponse.json({
+            error: 'No default API key configured. Please provide your own Google AI API key.'
           }, { status: 400 });
         }
-        
-        const openrouter = createOpenRouter({
-          apiKey: openRouterSettings.apiKey,
+
+        const googleProvider = createGoogleGenerativeAI({
+          apiKey: googleSettings.apiKey,
         });
-        model = openrouter.chat(currentModel);
+        model = googleProvider(currentModel);
       } else {
-        // Custom fetch to inject fallback models into the request
-        const openrouter = createOpenRouter({
-          apiKey: pageSpaceSettings.apiKey,
-          fetch: async (url, options) => {
-            if (options?.body) {
-              try {
-                const body = JSON.parse(options.body as string);
-                // Add fallback models for PageSpace provider (max 3 allowed by OpenRouter)
-                body.models = [
-                  'qwen/qwen3-coder:free', // Primary model
-                  'qwen/qwen3-8b:free',
-                  'qwen/qwen3-14b:free'
-                ];
-                options.body = JSON.stringify(body);
-              } catch (e) {
-                loggers.ai.error('Failed to inject fallback models', e as Error);
-              }
-            }
-            return fetch(url, options);
-          }
-        });
-        
-        model = openrouter.chat(currentModel);
+        // Use the appropriate provider based on the configuration
+        if (pageSpaceSettings.provider === 'google') {
+          const googleProvider = createGoogleGenerativeAI({
+            apiKey: pageSpaceSettings.apiKey,
+          });
+          model = googleProvider(currentModel);
+        } else {
+          // Fallback to OpenRouter for backwards compatibility
+          const openrouter = createOpenRouter({
+            apiKey: pageSpaceSettings.apiKey,
+          });
+          model = openrouter.chat(currentModel);
+        }
       }
     } else if (currentProvider === 'openrouter') {
       // Handle OpenRouter setup
@@ -428,10 +419,38 @@ export async function POST(request: Request) {
       }, { status: 400 });
     }
 
+    // Filter tools based on custom enabled tools or use all tools if not configured
+    let filteredTools;
+    if (enabledTools && enabledTools.length > 0) {
+      // Filter tools based on the page's enabled tools configuration
+      // Simple object filtering approach to avoid complex TypeScript issues
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const filtered: Record<string, any> = {};
+      for (const toolName of enabledTools) {
+        if (toolName in pageSpaceTools) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          filtered[toolName] = (pageSpaceTools as any)[toolName];
+        }
+      }
+      filteredTools = filtered;
+
+      loggers.ai.debug('AI Page Chat API: Filtered tools based on page configuration', {
+        totalTools: Object.keys(pageSpaceTools).length,
+        enabledTools: enabledTools.length,
+        filteredTools: Object.keys(filteredTools).length
+      });
+    } else {
+      // No tool restrictions configured, use default role-based filtering for compatibility
+      filteredTools = ToolPermissionFilter.filterTools(pageSpaceTools, AgentRole.PARTNER);
+      loggers.ai.debug('AI Page Chat API: Using default tool filtering (PARTNER role)');
+    }
+
     // Convert UIMessages to ModelMessages for the AI model
     // First sanitize messages to remove tool parts without results (prevents "input-available" state errors)
     const sanitizedMessages = sanitizeMessagesForModel(messages);
-    const modelMessages = convertToModelMessages(sanitizedMessages);
+    const modelMessages = convertToModelMessages(sanitizedMessages, {
+      tools: filteredTools  // Use original tools - no wrapping needed
+    });
 
     // Build system prompt for Page AI - use custom system prompt if available, otherwise use default
     let systemPrompt: string;
@@ -456,32 +475,6 @@ export async function POST(request: Request) {
         } : undefined
       );
     }
-
-    // Filter tools based on custom enabled tools or use all tools if not configured
-    let filteredTools;
-    if (enabledTools && enabledTools.length > 0) {
-      // Filter tools based on the page's enabled tools configuration
-      // Simple object filtering approach to avoid complex TypeScript issues
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const filtered: Record<string, any> = {};
-      for (const toolName of enabledTools) {
-        if (toolName in pageSpaceTools) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          filtered[toolName] = (pageSpaceTools as any)[toolName];
-        }
-      }
-      filteredTools = filtered;
-      
-      loggers.ai.debug('AI Page Chat API: Filtered tools based on page configuration', {
-        totalTools: Object.keys(pageSpaceTools).length,
-        enabledTools: enabledTools.length,
-        filteredTools: Object.keys(filteredTools).length
-      });
-    } else {
-      // No tool restrictions configured, use default role-based filtering for compatibility
-      filteredTools = ToolPermissionFilter.filterTools(pageSpaceTools, AgentRole.PARTNER);
-      loggers.ai.debug('AI Page Chat API: Using default tool filtering (PARTNER role)');
-    }
     
     // Build timestamp system prompt for temporal awareness
     const timestampSystemPrompt = buildTimestampSystemPrompt();
@@ -489,12 +482,17 @@ export async function POST(request: Request) {
     loggers.ai.debug('AI Chat API: Tools configured for Page AI', { toolCount: Object.keys(filteredTools).length });
     loggers.ai.info('AI Chat API: Starting streamText for Page AI', { model: currentModel, pageName: page.title });
     
-    // Wrap streamText in try-catch for better error handling
+    // Create UI message stream with visual content injection support
+    // This handles the case where tools return visual content that needs to be injected into the stream
     let result;
     try {
-      result = streamText({
-      model,
-      system: systemPrompt + mentionSystemPrompt + timestampSystemPrompt + `
+      const stream = createUIMessageStream({
+        originalMessages: sanitizedMessages,
+        execute: async ({ writer }) => {
+          // Start the AI response
+          const aiResult = streamText({
+            model,
+            system: systemPrompt + mentionSystemPrompt + timestampSystemPrompt + `
 
 CRITICAL NESTING PRINCIPLE:
 • NO RESTRICTIONS on what can contain what - organize based on logical user needs
@@ -529,13 +527,13 @@ PAGE TYPES AND STRATEGIC USAGE:
 • DOCUMENT: Create written content, SOPs, notes, reports (e.g., "Meeting Notes", "Project Requirements", "User Guide")
 • AI_CHAT: Create contextual AI conversation spaces for specific topics/projects (e.g., "Project Alpha AI Assistant", "Marketing Strategy AI", "Code Review AI")
 • CHANNEL: Create team discussion spaces for collaborative conversations (e.g., "Project Alpha Team Chat", "Marketing Team", "Engineering Discussions")
-• CANVAS: Create custom HTML/CSS pages for navigation, dashboards, client-facing content, or any custom design (e.g., "Project Dashboard", "Client Portal", "Navigation Hub", "Company Homepage")
+• CANVAS: Create custom HTML/CSS pages with complete creative freedom - blank canvas for any visual design. Use for: dashboards, landing pages, graphics, demos, portfolios, presentations, prototypes, or any custom layout. Always start with <style> tags for CSS, then HTML. White background by default (theme-independent). Navigation syntax: <a href="/dashboard/DRIVE_ID/PAGE_ID">Link Text</a>
 • DATABASE: Create structured data collections (deprecated but available for legacy support)
 
 WHEN TO CREATE EACH PAGE TYPE:
 - AI_CHAT pages when users need context-specific AI assistance, isolated AI conversations, or persistent AI context tied to workspace areas
 - CHANNEL pages when users need team collaboration spaces, persistent chat history for topics, or organized discussions separate from main communication
-- CANVAS pages when users need custom HTML/CSS pages with full design control, navigation hubs, client-facing portals, dashboard pages with custom layouts, or interactive pages requiring custom functionality
+- CANVAS pages when users want complete creative control over HTML/CSS layout - any visual design need. Use for landing pages, graphics, portfolios, demos, prototypes, presentations, or custom interfaces. Structure: Always start with <style> tags containing CSS, followed by HTML. Navigation links: <a href="/dashboard/DRIVE_ID/PAGE_ID">Link Text</a> (get DRIVE_ID from pageContext.driveId, PAGE_ID from list_pages results).
 
 AVAILABLE TOOLS AND WHEN TO USE THEM:
 - list_drives: Use ONLY when user explicitly asks about other workspaces
@@ -631,11 +629,147 @@ MENTION PROCESSING:
 • Let mentioned document content inform and enrich your response
 • Don't explicitly mention that you're reading @mentioned docs unless relevant to the conversation`,
       messages: modelMessages,
-      tools: filteredTools,
-      stopWhen: stepCountIs(100), // Allow up to 100 tool calls per conversation turn
-      experimental_context: { userId }, // Pass userId to tools for permission checking
-      maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
-    });
+      tools: filteredTools,  // Use original tools directly
+            stopWhen: stepCountIs(100), // Allow up to 100 tool calls per conversation turn
+            experimental_context: {
+              userId,
+              modelCapabilities: getModelCapabilities(currentModel, currentProvider)
+            }, // Pass userId and model capabilities to tools
+            maxRetries: 20 // Increase from default 2 to 20 for better handling of rate limits
+          });
+
+          // Stream the AI response directly to the client
+          for await (const chunk of aiResult.toUIMessageStream()) {
+            writer.write(chunk);
+          }
+        },
+        onFinish: async ({ responseMessage }) => {
+          loggers.ai.debug('AI Chat API: onFinish callback triggered for AI response');
+          
+          // Enhanced debugging: Log the complete message structure
+          loggers.ai.debug('AI Chat API: Response message structure', {
+            id: responseMessage?.id,
+            role: responseMessage?.role,
+            partsCount: responseMessage?.parts?.length || 0,
+            partTypes: responseMessage?.parts?.map(p => p.type) || [],
+          });
+          
+          // Log each part in detail
+          responseMessage?.parts?.forEach((part, index) => {
+            if (part.type === 'text') {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const text = (part as any).text || '';
+              loggers.ai.trace(`AI Chat API: Part ${index}: TEXT`, { preview: text.substring(0, 100) });
+            } else if (part.type.startsWith('tool-')) {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const toolPart = part as any;
+              loggers.ai.trace(`AI Chat API: Part ${index}: TOOL`, { type: part.type, state: toolPart.state, hasOutput: !!toolPart.output });
+            } else {
+              loggers.ai.trace(`AI Chat API: Part ${index}`, { type: part.type });
+            }
+          });
+          
+          // Save the AI's response message with tool calls and results (database-first approach)
+          if (chatId && responseMessage) {
+            try {
+              const messageId = responseMessage.id || createId();
+              const messageContent = extractMessageContent(responseMessage);
+              
+              // Extract tool calls and results from the response
+              const extractedToolCalls = extractToolCalls(responseMessage);
+              const extractedToolResults = extractToolResults(responseMessage);
+              
+              loggers.ai.debug('AI Chat API: Saving AI response message', { 
+                id: messageId, 
+                contentLength: messageContent.length,
+                contentPreview: messageContent.substring(0, 100),
+                toolCallsCount: extractedToolCalls.length,
+                toolResultsCount: extractedToolResults.length,
+                hasContent: messageContent.length > 0,
+                hasTools: extractedToolCalls.length > 0 || extractedToolResults.length > 0
+              });
+              
+              loggers.ai.trace('AI Chat API: Tool tracking', { 
+                toolCalls: extractedToolCalls.length,
+                toolResults: extractedToolResults.length 
+              });
+              
+              // Use the new helper function to save the message with complete UIMessage for chronological ordering
+              await saveMessageToDatabase({
+                messageId,
+                pageId: chatId,
+                userId: null, // AI message
+                role: 'assistant',
+                content: messageContent,
+                toolCalls: extractedToolCalls.length > 0 ? extractedToolCalls : undefined,
+                toolResults: extractedToolResults.length > 0 ? extractedToolResults : undefined,
+                uiMessage: responseMessage, // NEW: Pass complete UIMessage to preserve part ordering
+                agentRole: page.title || 'Page AI', // Use page title as agent role
+              });
+              
+              loggers.ai.debug('AI Chat API: AI response message saved to database with tools');
+              
+              // Track enhanced AI usage with token counting and cost calculation
+              const duration = Date.now() - startTime;
+              
+              // Use enhanced AI monitoring with token usage from SDK
+              await AIMonitoring.trackUsage({
+                userId: userId!,
+                provider: currentProvider,
+                model: currentModel,
+                inputTokens: undefined,
+                outputTokens: undefined, 
+                totalTokens: undefined,
+                prompt: undefined, // Last user message
+                completion: messageContent?.substring(0, 1000),
+                duration,
+                conversationId: chatId,
+                messageId,
+                pageId: chatId,
+                driveId: pageContext?.driveId,
+                success: true,
+                metadata: {
+                  pageName: page.title,
+                  toolCallsCount: extractedToolCalls.length,
+                  toolResultsCount: extractedToolResults.length,
+                  hasTools: extractedToolCalls.length > 0 || extractedToolResults.length > 0
+                }
+              });
+              
+              // Track tool usage separately for analytics
+              if (extractedToolCalls.length > 0) {
+                for (const toolCall of extractedToolCalls) {
+                  await AIMonitoring.trackToolUsage({
+                    userId: userId!,
+                    provider: currentProvider,
+                    model: currentModel,
+                    toolName: toolCall.toolName,
+                    toolId: toolCall.toolCallId,
+                    args: undefined,
+                    conversationId: chatId,
+                    pageId: chatId,
+                    success: true
+                  });
+                }
+                
+                // Also track feature usage
+                trackFeature(userId!, 'ai_tools_used', {
+                  toolCount: extractedToolCalls.length,
+                  provider: currentProvider,
+                  model: currentModel
+                });
+              }
+            } catch (error) {
+              loggers.ai.error('AI Chat API: Failed to save AI response message', error as Error);
+              // Don't fail the response - persistence errors shouldn't break the chat
+            }
+          } else {
+            loggers.ai.warn('AI Chat API: No chatId or response message provided, skipping persistence');
+          }
+        },
+      });
+
+      result = { toUIMessageStreamResponse: () => createUIMessageStreamResponse({ stream }) };
     } catch (streamError) {
       loggers.ai.error('AI Chat API: Failed to create stream', streamError as Error, {
         message: streamError instanceof Error ? streamError.message : 'Unknown error',
@@ -644,135 +778,10 @@ MENTION PROCESSING:
       throw streamError; // Re-throw to be handled by the outer catch
     }
 
-    loggers.ai.debug('AI Chat API: Returning stream response with database-first persistence');
+    loggers.ai.debug('AI Chat API: Returning visual-content-aware stream response');
     
-    // Return UI message stream response with database-first persistence
-    return result.toUIMessageStreamResponse({
-      onFinish: async ({ responseMessage }) => {
-        loggers.ai.debug('AI Chat API: onFinish callback triggered for AI response');
-        
-        // Enhanced debugging: Log the complete message structure
-        loggers.ai.debug('AI Chat API: Response message structure', {
-          id: responseMessage?.id,
-          role: responseMessage?.role,
-          partsCount: responseMessage?.parts?.length || 0,
-          partTypes: responseMessage?.parts?.map(p => p.type) || [],
-        });
-        
-        // Log each part in detail
-        responseMessage?.parts?.forEach((part, index) => {
-          if (part.type === 'text') {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const text = (part as any).text || '';
-            loggers.ai.trace(`AI Chat API: Part ${index}: TEXT`, { preview: text.substring(0, 100) });
-          } else if (part.type.startsWith('tool-')) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const toolPart = part as any;
-            loggers.ai.trace(`AI Chat API: Part ${index}: TOOL`, { type: part.type, state: toolPart.state, hasOutput: !!toolPart.output });
-          } else {
-            loggers.ai.trace(`AI Chat API: Part ${index}`, { type: part.type });
-          }
-        });
-        
-        // Save the AI's response message with tool calls and results (database-first approach)
-        if (chatId && responseMessage) {
-          try {
-            const messageId = responseMessage.id || createId();
-            const messageContent = extractMessageContent(responseMessage);
-            
-            // Extract tool calls and results from the response
-            const extractedToolCalls = extractToolCalls(responseMessage);
-            const extractedToolResults = extractToolResults(responseMessage);
-            
-            loggers.ai.debug('AI Chat API: Saving AI response message', { 
-              id: messageId, 
-              contentLength: messageContent.length,
-              contentPreview: messageContent.substring(0, 100),
-              toolCallsCount: extractedToolCalls.length,
-              toolResultsCount: extractedToolResults.length,
-              hasContent: messageContent.length > 0,
-              hasTools: extractedToolCalls.length > 0 || extractedToolResults.length > 0
-            });
-            
-            loggers.ai.trace('AI Chat API: Tool tracking', { 
-              toolCalls: extractedToolCalls.length,
-              toolResults: extractedToolResults.length 
-            });
-            
-            // Use the new helper function to save the message with complete UIMessage for chronological ordering
-            await saveMessageToDatabase({
-              messageId,
-              pageId: chatId,
-              userId: null, // AI message
-              role: 'assistant',
-              content: messageContent,
-              toolCalls: extractedToolCalls.length > 0 ? extractedToolCalls : undefined,
-              toolResults: extractedToolResults.length > 0 ? extractedToolResults : undefined,
-              uiMessage: responseMessage, // NEW: Pass complete UIMessage to preserve part ordering
-              agentRole: page.title || 'Page AI', // Use page title as agent role
-            });
-            
-            loggers.ai.debug('AI Chat API: AI response message saved to database with tools');
-            
-            // Track enhanced AI usage with token counting and cost calculation
-            const duration = Date.now() - startTime;
-            
-            // Use enhanced AI monitoring with token usage from SDK
-            await AIMonitoring.trackUsage({
-              userId: userId!,
-              provider: currentProvider,
-              model: currentModel,
-              inputTokens: undefined,
-              outputTokens: undefined, 
-              totalTokens: undefined,
-              prompt: undefined, // Last user message
-              completion: messageContent?.substring(0, 1000),
-              duration,
-              conversationId: chatId,
-              messageId,
-              pageId: chatId,
-              driveId: pageContext?.driveId,
-              success: true,
-              metadata: {
-                pageName: page.title,
-                toolCallsCount: extractedToolCalls.length,
-                toolResultsCount: extractedToolResults.length,
-                hasTools: extractedToolCalls.length > 0 || extractedToolResults.length > 0
-              }
-            });
-            
-            // Track tool usage separately for analytics
-            if (extractedToolCalls.length > 0) {
-              for (const toolCall of extractedToolCalls) {
-                await AIMonitoring.trackToolUsage({
-                  userId: userId!,
-                  provider: currentProvider,
-                  model: currentModel,
-                  toolName: toolCall.toolName,
-                  toolId: toolCall.toolCallId,
-                  args: undefined,
-                  conversationId: chatId,
-                  pageId: chatId,
-                  success: true
-                });
-              }
-              
-              // Also track feature usage
-              trackFeature(userId!, 'ai_tools_used', {
-                toolCount: extractedToolCalls.length,
-                provider: currentProvider,
-                model: currentModel
-              });
-            }
-          } catch (error) {
-            loggers.ai.error('AI Chat API: Failed to save AI response message', error as Error);
-            // Don't fail the response - persistence errors shouldn't break the chat
-          }
-        } else {
-          loggers.ai.warn('AI Chat API: No chatId or response message provided, skipping persistence');
-        }
-      },
-    });
+    // Return the enhanced UI message stream response with visual content injection
+    return result.toUIMessageStreamResponse();
 
   } catch (error) {
     loggers.ai.error('AI Chat API Error', error as Error, {

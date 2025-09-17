@@ -2,7 +2,7 @@ import { pgTable, text, timestamp, jsonb, real, boolean, pgEnum, primaryKey, ind
 import { relations } from 'drizzle-orm';
 import { users } from './auth';
 import { createId } from '@paralleldrive/cuid2';
-export const pageType = pgEnum('PageType', ['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS']);
+export const pageType = pgEnum('PageType', ['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'FILE']);
 
 export const drives = pgTable('drives', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
@@ -31,6 +31,19 @@ export const pages = pgTable('pages', {
   aiModel: text('aiModel'),
   systemPrompt: text('systemPrompt'),
   enabledTools: jsonb('enabledTools'),
+  // File-specific fields
+  fileSize: real('fileSize'),
+  mimeType: text('mimeType'),
+  originalFileName: text('originalFileName'),
+  filePath: text('filePath'),
+  fileMetadata: jsonb('fileMetadata'),
+  // Processing status fields
+  processingStatus: text('processingStatus').default('pending'),
+  processingError: text('processingError'),
+  processedAt: timestamp('processedAt', { mode: 'date' }),
+  extractionMethod: text('extractionMethod'),
+  extractionMetadata: jsonb('extractionMetadata'),
+  contentHash: text('contentHash'),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
   trashedAt: timestamp('trashedAt', { mode: 'date' }),
@@ -80,6 +93,22 @@ export const pageTags = pgTable('page_tags', {
     return {
         pk: primaryKey({ columns: [table.pageId, table.tagId] }),
     }
+});
+
+export const storageEvents = pgTable('storage_events', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  pageId: text('pageId').references(() => pages.id, { onDelete: 'set null' }),
+  eventType: text('eventType').notNull(), // 'upload', 'delete', 'update', 'reconcile'
+  sizeDelta: real('sizeDelta').notNull(),
+  totalSizeAfter: real('totalSizeAfter').notNull(),
+  metadata: jsonb('metadata'),
+  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => {
+  return {
+    userIdx: index('storage_events_user_id_idx').on(table.userId),
+    createdAtIdx: index('storage_events_created_at_idx').on(table.createdAt),
+  }
 });
 
 export const favorites = pgTable('favorites', {

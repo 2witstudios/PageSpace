@@ -2,7 +2,7 @@
 
 import PageTree from "./page-tree/PageTree";
 import { Button } from "@/components/ui/button";
-import { Trash2, Search, Plus, Users, Lock, Settings } from "lucide-react";
+import { Trash2, Search, Plus, Users, Lock, Settings, HardDrive } from "lucide-react";
 import { useState, useEffect } from "react";
 import CreatePageDialog from "./CreatePageDialog";
 import { Input } from "@/components/ui/input";
@@ -103,10 +103,16 @@ export default function Sidebar() {
                 Trash
             </Link>
             {!driveId && (
-                <Link href="/settings" className="flex items-center gap-2 p-2 rounded-lg hover:bg-accent hover:text-accent-foreground text-sm">
-                    <Settings className="h-4 w-4" />
-                    Settings
-                </Link>
+                <>
+                    <Link href="/dashboard/storage" className="flex items-center gap-2 p-2 rounded-lg hover:bg-accent hover:text-accent-foreground text-sm">
+                        <HardDrive className="h-4 w-4" />
+                        Storage
+                    </Link>
+                    <Link href="/settings" className="flex items-center gap-2 p-2 rounded-lg hover:bg-accent hover:text-accent-foreground text-sm">
+                        <Settings className="h-4 w-4" />
+                        Settings
+                    </Link>
+                </>
             )}
         </div>
         <CreatePageDialog

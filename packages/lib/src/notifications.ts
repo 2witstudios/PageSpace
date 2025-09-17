@@ -1,5 +1,9 @@
-import { db, notifications, users, pages, drives, eq, and, desc, count } from '@pagespace/db';
+import { db, notifications, users, pages, drives, eq, and, desc, count, sql } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
+
+// Export types and guards
+export * from './notifications/types';
+export * from './notifications/guards';
 
 async function broadcastNotification(userId: string, notification: unknown) {
   try {
@@ -25,7 +29,11 @@ export type NotificationType =
   | 'PAGE_SHARED'
   | 'DRIVE_INVITED'
   | 'DRIVE_JOINED'
-  | 'DRIVE_ROLE_CHANGED';
+  | 'DRIVE_ROLE_CHANGED'
+  | 'CONNECTION_REQUEST'
+  | 'CONNECTION_ACCEPTED'
+  | 'CONNECTION_REJECTED'
+  | 'NEW_DIRECT_MESSAGE';
 
 interface CreateNotificationParams {
   userId: string;
@@ -251,6 +259,52 @@ export async function createDriveNotification(
       role,
     },
     driveId,
+    triggeredByUserId,
+  });
+}
+
+export async function createOrUpdateMessageNotification(
+  targetUserId: string,
+  conversationId: string,
+  messagePreview: string,
+  triggeredByUserId: string
+) {
+  // Check if there's an existing unread notification for this specific conversation
+  const existingNotification = await db.query.notifications.findFirst({
+    where: and(
+      eq(notifications.userId, targetUserId),
+      eq(notifications.type, 'NEW_DIRECT_MESSAGE'),
+      eq(notifications.isRead, false),
+      sql`${notifications.metadata}->>'conversationId' = ${conversationId}`
+    ),
+  });
+
+  if (existingNotification) {
+    // Update the existing notification with the new message
+    const updatedNotification = await db
+      .update(notifications)
+      .set({
+        message: messagePreview,
+        createdAt: new Date(), // Update timestamp to show as recent
+      })
+      .where(eq(notifications.id, existingNotification.id))
+      .returning();
+
+    // Broadcast the updated notification
+    await broadcastNotification(targetUserId, updatedNotification[0]);
+
+    return updatedNotification[0];
+  }
+
+  // Create a new notification if none exists for this conversation
+  return createNotification({
+    userId: targetUserId,
+    type: 'NEW_DIRECT_MESSAGE',
+    title: 'New Direct Message',
+    message: messagePreview,
+    metadata: {
+      conversationId,
+    },
     triggeredByUserId,
   });
 }

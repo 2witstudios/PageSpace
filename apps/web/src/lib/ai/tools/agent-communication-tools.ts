@@ -1,4 +1,4 @@
-import { tool } from 'ai';
+import { tool, stepCountIs } from 'ai';
 import { z } from 'zod';
 import { generateText, convertToModelMessages, UIMessage } from 'ai';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
@@ -27,6 +27,7 @@ import {
 import { buildTimestampSystemPrompt } from '@/lib/ai/timestamp-utils';
 import { ToolExecutionContext } from '../types';
 import { loggers } from '@pagespace/lib/logger-config';
+import { AI_PROVIDERS, getModelDisplayName } from '@/lib/ai/ai-providers-config';
 
 // Constants
 const MAX_AGENT_DEPTH = 3;
@@ -54,7 +55,7 @@ async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: st
         throw new Error('Google AI API key not configured');
       }
       const google = createGoogleGenerativeAI({ apiKey: settings.apiKey });
-      return google(aiModel || 'gemini-1.5-pro');
+      return google(aiModel || 'gemini-2.5-flash');
     }
     
     case 'openai': {
@@ -90,10 +91,15 @@ async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: st
       if (!defaultSettings) {
         throw new Error('No AI provider configured');
       }
-      
-      // Use default provider logic
-      const openrouter = createOpenRouter({ apiKey: defaultSettings.apiKey });
-      return openrouter('anthropic/claude-3.5-sonnet');
+
+      // Only use Google AI as the default provider
+      if (defaultSettings.provider === 'google') {
+        const google = createGoogleGenerativeAI({ apiKey: defaultSettings.apiKey });
+        return google('gemini-2.5-flash');
+      }
+
+      // Should not reach here if properly configured, but throw clear error
+      throw new Error('Default AI provider must be Google AI with gemini-2.5-flash');
     }
   }
 }
@@ -538,18 +544,39 @@ export const agentCommunicationTools = {
               messages: convertToModelMessages(sanitizedMessages),
               tools: agentTools as Parameters<typeof generateText>[0]['tools'],
               experimental_context: nestedContext,
-              maxRetries: 3, // Limited retries for agent-to-agent calls
+              stopWhen: stepCountIs(100), // Match main conversation tool depth
+              maxRetries: 3,
+              onStepFinish: ({ toolCalls }) => {
+                if (toolCalls?.length > 0) {
+                  loggers.ai.debug('Sub-agent tool execution:', {
+                    agentId,
+                    toolCalls: toolCalls.map(tc => tc.toolName),
+                  });
+                }
+              },
             })
           : await generateText({
               model,
               system: systemPrompt,
               messages: convertToModelMessages(sanitizedMessages),
               experimental_context: nestedContext,
-              maxRetries: 3, // Limited retries for agent-to-agent calls
+              maxRetries: 3,
             });
-        
-        // 12. Extract response text - direct access with generateText
+
+        // 12. Extract response text with error checking
         const agentResponse = response.text;
+
+        // Check for tool execution errors
+        const toolErrors = response.steps?.flatMap(step =>
+          step.content?.filter(part => part.type === 'tool-error') || []
+        ) || [];
+
+        if (toolErrors.length > 0) {
+          loggers.ai.warn('Sub-agent tool execution errors:', {
+            agentId,
+            errors: toolErrors,
+          });
+        }
         
         // 13. Log successful interaction
         await logAgentInteraction({
@@ -575,9 +602,16 @@ export const agentCommunicationTools = {
             processingTime,
             messagesInHistory: historyMessages.length,
             callDepth: callDepth + 1,
-            provider: targetAgent.aiProvider || 'default',
-            model: targetAgent.aiModel || 'default',
-            toolsEnabled: (targetAgent.enabledTools as string[] | null)?.length || 0
+            // Use display names from AI_PROVIDERS config
+            provider: targetAgent.aiProvider
+              ? (AI_PROVIDERS[targetAgent.aiProvider as keyof typeof AI_PROVIDERS]?.name || targetAgent.aiProvider)
+              : AI_PROVIDERS.pagespace.name,
+            model: targetAgent.aiProvider
+              ? getModelDisplayName(targetAgent.aiProvider, targetAgent.aiModel || 'gemini-2.5-flash')
+              : 'Default (Free)',  // PageSpace default model display name
+            toolsEnabled: (targetAgent.enabledTools as string[] | null)?.length || 0,
+            toolCalls: response.steps?.flatMap(step => step.toolCalls || []).length || 0,
+            steps: response.steps?.length || 1
           }
         };
         

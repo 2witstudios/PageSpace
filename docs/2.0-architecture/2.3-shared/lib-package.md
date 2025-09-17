@@ -16,6 +16,8 @@ export * from './src/utils';
 export * from './src/enums';
 export * from './src/types';
 export * from './src/notifications';
+export * from './src/page-types.config';
+export * from './src/page-type-validators';
 ```
 
 ### 2. Server Export (`@pagespace/lib/server`)
@@ -42,18 +44,22 @@ export * from './src/tree-utils';
 export * from './src/utils';
 export * from './src/enums';
 export * from './src/types';
+export * from './src/page-types.config';
+export * from './src/page-type-validators';
 ```
 
 ## Responsibilities
 
 ### Core Utilities:
 - **Types** (`types.ts`) - Common TypeScript types and interfaces
-- **Enums** (`enums.ts`) - Shared enum definitions
+- **Enums** (`enums.ts`) - Shared enum definitions including PageType
 - **Utils** (`utils.ts`) - General-purpose helper functions
 - **Tree Utils** (`tree-utils.ts`) - Page hierarchy manipulation
 - **Page Content Parser** (`page-content-parser.ts`) - Content parsing utilities
 - **Permissions** (`permissions.ts`) - Permission checking and access control logic
 - **Notifications** (`notifications.ts`) - Notification system utilities
+- **Page Types Config** (`page-types.config.ts`) - Centralized page type configuration and metadata
+- **Page Type Validators** (`page-type-validators.ts`) - Page creation and update validation logic
 
 ### Server-Only Utilities:
 - **Auth Utils** (`auth-utils.ts`) - JWT authentication and session management

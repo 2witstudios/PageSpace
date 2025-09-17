@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { db, pages, drives, eq, and, sql } from '@pagespace/db';
+import { db, pages, drives, eq, and, sql, inArray } from '@pagespace/db';
 import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib';
 import { ToolExecutionContext } from '../types';
 
@@ -196,7 +196,7 @@ export const searchTools = {
           ? and(
               eq(pages.driveId, driveId),
               eq(pages.isTrashed, false),
-              sql`${pages.type} = ANY(${includeTypes})`
+              inArray(pages.type, includeTypes)
             )
           : and(
               eq(pages.driveId, driveId),

@@ -78,4 +78,133 @@ The entire logic for reordering is handled by the event handlers in [`PageTree.t
     -   If the API call is successful, it calls `mutate()` from SWR to re-fetch the official page tree from the server, ensuring the UI is in sync with the database.
     -   If the API call fails, it reverts the change by setting `optimisticTree` back to `null`.
     -   Finally, it resets all drag-related state variables (`activeId`, `dragState`, `optimisticTree`).
-**Last Updated:** 2025-08-13
+
+## External File Upload Integration (New)
+
+As of 2025-09-11, the drag-and-drop system has been extended to support external file uploads that behave identically to native @dnd-kit items.
+
+### The Challenge
+
+External file drags bypass @dnd-kit's sensor system entirely since they originate from outside the React component tree. This means:
+- No `DragOverEvent` is fired by @dnd-kit
+- No automatic collision detection
+- No transform calculations for animations
+- Items don't automatically move out of the way
+
+### The Solution: Hybrid Approach
+
+We implemented a hybrid system that mimics @dnd-kit's behavior for external files without modifying the library itself.
+
+#### 1. Enhanced DragState
+
+```typescript
+interface DragState {
+  overId: string | null;
+  dropPosition: 'before' | 'after' | 'inside' | null;
+  isExternalFile?: boolean;  // Flag for external drags
+  displacedNodes?: Set<string>;  // Nodes that should animate
+  dragStartPos?: { x: number; y: number };  // For delta calculation
+  mousePosition?: { x: number; y: number };  // For overlay positioning
+}
+```
+
+#### 2. Position Detection Matching Native Behavior
+
+For external files, we replicate @dnd-kit's position detection:
+
+```typescript
+// Capture drag start position on file enter
+onDragEnter={(e) => {
+  if (e.dataTransfer?.types?.includes('Files')) {
+    setDragState(prev => ({
+      ...prev,
+      dragStartPos: { x: e.clientX, y: e.clientY }
+    }));
+  }
+}}
+
+// Calculate position using same logic as native
+onDragOver={(e) => {
+  const deltaX = e.clientX - dragState.dragStartPos.x;
+  
+  if (deltaX > 30) {
+    // Same 30px threshold as native
+    dropPosition = 'inside';
+  } else {
+    // Element-relative positioning for before/after
+    const heightPercent = (e.clientY - rect.top) / rect.height;
+    
+    if (heightPercent < 0.4) {
+      dropPosition = 'before';
+    } else if (heightPercent > 0.6) {
+      dropPosition = 'after';
+    } else {
+      // Dead zone prevents spazzing
+      dropPosition = dragState.dropPosition || 'after';
+    }
+  }
+}}
+```
+
+#### 3. Manual Animation System
+
+Since @dnd-kit doesn't know about external drags, we manually apply animations:
+
+```typescript
+// In TreeNode.tsx
+const isDisplaced = dragState.isExternalFile && 
+                    dragState.displacedNodes?.has(node.id);
+
+const style = {
+  transform: CSS.Transform.toString(transform),  // Native drags
+  marginTop: isDisplaced ? '10px' : undefined,   // External drags
+  transition: transition || (isDisplaced ? 
+    'margin 150ms cubic-bezier(0.25, 1, 0.5, 1)' : undefined)
+};
+```
+
+#### 4. Enhanced Upload API
+
+The `/api/upload` endpoint now supports precise positioning:
+
+```typescript
+// New parameters
+position: 'before' | 'after' | null
+afterNodeId: string | null
+
+// Position calculation using fractional values
+if (position === 'before') {
+  calculatedPosition = (prevSibling.position + target.position) / 2;
+} else if (position === 'after') {
+  calculatedPosition = (target.position + nextSibling.position) / 2;
+}
+```
+
+### Visual Feedback
+
+External file drags show the same visual indicators as native drags:
+- **Blue line above** for "before" drops (with 2px gap)
+- **Blue line below** for "after" drops (with 2px gap)
+- **Blue ring highlight** for "inside" drops
+- **File preview overlay** following the cursor
+- **10px displacement** animation for affected nodes
+
+### Key Design Decisions
+
+1. **Dead Zones**: The middle 20% of each item maintains the previous drop position, preventing rapid state changes that cause "spazzing"
+
+2. **Margin vs Transform**: External drags use margin displacement instead of transforms to avoid conflicts with @dnd-kit's transform system
+
+3. **Delta Tracking**: We track the drag start position to calculate deltas, matching @dnd-kit's approach for the "inside" drop detection
+
+4. **Subtle Animations**: 10px displacement (vs previous 32px) and 2px gaps (vs 6px) create a more refined feel matching native behavior
+
+### Result
+
+External file uploads now behave identically to native @dnd-kit items:
+- Same 30px right-drag threshold for "inside" drops
+- Smooth animations with items moving out of the way
+- Precise positioning between any two items
+- No visual distinction between dragging files vs pages
+
+**Last Updated:** 2025-09-11

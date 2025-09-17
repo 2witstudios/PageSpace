@@ -8,6 +8,7 @@ import { FolderViewProps, ViewMode, SortKey, SortDirection } from './types';
 import { FolderViewHeader } from './FolderViewHeader';
 import { GridView } from './GridView';
 import { ListView } from './ListView';
+import { PageType, isFolderPage } from '@pagespace/lib';
 
 export default function FolderView({ page }: FolderViewProps) {
   const params = useParams();
@@ -20,7 +21,7 @@ export default function FolderView({ page }: FolderViewProps) {
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
 
   useEffect(() => {
-    if (page.type === 'FOLDER' && !page.children) {
+    if (isFolderPage(page.type as PageType) && !page.children) {
       fetchAndMergeChildren(page.id);
     }
   }, [page.id, page.type, page.children, fetchAndMergeChildren]);

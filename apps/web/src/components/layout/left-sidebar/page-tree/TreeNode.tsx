@@ -6,12 +6,8 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
   ChevronRight,
-  FileText,
-  Folder,
   Plus,
   MoreHorizontal,
-  MessageSquare,
-  Sparkles,
   Trash2,
   Pencil,
   Star,
@@ -21,7 +17,7 @@ import { useParams } from "next/navigation";
 import { TreePage } from "@/hooks/usePageTree";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { DragState } from "./PageTree";
-import { PageType } from "@pagespace/lib";
+import { PageTypeIcon } from "@/components/common/PageTypeIcon";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -77,28 +73,17 @@ export default function TreeNode({
     data: { node, depth },
   });
 
+  // Calculate animations for external file drags
+  const isDisplaced = dragState.isExternalFile && dragState.displacedNodes?.has(node.id);
+  
+  // Use margin for external file drags, transform for internal drags
   const style = {
     transform: CSS.Transform.toString(transform),
-    transition,
+    transition: transition || (isDisplaced ? 'margin 150ms cubic-bezier(0.25, 1, 0.5, 1)' : undefined),
     opacity: isDragging ? 0 : 1,
+    marginTop: isDisplaced ? '10px' : undefined, // Match native displacement
   };
 
-  const getIcon = (type: PageType) => {
-    switch (type) {
-      case PageType.FOLDER:
-        return Folder;
-      case PageType.DOCUMENT:
-        return FileText;
-      case PageType.CHANNEL:
-        return MessageSquare;
-      case PageType.AI_CHAT:
-        return Sparkles;
-      default:
-        return FileText;
-    }
-  };
-
-  const Icon = getIcon(node.type);
 
 
   const linkHref = `/dashboard/${params.driveId}/${node.id}`;
@@ -185,7 +170,8 @@ export default function TreeNode({
 
   const isOverThisNode = dragState.overId === node.id;
   const isActiveNode = activeId === node.id;
-  const showDropIndicator = isOverThisNode && !isActiveNode;
+  const isFileDrag = dragState.isExternalFile;
+  const showDropIndicator = isOverThisNode && (!isActiveNode || isFileDrag);
 
   return (
     <>
@@ -198,15 +184,20 @@ export default function TreeNode({
       >
         {/* Drop indicator - BEFORE */}
         {showDropIndicator && dragState.dropPosition === "before" && (
-          <div
-            className="absolute left-0 right-0 h-0.5 bg-blue-500 -top-[1px] pointer-events-none"
-            style={{ left: `${depth * 24 + 8}px` }}
-          />
+          <div className="relative">
+            <div
+              className="absolute left-0 right-0 h-0.5 bg-blue-500 -top-[1px] pointer-events-none z-10"
+              style={{ left: `${depth * 24 + 8}px` }}
+            />
+            {/* Subtle gap for visual feedback */}
+            <div className="h-0.5 w-full" />
+          </div>
         )}
-
+        
         <div
           {...attributes}
           {...listeners}
+          data-tree-node-id={node.id}
           className={`
             group flex items-center px-1 py-1.5 rounded-lg transition-all duration-200 cursor-grab active:cursor-grabbing
             ${
@@ -245,7 +236,8 @@ export default function TreeNode({
 
           {/* Icon and Title */}
           <Link href={linkHref} passHref className="flex items-center flex-1 min-w-0 ml-1 cursor-pointer" onClick={(e) => e.stopPropagation()}>
-            <Icon
+            <PageTypeIcon
+              type={node.type}
               className={`
               h-4 w-4 mr-1.5 flex-shrink-0
               ${hasChildren ? "text-blue-500" : "text-gray-500"}
@@ -328,19 +320,23 @@ export default function TreeNode({
           </div>
 
           {/* Visual hint for drop zones */}
-          {showDropIndicator && dragState.dropPosition === "inside" && (
+          {showDropIndicator && dragState.dropPosition === "inside" ? (
             <div className="absolute inset-0 pointer-events-none">
               <div className="absolute inset-x-4 inset-y-1 border-2 border-blue-500 rounded-md opacity-50" />
             </div>
-          )}
+          ) : null}
         </div>
 
         {/* Drop indicator - AFTER */}
         {showDropIndicator && dragState.dropPosition === "after" && (
-          <div
-            className="absolute left-0 right-0 h-0.5 bg-blue-500 -bottom-[1px] pointer-events-none"
-            style={{ left: `${depth * 24 + 8}px` }}
-          />
+          <div className="relative">
+            {/* Subtle gap for visual feedback */}
+            <div className="h-0.5 w-full" />
+            <div
+              className="absolute left-0 right-0 h-0.5 bg-blue-500 -bottom-[1px] pointer-events-none z-10"
+              style={{ left: `${depth * 24 + 8}px` }}
+            />
+          </div>
         )}
       </div>
 

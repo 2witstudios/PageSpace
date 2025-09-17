@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { streamText, convertToModelMessages, stepCountIs } from 'ai';
+import { streamText, convertToModelMessages, stepCountIs, UIMessage } from 'ai';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { authenticateRequest } from '@/lib/auth-utils';
@@ -26,10 +26,11 @@ import { buildTimestampSystemPrompt } from '@/lib/ai/timestamp-utils';
 import { AgentRoleUtils } from '@/lib/ai/agent-roles';
 import { RolePromptBuilder } from '@/lib/ai/role-prompts';
 import { ToolPermissionFilter } from '@/lib/ai/tool-permissions';
+import { getModelCapabilities } from '@/lib/ai/model-capabilities';
 import { loggers } from '@pagespace/lib/logger-config';
 
-// Allow streaming responses up to 60 seconds
-export const maxDuration = 60;
+// Allow streaming responses up to 5 minutes
+export const maxDuration = 300;
 
 /**
  * GET - Get all messages for a conversation
@@ -226,7 +227,7 @@ export async function POST(
     // Get user's current AI provider settings
     const [user] = await db.select().from(users).where(eq(users.id, userId));
     const currentProvider = selectedProvider || user?.currentAiProvider || 'pagespace';
-    const currentModel = selectedModel || user?.currentAiModel || 'qwen/qwen3-coder:free';
+    const currentModel = selectedModel || user?.currentAiModel || 'gemini-2.5-flash';
     
     // Update user's current provider/model if changed
     if (selectedProvider && selectedModel && 
@@ -244,52 +245,42 @@ export async function POST(
     let model;
 
     if (currentProvider === 'pagespace') {
-      // Use default PageSpace settings (app's OpenRouter key)
+      // Use default PageSpace settings (now Google AI with Gemini 2.5 Flash)
       const pageSpaceSettings = await getDefaultPageSpaceSettings();
-      
+
       if (!pageSpaceSettings) {
-        // Fall back to user's OpenRouter settings if no default key
-        let openRouterSettings = await getUserOpenRouterSettings(userId);
-        
-        if (!openRouterSettings && openRouterApiKey) {
-          await createOpenRouterSettings(userId, openRouterApiKey);
-          openRouterSettings = { apiKey: openRouterApiKey, isConfigured: true };
+        // Fall back to user's Google settings if no default key
+        let googleSettings = await getUserGoogleSettings(userId);
+
+        if (!googleSettings && googleApiKey) {
+          await createGoogleSettings(userId, googleApiKey);
+          googleSettings = { apiKey: googleApiKey, isConfigured: true };
         }
 
-        if (!openRouterSettings) {
-          return NextResponse.json({ 
-            error: 'No default API key configured. Please provide your own OpenRouter API key.' 
+        if (!googleSettings) {
+          return NextResponse.json({
+            error: 'No default API key configured. Please provide your own Google AI API key.'
           }, { status: 400 });
         }
-        
-        const openrouter = createOpenRouter({
-          apiKey: openRouterSettings.apiKey,
+
+        const googleProvider = createGoogleGenerativeAI({
+          apiKey: googleSettings.apiKey,
         });
-        model = openrouter.chat(currentModel);
+        model = googleProvider(currentModel);
       } else {
-        // Custom fetch to inject fallback models into the request
-        const openrouter = createOpenRouter({
-          apiKey: pageSpaceSettings.apiKey,
-          fetch: async (url, options) => {
-            if (options?.body) {
-              try {
-                const body = JSON.parse(options.body as string);
-                // Add fallback models for PageSpace provider (max 3 allowed by OpenRouter)
-                body.models = [
-                  'qwen/qwen3-coder:free', // Primary model
-                  'qwen/qwen3-8b:free',
-                  'qwen/qwen3-14b:free'
-                ];
-                options.body = JSON.stringify(body);
-              } catch (e) {
-                loggers.api.error('Failed to inject fallback models:', e as Error);
-              }
-            }
-            return fetch(url, options);
-          }
-        });
-        
-        model = openrouter.chat(currentModel);
+        // Use the appropriate provider based on the configuration
+        if (pageSpaceSettings.provider === 'google') {
+          const googleProvider = createGoogleGenerativeAI({
+            apiKey: pageSpaceSettings.apiKey,
+          });
+          model = googleProvider(currentModel);
+        } else {
+          // Fallback to OpenRouter for backwards compatibility
+          const openrouter = createOpenRouter({
+            apiKey: pageSpaceSettings.apiKey,
+          });
+          model = openrouter.chat(currentModel);
+        }
       }
     } else if (currentProvider === 'openrouter') {
       let openRouterSettings = await getUserOpenRouterSettings(userId);
@@ -363,7 +354,56 @@ export async function POST(
 
     // Convert UIMessages to ModelMessages for the AI model
     const sanitizedMessages = sanitizeMessagesForModel(requestMessages);
-    const modelMessages = convertToModelMessages(sanitizedMessages);
+    
+    // Process messages to inject visual content from previous tool calls
+    // Limit history to prevent memory issues with large conversations
+    const MAX_MESSAGES_WITH_IMAGES = 10; // Limit messages with images to prevent memory issues
+    const recentMessages = sanitizedMessages.slice(-MAX_MESSAGES_WITH_IMAGES);
+    
+    const processedMessages = recentMessages.map((msg: UIMessage) => {
+      if (msg.role === 'assistant' && msg.parts) {
+        // Check if any tool results contain visual content to inject
+        const toolResults = msg.parts.filter((part) => {
+          if (part && typeof part === 'object' && 'type' in part && part.type === 'tool-result') {
+            const result = (part as { result?: unknown }).result;
+            if (result && typeof result === 'object' && 'type' in result && 'imageDataUrl' in result) {
+              return (result as { type: string }).type === 'visual_content';
+            }
+          }
+          return false;
+        });
+        
+        if (toolResults.length > 0) {
+          // Create new parts array with injected images
+          const newParts = [...msg.parts];
+          
+          // Add image parts for each visual result
+          toolResults.forEach((toolResult) => {
+            const result = (toolResult as { result?: { imageDataUrl?: string; title?: string } }).result;
+            if (result?.imageDataUrl) {
+              // Add a data part that contains the visual content
+              // This will be processed by the client to display the image
+              newParts.push({
+                type: 'data-visual-content' as const,
+                data: {
+                  imageDataUrl: result.imageDataUrl,
+                  title: result.title || 'Visual content'
+                }
+              });
+              
+              // Clear the original imageDataUrl from tool result to save memory
+              const mutableResult = result as { imageDataUrl?: string; title?: string };
+              delete mutableResult.imageDataUrl;
+            }
+          });
+          
+          return { ...msg, parts: newParts };
+        }
+      }
+      return msg;
+    });
+    
+    const modelMessages = convertToModelMessages(processedMessages);
 
     // Build role-aware system prompt with context
     const contextType = locationContext?.currentPage ? 'page' : 
@@ -464,7 +504,8 @@ MENTION PROCESSING:
       stopWhen: stepCountIs(100),
       experimental_context: { 
         userId, 
-        locationContext
+        locationContext,
+        modelCapabilities: getModelCapabilities(currentModel, currentProvider)
       },
       maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
     });

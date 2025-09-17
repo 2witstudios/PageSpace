@@ -14,6 +14,10 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 200M
 
   migrate:
     build:
@@ -49,15 +53,82 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      processor:
+        condition: service_healthy
+    volumes:
+      - file_storage:/app/storage
     env_file: .env
     environment:
       - DATABASE_URL=postgresql://user:password@postgres:5432/pagespace
       - NEXT_PUBLIC_REALTIME_URL=${NEXT_PUBLIC_REALTIME_URL}
+      - FILE_STORAGE_PATH=/app/storage
+      - PROCESSOR_URL=http://processor:3003
       - PORT=3000
+      - NODE_OPTIONS=--max-old-space-size=640
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 768M
+
+  # Permission fixer - runs once to fix existing volume permissions
+  processor-permissions:
+    build:
+      context: .
+      dockerfile: apps/processor/Dockerfile
+    user: root
+    volumes:
+      - file_storage:/data/files
+      - cache_storage:/data/cache
+    command: |
+      sh -c '
+        echo "Fixing volume permissions..."
+        chown -R 1000:1000 /data/files /data/cache
+        echo "Permissions fixed successfully"
+      '
+    restart: "no"
+
+  processor:
+    build:
+      context: .
+      dockerfile: apps/processor/Dockerfile
+    ports:
+      - "3003:3003"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      processor-permissions:
+        condition: service_completed_successfully
+    volumes:
+      - file_storage:/data/files
+      - cache_storage:/data/cache
+    env_file: .env
+    environment:
+      - DATABASE_URL=postgresql://user:password@postgres:5432/pagespace
+      - FILE_STORAGE_PATH=/data/files
+      - CACHE_PATH=/data/cache
+      - PORT=3003
+      - NODE_OPTIONS=--max-old-space-size=1024
+      - ENABLE_OCR=${ENABLE_OCR:-false}
+      - ENABLE_EXTERNAL_OCR=${ENABLE_EXTERNAL_OCR:-false}
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3003/health', (r) => {r.statusCode === 200 ? process.exit(0) : process.exit(1)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 1280M
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=100m
+    security_opt:
+      - no-new-privileges:true
 
   realtime:
     build:
@@ -78,5 +149,27 @@ services:
         limits:
           memory: 256M
 
+  
+
+  # Optional nginx service for efficient static file serving
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "3004:80"
+    volumes:
+      - cache_storage:/usr/share/nginx/html/cache:ro
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      processor:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    profiles:
+      - production
+
 volumes:
   postgres_data:
+  file_storage:
+  cache_storage:

@@ -17,13 +17,24 @@ import {
   DropdownMenuPortal,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { LogOut, User as UserIcon, MessageSquare, Settings, LayoutDashboard, Sun, Moon, Monitor } from 'lucide-react';
+import { LogOut, MessageSquare, Settings, LayoutDashboard, Sun, Moon, Monitor, HardDrive, Users } from 'lucide-react';
 import { useTheme } from "next-themes";
+import useSWR from 'swr';
+import { Progress } from "@/components/ui/progress";
+
+const fetcher = (url: string) => fetch(url).then(res => res.json());
 
 export default function UserDropdown() {
   const { isAuthenticated, user, isLoading } = useAuth();
   const router = useRouter();
   const { setTheme } = useTheme();
+
+  // Fetch storage info
+  const { data: storageInfo } = useSWR(
+    isAuthenticated ? '/api/storage/info' : null,
+    fetcher,
+    { refreshInterval: 30000 } // Refresh every 30 seconds
+  );
 
   const handleSignOut = async () => {
     await fetch('/api/auth/logout', { method: 'POST' });
@@ -41,7 +52,7 @@ export default function UserDropdown() {
         <DropdownMenuTrigger asChild>
           <Button variant="ghost" className="relative h-8 w-8 rounded-full">
             <Avatar className="h-8 w-8">
-              <AvatarImage src={''} alt={user.name || 'User'} />
+              <AvatarImage src={user.image || ''} alt={user.name || 'User'} />
               <AvatarFallback>{user.name?.charAt(0).toUpperCase()}</AvatarFallback>
             </Avatar>
           </Button>
@@ -56,17 +67,34 @@ export default function UserDropdown() {
             </div>
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
-          <DropdownMenuItem disabled className="text-muted-foreground">
+          <DropdownMenuItem onClick={() => router.push('/dashboard/messages')}>
             <MessageSquare className="mr-2 h-4 w-4" />
             <span>Messages</span>
-            <span className="ml-auto text-xs">Coming Soon</span>
           </DropdownMenuItem>
-          <DropdownMenuItem disabled className="text-muted-foreground">
-            <UserIcon className="mr-2 h-4 w-4" />
-            <span>Profile</span>
-            <span className="ml-auto text-xs">Coming Soon</span>
+          <DropdownMenuItem onClick={() => router.push('/dashboard/connections')}>
+            <Users className="mr-2 h-4 w-4" />
+            <span>Connections</span>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={() => router.push('/dashboard/storage')}>
+            <HardDrive className="mr-2 h-4 w-4" />
+            <div className="flex-1">
+              <div className="flex items-center justify-between">
+                <span>Storage</span>
+                {storageInfo?.quota && (
+                  <span className="text-xs text-muted-foreground ml-2">
+                    {storageInfo.quota.formattedUsed} / {storageInfo.quota.formattedQuota}
+                  </span>
+                )}
+              </div>
+              {storageInfo?.quota && (
+                <Progress
+                  value={storageInfo.quota.utilizationPercent}
+                  className="h-1 mt-1"
+                />
+              )}
+            </div>
+          </DropdownMenuItem>
           <DropdownMenuItem onClick={() => router.push('/account')}>
             <LayoutDashboard className="mr-2 h-4 w-4" />
             <span>Account</span>

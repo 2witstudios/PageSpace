@@ -1,3 +1,168 @@
+### 2025-01-16
+
+- **Canvas Navigation Simplification**: Removed pagespace:// protocol in favor of standard URLs
+  - **Updated**: `apps/web/src/components/layout/middle-content/page-views/canvas/CanvasPageView.tsx`
+    - **Removed**: Support for `pagespace://page/id` protocol (was broken due to browser URL handling)
+    - **Standardized**: All navigation now uses `/dashboard/drive-id/page-id` format
+  - **Updated**: Documentation to reflect single navigation pattern
+    - **Added**: "Getting Your IDs" section in canvas dashboard guide
+    - **Removed**: All references to pagespace:// protocol
+  - **Benefits**:
+    - Simpler, more predictable navigation
+    - Works with browser URL standards
+    - No special protocol handling needed
+
+- **Canvas Dashboard System**: Functional HTML/CSS Dashboards with Navigation
+  - **Created**: `apps/web/src/components/canvas/ShadowCanvas.tsx` - Shadow DOM component for isolated rendering
+    - **Shadow DOM Isolation**: Complete style encapsulation from main app
+    - **Navigation Interception**: Clicks on links and buttons trigger PageSpace navigation
+    - **Theme Independence**: Dashboards look identical in light/dark mode
+    - **CSS Extraction**: Automatically extracts and applies embedded `<style>` tags
+    - **Security**: DOMPurify HTML sanitization, CSS JavaScript blocking
+  - **Updated**: `apps/web/src/components/layout/middle-content/page-views/canvas/CanvasPageView.tsx`
+    - **Replaced**: Iframe-based Sandbox with ShadowCanvas component
+    - **Added**: Navigation handling with permission checking
+    - **Removed**: Complex postMessage communication
+  - **Created**: `apps/web/src/lib/canvas/css-sanitizer.ts` - CSS security utilities
+    - **Blocks**: JavaScript execution (expression, -moz-binding, javascript:)
+    - **Allows**: Full creative CSS (animations, gradients, transforms)
+  - **Updated**: `apps/web/src/components/sandbox/Sandbox.tsx`
+    - **Reverted**: Removed navigation complexity, back to simple iframe
+  - **Documentation**:
+    - Created comprehensive feature documentation
+    - Created user-friendly dashboard builder guide
+    - Updated all related documentation files
+  - **Impact**:
+    - Canvas pages now have fully functional navigation
+    - Users can build custom dashboards with standard HTML/CSS
+    - AI can generate compatible dashboards naturally
+    - Improved security through Shadow DOM isolation
+    - Simplified architecture without iframe complexity
+
+### 2025-01-14
+
+- **AI System Enhancement**: Comprehensive AI Prompt System Overhaul (Part 2 - Simplified & Adaptive)
+  - **Updated**: `apps/web/src/lib/ai/role-prompts.ts` - Simplified PARTNER role for natural adaptability
+    - **Removed**: Over-prescriptive instructions like "ALWAYS explore first"
+    - **Added**: Flexible principles: "Read the situation" and "Use your judgment"
+    - **Conversational First**: Engage naturally before reaching for tools when brainstorming
+    - **Intent-Based Actions**: Clear requests trigger immediate tool use
+    - **Human Balance**: Like a knowledgeable colleague, not a robot following scripts
+  - **Philosophy Change**: Trust the AI's intelligence rather than micromanaging behavior
+    - Let context and user intent naturally drive tool usage
+    - Remove rigid workflows in favor of adaptive responses
+    - Keep technical documentation available but not mandatory
+
+- **AI System Enhancement**: Comprehensive AI Prompt System Overhaul (Part 1)
+  - **Created**: `apps/web/src/lib/ai/tool-instructions.ts` - Detailed tool usage instructions
+    - **Core Navigation**: Workspace discovery patterns and permission awareness
+    - **Document Operations**: Read-before-write patterns, line-based editing guidance
+    - **Search Strategies**: Hierarchical search tools (glob → regex → fuzzy)
+    - **Task Management**: Complex operation tracking with create_task_list
+    - **Batch Operations**: Atomic multi-page transactions with tempId system
+    - **AI Agent Management**: Specialized assistant creation and configuration
+    - **Parallel Execution**: 3-5x performance improvement patterns
+    - **Error Recovery**: Graceful failure handling and retry strategies
+  - **Updated**: `apps/web/src/lib/ai/role-prompts.ts` - Enhanced role definitions
+    - **Core Identity**: "PageSpace AI - think Cursor for Google Drive"
+    - **Action-Oriented Language**: EXPLORE FIRST, EXECUTE AUTONOMOUSLY, PARALLELIZE AGGRESSIVELY
+    - **Role-Specific Instructions**: Tailored tool usage for PARTNER, PLANNER, WRITER roles
+    - **Critical Principles**: Always explore before modifying, complete tasks autonomously
+    - **Status Communication**: Before/during/after operation updates
+  - **Created**: `apps/web/src/lib/ai/test-enhanced-prompts.ts` - Prompt testing utility
+    - **Verification**: All key improvements present in generated prompts
+    - **Length Analysis**: Partner (14KB), Planner (8KB), Writer (9KB) prompts
+  - **Impact**:
+    - AI now has explicit workflows for common operations
+    - Parallel execution patterns improve response time 3-5x
+    - Error recovery prevents task abandonment
+    - Tool usage is now predictable and efficient
+    - Status updates keep users informed during operations
+
+### 2025-01-13
+
+- **Documentation**: File Upload and Processing Architecture
+  - **Created**: `docs/2.0-architecture/2.6-features/file-upload.md` - Comprehensive file upload system documentation
+    - **Overview**: Distributed architecture, design principles, component responsibilities
+    - **Processing**: Image optimization pipeline, text extraction pipeline
+    - **Storage**: Content-addressed storage with SHA256 hashing
+    - **AI Integration**: Vision model support, file immutability for uploaded content
+    - **Known Limitations**: Current implementation status and future enhancements
+  - **Created**: `docs/2.0-architecture/2.2-backend/processor-service.md` - Processor service architecture
+    - **Service Configuration**: Docker setup, memory management
+    - **Core Components**: Express server, content store, image processor, queue manager
+    - **API Endpoints**: Upload, serve, optimization, health check
+    - **Processing Workflows**: Image and document processing flows
+    - **Performance**: Memory management, caching strategy, concurrency control
+  - **Updated**: `docs/1.0-overview/1.4-api-routes-list.md` - Added file upload routes
+    - **POST /api/upload**: File upload endpoint documentation
+    - **GET /api/files/[id]/view**: File viewing endpoint documentation
+  - **Updated**: `docs/1.0-overview/1.5-functions-list.md` - Added file processing functions
+    - **ContentStore Functions**: File storage and retrieval functions
+    - **Image Processing Functions**: Image optimization and preset processing
+    - **Queue Manager Functions**: Job queue management for background processing
+    - **Text Extraction Functions**: Document text extraction (partially implemented)
+    - **File Upload/View Functions**: API handlers for file operations
+    - **AI Visual Content Functions**: Vision model integration utilities
+
+### 2025-01-02
+
+- **Major Refactor**: Page Type System Centralization
+  - **Refactored**: Complete overhaul of page type handling system with centralized configuration
+  - **Created**: `packages/lib/src/page-types.config.ts` - Central configuration for all page type metadata
+    - **Metadata**: Display names, descriptions, icons, emojis, capabilities
+    - **Behavior**: Default content generation, allowed child types, UI component mapping
+    - **Validation**: API validation rules, custom validators
+  - **Created**: `packages/lib/src/page-type-validators.ts` - Centralized validation logic
+    - **validatePageCreation()**: Type-specific creation validation
+    - **validatePageUpdate()**: Update validation with type awareness
+    - **validateAIChatTools()**: AI tool validation for AI_CHAT pages
+    - **canConvertToType()**: Page type conversion rules
+  - **Created**: `apps/web/src/components/common/PageTypeIcon.tsx` - Unified icon component
+    - **Replaces**: 4 duplicate icon mapping functions across the codebase
+    - **Consistent**: AI_CHAT now uses Sparkles icon everywhere (was Bot in some places)
+  - **Updated**: Component selection to use dynamic mapping instead of switch statements
+    - **index.tsx**: Uses getPageTypeComponent() with componentMap
+    - **CenterPanel.tsx**: Uses getPageTypeComponent() with componentMap
+  - **Removed**: Duplicate code and hardcoded type checks
+    - **Deleted**: Icon.tsx wrapper files from drive/ and folder/ directories
+    - **Replaced**: All hardcoded type comparisons with helper functions
+    - **Helper functions**: isDocumentPage(), isFilePage(), isFolderPage(), isCanvasPage(), isChannelPage(), isAIChatPage()
+  - **Impact**: 
+    - **~400 lines of duplicate code removed**
+    - **Single source of truth for page type behavior**
+    - **New page types now require changes in only 2 files vs 31+**
+    - **Improved type safety with TypeScript enums throughout**
+  - **Files modified**: 31 files refactored to use centralized system
+
+### 2025-09-11
+
+- **Major Enhancement**: Drag-and-Drop File Upload with Native @dnd-kit Behavior
+  - **Added**: External file drag-and-drop functionality that perfectly matches internal page reordering
+    - **Position tracking**: Captures drag start position to calculate delta values like native @dnd-kit
+    - **Smart drop zones**: Top 40% = before, bottom 40% = after, middle 20% = maintains state (prevents spazzing)
+    - **Delta-based "inside" detection**: Drag 30px right from start position to drop inside folders (matches native)
+    - **Smooth animations**: 10px margin displacement with 150ms cubic-bezier transitions (identical to native)
+  - **Enhanced**: `/api/upload` endpoint to support precise positioning
+    - **Added**: `position` parameter ('before' | 'after') for drop type
+    - **Added**: `afterNodeId` parameter to identify target node
+    - **Implemented**: Fractional position calculation for exact placement between items
+  - **Updated**: `useFileDrop` hook to pass position data through upload flow
+  - **Fixed**: Spazzing/flickering issues with overlapping drop zones
+    - **Element-relative positioning**: Uses position within hovered element instead of total delta
+    - **Dead zones**: Middle 20% of elements prevents rapid state changes
+  - **Enhanced**: Visual feedback system
+    - **Subtle gaps**: Reduced from 6px to 2px for cleaner appearance
+    - **Blue indicators**: Lines for before/after, ring for inside drops
+    - **File preview overlay**: Shows "Upload files" indicator following cursor
+  - **Result**: External file uploads now behave identically to native @dnd-kit draggable items
+  - **Technical approach**: Hybrid system that mimics @dnd-kit behavior without modifying the library
+  - **Files modified**: 
+    - `apps/web/src/components/layout/left-sidebar/page-tree/PageTree.tsx`
+    - `apps/web/src/components/layout/left-sidebar/page-tree/TreeNode.tsx`
+    - `apps/web/src/hooks/useFileDrop.ts`
+    - `apps/web/src/app/api/upload/route.ts`
+
 ### 2025-09-10
 
 - **Major Enhancement**: AI Agent Creation System and Enhanced Page Creation Tools

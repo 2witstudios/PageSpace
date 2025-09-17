@@ -1,7 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db, pages, drives, eq, and, desc, isNull, inArray } from '@pagespace/db';
-import { canUserEditPage, canUserDeletePage } from '@pagespace/lib';
+import { canUserEditPage, canUserDeletePage, PageType, isAIChatPage, isDocumentPage } from '@pagespace/lib';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
 import { ToolExecutionContext } from '../types';
 import { pageSpaceTools } from '../ai-tools';
@@ -36,6 +36,22 @@ export const pageWriteTools = {
 
         if (!page) {
           throw new Error(`Page with ID "${pageId}" not found`);
+        }
+
+        // Check if this is a FILE type page - these are read-only
+        if (page.type === 'FILE') {
+          return {
+            success: false,
+            error: 'Cannot edit FILE pages',
+            message: 'This is an uploaded file. File content is read-only and managed by the system.',
+            suggestion: 'To modify content, create a new document page instead of editing the uploaded file.',
+            pageInfo: {
+              pageId: page.id,
+              title: page.title,
+              type: page.type,
+              mimeType: page.mimeType
+            }
+          };
         }
 
         // Check user permissions (need EDIT access)
@@ -132,6 +148,22 @@ export const pageWriteTools = {
           throw new Error(`Page with ID "${pageId}" not found`);
         }
 
+        // Check if this is a FILE type page - these are read-only
+        if (page.type === 'FILE') {
+          return {
+            success: false,
+            error: 'Cannot edit FILE pages',
+            message: 'This is an uploaded file. File content is read-only and managed by the system.',
+            suggestion: 'To modify content, create a new document page instead of editing the uploaded file.',
+            pageInfo: {
+              pageId: page.id,
+              title: page.title,
+              type: page.type,
+              mimeType: page.mimeType
+            }
+          };
+        }
+
         // Check user permissions
         const canEdit = await canUserEditPage(userId, page.id);
         if (!canEdit) {
@@ -224,6 +256,22 @@ export const pageWriteTools = {
 
         if (!page) {
           throw new Error(`Page with ID "${pageId}" not found`);
+        }
+
+        // Check if this is a FILE type page - these are read-only
+        if (page.type === 'FILE') {
+          return {
+            success: false,
+            error: 'Cannot edit FILE pages',
+            message: 'This is an uploaded file. File content is read-only and managed by the system.',
+            suggestion: 'To modify content, create a new document page instead of editing the uploaded file.',
+            pageInfo: {
+              pageId: page.id,
+              title: page.title,
+              type: page.type,
+              mimeType: page.mimeType
+            }
+          };
         }
 
         // Check user permissions
@@ -357,7 +405,7 @@ export const pageWriteTools = {
         const nextPosition = siblingPages.length > 0 ? siblingPages[0].position + 1 : 1;
 
         // Validate agent configuration for AI_CHAT pages
-        if (type === 'AI_CHAT') {
+        if (isAIChatPage(type as PageType)) {
           // Validate enabled tools if provided
           if (enabledTools && enabledTools.length > 0) {
             const availableToolNames = Object.keys(pageSpaceTools);
@@ -399,7 +447,7 @@ export const pageWriteTools = {
         };
 
         // Add agent-specific fields for AI_CHAT pages
-        if (type === 'AI_CHAT') {
+        if (isAIChatPage(type as PageType)) {
           if (systemPrompt) {
             pageData.systemPrompt = systemPrompt;
           }
@@ -459,16 +507,16 @@ export const pageWriteTools = {
           title: newPage.title,
           type: newPage.type,
           parentId: parentId || 'root',
-          message: `Successfully created ${type.toLowerCase()} page "${title}"${type === 'AI_CHAT' && (systemPrompt || enabledTools) ? ' with agent configuration' : ''}`,
-          summary: `Created new ${type.toLowerCase()} "${title}" in ${parentId ? `parent ${parentId}` : 'drive root'}${type === 'AI_CHAT' && systemPrompt ? ' with custom system prompt' : ''}`,
+          message: `Successfully created ${type.toLowerCase()} page "${title}"${isAIChatPage(type as PageType) && (systemPrompt || enabledTools) ? ' with agent configuration' : ''}`,
+          summary: `Created new ${type.toLowerCase()} "${title}" in ${parentId ? `parent ${parentId}` : 'drive root'}${isAIChatPage(type as PageType) && systemPrompt ? ' with custom system prompt' : ''}`,
           stats: {
             pageType: newPage.type,
             location: parentId ? `Parent ID: ${parentId}` : 'Drive root',
             hasContent: content.length > 0
           },
           nextSteps: [
-            type === 'DOCUMENT' ? 'Add content to the new document' : 
-            type === 'AI_CHAT' ? 'Start chatting with your new AI agent' : 
+            isDocumentPage(type as PageType) ? 'Add content to the new document' : 
+            isAIChatPage(type as PageType) ? 'Start chatting with your new AI agent' : 
             'Organize related pages in this folder',
             'Use read_page to verify the content was created correctly',
             `New page ID: ${newPage.id} - use this for further operations`
@@ -476,7 +524,7 @@ export const pageWriteTools = {
         };
 
         // Add agent configuration details to response if applicable
-        if (type === 'AI_CHAT') {
+        if (isAIChatPage(type as PageType)) {
           response.agentConfig = {
             hasSystemPrompt: !!systemPrompt,
             enabledToolsCount: enabledTools?.length || 0,
@@ -675,6 +723,22 @@ export const pageWriteTools = {
           throw new Error(`Page with ID "${pageId}" not found`);
         }
 
+        // Check if this is a FILE type page - these are read-only
+        if (page.type === 'FILE') {
+          return {
+            success: false,
+            error: 'Cannot edit FILE pages',
+            message: 'This is an uploaded file. File content is read-only and managed by the system.',
+            suggestion: 'To modify content, create a new document page instead of editing the uploaded file.',
+            pageInfo: {
+              pageId: page.id,
+              title: page.title,
+              type: page.type,
+              mimeType: page.mimeType
+            }
+          };
+        }
+
         // Check permissions
         const canEdit = await canUserEditPage(userId, page.id);
         if (!canEdit) {
@@ -750,6 +814,22 @@ export const pageWriteTools = {
 
         if (!page) {
           throw new Error(`Page with ID "${pageId}" not found`);
+        }
+
+        // Check if this is a FILE type page - these are read-only
+        if (page.type === 'FILE') {
+          return {
+            success: false,
+            error: 'Cannot edit FILE pages',
+            message: 'This is an uploaded file. File content is read-only and managed by the system.',
+            suggestion: 'To modify content, create a new document page instead of editing the uploaded file.',
+            pageInfo: {
+              pageId: page.id,
+              title: page.title,
+              type: page.type,
+              mimeType: page.mimeType
+            }
+          };
         }
 
         // Check permissions

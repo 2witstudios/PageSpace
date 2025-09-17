@@ -41,7 +41,8 @@ ENV NEXT_PUBLIC_REALTIME_URL=$NEXT_PUBLIC_REALTIME_URL
 # ENV NODE_ENV=development
 
 # Build with development env to ensure Tailwind v4 processes correctly
-RUN cd apps/web && NODE_OPTIONS="--max-old-space-size=1024" pnpm build
+# Increased memory for Scribe.js and other heavy dependencies
+RUN cd apps/web && NODE_OPTIONS="--max-old-space-size=2048" pnpm build
 
 # Reset NODE_ENV for production runtime
 ENV NODE_ENV=production
@@ -56,6 +57,9 @@ ENV NODE_ENV=production
 
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
+
+# Create storage directory with proper permissions
+RUN mkdir -p /app/storage && chown -R nextjs:nodejs /app/storage
 
 # Copy the standalone output
 COPY --from=builder /app/apps/web/.next/standalone .

@@ -4,22 +4,26 @@ import { useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { formatDistanceToNow } from 'date-fns';
-import { 
-  X, 
-  FileText, 
-  Share2, 
-  UserPlus, 
+import { toast } from 'sonner';
+import {
+  X,
+  FileText,
+  Share2,
+  UserPlus,
+  UserCheck,
   Shield,
   Users,
   ChevronRight,
   CheckCheck,
-  Bell
+  Bell,
+  MessageCircle
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { useNotificationStore } from '@/stores/notificationStore';
 import { cn } from '@/lib/utils';
+import { isConnectionRequest } from '@pagespace/lib';
 
 const NotificationIcon = ({ type }: { type: string }) => {
   switch (type) {
@@ -32,6 +36,14 @@ const NotificationIcon = ({ type }: { type: string }) => {
       return <X className="h-4 w-4" />;
     case 'DRIVE_INVITED':
       return <UserPlus className="h-4 w-4" />;
+    case 'CONNECTION_REQUEST':
+      return <UserPlus className="h-4 w-4" />;
+    case 'CONNECTION_ACCEPTED':
+      return <UserCheck className="h-4 w-4" />;
+    case 'CONNECTION_REJECTED':
+      return <X className="h-4 w-4" />;
+    case 'NEW_DIRECT_MESSAGE':
+      return <MessageCircle className="h-4 w-4" />;
     case 'DRIVE_JOINED':
     case 'DRIVE_ROLE_CHANGED':
       return <Users className="h-4 w-4" />;
@@ -50,6 +62,33 @@ export default function NotificationDropdown() {
     handleDeleteNotification,
     setIsDropdownOpen,
   } = useNotificationStore();
+
+  const handleConnectionAction = async (connectionId: string, action: 'accept' | 'reject', notificationId: string) => {
+    try {
+      const response = await fetch(`/api/connections/${connectionId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to ${action} connection`);
+      }
+
+      // Remove the notification immediately for visual feedback
+      handleDeleteNotification(notificationId);
+
+      // Show success message
+      const message = action === 'accept'
+        ? 'Connection request accepted successfully!'
+        : 'Connection request declined.';
+
+      toast.success(message);
+    } catch (error) {
+      console.error(`Error ${action}ing connection:`, error);
+      toast.error(`Failed to ${action} connection request. Please try again.`);
+    }
+  };
 
   const groupedNotifications = useMemo(() => {
     const groups: Record<string, typeof notifications> = {
@@ -135,8 +174,17 @@ export default function NotificationDropdown() {
                       if (!notification.isRead) {
                         handleNotificationRead(notification.id);
                       }
-                      // Navigate to drive if available
-                      if (notification.drive?.id) {
+
+                      // Navigate based on notification type
+                      if (notification.type === 'NEW_DIRECT_MESSAGE' &&
+                          notification.metadata &&
+                          typeof notification.metadata === 'object' &&
+                          'conversationId' in notification.metadata) {
+                        // Navigate to the direct message conversation
+                        setIsDropdownOpen(false);
+                        router.push(`/dashboard/messages/${notification.metadata.conversationId}`);
+                      } else if (notification.drive?.id) {
+                        // Navigate to drive if available
                         setIsDropdownOpen(false);
                         router.push(`/dashboard/${notification.drive.id}`);
                       }
@@ -172,6 +220,34 @@ export default function NotificationDropdown() {
                             </>
                           )}
                         </div>
+                        {isConnectionRequest(notification) && (
+                          <div className="flex gap-2 mt-3" onClick={(e) => e.stopPropagation()}>
+                            <Button
+                              size="sm"
+                              variant="default"
+                              className="h-7"
+                              onClick={() => handleConnectionAction(
+                                notification.metadata.connectionId,
+                                'accept',
+                                notification.id
+                              )}
+                            >
+                              Accept
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7"
+                              onClick={() => handleConnectionAction(
+                                notification.metadata.connectionId,
+                                'reject',
+                                notification.id
+                              )}
+                            >
+                              Decline
+                            </Button>
+                          </div>
+                        )}
                       </div>
                       <div className="opacity-0 group-hover:opacity-100 transition-opacity">
                         <Button

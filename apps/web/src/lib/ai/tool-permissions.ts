@@ -115,6 +115,139 @@ export const TOOL_METADATA: Record<string, ToolMetadata> = {
     name: 'list_trash',
     operation: ToolOperation.EXPLORE,
     description: 'See what pages are in the trash for a drive'
+  },
+
+  // Agent communication tools
+  ask_agent: {
+    name: 'ask_agent',
+    operation: ToolOperation.READ,
+    description: 'Consult another AI agent for specialized knowledge'
+  },
+  list_agents: {
+    name: 'list_agents',
+    operation: ToolOperation.EXPLORE,
+    description: 'List AI agents in a drive'
+  },
+  multi_drive_list_agents: {
+    name: 'multi_drive_list_agents',
+    operation: ToolOperation.EXPLORE,
+    description: 'List AI agents across all drives'
+  },
+
+  // Agent management tools
+  create_agent: {
+    name: 'create_agent',
+    operation: ToolOperation.CREATE,
+    description: 'Create a new AI agent',
+    requiresConfirmation: true
+  },
+  update_agent_config: {
+    name: 'update_agent_config',
+    operation: ToolOperation.WRITE,
+    description: 'Update agent configuration'
+  },
+
+  // Drive management tools
+  create_drive: {
+    name: 'create_drive',
+    operation: ToolOperation.CREATE,
+    description: 'Create a new drive/workspace',
+    requiresConfirmation: true
+  },
+  rename_drive: {
+    name: 'rename_drive',
+    operation: ToolOperation.WRITE,
+    description: 'Rename a drive'
+  },
+  trash_drive: {
+    name: 'trash_drive',
+    operation: ToolOperation.DELETE,
+    description: 'Delete a drive',
+    requiresConfirmation: true,
+    destructive: true
+  },
+  restore_drive: {
+    name: 'restore_drive',
+    operation: ToolOperation.ORGANIZE,
+    description: 'Restore a trashed drive'
+  },
+
+  // Search tools
+  regex_search: {
+    name: 'regex_search',
+    operation: ToolOperation.READ,
+    description: 'Search using regex patterns'
+  },
+  glob_search: {
+    name: 'glob_search',
+    operation: ToolOperation.READ,
+    description: 'Search using glob patterns'
+  },
+  multi_drive_search: {
+    name: 'multi_drive_search',
+    operation: ToolOperation.READ,
+    description: 'Search across multiple drives'
+  },
+
+  // Task management tools
+  create_task_list: {
+    name: 'create_task_list',
+    operation: ToolOperation.CREATE,
+    description: 'Create a new task list'
+  },
+  get_task_list: {
+    name: 'get_task_list',
+    operation: ToolOperation.READ,
+    description: 'Get current task list'
+  },
+  update_task_status: {
+    name: 'update_task_status',
+    operation: ToolOperation.WRITE,
+    description: 'Update task status'
+  },
+  add_task: {
+    name: 'add_task',
+    operation: ToolOperation.WRITE,
+    description: 'Add a new task'
+  },
+  add_task_note: {
+    name: 'add_task_note',
+    operation: ToolOperation.WRITE,
+    description: 'Add note to a task'
+  },
+  resume_task_list: {
+    name: 'resume_task_list',
+    operation: ToolOperation.WRITE,
+    description: 'Resume task list processing'
+  },
+
+  // Batch operation tools
+  batch_page_operations: {
+    name: 'batch_page_operations',
+    operation: ToolOperation.WRITE,
+    description: 'Perform batch operations on pages'
+  },
+  bulk_move_pages: {
+    name: 'bulk_move_pages',
+    operation: ToolOperation.ORGANIZE,
+    description: 'Move multiple pages at once'
+  },
+  bulk_rename_pages: {
+    name: 'bulk_rename_pages',
+    operation: ToolOperation.WRITE,
+    description: 'Rename multiple pages'
+  },
+  create_folder_structure: {
+    name: 'create_folder_structure',
+    operation: ToolOperation.CREATE,
+    description: 'Create a folder hierarchy'
+  },
+
+  // Page read tools
+  read_current_page: {
+    name: 'read_current_page',
+    operation: ToolOperation.READ,
+    description: 'Read the current page content'
   }
 };
 

@@ -13,6 +13,7 @@
 ├── dialogs/                # Custom application-specific dialogs
 ├── admin/                  # Administrative components for user and schema management
 ├── ai/                     # AI-specific UI components and renderers
+├── canvas/                 # Canvas dashboard components (ShadowCanvas)
 ├── editors/                # Rich text and code editor components
 ├── members/                # Drive member and collaboration management components
 ├── notifications/          # Notification system components

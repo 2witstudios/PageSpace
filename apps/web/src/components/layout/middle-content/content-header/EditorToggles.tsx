@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { useDocumentStore } from '@/stores/useDocumentStore';
 import { useParams } from 'next/navigation';
 import useSWR from 'swr';
+import { PageType, isDocumentPage, isCanvasPage } from '@pagespace/lib';
 
 const fetcher = (url: string) => fetch(url).then(res => res.json());
 
@@ -19,7 +20,8 @@ export function EditorToggles() {
   );
   
   // Only show editor toggles for document and canvas pages
-  const shouldShowToggles = pageData?.type === 'DOCUMENT' || pageData?.type === 'CANVAS';
+  const pageType = pageData?.type as PageType;
+  const shouldShowToggles = pageType && (isDocumentPage(pageType) || isCanvasPage(pageType));
   
   if (!shouldShowToggles) {
     return null;

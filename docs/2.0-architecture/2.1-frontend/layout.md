@@ -50,7 +50,7 @@ pagespace follows a **five-section layout** that provides consistent, predictabl
 - `ai-page/` - AI chat interface  
 - `channel/` - People group conversations
 - `folder/` - Directory listing view
-- `canvas/` - Canvas page editing interface
+- `canvas/` - Canvas dashboard view with functional HTML/CSS navigation
 - `dashboard/` - User dashboard and global assistant views
 - `drive/` - Drive overview and management interface
 - `settings/` - Application settings (AI API, MCP configuration)
@@ -123,7 +123,7 @@ The `/layout/` directory directly maps to this visual structure:
 │       ├── ai-page/       # AI chat interface
 │       ├── channel/       # People group conversations
 │       ├── folder/        # Directory listing view
-│       ├── canvas/        # Canvas page editing interface
+│       ├── canvas/        # Canvas dashboard with HTML/CSS navigation
 │       ├── dashboard/     # User dashboard and global assistant
 │       ├── drive/         # Drive overview and management
 │       └── settings/      # Application settings (AI API, MCP)

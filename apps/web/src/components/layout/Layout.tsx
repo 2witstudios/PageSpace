@@ -30,6 +30,7 @@ function Layout({ children }: LayoutProps) {
     toggleRightSidebar,
   } = useLayoutStore();
   const hasHydrated = useHasHydrated();
+
   
   // Monitor performance
   usePerformanceMonitor();

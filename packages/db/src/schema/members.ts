@@ -13,7 +13,7 @@ export const invitationStatus = pgEnum('InvitationStatus', ['PENDING', 'ACCEPTED
 // User profiles for discovery
 export const userProfiles = pgTable('user_profiles', {
   userId: text('userId').primaryKey().references(() => users.id, { onDelete: 'cascade' }),
-  username: text('username').notNull().unique(),
+  username: text('username'), // Made optional, no longer unique
   displayName: text('displayName').notNull(),
   bio: text('bio'),
   avatarUrl: text('avatarUrl'),
@@ -22,7 +22,6 @@ export const userProfiles = pgTable('user_profiles', {
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
 }, (table) => {
   return {
-    usernameIdx: index('user_profiles_username_idx').on(table.username),
     isPublicIdx: index('user_profiles_is_public_idx').on(table.isPublic),
   }
 });

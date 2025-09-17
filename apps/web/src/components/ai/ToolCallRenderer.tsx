@@ -1,4 +1,5 @@
 import React from 'react';
+import { PageType, isFolderPage } from '@pagespace/lib';
 import { 
   FileText, 
   FolderOpen, 
@@ -383,7 +384,7 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
     return items.map((item, index) => (
       <div key={index} style={{ paddingLeft: `${depth * 12}px` }}>
         <TaskItem status="completed">
-          {item.type === 'FOLDER' ? (
+          {isFolderPage(item.type as PageType) ? (
             <FolderOpen className="h-3 w-3 text-blue-600" />
           ) : (
             <FileText className="h-3 w-3 text-gray-600" />

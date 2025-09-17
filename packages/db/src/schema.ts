@@ -8,6 +8,7 @@ export * from './schema/dashboard';
 export * from './schema/conversations';
 export * from './schema/notifications';
 export * from './schema/monitoring';
+export * from './schema/social';
 
 import * as auth from './schema/auth';
 import * as core from './schema/core';
@@ -19,6 +20,7 @@ import * as dashboard from './schema/dashboard';
 import * as conversations from './schema/conversations';
 import * as notifications from './schema/notifications';
 import * as monitoring from './schema/monitoring';
+import * as social from './schema/social';
 
 export const schema = {
   ...auth,
@@ -31,4 +33,5 @@ export const schema = {
   ...conversations,
   ...notifications,
   ...monitoring,
+  ...social,
 };

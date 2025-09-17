@@ -1,8 +1,9 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db, pages, eq, and, asc } from '@pagespace/db';
-import { buildTree, getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib';
+import { buildTree, getUserAccessLevel, getUserDriveAccess, getPageTypeEmoji, isFolderPage, PageType } from '@pagespace/lib';
 import { ToolExecutionContext } from '../types';
+import { getSuggestedVisionModels } from '../model-capabilities';
 
 export const pageReadTools = {
   /**
@@ -61,12 +62,7 @@ export const pageReadTools = {
           for (const page of currentPages) {
             const currentPath = `${parentPath}/${page.title}`;
             // Add type indicator emoji
-            const typeIndicator = page.type === 'FOLDER' ? '📁' : 
-                                 page.type === 'DOCUMENT' ? '📄' : 
- 
-                                 page.type === 'AI_CHAT' ? '🤖' : 
-                                 page.type === 'CHANNEL' ? '💬' : 
-                                 page.type === 'CANVAS' ? '🎨' : '📄';
+            const typeIndicator = getPageTypeEmoji(page.type as PageType);
             
             pages.push(`${typeIndicator} ID: ${page.id} Path: ${currentPath}`);
             
@@ -137,11 +133,100 @@ export const pageReadTools = {
           throw new Error('Insufficient permissions to read this document');
         }
 
+        // Handle FILE type pages
+        if (page.type === 'FILE') {
+          // Check processing status
+          switch (page.processingStatus) {
+            case 'pending':
+            case 'processing':
+              return {
+                success: false,
+                error: 'File is still being processed',
+                status: page.processingStatus,
+                path,
+                title: page.title,
+                type: page.type,
+                suggestion: 'Please try again in a moment'
+              };
+            
+            case 'visual':
+              // Pure visual content - check if current model supports vision
+              const modelCapabilities = (context as ToolExecutionContext)?.modelCapabilities;
+              
+              if (!modelCapabilities?.hasVision) {
+                // Model doesn't support vision - provide helpful guidance
+                return {
+                  success: true,
+                  type: 'visual_requires_vision_model',
+                  path,
+                  title: page.title,
+                  mimeType: page.mimeType,
+                  message: `This is a visual file (${page.mimeType || 'image'}). To view its content, please switch to a vision-capable model.`,
+                  suggestedModels: getSuggestedVisionModels(),
+                  metadata: {
+                    fileType: page.mimeType,
+                    requiresVision: true
+                  }
+                };
+              }
+              
+              // Model supports vision - return metadata about the visual content
+              // Use page metadata instead of loading the full content
+              return {
+                success: true,
+                type: 'visual_content_metadata',
+                path,
+                pageId: page.id,
+                title: page.title,
+                message: `Found visual content: "${page.title}" (${page.mimeType || 'unknown type'})`,
+                mimeType: page.mimeType || 'unknown',
+                sizeBytes: page.fileSize || 0,
+                summary: `This is a visual file that requires vision capabilities to process`,
+                stats: {
+                  documentType: 'VISUAL',
+                  mimeType: page.mimeType || 'unknown',
+                  sizeBytes: page.fileSize || 0,
+                  sizeMB: page.fileSize ? (page.fileSize / 1024 / 1024).toFixed(2) : '0'
+                },
+                metadata: {
+                  requiresVisionModel: true,
+                  processingStatus: 'visual',
+                  originalFileName: page.originalFileName
+                }
+              };
+            
+            case 'failed':
+              return {
+                success: false,
+                error: 'Failed to extract content from this file',
+                processingError: page.processingError,
+                path,
+                title: page.title,
+                type: page.type,
+                suggestion: 'Try reprocessing the file or contact support'
+              };
+            
+            case 'completed':
+              // Normal text content available - continue to process below
+              break;
+          }
+        }
+
         // Split content into numbered lines for easy reference
         const lines = page.content.split('\n');
         const numberedContent = lines
           .map((line, index) => `${index + 1}→${line}`)
           .join('\n');
+
+        // Add file-specific metadata if it's a FILE type
+        const metadata = page.type === 'FILE' ? {
+          mimeType: page.mimeType,
+          fileSize: page.fileSize,
+          originalFileName: page.originalFileName,
+          processingStatus: page.processingStatus,
+          extractionMethod: page.extractionMethod,
+          extractionMetadata: page.extractionMetadata
+        } : undefined;
 
         return {
           success: true,
@@ -157,6 +242,7 @@ export const pageReadTools = {
             wordCount: page.content.split(/\s+/).length,
             characterCount: page.content.length
           },
+          ...(metadata && { fileMetadata: metadata }),
           nextSteps: [
             'Use the content for context in creating related documents',
             'Use edit tools to modify this document if needed',
@@ -167,7 +253,7 @@ export const pageReadTools = {
         console.error('Error reading document:', error);
         throw new Error(`Failed to read document at ${path}: ${error instanceof Error ? error.message : String(error)}`);
       }
-    },
+    }
   }),
 
   /**
@@ -227,7 +313,7 @@ export const pageReadTools = {
             type: node.type,
             trashedAt: node.trashedAt,
             parentId: node.parentId,
-            isFolder: node.type === 'FOLDER',
+            isFolder: isFolderPage(node.type as PageType),
             hasChildren: node.children && node.children.length > 0,
             children: node.children ? formatForAI(node.children, depth + 1) : [],
             depth,

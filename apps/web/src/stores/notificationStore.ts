@@ -1,30 +1,11 @@
 import { create } from 'zustand';
 import { useSocketStore } from './socketStore';
+import type { LegacyNotification } from '@pagespace/lib';
 
-interface Notification {
-  id: string;
-  userId: string;
-  type: string;
+// Use LegacyNotification type for backward compatibility
+type Notification = LegacyNotification & {
   title: string;
   message: string;
-  metadata?: Record<string, unknown>;
-  isRead: boolean;
-  createdAt: Date;
-  readAt?: Date | null;
-  pageId?: string | null;
-  driveId?: string | null;
-  triggeredByUserId?: string | null;
-  triggeredByUser?: {
-    id: string;
-    name: string | null;
-    email: string;
-    image: string | null;
-  } | null;
-  drive?: {
-    id: string;
-    slug: string;
-    name: string;
-  } | null;
 }
 
 interface NotificationStore {
@@ -63,10 +44,50 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
   setIsLoading: (loading) => set({ isLoading: loading }),
   setIsDropdownOpen: (open) => set({ isDropdownOpen: open }),
   
-  addNotification: (notification) => set((state) => ({
-    notifications: [notification, ...state.notifications],
-    unreadCount: state.unreadCount + (notification.isRead ? 0 : 1),
-  })),
+  addNotification: (notification) => set((state) => {
+    // Check if we already have a notification for the same conversation
+    if (notification.type === 'NEW_DIRECT_MESSAGE' &&
+        notification.metadata &&
+        typeof notification.metadata === 'object' &&
+        'conversationId' in notification.metadata) {
+
+      const conversationId = notification.metadata.conversationId;
+      const existingIndex = state.notifications.findIndex(n =>
+        n.type === 'NEW_DIRECT_MESSAGE' &&
+        !n.isRead &&
+        n.metadata &&
+        typeof n.metadata === 'object' &&
+        'conversationId' in n.metadata &&
+        n.metadata.conversationId === conversationId
+      );
+
+      if (existingIndex !== -1) {
+        // Update existing notification
+        const updatedNotifications = [...state.notifications];
+        updatedNotifications[existingIndex] = {
+          ...updatedNotifications[existingIndex],
+          message: notification.message,
+          createdAt: notification.createdAt,
+        };
+
+        // Sort by createdAt to bring updated notification to top
+        updatedNotifications.sort((a, b) =>
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+
+        return {
+          notifications: updatedNotifications,
+          unreadCount: state.unreadCount, // Count stays the same
+        };
+      }
+    }
+
+    // Add new notification if not updating existing
+    return {
+      notifications: [notification, ...state.notifications],
+      unreadCount: state.unreadCount + (notification.isRead ? 0 : 1),
+    };
+  }),
   
   markAsRead: (notificationId) => set((state) => ({
     notifications: state.notifications.map(n => 

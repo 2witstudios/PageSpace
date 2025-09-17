@@ -3,11 +3,12 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { formatDistanceToNow } from 'date-fns';
-import { 
-  X, 
-  FileText, 
-  Share2, 
-  UserPlus, 
+import {
+  X,
+  FileText,
+  Share2,
+  UserPlus,
+  UserCheck,
   Shield,
   Users,
   CheckCheck,
@@ -25,10 +26,11 @@ import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
 import { useNotificationStore } from '@/stores/notificationStore';
 import { useSocketStore } from '@/stores/socketStore';
+import { isConnectionRequest } from '@pagespace/lib';
 
 const NotificationIcon = ({ type, size = 'default' }: { type: string; size?: 'default' | 'large' }) => {
   const sizeClass = size === 'large' ? 'h-5 w-5' : 'h-4 w-4';
-  
+
   switch (type) {
     case 'PAGE_SHARED':
     case 'PERMISSION_GRANTED':
@@ -39,6 +41,12 @@ const NotificationIcon = ({ type, size = 'default' }: { type: string; size?: 'de
       return <X className={sizeClass} />;
     case 'DRIVE_INVITED':
       return <UserPlus className={sizeClass} />;
+    case 'CONNECTION_REQUEST':
+      return <UserPlus className={sizeClass} />;
+    case 'CONNECTION_ACCEPTED':
+      return <UserCheck className={sizeClass} />;
+    case 'CONNECTION_REJECTED':
+      return <X className={sizeClass} />;
     case 'DRIVE_JOINED':
     case 'DRIVE_ROLE_CHANGED':
       return <Users className={sizeClass} />;
@@ -59,6 +67,12 @@ const NotificationTypeLabel = ({ type }: { type: string }) => {
         return { label: 'Revoked', color: 'bg-red-500/10 text-red-500' };
       case 'DRIVE_INVITED':
         return { label: 'Invited', color: 'bg-purple-500/10 text-purple-500' };
+      case 'CONNECTION_REQUEST':
+        return { label: 'Connection', color: 'bg-purple-500/10 text-purple-500' };
+      case 'CONNECTION_ACCEPTED':
+        return { label: 'Accepted', color: 'bg-green-500/10 text-green-500' };
+      case 'CONNECTION_REJECTED':
+        return { label: 'Rejected', color: 'bg-red-500/10 text-red-500' };
       case 'DRIVE_JOINED':
         return { label: 'Joined', color: 'bg-green-500/10 text-green-500' };
       case 'DRIVE_ROLE_CHANGED':
@@ -161,6 +175,28 @@ export default function NotificationsPage() {
     }
     if (notification.drive?.id) {
       router.push(`/dashboard/${notification.drive.id}`);
+    }
+  };
+
+  const handleConnectionAction = async (connectionId: string, action: 'accept' | 'reject', notificationId: string) => {
+    try {
+      const response = await fetch(`/api/connections/${connectionId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to ${action} connection`);
+      }
+
+      // Mark notification as read
+      handleNotificationRead(notificationId);
+
+      // Refresh the notifications list
+      window.location.reload();
+    } catch (error) {
+      console.error(`Error ${action}ing connection:`, error);
     }
   };
 
@@ -344,8 +380,35 @@ export default function NotificationsPage() {
                                         </>
                                       )}
                                     </div>
+
+                                    {isConnectionRequest(notification) && (
+                                      <div className="flex gap-2 mt-3" onClick={(e) => e.stopPropagation()}>
+                                        <Button
+                                          size="sm"
+                                          variant="default"
+                                          onClick={() => handleConnectionAction(
+                                            notification.metadata.connectionId,
+                                            'accept',
+                                            notification.id
+                                          )}
+                                        >
+                                          Accept
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          onClick={() => handleConnectionAction(
+                                            notification.metadata.connectionId,
+                                            'reject',
+                                            notification.id
+                                          )}
+                                        >
+                                          Decline
+                                        </Button>
+                                      </div>
+                                    )}
                                   </div>
-                                  
+
                                   <Button
                                     variant="ghost"
                                     size="icon"

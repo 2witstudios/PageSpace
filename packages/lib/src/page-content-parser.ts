@@ -1,4 +1,5 @@
 import type { Page } from './types';
+import { PageType } from './enums';
 
 type ContentFormat = string[] | string | any;
 
@@ -34,14 +35,14 @@ export function getPageContentForAI(page: Page & { channelMessages?: any[], chil
     let contentString = `--- Start of Context from Page: "${page.title}" (Type: ${page.type}) ---\n`;
 
     switch (page.type) {
-        case 'DOCUMENT':
+        case PageType.DOCUMENT:
             if (page.content) {
                 contentString += convertContentToPlainText(page.content);
             } else {
                 contentString += "No document content available.\n";
             }
             break;
-        case 'CHANNEL':
+        case PageType.CHANNEL:
             if (page.channelMessages && page.channelMessages.length > 0) {
                 contentString += "Channel Messages:\n";
                 page.channelMessages.forEach((msg: any) => {
@@ -51,7 +52,7 @@ export function getPageContentForAI(page: Page & { channelMessages?: any[], chil
                 contentString += "No channel messages available.\n";
             }
             break;
-        case 'FOLDER':
+        case PageType.FOLDER:
             if (page.children && page.children.length > 0) {
                 contentString += "Folder Contents (Titles):\n";
                 page.children.forEach((child: any) => {
