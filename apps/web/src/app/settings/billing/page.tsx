@@ -218,8 +218,9 @@ export default function BillingPage() {
           <div>
             <h4 className="font-medium mb-2">What happens when I hit my daily limit?</h4>
             <p className="text-sm text-muted-foreground">
-              For Normal tier users, you&apos;ll need to wait until the next day (midnight UTC) for your usage to reset.
-              Pro users have unlimited Normal AI calls and 10 Extra Thinking calls per day.
+              The 100 daily limit only applies to built-in PageSpace AI. Your own API keys (OpenAI, Anthropic, Google, etc.) have no limits.
+              For Normal tier users, you&apos;ll need to wait until the next day (midnight UTC) for built-in AI usage to reset.
+              Pro users have unlimited built-in PageSpace AI calls and 10 Extra Thinking calls per day.
             </p>
           </div>
           <div>

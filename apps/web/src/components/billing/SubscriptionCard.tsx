@@ -136,7 +136,7 @@ export function SubscriptionCard({
                 AI Calls
               </h4>
               <div className="text-sm text-muted-foreground">
-                {isPro ? "Unlimited Normal calls" : `${usage.normal.limit} Normal calls per day`}
+                {isPro ? "Unlimited built-in PageSpace AI calls" : `${usage.normal.limit} built-in PageSpace AI calls per day`}
               </div>
               {!isPro && (
                 <>
@@ -173,7 +173,7 @@ export function SubscriptionCard({
                   Extra Thinking
                 </h4>
                 <div className="text-sm text-muted-foreground">
-                  Advanced AI model (Gemini 2.5 Pro) - 10 calls per day
+                  Advanced AI thinking - 10 calls per day
                 </div>
                 <Progress value={extraThinkingPercentage} className="h-2" />
                 <div className="text-xs text-muted-foreground">

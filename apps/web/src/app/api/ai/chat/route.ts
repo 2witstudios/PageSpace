@@ -245,26 +245,34 @@ export async function POST(request: Request) {
       return createSubscriptionRequiredResponse();
     }
 
-    // Check rate limits
-    const rateLimitResult = await checkAIRateLimit(userId, currentProvider);
-    if (!rateLimitResult.allowed) {
-      loggers.ai.warn('AI Chat API: Rate limit exceeded', {
+    // Check rate limits (only for built-in PageSpace providers)
+    const shouldRateLimit = currentProvider === 'pagespace' || currentProvider === 'pagespace_extra';
+    if (shouldRateLimit) {
+      const rateLimitResult = await checkAIRateLimit(userId, currentProvider);
+      if (!rateLimitResult.allowed) {
+        loggers.ai.warn('AI Chat API: Rate limit exceeded', {
+          userId,
+          provider: currentProvider,
+          remaining: rateLimitResult.remaining,
+          limit: rateLimitResult.limit
+        });
+
+        const providerType = currentProvider === 'pagespace_extra' ? 'extra_thinking' : 'normal';
+        return createRateLimitResponse(providerType, rateLimitResult.limit);
+      }
+
+      loggers.ai.debug('AI Chat API: Rate limit check passed', {
         userId,
         provider: currentProvider,
         remaining: rateLimitResult.remaining,
         limit: rateLimitResult.limit
       });
-
-      const providerType = currentProvider === 'pagespace_extra' ? 'extra_thinking' : 'normal';
-      return createRateLimitResponse(providerType, rateLimitResult.limit);
+    } else {
+      loggers.ai.debug('AI Chat API: Skipping rate limit check for BYO provider', {
+        userId,
+        provider: currentProvider
+      });
     }
-
-    loggers.ai.debug('AI Chat API: Rate limit check passed', {
-      userId,
-      provider: currentProvider,
-      remaining: rateLimitResult.remaining,
-      limit: rateLimitResult.limit
-    });
     
     // Update page's AI provider/model if changed
     if (selectedProvider && selectedModel && chatId) {
