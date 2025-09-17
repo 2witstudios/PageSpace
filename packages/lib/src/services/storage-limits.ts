@@ -10,6 +10,11 @@ export interface StorageQuota {
   warningLevel: 'none' | 'warning' | 'critical';
 }
 
+// Map subscription tiers to storage tiers
+export function mapSubscriptionToStorageTier(subscriptionTier: 'normal' | 'pro'): 'free' | 'pro' {
+  return subscriptionTier === 'pro' ? 'pro' : 'free';
+}
+
 export interface StorageCheckResult {
   allowed: boolean;
   reason?: string;
@@ -350,6 +355,11 @@ export function formatBytes(bytes: number): string {
  * Parse human-readable size to bytes
  */
 export function parseBytes(size: string): number {
+  // Defensive check for undefined/null input
+  if (!size || typeof size !== 'string') {
+    throw new Error(`Invalid size parameter: expected string, got ${typeof size}`);
+  }
+
   const units: Record<string, number> = {
     B: 1,
     KB: 1024,
@@ -359,7 +369,7 @@ export function parseBytes(size: string): number {
   };
 
   const match = size.match(/^(\d+(?:\.\d+)?)\s*([KMGT]?B)$/i);
-  if (!match) throw new Error('Invalid size format');
+  if (!match) throw new Error(`Invalid size format: "${size}"`);
 
   const [, value, unit] = match;
   return Math.floor(parseFloat(value) * (units[unit.toUpperCase()] || 1));
@@ -386,4 +396,16 @@ export async function changeUserTier(
       storageQuotaBytes: newQuotaBytes
     })
     .where(eq(users.id, userId));
+}
+
+/**
+ * Update user's storage tier based on subscription
+ * Called by subscription webhook handler
+ */
+export async function updateStorageTierFromSubscription(
+  userId: string,
+  subscriptionTier: 'normal' | 'pro'
+): Promise<void> {
+  const storageTier = mapSubscriptionToStorageTier(subscriptionTier);
+  await changeUserTier(userId, storageTier);
 }

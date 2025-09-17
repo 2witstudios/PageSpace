@@ -16,6 +16,7 @@ interface UserData {
   currentAiProvider: string;
   currentAiModel: string;
   tokenVersion: number;
+  subscriptionTier: 'normal' | 'pro';
   stats: {
     drives: number;
     pages: number;

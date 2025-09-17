@@ -9,8 +9,27 @@ import AssistantSettingsTab from './ai-assistant/AssistantSettingsTab';
 
 export default function RightPanel() {
   const pathname = usePathname();
+  console.log('🔍 RightPanel pathname:', pathname, 'type:', typeof pathname);
+
   // Treat dashboard and drive root pages the same (no chat tab)
-  const isDashboardOrDrive = pathname === '/dashboard' || pathname.match(/^\/dashboard\/[^/]+$/);
+  let isDashboardOrDrive = false;
+
+  // Safely handle pathname that might be null/undefined
+  if (pathname && typeof pathname === 'string') {
+    try {
+      const matchResult = pathname.match(/^\/dashboard\/[^/]+$/);
+      console.log('🎯 RightPanel match result:', matchResult);
+      isDashboardOrDrive = pathname === '/dashboard' || !!matchResult;
+    } catch (error) {
+      console.error('💥 RightPanel pathname.match error:', error);
+      isDashboardOrDrive = false;
+    }
+  } else {
+    console.log('⚠️ RightPanel: pathname is null/undefined, defaulting to false');
+    isDashboardOrDrive = false;
+  }
+
+  console.log('📍 RightPanel isDashboardOrDrive:', isDashboardOrDrive);
   
   // Determine default tab based on context
   const defaultTab = isDashboardOrDrive ? 'history' : 'chat';

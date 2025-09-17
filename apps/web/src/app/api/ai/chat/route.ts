@@ -231,6 +231,40 @@ export async function POST(request: Request) {
     const [user] = await db.select().from(users).where(eq(users.id, userId));
     const currentProvider = selectedProvider || user?.currentAiProvider || 'pagespace';
     const currentModel = selectedModel || user?.currentAiModel || 'gemini-2.5-flash';
+
+    // Rate limiting check
+    const { checkAIRateLimit, createRateLimitResponse, requiresProSubscription, createSubscriptionRequiredResponse } = await import('@/lib/subscription/rate-limit-middleware');
+
+    // Check if provider requires Pro subscription
+    if (requiresProSubscription(currentProvider) && user?.subscriptionTier !== 'pro') {
+      loggers.ai.warn('AI Chat API: Pro subscription required', {
+        userId,
+        provider: currentProvider,
+        subscriptionTier: user?.subscriptionTier
+      });
+      return createSubscriptionRequiredResponse();
+    }
+
+    // Check rate limits
+    const rateLimitResult = await checkAIRateLimit(userId, currentProvider);
+    if (!rateLimitResult.allowed) {
+      loggers.ai.warn('AI Chat API: Rate limit exceeded', {
+        userId,
+        provider: currentProvider,
+        remaining: rateLimitResult.remaining,
+        limit: rateLimitResult.limit
+      });
+
+      const providerType = currentProvider === 'pagespace_extra' ? 'extra_thinking' : 'normal';
+      return createRateLimitResponse(providerType, rateLimitResult.limit);
+    }
+
+    loggers.ai.debug('AI Chat API: Rate limit check passed', {
+      userId,
+      provider: currentProvider,
+      remaining: rateLimitResult.remaining,
+      limit: rateLimitResult.limit
+    });
     
     // Update page's AI provider/model if changed
     if (selectedProvider && selectedModel && chatId) {
@@ -286,6 +320,36 @@ export async function POST(request: Request) {
           });
           model = openrouter.chat(currentModel);
         }
+      }
+    } else if (currentProvider === 'pagespace_extra') {
+      // Use PageSpace Extra Thinking (Google AI with Gemini 2.5 Pro)
+      const pageSpaceSettings = await getDefaultPageSpaceSettings();
+
+      if (!pageSpaceSettings) {
+        // Fall back to user's Google settings if no default key
+        let googleSettings = await getUserGoogleSettings(userId);
+
+        if (!googleSettings && googleApiKey) {
+          await createGoogleSettings(userId, googleApiKey);
+          googleSettings = { apiKey: googleApiKey, isConfigured: true };
+        }
+
+        if (!googleSettings) {
+          return NextResponse.json({
+            error: 'No default API key configured. Please provide your own Google AI API key.'
+          }, { status: 400 });
+        }
+
+        const googleProvider = createGoogleGenerativeAI({
+          apiKey: googleSettings.apiKey,
+        });
+        model = googleProvider(currentModel);
+      } else {
+        // Use Google provider for Extra Thinking
+        const googleProvider = createGoogleGenerativeAI({
+          apiKey: pageSpaceSettings.apiKey,
+        });
+        model = googleProvider(currentModel);
       }
     } else if (currentProvider === 'openrouter') {
       // Handle OpenRouter setup
