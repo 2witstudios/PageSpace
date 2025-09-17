@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
 import dynamic from 'next/dynamic';
-import { useRouter, useParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { ShadowCanvas } from '@/components/canvas/ShadowCanvas';
 import PreviewErrorBoundary from '@/components/sandbox/PreviewErrorBoundary';
 import { TreePage } from '@/hooks/usePageTree';
@@ -21,9 +21,7 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
   const [activeTab, setActiveTab] = useState('view');
   const containerRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
-  const params = useParams();
   const { user } = useAuth();
-  const currentDriveId = params.driveId as string;
 
   const saveContent = useCallback(async (pageId: string, newValue: string) => {
     console.log(`--- Saving Page ${pageId} ---`);
@@ -63,31 +61,6 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
       return;
     }
 
-    // Handle PageSpace protocol
-    if (url.startsWith('pagespace://page/')) {
-      const pageId = url.replace('pagespace://page/', '');
-      if (user) {
-        try {
-          const response = await fetch(`/api/pages/${pageId}/permissions/check`);
-          if (response.ok) {
-            const permissions = await response.json();
-            if (!permissions.canView) {
-              toast.error('You do not have permission to view this page');
-              return;
-            }
-          } else {
-            toast.error('Failed to verify page permissions');
-            return;
-          }
-        } catch (error) {
-          console.error('Error checking permissions:', error);
-          toast.error('Failed to verify page permissions');
-          return;
-        }
-      }
-      router.push(`/dashboard/${currentDriveId}/${pageId}`);
-      return;
-    }
 
     // Handle standard dashboard URLs
     const dashboardMatch = url.match(/^\/dashboard\/([^\/]+)\/([^\/]+)$/);
@@ -122,7 +95,7 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
     } else {
       toast.error('Invalid navigation URL');
     }
-  }, [router, currentDriveId, user]);
+  }, [router, user]);
 
   return (
     <div ref={containerRef} className="h-full flex flex-col relative">

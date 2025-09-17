@@ -65,7 +65,7 @@ Canvas pages support multiple navigation patterns through intelligent link inter
 ```html
 <!-- Internal PageSpace navigation -->
 <a href="/dashboard/drive-id/page-id">Go to Page</a>
-<a href="pagespace://page/page-id">Quick Link</a>
+<a href="/dashboard">Dashboard Home</a>
 
 <!-- Button navigation with data attributes -->
 <button data-href="/settings">Settings</button>

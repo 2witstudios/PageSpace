@@ -1,5 +1,17 @@
 ### 2025-01-16
 
+- **Canvas Navigation Simplification**: Removed pagespace:// protocol in favor of standard URLs
+  - **Updated**: `apps/web/src/components/layout/middle-content/page-views/canvas/CanvasPageView.tsx`
+    - **Removed**: Support for `pagespace://page/id` protocol (was broken due to browser URL handling)
+    - **Standardized**: All navigation now uses `/dashboard/drive-id/page-id` format
+  - **Updated**: Documentation to reflect single navigation pattern
+    - **Added**: "Getting Your IDs" section in canvas dashboard guide
+    - **Removed**: All references to pagespace:// protocol
+  - **Benefits**:
+    - Simpler, more predictable navigation
+    - Works with browser URL standards
+    - No special protocol handling needed
+
 - **Canvas Dashboard System**: Functional HTML/CSS Dashboards with Navigation
   - **Created**: `apps/web/src/components/canvas/ShadowCanvas.tsx` - Shadow DOM component for isolated rendering
     - **Shadow DOM Isolation**: Complete style encapsulation from main app
@@ -10,7 +22,6 @@
   - **Updated**: `apps/web/src/components/layout/middle-content/page-views/canvas/CanvasPageView.tsx`
     - **Replaced**: Iframe-based Sandbox with ShadowCanvas component
     - **Added**: Navigation handling with permission checking
-    - **Added**: Support for PageSpace protocol (`pagespace://page/id`)
     - **Removed**: Complex postMessage communication
   - **Created**: `apps/web/src/lib/canvas/css-sanitizer.ts` - CSS security utilities
     - **Blocks**: JavaScript execution (expression, -moz-binding, javascript:)

@@ -183,14 +183,15 @@ Canvas dashboards support multiple ways to create navigation:
 <a href="/account">Account</a>
 ```
 
-### PageSpace Protocol
+### Getting Your Drive and Page IDs
 
-Use the custom protocol for quick page links:
+To create navigation links, you need the drive ID and page ID. Here's how to find them:
 
-```html
-<!-- Navigate to a page by ID (uses current drive) -->
-<a href="pagespace://page/page-id-here">Go to Page</a>
-```
+1. **From the URL**: When viewing any page, the URL shows: `/dashboard/{drive-id}/{page-id}`
+2. **Example**: If your URL is `/dashboard/cm3abc123/cm3xyz789`, then:
+   - Drive ID: `cm3abc123`
+   - Page ID: `cm3xyz789`
+3. **Use in links**: `<a href="/dashboard/cm3abc123/cm3xyz789">Go to Page</a>`
 
 ### Button Navigation
 
@@ -561,7 +562,7 @@ Canvas dashboards are intentionally independent of PageSpace's theme. They alway
 Make sure your links follow one of these patterns:
 - Regular links: `<a href="/dashboard">Link</a>`
 - Buttons: `<button data-href="/dashboard">Button</button>`
-- PageSpace protocol: `<a href="pagespace://page/id">Page</a>`
+- Always use full path: `<a href="/dashboard/drive-id/page-id">Page Name</a>`
 
 ### Styles Not Applying
 

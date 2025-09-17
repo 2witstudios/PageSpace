@@ -527,13 +527,13 @@ PAGE TYPES AND STRATEGIC USAGE:
 • DOCUMENT: Create written content, SOPs, notes, reports (e.g., "Meeting Notes", "Project Requirements", "User Guide")
 • AI_CHAT: Create contextual AI conversation spaces for specific topics/projects (e.g., "Project Alpha AI Assistant", "Marketing Strategy AI", "Code Review AI")
 • CHANNEL: Create team discussion spaces for collaborative conversations (e.g., "Project Alpha Team Chat", "Marketing Team", "Engineering Discussions")
-• CANVAS: Create custom HTML/CSS pages for navigation, dashboards, client-facing content, or any custom design (e.g., "Project Dashboard", "Client Portal", "Navigation Hub", "Company Homepage")
+• CANVAS: Create custom HTML/CSS pages with complete creative freedom - blank canvas for any visual design. Use for: dashboards, landing pages, graphics, demos, portfolios, presentations, prototypes, or any custom layout. Always start with <style> tags for CSS, then HTML. White background by default (theme-independent). Navigation syntax: <a href="/dashboard/DRIVE_ID/PAGE_ID">Link Text</a>
 • DATABASE: Create structured data collections (deprecated but available for legacy support)
 
 WHEN TO CREATE EACH PAGE TYPE:
 - AI_CHAT pages when users need context-specific AI assistance, isolated AI conversations, or persistent AI context tied to workspace areas
 - CHANNEL pages when users need team collaboration spaces, persistent chat history for topics, or organized discussions separate from main communication
-- CANVAS pages when users need custom HTML/CSS pages with full design control, navigation hubs, client-facing portals, dashboard pages with custom layouts, or interactive pages requiring custom functionality
+- CANVAS pages when users want complete creative control over HTML/CSS layout - any visual design need. Use for landing pages, graphics, portfolios, demos, prototypes, presentations, or custom interfaces. Structure: Always start with <style> tags containing CSS, followed by HTML. Navigation links: <a href="/dashboard/DRIVE_ID/PAGE_ID">Link Text</a> (get DRIVE_ID from pageContext.driveId, PAGE_ID from list_pages results).
 
 AVAILABLE TOOLS AND WHEN TO USE THEM:
 - list_drives: Use ONLY when user explicitly asks about other workspaces
