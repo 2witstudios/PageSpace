@@ -5,6 +5,7 @@
 export type PageOperation = 'created' | 'updated' | 'moved' | 'deleted' | 'restored' | 'trashed' | 'content-updated';
 export type DriveOperation = 'created' | 'updated' | 'deleted';
 export type TaskOperation = 'task_list_created' | 'task_added' | 'task_updated' | 'task_completed';
+export type UsageOperation = 'updated';
 
 export interface PageEventPayload {
   driveId: string;
@@ -29,6 +30,22 @@ export interface TaskEventPayload {
   userId: string;
   data: {
     [key: string]: unknown;
+  };
+}
+
+export interface UsageEventPayload {
+  userId: string;
+  operation: UsageOperation;
+  subscriptionTier: 'normal' | 'pro';
+  normal: {
+    current: number;
+    limit: number;
+    remaining: number;
+  };
+  extraThinking: {
+    current: number;
+    limit: number;
+    remaining: number;
   };
 }
 
@@ -149,5 +166,39 @@ export async function broadcastTaskEvent(payload: TaskEventPayload): Promise<voi
   } catch (error) {
     // Log error but don't throw - broadcasting failures shouldn't break operations
     console.error('Failed to broadcast task event:', error);
+  }
+}
+
+/**
+ * Broadcasts a usage event to the realtime server
+ * @param payload - The usage event payload to broadcast
+ */
+export async function broadcastUsageEvent(payload: UsageEventPayload): Promise<void> {
+  // Only broadcast if realtime URL is configured
+  if (!process.env.INTERNAL_REALTIME_URL) {
+    console.warn('INTERNAL_REALTIME_URL not configured, skipping usage event broadcast');
+    return;
+  }
+
+  try {
+    await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channelId: `notifications:${payload.userId}`,
+        event: `usage:${payload.operation}`,
+        payload,
+      }),
+    });
+
+    console.log('🔔 Usage event broadcasted:', {
+      userId: payload.userId,
+      operation: payload.operation,
+      normal: `${payload.normal.current}/${payload.normal.limit}`,
+      extraThinking: `${payload.extraThinking.current}/${payload.extraThinking.limit}`
+    });
+  } catch (error) {
+    // Log error but don't throw - broadcasting failures shouldn't break operations
+    console.error('Failed to broadcast usage event:', error);
   }
 }

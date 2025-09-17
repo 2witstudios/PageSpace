@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { streamText, convertToModelMessages, stepCountIs, UIMessage } from 'ai';
-import { incrementUsage } from '@/lib/subscription/usage-service';
+import { incrementUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
+import { broadcastUsageEvent } from '@/lib/socket-utils';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { authenticateRequest } from '@/lib/auth-utils';
@@ -602,6 +603,23 @@ MENTION PROCESSING:
                   remaining: usageResult.remainingCalls,
                   success: usageResult.success
                 });
+
+                // Broadcast usage event for real-time updates
+                try {
+                  const currentUsageSummary = await getUserUsageSummary(userId);
+
+                  await broadcastUsageEvent({
+                    userId,
+                    operation: 'updated',
+                    subscriptionTier: currentUsageSummary.subscriptionTier as 'normal' | 'pro',
+                    normal: currentUsageSummary.normal,
+                    extraThinking: currentUsageSummary.extraThinking
+                  });
+
+                  console.log('🔔 Usage broadcast sent for Global Assistant');
+                } catch (broadcastError) {
+                  console.error('Failed to broadcast usage event (non-fatal):', broadcastError);
+                }
 
               } catch (usageError) {
                 loggers.api.error('Global Assistant API: USAGE TRACKING FAILED', usageError as Error, {

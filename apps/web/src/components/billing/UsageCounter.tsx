@@ -6,6 +6,8 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Crown, Zap, AlertCircle } from 'lucide-react';
 import useSWR from 'swr';
+import { useSocketStore } from '@/stores/socketStore';
+import type { UsageEventPayload } from '@/lib/socket-utils';
 
 interface UsageData {
   subscriptionTier: 'normal' | 'pro';
@@ -25,6 +27,7 @@ const fetcher = (url: string) => fetch(url).then(res => res.json());
 
 export function UsageCounter() {
   const router = useRouter();
+  const { connect, getSocket } = useSocketStore();
   const { data: usage, error, mutate } = useSWR<UsageData>('/api/subscriptions/usage', fetcher, {
     refreshInterval: 30000, // Refresh every 30 seconds
     revalidateOnFocus: true,
@@ -37,7 +40,33 @@ export function UsageCounter() {
     router.push('/settings/billing');
   };
 
-  // Refresh usage when AI conversations complete
+  // Connect to Socket.IO and listen for usage events
+  useEffect(() => {
+    connect();
+    const socket = getSocket();
+
+    if (socket) {
+      const handleUsageUpdated = (payload: UsageEventPayload) => {
+        console.log('🔔 Received usage update:', payload);
+
+        // Update SWR cache with new usage data
+        mutate({
+          subscriptionTier: payload.subscriptionTier,
+          normal: payload.normal,
+          extraThinking: payload.extraThinking
+        }, false); // Don't revalidate, trust the real-time data
+      };
+
+      socket.on('usage:updated', handleUsageUpdated);
+
+      // Cleanup listener on unmount
+      return () => {
+        socket.off('usage:updated', handleUsageUpdated);
+      };
+    }
+  }, [connect, getSocket, mutate]);
+
+  // Refresh usage when AI conversations complete (fallback)
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (!document.hidden) {
