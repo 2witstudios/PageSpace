@@ -1,6 +1,10 @@
 import Link from "next/link";
-import { FileText, GitMerge, Share2, Folder, Code, MessageSquare } from "lucide-react";
+import { GitMerge, Folder, Code, MessageSquare, Check, Shield, Zap, Users, Cloud, Building } from "lucide-react";
 import AuthButtons from "@/components/shared/AuthButtons";
+import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import ContactForm from "@/components/shared/ContactForm";
 
 export default function Home() {
   return (
@@ -39,7 +43,7 @@ export default function Home() {
             </div>
           </div>
         </section>
-        <section className="w-full py-16 md:py-24 lg:py-32 bg-muted/30">
+        <section className="w-full py-16 md:py-24 lg:py-32 bg-muted">
           <div className="container mx-auto px-4 md:px-6">
             <div className="flex flex-col items-center space-y-12 text-center">
               <div className="space-y-4">
@@ -82,68 +86,192 @@ export default function Home() {
             </div>
           </div>
         </section>
-        <section className="w-full py-20 md:py-32 lg:py-40 bg-card text-card-foreground">
+        <section className="w-full py-20 md:py-32 lg:py-40 bg-background">
           <div className="container mx-auto px-4 md:px-6">
-            <div className="grid gap-12 lg:grid-cols-3">
-              <div className="flex flex-col items-center justify-center space-y-4 text-center">
-                <FileText className="w-12 h-12" />
-                <div className="space-y-2">
-                  <h3 className="text-2xl font-bold">Everything is a Page</h3>
-                  <p className="text-muted-foreground">
-                    Documents, folders, chats, and even AI assistants are all
-                    flexible pages. Mix and match them to create the perfect
-                    workflow.
-                  </p>
-                </div>
+            <div className="flex flex-col items-center space-y-12">
+              <div className="space-y-4 text-center">
+                <h2 className="text-3xl font-bold tracking-tighter sm:text-4xl md:text-5xl">
+                  Choose Your PageSpace Plan
+                </h2>
+                <p className="mx-auto max-w-[800px] text-lg text-muted-foreground md:text-xl">
+                  Start free, upgrade to Pro, or scale to enterprise deployment.
+                </p>
               </div>
-              <div className="flex flex-col items-center justify-center space-y-4 text-center">
-                <GitMerge className="w-12 h-12" />
-                <div className="space-y-2">
-                  <h3 className="text-2xl font-bold">The Infinite Tree</h3>
-                  <p className="text-muted-foreground">
-                    Nest anything inside anything. Give your work structure and
-                    context that evolves with your ideas.
-                  </p>
-                </div>
-              </div>
-              <div className="flex flex-col items-center justify-center space-y-4 text-center">
-                <Share2 className="w-12 h-12" />
-                <div className="space-y-2">
-                  <h3 className="text-2xl font-bold">
-                    Mention Anything, Anywhere
-                  </h3>
-                  <p className="text-muted-foreground">
-                    Link pages, people, or conversations to create a web of
-                    knowledge. Your AI understands the context of every mention.
-                  </p>
-                </div>
+              <div className="grid gap-8 lg:grid-cols-3 max-w-6xl w-full">
+                {/* Free Tier */}
+                <Card className="relative border-2 hover:border-primary/50 transition-colors flex flex-col">
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <Badge variant="secondary">Get Started</Badge>
+                      <div className="text-right">
+                        <div className="text-3xl font-bold">Free</div>
+                      </div>
+                    </div>
+                    <CardTitle>Free</CardTitle>
+                    <CardDescription>
+                      Full PageSpace features with daily limits
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4 flex-grow">
+                    <ul className="space-y-3">
+                      <li className="flex items-center gap-3">
+                        <Check className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>500MB storage</span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                        <Zap className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>100 daily PageSpace AI calls</span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                        <Code className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>Bring your own AI API keys</span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                        <Users className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>Real-time collaboration</span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                        <GitMerge className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>Hierarchical AI agents</span>
+                      </li>
+                    </ul>
+                    <div className="pt-4 border-t">
+                      <p className="text-sm text-muted-foreground">
+                        Perfect for trying out PageSpace
+                      </p>
+                    </div>
+                  </CardContent>
+                  <CardFooter>
+                    <Button asChild variant="outline" className="w-full" size="lg">
+                      <Link href="/auth/signup">
+                        Get Started
+                      </Link>
+                    </Button>
+                  </CardFooter>
+                </Card>
+
+                {/* Pro Tier */}
+                <Card className="relative border-2 border-primary hover:border-primary/70 transition-colors flex flex-col">
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <Badge variant="default">Most Popular</Badge>
+                      <div className="text-right">
+                        <div className="text-3xl font-bold">$15</div>
+                        <div className="text-sm text-muted-foreground">/month</div>
+                      </div>
+                    </div>
+                    <CardTitle>Pro</CardTitle>
+                    <CardDescription>
+                      Everything you need for individual productivity
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4 flex-grow">
+                    <ul className="space-y-3">
+                      <li className="flex items-center gap-3">
+                        <Check className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>2GB storage for documents, PDFs, and images</span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                        <Zap className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>Unlimited PageSpace AI (fast responses)</span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                        <Shield className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>10 daily &quot;Extra Thinking&quot; sessions (advanced reasoning)</span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                        <Users className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>Real-time collaboration</span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                        <GitMerge className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>Hierarchical AI agents</span>
+                      </li>
+                    </ul>
+                    <div className="pt-4 border-t">
+                      <p className="text-sm text-muted-foreground">
+                        Perfect for individuals, freelancers, and personal projects
+                      </p>
+                    </div>
+                  </CardContent>
+                  <CardFooter>
+                    <Button asChild className="w-full" size="lg">
+                      <Link href="/settings/billing">
+                        Get Started
+                      </Link>
+                    </Button>
+                  </CardFooter>
+                </Card>
+
+                {/* Enterprise Tier */}
+                <Card className="relative border-2 hover:border-primary/50 transition-colors flex flex-col">
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <Badge variant="outline">Enterprise</Badge>
+                      <div className="text-right">
+                        <div className="text-3xl font-bold">Custom</div>
+                      </div>
+                    </div>
+                    <CardTitle>Enterprise</CardTitle>
+                    <CardDescription>
+                      Scalable solutions for organizations
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4 flex-grow">
+                    <ul className="space-y-3">
+                      <li className="flex items-center gap-3">
+                        <Cloud className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>Cloud Enterprise - Managed infrastructure</span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                        <Building className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>On-Premise - Your infrastructure, your data</span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                        <Users className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>Advanced team management and analytics</span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                        <Shield className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>Enterprise security and compliance</span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                        <Zap className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>Priority AI processing with your models</span>
+                      </li>
+                    </ul>
+                    <div className="pt-4 border-t">
+                      <p className="text-sm text-muted-foreground">
+                        Custom pricing based on deployment and requirements
+                      </p>
+                    </div>
+                  </CardContent>
+                  <CardFooter>
+                    <Button asChild variant="outline" className="w-full" size="lg">
+                      <Link href="/contact">
+                        Contact Sales
+                      </Link>
+                    </Button>
+                  </CardFooter>
+                </Card>
               </div>
             </div>
           </div>
         </section>
-      </main>
-      <section className="w-full py-20 md:py-32 lg:py-40 bg-background text-foreground">
-        <div className="container mx-auto px-4 md:px-6">
-          <div className="flex flex-col items-center space-y-6 text-center">
-            <div className="space-y-4">
-              <h2 className="text-3xl font-bold tracking-tighter sm:text-4xl md:text-5xl">
-                Ready to build your new workspace?
+        <section className="w-full py-20 md:py-32 lg:py-40 bg-muted text-foreground">
+          <div className="container mx-auto px-4 md:px-6 max-w-2xl">
+            <div className="text-center mb-12">
+              <h2 className="text-3xl font-bold tracking-tighter sm:text-4xl mb-4">
+                Contact Us
               </h2>
-              <p className="mx-auto max-w-[600px] text-lg text-muted-foreground md:text-xl">
-                Sign up for free and start organizing your world.
+              <p className="text-lg text-muted-foreground max-w-md mx-auto">
+                Have questions? We&apos;d love to hear from you.
               </p>
             </div>
-            <div className="space-y-2">
-              <Link
-                className="inline-flex h-12 items-center justify-center rounded-md bg-primary px-8 text-sm font-medium text-primary-foreground shadow transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
-                href="/dashboard"
-              >
-                Join open beta!
-              </Link>
-            </div>
+            <ContactForm />
           </div>
-        </div>
-      </section>
+        </section>
+      </main>
       <footer className="w-full border-t bg-background text-foreground">
         <div className="container mx-auto flex flex-col gap-2 sm:flex-row py-6 shrink-0 items-center px-4 md:px-6">
           <p className="text-xs text-muted-foreground">
@@ -168,5 +296,3 @@ export default function Home() {
     </div>
   );
 }
-
-

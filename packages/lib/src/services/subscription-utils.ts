@@ -1,0 +1,75 @@
+/**
+ * Utilities for computing storage limits and tiers from subscription data
+ * This replaces the complex sync logic with simple computed values
+ */
+
+export type SubscriptionTier = 'normal' | 'pro';
+export type StorageTier = 'free' | 'pro' | 'enterprise';
+
+export interface StorageConfig {
+  tier: StorageTier;
+  quotaBytes: number;
+  maxFileSize: number;
+  maxConcurrentUploads: number;
+  maxFileCount: number;
+  features: string[];
+}
+
+/**
+ * Get storage tier from subscription tier
+ */
+export function getStorageTierFromSubscription(subscriptionTier: SubscriptionTier): StorageTier {
+  return subscriptionTier === 'pro' ? 'pro' : 'free';
+}
+
+/**
+ * Get storage quota in bytes from subscription tier
+ */
+export function getStorageQuotaFromSubscription(subscriptionTier: SubscriptionTier): number {
+  return subscriptionTier === 'pro'
+    ? 2 * 1024 * 1024 * 1024  // 2GB for pro
+    : 500 * 1024 * 1024;      // 500MB for normal
+}
+
+/**
+ * Get complete storage configuration from subscription tier
+ */
+export function getStorageConfigFromSubscription(subscriptionTier: SubscriptionTier): StorageConfig {
+  if (subscriptionTier === 'pro') {
+    return {
+      tier: 'pro',
+      quotaBytes: 2 * 1024 * 1024 * 1024,     // 2GB
+      maxFileSize: 50 * 1024 * 1024,          // 50MB
+      maxConcurrentUploads: 3,
+      maxFileCount: 500,
+      features: ['2GB storage', '50MB per file', 'Priority processing']
+    };
+  }
+
+  return {
+    tier: 'free',
+    quotaBytes: 500 * 1024 * 1024,           // 500MB
+    maxFileSize: 20 * 1024 * 1024,           // 20MB
+    maxConcurrentUploads: 2,
+    maxFileCount: 100,
+    features: ['500MB storage', '20MB per file', 'Basic processing']
+  };
+}
+
+/**
+ * Check if a subscription tier allows a feature
+ */
+export function subscriptionAllows(subscriptionTier: SubscriptionTier, feature: string): boolean {
+  const config = getStorageConfigFromSubscription(subscriptionTier);
+  return config.features.includes(feature);
+}
+
+/**
+ * Format bytes to human-readable string
+ */
+export function formatBytes(bytes: number): string {
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  if (bytes === 0) return '0 B';
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return `${Math.round(bytes / Math.pow(1024, i) * 100) / 100} ${sizes[i]}`;
+}

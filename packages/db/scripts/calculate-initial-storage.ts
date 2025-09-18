@@ -41,8 +41,6 @@ async function calculateInitialStorage() {
           await db.update(users)
             .set({
               storageUsedBytes: 0,
-              storageQuotaBytes: 524288000, // 500MB default
-              storageTier: 'free',
               lastStorageCalculated: new Date()
             })
             .where(eq(users.id, user.id));
@@ -72,35 +70,28 @@ async function calculateInitialStorage() {
         console.log(`  Files: ${fileCount}`);
         console.log(`  Total size: ${formatBytes(totalSize)}`);
 
-        // Determine appropriate tier based on current usage
-        let tier: 'free' | 'pro' | 'enterprise' = 'free';
-        let quotaBytes = 524288000; // 500MB default
+        // Check if user needs subscription upgrade (log warnings only)
+        const currentSubscription = user.subscriptionTier || 'normal';
+        const freeLimit = 524288000; // 500MB
+        const proLimit = 2 * 1024 * 1024 * 1024; // 2GB
 
-        // If user already has more than free tier limit, upgrade them
-        if (totalSize > 524288000) { // > 500MB
-          if (totalSize > 2 * 1024 * 1024 * 1024) { // > 2GB
-            tier = 'enterprise';
-            quotaBytes = 10 * 1024 * 1024 * 1024; // 10GB
-            console.log(`  ⚠️ User needs enterprise tier (using ${formatBytes(totalSize)})`);
-          } else {
-            tier = 'pro';
-            quotaBytes = 2 * 1024 * 1024 * 1024; // 2GB
-            console.log(`  ⚠️ User needs pro tier (using ${formatBytes(totalSize)})`);
-          }
+        if (totalSize > freeLimit && currentSubscription === 'normal') {
+          console.log(`  ⚠️ User using ${formatBytes(totalSize)} but has normal subscription (${formatBytes(freeLimit)} limit)`);
+        } else if (totalSize > proLimit && currentSubscription === 'pro') {
+          console.log(`  ⚠️ User using ${formatBytes(totalSize)} but only has pro subscription (${formatBytes(proLimit)} limit)`);
         }
 
-        // Update user's storage information
+        // Update only storage usage (quota/tier computed from subscription)
         await db.update(users)
           .set({
             storageUsedBytes: totalSize,
-            storageQuotaBytes: quotaBytes,
-            storageTier: tier,
             activeUploads: 0,
             lastStorageCalculated: new Date()
           })
           .where(eq(users.id, user.id));
 
-        console.log(`  ✅ Updated: ${formatBytes(totalSize)} / ${formatBytes(quotaBytes)} (${tier} tier)`);
+        const quotaBytes = currentSubscription === 'pro' ? proLimit : freeLimit;
+        console.log(`  ✅ Updated: ${formatBytes(totalSize)} / ${formatBytes(quotaBytes)} (${currentSubscription} subscription)`);
         processed++;
 
         // Log storage event for initial calculation
@@ -135,9 +126,8 @@ async function calculateInitialStorage() {
         totalUsers: sql<number>`COUNT(*)`,
         totalStorage: sql<number>`SUM(storage_used_bytes)`,
         avgStorage: sql<number>`AVG(storage_used_bytes)`,
-        freeUsers: sql<number>`COUNT(*) FILTER (WHERE storage_tier = 'free')`,
-        proUsers: sql<number>`COUNT(*) FILTER (WHERE storage_tier = 'pro')`,
-        enterpriseUsers: sql<number>`COUNT(*) FILTER (WHERE storage_tier = 'enterprise')`
+        normalUsers: sql<number>`COUNT(*) FILTER (WHERE subscription_tier = 'normal')`,
+        proUsers: sql<number>`COUNT(*) FILTER (WHERE subscription_tier = 'pro')`
       })
       .from(users);
 
@@ -146,9 +136,8 @@ async function calculateInitialStorage() {
     console.log(`  Total users: ${stats.totalUsers}`);
     console.log(`  Total storage used: ${formatBytes(Number(stats.totalStorage || 0))}`);
     console.log(`  Average per user: ${formatBytes(Number(stats.avgStorage || 0))}`);
-    console.log(`  Free tier users: ${stats.freeUsers}`);
-    console.log(`  Pro tier users: ${stats.proUsers}`);
-    console.log(`  Enterprise tier users: ${stats.enterpriseUsers}`);
+    console.log(`  Normal subscription users: ${stats.normalUsers}`);
+    console.log(`  Pro subscription users: ${stats.proUsers}`);
 
   } catch (error) {
     console.error('Fatal error during storage calculation:', error);

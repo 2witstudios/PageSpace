@@ -35,6 +35,7 @@ export async function GET(request: Request) {
         currentAiProvider: users.currentAiProvider,
         currentAiModel: users.currentAiModel,
         tokenVersion: users.tokenVersion,
+        subscriptionTier: users.subscriptionTier,
       })
       .from(users)
       .orderBy(users.name);

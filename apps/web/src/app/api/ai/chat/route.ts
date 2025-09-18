@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { streamText, convertToModelMessages, UIMessage, stepCountIs, createUIMessageStream, createUIMessageStreamResponse } from 'ai';
+import { incrementUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
+import { broadcastUsageEvent } from '@/lib/socket-utils';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -231,6 +233,27 @@ export async function POST(request: Request) {
     const [user] = await db.select().from(users).where(eq(users.id, userId));
     const currentProvider = selectedProvider || user?.currentAiProvider || 'pagespace';
     const currentModel = selectedModel || user?.currentAiModel || 'gemini-2.5-flash';
+
+    // Pro subscription check for special providers
+    const { requiresProSubscription, createSubscriptionRequiredResponse } = await import('@/lib/subscription/rate-limit-middleware');
+
+    // Check if provider requires Pro subscription
+    if (requiresProSubscription(currentProvider, currentModel) && user?.subscriptionTier !== 'pro') {
+      loggers.ai.warn('AI Chat API: Pro subscription required', {
+        userId,
+        provider: currentProvider,
+        model: currentModel,
+        subscriptionTier: user?.subscriptionTier
+      });
+      return createSubscriptionRequiredResponse();
+    }
+
+    // Usage tracking will be handled in onFinish callback for PageSpace providers only
+    loggers.ai.debug('AI Chat API: Will track usage in onFinish for PageSpace providers', {
+      userId,
+      provider: currentProvider,
+      isPageSpaceProvider: currentProvider === 'pagespace'
+    });
     
     // Update page's AI provider/model if changed
     if (selectedProvider && selectedModel && chatId) {
@@ -250,7 +273,7 @@ export async function POST(request: Request) {
     let model;
 
     if (currentProvider === 'pagespace') {
-      // Use default PageSpace settings (now Google AI with Gemini 2.5 Flash)
+      // Use default PageSpace settings (Google AI backend supports both normal and thinking models)
       const pageSpaceSettings = await getDefaultPageSpaceSettings();
 
       if (!pageSpaceSettings) {
@@ -271,20 +294,23 @@ export async function POST(request: Request) {
         const googleProvider = createGoogleGenerativeAI({
           apiKey: googleSettings.apiKey,
         });
-        model = googleProvider(currentModel);
+        const baseModel = googleProvider(currentModel);
+        model = baseModel;
       } else {
         // Use the appropriate provider based on the configuration
         if (pageSpaceSettings.provider === 'google') {
           const googleProvider = createGoogleGenerativeAI({
             apiKey: pageSpaceSettings.apiKey,
           });
-          model = googleProvider(currentModel);
+          const baseModel = googleProvider(currentModel);
+          model = baseModel;
         } else {
           // Fallback to OpenRouter for backwards compatibility
           const openrouter = createOpenRouter({
             apiKey: pageSpaceSettings.apiKey,
           });
-          model = openrouter.chat(currentModel);
+          const baseModel = openrouter.chat(currentModel);
+          model = baseModel;
         }
       }
     } else if (currentProvider === 'openrouter') {
@@ -708,7 +734,109 @@ MENTION PROCESSING:
               });
               
               loggers.ai.debug('AI Chat API: AI response message saved to database with tools');
-              
+
+              // Track usage for PageSpace providers only (rate limiting/quota tracking)
+              const isPageSpaceProvider = currentProvider === 'pagespace';
+
+              // Determine if this is thinking model based on model name
+              const isThinkingModel = currentModel === 'gemini-2.5-pro';
+
+              loggers.ai.info('AI Chat API: USAGE TRACKING DECISION', {
+                userId,
+                currentProvider,
+                currentModel,
+                isPageSpaceProvider,
+                isThinkingModel,
+                messageId,
+                timestamp: new Date().toISOString()
+              });
+
+              if (isPageSpaceProvider) {
+                try {
+                  const providerType = isThinkingModel ? 'extra_thinking' : 'normal';
+
+                  loggers.ai.info('AI Chat API: CALLING incrementUsage', {
+                    userId,
+                    provider: currentProvider,
+                    providerType,
+                    messageId,
+                    timestamp: new Date().toISOString()
+                  });
+
+                  const usageResult = await incrementUsage(userId!, providerType);
+
+                  loggers.ai.info('AI Chat API: USAGE TRACKED SUCCESSFULLY', {
+                    userId,
+                    provider: currentProvider,
+                    providerType,
+                    messageId,
+                    usageResult,
+                    timestamp: new Date().toISOString()
+                  });
+
+                  // Also log to console for immediate visibility
+                  console.log('🟢 USAGE TRACKED:', {
+                    userId,
+                    provider: currentProvider,
+                    providerType,
+                    currentCount: usageResult.currentCount,
+                    limit: usageResult.limit,
+                    remaining: usageResult.remainingCalls,
+                    success: usageResult.success
+                  });
+
+                  // Broadcast usage event for real-time updates
+                  try {
+                    const currentUsageSummary = await getUserUsageSummary(userId!);
+
+                    await broadcastUsageEvent({
+                      userId: userId!,
+                      operation: 'updated',
+                      subscriptionTier: currentUsageSummary.subscriptionTier as 'normal' | 'pro',
+                      normal: currentUsageSummary.normal,
+                      extraThinking: currentUsageSummary.extraThinking
+                    });
+
+                    console.log('🔔 Usage broadcast sent for Page AI');
+                  } catch (broadcastError) {
+                    console.error('Failed to broadcast usage event (non-fatal):', broadcastError);
+                  }
+
+                } catch (usageError) {
+                  loggers.ai.error('AI Chat API: USAGE TRACKING FAILED', usageError as Error, {
+                    userId,
+                    provider: currentProvider,
+                    messageId,
+                    timestamp: new Date().toISOString()
+                  });
+
+                  // Also log to console for immediate visibility
+                  console.error('🔴 USAGE TRACKING FAILED:', {
+                    userId,
+                    provider: currentProvider,
+                    error: usageError instanceof Error ? usageError.message : usageError,
+                    stack: usageError instanceof Error ? usageError.stack : undefined
+                  });
+
+                  // Don't fail the request - usage tracking errors shouldn't break the chat
+                }
+              } else {
+                loggers.ai.info('AI Chat API: SKIPPING usage tracking for non-PageSpace provider', {
+                  provider: currentProvider,
+                  isPageSpaceProvider,
+                  userId,
+                  messageId,
+                  timestamp: new Date().toISOString()
+                });
+
+                // Also log to console for immediate visibility
+                console.log('⚪ USAGE TRACKING SKIPPED:', {
+                  provider: currentProvider,
+                  reason: 'Not a PageSpace provider',
+                  expectedProviders: ['pagespace']
+                });
+              }
+
               // Track enhanced AI usage with token counting and cost calculation
               const duration = Date.now() - startTime;
               

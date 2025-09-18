@@ -7,7 +7,8 @@ export const AI_PROVIDERS = {
   pagespace: {
     name: 'PageSpace',
     models: {
-      'gemini-2.5-flash': 'Default (Free)',
+      'gemini-2.5-flash': 'Normal',
+      'gemini-2.5-pro': 'Extra Thinking (Pro Only)',
     },
   },
   openrouter: {
@@ -199,7 +200,7 @@ export const AI_PROVIDERS = {
 /**
  * Map UI provider to backend provider
  * Both openrouter and openrouter_free use 'openrouter' backend
- * PageSpace now uses 'google' backend with Gemini 2.5 Flash
+ * PageSpace uses 'google' backend
  * OpenAI, Anthropic, and xAI use their own backends
  */
 export function getBackendProvider(uiProvider: string): string {

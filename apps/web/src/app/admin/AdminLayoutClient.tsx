@@ -11,8 +11,9 @@ export default function AdminLayoutClient({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const currentTab = pathname.includes('/monitoring') ? 'monitoring' : 
-                     pathname.includes('/tables') ? 'tables' : 'users';
+  const currentTab = pathname.includes('/monitoring') ? 'monitoring' :
+                     pathname.includes('/tables') ? 'tables' :
+                     pathname.includes('/support') ? 'support' : 'users';
 
   return (
     <div className="min-h-screen bg-background p-6">
@@ -21,13 +22,13 @@ export default function AdminLayoutClient({
           <CardHeader>
             <CardTitle>Admin Dashboard</CardTitle>
             <CardDescription>
-              Monitor system performance, manage users, and visualize database schema
+              Monitor system performance, manage users, view support requests, and visualize database schema
             </CardDescription>
           </CardHeader>
         </Card>
 
         <Tabs value={currentTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-3 max-w-[600px]">
+          <TabsList className="grid w-full grid-cols-4 max-w-[800px]">
             <TabsTrigger value="monitoring" asChild>
               <Link href="/admin/monitoring">Monitoring</Link>
             </TabsTrigger>
@@ -36,6 +37,9 @@ export default function AdminLayoutClient({
             </TabsTrigger>
             <TabsTrigger value="users" asChild>
               <Link href="/admin/users">User Management</Link>
+            </TabsTrigger>
+            <TabsTrigger value="support" asChild>
+              <Link href="/admin/support">Support</Link>
             </TabsTrigger>
           </TabsList>
 

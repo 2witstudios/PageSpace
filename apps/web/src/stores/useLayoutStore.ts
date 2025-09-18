@@ -69,13 +69,39 @@ interface LayoutState {
 
 // Utility functions
 const extractPageId = (url: string): string | null => {
-  const match = url.match(/\/dashboard\/[^\/]+\/([^\/\?#]+)/);
-  return match ? match[1] : null;
+  console.log('🔍 extractPageId called with url:', url, 'type:', typeof url);
+
+  if (!url || typeof url !== 'string') {
+    console.error('❌ extractPageId: Invalid URL parameter', { url, type: typeof url });
+    return null;
+  }
+
+  try {
+    const match = url.match(/\/dashboard\/[^\/]+\/([^\/\?#]+)/);
+    console.log('🎯 extractPageId match result:', match);
+    return match ? match[1] : null;
+  } catch (error) {
+    console.error('💥 extractPageId error:', error);
+    return null;
+  }
 };
 
 const extractDriveId = (url: string): string | null => {
-  const match = url.match(/\/dashboard\/([^\/\?#]+)/);
-  return match ? match[1] : null;
+  console.log('🔍 extractDriveId called with url:', url, 'type:', typeof url);
+
+  if (!url || typeof url !== 'string') {
+    console.error('❌ extractDriveId: Invalid URL parameter', { url, type: typeof url });
+    return null;
+  }
+
+  try {
+    const match = url.match(/\/dashboard\/([^\/\?#]+)/);
+    console.log('🎯 extractDriveId match result:', match);
+    return match ? match[1] : null;
+  } catch (error) {
+    console.error('💥 extractDriveId error:', error);
+    return null;
+  }
 };
 
 const getViewType = (pageType: string): ViewState['viewType'] => {

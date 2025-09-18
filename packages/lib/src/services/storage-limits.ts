@@ -1,4 +1,5 @@
 import { db, users, pages, drives, storageEvents, eq, sql, and, isNull, inArray } from '@pagespace/db';
+import { getStorageConfigFromSubscription, getStorageTierFromSubscription, type SubscriptionTier } from './subscription-utils';
 
 export interface StorageQuota {
   userId: string;
@@ -8,6 +9,12 @@ export interface StorageQuota {
   utilizationPercent: number;
   tier: 'free' | 'pro' | 'enterprise';
   warningLevel: 'none' | 'warning' | 'critical';
+}
+
+// Map subscription tiers to storage tiers (deprecated - use subscription-utils instead)
+export function mapSubscriptionToStorageTier(subscriptionTier: 'normal' | 'pro'): 'free' | 'pro' {
+  const tier = getStorageTierFromSubscription(subscriptionTier);
+  return tier === 'enterprise' ? 'pro' : tier; // Fallback for enterprise
 }
 
 export interface StorageCheckResult {
@@ -46,23 +53,25 @@ export const STORAGE_TIERS = {
 
 /**
  * Get user's current storage quota and usage
- * Uses database-stored values for performance
+ * Computes quota from subscription tier for consistency
  */
 export async function getUserStorageQuota(userId: string): Promise<StorageQuota | null> {
   const user = await db.query.users.findFirst({
     where: eq(users.id, userId),
     columns: {
       id: true,
-      storageQuotaBytes: true,
       storageUsedBytes: true,
-      storageTier: true
+      subscriptionTier: true
     }
   });
 
   if (!user) return null;
 
-  const tier = (user.storageTier || 'free') as keyof typeof STORAGE_TIERS;
-  const quotaBytes = user.storageQuotaBytes || STORAGE_TIERS[tier].quotaBytes;
+  // Compute storage config from subscription tier
+  const subscriptionTier = (user.subscriptionTier || 'normal') as SubscriptionTier;
+  const storageConfig = getStorageConfigFromSubscription(subscriptionTier);
+
+  const quotaBytes = storageConfig.quotaBytes;
   const usedBytes = user.storageUsedBytes || 0;
   const availableBytes = Math.max(0, quotaBytes - usedBytes);
   const utilizationPercent = quotaBytes > 0 ? (usedBytes / quotaBytes) * 100 : 0;
@@ -73,7 +82,7 @@ export async function getUserStorageQuota(userId: string): Promise<StorageQuota 
     usedBytes,
     availableBytes,
     utilizationPercent,
-    tier,
+    tier: storageConfig.tier,
     warningLevel: getWarningLevel(utilizationPercent)
   };
 }
@@ -141,16 +150,16 @@ export async function checkConcurrentUploads(userId: string): Promise<boolean> {
     where: eq(users.id, userId),
     columns: {
       activeUploads: true,
-      storageTier: true
+      subscriptionTier: true
     }
   });
 
   if (!user) return false;
 
-  const tier = (user.storageTier || 'free') as keyof typeof STORAGE_TIERS;
-  const maxConcurrent = STORAGE_TIERS[tier].maxConcurrentUploads;
+  const subscriptionTier = (user.subscriptionTier || 'normal') as SubscriptionTier;
+  const storageConfig = getStorageConfigFromSubscription(subscriptionTier);
 
-  return (user.activeUploads || 0) < maxConcurrent;
+  return (user.activeUploads || 0) < storageConfig.maxConcurrentUploads;
 }
 
 /**
@@ -350,6 +359,11 @@ export function formatBytes(bytes: number): string {
  * Parse human-readable size to bytes
  */
 export function parseBytes(size: string): number {
+  // Defensive check for undefined/null input
+  if (!size || typeof size !== 'string') {
+    throw new Error(`Invalid size parameter: expected string, got ${typeof size}`);
+  }
+
   const units: Record<string, number> = {
     B: 1,
     KB: 1024,
@@ -359,31 +373,22 @@ export function parseBytes(size: string): number {
   };
 
   const match = size.match(/^(\d+(?:\.\d+)?)\s*([KMGT]?B)$/i);
-  if (!match) throw new Error('Invalid size format');
+  if (!match) throw new Error(`Invalid size format: "${size}"`);
 
   const [, value, unit] = match;
   return Math.floor(parseFloat(value) * (units[unit.toUpperCase()] || 1));
 }
 
 /**
- * Change user's storage tier
+ * @deprecated - Removed: Use subscription tier changes instead
  */
-export async function changeUserTier(
-  userId: string,
-  newTier: 'free' | 'pro' | 'enterprise'
-): Promise<void> {
-  const currentQuota = await getUserStorageQuota(userId);
-  const newQuotaBytes = STORAGE_TIERS[newTier].quotaBytes;
+export async function changeUserTier(): Promise<void> {
+  throw new Error('changeUserTier has been removed - storage tiers are computed from subscription tiers automatically');
+}
 
-  // Check if current usage fits in new tier
-  if (currentQuota && currentQuota.usedBytes > newQuotaBytes) {
-    throw new Error(`Current usage (${formatBytes(currentQuota.usedBytes)}) exceeds ${newTier} tier limit`);
-  }
-
-  await db.update(users)
-    .set({
-      storageTier: newTier,
-      storageQuotaBytes: newQuotaBytes
-    })
-    .where(eq(users.id, userId));
+/**
+ * @deprecated - Removed: Storage tiers are computed dynamically
+ */
+export async function updateStorageTierFromSubscription(): Promise<void> {
+  throw new Error('updateStorageTierFromSubscription has been removed - storage tiers are computed dynamically');
 }

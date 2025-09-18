@@ -8,11 +8,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { ChevronDown, ChevronRight, Search, Shield, MessageCircle, Database, Settings } from "lucide-react";
+import { ChevronDown, ChevronRight, Search, Shield, MessageCircle, Database, Settings, Crown, CreditCard, CheckCircle } from "lucide-react";
 
 interface UserStats {
   drives: number;
@@ -48,6 +49,7 @@ interface UserData {
   currentAiProvider: string;
   currentAiModel: string;
   tokenVersion: number;
+  subscriptionTier: 'normal' | 'pro';
   stats: UserStats;
   aiSettings: AiSetting[];
   recentTokens: RefreshToken[];
@@ -55,6 +57,7 @@ interface UserData {
 
 interface UsersTableProps {
   users: UserData[];
+  onUserUpdate?: (userId: string, updatedUser: Partial<UserData>) => void;
 }
 
 function formatDate(dateString: string | null) {
@@ -76,9 +79,11 @@ function getUserInitials(name: string) {
     .slice(0, 2);
 }
 
-export function UsersTable({ users }: UsersTableProps) {
+export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [expandedUsers, setExpandedUsers] = useState<Record<string, boolean>>({});
+  const [updatingUsers, setUpdatingUsers] = useState<Record<string, boolean>>({});
+  const [recentlyUpdated, setRecentlyUpdated] = useState<Record<string, boolean>>({});
 
   const filteredUsers = users.filter(user =>
     user.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -91,6 +96,52 @@ export function UsersTable({ users }: UsersTableProps) {
       ...prev,
       [userId]: !prev[userId]
     }));
+  };
+
+  const toggleSubscription = async (userId: string, currentTier: 'normal' | 'pro') => {
+    setUpdatingUsers(prev => ({ ...prev, [userId]: true }));
+
+    try {
+      const newTier = currentTier === 'pro' ? 'normal' : 'pro';
+      const response = await fetch(`/api/admin/users/${userId}/subscription`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ subscriptionTier: newTier }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `HTTP ${response.status}: Failed to update subscription`);
+      }
+
+      const result = await response.json();
+
+      // Update the user in the parent component's state instead of reloading
+      if (onUserUpdate) {
+        onUserUpdate(userId, { subscriptionTier: newTier });
+      }
+
+      // Show success feedback
+      setRecentlyUpdated(prev => ({ ...prev, [userId]: true }));
+      setTimeout(() => {
+        setRecentlyUpdated(prev => ({ ...prev, [userId]: false }));
+      }, 3000);
+
+      console.log('Subscription updated successfully:', result);
+    } catch (error) {
+      console.error('Error updating subscription:', error);
+
+      // Show a more informative error message
+      const errorMessage = error instanceof Error
+        ? error.message
+        : 'An unexpected error occurred';
+
+      alert(`Failed to update subscription: ${errorMessage}`);
+    } finally {
+      setUpdatingUsers(prev => ({ ...prev, [userId]: false }));
+    }
   };
 
   return (
@@ -147,6 +198,15 @@ export function UsersTable({ users }: UsersTableProps) {
                       <Badge variant="outline">
                         <MessageCircle className="h-3 w-3 mr-1" />
                         {user.stats.totalMessages} messages
+                      </Badge>
+
+                      <Badge variant={user.subscriptionTier === 'pro' ? "default" : "secondary"}>
+                        {user.subscriptionTier === 'pro' ? (
+                          <Crown className="h-3 w-3 mr-1" />
+                        ) : (
+                          <CreditCard className="h-3 w-3 mr-1" />
+                        )}
+                        {user.subscriptionTier === 'pro' ? 'Pro' : 'Free'}
                       </Badge>
                     </div>
                   </div>
@@ -221,6 +281,48 @@ export function UsersTable({ users }: UsersTableProps) {
                             <span className="text-muted-foreground">Current AI Model:</span>
                             <span className="text-xs">{user.currentAiModel}</span>
                           </div>
+                        </div>
+                      </div>
+
+                      {/* Subscription Management */}
+                      <div>
+                        <h4 className="text-sm font-medium mb-3 flex items-center">
+                          <CreditCard className="h-4 w-4 mr-2" />
+                          Subscription Management
+                        </h4>
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm text-muted-foreground">Current Plan:</span>
+                            <Badge variant={user.subscriptionTier === 'pro' ? "default" : "secondary"}>
+                              {user.subscriptionTier === 'pro' ? (
+                                <Crown className="h-3 w-3 mr-1" />
+                              ) : (
+                                <CreditCard className="h-3 w-3 mr-1" />
+                              )}
+                              {user.subscriptionTier === 'pro' ? 'Pro Plan' : 'Free Plan'}
+                            </Badge>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant={user.subscriptionTier === 'pro' ? "destructive" : "default"}
+                            onClick={() => toggleSubscription(user.id, user.subscriptionTier)}
+                            disabled={updatingUsers[user.id]}
+                            className="w-full"
+                          >
+                            {updatingUsers[user.id] ? (
+                              <div className="flex items-center space-x-2">
+                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                                <span>Updating...</span>
+                              </div>
+                            ) : recentlyUpdated[user.id] ? (
+                              <div className="flex items-center space-x-2 text-green-600">
+                                <CheckCircle className="h-4 w-4" />
+                                <span>Updated!</span>
+                              </div>
+                            ) : (
+                              user.subscriptionTier === 'pro' ? 'Downgrade to Free' : 'Upgrade to Pro'
+                            )}
+                          </Button>
                         </div>
                       </div>
 

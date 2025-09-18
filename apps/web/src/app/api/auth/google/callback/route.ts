@@ -134,6 +134,9 @@ export async function GET(req: Request) {
         provider: 'google',
         tokenVersion: 0,
         role: 'user',
+        // Storage tracking (quota/tier computed from subscriptionTier)
+        storageUsedBytes: 0,
+        subscriptionTier: 'normal',
       }).returning();
 
       user = newUser;

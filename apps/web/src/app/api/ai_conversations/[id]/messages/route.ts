@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { streamText, convertToModelMessages, stepCountIs, UIMessage } from 'ai';
+import { incrementUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
+import { broadcastUsageEvent } from '@/lib/socket-utils';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { authenticateRequest } from '@/lib/auth-utils';
@@ -550,8 +552,115 @@ MENTION PROCESSING:
                 updatedAt: new Date(),
               })
               .where(eq(conversations.id, conversationId));
-            
+
             loggers.api.debug('✅ Global Assistant Chat API: AI response message saved to database', {});
+
+            // Track usage for PageSpace providers only (rate limiting/quota tracking)
+            const isPageSpaceProvider = currentProvider === 'pagespace';
+
+            loggers.api.info('Global Assistant API: USAGE TRACKING DECISION', {
+              userId,
+              currentProvider,
+              isPageSpaceProvider,
+              messageId,
+              conversationId,
+              timestamp: new Date().toISOString()
+            });
+
+            if (isPageSpaceProvider) {
+              try {
+                // Determine if this is thinking model based on model name
+                const isThinkingModel = currentModel === 'gemini-2.5-pro';
+                const providerType = isThinkingModel ? 'extra_thinking' : 'normal';
+
+                loggers.api.info('Global Assistant API: CALLING incrementUsage', {
+                  userId,
+                  provider: currentProvider,
+                  providerType,
+                  messageId,
+                  conversationId,
+                  timestamp: new Date().toISOString()
+                });
+
+                const usageResult = await incrementUsage(userId, providerType);
+
+                loggers.api.info('Global Assistant API: USAGE TRACKED SUCCESSFULLY', {
+                  userId,
+                  provider: currentProvider,
+                  providerType,
+                  messageId,
+                  conversationId,
+                  usageResult,
+                  timestamp: new Date().toISOString()
+                });
+
+                // Also log to console for immediate visibility
+                console.log('🟢 GLOBAL ASSISTANT USAGE TRACKED:', {
+                  userId,
+                  provider: currentProvider,
+                  providerType,
+                  conversationId,
+                  currentCount: usageResult.currentCount,
+                  limit: usageResult.limit,
+                  remaining: usageResult.remainingCalls,
+                  success: usageResult.success
+                });
+
+                // Broadcast usage event for real-time updates
+                try {
+                  const currentUsageSummary = await getUserUsageSummary(userId);
+
+                  await broadcastUsageEvent({
+                    userId,
+                    operation: 'updated',
+                    subscriptionTier: currentUsageSummary.subscriptionTier as 'normal' | 'pro',
+                    normal: currentUsageSummary.normal,
+                    extraThinking: currentUsageSummary.extraThinking
+                  });
+
+                  console.log('🔔 Usage broadcast sent for Global Assistant');
+                } catch (broadcastError) {
+                  console.error('Failed to broadcast usage event (non-fatal):', broadcastError);
+                }
+
+              } catch (usageError) {
+                loggers.api.error('Global Assistant API: USAGE TRACKING FAILED', usageError as Error, {
+                  userId,
+                  provider: currentProvider,
+                  messageId,
+                  conversationId,
+                  timestamp: new Date().toISOString()
+                });
+
+                // Also log to console for immediate visibility
+                console.error('🔴 GLOBAL ASSISTANT USAGE TRACKING FAILED:', {
+                  userId,
+                  provider: currentProvider,
+                  conversationId,
+                  error: usageError instanceof Error ? usageError.message : usageError,
+                  stack: usageError instanceof Error ? usageError.stack : undefined
+                });
+
+                // Don't fail the request - usage tracking errors shouldn't break the chat
+              }
+            } else {
+              loggers.api.info('Global Assistant API: SKIPPING usage tracking for non-PageSpace provider', {
+                provider: currentProvider,
+                isPageSpaceProvider,
+                userId,
+                messageId,
+                conversationId,
+                timestamp: new Date().toISOString()
+              });
+
+              // Also log to console for immediate visibility
+              console.log('⚪ GLOBAL ASSISTANT USAGE TRACKING SKIPPED:', {
+                provider: currentProvider,
+                conversationId,
+                reason: 'Not a PageSpace provider',
+                expectedProviders: ['pagespace']
+              });
+            }
           } catch (error) {
             loggers.api.error('❌ Global Assistant Chat API: Failed to save AI response message:', error as Error);
           }

@@ -52,6 +52,9 @@ export async function POST(req: Request) {
       name,
       email,
       password: hashedPassword,
+      // Storage tracking (quota/tier computed from subscriptionTier)
+      storageUsedBytes: 0,
+      subscriptionTier: 'normal',
     }).returning().then(res => res[0]);
 
     // Create a personal drive for the new user

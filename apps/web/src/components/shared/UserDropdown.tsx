@@ -17,7 +17,7 @@ import {
   DropdownMenuPortal,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { LogOut, MessageSquare, Settings, LayoutDashboard, Sun, Moon, Monitor, HardDrive, Users } from 'lucide-react';
+import { LogOut, MessageSquare, Settings, LayoutDashboard, Sun, Moon, Monitor, HardDrive, Users, CreditCard } from 'lucide-react';
 import { useTheme } from "next-themes";
 import useSWR from 'swr';
 import { Progress } from "@/components/ui/progress";
@@ -34,6 +34,13 @@ export default function UserDropdown() {
     isAuthenticated ? '/api/storage/info' : null,
     fetcher,
     { refreshInterval: 30000 } // Refresh every 30 seconds
+  );
+
+  // Fetch subscription status
+  const { data: subscriptionInfo } = useSWR(
+    isAuthenticated ? '/api/subscriptions/status' : null,
+    fetcher,
+    { refreshInterval: 60000 } // Refresh every minute
   );
 
   const handleSignOut = async () => {
@@ -94,6 +101,12 @@ export default function UserDropdown() {
                 />
               )}
             </div>
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => router.push('/settings/billing')}>
+            <CreditCard className="mr-2 h-4 w-4" />
+            <span>
+              Billing ({subscriptionInfo?.subscriptionTier === 'pro' ? 'Pro' : 'Free'})
+            </span>
           </DropdownMenuItem>
           <DropdownMenuItem onClick={() => router.push('/account')}>
             <LayoutDashboard className="mr-2 h-4 w-4" />

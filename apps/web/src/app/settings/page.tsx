@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Settings, User, Plug2, Key, ArrowLeft } from "lucide-react";
+import { Settings, User, Plug2, Key, ArrowLeft, CreditCard } from "lucide-react";
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -21,6 +21,13 @@ export default function SettingsPage() {
       description: "Manage your account and profile",
       icon: User,
       href: "/account",
+      available: true,
+    },
+    {
+      title: "Billing & Subscription",
+      description: "Manage your subscription and billing",
+      icon: CreditCard,
+      href: "/settings/billing",
       available: true,
     },
     {

@@ -6,6 +6,7 @@ import UserDropdown from '@/components/shared/UserDropdown';
 import NotificationBell from '@/components/notifications/NotificationBell';
 import InlineSearch from '@/components/search/InlineSearch';
 import GlobalSearch from '@/components/search/GlobalSearch';
+import { UsageCounter } from '@/components/billing/UsageCounter';
 import { useState } from 'react';
 
 interface TopBarProps {
@@ -52,6 +53,7 @@ export default function TopBar({ onToggleLeftPanel, onToggleRightPanel }: TopBar
 
         {/* User Controls */}
         <div className="flex items-center space-x-4">
+          <UsageCounter />
           <div className="hidden md:block">
             <NotificationBell />
           </div>

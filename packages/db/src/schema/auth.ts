@@ -18,13 +18,16 @@ export const users = pgTable('users', {
   tokenVersion: integer('tokenVersion').default(0).notNull(),
   role: userRole('role').default('user').notNull(),
   currentAiProvider: text('currentAiProvider').default('pagespace').notNull(),
-  currentAiModel: text('currentAiModel').default('qwen/qwen3-coder:free').notNull(),
-  // Storage tracking fields
+  currentAiModel: text('currentAiModel').default('gemini-2.5-flash').notNull(),
+  // Storage tracking fields (quota/tier now computed from subscriptionTier)
   storageUsedBytes: real('storageUsedBytes').default(0).notNull(),
-  storageQuotaBytes: real('storageQuotaBytes').default(524288000).notNull(), // 500MB default
-  storageTier: text('storageTier').default('free').notNull(),
   activeUploads: integer('activeUploads').default(0).notNull(),
   lastStorageCalculated: timestamp('lastStorageCalculated', { mode: 'date' }),
+  // Subscription fields
+  stripeCustomerId: text('stripeCustomerId').unique(),
+  subscriptionTier: text('subscriptionTier').default('normal').notNull(), // 'normal' or 'pro'
+  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
 });
 
 export const refreshTokens = pgTable('refresh_tokens', {
@@ -57,12 +60,15 @@ export const mcpTokens = pgTable('mcp_tokens', {
 });
 
 import { userAiSettings } from './ai';
+import { subscriptions, aiUsageDaily } from './subscriptions';
 
 export const usersRelations = relations(users, ({ many }) => ({
   refreshTokens: many(refreshTokens),
   chatMessages: many(chatMessages),
   aiSettings: many(userAiSettings),
   mcpTokens: many(mcpTokens),
+  subscriptions: many(subscriptions),
+  aiUsageDaily: many(aiUsageDaily),
 }));
 
 export const refreshTokensRelations = relations(refreshTokens, ({ one }) => ({
