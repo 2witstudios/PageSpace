@@ -260,13 +260,17 @@ export function SubscriptionCard({
                 </ul>
               </div>
               <div>
-                <h4 className="font-medium mb-2">Compare to others:</h4>
-                <ul className="space-y-1 text-sm text-foreground/70 dark:text-foreground/80">
-                  <li>• Notion AI: ~40 requests/month</li>
-                  <li>• ChatGPT Plus: $20/month</li>
-                  <li>• Claude Pro: $20/month</li>
-                  <li>• PageSpace Pro: $15/month</li>
-                </ul>
+                <h4 className="font-medium mb-2">PageSpace Pricing:</h4>
+                <div className="space-y-3 text-sm">
+                  <div>
+                    <div className="font-medium text-foreground">Personal - $15/month</div>
+                    <div className="text-foreground/70 dark:text-foreground/80">Perfect for individuals, freelancers, and personal projects</div>
+                  </div>
+                  <div>
+                    <div className="font-medium text-foreground">Enterprise - Contact Sales</div>
+                    <div className="text-foreground/70 dark:text-foreground/80">Cloud and On-Premise deployment options for organizations</div>
+                  </div>
+                </div>
               </div>
             </div>
           </CardContent>

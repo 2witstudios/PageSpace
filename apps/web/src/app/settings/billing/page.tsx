@@ -224,10 +224,10 @@ export default function BillingPage() {
             </p>
           </div>
           <div>
-            <h4 className="font-medium mb-2">How does PageSpace compare to other AI tools?</h4>
+            <h4 className="font-medium mb-2">What are PageSpace&apos;s pricing options?</h4>
             <p className="text-sm text-muted-foreground">
-              PageSpace offers much more generous limits than competitors like Notion AI (40 requests/month)
-              and costs less than ChatGPT Plus or Claude Pro ($20/month each).
+              PageSpace offers Personal plans at $15/month with everything you need for individual productivity.
+              For organizations, we offer Enterprise solutions with both Cloud and On-Premise deployment options - contact sales for pricing.
             </p>
           </div>
           <div>
