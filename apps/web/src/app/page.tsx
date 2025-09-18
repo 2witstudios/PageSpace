@@ -4,6 +4,7 @@ import AuthButtons from "@/components/shared/AuthButtons";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import ContactForm from "@/components/shared/ContactForm";
 
 export default function Home() {
   return (
@@ -42,7 +43,7 @@ export default function Home() {
             </div>
           </div>
         </section>
-        <section className="w-full py-16 md:py-24 lg:py-32 bg-muted/30">
+        <section className="w-full py-16 md:py-24 lg:py-32 bg-muted">
           <div className="container mx-auto px-4 md:px-6">
             <div className="flex flex-col items-center space-y-12 text-center">
               <div className="space-y-4">
@@ -50,14 +51,14 @@ export default function Home() {
                   Where familiar meets extraordinary
                 </h2>
                 <p className="mx-auto max-w-[800px] text-lg text-muted-foreground md:text-xl">
-                  The tools you love, unified and amplified by AI that doesn&apos;t just suggest—it builds.
+                  The tools you love, unified and amplified by AI that doesn't just suggest—it builds.
                 </p>
               </div>
               <div className="grid gap-8 lg:grid-cols-3 max-w-6xl">
                 <div className="flex flex-col items-center space-y-4 text-center">
                   <Folder className="w-12 h-12 text-primary" />
                   <div className="space-y-2">
-                    <h3 className="text-xl font-semibold">Drive&apos;s Organization</h3>
+                    <h3 className="text-xl font-semibold">Drive's Organization</h3>
                     <p className="text-muted-foreground text-sm">
                       File structure you understand, with AI that organizes intelligently as you work.
                     </p>
@@ -66,7 +67,7 @@ export default function Home() {
                 <div className="flex flex-col items-center space-y-4 text-center">
                   <Code className="w-12 h-12 text-primary" />
                   <div className="space-y-2">
-                    <h3 className="text-xl font-semibold">Cursor&apos;s Precision</h3>
+                    <h3 className="text-xl font-semibold">Cursor's Precision</h3>
                     <p className="text-muted-foreground text-sm">
                       Agentic AI editing that makes exact changes, refactors code, and builds features.
                     </p>
@@ -85,10 +86,10 @@ export default function Home() {
             </div>
           </div>
         </section>
-        <section className="w-full py-20 md:py-32 lg:py-40 bg-muted/30">
+        <section className="w-full py-20 md:py-32 lg:py-40 bg-background">
           <div className="container mx-auto px-4 md:px-6">
-            <div className="flex flex-col items-center space-y-12 text-center">
-              <div className="space-y-4">
+            <div className="flex flex-col items-center space-y-12">
+              <div className="space-y-4 text-center">
                 <h2 className="text-3xl font-bold tracking-tighter sm:text-4xl md:text-5xl">
                   Choose Your PageSpace Plan
                 </h2>
@@ -98,7 +99,7 @@ export default function Home() {
               </div>
               <div className="grid gap-8 lg:grid-cols-3 max-w-6xl w-full">
                 {/* Free Tier */}
-                <Card className="relative border-2 hover:border-primary/50 transition-colors">
+                <Card className="relative border-2 hover:border-primary/50 transition-colors flex flex-col">
                   <CardHeader>
                     <div className="flex items-center justify-between">
                       <Badge variant="secondary">Get Started</Badge>
@@ -111,7 +112,7 @@ export default function Home() {
                       Full PageSpace features with daily limits
                     </CardDescription>
                   </CardHeader>
-                  <CardContent className="space-y-4">
+                  <CardContent className="space-y-4 flex-grow">
                     <ul className="space-y-3">
                       <li className="flex items-center gap-3">
                         <Check className="w-5 h-5 text-primary flex-shrink-0" />
@@ -150,7 +151,7 @@ export default function Home() {
                 </Card>
 
                 {/* Pro Tier */}
-                <Card className="relative border-2 border-primary hover:border-primary/70 transition-colors">
+                <Card className="relative border-2 border-primary hover:border-primary/70 transition-colors flex flex-col">
                   <CardHeader>
                     <div className="flex items-center justify-between">
                       <Badge variant="default">Most Popular</Badge>
@@ -164,7 +165,7 @@ export default function Home() {
                       Everything you need for individual productivity
                     </CardDescription>
                   </CardHeader>
-                  <CardContent className="space-y-4">
+                  <CardContent className="space-y-4 flex-grow">
                     <ul className="space-y-3">
                       <li className="flex items-center gap-3">
                         <Check className="w-5 h-5 text-primary flex-shrink-0" />
@@ -176,7 +177,7 @@ export default function Home() {
                       </li>
                       <li className="flex items-center gap-3">
                         <Shield className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>10 daily &quot;Extra Thinking&quot; sessions (advanced reasoning)</span>
+                        <span>10 daily "Extra Thinking" sessions (advanced reasoning)</span>
                       </li>
                       <li className="flex items-center gap-3">
                         <Users className="w-5 h-5 text-primary flex-shrink-0" />
@@ -203,12 +204,12 @@ export default function Home() {
                 </Card>
 
                 {/* Enterprise Tier */}
-                <Card className="relative border-2 hover:border-primary/50 transition-colors">
+                <Card className="relative border-2 hover:border-primary/50 transition-colors flex flex-col">
                   <CardHeader>
                     <div className="flex items-center justify-between">
                       <Badge variant="outline">Enterprise</Badge>
                       <div className="text-right">
-                        <div className="text-2xl font-bold">Contact Sales</div>
+                        <div className="text-3xl font-bold">Custom</div>
                       </div>
                     </div>
                     <CardTitle>Enterprise</CardTitle>
@@ -216,7 +217,7 @@ export default function Home() {
                       Scalable solutions for organizations
                     </CardDescription>
                   </CardHeader>
-                  <CardContent className="space-y-4">
+                  <CardContent className="space-y-4 flex-grow">
                     <ul className="space-y-3">
                       <li className="flex items-center gap-3">
                         <Cloud className="w-5 h-5 text-primary flex-shrink-0" />
@@ -257,29 +258,20 @@ export default function Home() {
             </div>
           </div>
         </section>
-      </main>
-      <section className="w-full py-20 md:py-32 lg:py-40 bg-background text-foreground">
-        <div className="container mx-auto px-4 md:px-6">
-          <div className="flex flex-col items-center space-y-6 text-center">
-            <div className="space-y-4">
-              <h2 className="text-3xl font-bold tracking-tighter sm:text-4xl md:text-5xl">
-                Ready to build your new workspace?
+        <section className="w-full py-20 md:py-32 lg:py-40 bg-muted text-foreground">
+          <div className="container mx-auto px-4 md:px-6 max-w-2xl">
+            <div className="text-center mb-12">
+              <h2 className="text-3xl font-bold tracking-tighter sm:text-4xl mb-4">
+                Contact Us
               </h2>
-              <p className="mx-auto max-w-[600px] text-lg text-muted-foreground md:text-xl">
-                Sign up for free and start organizing your world.
+              <p className="text-lg text-muted-foreground max-w-md mx-auto">
+                Have questions? We'd love to hear from you.
               </p>
             </div>
-            <div className="space-y-2">
-              <Link
-                className="inline-flex h-12 items-center justify-center rounded-md bg-primary px-8 text-sm font-medium text-primary-foreground shadow transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
-                href="/dashboard"
-              >
-                Join open beta!
-              </Link>
-            </div>
+            <ContactForm />
           </div>
-        </div>
-      </section>
+        </section>
+      </main>
       <footer className="w-full border-t bg-background text-foreground">
         <div className="container mx-auto flex flex-col gap-2 sm:flex-row py-6 shrink-0 items-center px-4 md:px-6">
           <p className="text-xs text-muted-foreground">
@@ -304,5 +296,3 @@ export default function Home() {
     </div>
   );
 }
-
-
