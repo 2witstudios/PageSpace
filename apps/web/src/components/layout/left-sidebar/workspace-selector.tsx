@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { ChevronsUpDown } from "lucide-react";
+import { ChevronsUpDown, Plus } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -85,9 +85,17 @@ export default function DriveSwitcher() {
               <ChevronsUpDown className="h-4 w-4" />
             </Button>
           </DropdownMenuTrigger>
-          <Link href={currentDrive ? `/dashboard/${currentDrive.id}` : '/dashboard'} className="font-semibold truncate hover:underline">
+          <Link href={currentDrive ? `/dashboard/${currentDrive.id}` : '/dashboard'} className="font-semibold truncate hover:underline flex-1">
             {currentDrive ? currentDrive.name : "Select a drive"}
           </Link>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="shrink-0 text-muted-foreground h-8 w-8"
+            onClick={() => setCreateDriveOpen(true)}
+          >
+            <Plus className="h-4 w-4" />
+          </Button>
         </div>
         <DropdownMenuContent className="w-56">
           {ownedDrives.length > 0 && (

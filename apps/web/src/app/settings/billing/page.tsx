@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { SubscriptionCard } from '@/components/billing/SubscriptionCard';
-import { CheckCircle, XCircle, AlertCircle } from 'lucide-react';
+import { CheckCircle, XCircle, AlertCircle, ArrowLeft } from 'lucide-react';
 // Stripe Payment Link for Pro subscription upgrades
 const STRIPE_PAYMENT_LINK = 'https://buy.stripe.com/eVq8wRc8vgnvaeGaoKeEo00';
 
@@ -168,6 +168,15 @@ export default function BillingPage() {
   return (
     <div className="container mx-auto p-6 space-y-6">
       <div>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => router.push('/settings')}
+          className="mb-4"
+        >
+          <ArrowLeft className="h-4 w-4 mr-2" />
+          Back to Settings
+        </Button>
         <h1 className="text-3xl font-bold">Billing & Subscription</h1>
         <p className="text-muted-foreground">
           Manage your PageSpace subscription and usage
