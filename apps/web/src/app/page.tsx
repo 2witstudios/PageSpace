@@ -141,8 +141,10 @@ export default function Home() {
                     </div>
                   </CardContent>
                   <CardFooter>
-                    <Button variant="outline" className="w-full" size="lg">
-                      Get Started
+                    <Button asChild variant="outline" className="w-full" size="lg">
+                      <Link href="/auth/signup">
+                        Get Started
+                      </Link>
                     </Button>
                   </CardFooter>
                 </Card>
@@ -192,8 +194,10 @@ export default function Home() {
                     </div>
                   </CardContent>
                   <CardFooter>
-                    <Button className="w-full" size="lg">
-                      Get Started
+                    <Button asChild className="w-full" size="lg">
+                      <Link href="/settings/billing">
+                        Get Started
+                      </Link>
                     </Button>
                   </CardFooter>
                 </Card>
@@ -242,8 +246,10 @@ export default function Home() {
                     </div>
                   </CardContent>
                   <CardFooter>
-                    <Button variant="outline" className="w-full" size="lg">
-                      Contact Sales
+                    <Button asChild variant="outline" className="w-full" size="lg">
+                      <Link href="/contact">
+                        Contact Sales
+                      </Link>
                     </Button>
                   </CardFooter>
                 </Card>
