@@ -51,14 +51,14 @@ export default function Home() {
                   Where familiar meets extraordinary
                 </h2>
                 <p className="mx-auto max-w-[800px] text-lg text-muted-foreground md:text-xl">
-                  The tools you love, unified and amplified by AI that doesn't just suggest—it builds.
+                  The tools you love, unified and amplified by AI that doesn&apos;t just suggest—it builds.
                 </p>
               </div>
               <div className="grid gap-8 lg:grid-cols-3 max-w-6xl">
                 <div className="flex flex-col items-center space-y-4 text-center">
                   <Folder className="w-12 h-12 text-primary" />
                   <div className="space-y-2">
-                    <h3 className="text-xl font-semibold">Drive's Organization</h3>
+                    <h3 className="text-xl font-semibold">Drive&apos;s Organization</h3>
                     <p className="text-muted-foreground text-sm">
                       File structure you understand, with AI that organizes intelligently as you work.
                     </p>
@@ -67,7 +67,7 @@ export default function Home() {
                 <div className="flex flex-col items-center space-y-4 text-center">
                   <Code className="w-12 h-12 text-primary" />
                   <div className="space-y-2">
-                    <h3 className="text-xl font-semibold">Cursor's Precision</h3>
+                    <h3 className="text-xl font-semibold">Cursor&apos;s Precision</h3>
                     <p className="text-muted-foreground text-sm">
                       Agentic AI editing that makes exact changes, refactors code, and builds features.
                     </p>
@@ -177,7 +177,7 @@ export default function Home() {
                       </li>
                       <li className="flex items-center gap-3">
                         <Shield className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>10 daily "Extra Thinking" sessions (advanced reasoning)</span>
+                        <span>10 daily &quot;Extra Thinking&quot; sessions (advanced reasoning)</span>
                       </li>
                       <li className="flex items-center gap-3">
                         <Users className="w-5 h-5 text-primary flex-shrink-0" />
@@ -265,7 +265,7 @@ export default function Home() {
                 Contact Us
               </h2>
               <p className="text-lg text-muted-foreground max-w-md mx-auto">
-                Have questions? We'd love to hear from you.
+                Have questions? We&apos;d love to hear from you.
               </p>
             </div>
             <ContactForm />

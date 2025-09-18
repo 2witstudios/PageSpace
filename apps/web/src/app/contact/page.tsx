@@ -33,7 +33,7 @@ export default function ContactPage() {
               Contact Sales
             </h1>
             <p className="text-lg text-muted-foreground max-w-md mx-auto">
-              Ready to explore PageSpace for your organization? Let's discuss how we can help transform your workspace.
+              Ready to explore PageSpace for your organization? Let&apos;s discuss how we can help transform your workspace.
             </p>
           </div>
           <ContactForm />

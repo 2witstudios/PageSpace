@@ -6,7 +6,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Mail, MessageSquare, User, Building } from "lucide-react";
+import { Mail, MessageSquare, User } from "lucide-react";
 
 interface FormData {
   name: string;
@@ -116,7 +116,7 @@ export default function ContactForm() {
         </div>
         <h2 className="text-2xl font-bold">Thank you for reaching out!</h2>
         <p className="text-lg text-muted-foreground mt-2">
-          We've received your message and will get back to you within 24 hours.
+          We&apos;ve received your message and will get back to you within 24 hours.
         </p>
       </div>
     );
