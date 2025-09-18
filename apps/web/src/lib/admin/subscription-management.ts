@@ -1,13 +1,11 @@
-import { db, eq, ne, and, or, users } from '@pagespace/db';
-import { updateStorageTierFromSubscription } from '@pagespace/lib/services/storage-limits';
+import { db, eq, users } from '@pagespace/db';
+import { getStorageConfigFromSubscription } from '@pagespace/lib/services/subscription-utils';
 
 export interface SubscriptionUpdateResult {
   success: boolean;
   user?: {
     id: string;
     subscriptionTier: string;
-    storageTier: string;
-    storageQuotaBytes: number;
   };
   error?: string;
 }
@@ -37,8 +35,6 @@ export async function updateUserSubscriptionTier(
       .select({
         id: users.id,
         subscriptionTier: users.subscriptionTier,
-        storageTier: users.storageTier,
-        storageQuotaBytes: users.storageQuotaBytes,
       })
       .from(users)
       .where(eq(users.id, userId))
@@ -55,38 +51,31 @@ export async function updateUserSubscriptionTier(
         user: {
           id: existingUser.id,
           subscriptionTier: existingUser.subscriptionTier,
-          storageTier: existingUser.storageTier || 'free',
-          storageQuotaBytes: existingUser.storageQuotaBytes || 524288000,
         }
       };
     }
 
-    // Perform the update in a transaction to ensure consistency
-    await db.transaction(async (tx) => {
-      // Update subscription tier
-      await tx
-        .update(users)
-        .set({
-          subscriptionTier: newTier,
-          updatedAt: new Date(),
-        })
-        .where(eq(users.id, userId));
-
-      // Update storage tier using the same logic as webhooks
-      await updateStorageTierFromSubscription(userId, newTier);
-    });
+    // Simple subscription tier update - storage limits computed dynamically
+    await db
+      .update(users)
+      .set({
+        subscriptionTier: newTier,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, userId));
 
     // Get updated user data
     const [updatedUser] = await db
       .select({
         id: users.id,
         subscriptionTier: users.subscriptionTier,
-        storageTier: users.storageTier,
-        storageQuotaBytes: users.storageQuotaBytes,
       })
       .from(users)
       .where(eq(users.id, userId))
       .limit(1);
+
+    // Compute storage config for updated tier
+    const storageConfig = getStorageConfigFromSubscription(newTier);
 
     // Log the change
     console.log(`Subscription tier updated for user ${userId}:`, {
@@ -94,8 +83,8 @@ export async function updateUserSubscriptionTier(
       to: newTier,
       adminUserId: adminUserId || 'system',
       storageUpdate: {
-        tier: updatedUser?.storageTier,
-        quota: updatedUser?.storageQuotaBytes,
+        tier: storageConfig.tier,
+        quota: storageConfig.quotaBytes,
       },
       timestamp: new Date().toISOString(),
     });
@@ -105,8 +94,6 @@ export async function updateUserSubscriptionTier(
       user: {
         id: updatedUser!.id,
         subscriptionTier: updatedUser!.subscriptionTier,
-        storageTier: updatedUser!.storageTier || 'free',
-        storageQuotaBytes: updatedUser!.storageQuotaBytes || 524288000,
       }
     };
 
@@ -120,87 +107,25 @@ export async function updateUserSubscriptionTier(
 }
 
 /**
- * Get users with mismatched subscription and storage tiers
- * Useful for identifying users who need reconciliation
+ * DEPRECATED: These functions are no longer needed since storage limits are computed
+ * from subscription tier dynamically. Keeping for backward compatibility.
  */
-export async function findMismatchedUsers(): Promise<{
-  id: string;
-  subscriptionTier: string;
-  storageTier: string;
-  storageQuotaBytes: number;
-}[]> {
-  const mismatchedUsers = await db
-    .select({
-      id: users.id,
-      subscriptionTier: users.subscriptionTier,
-      storageTier: users.storageTier,
-      storageQuotaBytes: users.storageQuotaBytes,
-    })
-    .from(users)
-    .where(
-      // Find users where subscription tier is 'pro' but storage tier is not 'pro'
-      // OR where subscription tier is 'normal' but storage tier is not 'free'
-      or(
-        and(
-          eq(users.subscriptionTier, 'pro'),
-          or(
-            ne(users.storageTier, 'pro'),
-            ne(users.storageQuotaBytes, 2147483648) // 2GB
-          )
-        ),
-        and(
-          eq(users.subscriptionTier, 'normal'),
-          or(
-            ne(users.storageTier, 'free'),
-            ne(users.storageQuotaBytes, 524288000) // 500MB
-          )
-        )
-      )
-    );
 
-  return mismatchedUsers;
+/**
+ * @deprecated Storage limits are now computed from subscription tier
+ */
+export async function findMismatchedUsers(): Promise<never[]> {
+  console.log('findMismatchedUsers is deprecated - storage limits are now computed from subscription tier');
+  return [];
 }
 
 /**
- * Reconcile all users with mismatched subscription/storage tiers
- * This should be run after manual subscription changes or as a maintenance task
+ * @deprecated Storage limits are now computed from subscription tier
  */
 export async function reconcileAllSubscriptionTiers(): Promise<{
   totalFixed: number;
-  results: Array<{
-    userId: string;
-    success: boolean;
-    error?: string;
-  }>;
+  results: Array<{ userId: string; success: boolean; error?: string }>;
 }> {
-  const mismatchedUsers = await findMismatchedUsers();
-  const results: Array<{ userId: string; success: boolean; error?: string }> = [];
-
-  console.log(`Found ${mismatchedUsers.length} users with mismatched subscription/storage tiers`);
-
-  for (const user of mismatchedUsers) {
-    const result = await updateUserSubscriptionTier(
-      user.id,
-      user.subscriptionTier as 'normal' | 'pro',
-      'system-reconciliation'
-    );
-
-    results.push({
-      userId: user.id,
-      success: result.success,
-      error: result.error,
-    });
-
-    // Small delay to avoid overwhelming the database
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-
-  const totalFixed = results.filter(r => r.success).length;
-
-  console.log(`Reconciliation complete: ${totalFixed}/${mismatchedUsers.length} users fixed`);
-
-  return {
-    totalFixed,
-    results,
-  };
+  console.log('reconcileAllSubscriptionTiers is deprecated - storage limits are now computed from subscription tier');
+  return { totalFixed: 0, results: [] };
 }

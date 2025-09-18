@@ -13,10 +13,12 @@ export interface RateLimitResult {
  */
 export async function checkAIRateLimit(
   userId: string,
-  provider: string
+  provider: string,
+  model?: string
 ): Promise<RateLimitResult> {
-  // Determine provider type based on provider and model
-  const providerType: ProviderType = provider === 'pagespace_extra' ? 'extra_thinking' : 'normal';
+  // Determine provider type based on model name for PageSpace provider
+  const isThinkingModel = provider === 'pagespace' && model === 'gemini-2.5-pro';
+  const providerType: ProviderType = isThinkingModel ? 'extra_thinking' : 'normal';
 
   try {
     const result = await incrementUsage(userId, providerType);
@@ -96,8 +98,9 @@ function getTomorrowMidnight(): Date {
 /**
  * Check if provider requires Pro subscription
  */
-export function requiresProSubscription(provider: string): boolean {
-  return provider === 'pagespace_extra';
+export function requiresProSubscription(provider: string, model?: string): boolean {
+  // Check if this is the thinking model for PageSpace provider
+  return provider === 'pagespace' && model === 'gemini-2.5-pro';
 }
 
 /**

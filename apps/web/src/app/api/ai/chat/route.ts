@@ -238,10 +238,11 @@ export async function POST(request: Request) {
     const { requiresProSubscription, createSubscriptionRequiredResponse } = await import('@/lib/subscription/rate-limit-middleware');
 
     // Check if provider requires Pro subscription
-    if (requiresProSubscription(currentProvider) && user?.subscriptionTier !== 'pro') {
+    if (requiresProSubscription(currentProvider, currentModel) && user?.subscriptionTier !== 'pro') {
       loggers.ai.warn('AI Chat API: Pro subscription required', {
         userId,
         provider: currentProvider,
+        model: currentModel,
         subscriptionTier: user?.subscriptionTier
       });
       return createSubscriptionRequiredResponse();
@@ -251,7 +252,7 @@ export async function POST(request: Request) {
     loggers.ai.debug('AI Chat API: Will track usage in onFinish for PageSpace providers', {
       userId,
       provider: currentProvider,
-      isPageSpaceProvider: currentProvider === 'pagespace' || currentProvider === 'pagespace_extra'
+      isPageSpaceProvider: currentProvider === 'pagespace'
     });
     
     // Update page's AI provider/model if changed
@@ -272,7 +273,7 @@ export async function POST(request: Request) {
     let model;
 
     if (currentProvider === 'pagespace') {
-      // Use default PageSpace settings (now Google AI with Gemini 2.5 Flash)
+      // Use default PageSpace settings (Google AI backend supports both normal and thinking models)
       const pageSpaceSettings = await getDefaultPageSpaceSettings();
 
       if (!pageSpaceSettings) {
@@ -311,38 +312,6 @@ export async function POST(request: Request) {
           const baseModel = openrouter.chat(currentModel);
           model = baseModel;
         }
-      }
-    } else if (currentProvider === 'pagespace_extra') {
-      // Use PageSpace Extra Thinking (Google AI with Gemini 2.5 Pro)
-      const pageSpaceSettings = await getDefaultPageSpaceSettings();
-
-      if (!pageSpaceSettings) {
-        // Fall back to user's Google settings if no default key
-        let googleSettings = await getUserGoogleSettings(userId);
-
-        if (!googleSettings && googleApiKey) {
-          await createGoogleSettings(userId, googleApiKey);
-          googleSettings = { apiKey: googleApiKey, isConfigured: true };
-        }
-
-        if (!googleSettings) {
-          return NextResponse.json({
-            error: 'No default API key configured. Please provide your own Google AI API key.'
-          }, { status: 400 });
-        }
-
-        const googleProvider = createGoogleGenerativeAI({
-          apiKey: googleSettings.apiKey,
-        });
-        const baseModel = googleProvider(currentModel);
-        model = baseModel;
-      } else {
-        // Use Google provider for Extra Thinking
-        const googleProvider = createGoogleGenerativeAI({
-          apiKey: pageSpaceSettings.apiKey,
-        });
-        const baseModel = googleProvider(currentModel);
-        model = baseModel;
       }
     } else if (currentProvider === 'openrouter') {
       // Handle OpenRouter setup
@@ -767,19 +736,24 @@ MENTION PROCESSING:
               loggers.ai.debug('AI Chat API: AI response message saved to database with tools');
 
               // Track usage for PageSpace providers only (rate limiting/quota tracking)
-              const isPageSpaceProvider = currentProvider === 'pagespace' || currentProvider === 'pagespace_extra';
+              const isPageSpaceProvider = currentProvider === 'pagespace';
+
+              // Determine if this is thinking model based on model name
+              const isThinkingModel = currentModel === 'gemini-2.5-pro';
 
               loggers.ai.info('AI Chat API: USAGE TRACKING DECISION', {
                 userId,
                 currentProvider,
+                currentModel,
                 isPageSpaceProvider,
+                isThinkingModel,
                 messageId,
                 timestamp: new Date().toISOString()
               });
 
               if (isPageSpaceProvider) {
                 try {
-                  const providerType = currentProvider === 'pagespace_extra' ? 'extra_thinking' : 'normal';
+                  const providerType = isThinkingModel ? 'extra_thinking' : 'normal';
 
                   loggers.ai.info('AI Chat API: CALLING incrementUsage', {
                     userId,
@@ -859,7 +833,7 @@ MENTION PROCESSING:
                 console.log('⚪ USAGE TRACKING SKIPPED:', {
                   provider: currentProvider,
                   reason: 'Not a PageSpace provider',
-                  expectedProviders: ['pagespace', 'pagespace_extra']
+                  expectedProviders: ['pagespace']
                 });
               }
 

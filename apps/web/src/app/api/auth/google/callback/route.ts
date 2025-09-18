@@ -134,10 +134,8 @@ export async function GET(req: Request) {
         provider: 'google',
         tokenVersion: 0,
         role: 'user',
-        // Explicitly set storage defaults to ensure new users always have proper limits
+        // Storage tracking (quota/tier computed from subscriptionTier)
         storageUsedBytes: 0,
-        storageQuotaBytes: 524288000, // 500MB (500 * 1024 * 1024)
-        storageTier: 'free',
         subscriptionTier: 'normal',
       }).returning();
 

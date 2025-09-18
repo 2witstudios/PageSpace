@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, isAuthError } from '@/lib/auth-helpers';
 import { db, eq, subscriptions, users } from '@pagespace/db';
+import { getStorageConfigFromSubscription, type SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 
 export async function GET(request: NextRequest) {
   try {
@@ -33,6 +34,10 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    // Compute storage config from subscription tier
+    const subscriptionTier = (user.subscriptionTier || 'normal') as SubscriptionTier;
+    const storageConfig = getStorageConfigFromSubscription(subscriptionTier);
+
     return NextResponse.json({
       subscriptionTier: user.subscriptionTier,
       stripeCustomerId: user.stripeCustomerId,
@@ -43,9 +48,9 @@ export async function GET(request: NextRequest) {
         cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
       } : null,
       storage: {
-        used: user.storageUsedBytes,
-        quota: user.storageQuotaBytes,
-        tier: user.storageTier,
+        used: user.storageUsedBytes || 0,
+        quota: storageConfig.quotaBytes,
+        tier: storageConfig.tier,
       },
     });
 

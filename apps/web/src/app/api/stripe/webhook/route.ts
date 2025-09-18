@@ -151,9 +151,7 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
     })
     .where(eq(users.id, userId));
 
-  // Update storage tier using the storage service
-  const { updateStorageTierFromSubscription } = await import('@pagespace/lib/services/storage-limits');
-  await updateStorageTierFromSubscription(userId, subscriptionTier);
+  // Storage limits are now computed dynamically from subscription tier - no sync needed
 
   console.log(`Updated subscription for user ${userId}: ${subscriptionTier}`);
 }
@@ -181,9 +179,7 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
     })
     .where(eq(users.id, userId));
 
-  // Update storage tier using the storage service
-  const { updateStorageTierFromSubscription } = await import('@pagespace/lib/services/storage-limits');
-  await updateStorageTierFromSubscription(userId, 'normal');
+  // Storage limits are now computed dynamically from subscription tier - no sync needed
 
   // Mark subscription as canceled
   await db.update(subscriptions)

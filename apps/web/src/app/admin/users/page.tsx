@@ -46,6 +46,14 @@ export default function AdminUsersPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const handleUserUpdate = (userId: string, updatedUser: Partial<UserData>) => {
+    setUsers(prevUsers =>
+      prevUsers.map(user =>
+        user.id === userId ? { ...user, ...updatedUser } : user
+      )
+    );
+  };
+
   useEffect(() => {
     async function fetchUsers() {
       try {
@@ -170,7 +178,7 @@ export default function AdminUsersPage() {
         </CardContent>
       </Card>
 
-      <UsersTable users={users} />
+      <UsersTable users={users} onUserUpdate={handleUserUpdate} />
     </div>
   );
 }

@@ -16,6 +16,7 @@
     "./auth-utils": "./src/auth-utils.ts",
     "./scribe-processor": "./src/scribe-processor.ts",
     "./services/storage-limits": "./src/services/storage-limits.ts",
+    "./services/subscription-utils": "./src/services/subscription-utils.ts",
     "./services/upload-semaphore": "./src/services/upload-semaphore.ts",
     "./services/memory-monitor": "./src/services/memory-monitor.ts"
   },
@@ -50,6 +51,9 @@
       ],
       "services/storage-limits": [
         "./src/services/storage-limits.ts"
+      ],
+      "services/subscription-utils": [
+        "./src/services/subscription-utils.ts"
       ],
       "services/upload-semaphore": [
         "./src/services/upload-semaphore.ts"

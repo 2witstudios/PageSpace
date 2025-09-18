@@ -13,7 +13,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { ChevronDown, ChevronRight, Search, Shield, MessageCircle, Database, Settings, Crown, CreditCard } from "lucide-react";
+import { ChevronDown, ChevronRight, Search, Shield, MessageCircle, Database, Settings, Crown, CreditCard, CheckCircle } from "lucide-react";
 
 interface UserStats {
   drives: number;
@@ -57,6 +57,7 @@ interface UserData {
 
 interface UsersTableProps {
   users: UserData[];
+  onUserUpdate?: (userId: string, updatedUser: Partial<UserData>) => void;
 }
 
 function formatDate(dateString: string | null) {
@@ -78,10 +79,11 @@ function getUserInitials(name: string) {
     .slice(0, 2);
 }
 
-export function UsersTable({ users }: UsersTableProps) {
+export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [expandedUsers, setExpandedUsers] = useState<Record<string, boolean>>({});
   const [updatingUsers, setUpdatingUsers] = useState<Record<string, boolean>>({});
+  const [recentlyUpdated, setRecentlyUpdated] = useState<Record<string, boolean>>({});
 
   const filteredUsers = users.filter(user =>
     user.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -110,14 +112,33 @@ export function UsersTable({ users }: UsersTableProps) {
       });
 
       if (!response.ok) {
-        throw new Error('Failed to update subscription');
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `HTTP ${response.status}: Failed to update subscription`);
       }
 
-      // Refresh the page to show updated data
-      window.location.reload();
+      const result = await response.json();
+
+      // Update the user in the parent component's state instead of reloading
+      if (onUserUpdate) {
+        onUserUpdate(userId, { subscriptionTier: newTier });
+      }
+
+      // Show success feedback
+      setRecentlyUpdated(prev => ({ ...prev, [userId]: true }));
+      setTimeout(() => {
+        setRecentlyUpdated(prev => ({ ...prev, [userId]: false }));
+      }, 3000);
+
+      console.log('Subscription updated successfully:', result);
     } catch (error) {
       console.error('Error updating subscription:', error);
-      alert('Failed to update subscription. Please try again.');
+
+      // Show a more informative error message
+      const errorMessage = error instanceof Error
+        ? error.message
+        : 'An unexpected error occurred';
+
+      alert(`Failed to update subscription: ${errorMessage}`);
     } finally {
       setUpdatingUsers(prev => ({ ...prev, [userId]: false }));
     }
@@ -288,9 +309,19 @@ export function UsersTable({ users }: UsersTableProps) {
                             disabled={updatingUsers[user.id]}
                             className="w-full"
                           >
-                            {updatingUsers[user.id] ? 'Updating...' :
+                            {updatingUsers[user.id] ? (
+                              <div className="flex items-center space-x-2">
+                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                                <span>Updating...</span>
+                              </div>
+                            ) : recentlyUpdated[user.id] ? (
+                              <div className="flex items-center space-x-2 text-green-600">
+                                <CheckCircle className="h-4 w-4" />
+                                <span>Updated!</span>
+                              </div>
+                            ) : (
                               user.subscriptionTier === 'pro' ? 'Downgrade to Free' : 'Upgrade to Pro'
-                            }
+                            )}
                           </Button>
                         </div>
                       </div>

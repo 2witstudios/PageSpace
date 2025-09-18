@@ -8,11 +8,6 @@ export const AI_PROVIDERS = {
     name: 'PageSpace',
     models: {
       'gemini-2.5-flash': 'Normal',
-    },
-  },
-  pagespace_extra: {
-    name: 'PageSpace Extra Thinking',
-    models: {
       'gemini-2.5-pro': 'Extra Thinking (Pro Only)',
     },
   },
@@ -205,11 +200,11 @@ export const AI_PROVIDERS = {
 /**
  * Map UI provider to backend provider
  * Both openrouter and openrouter_free use 'openrouter' backend
- * PageSpace and PageSpace Extra both use 'google' backend
+ * PageSpace uses 'google' backend
  * OpenAI, Anthropic, and xAI use their own backends
  */
 export function getBackendProvider(uiProvider: string): string {
-  if (uiProvider === 'pagespace' || uiProvider === 'pagespace_extra') {
+  if (uiProvider === 'pagespace') {
     return 'google';
   }
   if (uiProvider === 'openrouter_free') {
@@ -225,11 +220,6 @@ export function getDefaultModel(provider: string): string {
   // Always return gemini-2.5-flash for PageSpace provider
   if (provider === 'pagespace') {
     return 'gemini-2.5-flash';
-  }
-
-  // Always return gemini-2.5-pro for PageSpace Extra provider
-  if (provider === 'pagespace_extra') {
-    return 'gemini-2.5-pro';
   }
 
   // Always return gemini-2.5-flash for Google provider

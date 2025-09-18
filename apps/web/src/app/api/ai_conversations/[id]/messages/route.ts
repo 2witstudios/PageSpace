@@ -556,7 +556,7 @@ MENTION PROCESSING:
             loggers.api.debug('✅ Global Assistant Chat API: AI response message saved to database', {});
 
             // Track usage for PageSpace providers only (rate limiting/quota tracking)
-            const isPageSpaceProvider = currentProvider === 'pagespace' || currentProvider === 'pagespace_extra';
+            const isPageSpaceProvider = currentProvider === 'pagespace';
 
             loggers.api.info('Global Assistant API: USAGE TRACKING DECISION', {
               userId,
@@ -569,7 +569,9 @@ MENTION PROCESSING:
 
             if (isPageSpaceProvider) {
               try {
-                const providerType = currentProvider === 'pagespace_extra' ? 'extra_thinking' : 'normal';
+                // Determine if this is thinking model based on model name
+                const isThinkingModel = currentModel === 'gemini-2.5-pro';
+                const providerType = isThinkingModel ? 'extra_thinking' : 'normal';
 
                 loggers.api.info('Global Assistant API: CALLING incrementUsage', {
                   userId,
@@ -656,7 +658,7 @@ MENTION PROCESSING:
                 provider: currentProvider,
                 conversationId,
                 reason: 'Not a PageSpace provider',
-                expectedProviders: ['pagespace', 'pagespace_extra']
+                expectedProviders: ['pagespace']
               });
             }
           } catch (error) {

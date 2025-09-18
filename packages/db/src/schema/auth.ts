@@ -19,10 +19,8 @@ export const users = pgTable('users', {
   role: userRole('role').default('user').notNull(),
   currentAiProvider: text('currentAiProvider').default('pagespace').notNull(),
   currentAiModel: text('currentAiModel').default('gemini-2.5-flash').notNull(),
-  // Storage tracking fields
+  // Storage tracking fields (quota/tier now computed from subscriptionTier)
   storageUsedBytes: real('storageUsedBytes').default(0).notNull(),
-  storageQuotaBytes: real('storageQuotaBytes').default(524288000).notNull(), // 500MB default
-  storageTier: text('storageTier').default('free').notNull(),
   activeUploads: integer('activeUploads').default(0).notNull(),
   lastStorageCalculated: timestamp('lastStorageCalculated', { mode: 'date' }),
   // Subscription fields

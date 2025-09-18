@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db, eq, users } from '@pagespace/db';
 import { verifyAdminAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logger-config';
-import { updateStorageTierFromSubscription } from '@pagespace/lib/services/storage-limits';
 
 export async function PUT(
   request: NextRequest,
@@ -46,20 +45,14 @@ export async function PUT(
       );
     }
 
-    // Update user subscription tier and sync storage tier
-    await db.transaction(async (tx) => {
-      // Update subscription tier
-      await tx
-        .update(users)
-        .set({
-          subscriptionTier: subscriptionTier as 'normal' | 'pro',
-          updatedAt: new Date(),
-        })
-        .where(eq(users.id, userId));
-
-      // Sync storage tier using the same logic as webhooks
-      await updateStorageTierFromSubscription(userId, subscriptionTier as 'normal' | 'pro');
-    });
+    // Update user subscription tier - storage limits will be computed dynamically
+    await db
+      .update(users)
+      .set({
+        subscriptionTier: subscriptionTier as 'normal' | 'pro',
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, userId));
 
     // Log the admin action
     loggers.api.info('Admin subscription update', {
@@ -68,7 +61,6 @@ export async function PUT(
       targetUserName: existingUser.name,
       oldTier: existingUser.subscriptionTier,
       newTier: subscriptionTier,
-      storageSync: 'completed',
     });
 
     return NextResponse.json({

@@ -52,10 +52,8 @@ export async function POST(req: Request) {
       name,
       email,
       password: hashedPassword,
-      // Explicitly set storage defaults to ensure new users always have proper limits
+      // Storage tracking (quota/tier computed from subscriptionTier)
       storageUsedBytes: 0,
-      storageQuotaBytes: 524288000, // 500MB (500 * 1024 * 1024)
-      storageTier: 'free',
       subscriptionTier: 'normal',
     }).returning().then(res => res[0]);
 
