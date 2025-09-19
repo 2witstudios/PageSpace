@@ -68,10 +68,11 @@ export async function POST(req: Request) {
     }).returning();
 
     // Add default 'ollama' provider for the new user with Docker-compatible URL
+    // This enables local AI models via Ollama for users with local deployments
     await db.insert(userAiSettings).values({
       userId: user.id,
       provider: 'ollama',
-      baseUrl: 'http://host.docker.internal:11434',
+      baseUrl: 'http://host.docker.internal:11434', // Default Docker networking URL
       updatedAt: new Date(),
     });
 

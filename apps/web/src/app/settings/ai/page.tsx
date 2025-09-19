@@ -22,6 +22,7 @@ interface ProviderSettings {
     openai: { isConfigured: boolean; hasApiKey: boolean };
     anthropic: { isConfigured: boolean; hasApiKey: boolean };
     xai: { isConfigured: boolean; hasApiKey: boolean };
+    ollama: { isConfigured: boolean; hasBaseUrl: boolean };
   };
   isAnyProviderConfigured: boolean;
 }
@@ -34,6 +35,7 @@ export default function AiSettingsPage() {
   const [openAIApiKey, setOpenAIApiKey] = useState<string>('');
   const [anthropicApiKey, setAnthropicApiKey] = useState<string>('');
   const [xaiApiKey, setXaiApiKey] = useState<string>('');
+  const [ollamaBaseUrl, setOllamaBaseUrl] = useState<string>('');
   const [showOpenRouterKey, setShowOpenRouterKey] = useState<boolean>(false);
   const [showGoogleKey, setShowGoogleKey] = useState<boolean>(false);
   const [showOpenAIKey, setShowOpenAIKey] = useState<boolean>(false);
@@ -89,7 +91,7 @@ export default function AiSettingsPage() {
           apiKey = xaiApiKey;
           break;
       }
-      
+
       if (!apiKey.trim()) {
         toast.error('Please enter an API key');
         setSaving(false);
@@ -149,7 +151,7 @@ export default function AiSettingsPage() {
           setXaiApiKey('');
           break;
       }
-      
+
       // Broadcast settings update event for other components
       window.dispatchEvent(new CustomEvent('ai-settings-updated', {
         detail: { provider, apiKeySaved: true }
@@ -159,6 +161,73 @@ export default function AiSettingsPage() {
     } catch (error) {
       console.error('Failed to save API key:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to save API key. Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveOllamaBaseUrl = async () => {
+    setSaving(true);
+    try {
+      if (!ollamaBaseUrl.trim()) {
+        toast.error('Please enter a base URL');
+        setSaving(false);
+        return;
+      }
+
+      // Format the base URL - store user input as-is (backend will add /api when needed)
+      let formattedUrl = ollamaBaseUrl.trim();
+
+      // Remove trailing slash if present
+      formattedUrl = formattedUrl.replace(/\/$/, '');
+
+      // Save Ollama base URL to backend
+      const response = await fetch('/api/ai/settings', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          provider: 'ollama',
+          baseUrl: formattedUrl,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to save Ollama base URL');
+      }
+
+      const result = await response.json();
+
+      // Update provider settings locally
+      if (providerSettings) {
+        const updatedSettings = {
+          ...providerSettings,
+          providers: {
+            ...providerSettings.providers,
+            ollama: {
+              isConfigured: true,
+              hasBaseUrl: true,
+            },
+          },
+          isAnyProviderConfigured: true,
+        };
+        setProviderSettings(updatedSettings);
+      }
+
+      // Clear the input field
+      setOllamaBaseUrl('');
+
+      // Broadcast settings update event for other components
+      window.dispatchEvent(new CustomEvent('ai-settings-updated', {
+        detail: { provider: 'ollama', baseUrlSaved: true }
+      }));
+
+      toast.success(result.message || 'Ollama base URL saved successfully!');
+    } catch (error) {
+      console.error('Failed to save Ollama base URL:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to save Ollama base URL. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -249,6 +318,17 @@ export default function AiSettingsPage() {
             <div className="flex items-center justify-between p-3 border rounded-lg">
               <span className="font-medium">xAI (Grok)</span>
               {isProviderConfigured('xai') ? (
+                <Badge variant="default" className="bg-green-500">
+                  <CheckCircle className="h-3 w-3 mr-1" />
+                  Configured
+                </Badge>
+              ) : (
+                <Badge variant="secondary">Not Configured</Badge>
+              )}
+            </div>
+            <div className="flex items-center justify-between p-3 border rounded-lg">
+              <span className="font-medium">Ollama (Local)</span>
+              {isProviderConfigured('ollama') ? (
                 <Badge variant="default" className="bg-green-500">
                   <CheckCircle className="h-3 w-3 mr-1" />
                   Configured
@@ -572,6 +652,62 @@ export default function AiSettingsPage() {
               </a>
             </p>
             <p className="mt-2">xAI provides access to Grok 4, Grok 3, and other Grok models with reasoning capabilities.</p>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Ollama Base URL */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between">
+            <span>Ollama (Local AI)</span>
+            {isProviderConfigured('ollama') && (
+              <Badge variant="default" className="bg-green-500">
+                <CheckCircle className="h-3 w-3 mr-1" />
+                Configured
+              </Badge>
+            )}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Base URL</label>
+            <div className="flex gap-2">
+              <Input
+                type="text"
+                placeholder="http://localhost:11434"
+                value={ollamaBaseUrl}
+                onChange={(e) => setOllamaBaseUrl(e.target.value)}
+                className="flex-1"
+              />
+              <Button
+                onClick={handleSaveOllamaBaseUrl}
+                disabled={!ollamaBaseUrl.trim() || saving}
+              >
+                {saving ? 'Saving...' : 'Save URL'}
+              </Button>
+            </div>
+          </div>
+          <div className="text-sm text-muted-foreground">
+            <p>Enter your Ollama server base URL. <code>/api</code> will be added automatically.</p>
+            <p className="mt-1">
+              <strong>Examples:</strong> <code>http://localhost:11434</code> or <code>http://host.docker.internal:11434</code>
+            </p>
+            <p className="mt-2">
+              Install Ollama from{' '}
+              <a
+                href="https://ollama.ai"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 hover:underline"
+              >
+                ollama.ai
+              </a>
+              {' '}to run local AI models without API costs.
+            </p>
+            <p className="mt-2">
+              <strong>Popular models:</strong> llama3.2, codellama, mistral, qwen2.5-coder, gemma2
+            </p>
           </div>
         </CardContent>
       </Card>

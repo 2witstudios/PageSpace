@@ -171,7 +171,7 @@ export const AI_PROVIDERS = {
     models: {
       // Grok 4 Models
       'grok-4': 'Grok 4',
-      
+
       // Grok 3 Models
       'grok-3': 'Grok 3',
       'grok-3-latest': 'Grok 3 Latest',
@@ -181,7 +181,7 @@ export const AI_PROVIDERS = {
       'grok-3-mini-latest': 'Grok 3 Mini Latest',
       'grok-3-mini-fast': 'Grok 3 Mini Fast',
       'grok-3-mini-fast-latest': 'Grok 3 Mini Fast Latest',
-      
+
       // Grok 2 Models
       'grok-2': 'Grok 2',
       'grok-2-latest': 'Grok 2 Latest',
@@ -189,10 +189,35 @@ export const AI_PROVIDERS = {
       'grok-2-vision': 'Grok 2 Vision',
       'grok-2-vision-latest': 'Grok 2 Vision Latest',
       'grok-2-vision-1212': 'Grok 2 Vision (December)',
-      
+
       // Beta Models
       'grok-beta': 'Grok Beta',
       'grok-vision-beta': 'Grok Vision Beta',
+    },
+  },
+  ollama: {
+    name: 'Ollama (Local)',
+    models: {
+      // Note: Model list will be discovered dynamically from local Ollama instance
+      // These are common defaults - actual available models depend on what's installed locally
+      'llama3.2:latest': 'Llama 3.2',
+      'llama3.2:3b': 'Llama 3.2 3B',
+      'llama3.2:1b': 'Llama 3.2 1B',
+      'llama3.1:latest': 'Llama 3.1 8B',
+      'llama3.1:70b': 'Llama 3.1 70B',
+      'llama3.1:405b': 'Llama 3.1 405B',
+      'codellama:latest': 'Code Llama',
+      'codellama:7b': 'Code Llama 7B',
+      'codellama:13b': 'Code Llama 13B',
+      'codellama:34b': 'Code Llama 34B',
+      'mistral:latest': 'Mistral 7B',
+      'mixtral:latest': 'Mixtral 8x7B',
+      'qwen2.5:latest': 'Qwen 2.5',
+      'qwen2.5-coder:latest': 'Qwen 2.5 Coder',
+      'gemma2:latest': 'Gemma 2',
+      'phi3:latest': 'Phi-3',
+      'deepseek-coder:latest': 'DeepSeek Coder',
+      'neural-chat:latest': 'Neural Chat',
     },
   },
 } as const;

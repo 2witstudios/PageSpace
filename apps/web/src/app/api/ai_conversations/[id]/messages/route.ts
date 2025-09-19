@@ -4,13 +4,16 @@ import { incrementUsage, getUserUsageSummary } from '@/lib/subscription/usage-se
 import { broadcastUsageEvent } from '@/lib/socket-utils';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
+import { createOllama } from 'ollama-ai-provider-v2';
 import { authenticateRequest } from '@/lib/auth-utils';
-import { 
+import {
   getUserOpenRouterSettings,
   createOpenRouterSettings,
   getUserGoogleSettings,
   createGoogleSettings,
-  getDefaultPageSpaceSettings 
+  getDefaultPageSpaceSettings,
+  getUserOllamaSettings,
+  createOllamaSettings
 } from '@/lib/ai/ai-utils';
 import { db, users, conversations, messages, eq, and, asc } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
@@ -144,12 +147,13 @@ export async function POST(
       hasLocationContext: !!requestBody.locationContext
     });
     
-    const { 
+    const {
       messages: requestMessages,
-      selectedProvider, 
+      selectedProvider,
       selectedModel,
       openRouterApiKey,
       googleApiKey,
+      ollamaBaseUrl,
       locationContext,
       agentRole: roleString
     } = requestBody;
@@ -343,10 +347,33 @@ export async function POST(
         apiKey: googleSettings.apiKey,
       });
       model = googleProvider(currentModel);
-      
+
+    } else if (currentProvider === 'ollama') {
+      // Handle Ollama setup
+      let ollamaSettings = await getUserOllamaSettings(userId);
+
+      if (!ollamaSettings && ollamaBaseUrl) {
+        await createOllamaSettings(userId, ollamaBaseUrl);
+        ollamaSettings = { baseUrl: ollamaBaseUrl, isConfigured: true };
+      }
+
+      if (!ollamaSettings) {
+        return NextResponse.json({
+          error: 'Ollama base URL not configured. Please provide a base URL for your local Ollama instance.'
+        }, { status: 400 });
+      }
+
+      // Create Ollama provider instance with base URL
+      // Add /api suffix for ollama-ai-provider-v2 which expects full API endpoint
+      const ollamaApiUrl = `${ollamaSettings.baseUrl}/api`;
+      const ollamaProvider = createOllama({
+        baseURL: ollamaApiUrl,
+      });
+      model = ollamaProvider(currentModel);
+
     } else {
-      return NextResponse.json({ 
-        error: `Unsupported AI provider: ${currentProvider}` 
+      return NextResponse.json({
+        error: `Unsupported AI provider: ${currentProvider}`
       }, { status: 400 });
     }
 
@@ -497,15 +524,15 @@ MENTION PROCESSING:
     const roleFilteredTools = ToolPermissionFilter.filterTools(pageSpaceTools, agentRole);
     
     loggers.api.debug('🔄 Global Assistant Chat API: Starting streamText', { model: currentModel, agentRole });
-    
+
     const result = streamText({
       model,
       system: systemPrompt,
       messages: modelMessages,
       tools: roleFilteredTools,
       stopWhen: stepCountIs(100),
-      experimental_context: { 
-        userId, 
+      experimental_context: {
+        userId,
         locationContext,
         modelCapabilities: getModelCapabilities(currentModel, currentProvider)
       },

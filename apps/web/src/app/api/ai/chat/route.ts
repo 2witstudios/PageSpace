@@ -7,9 +7,10 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createXai } from '@ai-sdk/xai';
+import { createOllama } from 'ollama-ai-provider-v2';
 import { authenticateRequest } from '@/lib/auth-utils';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
-import { 
+import {
   getUserOpenRouterSettings,
   createOpenRouterSettings,
   getUserGoogleSettings,
@@ -20,7 +21,9 @@ import {
   getUserAnthropicSettings,
   createAnthropicSettings,
   getUserXAISettings,
-  createXAISettings
+  createXAISettings,
+  getUserOllamaSettings,
+  createOllamaSettings
 } from '@/lib/ai/ai-utils';
 import { db, users, chatMessages, pages, eq } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
@@ -45,6 +48,7 @@ import { getModelCapabilities } from '@/lib/ai/model-capabilities';
 
 // Allow streaming responses up to 5 minutes for complex AI agent interactions
 export const maxDuration = 300;
+
 
 /**
  * Next.js 15 compatible API route for AI chat
@@ -81,16 +85,17 @@ export async function POST(request: Request) {
       hasGoogleKey: !!requestBody.googleApiKey
     });
     
-    const { 
+    const {
       messages,
       chatId: requestChatId, // chat ID (page ID) - standard AI SDK pattern
-      selectedProvider: requestSelectedProvider, 
+      selectedProvider: requestSelectedProvider,
       selectedModel: requestSelectedModel,
       openRouterApiKey,
       googleApiKey,
       openAIApiKey,
       anthropicApiKey,
       xaiApiKey,
+      ollamaBaseUrl,
       pageContext,
       // Note: agentRole no longer needed - handled server-side via page configuration
     }: {
@@ -103,6 +108,7 @@ export async function POST(request: Request) {
       openAIApiKey?: string,
       anthropicApiKey?: string,
       xaiApiKey?: string,
+      ollamaBaseUrl?: string,
       pageContext?: {
         pageId: string,
         pageTitle: string,
@@ -421,15 +427,15 @@ export async function POST(request: Request) {
     } else if (currentProvider === 'xai') {
       // Handle xAI setup
       let xaiSettings = await getUserXAISettings(userId);
-      
+
       if (!xaiSettings && xaiApiKey) {
         await createXAISettings(userId, xaiApiKey);
         xaiSettings = { apiKey: xaiApiKey, isConfigured: true };
       }
 
       if (!xaiSettings) {
-        return NextResponse.json({ 
-          error: 'xAI API key not configured. Please provide an API key.' 
+        return NextResponse.json({
+          error: 'xAI API key not configured. Please provide an API key.'
         }, { status: 400 });
       }
 
@@ -438,10 +444,39 @@ export async function POST(request: Request) {
         apiKey: xaiSettings.apiKey,
       });
       model = xai(currentModel);
-      
+
+    } else if (currentProvider === 'ollama') {
+      // Handle Ollama setup
+      let ollamaSettings = await getUserOllamaSettings(userId);
+
+      if (!ollamaSettings && ollamaBaseUrl) {
+        await createOllamaSettings(userId, ollamaBaseUrl);
+        ollamaSettings = { baseUrl: ollamaBaseUrl, isConfigured: true };
+      }
+
+      if (!ollamaSettings) {
+        return NextResponse.json({
+          error: 'Ollama base URL not configured. Please provide a base URL for your local Ollama instance.'
+        }, { status: 400 });
+      }
+
+      // Create Ollama provider instance with base URL
+      // Add /api suffix for ollama-ai-provider-v2 which expects full API endpoint
+      const ollamaApiUrl = `${ollamaSettings.baseUrl}/api`;
+      console.log('🔧 OLLAMA DEBUG: User baseURL:', ollamaSettings.baseUrl);
+      console.log('🔧 OLLAMA DEBUG: Provider baseURL:', ollamaApiUrl);
+      console.log('🔧 OLLAMA DEBUG: Current model:', currentModel);
+
+      const ollamaProvider = createOllama({
+        baseURL: ollamaApiUrl,
+      });
+      model = ollamaProvider(currentModel);
+
+      console.log('✅ OLLAMA DEBUG: Ollama provider created successfully');
+
     } else {
-      return NextResponse.json({ 
-        error: `Unsupported AI provider: ${currentProvider}` 
+      return NextResponse.json({
+        error: `Unsupported AI provider: ${currentProvider}`
       }, { status: 400 });
     }
 
@@ -524,7 +559,7 @@ CRITICAL NESTING PRINCIPLE:
 • NO RESTRICTIONS on what can contain what - organize based on logical user needs
 • Documents can contain AI chats, channels, folders, and canvas pages
 • AI chats can contain documents, other AI chats, folders, and any page type
-• Channels can contain any page type for organized discussion threads  
+• Channels can contain any page type for organized discussion threads
 • Canvas pages can contain any page type for custom navigation structures
 • Think creatively about nesting - optimize for user workflow, not type conventions
 
@@ -654,8 +689,8 @@ MENTION PROCESSING:
 • Use the read_page tool for each mentioned document before providing your main response
 • Let mentioned document content inform and enrich your response
 • Don't explicitly mention that you're reading @mentioned docs unless relevant to the conversation`,
-      messages: modelMessages,
-      tools: filteredTools,  // Use original tools directly
+            messages: modelMessages,
+            tools: filteredTools,  // Use original tools directly
             stopWhen: stepCountIs(100), // Allow up to 100 tool calls per conversation turn
             experimental_context: {
               userId,
@@ -979,7 +1014,10 @@ export async function GET(request: Request) {
     
     // Check Google AI settings
     const googleSettings = await getUserGoogleSettings(userId);
-    
+
+    // Check Ollama settings
+    const ollamaSettings = await getUserOllamaSettings(userId);
+
     return NextResponse.json({
       currentProvider,
       currentModel,
@@ -996,8 +1034,12 @@ export async function GET(request: Request) {
           isConfigured: !!googleSettings?.isConfigured,
           hasApiKey: !!googleSettings?.apiKey,
         },
+        ollama: {
+          isConfigured: !!ollamaSettings?.isConfigured,
+          hasBaseUrl: !!ollamaSettings?.baseUrl,
+        },
       },
-      isAnyProviderConfigured: !!pageSpaceSettings?.isConfigured || !!openRouterSettings?.isConfigured || !!googleSettings?.isConfigured,
+      isAnyProviderConfigured: !!pageSpaceSettings?.isConfigured || !!openRouterSettings?.isConfigured || !!googleSettings?.isConfigured || !!ollamaSettings?.isConfigured,
     });
 
   } catch (error) {

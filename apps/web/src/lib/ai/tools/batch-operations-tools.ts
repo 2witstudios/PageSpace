@@ -52,12 +52,12 @@ export const batchOperationsTools = {
         throw new Error('You don\'t have access to this drive');
       }
 
-      const results: Array<{ 
-        operation: string; 
-        pageId?: string; 
+      const results: Array<{
+        operation: string;
+        pageId?: string;
         tempId?: string;
         title?: string;
-        status?: string; 
+        status?: string;
         message?: string;
         success?: boolean;
         error?: string;
@@ -71,6 +71,43 @@ export const batchOperationsTools = {
       const createdPageIds: string[] = [];
       const modifiedPageIds: string[] = [];
       const deletedPageIds: string[] = [];
+
+      // Helper function to resolve parentId (could be real ID or tempId)
+      const resolveParentId = (parentId: string | undefined): string | undefined => {
+        if (!parentId) return parentId;
+        return tempIdMap.has(parentId) ? tempIdMap.get(parentId) : parentId;
+      };
+
+      // Pre-validate tempId references to ensure they reference create operations in this batch
+      const validateTempIdReferences = () => {
+        const createOperationTempIds = new Set<string>();
+        const tempIdReferences: Array<{ operation: typeof operations[0]; index: number }> = [];
+
+        // First pass: collect all tempIds from create operations
+        operations.forEach((op, index) => {
+          if (op.type === 'create' && op.tempId) {
+            createOperationTempIds.add(op.tempId);
+          }
+          // Collect operations that reference tempIds as parentId
+          if ((op.type === 'create' || op.type === 'move') && op.parentId && !op.parentId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+            tempIdReferences.push({ operation: op, index });
+          }
+          if (op.type === 'move' && op.newParentId && !op.newParentId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+            tempIdReferences.push({ operation: op, index });
+          }
+        });
+
+        // Second pass: validate tempId references
+        for (const { operation, index } of tempIdReferences) {
+          const referencedTempId = operation.parentId || operation.newParentId;
+          if (referencedTempId && !createOperationTempIds.has(referencedTempId)) {
+            throw new Error(`Operation ${index + 1} references tempId "${referencedTempId}" which is not created in this batch`);
+          }
+        }
+      };
+
+      // Validate tempId references before starting
+      validateTempIdReferences();
 
       try {
         // Begin transaction
@@ -127,11 +164,9 @@ export const batchOperationsTools = {
                   const pageType = operation.pageType!;
 
                   // Resolve parent ID if it's a temp ID
-                  const parentId = operation.parentId && tempIdMap.has(operation.parentId)
-                    ? tempIdMap.get(operation.parentId)
-                    : operation.parentId;
+                  const parentId = resolveParentId(operation.parentId);
 
-                  // Check permissions for parent
+                  // Check permissions for parent (only if it's a real pageId, not a tempId)
                   if (parentId) {
                     const canEdit = await canUserEditPage(userId, parentId);
                     if (!canEdit) {
@@ -192,11 +227,9 @@ export const batchOperationsTools = {
                   }
 
                   // Resolve new parent ID if it's a temp ID
-                  const newParentId = operation.newParentId && tempIdMap.has(operation.newParentId)
-                    ? tempIdMap.get(operation.newParentId)
-                    : operation.newParentId;
+                  const newParentId = resolveParentId(operation.newParentId);
 
-                  // Check permissions for destination
+                  // Check permissions for destination (only if it's a real pageId, not a tempId)
                   if (newParentId) {
                     const canEditDest = await canUserEditPage(userId, newParentId);
                     if (!canEditDest) {

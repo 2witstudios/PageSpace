@@ -482,5 +482,95 @@ export async function deleteXAISettings(userId: string): Promise<void> {
   }
 }
 
+/**
+ * Gets user's Ollama settings
+ * Returns baseUrl for use with local Ollama instance
+ */
+export async function getUserOllamaSettings(userId: string): Promise<{
+  baseUrl: string;
+  isConfigured: boolean;
+} | null> {
+  const settings = await db.query.userAiSettings.findFirst({
+    where: and(
+      eq(userAiSettings.userId, userId),
+      eq(userAiSettings.provider, 'ollama')
+    ),
+  });
+
+  if (!settings || !settings.baseUrl) {
+    return null;
+  }
+
+  return {
+    baseUrl: settings.baseUrl,
+    isConfigured: true,
+  };
+}
+
+/**
+ * Creates Ollama provider settings for a user
+ * Stores the baseUrl for local Ollama instance connection
+ */
+export async function createOllamaSettings(
+  userId: string,
+  baseUrl: string
+): Promise<void> {
+  // Validate and format the base URL - store user input as-is
+  // The system will add /api suffix when needed for specific API calls
+  let formattedUrl = baseUrl.trim();
+
+  // Remove trailing slash if present
+  formattedUrl = formattedUrl.replace(/\/$/, '');
+
+  console.log('🔧 OLLAMA DEBUG: Storing clean baseURL:', formattedUrl);
+
+  // Check if settings already exist
+  const existingSettings = await db.query.userAiSettings.findFirst({
+    where: and(
+      eq(userAiSettings.userId, userId),
+      eq(userAiSettings.provider, 'ollama')
+    ),
+  });
+
+  if (existingSettings) {
+    // Update existing settings
+    await db
+      .update(userAiSettings)
+      .set({
+        baseUrl: formattedUrl,
+        updatedAt: new Date(),
+      })
+      .where(eq(userAiSettings.id, existingSettings.id));
+  } else {
+    // Create new settings
+    await db.insert(userAiSettings).values({
+      id: createId(),
+      userId,
+      provider: 'ollama',
+      baseUrl: formattedUrl,
+      // Note: Ollama doesn't use API keys, so encryptedApiKey is null
+    });
+  }
+}
+
+/**
+ * Deletes Ollama provider settings for a user
+ * Removes the baseUrl configuration from database
+ */
+export async function deleteOllamaSettings(userId: string): Promise<void> {
+  const existingSettings = await db.query.userAiSettings.findFirst({
+    where: and(
+      eq(userAiSettings.userId, userId),
+      eq(userAiSettings.provider, 'ollama')
+    ),
+  });
+
+  if (existingSettings) {
+    await db
+      .delete(userAiSettings)
+      .where(eq(userAiSettings.id, existingSettings.id));
+  }
+}
+
 // Note: Message management functions are now in ChatStorageAdapter
 // This provides a cleaner separation of concerns

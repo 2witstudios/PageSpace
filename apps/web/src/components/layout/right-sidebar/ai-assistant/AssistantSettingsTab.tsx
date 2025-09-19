@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -20,6 +20,7 @@ interface ProviderSettings {
     openai: { isConfigured: boolean; hasApiKey: boolean };
     anthropic: { isConfigured: boolean; hasApiKey: boolean };
     xai: { isConfigured: boolean; hasApiKey: boolean };
+    ollama: { isConfigured: boolean; hasBaseUrl: boolean };
   };
   isAnyProviderConfigured: boolean;
 }
@@ -32,14 +33,55 @@ const AssistantSettingsTab: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
+  // Dynamic Ollama models state
+  const [ollamaModels, setOllamaModels] = useState<Record<string, string> | null>(null);
+  const [ollamaModelsLoading, setOllamaModelsLoading] = useState(false);
+  const [ollamaModelsError, setOllamaModelsError] = useState<string | null>(null);
+
+  // Fetch Ollama models dynamically
+  const fetchOllamaModels = useCallback(async () => {
+    // Return cached results if available
+    if (ollamaModels) {
+      return ollamaModels;
+    }
+
+    setOllamaModelsLoading(true);
+    setOllamaModelsError(null);
+
+    try {
+      const response = await fetch('/api/ai/ollama/models');
+      const data = await response.json();
+
+      if (data.success && data.models) {
+        setOllamaModels(data.models);
+        return data.models;
+      } else {
+        // Use fallback models if fetch failed but returned data
+        const fallbackModels = AI_PROVIDERS.ollama.models;
+        setOllamaModels(fallbackModels);
+        setOllamaModelsError(data.error || 'Using fallback models');
+        return fallbackModels;
+      }
+    } catch (error) {
+      console.error('Failed to fetch Ollama models:', error);
+      // Use static fallback models
+      const fallbackModels = AI_PROVIDERS.ollama.models;
+      setOllamaModels(fallbackModels);
+      setOllamaModelsError('Connection failed. Using fallback models.');
+      return fallbackModels;
+    } finally {
+      setOllamaModelsLoading(false);
+    }
+  }, [ollamaModels]);
+
   // Load current settings
-  const loadSettings = async () => {
+  const loadSettings = useCallback(async () => {
     try {
       const response = await fetch('/api/ai/settings');
       if (response.ok) {
         const data: ProviderSettings = await response.json();
         setProviderSettings(data);
-        
+
         // Determine the correct UI provider based on the model
         let uiProvider = data.currentProvider;
         if (data.currentProvider === 'openrouter' && data.currentModel) {
@@ -48,20 +90,30 @@ const AssistantSettingsTab: React.FC = () => {
             uiProvider = 'openrouter_free';
           }
         }
-        
+
         setSelectedProvider(uiProvider);
         setSelectedModel(data.currentModel);
+
+        // If current provider is Ollama, eagerly fetch models to avoid empty dropdown
+        if (uiProvider === 'ollama') {
+          try {
+            await fetchOllamaModels();
+          } catch {
+            // Silently handle errors - fetchOllamaModels already has error handling
+            console.debug('Initial Ollama model fetch failed, will use fallback models');
+          }
+        }
       }
     } catch (error) {
       console.error('Failed to load settings:', error);
     } finally {
       setLoading(false);
     }
-  };
+  }, [fetchOllamaModels]);
 
   useEffect(() => {
     loadSettings();
-  }, []);
+  }, [loadSettings]);
 
   // Listen for settings updates from other components
   useEffect(() => {
@@ -73,16 +125,40 @@ const AssistantSettingsTab: React.FC = () => {
     return () => {
       window.removeEventListener('ai-settings-updated', handleSettingsUpdate);
     };
-  }, []);
+  }, [loadSettings]);
 
-  const handleProviderChange = (provider: string) => {
+
+  const handleProviderChange = async (provider: string) => {
     setSelectedProvider(provider);
-    const defaultModel = Object.keys(AI_PROVIDERS[provider as keyof typeof AI_PROVIDERS].models)[0];
-    setSelectedModel(defaultModel);
+
+    if (provider === 'ollama') {
+      // Fetch Ollama models lazily when provider is selected
+      try {
+        const models = await fetchOllamaModels();
+        const defaultModel = Object.keys(models)[0];
+        setSelectedModel(defaultModel);
+      } catch {
+        // Fallback to static models
+        const defaultModel = Object.keys(AI_PROVIDERS.ollama.models)[0];
+        setSelectedModel(defaultModel);
+      }
+    } else {
+      // For other providers, use static models
+      const defaultModel = Object.keys(AI_PROVIDERS[provider as keyof typeof AI_PROVIDERS].models)[0];
+      setSelectedModel(defaultModel);
+    }
   };
 
   const handleModelChange = (model: string) => {
     setSelectedModel(model);
+  };
+
+  // Get models for the current provider (dynamic for Ollama, static for others)
+  const getCurrentProviderModels = () => {
+    if (selectedProvider === 'ollama' && ollamaModels) {
+      return ollamaModels;
+    }
+    return AI_PROVIDERS[selectedProvider as keyof typeof AI_PROVIDERS]?.models || {};
   };
 
   const isProviderConfigured = (provider: string): boolean => {
@@ -109,6 +185,8 @@ const AssistantSettingsTab: React.FC = () => {
         return providerSettings.providers.anthropic?.isConfigured || false;
       case 'xai':
         return providerSettings.providers.xai?.isConfigured || false;
+      case 'ollama':
+        return providerSettings.providers.ollama?.isConfigured || false;
       default:
         return false;
     }
@@ -275,13 +353,21 @@ const AssistantSettingsTab: React.FC = () => {
               </div>
 
               <div className="space-y-2">
-                <label className="text-xs font-medium">Model</label>
+                <label className="text-xs font-medium">
+                  Model
+                  {selectedProvider === 'ollama' && ollamaModelsLoading && (
+                    <span className="ml-1 text-xs text-muted-foreground">(Loading...)</span>
+                  )}
+                  {selectedProvider === 'ollama' && ollamaModelsError && (
+                    <span className="ml-1 text-xs text-orange-600">({ollamaModelsError})</span>
+                  )}
+                </label>
                 <Select value={selectedModel} onValueChange={handleModelChange}>
                   <SelectTrigger className="h-8">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {Object.entries(AI_PROVIDERS[selectedProvider as keyof typeof AI_PROVIDERS]?.models || {}).map(([key, name]) => (
+                    {Object.entries(getCurrentProviderModels()).map(([key, name]) => (
                       <SelectItem key={key} value={key}>
                         {name}
                       </SelectItem>
