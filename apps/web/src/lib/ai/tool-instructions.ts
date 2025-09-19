@@ -270,68 +270,75 @@ Task lists persist across AI conversations - great for long-term projects`,
   },
 
   // ==========================================
-  // BATCH OPERATIONS
+  // BULK OPERATIONS
   // ==========================================
-  batch_operations: {
-    category: 'Atomic Transactions',
+  bulk_operations: {
+    category: 'Simple Bulk Operations',
     priority: 5,
     instructions: `
-# BATCH OPERATIONS - All or Nothing
+# BULK OPERATIONS - Simple and Atomic
 
 ## PURPOSE:
-Execute multiple page operations atomically - either all succeed or all fail.
-Perfect for maintaining consistency during complex reorganizations.
+Execute single-purpose operations on multiple pages atomically.
+Each tool has a clear, specific purpose - no confusion about when to use what.
 
-## OPERATION TYPES:
-- **create**: New pages with tempIds for referencing
-- **move**: Relocate pages to new parents
-- **rename**: Change page titles
-- **delete**: Remove pages (with/without children)
-- **update_content**: Modify page content
+## AVAILABLE TOOLS:
+- **create_folder_structure**: Create hierarchical structures (folders, docs, chats)
+- **bulk_move_pages**: Move multiple pages to new location
+- **bulk_rename_pages**: Rename multiple pages with patterns
+- **bulk_delete_pages**: Delete multiple pages (with/without children)
+- **bulk_update_content**: Update content in multiple pages
 
-## TEMP ID SYSTEM:
-When creating related pages, use tempIds to reference them:
-1. Create parent with tempId: "t1"
-2. Create child with parentId: "t1"
-3. System resolves tempIds to real IDs
+## KEY BENEFITS:
+- **No tempId confusion** - eliminated entirely
+- **Single purpose per tool** - crystal clear usage
+- **Atomic execution** - all succeed or all fail
+- **Simple error handling** - easier to debug
+- **Better AI compatibility** - obvious tool selection
 
-## TRANSACTION BENEFITS:
-- Atomic execution (all or nothing)
-- Rollback on any error
-- Maintains referential integrity
-- No partial states
-- Single operation for complex changes
+## WHEN TO USE WHICH TOOL:
+- **Need hierarchical structure?** → create_folder_structure
+- **Need to move pages?** → bulk_move_pages
+- **Need to rename pages?** → bulk_rename_pages
+- **Need to delete pages?** → bulk_delete_pages
+- **Need to update content?** → bulk_update_content
 
-## USE CASES:
-- Creating project templates
-- Reorganizing folder structures
-- Bulk renaming operations
-- Moving page hierarchies
-- Cleaning up workspaces`,
+## STRUCTURE PATTERNS:
+For hierarchical creation, define nested objects with title, type, content, and children.
+For bulk operations, provide arrays of page IDs and operation parameters.`,
 
     examples: [
       `User: "Create a new project structure"
-      → batch_page_operations([
-          {type: "create", tempId: "root", title: "New Project", pageType: "FOLDER"},
-          {type: "create", tempId: "docs", title: "Documentation", pageType: "FOLDER", parentId: "root"},
-          {type: "create", tempId: "readme", title: "README", pageType: "DOCUMENT", parentId: "docs", content: "# Project Name"},
-          {type: "create", tempId: "src", title: "Source", pageType: "FOLDER", parentId: "root"},
-          {type: "create", tempId: "ai", title: "AI Assistant", pageType: "AI_CHAT", parentId: "root"}
-        ])`,
+      → create_folder_structure({
+          structure: [
+            {title: "New Project", type: "FOLDER", children: [
+              {title: "Documentation", type: "FOLDER", children: [
+                {title: "README", type: "DOCUMENT", content: "# Project Name"}
+              ]},
+              {title: "Source", type: "FOLDER"},
+              {title: "AI Assistant", type: "AI_CHAT"}
+            ]}
+          ]
+        })`,
 
-      `User: "Reorganize my folders"
-      → batch_page_operations([
-          {type: "move", pageId: "page1", newParentId: "folder2"},
-          {type: "move", pageId: "page2", newParentId: "folder2"},
-          {type: "rename", pageId: "folder1", newTitle: "Archive"},
-          {type: "delete", pageId: "oldFolder", includeChildren: true}
-        ])`,
+      `User: "Move these files to archive folder"
+      → bulk_move_pages({
+          pageIds: ["page1", "page2", "page3"],
+          targetParentId: "archiveFolder",
+          targetDriveId: "drive123"
+        })`,
+
+      `User: "Rename all docs to have 'v2' prefix"
+      → bulk_rename_pages({
+          pageIds: ["doc1", "doc2", "doc3"],
+          renamePattern: {type: "prefix", prefix: "v2 "}
+        })`,
     ],
 
     errorPatterns: [
-      'ERROR: "Transaction rolled back" → One operation failed, check permissions',
-      'ERROR: "Circular reference" → Can\'t move folder into its own child',
-      'ERROR: "TempId not found" → Ensure create operations come before references',
+      'ERROR: "No permission to move page X" → Check individual page permissions',
+      'ERROR: "Page not found" → Verify page IDs are correct',
+      'ERROR: "Pattern requires X field" → Check required fields for rename pattern type',
     ],
   },
 
@@ -611,7 +618,7 @@ export function getRoleSpecificInstructions(role: 'PARTNER' | 'PLANNER' | 'WRITE
       return getToolInstructions([
         'Core Navigation',
         'Content Management',
-        'Atomic Transactions',
+        'Simple Bulk Operations',
         'Performance Optimization',
       ]);
 

@@ -1,3 +1,27 @@
+### 2025-09-19
+
+- **AI Tool Simplification**: Simplified batch operations for better AI compatibility
+  - **REMOVED**: Complex `batch_page_operations` tool with confusing `tempId` system
+    - **Issue**: AI assistants struggled with `tempId` scoping and parameter requirements
+    - **Problem**: Overlapping tool capabilities created confusion about when to use what
+  - **ADDED**: Simple `bulk_delete_pages` tool for atomic page deletions
+    - **Features**: Delete multiple pages with optional child deletion in one transaction
+    - **Clear Purpose**: Single-function tool with obvious parameters
+  - **ADDED**: Simple `bulk_update_content` tool for atomic content updates
+    - **Features**: Replace, append, or prepend content in multiple pages atomically
+    - **Easy Usage**: No complex parameter validation or cross-referencing
+  - **IMPROVED**: Tool documentation and examples to be more AI-friendly
+    - **Updated**: `apps/web/src/lib/ai/tool-instructions.ts` with clearer guidance
+    - **Renamed**: "Batch Operations" to "Simple Bulk Operations"
+    - **Benefits**: Each tool has single, obvious purpose
+  - **RESULT**: Eliminates `tempId` confusion that was causing AI assistant errors
+  - **MIGRATION**: Use purpose-built tools instead of complex batch operations:
+    - Create hierarchies → `create_folder_structure`
+    - Move pages → `bulk_move_pages`
+    - Rename pages → `bulk_rename_pages`
+    - Delete pages → `bulk_delete_pages`
+    - Update content → `bulk_update_content`
+
 ### 2025-01-16
 
 - **Canvas Navigation Simplification**: Removed pagespace:// protocol in favor of standard URLs

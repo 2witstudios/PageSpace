@@ -7,648 +7,7 @@ import { ToolExecutionContext } from '../types';
 
 export const batchOperationsTools = {
   /**
-   * Execute multiple page operations atomically
-   */
-  batch_page_operations: tool({
-    description: 'Execute multiple page operations in a single atomic transaction. All operations succeed or all fail together. Perfect for complex reorganizations.',
-    inputSchema: z.object({
-      driveId: z.string().describe('The drive ID where operations will occur'),
-      operations: z.array(z.object({
-        // Required field - operation type
-        type: z.enum(['create', 'move', 'rename', 'delete', 'trash', 'append', 'replace', 'update_content']).describe('The type of operation to perform'),
-
-        // Optional fields for all operation types (Google AI compatible)
-        tempId: z.string().optional().describe('For create: Temporary ID to reference this page in other operations'),
-        title: z.string().optional().describe('For create/rename: The page title'),
-        pageType: z.enum(['FOLDER', 'DOCUMENT', 'AI_CHAT', 'CHANNEL', 'CANVAS']).optional().describe('For create: The type of page to create'),
-        pageId: z.string().optional().describe('For most operations: The page ID to operate on'),
-        parentId: z.string().optional().describe('For create: Parent page ID or tempId from another create operation'),
-        content: z.string().optional().describe('For create/update_content/append/replace: The page content'),
-        position: z.number().optional().describe('For create/move: The position in the parent'),
-        newParentId: z.string().optional().describe('For move: New parent ID or tempId'),
-        newTitle: z.string().optional().describe('For rename: The new title for the page'),
-        includeChildren: z.boolean().optional().describe('For delete/trash: Whether to delete child pages too'),
-        startLine: z.number().optional().describe('For replace: Start line for partial replace (1-based)'),
-        endLine: z.number().optional().describe('For replace: End line for partial replace (1-based)'),
-        path: z.string().optional().describe('For context: Page path for better AI understanding'),
-      })).describe('Array of operations to execute'),
-      rollbackOnError: z.boolean().default(true).describe('Rollback all changes if any operation fails'),
-    }),
-    // Provider-specific options to handle schema compatibility
-    providerOptions: {
-      google: {
-        structuredOutputs: false, // Bypass Google's strict schema validation for better compatibility
-      },
-    },
-    execute: async ({ driveId, operations, rollbackOnError = true }, { experimental_context: context }) => {
-      const userId = (context as ToolExecutionContext)?.userId;
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
-
-      // Verify drive access
-      const hasDriveAccess = await getUserDriveAccess(userId, driveId);
-      if (!hasDriveAccess) {
-        throw new Error('You don\'t have access to this drive');
-      }
-
-      const results: Array<{
-        operation: string;
-        pageId?: string;
-        tempId?: string;
-        title?: string;
-        status?: string;
-        message?: string;
-        success?: boolean;
-        error?: string;
-        newParentId?: string;
-        newTitle?: string;
-        newContent?: string;
-        reason?: string;
-        [key: string]: unknown;
-      }> = [];
-      const tempIdMap = new Map<string, string>(); // Map temp IDs to real IDs
-      const createdPageIds: string[] = [];
-      const modifiedPageIds: string[] = [];
-      const deletedPageIds: string[] = [];
-
-      // Helper function to resolve parentId (could be real ID or tempId)
-      const resolveParentId = (parentId: string | undefined): string | undefined => {
-        if (!parentId) return parentId;
-        return tempIdMap.has(parentId) ? tempIdMap.get(parentId) : parentId;
-      };
-
-      // Pre-validate tempId references to ensure they reference create operations in this batch
-      const validateTempIdReferences = () => {
-        const createOperationTempIds = new Set<string>();
-        const tempIdReferences: Array<{ operation: typeof operations[0]; index: number }> = [];
-
-        // First pass: collect all tempIds from create operations
-        operations.forEach((op, index) => {
-          if (op.type === 'create' && op.tempId) {
-            createOperationTempIds.add(op.tempId);
-          }
-          // Collect operations that reference tempIds as parentId
-          if ((op.type === 'create' || op.type === 'move') && op.parentId && !op.parentId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
-            tempIdReferences.push({ operation: op, index });
-          }
-          if (op.type === 'move' && op.newParentId && !op.newParentId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
-            tempIdReferences.push({ operation: op, index });
-          }
-        });
-
-        // Second pass: validate tempId references
-        for (const { operation, index } of tempIdReferences) {
-          const referencedTempId = operation.parentId || operation.newParentId;
-          if (referencedTempId && !createOperationTempIds.has(referencedTempId)) {
-            throw new Error(`Operation ${index + 1} references tempId "${referencedTempId}" which is not created in this batch`);
-          }
-        }
-      };
-
-      // Validate tempId references before starting
-      validateTempIdReferences();
-
-      try {
-        // Begin transaction
-        await db.transaction(async (tx) => {
-          for (const operation of operations) {
-            try {
-              // Enhanced runtime validation for simplified schema (Google AI compatible)
-              switch (operation.type) {
-                case 'create':
-                  if (!operation.tempId || !operation.title || !operation.pageType) {
-                    throw new Error('Create operation requires tempId, title, and pageType');
-                  }
-                  break;
-                case 'move':
-                  if (!operation.pageId) {
-                    throw new Error('Move operation requires pageId');
-                  }
-                  break;
-                case 'rename':
-                  if (!operation.pageId || !operation.newTitle) {
-                    throw new Error('Rename operation requires pageId and newTitle');
-                  }
-                  break;
-                case 'delete':
-                case 'trash':
-                  if (!operation.pageId) {
-                    throw new Error(`${operation.type} operation requires pageId`);
-                  }
-                  break;
-                case 'append':
-                  if (!operation.pageId || !operation.content) {
-                    throw new Error('Append operation requires pageId and content');
-                  }
-                  break;
-                case 'replace':
-                  if (!operation.pageId || !operation.content) {
-                    throw new Error('Replace operation requires pageId and content');
-                  }
-                  break;
-                case 'update_content':
-                  if (!operation.pageId || !operation.content) {
-                    throw new Error('Update content operation requires pageId and content');
-                  }
-                  break;
-                default:
-                  throw new Error(`Unknown operation type: ${operation.type}`);
-              }
-
-              switch (operation.type) {
-                case 'create': {
-                  // After validation, we know these fields exist
-                  const tempId = operation.tempId!;
-                  const title = operation.title!;
-                  const pageType = operation.pageType!;
-
-                  // Resolve parent ID if it's a temp ID
-                  const parentId = resolveParentId(operation.parentId);
-
-                  // Check permissions for parent (only if it's a real pageId, not a tempId)
-                  if (parentId) {
-                    const canEdit = await canUserEditPage(userId, parentId);
-                    if (!canEdit) {
-                      throw new Error(`No permission to create pages in parent ${parentId}`);
-                    }
-                  }
-
-                  // Get next position if not specified
-                  let position = operation.position;
-                  if (!position) {
-                    const siblings = await tx
-                      .select({ position: pages.position })
-                      .from(pages)
-                      .where(and(
-                        eq(pages.driveId, driveId),
-                        parentId ? eq(pages.parentId, parentId) : sql`${pages.parentId} IS NULL`
-                      ))
-                      .orderBy(sql`${pages.position} DESC`)
-                      .limit(1);
-                    position = siblings[0] ? siblings[0].position + 1 : 1;
-                  }
-
-                  // Create the page
-                  const [newPage] = await tx
-                    .insert(pages)
-                    .values({
-                      title: title,
-                      type: pageType,
-                      content: operation.content || '',
-                      driveId,
-                      parentId,
-                      position,
-                      isTrashed: false,
-                    })
-                    .returning();
-
-                  tempIdMap.set(tempId, newPage.id);
-                  createdPageIds.push(newPage.id);
-
-                  results.push({
-                    operation: 'create',
-                    tempId: tempId,
-                    pageId: newPage.id,
-                    title: newPage.title,
-                    success: true,
-                  });
-                  break;
-                }
-
-                case 'move': {
-                  // After validation, we know this field exists
-                  const pageId = operation.pageId!;
-
-                  // Check permissions
-                  const canEdit = await canUserEditPage(userId, pageId);
-                  if (!canEdit) {
-                    throw new Error(`No permission to move page ${pageId}`);
-                  }
-
-                  // Resolve new parent ID if it's a temp ID
-                  const newParentId = resolveParentId(operation.newParentId);
-
-                  // Check permissions for destination (only if it's a real pageId, not a tempId)
-                  if (newParentId) {
-                    const canEditDest = await canUserEditPage(userId, newParentId);
-                    if (!canEditDest) {
-                      throw new Error(`No permission to move to parent ${newParentId}`);
-                    }
-                  }
-
-                  // Move the page
-                  const [movedPage] = await tx
-                    .update(pages)
-                    .set({
-                      parentId: newParentId,
-                      position: operation.position || undefined,
-                      updatedAt: new Date(),
-                    })
-                    .where(eq(pages.id, pageId))
-                    .returning();
-
-                  modifiedPageIds.push(movedPage.id);
-
-                  results.push({
-                    operation: 'move',
-                    pageId: movedPage.id,
-                    title: movedPage.title,
-                    newParentId: newParentId || undefined,
-                    success: true,
-                  });
-                  break;
-                }
-
-                case 'rename': {
-                  // After validation, we know these fields exist
-                  const pageId = operation.pageId!;
-                  const newTitle = operation.newTitle!;
-
-                  // Check permissions
-                  const canEdit = await canUserEditPage(userId, pageId);
-                  if (!canEdit) {
-                    throw new Error(`No permission to rename page ${pageId}`);
-                  }
-
-                  // Rename the page
-                  const [renamedPage] = await tx
-                    .update(pages)
-                    .set({
-                      title: newTitle,
-                      updatedAt: new Date(),
-                    })
-                    .where(eq(pages.id, pageId))
-                    .returning();
-
-                  modifiedPageIds.push(renamedPage.id);
-
-                  results.push({
-                    operation: 'rename',
-                    pageId: renamedPage.id,
-                    oldTitle: renamedPage.title,
-                    newTitle: newTitle,
-                    success: true,
-                  });
-                  break;
-                }
-
-                case 'delete': {
-                  // After validation, we know this field exists
-                  const pageId = operation.pageId!;
-
-                  // Check permissions
-                  const canDelete = operation.includeChildren
-                    ? await canUserDeletePage(userId, pageId)
-                    : await canUserEditPage(userId, pageId);
-
-                  if (!canDelete) {
-                    throw new Error(`No permission to delete page ${pageId}`);
-                  }
-
-                  if (operation.includeChildren) {
-                    // Recursively find all children
-                    const getAllChildren = async (parentId: string): Promise<string[]> => {
-                      const children = await tx
-                        .select({ id: pages.id })
-                        .from(pages)
-                        .where(and(
-                          eq(pages.parentId, parentId),
-                          eq(pages.driveId, driveId)
-                        ));
-
-                      const allIds = [];
-                      for (const child of children) {
-                        allIds.push(child.id);
-                        const grandChildren = await getAllChildren(child.id);
-                        allIds.push(...grandChildren);
-                      }
-                      return allIds;
-                    };
-
-                    const childIds = await getAllChildren(pageId);
-                    const allIds = [pageId, ...childIds];
-
-                    // Delete all pages
-                    await tx
-                      .update(pages)
-                      .set({
-                        isTrashed: true,
-                        trashedAt: new Date(),
-                        updatedAt: new Date(),
-                      })
-                      .where(inArray(pages.id, allIds));
-
-                    deletedPageIds.push(...allIds);
-
-                    results.push({
-                      operation: 'delete',
-                      pageId: pageId,
-                      deletedCount: allIds.length,
-                      success: true,
-                    });
-                  } else {
-                    // Delete single page
-                    await tx
-                      .update(pages)
-                      .set({
-                        isTrashed: true,
-                        trashedAt: new Date(),
-                        updatedAt: new Date(),
-                      })
-                      .where(eq(pages.id, pageId));
-
-                    deletedPageIds.push(pageId);
-
-                    results.push({
-                      operation: 'delete',
-                      pageId: pageId,
-                      deletedCount: 1,
-                      success: true,
-                    });
-                  }
-                  break;
-                }
-
-                case 'update_content': {
-                  // After validation, we know these fields exist
-                  const pageId = operation.pageId!;
-                  const content = operation.content!;
-
-                  // Check permissions
-                  const canEdit = await canUserEditPage(userId, pageId);
-                  if (!canEdit) {
-                    throw new Error(`No permission to update page ${pageId}`);
-                  }
-
-                  // Update content
-                  const [updatedPage] = await tx
-                    .update(pages)
-                    .set({
-                      content: content,
-                      updatedAt: new Date(),
-                    })
-                    .where(eq(pages.id, pageId))
-                    .returning();
-
-                  modifiedPageIds.push(updatedPage.id);
-
-                  results.push({
-                    operation: 'update_content',
-                    pageId: updatedPage.id,
-                    title: updatedPage.title,
-                    success: true,
-                  });
-                  break;
-                }
-
-                case 'trash': {
-                  // After validation, we know this field exists
-                  const pageId = operation.pageId!;
-
-                  // Trash operation (alias for delete)
-                  const canDelete = operation.includeChildren
-                    ? await canUserDeletePage(userId, pageId)
-                    : await canUserEditPage(userId, pageId);
-
-                  if (!canDelete) {
-                    throw new Error(`No permission to trash page ${pageId}`);
-                  }
-
-                  if (operation.includeChildren) {
-                    // Recursively find all children
-                    const getAllChildren = async (parentId: string): Promise<string[]> => {
-                      const children = await tx
-                        .select({ id: pages.id })
-                        .from(pages)
-                        .where(and(
-                          eq(pages.parentId, parentId),
-                          eq(pages.driveId, driveId)
-                        ));
-
-                      const allIds = [];
-                      for (const child of children) {
-                        allIds.push(child.id);
-                        const grandChildren = await getAllChildren(child.id);
-                        allIds.push(...grandChildren);
-                      }
-                      return allIds;
-                    };
-
-                    const childIds = await getAllChildren(pageId);
-                    const allIds = [pageId, ...childIds];
-
-                    // Trash all pages
-                    await tx
-                      .update(pages)
-                      .set({
-                        isTrashed: true,
-                        trashedAt: new Date(),
-                        updatedAt: new Date(),
-                      })
-                      .where(inArray(pages.id, allIds));
-
-                    deletedPageIds.push(...allIds);
-
-                    results.push({
-                      operation: 'trash',
-                      pageId: pageId,
-                      deletedCount: allIds.length,
-                      success: true,
-                    });
-                  } else {
-                    // Trash single page
-                    await tx
-                      .update(pages)
-                      .set({
-                        isTrashed: true,
-                        trashedAt: new Date(),
-                        updatedAt: new Date(),
-                      })
-                      .where(eq(pages.id, pageId));
-
-                    deletedPageIds.push(pageId);
-
-                    results.push({
-                      operation: 'trash',
-                      pageId: pageId,
-                      deletedCount: 1,
-                      success: true,
-                    });
-                  }
-                  break;
-                }
-
-                case 'append': {
-                  // After validation, we know these fields exist
-                  const pageId = operation.pageId!;
-                  const content = operation.content!;
-
-                  // Check permissions
-                  const canEdit = await canUserEditPage(userId, pageId);
-                  if (!canEdit) {
-                    throw new Error(`No permission to append to page ${pageId}`);
-                  }
-
-                  // Get current page content
-                  const [currentPage] = await tx
-                    .select({ content: pages.content, title: pages.title })
-                    .from(pages)
-                    .where(eq(pages.id, pageId));
-
-                  if (!currentPage) {
-                    throw new Error(`Page ${pageId} not found`);
-                  }
-
-                  // Append content
-                  const newContent = currentPage.content + content;
-                  const [updatedPage] = await tx
-                    .update(pages)
-                    .set({
-                      content: newContent,
-                      updatedAt: new Date(),
-                    })
-                    .where(eq(pages.id, pageId))
-                    .returning();
-
-                  modifiedPageIds.push(updatedPage.id);
-
-                  results.push({
-                    operation: 'append',
-                    pageId: updatedPage.id,
-                    title: updatedPage.title,
-                    success: true,
-                  });
-                  break;
-                }
-
-                case 'replace': {
-                  // After validation, we know these fields exist
-                  const pageId = operation.pageId!;
-                  const content = operation.content!;
-
-                  // Check permissions
-                  const canEdit = await canUserEditPage(userId, pageId);
-                  if (!canEdit) {
-                    throw new Error(`No permission to replace content in page ${pageId}`);
-                  }
-
-                  // Get current page content
-                  const [currentPage] = await tx
-                    .select({ content: pages.content, title: pages.title })
-                    .from(pages)
-                    .where(eq(pages.id, pageId));
-
-                  if (!currentPage) {
-                    throw new Error(`Page ${pageId} not found`);
-                  }
-
-                  let newContent: string;
-
-                  if (operation.startLine && operation.endLine) {
-                    // Line-based replacement
-                    const lines = currentPage.content.split('\n');
-                    const startLine = operation.startLine - 1; // Convert to 0-based
-                    const endLine = operation.endLine - 1; // Convert to 0-based
-
-                    if (startLine < 0 || startLine >= lines.length || endLine < startLine || endLine >= lines.length) {
-                      throw new Error(`Invalid line range: ${operation.startLine}-${operation.endLine}. Document has ${lines.length} lines.`);
-                    }
-
-                    // Replace lines
-                    const newLines = [
-                      ...lines.slice(0, startLine),
-                      content,
-                      ...lines.slice(endLine + 1),
-                    ];
-                    newContent = newLines.join('\n');
-                  } else {
-                    // Full content replacement
-                    newContent = content;
-                  }
-
-                  // Update content
-                  const [updatedPage] = await tx
-                    .update(pages)
-                    .set({
-                      content: newContent,
-                      updatedAt: new Date(),
-                    })
-                    .where(eq(pages.id, pageId))
-                    .returning();
-
-                  modifiedPageIds.push(updatedPage.id);
-
-                  results.push({
-                    operation: 'replace',
-                    pageId: updatedPage.id,
-                    title: updatedPage.title,
-                    linesReplaced: operation.startLine && operation.endLine ? operation.endLine - operation.startLine + 1 : undefined,
-                    success: true,
-                  });
-                  break;
-                }
-              }
-            } catch (error) {
-              if (rollbackOnError) {
-                throw error; // This will rollback the transaction
-              } else {
-                results.push({
-                  operation: operation.type,
-                  success: false,
-                  error: error instanceof Error ? error.message : String(error),
-                });
-              }
-            }
-          }
-        });
-
-        // Broadcast events for all changes
-        for (const pageId of createdPageIds) {
-          await broadcastPageEvent(
-            createPageEventPayload(driveId, pageId, 'created', {})
-          );
-        }
-        for (const pageId of modifiedPageIds) {
-          await broadcastPageEvent(
-            createPageEventPayload(driveId, pageId, 'updated', {})
-          );
-        }
-        for (const pageId of deletedPageIds) {
-          await broadcastPageEvent(
-            createPageEventPayload(driveId, pageId, 'trashed', {})
-          );
-        }
-
-        return {
-          success: true,
-          operations: operations.length,
-          results,
-          summary: `Successfully executed ${operations.length} operation${operations.length === 1 ? '' : 's'}`,
-          stats: {
-            totalOperations: operations.length,
-            successful: results.filter(r => r.success).length,
-            failed: results.filter(r => !r.success).length,
-            created: createdPageIds.length,
-            modified: modifiedPageIds.length,
-            deleted: deletedPageIds.length,
-          },
-          tempIdMappings: Object.fromEntries(tempIdMap),
-          nextSteps: [
-            'Use list_pages to verify the new structure',
-            'Continue with additional batch operations if needed',
-            'Use read_page to verify content changes',
-          ]
-        };
-      } catch (error) {
-        console.error('Batch operation failed:', error);
-        throw new Error(`Batch operation failed: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    },
-  }),
-
-  /**
-   * Bulk move multiple pages to a new parent
+   * Move multiple pages to a new parent location
    */
   bulk_move_pages: tool({
     description: 'Move multiple pages to a new parent location in one operation. Maintains relative positions.',
@@ -678,12 +37,12 @@ export const batchOperationsTools = {
           if (!canEdit) {
             throw new Error(`No permission to move page ${pageId}`);
           }
-          
+
           const [page] = await db
             .select()
             .from(pages)
             .where(eq(pages.id, pageId));
-          
+
           if (page) {
             sourcePages.push(page);
           }
@@ -727,7 +86,7 @@ export const batchOperationsTools = {
               })
               .where(eq(pages.id, page.id))
               .returning();
-            
+
             movedPages.push(moved);
           }
         });
@@ -774,7 +133,7 @@ export const batchOperationsTools = {
   }),
 
   /**
-   * Bulk rename pages using patterns
+   * Rename multiple pages using patterns
    */
   bulk_rename_pages: tool({
     description: 'Rename multiple pages using find/replace patterns or templates.',
@@ -938,6 +297,251 @@ export const batchOperationsTools = {
   }),
 
   /**
+   * Delete multiple pages in a single atomic operation
+   */
+  bulk_delete_pages: tool({
+    description: 'Delete multiple pages in one atomic operation. All deletions succeed or all fail together.',
+    inputSchema: z.object({
+      pageIds: z.array(z.string()).describe('Array of page IDs to delete'),
+      includeChildren: z.boolean().default(false).describe('Whether to delete child pages too'),
+    }),
+    execute: async ({ pageIds, includeChildren = false }, { experimental_context: context }) => {
+      const userId = (context as ToolExecutionContext)?.userId;
+      if (!userId) {
+        throw new Error('User authentication required');
+      }
+
+      try {
+        const deletedPages: Array<{ id: string; title: string; driveId: string; deletedCount: number }> = [];
+        const allDeletedIds: string[] = [];
+
+        await db.transaction(async (tx) => {
+          for (const pageId of pageIds) {
+            // Check permissions
+            const canDelete = includeChildren
+              ? await canUserDeletePage(userId, pageId)
+              : await canUserEditPage(userId, pageId);
+
+            if (!canDelete) {
+              throw new Error(`No permission to delete page ${pageId}`);
+            }
+
+            // Get page info
+            const [page] = await tx
+              .select({ id: pages.id, title: pages.title, driveId: pages.driveId })
+              .from(pages)
+              .where(eq(pages.id, pageId));
+
+            if (!page) {
+              throw new Error(`Page ${pageId} not found`);
+            }
+
+            if (includeChildren) {
+              // Recursively find all children
+              const getAllChildren = async (parentId: string): Promise<string[]> => {
+                const children = await tx
+                  .select({ id: pages.id })
+                  .from(pages)
+                  .where(and(
+                    eq(pages.parentId, parentId),
+                    eq(pages.driveId, page.driveId)
+                  ));
+
+                const allIds = [];
+                for (const child of children) {
+                  allIds.push(child.id);
+                  const grandChildren = await getAllChildren(child.id);
+                  allIds.push(...grandChildren);
+                }
+                return allIds;
+              };
+
+              const childIds = await getAllChildren(pageId);
+              const deleteIds = [pageId, ...childIds];
+
+              // Delete all pages
+              await tx
+                .update(pages)
+                .set({
+                  isTrashed: true,
+                  trashedAt: new Date(),
+                  updatedAt: new Date(),
+                })
+                .where(inArray(pages.id, deleteIds));
+
+              allDeletedIds.push(...deleteIds);
+              deletedPages.push({
+                id: page.id,
+                title: page.title,
+                driveId: page.driveId,
+                deletedCount: deleteIds.length,
+              });
+            } else {
+              // Delete single page
+              await tx
+                .update(pages)
+                .set({
+                  isTrashed: true,
+                  trashedAt: new Date(),
+                  updatedAt: new Date(),
+                })
+                .where(eq(pages.id, pageId));
+
+              allDeletedIds.push(pageId);
+              deletedPages.push({
+                id: page.id,
+                title: page.title,
+                driveId: page.driveId,
+                deletedCount: 1,
+              });
+            }
+          }
+        });
+
+        // Broadcast deletion events
+        for (const deletedId of allDeletedIds) {
+          const page = deletedPages.find(p => p.id === deletedId);
+          if (page) {
+            await broadcastPageEvent(
+              createPageEventPayload(page.driveId, deletedId, 'trashed', {})
+            );
+          }
+        }
+
+        return {
+          success: true,
+          deletedPages: deletedPages.map(p => ({
+            id: p.id,
+            title: p.title,
+            deletedCount: p.deletedCount,
+          })),
+          totalDeleted: allDeletedIds.length,
+          summary: `Successfully deleted ${deletedPages.length} page${deletedPages.length === 1 ? '' : 's'} (${allDeletedIds.length} total including children)`,
+          stats: {
+            pagesRequested: pageIds.length,
+            pagesDeleted: deletedPages.length,
+            totalDeleted: allDeletedIds.length,
+          },
+          nextSteps: [
+            'Use list_pages to verify the pages are gone',
+            'Check trash if you need to restore any pages',
+          ]
+        };
+      } catch (error) {
+        console.error('Bulk delete failed:', error);
+        throw new Error(`Bulk delete failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+  }),
+
+  /**
+   * Update content in multiple pages
+   */
+  bulk_update_content: tool({
+    description: 'Update content in multiple pages in one atomic operation. All updates succeed or all fail together.',
+    inputSchema: z.object({
+      updates: z.array(z.object({
+        pageId: z.string().describe('The page ID to update'),
+        content: z.string().describe('The new content for the page'),
+        operation: z.enum(['replace', 'append', 'prepend']).default('replace').describe('How to apply the content'),
+      })).describe('Array of content updates to apply'),
+    }),
+    execute: async ({ updates }, { experimental_context: context }) => {
+      const userId = (context as ToolExecutionContext)?.userId;
+      if (!userId) {
+        throw new Error('User authentication required');
+      }
+
+      try {
+        const updatedPages: Array<{ id: string; title: string; operation: string; driveId: string }> = [];
+
+        await db.transaction(async (tx) => {
+          for (const update of updates) {
+            // Check permissions
+            const canEdit = await canUserEditPage(userId, update.pageId);
+            if (!canEdit) {
+              throw new Error(`No permission to update page ${update.pageId}`);
+            }
+
+            // Get current page
+            const [currentPage] = await tx
+              .select({ content: pages.content, title: pages.title, driveId: pages.driveId })
+              .from(pages)
+              .where(eq(pages.id, update.pageId));
+
+            if (!currentPage) {
+              throw new Error(`Page ${update.pageId} not found`);
+            }
+
+            let newContent: string;
+            switch (update.operation) {
+              case 'replace':
+                newContent = update.content;
+                break;
+              case 'append':
+                newContent = currentPage.content + update.content;
+                break;
+              case 'prepend':
+                newContent = update.content + currentPage.content;
+                break;
+            }
+
+            // Update the page
+            await tx
+              .update(pages)
+              .set({
+                content: newContent,
+                updatedAt: new Date(),
+              })
+              .where(eq(pages.id, update.pageId));
+
+            updatedPages.push({
+              id: update.pageId,
+              title: currentPage.title,
+              operation: update.operation,
+              driveId: currentPage.driveId,
+            });
+          }
+        });
+
+        // Broadcast update events
+        for (const page of updatedPages) {
+          await broadcastPageEvent(
+            createPageEventPayload(page.driveId, page.id, 'updated', {
+              title: page.title,
+            })
+          );
+        }
+
+        return {
+          success: true,
+          updatedPages: updatedPages.map(p => ({
+            id: p.id,
+            title: p.title,
+            operation: p.operation,
+          })),
+          summary: `Successfully updated ${updatedPages.length} page${updatedPages.length === 1 ? '' : 's'}`,
+          stats: {
+            totalUpdated: updatedPages.length,
+            operations: {
+              replace: updatedPages.filter(p => p.operation === 'replace').length,
+              append: updatedPages.filter(p => p.operation === 'append').length,
+              prepend: updatedPages.filter(p => p.operation === 'prepend').length,
+            },
+          },
+          nextSteps: [
+            'Use read_page to verify the content changes',
+            'Use list_pages to see the updated pages',
+          ]
+        };
+      } catch (error) {
+        console.error('Bulk content update failed:', error);
+        throw new Error(`Bulk content update failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+  }),
+
+  /**
    * Create a folder structure from a template
    */
   create_folder_structure: tool({
@@ -978,7 +582,7 @@ export const batchOperationsTools = {
         }
 
         const createdPages: Array<{ id: string; title: string; type: string; parentId: string | null; path: string }> = [];
-        
+
         // Recursive function to create structure
         const createStructureRecursive = async (
           items: typeof structure,
@@ -987,7 +591,7 @@ export const batchOperationsTools = {
         ) => {
           for (let i = 0; i < items.length; i++) {
             const item = items[i];
-            
+
             // Create the page
             const [newPage] = await tx
               .insert(pages)
@@ -1074,3 +678,13 @@ export const batchOperationsTools = {
     },
   }),
 };
+
+// Note: The complex batch_page_operations tool has been removed in favor of simpler,
+// purpose-built tools that are easier for AI assistants to understand and use correctly:
+// - create_folder_structure: For hierarchical structure creation
+// - bulk_move_pages: For moving multiple pages
+// - bulk_rename_pages: For renaming multiple pages
+// - bulk_delete_pages: For deleting multiple pages
+// - bulk_update_content: For updating content in multiple pages
+//
+// This eliminates the confusing tempId concept and makes each tool's purpose crystal clear.
