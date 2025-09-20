@@ -25,10 +25,12 @@ echo "YOUR_GITHUB_TOKEN" | docker login ghcr.io -u YOUR_GITHUB_USERNAME --passwo
 
 ### On Local Machine (Build & Push)
 ```bash
-# Build and push all images
-./build-and-push.sh
+# Build and push all images using buildx
+docker buildx build --platform linux/amd64 -f apps/web/Dockerfile.migrate -t ghcr.io/2witstudios/pagespace-migrate:latest --push .
+docker buildx build --platform linux/amd64 -f apps/web/Dockerfile -t ghcr.io/2witstudios/pagespace-web:latest --push . --build-arg NEXT_PUBLIC_REALTIME_URL="${NEXT_PUBLIC_REALTIME_URL}" --build-arg OPENROUTER_DEFAULT_API_KEY="${OPENROUTER_DEFAULT_API_KEY}"
+docker buildx build --platform linux/amd64 -f apps/realtime/Dockerfile -t ghcr.io/2witstudios/pagespace-realtime:latest --push .
 
-# Or build individually
+# Or build and push separately
 docker build -f apps/web/Dockerfile.migrate -t ghcr.io/2witstudios/pagespace-migrate:latest .
 docker build -f apps/web/Dockerfile -t ghcr.io/2witstudios/pagespace-web:latest .
 docker build -f apps/realtime/Dockerfile -t ghcr.io/2witstudios/pagespace-realtime:latest .

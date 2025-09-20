@@ -43,11 +43,11 @@ const SheetView = ({ page }: SheetViewProps) => {
   const formulaEngineRef = useRef<FormulaEngine | null>(null);
 
   // Initialize formula engine
-  useMemo(() => {
+  useEffect(() => {
     if (!formulaEngineRef.current) {
       formulaEngineRef.current = new FormulaEngine();
+      console.log('✓ Formula engine initialized');
     }
-    return formulaEngineRef.current;
   }, []);
 
   // Use the document hook with sheet data
@@ -122,21 +122,39 @@ const SheetView = ({ page }: SheetViewProps) => {
     if (!formulaEngineRef.current || !sheetData) return;
 
     try {
-      // Load regular cell data first
-      formulaEngineRef.current.loadData(sheetData.data);
+      console.log('🔄 Initializing formula engine with sheet data...');
+
+      // Clear the engine first
+      formulaEngineRef.current.clear();
+
+      // Load regular cell data first (non-formula cells)
+      const nonFormulaData = sheetData.data.map((row, rowIndex) =>
+        row.map((cell, colIndex) => {
+          const cellRef = `${String.fromCharCode(65 + colIndex)}${rowIndex + 1}`;
+          // If this cell has a formula, load empty for now
+          return sheetData.formulas?.[cellRef] ? '' : cell;
+        })
+      );
+
+      formulaEngineRef.current.loadData(nonFormulaData);
+      console.log('✓ Loaded non-formula cell data');
 
       // Then set formulas if they exist
       if (sheetData.formulas) {
+        console.log(`📊 Setting ${Object.keys(sheetData.formulas).length} formulas...`);
         Object.entries(sheetData.formulas).forEach(([cellRef, formula]) => {
           try {
-            formulaEngineRef.current?.setCellContent(cellRef, formula);
+            const result = formulaEngineRef.current?.setCellContent(cellRef, formula);
+            console.log(`✓ Formula ${cellRef}: ${formula} = ${result?.value}`);
           } catch (error) {
-            console.error(`Error setting formula for ${cellRef}:`, error);
+            console.error(`❌ Error setting formula for ${cellRef} (${formula}):`, error);
           }
         });
       }
+
+      console.log('✅ Formula engine initialization complete');
     } catch (error) {
-      console.error('Error initializing formula engine:', error);
+      console.error('❌ Error initializing formula engine:', error);
     }
   }, [sheetData]);
 
@@ -215,6 +233,8 @@ const SheetView = ({ page }: SheetViewProps) => {
     const cellRef = `${String.fromCharCode(65 + col)}${row + 1}`; // Convert to A1 notation
     const isFormula = value.startsWith('=');
 
+    console.log(`📝 Cell change: ${cellRef} = "${value}" (isFormula: ${isFormula})`);
+
     // Update the data array
     const newData = [...sheetData.data];
 
@@ -241,18 +261,22 @@ const SheetView = ({ page }: SheetViewProps) => {
       try {
         // Set the formula in the engine
         const result = formulaEngineRef.current.setCellContent(cellRef, value);
+        console.log(`🧮 Formula result for ${cellRef}:`, result);
 
         if (result.error) {
           displayValue = `#ERROR: ${result.error}`;
           newComputedValues[cellRef] = displayValue;
+          console.log(`❌ Formula error in ${cellRef}: ${result.error}`);
         } else {
-          displayValue = String(result.value || '');
-          newComputedValues[cellRef] = result.value || '';
+          // Use the calculated value from the formula engine
+          displayValue = String(result.value ?? '');
+          newComputedValues[cellRef] = result.value ?? '';
+          console.log(`✅ Formula ${cellRef} calculated: ${displayValue}`);
         }
       } catch (error) {
         displayValue = '#ERROR!';
         newComputedValues[cellRef] = displayValue;
-        console.error('Formula calculation error:', error);
+        console.error(`❌ Formula calculation error for ${cellRef}:`, error);
       }
     } else {
       // Regular value - remove any existing formula
@@ -262,15 +286,52 @@ const SheetView = ({ page }: SheetViewProps) => {
       // Also update the formula engine with the raw value
       if (formulaEngineRef.current) {
         try {
-          formulaEngineRef.current.setCellContent(cellRef, value);
+          const result = formulaEngineRef.current.setCellContent(cellRef, value);
+          console.log(`📊 Raw value set for ${cellRef}:`, result);
         } catch (error) {
-          console.error('Error setting cell content in formula engine:', error);
+          console.error(`❌ Error setting raw value for ${cellRef}:`, error);
         }
       }
     }
 
     // Update the cell with the display value
     newData[row][col] = displayValue;
+
+    // Also get updated computed values from any dependent cells that might have changed
+    if (formulaEngineRef.current) {
+      try {
+        // Get all dependents of this cell
+        const dependents = formulaEngineRef.current.getDependents(cellRef);
+        console.log(`🔗 Updating ${dependents.length} dependent cells: ${dependents.join(', ')}`);
+
+        dependents.forEach(dependentRef => {
+          const dependentResult = formulaEngineRef.current!.getCellValue(dependentRef);
+          const dependentFormula = formulaEngineRef.current!.getCellFormula(dependentRef);
+
+          if (dependentFormula) {
+            // This is a formula cell that needs updating
+            const dependentCoords = formulaEngineRef.current!.parseA1Notation(dependentRef);
+            const dependentDisplayValue = String(dependentResult.value ?? '');
+
+            // Ensure the dependent cell's row/col exists in newData
+            while (newData.length <= dependentCoords.row) {
+              newData.push(new Array(sheetData.metadata.cols).fill(''));
+            }
+            while (newData[dependentCoords.row].length <= dependentCoords.col) {
+              newData[dependentCoords.row].push('');
+            }
+
+            // Update the display value for the dependent cell
+            newData[dependentCoords.row][dependentCoords.col] = dependentDisplayValue;
+            newComputedValues[dependentRef] = dependentResult.value ?? '';
+
+            console.log(`🔄 Updated dependent ${dependentRef}: ${dependentDisplayValue}`);
+          }
+        });
+      } catch (error) {
+        console.error('❌ Error updating dependent cells:', error);
+      }
+    }
 
     // Create updated sheet data
     const updatedSheetData: SheetData = {
@@ -286,6 +347,8 @@ const SheetView = ({ page }: SheetViewProps) => {
     };
 
     const newContent = JSON.stringify(updatedSheetData);
+
+    console.log(`💾 Saving updated sheet data for ${cellRef}`);
 
     // Update document state immediately (optimistic update)
     updateContent(newContent);

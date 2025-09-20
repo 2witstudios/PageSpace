@@ -1,4 +1,7 @@
-import { HyperFormula, ConfigParams } from 'hyperformula';
+import { FormulaParser } from './formula/FormulaParser';
+import { DependencyTracker } from './formula/DependencyTracker';
+import { CellReferenceResolver, CellValue, SheetDataProvider } from './formula/CellReferenceResolver';
+import { ExpressionEvaluator } from './formula/ExpressionEvaluator';
 
 export interface CellReference {
   row: number;
@@ -17,29 +20,40 @@ export interface CellAddress {
   col: number;
 }
 
+class SheetDataProviderImpl implements SheetDataProvider {
+  constructor(private engine: FormulaEngine) {}
+
+  getCellValue(cellRef: string): CellValue {
+    const value = this.engine.getRawCellValue(cellRef);
+
+    if (value === null || value === undefined) {
+      return { value: '', isError: false };
+    }
+
+    if (typeof value === 'string' && value.startsWith('#')) {
+      return { value: '', isError: true, errorMessage: value };
+    }
+
+    return { value, isError: false };
+  }
+
+  getCellValues(cellRefs: string[]): CellValue[] {
+    return cellRefs.map(ref => this.getCellValue(ref));
+  }
+}
+
 export class FormulaEngine {
-  private hf: HyperFormula;
-  private sheetId: number = 0;
+  private cellValues: Map<string, string | number> = new Map();
+  private cellFormulas: Map<string, string> = new Map();
+  private dependencyTracker: DependencyTracker = new DependencyTracker();
+  private dataProvider: SheetDataProviderImpl;
+  private resolver: CellReferenceResolver;
+  private evaluator: ExpressionEvaluator;
 
-  constructor(config?: Partial<ConfigParams>) {
-    const defaultConfig: Partial<ConfigParams> = {
-      licenseKey: 'gpl-v3',
-      useColumnIndex: true,
-      // Performance optimizations
-      smartRounding: true,
-      nullYear: 30,
-      leapYear1900: false,
-      // Function configurations
-      functionArgSeparator: ',',
-      arrayColumnSeparator: ',',
-      arrayRowSeparator: ';',
-      ...config
-    };
-
-    this.hf = HyperFormula.buildEmpty(defaultConfig);
-    // Add a sheet since buildEmpty() creates no sheets
-    const sheetName = this.hf.addSheet('main');
-    this.sheetId = this.hf.getSheetId(sheetName) || 0;
+  constructor() {
+    this.dataProvider = new SheetDataProviderImpl(this);
+    this.resolver = new CellReferenceResolver(this.dataProvider);
+    this.evaluator = new ExpressionEvaluator(this.resolver);
   }
 
   /**
@@ -48,23 +62,8 @@ export class FormulaEngine {
    * B5 -> {row: 4, col: 1}
    */
   parseA1Notation(cellRef: string): CellReference {
-    const match = cellRef.match(/^([A-Z]+)(\d+)$/);
-    if (!match) {
-      throw new Error(`Invalid cell reference: ${cellRef}`);
-    }
-
-    const [, colStr, rowStr] = match;
-
-    // Convert column letters to number (A=0, B=1, ..., Z=25, AA=26, etc.)
-    let col = 0;
-    for (let i = 0; i < colStr.length; i++) {
-      col = col * 26 + (colStr.charCodeAt(i) - 65 + 1);
-    }
-    col -= 1; // Convert to 0-based index
-
-    const row = parseInt(rowStr, 10) - 1; // Convert to 0-based index
-
-    return { row, col };
+    const coords = FormulaParser.parseA1Notation(cellRef);
+    return { row: coords.row, col: coords.col };
   }
 
   /**
@@ -73,16 +72,7 @@ export class FormulaEngine {
    * {row: 4, col: 1} -> B5
    */
   toA1Notation(row: number, col: number): string {
-    let colStr = '';
-    let colIndex = col + 1; // Convert to 1-based
-
-    while (colIndex > 0) {
-      colIndex -= 1;
-      colStr = String.fromCharCode(65 + (colIndex % 26)) + colStr;
-      colIndex = Math.floor(colIndex / 26);
-    }
-
-    return `${colStr}${row + 1}`;
+    return FormulaParser.toA1Notation(row, col);
   }
 
   /**
@@ -90,20 +80,13 @@ export class FormulaEngine {
    */
   setCellContent(cellRef: string, content: string | number): FormulaResult {
     try {
-      const { row, col } = this.parseA1Notation(cellRef);
-      const address: CellAddress = { sheet: this.sheetId, row, col };
-
-      // Set the content in HyperFormula
-      this.hf.setCellContents(address, [[content]]);
-
-      // Get the computed value
-      const value = this.hf.getCellValue(address);
       const isFormula = typeof content === 'string' && content.startsWith('=');
 
-      return {
-        value: this.formatValue(value),
-        isFormula,
-      };
+      if (isFormula) {
+        return this.setFormula(cellRef, content);
+      } else {
+        return this.setValue(cellRef, content);
+      }
     } catch (error) {
       return {
         value: null,
@@ -113,20 +96,106 @@ export class FormulaEngine {
     }
   }
 
+  private setFormula(cellRef: string, formula: string): FormulaResult {
+    try {
+      // Parse formula to extract dependencies
+      const allCellRefs = FormulaParser.getAllCellReferencesFlat(formula);
+
+      // Update dependency tracking
+      this.dependencyTracker.updateDependencies(cellRef, allCellRefs);
+
+      // Check for circular references
+      if (this.dependencyTracker.detectCircularReference(cellRef)) {
+        throw new Error('Circular reference detected');
+      }
+
+      // Store formula
+      this.cellFormulas.set(cellRef, formula);
+
+      // Calculate value
+      const result = this.evaluator.evaluate(formula);
+
+      if (result.error) {
+        this.cellValues.set(cellRef, `#ERROR: ${result.error}`);
+        return {
+          value: `#ERROR: ${result.error}`,
+          error: result.error,
+          isFormula: true
+        };
+      } else {
+        this.cellValues.set(cellRef, result.value || '');
+
+        // Trigger recalculation of dependents
+        this.recalculateDependents(cellRef);
+
+        return {
+          value: this.formatValue(result.value),
+          isFormula: true
+        };
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.cellValues.set(cellRef, `#ERROR: ${errorMessage}`);
+      return {
+        value: `#ERROR: ${errorMessage}`,
+        error: errorMessage,
+        isFormula: true,
+      };
+    }
+  }
+
+  private setValue(cellRef: string, value: string | number): FormulaResult {
+    // Remove any existing formula and its precedents, but keep this cell as a precedent for others
+    this.cellFormulas.delete(cellRef);
+    this.dependencyTracker.removePrecedents(cellRef);
+
+    // Store the value
+    this.cellValues.set(cellRef, value);
+
+    // Trigger recalculation of dependents
+    this.recalculateDependents(cellRef);
+
+    return {
+      value: this.formatValue(value),
+      isFormula: false
+    };
+  }
+
+  private recalculateDependents(cellRef: string): void {
+    try {
+      const dependents = this.dependencyTracker.getAllDependents(cellRef);
+      const calculationOrder = this.dependencyTracker.getCalculationOrder(dependents);
+
+      calculationOrder.forEach(dependentRef => {
+        const formula = this.cellFormulas.get(dependentRef);
+
+        if (formula) {
+          // Recalculate this dependent cell
+          const result = this.evaluator.evaluate(formula);
+
+          if (result.error) {
+            this.cellValues.set(dependentRef, `#ERROR: ${result.error}`);
+          } else {
+            this.cellValues.set(dependentRef, result.value || '');
+          }
+        }
+      });
+    } catch (error) {
+      console.error('Error during recalculation:', error);
+    }
+  }
+
   /**
    * Get the value of a cell
    */
   getCellValue(cellRef: string): FormulaResult {
     try {
-      const { row, col } = this.parseA1Notation(cellRef);
-      const address: CellAddress = { sheet: this.sheetId, row, col };
-
-      const value = this.hf.getCellValue(address);
-      const formula = this.hf.getCellFormula(address);
+      const value = this.cellValues.get(cellRef);
+      const formula = this.cellFormulas.get(cellRef);
       const isFormula = formula !== undefined;
 
       return {
-        value: this.formatValue(value),
+        value: value !== undefined ? this.formatValue(value) : '',
         isFormula,
       };
     } catch (error) {
@@ -139,96 +208,97 @@ export class FormulaEngine {
   }
 
   /**
+   * Get the raw cell value (used internally by the data provider)
+   */
+  getRawCellValue(cellRef: string): string | number | null {
+    return this.cellValues.get(cellRef) || null;
+  }
+
+  /**
    * Get the raw formula of a cell (if it has one)
    */
   getCellFormula(cellRef: string): string | undefined {
-    try {
-      const { row, col } = this.parseA1Notation(cellRef);
-      const address: CellAddress = { sheet: this.sheetId, row, col };
-      return this.hf.getCellFormula(address);
-    } catch (error) {
-      return undefined;
-    }
+    return this.cellFormulas.get(cellRef);
   }
 
   /**
    * Check if a cell contains a formula
    */
   isFormula(cellRef: string): boolean {
-    return this.getCellFormula(cellRef) !== undefined;
+    return this.cellFormulas.has(cellRef);
   }
 
   /**
    * Get all cells that depend on the given cell
    */
   getDependents(cellRef: string): string[] {
-    try {
-      const { row, col } = this.parseA1Notation(cellRef);
-      const address: CellAddress = { sheet: this.sheetId, row, col };
-
-      const dependents = this.hf.getCellDependents(address);
-      return dependents
-        .filter(dep => 'row' in dep && 'col' in dep)
-        .map(dep => this.toA1Notation(dep.row, dep.col));
-    } catch (error) {
-      return [];
-    }
+    return this.dependencyTracker.getDependents(cellRef);
   }
 
   /**
    * Get all cells that the given cell depends on
    */
   getPrecedents(cellRef: string): string[] {
-    try {
-      const { row, col } = this.parseA1Notation(cellRef);
-      const address: CellAddress = { sheet: this.sheetId, row, col };
-
-      const precedents = this.hf.getCellPrecedents(address);
-      return precedents
-        .filter(prec => 'row' in prec && 'col' in prec)
-        .map(prec => this.toA1Notation(prec.row, prec.col));
-    } catch (error) {
-      return [];
-    }
+    return this.dependencyTracker.getPrecedents(cellRef);
   }
 
   /**
    * Recalculate all formulas
    */
   recalculate(): void {
-    // HyperFormula automatically recalculates when dependencies change
-    // This method is here for explicit recalculation if needed
-    this.hf.rebuildAndRecalculate();
+    try {
+      const allFormulaCells = Array.from(this.cellFormulas.keys());
+      const calculationOrder = this.dependencyTracker.getCalculationOrder(allFormulaCells);
+
+      calculationOrder.forEach(cellRef => {
+        const formula = this.cellFormulas.get(cellRef);
+        if (formula) {
+          const result = this.evaluator.evaluate(formula);
+
+          if (result.error) {
+            this.cellValues.set(cellRef, `#ERROR: ${result.error}`);
+          } else {
+            this.cellValues.set(cellRef, result.value || '');
+          }
+        }
+      });
+    } catch (error) {
+      console.error('Error during recalculation:', error);
+    }
   }
 
   /**
    * Clear all data
    */
   clear(): void {
-    try {
-      this.hf.clearSheet(this.sheetId);
-    } catch (error) {
-      // Sheet might not exist, ensure it exists
-      if (this.hf.countSheets() === 0) {
-        const sheetName = this.hf.addSheet('main');
-        this.sheetId = this.hf.getSheetId(sheetName) || 0;
-      }
-    }
+    this.cellValues.clear();
+    this.cellFormulas.clear();
+    this.dependencyTracker.clear();
   }
 
   /**
    * Get the current sheet data as a 2D array
    */
   getSheetData(): (string | number)[][] {
-    const sheetSize = this.hf.getSheetDimensions(this.sheetId);
     const data: (string | number)[][] = [];
 
-    for (let row = 0; row < sheetSize.height; row++) {
+    // Find the maximum row and column
+    let maxRow = 0;
+    let maxCol = 0;
+
+    this.cellValues.forEach((_, cellRef) => {
+      const coords = this.parseA1Notation(cellRef);
+      maxRow = Math.max(maxRow, coords.row);
+      maxCol = Math.max(maxCol, coords.col);
+    });
+
+    // Create the data array
+    for (let row = 0; row <= maxRow; row++) {
       const rowData: (string | number)[] = [];
-      for (let col = 0; col < sheetSize.width; col++) {
-        const address: CellAddress = { sheet: this.sheetId, row, col };
-        const value = this.hf.getCellValue(address);
-        rowData.push(this.formatValue(value));
+      for (let col = 0; col <= maxCol; col++) {
+        const cellRef = this.toA1Notation(row, col);
+        const value = this.cellValues.get(cellRef);
+        rowData.push(this.formatValue(value || ''));
       }
       data.push(rowData);
     }
@@ -240,18 +310,8 @@ export class FormulaEngine {
    * Load data from a 2D array
    */
   loadData(data: (string | number)[][]): void {
-    if (data.length === 0) return;
-
-    // Ensure we have a sheet before clearing
-    if (this.hf.countSheets() === 0) {
-      const sheetName = this.hf.addSheet('main');
-      this.sheetId = this.hf.getSheetId(sheetName) || 0;
-    }
-
-    // Clear existing data
     this.clear();
 
-    // Set all cell contents
     for (let row = 0; row < data.length; row++) {
       for (let col = 0; col < data[row].length; col++) {
         const value = data[row][col];
@@ -271,32 +331,9 @@ export class FormulaEngine {
       return '';
     }
 
-    // Handle HyperFormula error values
-    if (typeof value === 'object' && value.type === 'DIV_BY_ZERO') {
-      return '#DIV/0!';
-    }
-    if (typeof value === 'object' && value.type === 'NA') {
-      return '#N/A';
-    }
-    if (typeof value === 'object' && value.type === 'NAME') {
-      return '#NAME?';
-    }
-    if (typeof value === 'object' && value.type === 'NULL') {
-      return '#NULL!';
-    }
-    if (typeof value === 'object' && value.type === 'NUM') {
-      return '#NUM!';
-    }
-    if (typeof value === 'object' && value.type === 'REF') {
-      return '#REF!';
-    }
-    if (typeof value === 'object' && value.type === 'VALUE') {
-      return '#VALUE!';
-    }
-
-    // Handle other error objects
-    if (typeof value === 'object' && 'type' in value) {
-      return `#ERROR!`;
+    // Handle error values that start with #
+    if (typeof value === 'string' && value.startsWith('#')) {
+      return value;
     }
 
     return value;
@@ -306,15 +343,14 @@ export class FormulaEngine {
    * Get available function names
    */
   getAvailableFunctions(): string[] {
-    // Note: This method may not be available in all HyperFormula versions
-    return ['SUM', 'AVERAGE', 'COUNT', 'MIN', 'MAX', 'IF']; // Basic list
+    return this.evaluator.getAvailableFunctions();
   }
 
   /**
    * Destroy the engine instance
    */
   destroy(): void {
-    this.hf.destroy();
+    this.clear();
   }
 }
 

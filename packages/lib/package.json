@@ -68,6 +68,7 @@
     }
   },
   "dependencies": {
+    "@formulajs/formulajs": "^4.5.3",
     "@paralleldrive/cuid2": "^2.2.2",
     "hyperformula": "^3.0.1",
     "jose": "^6.0.11",
