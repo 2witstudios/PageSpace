@@ -10,6 +10,8 @@ import { toast } from 'sonner';
 import { useAuth } from '@/hooks/use-auth';
 import SheetErrorBoundary from './SheetErrorBoundary';
 import NativeSheetView from './NativeSheetView';
+import FormulaBar from './FormulaBar';
+import { FormulaEngine } from '@pagespace/lib/formula-engine';
 
 interface SheetViewProps {
   page: TreePage;
@@ -24,15 +26,29 @@ export interface SheetData {
     headers: boolean;
     frozenRows: number;
   };
+  formulas?: { [cellRef: string]: string }; // e.g., "A1": "=SUM(B1:B5)"
+  computedValues?: { [cellRef: string]: string | number }; // cached calculated values
   version: number;
 }
 
 
 const SheetView = ({ page }: SheetViewProps) => {
   const [isReadOnly, setIsReadOnly] = useState(false);
+  const [selectedCell, setSelectedCell] = useState<{ row: number; col: number } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const socket = useSocket();
   const { user } = useAuth();
+
+  // Formula engine instance
+  const formulaEngineRef = useRef<FormulaEngine | null>(null);
+
+  // Initialize formula engine
+  useMemo(() => {
+    if (!formulaEngineRef.current) {
+      formulaEngineRef.current = new FormulaEngine();
+    }
+    return formulaEngineRef.current;
+  }, []);
 
   // Use the document hook with sheet data
   const {
@@ -53,6 +69,9 @@ const SheetView = ({ page }: SheetViewProps) => {
         if (parsed.type === 'spreadsheet') {
           parsed.type = 'sheet';
         }
+        // Ensure formulas and computedValues are initialized
+        if (!parsed.formulas) parsed.formulas = {};
+        if (!parsed.computedValues) parsed.computedValues = {};
         return parsed;
       }
       return documentState?.content || {
@@ -70,6 +89,8 @@ const SheetView = ({ page }: SheetViewProps) => {
           headers: false,
           frozenRows: 0
         },
+        formulas: {},
+        computedValues: {},
         version: 1
       };
     } catch (error) {
@@ -89,10 +110,35 @@ const SheetView = ({ page }: SheetViewProps) => {
           headers: false,
           frozenRows: 0
         },
+        formulas: {},
+        computedValues: {},
         version: 1
       };
     }
   }, [documentState?.content]);
+
+  // Initialize formula engine with existing data when sheet data changes
+  useEffect(() => {
+    if (!formulaEngineRef.current || !sheetData) return;
+
+    try {
+      // Load regular cell data first
+      formulaEngineRef.current.loadData(sheetData.data);
+
+      // Then set formulas if they exist
+      if (sheetData.formulas) {
+        Object.entries(sheetData.formulas).forEach(([cellRef, formula]) => {
+          try {
+            formulaEngineRef.current?.setCellContent(cellRef, formula);
+          } catch (error) {
+            console.error(`Error setting formula for ${cellRef}:`, error);
+          }
+        });
+      }
+    } catch (error) {
+      console.error('Error initializing formula engine:', error);
+    }
+  }, [sheetData]);
 
 
   // Initialize document when component mounts
@@ -166,6 +212,9 @@ const SheetView = ({ page }: SheetViewProps) => {
       return;
     }
 
+    const cellRef = `${String.fromCharCode(65 + col)}${row + 1}`; // Convert to A1 notation
+    const isFormula = value.startsWith('=');
+
     // Update the data array
     const newData = [...sheetData.data];
 
@@ -179,13 +228,56 @@ const SheetView = ({ page }: SheetViewProps) => {
       newData[row].push('');
     }
 
-    // Update the cell value
-    newData[row][col] = value;
+    // Initialize formulas and computedValues if not present
+    const newFormulas = { ...(sheetData.formulas || {}) };
+    const newComputedValues = { ...(sheetData.computedValues || {}) };
+
+    let displayValue = value;
+
+    if (isFormula && formulaEngineRef.current) {
+      // It's a formula - store the formula and calculate the result
+      newFormulas[cellRef] = value;
+
+      try {
+        // Set the formula in the engine
+        const result = formulaEngineRef.current.setCellContent(cellRef, value);
+
+        if (result.error) {
+          displayValue = `#ERROR: ${result.error}`;
+          newComputedValues[cellRef] = displayValue;
+        } else {
+          displayValue = String(result.value || '');
+          newComputedValues[cellRef] = result.value || '';
+        }
+      } catch (error) {
+        displayValue = '#ERROR!';
+        newComputedValues[cellRef] = displayValue;
+        console.error('Formula calculation error:', error);
+      }
+    } else {
+      // Regular value - remove any existing formula
+      delete newFormulas[cellRef];
+      delete newComputedValues[cellRef];
+
+      // Also update the formula engine with the raw value
+      if (formulaEngineRef.current) {
+        try {
+          formulaEngineRef.current.setCellContent(cellRef, value);
+        } catch (error) {
+          console.error('Error setting cell content in formula engine:', error);
+        }
+      }
+    }
+
+    // Update the cell with the display value
+    newData[row][col] = displayValue;
 
     // Create updated sheet data
     const updatedSheetData: SheetData = {
       ...sheetData,
       data: newData,
+      formulas: newFormulas,
+      computedValues: newComputedValues,
       metadata: {
         ...sheetData.metadata,
         rows: Math.max(sheetData.metadata.rows, newData.length),
@@ -207,14 +299,39 @@ const SheetView = ({ page }: SheetViewProps) => {
         pageId: page.id,
         operation: 'content-updated',
         data: {
-          cellRange: `${String.fromCharCode(65 + col)}${row + 1}`,
-          value: value
+          cellRange: cellRef,
+          value: value,
+          isFormula: isFormula,
+          displayValue: displayValue
         }
       });
     }
   }, [sheetData, updateContent, saveWithDebounce, isReadOnly, socket, page.id]);
 
-  // Cleanup on unmount - auto-save any unsaved changes
+  // Handle cell selection
+  const handleCellSelect = useCallback((row: number, col: number) => {
+    setSelectedCell({ row, col });
+  }, []);
+
+  // Handle formula bar changes
+  const handleFormulaChange = useCallback((value: string) => {
+    if (selectedCell) {
+      handleCellChange(selectedCell.row, selectedCell.col, value);
+    }
+  }, [selectedCell, handleCellChange]);
+
+  // Get current cell value and formula for formula bar
+  const selectedCellData = useMemo(() => {
+    if (!selectedCell) return { value: '', formula: undefined };
+
+    const cellRef = `${String.fromCharCode(65 + selectedCell.col)}${selectedCell.row + 1}`;
+    const formula = sheetData.formulas?.[cellRef];
+    const value = sheetData.data[selectedCell.row]?.[selectedCell.col] || '';
+
+    return { value, formula };
+  }, [selectedCell, sheetData]);
+
+  // Cleanup on unmount - auto-save any unsaved changes and destroy formula engine
   useEffect(() => {
     return () => {
       // Force save if dirty before unmounting
@@ -228,6 +345,12 @@ const SheetView = ({ page }: SheetViewProps) => {
         }).catch(error => {
           console.error('Failed to save on unmount:', error);
         });
+      }
+
+      // Cleanup formula engine
+      if (formulaEngineRef.current) {
+        formulaEngineRef.current.destroy();
+        formulaEngineRef.current = null;
       }
     };
   }, [documentState, page.id]);
@@ -292,11 +415,22 @@ const SheetView = ({ page }: SheetViewProps) => {
         </div>
       )}
 
+      {/* Formula bar */}
+      <FormulaBar
+        selectedCell={selectedCell}
+        cellValue={selectedCellData.value}
+        formula={selectedCellData.formula}
+        onFormulaChange={handleFormulaChange}
+        isReadOnly={isReadOnly}
+      />
+
       {/* Sheet content */}
       <div className={`flex-1 overflow-hidden ${isReadOnly ? 'bg-gray-50/50 dark:bg-gray-900/20' : ''}`}>
         <NativeSheetView
           sheetData={sheetData}
           onCellChange={handleCellChange}
+          onCellSelect={handleCellSelect}
+          selectedCell={selectedCell}
           isReadOnly={isReadOnly}
         />
       </div>

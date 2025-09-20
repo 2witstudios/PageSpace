@@ -1,12 +1,13 @@
 "use client";
 
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
-import { motion } from 'motion/react';
 import { cn } from '@/lib/utils';
 
 interface NativeSheetViewProps {
   sheetData: SheetData;
   onCellChange: (row: number, col: number, value: string) => void;
+  onCellSelect?: (row: number, col: number) => void;
+  selectedCell?: { row: number; col: number } | null;
   isReadOnly?: boolean;
 }
 
@@ -19,15 +20,22 @@ export interface SheetData {
     headers: boolean;
     frozenRows: number;
   };
+  formulas?: { [cellRef: string]: string }; // e.g., "A1": "=SUM(B1:B5)"
+  computedValues?: { [cellRef: string]: string | number }; // cached calculated values
   version: number;
 }
 
 const NativeSheetView: React.FC<NativeSheetViewProps> = ({
   sheetData,
   onCellChange,
+  onCellSelect,
+  selectedCell: externalSelectedCell,
   isReadOnly = false
 }) => {
-  const [selectedCell, setSelectedCell] = useState<{ row: number; col: number } | null>(null);
+  const [internalSelectedCell, setInternalSelectedCell] = useState<{ row: number; col: number } | null>(null);
+
+  // Use external selected cell if provided, otherwise use internal state
+  const selectedCell = externalSelectedCell !== undefined ? externalSelectedCell : internalSelectedCell;
   const [editingCell, setEditingCell] = useState<{ row: number; col: number } | null>(null);
   const [editValue, setEditValue] = useState('');
   const [selectedRange, setSelectedRange] = useState<{
@@ -68,6 +76,12 @@ const NativeSheetView: React.FC<NativeSheetViewProps> = ({
     return '';
   }, [sheetData.data]);
 
+  // Check if cell has a formula
+  const cellHasFormula = useCallback((row: number, col: number): boolean => {
+    const cellRef = `${String.fromCharCode(65 + col)}${row + 1}`;
+    return !!(sheetData.formulas && sheetData.formulas[cellRef]);
+  }, [sheetData.formulas]);
+
   // Handle cell click
   const handleCellClick = useCallback((row: number, col: number, event: React.MouseEvent) => {
     if (isReadOnly) return;
@@ -79,10 +93,15 @@ const NativeSheetView: React.FC<NativeSheetViewProps> = ({
         end: { row, col }
       });
     } else {
-      setSelectedCell({ row, col });
+      // Update selection
+      if (onCellSelect) {
+        onCellSelect(row, col);
+      } else {
+        setInternalSelectedCell({ row, col });
+      }
       setSelectedRange(null);
     }
-  }, [isReadOnly, selectedCell]);
+  }, [isReadOnly, selectedCell, onCellSelect]);
 
   // Handle cell double-click to edit
   const handleCellDoubleClick = useCallback((row: number, col: number) => {
@@ -123,21 +142,31 @@ const NativeSheetView: React.FC<NativeSheetViewProps> = ({
       handleSaveEdit();
       // Move to next cell down
       if (editingCell && editingCell.row < rowCount - 1) {
-        setSelectedCell({ row: editingCell.row + 1, col: editingCell.col });
+        const newCell = { row: editingCell.row + 1, col: editingCell.col };
+        if (onCellSelect) {
+          onCellSelect(newCell.row, newCell.col);
+        } else {
+          setInternalSelectedCell(newCell);
+        }
       }
     } else if (e.key === 'Tab') {
       e.preventDefault();
       handleSaveEdit();
       // Move to next cell right
       if (editingCell && editingCell.col < columnCount - 1) {
-        setSelectedCell({ row: editingCell.row, col: editingCell.col + 1 });
+        const newCell = { row: editingCell.row, col: editingCell.col + 1 };
+        if (onCellSelect) {
+          onCellSelect(newCell.row, newCell.col);
+        } else {
+          setInternalSelectedCell(newCell);
+        }
       }
     } else if (e.key === 'Escape') {
       e.preventDefault();
       setEditingCell(null);
       setEditValue('');
     }
-  }, [editingCell, handleSaveEdit, rowCount, columnCount]);
+  }, [editingCell, handleSaveEdit, rowCount, columnCount, onCellSelect]);
 
   // Handle keyboard navigation
   useEffect(() => {
@@ -182,7 +211,12 @@ const NativeSheetView: React.FC<NativeSheetViewProps> = ({
           return;
       }
 
-      setSelectedCell({ row: newRow, col: newCol });
+      const newCell = { row: newRow, col: newCol };
+      if (onCellSelect) {
+        onCellSelect(newCell.row, newCell.col);
+      } else {
+        setInternalSelectedCell(newCell);
+      }
       setSelectedRange(null);
     };
 
@@ -190,7 +224,7 @@ const NativeSheetView: React.FC<NativeSheetViewProps> = ({
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [selectedCell, editingCell, rowCount, columnCount, handleCellDoubleClick, hasFocus]);
+  }, [selectedCell, editingCell, rowCount, columnCount, handleCellDoubleClick, hasFocus, onCellSelect]);
 
   // Check if cell is in selected range
   const isCellInRange = useCallback((row: number, col: number): boolean => {
@@ -261,6 +295,7 @@ const NativeSheetView: React.FC<NativeSheetViewProps> = ({
                 const isEditing = editingCell?.row === rowIndex && editingCell?.col === colIndex;
                 const isInRange = isCellInRange(rowIndex, colIndex);
                 const cellValue = getCellValue(rowIndex, colIndex);
+                const hasFormula = cellHasFormula(rowIndex, colIndex);
 
                 return (
                   <div
@@ -269,7 +304,8 @@ const NativeSheetView: React.FC<NativeSheetViewProps> = ({
                       "sheet-cell",
                       isSelected && "selected",
                       isInRange && "in-range",
-                      isEditing && "editing"
+                      isEditing && "editing",
+                      hasFormula && "has-formula"
                     )}
                     onClick={(e) => handleCellClick(rowIndex, colIndex, e)}
                     onDoubleClick={() => handleCellDoubleClick(rowIndex, colIndex)}
@@ -286,7 +322,11 @@ const NativeSheetView: React.FC<NativeSheetViewProps> = ({
                         onKeyDown={handleInputKeyDown}
                       />
                     ) : (
-                      <span className="sheet-cell-content">
+                      <span className={cn(
+                        "sheet-cell-content",
+                        cellValue.toString().startsWith('#') && "text-red-600 dark:text-red-400 font-medium",
+                        hasFormula && "font-mono"
+                      )}>
                         {cellValue}
                       </span>
                     )}

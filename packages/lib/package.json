@@ -15,6 +15,7 @@
     "./ai-monitoring": "./src/ai-monitoring.ts",
     "./auth-utils": "./src/auth-utils.ts",
     "./scribe-processor": "./src/scribe-processor.ts",
+    "./formula-engine": "./src/formula-engine.ts",
     "./services/storage-limits": "./src/services/storage-limits.ts",
     "./services/subscription-utils": "./src/services/subscription-utils.ts",
     "./services/upload-semaphore": "./src/services/upload-semaphore.ts",
@@ -49,6 +50,9 @@
       "scribe-processor": [
         "./src/scribe-processor.ts"
       ],
+      "formula-engine": [
+        "./src/formula-engine.ts"
+      ],
       "services/storage-limits": [
         "./src/services/storage-limits.ts"
       ],
@@ -65,6 +69,7 @@
   },
   "dependencies": {
     "@paralleldrive/cuid2": "^2.2.2",
+    "hyperformula": "^3.0.1",
     "jose": "^6.0.11",
     "mammoth": "^1.10.0",
     "pdf-parse-debugging-disabled": "^1.1.1",

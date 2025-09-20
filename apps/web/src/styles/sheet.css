@@ -98,12 +98,35 @@
 
 /* Editing cell */
 .sheet-cell.editing {
-  @apply p-0;
   z-index: 15;
+  position: relative;
+}
+
+/* Formula cell styling */
+.sheet-cell.has-formula {
+  @apply bg-blue-50/50 dark:bg-blue-950/30;
+  position: relative;
+}
+
+.sheet-cell.has-formula::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 6px;
+  height: 6px;
+  background: hsl(var(--primary));
+  border-radius: 50%;
+  opacity: 0.6;
+}
+
+.sheet-cell.has-formula.selected::after {
+  @apply bg-primary-foreground opacity-80;
 }
 
 .sheet-cell-input {
-  @apply w-full h-full px-2 py-1;
+  @apply absolute inset-0;
+  @apply px-2 py-1;
   @apply bg-background;
   @apply focus:outline-none;
   @apply text-foreground;
@@ -113,6 +136,8 @@
   line-height: inherit;
   box-sizing: border-box;
   border: none;
+  width: 100%;
+  height: 100%;
 }
 
 /* Scrollbar styling */
