@@ -37,8 +37,9 @@ export class FormulaEngine {
     };
 
     this.hf = HyperFormula.buildEmpty(defaultConfig);
-    // Use the default sheet that's already created
-    this.sheetId = 0;
+    // Add a sheet since buildEmpty() creates no sheets
+    const sheetName = this.hf.addSheet('main');
+    this.sheetId = this.hf.getSheetId(sheetName) || 0;
   }
 
   /**
@@ -204,7 +205,15 @@ export class FormulaEngine {
    * Clear all data
    */
   clear(): void {
-    this.hf.clearSheet(this.sheetId);
+    try {
+      this.hf.clearSheet(this.sheetId);
+    } catch (error) {
+      // Sheet might not exist, ensure it exists
+      if (this.hf.countSheets() === 0) {
+        const sheetName = this.hf.addSheet('main');
+        this.sheetId = this.hf.getSheetId(sheetName) || 0;
+      }
+    }
   }
 
   /**
@@ -232,6 +241,12 @@ export class FormulaEngine {
    */
   loadData(data: (string | number)[][]): void {
     if (data.length === 0) return;
+
+    // Ensure we have a sheet before clearing
+    if (this.hf.countSheets() === 0) {
+      const sheetName = this.hf.addSheet('main');
+      this.sheetId = this.hf.getSheetId(sheetName) || 0;
+    }
 
     // Clear existing data
     this.clear();
