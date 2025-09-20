@@ -34,8 +34,10 @@ const NativeSheetView: React.FC<NativeSheetViewProps> = ({
     start: { row: number; col: number };
     end: { row: number; col: number };
   } | null>(null);
+  const [hasFocus, setHasFocus] = useState(false);
 
   const gridRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Generate column headers (A, B, C, ..., Z, AA, AB, etc.)
@@ -113,6 +115,9 @@ const NativeSheetView: React.FC<NativeSheetViewProps> = ({
 
   // Handle input key down
   const handleInputKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    // Stop propagation to prevent sheet-level keyboard handlers
+    e.stopPropagation();
+
     if (e.key === 'Enter') {
       e.preventDefault();
       handleSaveEdit();
@@ -137,6 +142,14 @@ const NativeSheetView: React.FC<NativeSheetViewProps> = ({
   // Handle keyboard navigation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Only handle keyboard events when sheet has focus
+      if (!hasFocus) return;
+
+      // Check if the event target is within our container
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        return;
+      }
+
       if (editingCell) return; // Don't navigate while editing
 
       if (!selectedCell) return;
@@ -177,7 +190,7 @@ const NativeSheetView: React.FC<NativeSheetViewProps> = ({
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [selectedCell, editingCell, rowCount, columnCount, handleCellDoubleClick]);
+  }, [selectedCell, editingCell, rowCount, columnCount, handleCellDoubleClick, hasFocus]);
 
   // Check if cell is in selected range
   const isCellInRange = useCallback((row: number, col: number): boolean => {
@@ -191,8 +204,26 @@ const NativeSheetView: React.FC<NativeSheetViewProps> = ({
     return row >= minRow && row <= maxRow && col >= minCol && col <= maxCol;
   }, [selectedRange]);
 
+  // Handle focus/blur on the container
+  const handleContainerFocus = useCallback(() => {
+    setHasFocus(true);
+  }, []);
+
+  const handleContainerBlur = useCallback((e: React.FocusEvent) => {
+    // Check if focus is moving to something within the container
+    if (!containerRef.current?.contains(e.relatedTarget as Node)) {
+      setHasFocus(false);
+    }
+  }, []);
+
   return (
-    <div className="sheet-container">
+    <div
+      className="sheet-container"
+      ref={containerRef}
+      tabIndex={0}
+      onFocus={handleContainerFocus}
+      onBlur={handleContainerBlur}
+    >
       <div className="sheet-wrapper" ref={gridRef}>
         <div className="sheet-grid">
           {/* Corner cell */}
@@ -251,6 +282,7 @@ const NativeSheetView: React.FC<NativeSheetViewProps> = ({
                         value={editValue}
                         onChange={handleInputChange}
                         onBlur={handleSaveEdit}
+                        onClick={(e) => e.stopPropagation()}
                         onKeyDown={handleInputKeyDown}
                       />
                     ) : (

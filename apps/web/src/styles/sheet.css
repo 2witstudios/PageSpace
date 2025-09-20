@@ -2,6 +2,11 @@
 .sheet-container {
   @apply h-full w-full flex flex-col bg-background;
   position: relative;
+  outline: none;
+}
+
+.sheet-container:focus {
+  @apply ring-1 ring-border/30 ring-inset;
 }
 
 .sheet-wrapper {
@@ -99,12 +104,15 @@
 
 .sheet-cell-input {
   @apply w-full h-full px-2 py-1;
-  @apply bg-background border-2 border-primary;
+  @apply bg-background;
   @apply focus:outline-none;
   @apply text-foreground;
+  @apply ring-2 ring-primary ring-inset;
   font-size: inherit;
   font-family: inherit;
   line-height: inherit;
+  box-sizing: border-box;
+  border: none;
 }
 
 /* Scrollbar styling */
