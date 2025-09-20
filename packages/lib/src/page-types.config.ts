@@ -172,15 +172,17 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     defaultContent: () => ({
       type: 'sheet',
       data: [
-        ['Column A', 'Column B', 'Column C'],
-        ['', '', ''],
-        ['', '', '']
+        ['', '', '', '', '', '', '', '', '', ''],
+        ['', '', '', '', '', '', '', '', '', ''],
+        ['', '', '', '', '', '', '', '', '', ''],
+        ['', '', '', '', '', '', '', '', '', ''],
+        ['', '', '', '', '', '', '', '', '', '']
       ],
       metadata: {
-        rows: 3,
-        cols: 3,
-        headers: true,
-        frozenRows: 1
+        rows: 5,
+        cols: 10,
+        headers: false,
+        frozenRows: 0
       },
       version: 1
     }),

@@ -1,0 +1,230 @@
+/* Sheet Container */
+.sheet-container {
+  @apply h-full w-full flex flex-col bg-background;
+  position: relative;
+}
+
+.sheet-wrapper {
+  @apply flex-1 overflow-auto;
+  position: relative;
+}
+
+/* Sheet Grid */
+.sheet-grid {
+  display: grid;
+  position: relative;
+  grid-template-columns: 50px repeat(var(--col-count, 15), minmax(100px, 1fr));
+  grid-auto-rows: 32px;
+  width: max-content;
+  min-width: 100%;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Corner cell (top-left) */
+.sheet-corner {
+  @apply sticky left-0 top-0 z-30;
+  @apply bg-muted border-r border-b border-border;
+  @apply flex items-center justify-center;
+  grid-column: 1;
+  grid-row: 1;
+}
+
+/* Column Headers */
+.sheet-column-header {
+  @apply sticky top-0 z-20;
+  @apply bg-muted border-r border-b border-border;
+  @apply flex items-center justify-center font-medium;
+  @apply text-muted-foreground;
+  @apply hover:bg-accent/5 transition-colors;
+  user-select: none;
+  cursor: pointer;
+  height: 32px;
+}
+
+.sheet-column-header.selected-column {
+  @apply bg-accent/10 text-foreground;
+}
+
+/* Row Headers */
+.sheet-row-header {
+  @apply sticky left-0 z-20;
+  @apply bg-muted border-r border-b border-border;
+  @apply flex items-center justify-center font-medium;
+  @apply text-muted-foreground;
+  @apply hover:bg-accent/5 transition-colors;
+  user-select: none;
+  cursor: pointer;
+  width: 50px;
+}
+
+.sheet-row-header.selected-row {
+  @apply bg-accent/10 text-foreground;
+}
+
+/* Cells */
+.sheet-cell {
+  @apply border-r border-b border-border;
+  @apply px-2 py-1;
+  @apply hover:bg-accent/5 transition-colors cursor-cell;
+  @apply relative overflow-hidden;
+  background: hsl(var(--background));
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+}
+
+.sheet-cell-content {
+  @apply truncate w-full;
+  @apply text-foreground;
+}
+
+/* Selected cell */
+.sheet-cell.selected {
+  @apply ring-2 ring-primary ring-inset;
+  @apply bg-accent/5;
+  z-index: 10;
+}
+
+/* Cell in selection range */
+.sheet-cell.in-range {
+  @apply bg-primary/10;
+}
+
+/* Editing cell */
+.sheet-cell.editing {
+  @apply p-0;
+  z-index: 15;
+}
+
+.sheet-cell-input {
+  @apply w-full h-full px-2 py-1;
+  @apply bg-background border-2 border-primary;
+  @apply focus:outline-none;
+  @apply text-foreground;
+  font-size: inherit;
+  font-family: inherit;
+  line-height: inherit;
+}
+
+/* Scrollbar styling */
+.sheet-wrapper {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+}
+
+.sheet-wrapper::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.sheet-wrapper::-webkit-scrollbar-track {
+  @apply bg-muted/30;
+}
+
+.sheet-wrapper::-webkit-scrollbar-thumb {
+  @apply bg-muted-foreground/30 rounded-md;
+  @apply hover:bg-muted-foreground/50;
+}
+
+.sheet-wrapper::-webkit-scrollbar-corner {
+  @apply bg-muted;
+}
+
+/* Dark mode adjustments */
+.dark .sheet-corner,
+.dark .sheet-column-header,
+.dark .sheet-row-header {
+  @apply bg-muted/50;
+  @apply border-border/50;
+}
+
+.dark .sheet-cell {
+  @apply border-border/30;
+}
+
+.dark .sheet-cell.selected {
+  @apply ring-primary/70;
+}
+
+.dark .sheet-wrapper::-webkit-scrollbar-track {
+  @apply bg-muted/20;
+}
+
+.dark .sheet-wrapper::-webkit-scrollbar-thumb {
+  @apply bg-muted-foreground/20;
+  @apply hover:bg-muted-foreground/40;
+}
+
+/* Grid lines enhancement */
+@media (min-resolution: 2dppx) {
+  .sheet-cell,
+  .sheet-column-header,
+  .sheet-row-header,
+  .sheet-corner {
+    border-width: 0.5px;
+  }
+}
+
+/* Performance optimizations */
+.sheet-grid {
+  will-change: scroll-position;
+}
+
+.sheet-cell {
+  contain: layout style paint;
+}
+
+/* Animations */
+@keyframes cell-highlight {
+  0% { background-color: hsl(var(--primary) / 0.2); }
+  100% { background-color: transparent; }
+}
+
+.sheet-cell.highlight-animation {
+  animation: cell-highlight 0.5s ease-out;
+}
+
+/* Responsive column widths */
+@media (max-width: 768px) {
+  .sheet-grid {
+    grid-template-columns: 40px repeat(var(--col-count, 15), minmax(80px, 1fr));
+  }
+
+  .sheet-row-header {
+    width: 40px;
+  }
+
+  .sheet-cell,
+  .sheet-column-header,
+  .sheet-row-header {
+    font-size: 12px;
+    height: 28px;
+    min-height: 28px;
+  }
+}
+
+/* Formula bar styling (future enhancement) */
+.sheet-formula-bar {
+  @apply h-10 border-b border-border bg-muted/30;
+  @apply flex items-center px-2 gap-2;
+}
+
+.sheet-formula-input {
+  @apply flex-1 bg-background rounded px-2 py-1;
+  @apply border border-border focus:border-primary;
+  @apply text-sm font-mono;
+}
+
+/* Context menu styling (future enhancement) */
+.sheet-context-menu {
+  @apply absolute z-50 min-w-[150px];
+  @apply bg-popover border border-border rounded-md shadow-md;
+  @apply py-1;
+}
+
+.sheet-context-menu-item {
+  @apply px-3 py-1.5 text-sm;
+  @apply hover:bg-accent hover:text-accent-foreground;
+  @apply cursor-pointer transition-colors;
+}

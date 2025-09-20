@@ -21,6 +21,7 @@ COPY packages/db/package.json ./packages/db/
 COPY packages/lib/package.json ./packages/lib/
 COPY apps/web/package.json ./apps/web/
 COPY apps/realtime/package.json ./apps/realtime/
+COPY apps/processor/package.json ./apps/processor/
 
 # Install ALL dependencies for the entire monorepo
 RUN pnpm install --frozen-lockfile

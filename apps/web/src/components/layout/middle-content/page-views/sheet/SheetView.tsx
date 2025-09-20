@@ -8,13 +8,8 @@ import { useSocket } from '@/hooks/useSocket';
 import { PageEventPayload } from '@/lib/socket-utils';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/use-auth';
-import { useTheme } from 'next-themes';
-import { AgGridReact } from 'ag-grid-react';
-import { ColDef, CellValueChangedEvent, ModuleRegistry, AllCommunityModule } from 'ag-grid-community';
 import SheetErrorBoundary from './SheetErrorBoundary';
-
-// Register AG Grid modules
-ModuleRegistry.registerModules([AllCommunityModule]);
+import NativeSheetView from './NativeSheetView';
 
 interface SheetViewProps {
   page: TreePage;
@@ -32,16 +27,12 @@ export interface SheetData {
   version: number;
 }
 
-interface SheetCellData {
-  [key: string]: string;
-}
 
 const SheetView = ({ page }: SheetViewProps) => {
   const [isReadOnly, setIsReadOnly] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const socket = useSocket();
   const { user } = useAuth();
-  const { theme } = useTheme();
 
   // Use the document hook with sheet data
   const {
@@ -67,15 +58,17 @@ const SheetView = ({ page }: SheetViewProps) => {
       return documentState?.content || {
         type: 'sheet',
         data: [
-          ['Column A', 'Column B', 'Column C'],
-          ['', '', ''],
-          ['', '', '']
+          ['', '', '', '', '', '', '', '', '', ''],
+          ['', '', '', '', '', '', '', '', '', ''],
+          ['', '', '', '', '', '', '', '', '', ''],
+          ['', '', '', '', '', '', '', '', '', ''],
+          ['', '', '', '', '', '', '', '', '', '']
         ],
         metadata: {
-          rows: 3,
-          cols: 3,
-          headers: true,
-          frozenRows: 1
+          rows: 5,
+          cols: 10,
+          headers: false,
+          frozenRows: 0
         },
         version: 1
       };
@@ -84,49 +77,23 @@ const SheetView = ({ page }: SheetViewProps) => {
       return {
         type: 'sheet',
         data: [
-          ['Column A', 'Column B', 'Column C'],
-          ['', '', ''],
-          ['', '', '']
+          ['', '', '', '', '', '', '', '', '', ''],
+          ['', '', '', '', '', '', '', '', '', ''],
+          ['', '', '', '', '', '', '', '', '', ''],
+          ['', '', '', '', '', '', '', '', '', ''],
+          ['', '', '', '', '', '', '', '', '', '']
         ],
         metadata: {
-          rows: 3,
-          cols: 3,
-          headers: true,
-          frozenRows: 1
+          rows: 5,
+          cols: 10,
+          headers: false,
+          frozenRows: 0
         },
         version: 1
       };
     }
   }, [documentState?.content]);
 
-  // Generate column definitions for AG Grid - memoized for performance
-  const columnDefs = useMemo<ColDef[]>(() => {
-    if (!sheetData.data[0]) return [];
-
-    return sheetData.data[0].map((_, index) => ({
-      field: `col${index}`,
-      headerName: sheetData.metadata.headers
-        ? sheetData.data[0][index]
-        : String.fromCharCode(65 + index), // A, B, C, etc.
-      editable: true,
-      resizable: true,
-      sortable: true,
-      filter: true,
-      width: 120,
-    }));
-  }, [sheetData.metadata.headers, sheetData.data]);
-
-  // Generate row data for AG Grid
-  const rowData = useMemo<SheetCellData[]>(() => {
-    const startRow = sheetData.metadata.headers ? 1 : 0;
-    return sheetData.data.slice(startRow).map((row) => {
-      const rowObj: SheetCellData = {};
-      row.forEach((cell, colIndex) => {
-        rowObj[`col${colIndex}`] = cell || '';
-      });
-      return rowObj;
-    });
-  }, [sheetData]);
 
   // Initialize document when component mounts
   useEffect(() => {
@@ -193,33 +160,27 @@ const SheetView = ({ page }: SheetViewProps) => {
   }, [socket, page.id, documentState, updateContentFromServer]);
 
   // Handle cell value changes
-  const handleCellValueChanged = useCallback((event: CellValueChangedEvent) => {
+  const handleCellChange = useCallback((row: number, col: number, value: string) => {
     if (isReadOnly) {
       toast.error('You do not have permission to edit this sheet');
       return;
     }
 
-    if (event.rowIndex === null || event.rowIndex === undefined) {
-      return; // Skip if rowIndex is invalid
-    }
-
     // Update the data array
     const newData = [...sheetData.data];
-    const actualRowIndex = event.rowIndex + (sheetData.metadata.headers ? 1 : 0);
-    const colIndex = parseInt(event.colDef.field!.replace('col', ''));
 
     // Ensure row exists
-    while (newData.length <= actualRowIndex) {
+    while (newData.length <= row) {
       newData.push(new Array(sheetData.metadata.cols).fill(''));
     }
 
     // Ensure column exists
-    while (newData[actualRowIndex].length <= colIndex) {
-      newData[actualRowIndex].push('');
+    while (newData[row].length <= col) {
+      newData[row].push('');
     }
 
     // Update the cell value
-    newData[actualRowIndex][colIndex] = event.newValue || '';
+    newData[row][col] = value;
 
     // Create updated sheet data
     const updatedSheetData: SheetData = {
@@ -246,8 +207,8 @@ const SheetView = ({ page }: SheetViewProps) => {
         pageId: page.id,
         operation: 'content-updated',
         data: {
-          cellRange: `${String.fromCharCode(65 + colIndex)}${actualRowIndex + 1}`,
-          value: event.newValue
+          cellRange: `${String.fromCharCode(65 + col)}${row + 1}`,
+          value: value
         }
       });
     }
@@ -332,38 +293,12 @@ const SheetView = ({ page }: SheetViewProps) => {
       )}
 
       {/* Sheet content */}
-      <div className={`flex-1 flex flex-col p-4 overflow-hidden ${isReadOnly ? 'bg-gray-50/50 dark:bg-gray-900/20' : ''}`}>
-        <div className={`w-full h-full ${theme === 'dark' ? 'ag-theme-alpine-dark' : 'ag-theme-alpine'}`}>
-          <AgGridReact
-            rowData={rowData}
-            columnDefs={columnDefs}
-            onCellValueChanged={handleCellValueChanged}
-            suppressMovableColumns={false}
-            enableRangeSelection={true}
-            enableFillHandle={true}
-            readOnlyEdit={isReadOnly}
-            defaultColDef={{
-              editable: true,
-              resizable: true,
-              sortable: true,
-              filter: true,
-            }}
-            // Performance optimizations
-            animateRows={false}
-            suppressRowVirtualisation={false}
-            suppressColumnVirtualisation={false}
-            rowBuffer={10}
-            viewportRowModelPageSize={100}
-            viewportRowModelBufferSize={50}
-            suppressFieldDotNotation={true}
-            undoRedoCellEditing={true}
-            undoRedoCellEditingLimit={20}
-            enableCellTextSelection={true}
-            suppressCopyRowsToClipboard={false}
-            suppressCopySingleCellRanges={false}
-            copyHeadersToClipboard={true}
-          />
-        </div>
+      <div className={`flex-1 overflow-hidden ${isReadOnly ? 'bg-gray-50/50 dark:bg-gray-900/20' : ''}`}>
+        <NativeSheetView
+          sheetData={sheetData}
+          onCellChange={handleCellChange}
+          isReadOnly={isReadOnly}
+        />
       </div>
 
       </motion.div>
