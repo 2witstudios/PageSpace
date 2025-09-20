@@ -1,6 +1,8 @@
 @import "../styles/tiptap.css";
 @import "tailwindcss";
 @import "tw-animate-css";
+@import "ag-grid-community/styles/ag-grid.css";
+@import "ag-grid-community/styles/ag-theme-alpine.css";
 
 @custom-variant dark (&:is(.dark *));
 

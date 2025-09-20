@@ -13,21 +13,21 @@ export interface PageTypeCapabilities {
 export interface PageTypeApiValidation {
   requiredFields?: string[];
   optionalFields?: string[];
-  customValidation?: (data: any) => { valid: boolean; error?: string };
+  customValidation?: (data: Record<string, unknown>) => { valid: boolean; error?: string };
 }
 
 export interface PageTypeConfig {
   type: PageType;
   displayName: string;
   description: string;
-  iconName: 'Folder' | 'FileText' | 'MessageSquare' | 'Sparkles' | 'Palette' | 'FileIcon';
+  iconName: 'Folder' | 'FileText' | 'MessageSquare' | 'Sparkles' | 'Palette' | 'FileIcon' | 'Table';
   emoji: string;
   capabilities: PageTypeCapabilities;
   defaultContent: () => any;
   allowedChildTypes: PageType[];
   apiValidation?: PageTypeApiValidation;
   uiComponent: string;
-  layoutViewType: 'document' | 'folder' | 'channel' | 'ai' | 'canvas';
+  layoutViewType: 'document' | 'folder' | 'channel' | 'ai' | 'canvas' | 'sheet';
 }
 
 export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
@@ -154,6 +154,40 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     uiComponent: 'FileViewer',
     layoutViewType: 'document',
   },
+  [PageType.SHEET]: {
+    type: PageType.SHEET,
+    displayName: 'Sheet',
+    description: 'Table data entry interface',
+    iconName: 'Table',
+    emoji: '📊',
+    capabilities: {
+      canHaveChildren: false,
+      canAcceptUploads: false,
+      canBeConverted: true,
+      requiresAuth: false,
+      supportsRealtime: true,
+      supportsVersioning: true,
+      supportsAI: true,
+    },
+    defaultContent: () => ({
+      type: 'sheet',
+      data: [
+        ['Column A', 'Column B', 'Column C'],
+        ['', '', ''],
+        ['', '', '']
+      ],
+      metadata: {
+        rows: 3,
+        cols: 3,
+        headers: true,
+        frozenRows: 1
+      },
+      version: 1
+    }),
+    allowedChildTypes: [],
+    uiComponent: 'SheetView',
+    layoutViewType: 'sheet',
+  },
 };
 
 // Helper functions
@@ -178,8 +212,8 @@ export function getDefaultContent(type: PageType): any {
   if (!config) return '';
   
   const content = config.defaultContent();
-  // For CHANNEL and AI_CHAT, return stringified JSON for consistency
-  if (type === PageType.CHANNEL || type === PageType.AI_CHAT) {
+  // For CHANNEL, AI_CHAT, and SHEET, return stringified JSON for consistency
+  if (type === PageType.CHANNEL || type === PageType.AI_CHAT || type === PageType.SHEET) {
     return JSON.stringify(content);
   }
   return content;

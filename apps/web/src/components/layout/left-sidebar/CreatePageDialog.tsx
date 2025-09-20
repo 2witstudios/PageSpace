@@ -186,6 +186,7 @@ export default function CreatePageDialog({ parentId, isOpen, setIsOpen, onPageCr
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="DOCUMENT">Document</SelectItem>
+                  <SelectItem value="SHEET">Sheet</SelectItem>
                   <SelectItem value="FOLDER">Folder</SelectItem>
                   <SelectItem value="CHANNEL">Channel</SelectItem>
                   <SelectItem value="AI_CHAT">AI Chat</SelectItem>
