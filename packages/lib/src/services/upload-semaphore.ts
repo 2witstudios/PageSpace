@@ -1,5 +1,5 @@
-import { STORAGE_TIERS } from './storage-limits';
 import { getMemoryStatus } from './memory-monitor';
+import { getStorageConfigFromSubscription, type StorageTier } from './subscription-utils';
 
 interface UploadSlot {
   userId: string;
@@ -42,7 +42,7 @@ class UploadSemaphore {
    */
   async acquireUploadSlot(
     userId: string,
-    tier: keyof typeof STORAGE_TIERS,
+    tier: StorageTier,
     fileSize: number
   ): Promise<string | null> {
     // Check global limit
@@ -52,7 +52,8 @@ class UploadSemaphore {
     }
 
     // Check user limit based on tier
-    const userLimit = STORAGE_TIERS[tier].maxConcurrentUploads;
+    const tierConfig = getStorageConfigFromSubscription(tier);
+    const userLimit = tierConfig.maxConcurrentUploads;
     const currentUserUploads = this.userPermits.get(userId) || 0;
 
     if (currentUserUploads >= userLimit) {
@@ -117,12 +118,13 @@ class UploadSemaphore {
   /**
    * Check if a user can acquire an upload slot without actually acquiring it
    */
-  async canAcquireSlot(userId: string, tier: keyof typeof STORAGE_TIERS): Promise<boolean> {
+  async canAcquireSlot(userId: string, tier: StorageTier): Promise<boolean> {
     // Check global limit
     if (this.globalPermits <= 0) return false;
 
     // Check user limit
-    const userLimit = STORAGE_TIERS[tier].maxConcurrentUploads;
+    const tierConfig = getStorageConfigFromSubscription(tier);
+    const userLimit = tierConfig.maxConcurrentUploads;
     const currentUserUploads = this.userPermits.get(userId) || 0;
     if (currentUserUploads >= userLimit) return false;
 

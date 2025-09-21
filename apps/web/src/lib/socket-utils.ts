@@ -36,7 +36,7 @@ export interface TaskEventPayload {
 export interface UsageEventPayload {
   userId: string;
   operation: UsageOperation;
-  subscriptionTier: 'normal' | 'pro';
+  subscriptionTier: 'free' | 'starter' | 'professional' | 'business' | 'enterprise';
   normal: {
     current: number;
     limit: number;
@@ -195,7 +195,8 @@ export async function broadcastUsageEvent(payload: UsageEventPayload): Promise<v
       userId: payload.userId,
       operation: payload.operation,
       normal: `${payload.normal.current}/${payload.normal.limit}`,
-      extraThinking: `${payload.extraThinking.current}/${payload.extraThinking.limit}`
+      extraThinking: `${payload.extraThinking.current}/${payload.extraThinking.limit}`,
+      subscriptionTier: payload.subscriptionTier
     });
   } catch (error) {
     // Log error but don't throw - broadcasting failures shouldn't break operations

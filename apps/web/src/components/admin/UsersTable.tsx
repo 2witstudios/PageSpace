@@ -8,11 +8,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ChevronDown, ChevronRight, Search, Shield, MessageCircle, Database, Settings, Crown, CreditCard, CheckCircle } from "lucide-react";
 
 interface UserStats {
@@ -49,7 +49,7 @@ interface UserData {
   currentAiProvider: string;
   currentAiModel: string;
   tokenVersion: number;
-  subscriptionTier: 'normal' | 'pro';
+  subscriptionTier: 'free' | 'starter' | 'professional' | 'business' | 'enterprise';
   stats: UserStats;
   aiSettings: AiSetting[];
   recentTokens: RefreshToken[];
@@ -98,11 +98,10 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
     }));
   };
 
-  const toggleSubscription = async (userId: string, currentTier: 'normal' | 'pro') => {
+  const updateSubscription = async (userId: string, newTier: 'free' | 'starter' | 'professional' | 'business' | 'enterprise') => {
     setUpdatingUsers(prev => ({ ...prev, [userId]: true }));
 
     try {
-      const newTier = currentTier === 'pro' ? 'normal' : 'pro';
       const response = await fetch(`/api/admin/users/${userId}/subscription`, {
         method: 'PUT',
         headers: {
@@ -200,13 +199,22 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
                         {user.stats.totalMessages} messages
                       </Badge>
 
-                      <Badge variant={user.subscriptionTier === 'pro' ? "default" : "secondary"}>
-                        {user.subscriptionTier === 'pro' ? (
+                      <Badge variant={
+                        user.subscriptionTier === 'enterprise' ? "default" :
+                        user.subscriptionTier === 'business' ? "outline" :
+                        user.subscriptionTier === 'professional' ? "secondary" :
+                        user.subscriptionTier === 'starter' ? "outline" : "secondary"
+                      }>
+                        {user.subscriptionTier === 'enterprise' ? (
                           <Crown className="h-3 w-3 mr-1" />
+                        ) : user.subscriptionTier === 'business' ? (
+                          <Crown className="h-3 w-3 mr-1" />
+                        ) : user.subscriptionTier === 'professional' ? (
+                          <CreditCard className="h-3 w-3 mr-1" />
                         ) : (
                           <CreditCard className="h-3 w-3 mr-1" />
                         )}
-                        {user.subscriptionTier === 'pro' ? 'Pro' : 'Free'}
+                        {user.subscriptionTier.charAt(0).toUpperCase() + user.subscriptionTier.slice(1)}
                       </Badge>
                     </div>
                   </div>
@@ -293,36 +301,59 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
                         <div className="space-y-3">
                           <div className="flex items-center justify-between">
                             <span className="text-sm text-muted-foreground">Current Plan:</span>
-                            <Badge variant={user.subscriptionTier === 'pro' ? "default" : "secondary"}>
-                              {user.subscriptionTier === 'pro' ? (
+                            <Badge variant={
+                              user.subscriptionTier === 'enterprise' ? "default" :
+                              user.subscriptionTier === 'business' ? "outline" :
+                              user.subscriptionTier === 'professional' ? "secondary" :
+                              user.subscriptionTier === 'starter' ? "outline" : "secondary"
+                            }>
+                              {user.subscriptionTier === 'enterprise' ? (
                                 <Crown className="h-3 w-3 mr-1" />
+                              ) : user.subscriptionTier === 'business' ? (
+                                <Crown className="h-3 w-3 mr-1" />
+                              ) : user.subscriptionTier === 'professional' ? (
+                                <CreditCard className="h-3 w-3 mr-1" />
                               ) : (
                                 <CreditCard className="h-3 w-3 mr-1" />
                               )}
-                              {user.subscriptionTier === 'pro' ? 'Pro Plan' : 'Free Plan'}
+                              {user.subscriptionTier.charAt(0).toUpperCase() + user.subscriptionTier.slice(1)} Plan
                             </Badge>
                           </div>
-                          <Button
-                            size="sm"
-                            variant={user.subscriptionTier === 'pro' ? "destructive" : "default"}
-                            onClick={() => toggleSubscription(user.id, user.subscriptionTier)}
-                            disabled={updatingUsers[user.id]}
-                            className="w-full"
-                          >
-                            {updatingUsers[user.id] ? (
-                              <div className="flex items-center space-x-2">
-                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                                <span>Updating...</span>
+                          <div className="space-y-2">
+                            <Select
+                              value={user.subscriptionTier}
+                              onValueChange={(value: 'starter' | 'professional' | 'business' | 'enterprise') =>
+                                updateSubscription(user.id, value)
+                              }
+                              disabled={updatingUsers[user.id]}
+                            >
+                              <SelectTrigger className="w-full">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="free">Free - $0 (15 messages/day)</SelectItem>
+                                <SelectItem value="starter">Starter - $29/mo (50 messages/day)</SelectItem>
+                                <SelectItem value="professional">Professional - $79/mo (200 messages/day)</SelectItem>
+                                <SelectItem value="business">Business - $199/mo (500 messages/day)</SelectItem>
+                                <SelectItem value="enterprise">Enterprise - Custom (Unlimited)</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            {(updatingUsers[user.id] || recentlyUpdated[user.id]) && (
+                              <div className="flex items-center justify-center space-x-2 text-sm">
+                                {updatingUsers[user.id] ? (
+                                  <>
+                                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary"></div>
+                                    <span>Updating subscription...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <CheckCircle className="h-4 w-4 text-green-600" />
+                                    <span className="text-green-600">Updated successfully!</span>
+                                  </>
+                                )}
                               </div>
-                            ) : recentlyUpdated[user.id] ? (
-                              <div className="flex items-center space-x-2 text-green-600">
-                                <CheckCircle className="h-4 w-4" />
-                                <span>Updated!</span>
-                              </div>
-                            ) : (
-                              user.subscriptionTier === 'pro' ? 'Downgrade to Free' : 'Upgrade to Pro'
                             )}
-                          </Button>
+                          </div>
                         </div>
                       </div>
 

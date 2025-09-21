@@ -240,19 +240,7 @@ export async function POST(request: Request) {
     const currentProvider = selectedProvider || user?.currentAiProvider || 'pagespace';
     const currentModel = selectedModel || user?.currentAiModel || 'gemini-2.5-flash';
 
-    // Pro subscription check for special providers
-    const { requiresProSubscription, createSubscriptionRequiredResponse } = await import('@/lib/subscription/rate-limit-middleware');
-
-    // Check if provider requires Pro subscription
-    if (requiresProSubscription(currentProvider, currentModel) && user?.subscriptionTier !== 'pro') {
-      loggers.ai.warn('AI Chat API: Pro subscription required', {
-        userId,
-        provider: currentProvider,
-        model: currentModel,
-        subscriptionTier: user?.subscriptionTier
-      });
-      return createSubscriptionRequiredResponse();
-    }
+    // Note: All models are now available to all subscription tiers
 
     // Usage tracking will be handled in onFinish callback for PageSpace providers only
     loggers.ai.debug('AI Chat API: Will track usage in onFinish for PageSpace providers', {
@@ -773,22 +761,21 @@ MENTION PROCESSING:
               // Track usage for PageSpace providers only (rate limiting/quota tracking)
               const isPageSpaceProvider = currentProvider === 'pagespace';
 
-              // Determine if this is thinking model based on model name
-              const isThinkingModel = currentModel === 'gemini-2.5-pro';
-
               loggers.ai.info('AI Chat API: USAGE TRACKING DECISION', {
                 userId,
                 currentProvider,
                 currentModel,
                 isPageSpaceProvider,
-                isThinkingModel,
                 messageId,
                 timestamp: new Date().toISOString()
               });
 
               if (isPageSpaceProvider) {
                 try {
-                  const providerType = isThinkingModel ? 'extra_thinking' : 'normal';
+                  // Determine provider type based on the model
+                  const providerType = (currentProvider === 'pagespace' && currentModel === 'gemini-2.5-pro')
+                    ? 'extra_thinking'
+                    : 'normal';
 
                   loggers.ai.info('AI Chat API: CALLING incrementUsage', {
                     userId,
@@ -827,7 +814,7 @@ MENTION PROCESSING:
                     await broadcastUsageEvent({
                       userId: userId!,
                       operation: 'updated',
-                      subscriptionTier: currentUsageSummary.subscriptionTier as 'normal' | 'pro',
+                      subscriptionTier: currentUsageSummary.subscriptionTier as 'free' | 'starter' | 'professional' | 'business' | 'enterprise',
                       normal: currentUsageSummary.normal,
                       extraThinking: currentUsageSummary.extraThinking
                     });

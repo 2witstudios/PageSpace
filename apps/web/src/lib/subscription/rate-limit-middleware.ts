@@ -13,12 +13,13 @@ export interface RateLimitResult {
  */
 export async function checkAIRateLimit(
   userId: string,
-  provider: string,
-  model?: string
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _provider: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _model?: string
 ): Promise<RateLimitResult> {
-  // Determine provider type based on model name for PageSpace provider
-  const isThinkingModel = provider === 'pagespace' && model === 'gemini-2.5-pro';
-  const providerType: ProviderType = isThinkingModel ? 'extra_thinking' : 'normal';
+  // All usage is now tracked as 'normal' type
+  const providerType: ProviderType = 'normal';
 
   try {
     const result = await incrementUsage(userId, providerType);
@@ -61,9 +62,7 @@ export function createRateLimitResponse(
 ): NextResponse {
   const resetTimeString = resetTime || getTomorrowMidnight();
 
-  const errorMessage = providerType === 'extra_thinking'
-    ? `Extra Thinking calls limited to ${limit} per day for Pro subscribers. Upgrade to Pro for access.`
-    : `AI calls limited to ${limit} per day. Upgrade to Pro for unlimited calls.`;
+  const errorMessage = `AI operations limited to ${limit} per day. Upgrade your plan for more operations.`;
 
   return NextResponse.json(
     {
@@ -96,21 +95,26 @@ function getTomorrowMidnight(): Date {
 }
 
 /**
- * Check if provider requires Pro subscription
+ * Check if provider requires paid subscription (deprecated - all models available to all tiers)
  */
-export function requiresProSubscription(provider: string, model?: string): boolean {
-  // Check if this is the thinking model for PageSpace provider
-  return provider === 'pagespace' && model === 'gemini-2.5-pro';
+export function requiresProSubscription(
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _provider: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _model?: string
+): boolean {
+  // All models are now available to all subscription tiers
+  return false;
 }
 
 /**
- * Create subscription required error response
+ * Create subscription required error response (deprecated)
  */
 export function createSubscriptionRequiredResponse(): NextResponse {
   return NextResponse.json(
     {
       error: 'Subscription required',
-      message: 'Extra Thinking provider requires a Pro subscription.',
+      message: 'This feature requires a paid subscription.',
       upgradeUrl: '/settings/billing',
     },
     { status: 403 }

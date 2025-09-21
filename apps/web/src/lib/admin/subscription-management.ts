@@ -17,7 +17,7 @@ export interface SubscriptionUpdateResult {
  */
 export async function updateUserSubscriptionTier(
   userId: string,
-  newTier: 'normal' | 'pro',
+  newTier: 'free' | 'starter' | 'professional' | 'business' | 'enterprise',
   adminUserId?: string
 ): Promise<SubscriptionUpdateResult> {
   try {
@@ -26,8 +26,8 @@ export async function updateUserSubscriptionTier(
       return { success: false, error: 'User ID is required' };
     }
 
-    if (!['normal', 'pro'].includes(newTier)) {
-      return { success: false, error: 'Invalid subscription tier. Must be "normal" or "pro"' };
+    if (!['free', 'starter', 'professional', 'business', 'enterprise'].includes(newTier)) {
+      return { success: false, error: 'Invalid subscription tier. Must be "free", "starter", "professional", "business", or "enterprise"' };
     }
 
     // Check if user exists

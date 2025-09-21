@@ -2,11 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
 import {
   checkStorageQuota,
-  getUserStorageQuota,
-  STORAGE_TIERS
+  getUserStorageQuota
 } from '@pagespace/lib/services/storage-limits';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkMemoryMiddleware } from '@pagespace/lib/services/memory-monitor';
+import { getStorageConfigFromSubscription, type SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { db, users, eq } from '@pagespace/db';
 
 export async function POST(request: NextRequest) {
   try {
@@ -61,12 +62,28 @@ export async function POST(request: NextRequest) {
       }, { status: 429 }); // Too Many Requests
     }
 
+    // Get user's subscription tier for storage config
+    const userWithSubscription = await db.query.users.findFirst({
+      where: eq(users.id, user.id),
+      columns: { subscriptionTier: true }
+    });
+
+    const subscriptionTier = (userWithSubscription?.subscriptionTier || 'free') as SubscriptionTier;
+    const tierConfig = getStorageConfigFromSubscription(subscriptionTier);
+
     // All checks passed
     return NextResponse.json({
       allowed: true,
       quota: quotaCheck.quota,
       tier: quota.tier,
-      tierLimits: STORAGE_TIERS[quota.tier]
+      tierLimits: {
+        name: tierConfig.tier,
+        quotaBytes: tierConfig.quotaBytes,
+        maxFileSize: tierConfig.maxFileSize,
+        maxConcurrentUploads: tierConfig.maxConcurrentUploads,
+        maxFileCount: tierConfig.maxFileCount,
+        features: tierConfig.features
+      }
     });
 
   } catch (error) {
@@ -93,15 +110,31 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Could not retrieve storage quota' }, { status: 500 });
     }
 
+    // Get user's subscription tier for storage config
+    const userWithSubscription = await db.query.users.findFirst({
+      where: eq(users.id, user.id),
+      columns: { subscriptionTier: true }
+    });
+
+    const subscriptionTier = (userWithSubscription?.subscriptionTier || 'free') as SubscriptionTier;
+    const tierConfig = getStorageConfigFromSubscription(subscriptionTier);
+
     // Get semaphore status
     const semaphoreStatus = uploadSemaphore.getStatus();
     const userActiveUploads = semaphoreStatus.userUploads.get(user.id) || 0;
 
     return NextResponse.json({
       quota,
-      tierLimits: STORAGE_TIERS[quota.tier],
+      tierLimits: {
+        name: tierConfig.tier,
+        quotaBytes: tierConfig.quotaBytes,
+        maxFileSize: tierConfig.maxFileSize,
+        maxConcurrentUploads: tierConfig.maxConcurrentUploads,
+        maxFileCount: tierConfig.maxFileCount,
+        features: tierConfig.features
+      },
       activeUploads: userActiveUploads,
-      canUpload: userActiveUploads < STORAGE_TIERS[quota.tier].maxConcurrentUploads
+      canUpload: userActiveUploads < tierConfig.maxConcurrentUploads
     });
 
   } catch (error) {

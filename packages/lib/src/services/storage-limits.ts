@@ -1,5 +1,5 @@
 import { db, users, pages, drives, storageEvents, eq, sql, and, isNull, inArray } from '@pagespace/db';
-import { getStorageConfigFromSubscription, getStorageTierFromSubscription, type SubscriptionTier } from './subscription-utils';
+import { getStorageConfigFromSubscription, getStorageTierFromSubscription, type SubscriptionTier, type StorageTier } from './subscription-utils';
 
 export interface StorageQuota {
   userId: string;
@@ -7,14 +7,14 @@ export interface StorageQuota {
   usedBytes: number;
   availableBytes: number;
   utilizationPercent: number;
-  tier: 'free' | 'pro' | 'enterprise';
+  tier: StorageTier;
   warningLevel: 'none' | 'warning' | 'critical';
 }
 
 // Map subscription tiers to storage tiers (deprecated - use subscription-utils instead)
-export function mapSubscriptionToStorageTier(subscriptionTier: 'normal' | 'pro'): 'free' | 'pro' {
+export function mapSubscriptionToStorageTier(subscriptionTier: SubscriptionTier): StorageTier {
   const tier = getStorageTierFromSubscription(subscriptionTier);
-  return tier === 'enterprise' ? 'pro' : tier; // Fallback for enterprise
+  return tier;
 }
 
 export interface StorageCheckResult {
@@ -68,7 +68,7 @@ export async function getUserStorageQuota(userId: string): Promise<StorageQuota 
   if (!user) return null;
 
   // Compute storage config from subscription tier
-  const subscriptionTier = (user.subscriptionTier || 'normal') as SubscriptionTier;
+  const subscriptionTier = (user.subscriptionTier || 'free') as SubscriptionTier;
   const storageConfig = getStorageConfigFromSubscription(subscriptionTier);
 
   const quotaBytes = storageConfig.quotaBytes;
@@ -105,8 +105,23 @@ export async function checkStorageQuota(
     };
   }
 
+  // Get user's subscription tier for storage config
+  const user = await db.query.users.findFirst({
+    where: eq(users.id, userId),
+    columns: { subscriptionTier: true }
+  });
+
+  if (!user) {
+    return {
+      allowed: false,
+      reason: 'User not found'
+    };
+  }
+
+  const subscriptionTier = (user.subscriptionTier || 'free') as SubscriptionTier;
+  const tierConfig = getStorageConfigFromSubscription(subscriptionTier);
+
   // Check tier file size limit
-  const tierConfig = STORAGE_TIERS[quota.tier];
   if (fileSize > tierConfig.maxFileSize) {
     return {
       allowed: false,
@@ -156,7 +171,7 @@ export async function checkConcurrentUploads(userId: string): Promise<boolean> {
 
   if (!user) return false;
 
-  const subscriptionTier = (user.subscriptionTier || 'normal') as SubscriptionTier;
+  const subscriptionTier = (user.subscriptionTier || 'free') as SubscriptionTier;
   const storageConfig = getStorageConfigFromSubscription(subscriptionTier);
 
   return (user.activeUploads || 0) < storageConfig.maxConcurrentUploads;

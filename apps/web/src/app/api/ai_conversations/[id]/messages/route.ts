@@ -596,9 +596,10 @@ MENTION PROCESSING:
 
             if (isPageSpaceProvider) {
               try {
-                // Determine if this is thinking model based on model name
-                const isThinkingModel = currentModel === 'gemini-2.5-pro';
-                const providerType = isThinkingModel ? 'extra_thinking' : 'normal';
+                // Determine provider type based on the model
+                const providerType = (currentProvider === 'pagespace' && currentModel === 'gemini-2.5-pro')
+                  ? 'extra_thinking'
+                  : 'normal';
 
                 loggers.api.info('Global Assistant API: CALLING incrementUsage', {
                   userId,
@@ -640,7 +641,7 @@ MENTION PROCESSING:
                   await broadcastUsageEvent({
                     userId,
                     operation: 'updated',
-                    subscriptionTier: currentUsageSummary.subscriptionTier as 'normal' | 'pro',
+                    subscriptionTier: currentUsageSummary.subscriptionTier as 'free' | 'starter' | 'professional' | 'business' | 'enterprise',
                     normal: currentUsageSummary.normal,
                     extraThinking: currentUsageSummary.extraThinking
                   });

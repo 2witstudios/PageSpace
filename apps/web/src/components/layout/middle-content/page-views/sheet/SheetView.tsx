@@ -9,15 +9,18 @@ import { PageEventPayload } from '@/lib/socket-utils';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/use-auth';
 import SheetErrorBoundary from './SheetErrorBoundary';
-import NativeSheetView from './NativeSheetView';
-import FormulaBar from './FormulaBar';
+import SimpleGridView from './SimpleGridView';
+import RevoFormulaBar from './RevoFormulaBar';
+import { SheetDataAdapterProvider } from './SheetDataAdapter';
+import { SheetData as NewSheetData, LegacySheetData as LegacySheetDataType, migrateLegacySheetData, createDefaultSheetData } from '@/lib/sheet-utils';
 import { FormulaEngine } from '@pagespace/lib/formula-engine';
 
 interface SheetViewProps {
   page: TreePage;
 }
 
-export interface SheetData {
+// Legacy interface for backward compatibility
+export interface LegacySheetData {
   type: 'sheet';
   data: string[][];
   metadata: {
@@ -26,15 +29,15 @@ export interface SheetData {
     headers: boolean;
     frozenRows: number;
   };
-  formulas?: { [cellRef: string]: string }; // e.g., "A1": "=SUM(B1:B5)"
-  computedValues?: { [cellRef: string]: string | number }; // cached calculated values
+  formulas?: { [cellRef: string]: string };
+  computedValues?: { [cellRef: string]: string | number };
   version: number;
 }
 
 
 const SheetView = ({ page }: SheetViewProps) => {
   const [isReadOnly, setIsReadOnly] = useState(false);
-  const [selectedCell, setSelectedCell] = useState<{ row: number; col: number } | null>(null);
+  const [selectedCell, setSelectedCell] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const socket = useSocket();
   const { user } = useAuth();
@@ -60,60 +63,45 @@ const SheetView = ({ page }: SheetViewProps) => {
     forceSave,
   } = useDocument(page.id, page.content);
 
-  // Parse sheet data from document content
-  const sheetData = useMemo<SheetData>(() => {
+  // Parse and migrate sheet data from document content
+  const sheetData = useMemo<NewSheetData>(() => {
     try {
       if (typeof documentState?.content === 'string') {
         const parsed = JSON.parse(documentState.content);
+
         // Convert legacy spreadsheet type to sheet
         if (parsed.type === 'spreadsheet') {
           parsed.type = 'sheet';
         }
-        // Ensure formulas and computedValues are initialized
-        if (!parsed.formulas) parsed.formulas = {};
-        if (!parsed.computedValues) parsed.computedValues = {};
-        return parsed;
+
+        // Check if this is legacy format (has data array)
+        if (parsed.data && Array.isArray(parsed.data)) {
+          console.log('🔄 Migrating legacy sheet data to new format');
+          return migrateLegacySheetData(parsed as LegacySheetDataType);
+        }
+
+        // New format - ensure required fields
+        if (!parsed.cells) parsed.cells = {};
+        if (!parsed.metadata) {
+          parsed.metadata = {
+            rows: 100,
+            cols: 26,
+            headers: false,
+            frozenRows: 0,
+            lastModified: Date.now()
+          };
+        }
+        if (!parsed.metadata.lastModified) {
+          parsed.metadata.lastModified = Date.now();
+        }
+
+        return parsed as NewSheetData;
       }
-      return documentState?.content || {
-        type: 'sheet',
-        data: [
-          ['', '', '', '', '', '', '', '', '', ''],
-          ['', '', '', '', '', '', '', '', '', ''],
-          ['', '', '', '', '', '', '', '', '', ''],
-          ['', '', '', '', '', '', '', '', '', ''],
-          ['', '', '', '', '', '', '', '', '', '']
-        ],
-        metadata: {
-          rows: 5,
-          cols: 10,
-          headers: false,
-          frozenRows: 0
-        },
-        formulas: {},
-        computedValues: {},
-        version: 1
-      };
+
+      return documentState?.content || createDefaultSheetData();
     } catch (error) {
       console.error('Failed to parse sheet data:', error);
-      return {
-        type: 'sheet',
-        data: [
-          ['', '', '', '', '', '', '', '', '', ''],
-          ['', '', '', '', '', '', '', '', '', ''],
-          ['', '', '', '', '', '', '', '', '', ''],
-          ['', '', '', '', '', '', '', '', '', ''],
-          ['', '', '', '', '', '', '', '', '', '']
-        ],
-        metadata: {
-          rows: 5,
-          cols: 10,
-          headers: false,
-          frozenRows: 0
-        },
-        formulas: {},
-        computedValues: {},
-        version: 1
-      };
+      return createDefaultSheetData();
     }
   }, [documentState?.content]);
 
@@ -127,30 +115,23 @@ const SheetView = ({ page }: SheetViewProps) => {
       // Clear the engine first
       formulaEngineRef.current.clear();
 
-      // Load regular cell data first (non-formula cells)
-      const nonFormulaData = sheetData.data.map((row, rowIndex) =>
-        row.map((cell, colIndex) => {
-          const cellRef = `${String.fromCharCode(65 + colIndex)}${rowIndex + 1}`;
-          // If this cell has a formula, load empty for now
-          return sheetData.formulas?.[cellRef] ? '' : cell;
-        })
-      );
-
-      formulaEngineRef.current.loadData(nonFormulaData);
-      console.log('✓ Loaded non-formula cell data');
-
-      // Then set formulas if they exist
-      if (sheetData.formulas) {
-        console.log(`📊 Setting ${Object.keys(sheetData.formulas).length} formulas...`);
-        Object.entries(sheetData.formulas).forEach(([cellRef, formula]) => {
-          try {
-            const result = formulaEngineRef.current?.setCellContent(cellRef, formula);
-            console.log(`✓ Formula ${cellRef}: ${formula} = ${result?.value}`);
-          } catch (error) {
-            console.error(`❌ Error setting formula for ${cellRef} (${formula}):`, error);
+      // Load cells from new format
+      Object.entries(sheetData.cells).forEach(([cellRef, cell]) => {
+        try {
+          if (cell.formula) {
+            // Set formula
+            const result = formulaEngineRef.current?.setCellContent(cellRef, cell.formula);
+            console.log(`✓ Formula ${cellRef}: ${cell.formula} = ${result?.value}`);
+          } else {
+            // Set value
+            const cellValue = typeof cell.value === 'boolean' ? (cell.value ? 'TRUE' : 'FALSE') : (cell.value || '');
+            formulaEngineRef.current?.setCellContent(cellRef, cellValue);
+            console.log(`✓ Value ${cellRef}: ${cell.value}`);
           }
-        });
-      }
+        } catch (error) {
+          console.error(`❌ Error setting cell ${cellRef}:`, error);
+        }
+      });
 
       console.log('✅ Formula engine initialization complete');
     } catch (error) {
@@ -223,132 +204,15 @@ const SheetView = ({ page }: SheetViewProps) => {
     };
   }, [socket, page.id, documentState, updateContentFromServer]);
 
-  // Handle cell value changes
-  const handleCellChange = useCallback((row: number, col: number, value: string) => {
+  // Handle data changes from the sheet adapter
+  const handleDataChange = useCallback((newData: NewSheetData) => {
     if (isReadOnly) {
       toast.error('You do not have permission to edit this sheet');
       return;
     }
 
-    const cellRef = `${String.fromCharCode(65 + col)}${row + 1}`; // Convert to A1 notation
-    const isFormula = value.startsWith('=');
-
-    console.log(`📝 Cell change: ${cellRef} = "${value}" (isFormula: ${isFormula})`);
-
-    // Update the data array
-    const newData = [...sheetData.data];
-
-    // Ensure row exists
-    while (newData.length <= row) {
-      newData.push(new Array(sheetData.metadata.cols).fill(''));
-    }
-
-    // Ensure column exists
-    while (newData[row].length <= col) {
-      newData[row].push('');
-    }
-
-    // Initialize formulas and computedValues if not present
-    const newFormulas = { ...(sheetData.formulas || {}) };
-    const newComputedValues = { ...(sheetData.computedValues || {}) };
-
-    let displayValue = value;
-
-    if (isFormula && formulaEngineRef.current) {
-      // It's a formula - store the formula and calculate the result
-      newFormulas[cellRef] = value;
-
-      try {
-        // Set the formula in the engine
-        const result = formulaEngineRef.current.setCellContent(cellRef, value);
-        console.log(`🧮 Formula result for ${cellRef}:`, result);
-
-        if (result.error) {
-          displayValue = `#ERROR: ${result.error}`;
-          newComputedValues[cellRef] = displayValue;
-          console.log(`❌ Formula error in ${cellRef}: ${result.error}`);
-        } else {
-          // Use the calculated value from the formula engine
-          displayValue = String(result.value ?? '');
-          newComputedValues[cellRef] = result.value ?? '';
-          console.log(`✅ Formula ${cellRef} calculated: ${displayValue}`);
-        }
-      } catch (error) {
-        displayValue = '#ERROR!';
-        newComputedValues[cellRef] = displayValue;
-        console.error(`❌ Formula calculation error for ${cellRef}:`, error);
-      }
-    } else {
-      // Regular value - remove any existing formula
-      delete newFormulas[cellRef];
-      delete newComputedValues[cellRef];
-
-      // Also update the formula engine with the raw value
-      if (formulaEngineRef.current) {
-        try {
-          const result = formulaEngineRef.current.setCellContent(cellRef, value);
-          console.log(`📊 Raw value set for ${cellRef}:`, result);
-        } catch (error) {
-          console.error(`❌ Error setting raw value for ${cellRef}:`, error);
-        }
-      }
-    }
-
-    // Update the cell with the display value
-    newData[row][col] = displayValue;
-
-    // Also get updated computed values from any dependent cells that might have changed
-    if (formulaEngineRef.current) {
-      try {
-        // Get all dependents of this cell
-        const dependents = formulaEngineRef.current.getDependents(cellRef);
-        console.log(`🔗 Updating ${dependents.length} dependent cells: ${dependents.join(', ')}`);
-
-        dependents.forEach(dependentRef => {
-          const dependentResult = formulaEngineRef.current!.getCellValue(dependentRef);
-          const dependentFormula = formulaEngineRef.current!.getCellFormula(dependentRef);
-
-          if (dependentFormula) {
-            // This is a formula cell that needs updating
-            const dependentCoords = formulaEngineRef.current!.parseA1Notation(dependentRef);
-            const dependentDisplayValue = String(dependentResult.value ?? '');
-
-            // Ensure the dependent cell's row/col exists in newData
-            while (newData.length <= dependentCoords.row) {
-              newData.push(new Array(sheetData.metadata.cols).fill(''));
-            }
-            while (newData[dependentCoords.row].length <= dependentCoords.col) {
-              newData[dependentCoords.row].push('');
-            }
-
-            // Update the display value for the dependent cell
-            newData[dependentCoords.row][dependentCoords.col] = dependentDisplayValue;
-            newComputedValues[dependentRef] = dependentResult.value ?? '';
-
-            console.log(`🔄 Updated dependent ${dependentRef}: ${dependentDisplayValue}`);
-          }
-        });
-      } catch (error) {
-        console.error('❌ Error updating dependent cells:', error);
-      }
-    }
-
-    // Create updated sheet data
-    const updatedSheetData: SheetData = {
-      ...sheetData,
-      data: newData,
-      formulas: newFormulas,
-      computedValues: newComputedValues,
-      metadata: {
-        ...sheetData.metadata,
-        rows: Math.max(sheetData.metadata.rows, newData.length),
-        cols: Math.max(sheetData.metadata.cols, Math.max(...newData.map(row => row.length)))
-      }
-    };
-
-    const newContent = JSON.stringify(updatedSheetData);
-
-    console.log(`💾 Saving updated sheet data for ${cellRef}`);
+    const newContent = JSON.stringify(newData);
+    console.log('💾 Saving updated sheet data');
 
     // Update document state immediately (optimistic update)
     updateContent(newContent);
@@ -356,43 +220,123 @@ const SheetView = ({ page }: SheetViewProps) => {
     // Trigger debounced save
     saveWithDebounce(newContent);
 
-    // Broadcast cell update via socket
+    // Broadcast update via socket
     if (socket) {
       socket.emit('page-operation', {
         pageId: page.id,
         operation: 'content-updated',
         data: {
-          cellRange: cellRef,
-          value: value,
-          isFormula: isFormula,
-          displayValue: displayValue
+          timestamp: Date.now()
         }
       });
     }
-  }, [sheetData, updateContent, saveWithDebounce, isReadOnly, socket, page.id]);
+  }, [updateContent, saveWithDebounce, isReadOnly, socket, page.id]);
+
+  // Handle cell value changes from RevoGrid
+  const handleCellChange = useCallback((cellRef: string, value: string | number, isFormula?: boolean) => {
+    if (isReadOnly) {
+      toast.error('You do not have permission to edit this sheet');
+      return;
+    }
+
+    console.log(`📝 Cell change: ${cellRef} = "${value}" (isFormula: ${isFormula || false})`);
+
+    const newCells = { ...sheetData.cells };
+    let displayValue = value;
+
+    if (isFormula && formulaEngineRef.current) {
+      // Set formula in engine and get result
+      try {
+        const result = formulaEngineRef.current.setCellContent(cellRef, value);
+        console.log(`🧮 Formula result for ${cellRef}:`, result);
+
+        if (result.error) {
+          displayValue = `#ERROR: ${result.error}`;
+        } else {
+          displayValue = result.value ?? '';
+        }
+
+        newCells[cellRef] = {
+          value: displayValue,
+          formula: String(value),
+          type: 'formula'
+        };
+      } catch (error) {
+        displayValue = '#ERROR!';
+        newCells[cellRef] = {
+          value: displayValue,
+          formula: String(value),
+          type: 'formula'
+        };
+        console.error(`❌ Formula calculation error for ${cellRef}:`, error);
+      }
+
+      // Update dependent cells
+      if (formulaEngineRef.current) {
+        try {
+          const dependents = formulaEngineRef.current.getDependents(cellRef);
+          console.log(`🔗 Updating ${dependents.length} dependent cells`);
+
+          dependents.forEach(dependentRef => {
+            const dependentResult = formulaEngineRef.current!.getCellValue(dependentRef);
+            if (newCells[dependentRef]) {
+              newCells[dependentRef] = {
+                ...newCells[dependentRef],
+                value: dependentResult.value ?? ''
+              };
+            }
+          });
+        } catch (error) {
+          console.error('❌ Error updating dependent cells:', error);
+        }
+      }
+    } else {
+      // Regular value
+      if (value === '' || value === null || value === undefined) {
+        delete newCells[cellRef];
+      } else {
+        newCells[cellRef] = {
+          value,
+          type: typeof value === 'number' ? 'number' : 'string'
+        };
+      }
+
+      // Update formula engine
+      if (formulaEngineRef.current) {
+        try {
+          formulaEngineRef.current.setCellContent(cellRef, value);
+        } catch (error) {
+          console.error(`❌ Error setting value for ${cellRef}:`, error);
+        }
+      }
+    }
+
+    // Create updated sheet data
+    const updatedSheetData: NewSheetData = {
+      ...sheetData,
+      cells: newCells,
+      metadata: {
+        ...sheetData.metadata,
+        lastModified: Date.now()
+      }
+    };
+
+    handleDataChange(updatedSheetData);
+  }, [sheetData, handleDataChange, isReadOnly, formulaEngineRef]);
 
   // Handle cell selection
-  const handleCellSelect = useCallback((row: number, col: number) => {
-    setSelectedCell({ row, col });
+  const handleCellSelect = useCallback((cellRef: string) => {
+    setSelectedCell(cellRef);
   }, []);
 
   // Handle formula bar changes
   const handleFormulaChange = useCallback((value: string) => {
     if (selectedCell) {
-      handleCellChange(selectedCell.row, selectedCell.col, value);
+      const isFormula = value.startsWith('=');
+      handleCellChange(selectedCell, value, isFormula);
     }
   }, [selectedCell, handleCellChange]);
 
-  // Get current cell value and formula for formula bar
-  const selectedCellData = useMemo(() => {
-    if (!selectedCell) return { value: '', formula: undefined };
-
-    const cellRef = `${String.fromCharCode(65 + selectedCell.col)}${selectedCell.row + 1}`;
-    const formula = sheetData.formulas?.[cellRef];
-    const value = sheetData.data[selectedCell.row]?.[selectedCell.col] || '';
-
-    return { value, formula };
-  }, [selectedCell, sheetData]);
 
   // Cleanup on unmount - auto-save any unsaved changes and destroy formula engine
   useEffect(() => {
@@ -469,35 +413,44 @@ const SheetView = ({ page }: SheetViewProps) => {
         ref={containerRef}
         className="h-full flex flex-col relative"
       >
-      {/* Read-only indicator */}
-      {isReadOnly && (
-        <div className="bg-yellow-50 dark:bg-yellow-900/20 border-b border-yellow-200 dark:border-yellow-800 px-4 py-2">
-          <p className="text-sm text-yellow-800 dark:text-yellow-200 text-center">
-            You don&apos;t have permission to edit this sheet
-          </p>
-        </div>
-      )}
+        {/* Read-only indicator */}
+        {isReadOnly && (
+          <div className="bg-yellow-50 dark:bg-yellow-900/20 border-b border-yellow-200 dark:border-yellow-800 px-4 py-2">
+            <p className="text-sm text-yellow-800 dark:text-yellow-200 text-center">
+              You don&apos;t have permission to edit this sheet
+            </p>
+          </div>
+        )}
 
-      {/* Formula bar */}
-      <FormulaBar
-        selectedCell={selectedCell}
-        cellValue={selectedCellData.value}
-        formula={selectedCellData.formula}
-        onFormulaChange={handleFormulaChange}
-        isReadOnly={isReadOnly}
-      />
-
-      {/* Sheet content */}
-      <div className={`flex-1 overflow-hidden ${isReadOnly ? 'bg-gray-50/50 dark:bg-gray-900/20' : ''}`}>
-        <NativeSheetView
+        {/* Sheet with data adapter */}
+        <SheetDataAdapterProvider
           sheetData={sheetData}
-          onCellChange={handleCellChange}
-          onCellSelect={handleCellSelect}
-          selectedCell={selectedCell}
-          isReadOnly={isReadOnly}
-        />
-      </div>
+          onDataChange={handleDataChange}
+        >
+          {(adapter) => (
+            <div className="flex-1 flex flex-col overflow-hidden">
+              {/* Formula bar */}
+              <RevoFormulaBar
+                selectedCell={selectedCell}
+                adapter={adapter}
+                onFormulaChange={handleFormulaChange}
+                isReadOnly={isReadOnly}
+              />
 
+              {/* Sheet content */}
+              <div className={`flex-1 overflow-hidden ${isReadOnly ? 'bg-gray-50/50 dark:bg-gray-900/20' : ''}`}>
+                <SimpleGridView
+                  sheetData={sheetData}
+                  onCellChange={handleCellChange}
+                  onCellSelect={handleCellSelect}
+                  selectedCell={selectedCell}
+                  isReadOnly={isReadOnly}
+                  className="h-full"
+                />
+              </div>
+            </div>
+          )}
+        </SheetDataAdapterProvider>
       </motion.div>
     </SheetErrorBoundary>
   );

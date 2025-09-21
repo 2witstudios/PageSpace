@@ -2,6 +2,8 @@ import { FormulaParser } from './formula/FormulaParser';
 import { DependencyTracker } from './formula/DependencyTracker';
 import { CellReferenceResolver, CellValue, SheetDataProvider } from './formula/CellReferenceResolver';
 import { ExpressionEvaluator } from './formula/ExpressionEvaluator';
+// import { Parser } from 'fast-formula-parser';
+import * as FormulaJS from '@formulajs/formulajs';
 
 export interface CellReference {
   row: number;
@@ -49,11 +51,15 @@ export class FormulaEngine {
   private dataProvider: SheetDataProviderImpl;
   private resolver: CellReferenceResolver;
   private evaluator: ExpressionEvaluator;
+  // private fastParser: Parser;
 
   constructor() {
     this.dataProvider = new SheetDataProviderImpl(this);
     this.resolver = new CellReferenceResolver(this.dataProvider);
     this.evaluator = new ExpressionEvaluator(this.resolver);
+
+    // Fast Formula Parser initialization disabled for now
+    // this.fastParser = new Parser({...});
   }
 
   /**
@@ -112,7 +118,7 @@ export class FormulaEngine {
       // Store formula
       this.cellFormulas.set(cellRef, formula);
 
-      // Calculate value
+      // Calculate value using original evaluator
       const result = this.evaluator.evaluate(formula);
 
       if (result.error) {
@@ -343,8 +349,11 @@ export class FormulaEngine {
    * Get available function names
    */
   getAvailableFunctions(): string[] {
-    return this.evaluator.getAvailableFunctions();
+    const customFunctions = this.evaluator.getAvailableFunctions();
+    const formulaJSFunctions = Object.keys(FormulaJS);
+    return [...new Set([...customFunctions, ...formulaJSFunctions])];
   }
+
 
   /**
    * Destroy the engine instance

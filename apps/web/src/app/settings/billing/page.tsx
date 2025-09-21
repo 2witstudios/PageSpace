@@ -7,11 +7,15 @@ import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { SubscriptionCard } from '@/components/billing/SubscriptionCard';
 import { CheckCircle, XCircle, AlertCircle, ArrowLeft } from 'lucide-react';
-// Stripe Payment Link for Pro subscription upgrades
-const STRIPE_PAYMENT_LINK = 'https://buy.stripe.com/eVq8wRc8vgnvaeGaoKeEo00';
+// Stripe Payment Links for subscription upgrades
+const STRIPE_PAYMENT_LINKS = {
+  starter: 'https://buy.stripe.com/8x2fZjdczc7ffz0eF0eEo01',
+  professional: 'https://buy.stripe.com/00w8wRfkH2wF0E640meEo02',
+  business: 'https://buy.stripe.com/dRm9AV1tRfjrcmOdAWeEo03'
+};
 
 interface SubscriptionData {
-  subscriptionTier: 'normal' | 'pro';
+  subscriptionTier: 'free' | 'starter' | 'professional' | 'business' | 'enterprise';
   subscription?: {
     status: string;
     currentPeriodStart: string;
@@ -31,7 +35,7 @@ interface UsageData {
     limit: number;
     remaining: number;
   };
-  extraThinking: {
+  extraThinking?: {
     current: number;
     limit: number;
     remaining: number;
@@ -75,7 +79,7 @@ export default function BillingPage() {
       setSubscriptionData(subscription);
       setUsageData({
         normal: usage.normal,
-        extraThinking: usage.extraThinking,
+        extraThinking: usage.extraThinking || undefined,
       });
 
     } catch (err) {
@@ -86,8 +90,11 @@ export default function BillingPage() {
     }
   };
 
-  const handleUpgrade = () => {
-    window.open(STRIPE_PAYMENT_LINK, '_blank');
+  const handleUpgrade = (tier: 'starter' | 'professional' | 'business') => {
+    const paymentLink = STRIPE_PAYMENT_LINKS[tier];
+    if (paymentLink) {
+      window.open(paymentLink, '_blank');
+    }
   };
 
   const handleManageBilling = async () => {
@@ -188,7 +195,7 @@ export default function BillingPage() {
         <Alert className="border-green-200 bg-green-50">
           <CheckCircle className="h-4 w-4 text-green-600" />
           <AlertDescription className="text-green-800">
-            Welcome to PageSpace Pro! Your subscription is now active.
+            Welcome to PageSpace! Your subscription is now active.
           </AlertDescription>
         </Alert>
       )}
@@ -227,23 +234,23 @@ export default function BillingPage() {
           <div>
             <h4 className="font-medium mb-2">What happens when I hit my daily limit?</h4>
             <p className="text-sm text-muted-foreground">
-              The 100 daily limit only applies to built-in PageSpace AI. Your own API keys (OpenAI, Anthropic, Google, etc.) have no limits.
-              For Normal tier users, you&apos;ll need to wait until the next day (midnight UTC) for built-in AI usage to reset.
-              Pro users have unlimited built-in PageSpace AI calls and 10 Extra Thinking calls per day.
+              Daily limits only apply to built-in PageSpace AI. Your own API keys (OpenAI, Anthropic, Google, etc.) have no limits.
+              Free users get 15 messages/day, Starter get 50/day, Professional get 200/day, Business get 500/day, and Enterprise get unlimited.
+              Usage resets at midnight UTC each day.
             </p>
           </div>
           <div>
             <h4 className="font-medium mb-2">What are PageSpace&apos;s pricing options?</h4>
             <p className="text-sm text-muted-foreground">
-              PageSpace offers Personal plans at $15/month with everything you need for individual productivity.
-              For organizations, we offer Enterprise solutions with both Cloud and On-Premise deployment options - contact sales for pricing.
+              PageSpace offers Free (15 messages/day), Starter ($29/mo), Professional ($79/mo), and Business ($199/mo) plans.
+              For large organizations, we offer Enterprise solutions with both Cloud and On-Premise deployment options - contact sales for custom pricing.
             </p>
           </div>
           <div>
             <h4 className="font-medium mb-2">Can I cancel anytime?</h4>
             <p className="text-sm text-muted-foreground">
-              Yes! You can cancel your Pro subscription anytime through the billing portal.
-              You&apos;ll keep Pro features until the end of your current billing period.
+              Yes! You can cancel your subscription anytime through the billing portal.
+              You&apos;ll keep your current tier features until the end of your current billing period.
             </p>
           </div>
         </CardContent>

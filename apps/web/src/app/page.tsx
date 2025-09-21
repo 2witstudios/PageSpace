@@ -94,10 +94,10 @@ export default function Home() {
                   Choose Your PageSpace Plan
                 </h2>
                 <p className="mx-auto max-w-[800px] text-lg text-muted-foreground md:text-xl">
-                  Start free, upgrade to Pro, or scale to enterprise deployment.
+                  Choose the plan that fits your AI productivity needs.
                 </p>
               </div>
-              <div className="grid gap-8 lg:grid-cols-3 max-w-6xl w-full">
+              <div className="grid gap-6 lg:grid-cols-5 max-w-full w-full">
                 {/* Free Tier */}
                 <Card className="relative border-2 hover:border-primary/50 transition-colors flex flex-col">
                   <CardHeader>
@@ -109,18 +109,18 @@ export default function Home() {
                     </div>
                     <CardTitle>Free</CardTitle>
                     <CardDescription>
-                      Full PageSpace features with daily limits
+                      Try PageSpace with essential AI productivity features
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4 flex-grow">
                     <ul className="space-y-3">
                       <li className="flex items-center gap-3">
                         <Check className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>500MB storage</span>
+                        <span>100MB storage</span>
                       </li>
                       <li className="flex items-center gap-3">
                         <Zap className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>100 daily PageSpace AI calls</span>
+                        <span>15 daily PageSpace AI messages</span>
                       </li>
                       <li className="flex items-center gap-3">
                         <Code className="w-5 h-5 text-primary flex-shrink-0" />
@@ -137,47 +137,47 @@ export default function Home() {
                     </ul>
                     <div className="pt-4 border-t">
                       <p className="text-sm text-muted-foreground">
-                        Perfect for trying out PageSpace
+                        Perfect for trying PageSpace
                       </p>
                     </div>
                   </CardContent>
                   <CardFooter>
                     <Button asChild variant="outline" className="w-full" size="lg">
                       <Link href="/auth/signup">
-                        Get Started
+                        Get Started Free
                       </Link>
                     </Button>
                   </CardFooter>
                 </Card>
 
-                {/* Pro Tier */}
-                <Card className="relative border-2 border-primary hover:border-primary/70 transition-colors flex flex-col">
+                {/* Starter Tier */}
+                <Card className="relative border-2 hover:border-primary/50 transition-colors flex flex-col">
                   <CardHeader>
                     <div className="flex items-center justify-between">
-                      <Badge variant="default">Most Popular</Badge>
+                      <Badge variant="outline">Popular</Badge>
                       <div className="text-right">
-                        <div className="text-3xl font-bold">$15</div>
+                        <div className="text-3xl font-bold">$29</div>
                         <div className="text-sm text-muted-foreground">/month</div>
                       </div>
                     </div>
-                    <CardTitle>Pro</CardTitle>
+                    <CardTitle>Starter</CardTitle>
                     <CardDescription>
-                      Everything you need for individual productivity
+                      Light users getting started with AI productivity
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4 flex-grow">
                     <ul className="space-y-3">
                       <li className="flex items-center gap-3">
                         <Check className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>2GB storage for documents, PDFs, and images</span>
+                        <span>2GB storage</span>
                       </li>
                       <li className="flex items-center gap-3">
                         <Zap className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>Unlimited PageSpace AI (fast responses)</span>
+                        <span>50 daily PageSpace AI messages</span>
                       </li>
                       <li className="flex items-center gap-3">
-                        <Shield className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>10 daily &quot;Extra Thinking&quot; sessions (advanced reasoning)</span>
+                        <Code className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>Bring your own AI API keys</span>
                       </li>
                       <li className="flex items-center gap-3">
                         <Users className="w-5 h-5 text-primary flex-shrink-0" />
@@ -190,12 +190,118 @@ export default function Home() {
                     </ul>
                     <div className="pt-4 border-t">
                       <p className="text-sm text-muted-foreground">
-                        Perfect for individuals, freelancers, and personal projects
+                        Perfect for regular AI productivity use
+                      </p>
+                    </div>
+                  </CardContent>
+                  <CardFooter>
+                    <Button asChild variant="outline" className="w-full" size="lg">
+                      <Link href="/settings/billing">
+                        Get Started
+                      </Link>
+                    </Button>
+                  </CardFooter>
+                </Card>
+
+                {/* Professional Tier */}
+                <Card className="relative border-2 border-primary hover:border-primary/70 transition-colors flex flex-col">
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <Badge variant="default">Most Popular</Badge>
+                      <div className="text-right">
+                        <div className="text-3xl font-bold">$79</div>
+                        <div className="text-sm text-muted-foreground">/month</div>
+                      </div>
+                    </div>
+                    <CardTitle>Professional</CardTitle>
+                    <CardDescription>
+                      Medium-heavy users who need reliable AI productivity
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4 flex-grow">
+                    <ul className="space-y-3">
+                      <li className="flex items-center gap-3">
+                        <Check className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>10GB storage for documents, PDFs, and images</span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                        <Zap className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>200 daily PageSpace AI messages</span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                        <Code className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>Bring your own AI API keys</span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                        <Users className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>Real-time collaboration</span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                        <GitMerge className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>Hierarchical AI agents</span>
+                      </li>
+                    </ul>
+                    <div className="pt-4 border-t">
+                      <p className="text-sm text-muted-foreground">
+                        Perfect for professionals and growing teams
                       </p>
                     </div>
                   </CardContent>
                   <CardFooter>
                     <Button asChild className="w-full" size="lg">
+                      <Link href="/settings/billing">
+                        Get Started
+                      </Link>
+                    </Button>
+                  </CardFooter>
+                </Card>
+
+                {/* Business Tier */}
+                <Card className="relative border-2 hover:border-primary/50 transition-colors flex flex-col">
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <Badge variant="outline">Power Users</Badge>
+                      <div className="text-right">
+                        <div className="text-3xl font-bold">$199</div>
+                        <div className="text-sm text-muted-foreground">/month</div>
+                      </div>
+                    </div>
+                    <CardTitle>Business</CardTitle>
+                    <CardDescription>
+                      Power users with intensive AI workflow needs
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4 flex-grow">
+                    <ul className="space-y-3">
+                      <li className="flex items-center gap-3">
+                        <Check className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>50GB storage</span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                        <Zap className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>500 daily PageSpace AI messages</span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                        <Code className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>Bring your own AI API keys</span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                        <Users className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>Advanced team collaboration</span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                        <GitMerge className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>Hierarchical AI agents</span>
+                      </li>
+                    </ul>
+                    <div className="pt-4 border-t">
+                      <p className="text-sm text-muted-foreground">
+                        Perfect for teams and heavy AI users
+                      </p>
+                    </div>
+                  </CardContent>
+                  <CardFooter>
+                    <Button asChild variant="outline" className="w-full" size="lg">
                       <Link href="/settings/billing">
                         Get Started
                       </Link>
@@ -214,7 +320,7 @@ export default function Home() {
                     </div>
                     <CardTitle>Enterprise</CardTitle>
                     <CardDescription>
-                      Scalable solutions for organizations
+                      Scalable solutions for large organizations
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4 flex-grow">
@@ -228,16 +334,16 @@ export default function Home() {
                         <span>On-Premise - Your infrastructure, your data</span>
                       </li>
                       <li className="flex items-center gap-3">
+                        <Zap className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>Unlimited operations</span>
+                      </li>
+                      <li className="flex items-center gap-3">
                         <Users className="w-5 h-5 text-primary flex-shrink-0" />
                         <span>Advanced team management and analytics</span>
                       </li>
                       <li className="flex items-center gap-3">
                         <Shield className="w-5 h-5 text-primary flex-shrink-0" />
                         <span>Enterprise security and compliance</span>
-                      </li>
-                      <li className="flex items-center gap-3">
-                        <Zap className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>Priority AI processing with your models</span>
                       </li>
                     </ul>
                     <div className="pt-4 border-t">

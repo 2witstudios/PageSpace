@@ -10,13 +10,13 @@ import { useSocketStore } from '@/stores/socketStore';
 import type { UsageEventPayload } from '@/lib/socket-utils';
 
 interface UsageData {
-  subscriptionTier: 'normal' | 'pro';
+  subscriptionTier: 'free' | 'starter' | 'professional' | 'business' | 'enterprise';
   normal: {
     current: number;
     limit: number;
     remaining: number;
   };
-  extraThinking: {
+  extraThinking?: {
     current: number;
     limit: number;
     remaining: number;
@@ -33,8 +33,11 @@ export function UsageCounter() {
     revalidateOnFocus: true,
   });
 
-  const isPro = usage?.subscriptionTier === 'pro';
+  const isPaid = usage && ['starter', 'professional', 'business', 'enterprise'].includes(usage.subscriptionTier);
+  const isUnlimited = usage?.subscriptionTier === 'enterprise';
   const isNearLimit = usage && usage.normal.limit > 0 && usage.normal.remaining <= 10;
+  const hasExtraThinking = usage && usage.extraThinking && usage.extraThinking.limit > 0;
+  const isExtraThinkingNearLimit = usage && usage.extraThinking && usage.extraThinking.limit > 0 && usage.extraThinking.remaining <= 2;
 
   const handleBillingClick = () => {
     router.push('/settings/billing');
@@ -53,7 +56,7 @@ export function UsageCounter() {
         mutate({
           subscriptionTier: payload.subscriptionTier,
           normal: payload.normal,
-          extraThinking: payload.extraThinking
+          extraThinking: payload.extraThinking || undefined
         }, false); // Don't revalidate, trust the real-time data
       };
 
@@ -100,7 +103,7 @@ export function UsageCounter() {
     <div className="flex items-center gap-2">
       {/* Usage Display */}
       <div className="flex items-center gap-2 text-sm">
-        {isPro ? (
+        {isUnlimited ? (
           <div className="flex items-center gap-1">
             <Crown className="h-4 w-4 text-yellow-500" />
             <span className="hidden md:inline font-medium">Unlimited</span>
@@ -108,7 +111,11 @@ export function UsageCounter() {
           </div>
         ) : (
           <div className="flex items-center gap-1">
-            <Zap className="h-4 w-4 text-blue-500" />
+            {isPaid ? (
+              <Crown className="h-4 w-4 text-yellow-500" />
+            ) : (
+              <Zap className="h-4 w-4 text-blue-500" />
+            )}
             <Badge
               variant={isNearLimit ? "destructive" : "secondary"}
               className="text-xs font-medium"
@@ -119,13 +126,16 @@ export function UsageCounter() {
           </div>
         )}
 
-        {/* Extended Thinking for Pro Users */}
-        {isPro && (
+        {/* Extra Thinking Usage for Paid Users */}
+        {hasExtraThinking && (
           <div className="flex items-center gap-1 text-muted-foreground">
             <span className="hidden md:inline">•</span>
             <Crown className="h-3 w-3 text-yellow-500" />
-            <Badge variant="secondary" className="text-xs">
-              {usage.extraThinking.current}/{usage.extraThinking.limit}
+            <Badge
+              variant={isExtraThinkingNearLimit ? "destructive" : "secondary"}
+              className="text-xs"
+            >
+              {usage.extraThinking?.current || 0}/{usage.extraThinking?.limit || 0}
             </Badge>
             <span className="hidden lg:inline text-xs">thinking</span>
           </div>
@@ -134,16 +144,16 @@ export function UsageCounter() {
 
       {/* Action Button */}
       <Button
-        variant={isPro ? "ghost" : "default"}
+        variant={isPaid ? "ghost" : "default"}
         size="sm"
         onClick={handleBillingClick}
-        className={`text-xs h-8 ${!isPro ? 'bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700' : ''}`}
+        className={`text-xs h-8 ${!isPaid ? 'bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700' : ''}`}
       >
-        {isPro ? (
+        {isPaid ? (
           <>
             <Crown className="h-3 w-3 mr-1" />
             <span className="hidden md:inline">Billing</span>
-            <span className="md:hidden">Pro</span>
+            <span className="md:hidden">{usage.subscriptionTier.charAt(0).toUpperCase()}</span>
           </>
         ) : (
           <>

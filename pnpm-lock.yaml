@@ -235,6 +235,12 @@ importers:
       '@radix-ui/react-tooltip':
         specifier: ^1.2.7
         version: 1.2.8(@types/react-dom@19.1.9(@types/react@19.1.13))(@types/react@19.1.13)(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
+      '@revolist/revogrid':
+        specifier: ^4.17.3
+        version: 4.17.3
+      '@revolist/revogrid-react':
+        specifier: ^4.17.3
+        version: 4.17.3
       '@tiptap/extension-link':
         specifier: ^3.0.7
         version: 3.4.4(@tiptap/core@3.4.4(@tiptap/pm@3.4.4))(@tiptap/pm@3.4.4)
@@ -301,6 +307,9 @@ importers:
       dompurify:
         specifier: ^3.2.6
         version: 3.2.7
+      fast-formula-parser:
+        specifier: ^1.0.19
+        version: 1.0.19
       framer-motion:
         specifier: ^12.23.10
         version: 12.23.16(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
@@ -2108,6 +2117,12 @@ packages:
   '@remirror/core-constants@3.0.0':
     resolution: {integrity: sha512-42aWfPrimMfDKDi4YegyS7x+/0tlzaqwPQCULLanv3DMIlu96KTJR0fM5isWX2UViOqlGnX6YFgqWepcX+XMNg==}
 
+  '@revolist/revogrid-react@4.17.3':
+    resolution: {integrity: sha512-MiZm0jtN0hpC6i4+fZhWYnIVJYFFFf8mZ8+wbERBkJMbld37+uepc5zNu9MjHJB4Y+9iC7VETt43RO0MJCGgig==}
+
+  '@revolist/revogrid@4.17.3':
+    resolution: {integrity: sha512-kHlz+8krf6ij+aLY1ePwsgS8t3Qp5KkFvSlEVbgOmyKXxPP0ODkyRfUxlMQHlg9tyPBx4x7TQv2q8qyAGGzciA==}
+
   '@rtsao/scc@1.1.0':
     resolution: {integrity: sha512-zt6OdqaDoOnJ1ZYsCYGt9YmWzDXl4vQdKTyJev62gFhRGKdx7mcT54V9KIjg+d2wi9EXsPvAPKe7i7WjfVWB8g==}
 
@@ -2989,6 +3004,9 @@ packages:
     resolution: {integrity: sha512-qIj0G9wZbMGNLjLmg1PT6v2mE9AH2zlnADJD/2tC6E00hgmhUOfEB6greHPAfLRSufHqROIUTkw6E+M3lH0PTQ==}
     engines: {node: '>= 0.4'}
 
+  bahttext@1.1.0:
+    resolution: {integrity: sha512-3g7DbmCwYhLnnN5hJFB+Mtbst4q2gfXpAdqOMK6tz6FmgtlrhX1n1uhuzkIhEr+WcnFR6eRvebIE5msGuEtA7Q==}
+
   bail@2.0.2:
     resolution: {integrity: sha512-0xO6mYd7JB2YesxDKplafRpsiOzPt9V02ddPCLbY1xYGPOX24NTyN50qnUxgCPcSoYMhKpAuBTjQoRZCAkUDRw==}
 
@@ -3139,6 +3157,9 @@ packages:
 
   chevrotain@6.5.0:
     resolution: {integrity: sha512-BwqQ/AgmKJ8jcMEjaSnfMybnKMgGTrtDKowfTP3pX4jwVy0kNjRsT/AP6h+wC3+3NC+X8X15VWBnTCQlX+wQFg==}
+
+  chevrotain@7.1.2:
+    resolution: {integrity: sha512-9bQsXVQ7UAvzMs7iUBBJ9Yv//exOy7bIR3PByOEk4M64vIE/LsiOiX7VIkMF/vEMlrSStwsaE884Bp9CpjtC5g==}
 
   chownr@3.0.0:
     resolution: {integrity: sha512-+IxzY9BZOQd/XuYPRmrvEVjF/nqj5kgT4kEq7VofrDoM1MxoRjEWkrCC3EtLi59TVawxTAn+orJwFQcrqEN1+g==}
@@ -3911,6 +3932,9 @@ packages:
 
   fast-deep-equal@3.1.3:
     resolution: {integrity: sha512-f3qQ9oQy9j2AhBe/H9VC91wLmKBCCU/gDOnKNAYG5hswO7BLKj09Hc5HYNz9cGI++xlpDCIgDaitVs03ATR84Q==}
+
+  fast-formula-parser@1.0.19:
+    resolution: {integrity: sha512-8Roq7V1XjuYj3cWZ9tILyqBHGjS7NkejRaHxSWePu0qjIcvimZwe6WfeA9che03dgWrykZqrw691qg3lwiIkMg==}
 
   fast-glob@3.3.1:
     resolution: {integrity: sha512-kNFPyjhh5cKjrUltxs+wFx+ZkbRaxxmZ+X0ZU31SOsxCEtP9VPgtq2teZw1DebupL5GmDaNQ6yKMMVcM41iqDg==}
@@ -5508,6 +5532,9 @@ packages:
 
   regexp-to-ast@0.4.0:
     resolution: {integrity: sha512-4qf/7IsIKfSNHQXSwial1IFmfM1Cc/whNBQqRwe0V2stPe7KmN1U0tWQiIx6JiirgSrisjE0eECdNf7Tav1Ntw==}
+
+  regexp-to-ast@0.5.0:
+    resolution: {integrity: sha512-tlbJqcMHnPKI9zSrystikWKwHkBqu2a/Sgw01h3zFjvYrMxEDYHzzoMZnUrbIfpTFEsoRnnviOXNCzFiSc54Qw==}
 
   regexp.prototype.flags@1.5.4:
     resolution: {integrity: sha512-dYqgNSZbDwkaJ2ceRd9ojCGjBq+mOm9LmtXnAnEGyHhN/5R7iDW2TRw3h+o/jCFxus3P2LfWIIiwowAjANm7IA==}
@@ -7767,6 +7794,12 @@ snapshots:
 
   '@remirror/core-constants@3.0.0': {}
 
+  '@revolist/revogrid-react@4.17.3':
+    dependencies:
+      '@revolist/revogrid': 4.17.3
+
+  '@revolist/revogrid@4.17.3': {}
+
   '@rtsao/scc@1.1.0': {}
 
   '@rushstack/eslint-patch@1.12.0': {}
@@ -8741,6 +8774,8 @@ snapshots:
 
   axobject-query@4.1.0: {}
 
+  bahttext@1.1.0: {}
+
   bail@2.0.2: {}
 
   balanced-match@1.0.2: {}
@@ -8929,6 +8964,10 @@ snapshots:
   chevrotain@6.5.0:
     dependencies:
       regexp-to-ast: 0.4.0
+
+  chevrotain@7.1.2:
+    dependencies:
+      regexp-to-ast: 0.5.0
 
   chownr@3.0.0: {}
 
@@ -9844,6 +9883,13 @@ snapshots:
       tmp: 0.0.33
 
   fast-deep-equal@3.1.3: {}
+
+  fast-formula-parser@1.0.19:
+    dependencies:
+      bahttext: 1.1.0
+      bessel: 1.0.2
+      chevrotain: 7.1.2
+      jstat: 1.9.6
 
   fast-glob@3.3.1:
     dependencies:
@@ -11729,6 +11775,8 @@ snapshots:
   regenerator-runtime@0.13.11: {}
 
   regexp-to-ast@0.4.0: {}
+
+  regexp-to-ast@0.5.0: {}
 
   regexp.prototype.flags@1.5.4:
     dependencies:

@@ -4,10 +4,10 @@ import {
   getUserStorageQuota,
   getUserFileCount,
   reconcileStorageUsage,
-  STORAGE_TIERS,
   formatBytes
 } from '@pagespace/lib/services/storage-limits';
-import { db, pages, drives, eq, and, desc, inArray } from '@pagespace/db';
+import { getStorageConfigFromSubscription, type SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { db, pages, drives, users, eq, and, desc, inArray } from '@pagespace/db';
 
 export async function GET(request: NextRequest) {
   try {
@@ -46,10 +46,26 @@ export async function GET(request: NextRequest) {
       columns: { id: true, name: true }
     });
 
+    // Get user's subscription tier for storage config
+    const userWithSubscription = await db.query.users.findFirst({
+      where: eq(users.id, user.id),
+      columns: { subscriptionTier: true }
+    });
+
+    const subscriptionTier = (userWithSubscription?.subscriptionTier || 'free') as SubscriptionTier;
+    const tierConfig = getStorageConfigFromSubscription(subscriptionTier);
+
     if (userDrives.length === 0) {
       return NextResponse.json({
         quota,
-        tierInfo: STORAGE_TIERS[quota.tier],
+        tierInfo: {
+          name: tierConfig.tier,
+          quotaBytes: tierConfig.quotaBytes,
+          maxFileSize: tierConfig.maxFileSize,
+          maxConcurrentUploads: tierConfig.maxConcurrentUploads,
+          maxFileCount: tierConfig.maxFileCount,
+          features: tierConfig.features
+        },
         fileCount,
         files: [],
         largestFiles: [],
@@ -124,7 +140,14 @@ export async function GET(request: NextRequest) {
         formattedQuota: formatBytes(quota.quotaBytes),
         formattedAvailable: formatBytes(quota.availableBytes)
       },
-      tierInfo: STORAGE_TIERS[quota.tier],
+      tierInfo: {
+        name: tierConfig.tier,
+        quotaBytes: tierConfig.quotaBytes,
+        maxFileSize: tierConfig.maxFileSize,
+        maxConcurrentUploads: tierConfig.maxConcurrentUploads,
+        maxFileCount: tierConfig.maxFileCount,
+        features: tierConfig.features
+      },
       fileCount,
       totalFiles: files.length,
       fileTypeBreakdown,
