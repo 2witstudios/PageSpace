@@ -25,9 +25,9 @@ export async function PUT(
     const { subscriptionTier } = body;
 
     // Validate subscription tier
-    if (!subscriptionTier || !['normal', 'pro'].includes(subscriptionTier)) {
+    if (!subscriptionTier || !['normal', 'pro', 'business'].includes(subscriptionTier)) {
       return NextResponse.json(
-        { error: 'Invalid subscription tier. Must be "normal" or "pro"' },
+        { error: 'Invalid subscription tier. Must be "normal", "pro", or "business"' },
         { status: 400 }
       );
     }
@@ -49,7 +49,7 @@ export async function PUT(
     await db
       .update(users)
       .set({
-        subscriptionTier: subscriptionTier as 'normal' | 'pro',
+        subscriptionTier: subscriptionTier as 'normal' | 'pro' | 'business',
         updatedAt: new Date(),
       })
       .where(eq(users.id, userId));

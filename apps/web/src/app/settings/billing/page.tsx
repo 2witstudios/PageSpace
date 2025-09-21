@@ -7,11 +7,12 @@ import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { SubscriptionCard } from '@/components/billing/SubscriptionCard';
 import { CheckCircle, XCircle, AlertCircle, ArrowLeft } from 'lucide-react';
-// Stripe Payment Link for Pro subscription upgrades
-const STRIPE_PAYMENT_LINK = 'https://buy.stripe.com/eVq8wRc8vgnvaeGaoKeEo00';
+// Stripe Payment Links for subscription upgrades
+const STRIPE_PRO_PAYMENT_LINK = 'https://buy.stripe.com/8x2fZjdczc7ffz0eF0eEo01';
+const STRIPE_BUSINESS_PAYMENT_LINK = 'https://buy.stripe.com/dRm9AV1tRfjrcmOdAWeEo03';
 
 interface SubscriptionData {
-  subscriptionTier: 'normal' | 'pro';
+  subscriptionTier: 'normal' | 'pro' | 'business';
   subscription?: {
     status: string;
     currentPeriodStart: string;
@@ -87,7 +88,12 @@ export default function BillingPage() {
   };
 
   const handleUpgrade = () => {
-    window.open(STRIPE_PAYMENT_LINK, '_blank');
+    // Choose payment link based on current subscription tier
+    const paymentLink = subscriptionData?.subscriptionTier === 'normal'
+      ? STRIPE_PRO_PAYMENT_LINK
+      : STRIPE_BUSINESS_PAYMENT_LINK;
+
+    window.open(paymentLink, '_blank');
   };
 
   const handleManageBilling = async () => {
@@ -227,23 +233,24 @@ export default function BillingPage() {
           <div>
             <h4 className="font-medium mb-2">What happens when I hit my daily limit?</h4>
             <p className="text-sm text-muted-foreground">
-              The 100 daily limit only applies to built-in PageSpace AI. Your own API keys (OpenAI, Anthropic, Google, etc.) have no limits.
-              For Normal tier users, you&apos;ll need to wait until the next day (midnight UTC) for built-in AI usage to reset.
-              Pro users have unlimited built-in PageSpace AI calls and 10 Extra Thinking calls per day.
+              Daily limits only apply to built-in PageSpace AI. Your own API keys (OpenAI, Anthropic, Google, etc.) have no limits.
+              Normal tier: 20 calls/day. Pro tier: 50 calls/day. Business tier: 500 calls/day.
+              Usage resets daily at midnight UTC. Extra Thinking is available for Pro (10/day) and Business (50/day) users.
             </p>
           </div>
           <div>
             <h4 className="font-medium mb-2">What are PageSpace&apos;s pricing options?</h4>
             <p className="text-sm text-muted-foreground">
-              PageSpace offers Personal plans at $15/month with everything you need for individual productivity.
-              For organizations, we offer Enterprise solutions with both Cloud and On-Premise deployment options - contact sales for pricing.
+              Normal: Free with 20 AI calls/day and 500MB storage.
+              Pro: $29.99/month with 50 AI calls/day, 10 Extra Thinking calls, and 2GB storage.
+              Business: $199.99/month with 500 AI calls/day, 50 Extra Thinking calls, and 50GB storage.
             </p>
           </div>
           <div>
             <h4 className="font-medium mb-2">Can I cancel anytime?</h4>
             <p className="text-sm text-muted-foreground">
-              Yes! You can cancel your Pro subscription anytime through the billing portal.
-              You&apos;ll keep Pro features until the end of your current billing period.
+              Yes! You can cancel your Pro or Business subscription anytime through the billing portal.
+              You&apos;ll keep your paid features until the end of your current billing period.
             </p>
           </div>
         </CardContent>

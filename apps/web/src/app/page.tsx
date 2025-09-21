@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { GitMerge, Folder, Code, MessageSquare, Check, Shield, Zap, Users, Cloud, Building } from "lucide-react";
+import { GitMerge, Folder, Code, MessageSquare, Check, Shield, Zap, Users, HardDrive } from "lucide-react";
 import AuthButtons from "@/components/shared/AuthButtons";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -120,7 +120,7 @@ export default function Home() {
                       </li>
                       <li className="flex items-center gap-3">
                         <Zap className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>100 daily PageSpace AI calls</span>
+                        <span>20 daily PageSpace AI calls</span>
                       </li>
                       <li className="flex items-center gap-3">
                         <Code className="w-5 h-5 text-primary flex-shrink-0" />
@@ -156,7 +156,7 @@ export default function Home() {
                     <div className="flex items-center justify-between">
                       <Badge variant="default">Most Popular</Badge>
                       <div className="text-right">
-                        <div className="text-3xl font-bold">$15</div>
+                        <div className="text-3xl font-bold">$29.99</div>
                         <div className="text-sm text-muted-foreground">/month</div>
                       </div>
                     </div>
@@ -173,7 +173,7 @@ export default function Home() {
                       </li>
                       <li className="flex items-center gap-3">
                         <Zap className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>Unlimited PageSpace AI (fast responses)</span>
+                        <span>50 daily PageSpace AI calls</span>
                       </li>
                       <li className="flex items-center gap-3">
                         <Shield className="w-5 h-5 text-primary flex-shrink-0" />
@@ -203,53 +203,54 @@ export default function Home() {
                   </CardFooter>
                 </Card>
 
-                {/* Enterprise Tier */}
+                {/* Business Tier */}
                 <Card className="relative border-2 hover:border-primary/50 transition-colors flex flex-col">
                   <CardHeader>
                     <div className="flex items-center justify-between">
-                      <Badge variant="outline">Enterprise</Badge>
+                      <Badge variant="outline">Business</Badge>
                       <div className="text-right">
-                        <div className="text-3xl font-bold">Custom</div>
+                        <div className="text-3xl font-bold">$199.99</div>
+                        <div className="text-sm text-muted-foreground">/month</div>
                       </div>
                     </div>
-                    <CardTitle>Enterprise</CardTitle>
+                    <CardTitle>Business</CardTitle>
                     <CardDescription>
-                      Scalable solutions for organizations
+                      High-volume usage for businesses and teams
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4 flex-grow">
                     <ul className="space-y-3">
                       <li className="flex items-center gap-3">
-                        <Cloud className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>Cloud Enterprise - Managed infrastructure</span>
-                      </li>
-                      <li className="flex items-center gap-3">
-                        <Building className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>On-Premise - Your infrastructure, your data</span>
-                      </li>
-                      <li className="flex items-center gap-3">
-                        <Users className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>Advanced team management and analytics</span>
-                      </li>
-                      <li className="flex items-center gap-3">
-                        <Shield className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>Enterprise security and compliance</span>
+                        <HardDrive className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>50GB storage for large projects</span>
                       </li>
                       <li className="flex items-center gap-3">
                         <Zap className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>Priority AI processing with your models</span>
+                        <span>500 daily PageSpace AI calls</span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                        <Shield className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>50 daily &quot;Extra Thinking&quot; sessions</span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                        <Users className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>Real-time collaboration</span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                        <GitMerge className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>Hierarchical AI agents</span>
                       </li>
                     </ul>
                     <div className="pt-4 border-t">
                       <p className="text-sm text-muted-foreground">
-                        Custom pricing based on deployment and requirements
+                        Perfect for businesses and high-volume users
                       </p>
                     </div>
                   </CardContent>
                   <CardFooter>
                     <Button asChild variant="outline" className="w-full" size="lg">
-                      <Link href="/contact">
-                        Contact Sales
+                      <Link href="/settings/billing">
+                        Get Started
                       </Link>
                     </Button>
                   </CardFooter>

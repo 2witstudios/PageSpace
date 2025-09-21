@@ -49,7 +49,7 @@ interface UserData {
   currentAiProvider: string;
   currentAiModel: string;
   tokenVersion: number;
-  subscriptionTier: 'normal' | 'pro';
+  subscriptionTier: 'normal' | 'pro' | 'business';
   stats: UserStats;
   aiSettings: AiSetting[];
   recentTokens: RefreshToken[];
@@ -98,11 +98,19 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
     }));
   };
 
-  const toggleSubscription = async (userId: string, currentTier: 'normal' | 'pro') => {
+  const toggleSubscription = async (userId: string, currentTier: 'normal' | 'pro' | 'business') => {
     setUpdatingUsers(prev => ({ ...prev, [userId]: true }));
 
     try {
-      const newTier = currentTier === 'pro' ? 'normal' : 'pro';
+      // Cycle through tiers: normal -> pro -> business -> normal
+      let newTier: 'normal' | 'pro' | 'business';
+      if (currentTier === 'normal') {
+        newTier = 'pro';
+      } else if (currentTier === 'pro') {
+        newTier = 'business';
+      } else {
+        newTier = 'normal';
+      }
       const response = await fetch(`/api/admin/users/${userId}/subscription`, {
         method: 'PUT',
         headers: {
@@ -200,13 +208,19 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
                         {user.stats.totalMessages} messages
                       </Badge>
 
-                      <Badge variant={user.subscriptionTier === 'pro' ? "default" : "secondary"}>
-                        {user.subscriptionTier === 'pro' ? (
+                      <Badge variant={
+                        user.subscriptionTier === 'business' ? "destructive" :
+                        user.subscriptionTier === 'pro' ? "default" : "secondary"
+                      }>
+                        {user.subscriptionTier === 'business' ? (
+                          <Crown className="h-3 w-3 mr-1" />
+                        ) : user.subscriptionTier === 'pro' ? (
                           <Crown className="h-3 w-3 mr-1" />
                         ) : (
                           <CreditCard className="h-3 w-3 mr-1" />
                         )}
-                        {user.subscriptionTier === 'pro' ? 'Pro' : 'Free'}
+                        {user.subscriptionTier === 'business' ? 'Business' :
+                         user.subscriptionTier === 'pro' ? 'Pro' : 'Free'}
                       </Badge>
                     </div>
                   </div>
@@ -293,18 +307,24 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
                         <div className="space-y-3">
                           <div className="flex items-center justify-between">
                             <span className="text-sm text-muted-foreground">Current Plan:</span>
-                            <Badge variant={user.subscriptionTier === 'pro' ? "default" : "secondary"}>
-                              {user.subscriptionTier === 'pro' ? (
+                            <Badge variant={
+                              user.subscriptionTier === 'business' ? "destructive" :
+                              user.subscriptionTier === 'pro' ? "default" : "secondary"
+                            }>
+                              {user.subscriptionTier === 'business' ? (
+                                <Crown className="h-3 w-3 mr-1" />
+                              ) : user.subscriptionTier === 'pro' ? (
                                 <Crown className="h-3 w-3 mr-1" />
                               ) : (
                                 <CreditCard className="h-3 w-3 mr-1" />
                               )}
-                              {user.subscriptionTier === 'pro' ? 'Pro Plan' : 'Free Plan'}
+                              {user.subscriptionTier === 'business' ? 'Business Plan' :
+                               user.subscriptionTier === 'pro' ? 'Pro Plan' : 'Free Plan'}
                             </Badge>
                           </div>
                           <Button
                             size="sm"
-                            variant={user.subscriptionTier === 'pro' ? "destructive" : "default"}
+                            variant={user.subscriptionTier === 'normal' ? "default" : "destructive"}
                             onClick={() => toggleSubscription(user.id, user.subscriptionTier)}
                             disabled={updatingUsers[user.id]}
                             className="w-full"
@@ -320,7 +340,8 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
                                 <span>Updated!</span>
                               </div>
                             ) : (
-                              user.subscriptionTier === 'pro' ? 'Downgrade to Free' : 'Upgrade to Pro'
+                              user.subscriptionTier === 'normal' ? 'Upgrade to Pro' :
+                              user.subscriptionTier === 'pro' ? 'Upgrade to Business' : 'Downgrade to Free'
                             )}
                           </Button>
                         </div>

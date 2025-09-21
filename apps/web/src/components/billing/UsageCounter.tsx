@@ -10,7 +10,7 @@ import { useSocketStore } from '@/stores/socketStore';
 import type { UsageEventPayload } from '@/lib/socket-utils';
 
 interface UsageData {
-  subscriptionTier: 'normal' | 'pro';
+  subscriptionTier: 'normal' | 'pro' | 'business';
   normal: {
     current: number;
     limit: number;
@@ -34,6 +34,8 @@ export function UsageCounter() {
   });
 
   const isPro = usage?.subscriptionTier === 'pro';
+  const isBusiness = usage?.subscriptionTier === 'business';
+  const isPaid = isPro || isBusiness;
   const isNearLimit = usage && usage.normal.limit > 0 && usage.normal.remaining <= 10;
 
   const handleBillingClick = () => {
@@ -100,27 +102,23 @@ export function UsageCounter() {
     <div className="flex items-center gap-2">
       {/* Usage Display */}
       <div className="flex items-center gap-2 text-sm">
-        {isPro ? (
-          <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1">
+          {isPaid ? (
             <Crown className="h-4 w-4 text-yellow-500" />
-            <span className="hidden md:inline font-medium">Unlimited</span>
-            <span className="md:hidden font-medium">∞</span>
-          </div>
-        ) : (
-          <div className="flex items-center gap-1">
+          ) : (
             <Zap className="h-4 w-4 text-blue-500" />
-            <Badge
-              variant={isNearLimit ? "destructive" : "secondary"}
-              className="text-xs font-medium"
-            >
-              {usage.normal.current}/{usage.normal.limit}
-            </Badge>
-            <span className="hidden lg:inline text-muted-foreground">today</span>
-          </div>
-        )}
+          )}
+          <Badge
+            variant={isNearLimit ? "destructive" : "secondary"}
+            className="text-xs font-medium"
+          >
+            {usage.normal.current}/{usage.normal.limit}
+          </Badge>
+          <span className="hidden lg:inline text-muted-foreground">today</span>
+        </div>
 
-        {/* Extended Thinking for Pro Users */}
-        {isPro && (
+        {/* Extended Thinking for Pro and Business Users */}
+        {isPaid && usage.extraThinking.limit > 0 && (
           <div className="flex items-center gap-1 text-muted-foreground">
             <span className="hidden md:inline">•</span>
             <Crown className="h-3 w-3 text-yellow-500" />
@@ -134,16 +132,16 @@ export function UsageCounter() {
 
       {/* Action Button */}
       <Button
-        variant={isPro ? "ghost" : "default"}
+        variant={isPaid ? "ghost" : "default"}
         size="sm"
         onClick={handleBillingClick}
-        className={`text-xs h-8 ${!isPro ? 'bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700' : ''}`}
+        className={`text-xs h-8 ${!isPaid ? 'bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700' : ''}`}
       >
-        {isPro ? (
+        {isPaid ? (
           <>
             <Crown className="h-3 w-3 mr-1" />
             <span className="hidden md:inline">Billing</span>
-            <span className="md:hidden">Pro</span>
+            <span className="md:hidden">{isBusiness ? 'Bus' : 'Pro'}</span>
           </>
         ) : (
           <>

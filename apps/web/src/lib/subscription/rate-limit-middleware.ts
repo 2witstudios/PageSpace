@@ -62,8 +62,8 @@ export function createRateLimitResponse(
   const resetTimeString = resetTime || getTomorrowMidnight();
 
   const errorMessage = providerType === 'extra_thinking'
-    ? `Extra Thinking calls limited to ${limit} per day for Pro subscribers. Upgrade to Pro for access.`
-    : `AI calls limited to ${limit} per day. Upgrade to Pro for unlimited calls.`;
+    ? `Extra Thinking calls limited to ${limit} per day. Upgrade to Pro or Business for more access.`
+    : `AI calls limited to ${limit} per day. Upgrade to Pro (50/day) or Business (500/day) for more calls.`;
 
   return NextResponse.json(
     {

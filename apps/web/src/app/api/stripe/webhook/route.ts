@@ -119,9 +119,28 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
 
   const userId = user[0].id;
 
-  // Determine subscription tier
+  // Determine subscription tier based on price or subscription status
   const isEntitled = ['active', 'trialing'].includes(subscription.status);
-  const subscriptionTier = isEntitled ? 'pro' : 'normal';
+
+  let subscriptionTier: 'normal' | 'pro' | 'business';
+
+  if (!isEntitled) {
+    // If not active/trialing, set to normal regardless of price
+    subscriptionTier = 'normal';
+  } else {
+    // For active subscriptions, determine tier from price amount
+    const priceAmount = subscription.items.data[0].price.unit_amount; // in cents
+
+    // Determine tier by price amount: $199.99 = Business, $29.99 = Pro
+    if (priceAmount === 19999) { // $199.99 in cents
+      subscriptionTier = 'business';
+    } else if (priceAmount === 2999) { // $29.99 in cents
+      subscriptionTier = 'pro';
+    } else {
+      // Fallback to pro for any other paid subscription
+      subscriptionTier = 'pro';
+    }
+  }
 
   // Upsert subscription record
   await db.insert(subscriptions).values({

@@ -14,13 +14,17 @@ export interface UsageTrackingResult {
  */
 export function getUsageLimits(subscriptionTier: string, providerType: ProviderType): number {
   if (providerType === 'normal') {
-    // Normal tier: 100 calls/day, Pro tier: unlimited (represented as -1)
-    return subscriptionTier === 'pro' ? -1 : 100;
+    // Normal tier: 20 calls/day, Pro tier: 50 calls/day, Business tier: 500 calls/day
+    if (subscriptionTier === 'business') return 500;
+    if (subscriptionTier === 'pro') return 50;
+    return 20; // normal tier
   }
 
   if (providerType === 'extra_thinking') {
-    // Extra thinking: 0 calls for normal, 10 calls for pro
-    return subscriptionTier === 'pro' ? 10 : 0;
+    // Extra thinking: 0 calls for normal, 10 calls for pro, 50 calls for business
+    if (subscriptionTier === 'business') return 50;
+    if (subscriptionTier === 'pro') return 10;
+    return 0; // normal tier
   }
 
   return 0;
@@ -67,16 +71,6 @@ export async function incrementUsage(
     today
   });
 
-  // Unlimited usage (pro normal calls)
-  if (limit === -1) {
-    console.log('✅ Unlimited usage (Pro tier):', { userId, providerType, subscriptionTier });
-    return {
-      success: true,
-      currentCount: 0,
-      limit: -1,
-      remainingCalls: -1
-    };
-  }
 
   // No access (normal tier trying extra thinking)
   if (limit === 0) {
@@ -257,15 +251,6 @@ export async function getCurrentUsage(
   const subscriptionTier = user[0].subscriptionTier;
   const limit = getUsageLimits(subscriptionTier, providerType);
 
-  // Unlimited usage
-  if (limit === -1) {
-    return {
-      success: true,
-      currentCount: 0,
-      limit: -1,
-      remainingCalls: -1
-    };
-  }
 
   const today = new Date().toISOString().split('T')[0];
 

@@ -9,7 +9,7 @@ import { Separator } from '@/components/ui/separator';
 import { Check, Crown, Zap, HardDrive, Clock, ExternalLink } from 'lucide-react';
 
 interface SubscriptionData {
-  subscriptionTier: 'normal' | 'pro';
+  subscriptionTier: 'normal' | 'pro' | 'business';
   subscription?: {
     status: string;
     currentPeriodStart: string;
@@ -53,6 +53,8 @@ export function SubscriptionCard({
   const [isManaging, setIsManaging] = useState(false);
 
   const isPro = subscription.subscriptionTier === 'pro';
+  const isBusiness = subscription.subscriptionTier === 'business';
+  const isPaid = isPro || isBusiness;
   const isActive = subscription.subscription?.status === 'active';
   const isCanceling = subscription.subscription?.cancelAtPeriodEnd;
 
@@ -79,7 +81,7 @@ export function SubscriptionCard({
   const storageUsedMB = Math.round(subscription.storage.used / (1024 * 1024));
   const storageQuotaMB = Math.round(subscription.storage.quota / (1024 * 1024));
 
-  // Calculate AI usage percentage for normal tier
+  // Calculate AI usage percentage
   const normalUsagePercentage = usage.normal.limit === -1 ? 0 :
     (usage.normal.current / usage.normal.limit) * 100;
 
@@ -95,7 +97,12 @@ export function SubscriptionCard({
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <CardTitle className="flex items-center gap-2">
-                {isPro ? (
+                {isBusiness ? (
+                  <>
+                    <Crown className="h-5 w-5 text-purple-500" />
+                    Business Plan
+                  </>
+                ) : isPro ? (
                   <>
                     <Crown className="h-5 w-5 text-yellow-500" />
                     Pro Plan
@@ -107,7 +114,7 @@ export function SubscriptionCard({
                   </>
                 )}
               </CardTitle>
-              {isPro && (
+              {isPaid && (
                 <Badge variant={isActive ? "default" : "secondary"}>
                   {isCanceling ? "Canceling" : subscription.subscription?.status || "Unknown"}
                 </Badge>
@@ -115,15 +122,17 @@ export function SubscriptionCard({
             </div>
             <div className="text-right">
               <div className="text-2xl font-bold">
-                {isPro ? "$15" : "Free"}
+                {isBusiness ? "$199.99" : isPro ? "$29.99" : "Free"}
               </div>
-              {isPro && <div className="text-sm text-muted-foreground">per month</div>}
+              {isPaid && <div className="text-sm text-muted-foreground">per month</div>}
             </div>
           </div>
           <CardDescription>
-            {isPro
-              ? "Unlimited AI calls, 2GB storage, and Extra Thinking access"
-              : "100 AI calls per day, 500MB storage"
+            {isBusiness
+              ? "500 AI calls per day, 50GB storage, and 50 Extra Thinking calls"
+              : isPro
+              ? "50 AI calls per day, 2GB storage, and 10 Extra Thinking calls"
+              : "20 AI calls per day, 500MB storage"
             }
           </CardDescription>
         </CardHeader>
@@ -136,16 +145,12 @@ export function SubscriptionCard({
                 AI Calls
               </h4>
               <div className="text-sm text-muted-foreground">
-                {isPro ? "Unlimited built-in PageSpace AI calls" : `${usage.normal.limit} built-in PageSpace AI calls per day`}
+                {`${usage.normal.limit} built-in PageSpace AI calls per day`}
               </div>
-              {!isPro && (
-                <>
-                  <Progress value={normalUsagePercentage} className="h-2" />
-                  <div className="text-xs text-muted-foreground">
-                    {usage.normal.current} / {usage.normal.limit} used today
-                  </div>
-                </>
-              )}
+              <Progress value={normalUsagePercentage} className="h-2" />
+              <div className="text-xs text-muted-foreground">
+                {usage.normal.current} / {usage.normal.limit} used today
+              </div>
             </div>
 
             <div className="space-y-2">
@@ -154,7 +159,7 @@ export function SubscriptionCard({
                 Storage
               </h4>
               <div className="text-sm text-muted-foreground">
-                {isPro ? "2GB" : "500MB"} storage limit
+                {isBusiness ? "50GB" : isPro ? "2GB" : "500MB"} storage limit
               </div>
               <Progress value={storagePercentage} className="h-2" />
               <div className="text-xs text-muted-foreground">
@@ -163,8 +168,8 @@ export function SubscriptionCard({
             </div>
           </div>
 
-          {/* Extra Thinking for Pro */}
-          {isPro && (
+          {/* Extra Thinking for Pro and Business */}
+          {isPaid && usage.extraThinking.limit > 0 && (
             <>
               <Separator />
               <div className="space-y-2">
@@ -173,7 +178,7 @@ export function SubscriptionCard({
                   Extra Thinking
                 </h4>
                 <div className="text-sm text-muted-foreground">
-                  Advanced AI thinking - 10 calls per day
+                  Advanced AI thinking - {usage.extraThinking.limit} calls per day
                 </div>
                 <Progress value={extraThinkingPercentage} className="h-2" />
                 <div className="text-xs text-muted-foreground">
@@ -183,8 +188,8 @@ export function SubscriptionCard({
             </>
           )}
 
-          {/* Billing Period for Pro */}
-          {isPro && subscription.subscription && (
+          {/* Billing Period for Paid Plans */}
+          {isPaid && subscription.subscription && (
             <>
               <Separator />
               <div className="flex items-center justify-between text-sm">
@@ -201,7 +206,7 @@ export function SubscriptionCard({
 
           {/* Action Buttons */}
           <div className="flex gap-2 pt-4">
-            {!isPro ? (
+            {subscription.subscriptionTier === 'normal' ? (
               <Button
                 onClick={handleUpgrade}
                 disabled={isUpgrading}
@@ -209,12 +214,31 @@ export function SubscriptionCard({
               >
                 {isUpgrading ? "Processing..." : "Upgrade to Pro"}
               </Button>
+            ) : subscription.subscriptionTier === 'pro' ? (
+              <div className="flex gap-2 w-full">
+                <Button
+                  onClick={handleUpgrade}
+                  disabled={isUpgrading}
+                  className="flex-1"
+                >
+                  {isUpgrading ? "Processing..." : "Upgrade to Business"}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleManageBilling}
+                  disabled={isManaging}
+                  className="flex items-center gap-2"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                  {isManaging ? "Opening..." : "Billing"}
+                </Button>
+              </div>
             ) : (
               <Button
                 variant="outline"
                 onClick={handleManageBilling}
                 disabled={isManaging}
-                className="flex items-center gap-2"
+                className="flex items-center gap-2 w-full"
               >
                 <ExternalLink className="h-4 w-4" />
                 {isManaging ? "Opening..." : "Manage Billing"}
@@ -225,25 +249,25 @@ export function SubscriptionCard({
       </Card>
 
       {/* Comparison Card for Normal Users */}
-      {!isPro && (
+      {!isPaid && (
         <Card className="border-yellow-200 dark:border-yellow-800 bg-gradient-to-r from-yellow-50 to-orange-50 dark:from-yellow-950/50 dark:to-orange-950/50">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Crown className="h-5 w-5 text-yellow-500" />
-              Upgrade to Pro
+              Upgrade Your Plan
             </CardTitle>
             <CardDescription>
-              Much more generous than Notion AI and other competitors
+              Pro and Business plans with generous limits
             </CardDescription>
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
               <div>
-                <h4 className="font-medium mb-2">What you&apos;ll get:</h4>
+                <h4 className="font-medium mb-2">Pro Plan - $29.99/month:</h4>
                 <ul className="space-y-1 text-sm">
                   <li className="flex items-center gap-2">
                     <Check className="h-4 w-4 text-green-500" />
-                    Unlimited Normal AI calls
+                    50 AI calls/day (2.5x more)
                   </li>
                   <li className="flex items-center gap-2">
                     <Check className="h-4 w-4 text-green-500" />
@@ -260,17 +284,25 @@ export function SubscriptionCard({
                 </ul>
               </div>
               <div>
-                <h4 className="font-medium mb-2">PageSpace Pricing:</h4>
-                <div className="space-y-3 text-sm">
-                  <div>
-                    <div className="font-medium text-foreground">Personal - $15/month</div>
-                    <div className="text-foreground/70 dark:text-foreground/80">Perfect for individuals, freelancers, and personal projects</div>
-                  </div>
-                  <div>
-                    <div className="font-medium text-foreground">Enterprise - Contact Sales</div>
-                    <div className="text-foreground/70 dark:text-foreground/80">Cloud and On-Premise deployment options for organizations</div>
-                  </div>
-                </div>
+                <h4 className="font-medium mb-2">Business Plan - $199.99/month:</h4>
+                <ul className="space-y-1 text-sm">
+                  <li className="flex items-center gap-2">
+                    <Check className="h-4 w-4 text-green-500" />
+                    500 AI calls/day (25x more)
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <Check className="h-4 w-4 text-green-500" />
+                    50 Extra Thinking calls/day
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <Check className="h-4 w-4 text-green-500" />
+                    50GB storage (100x more)
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <Check className="h-4 w-4 text-green-500" />
+                    Enterprise features
+                  </li>
+                </ul>
               </div>
             </div>
           </CardContent>
