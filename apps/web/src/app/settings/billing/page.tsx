@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { SubscriptionCard } from '@/components/billing/SubscriptionCard';
 import { CheckCircle, XCircle, AlertCircle, ArrowLeft } from 'lucide-react';
+<<<<<<< Updated upstream
 // Stripe Payment Links for subscription upgrades
 const STRIPE_PAYMENT_LINKS = {
   starter: 'https://buy.stripe.com/8x2fZjdczc7ffz0eF0eEo01',
@@ -16,6 +17,14 @@ const STRIPE_PAYMENT_LINKS = {
 
 interface SubscriptionData {
   subscriptionTier: 'free' | 'starter' | 'professional' | 'business' | 'enterprise';
+=======
+// Stripe Payment Links
+const STRIPE_PRO_PAYMENT_LINK = process.env.NEXT_PUBLIC_STRIPE_PRO_PAYMENT_LINK || 'https://buy.stripe.com/8x2fZjdczc7ffz0eF0eEo01';
+const STRIPE_BUSINESS_PAYMENT_LINK = process.env.NEXT_PUBLIC_STRIPE_BUSINESS_PAYMENT_LINK || 'https://buy.stripe.com/dRm9AV1tRfjrcmOdAWeEo03';
+
+interface SubscriptionData {
+  subscriptionTier: 'free' | 'pro' | 'business';
+>>>>>>> Stashed changes
   subscription?: {
     status: string;
     currentPeriodStart: string;
@@ -90,11 +99,17 @@ export default function BillingPage() {
     }
   };
 
+<<<<<<< Updated upstream
   const handleUpgrade = (tier: 'starter' | 'professional' | 'business') => {
     const paymentLink = STRIPE_PAYMENT_LINKS[tier];
     if (paymentLink) {
       window.open(paymentLink, '_blank');
     }
+=======
+  const handleUpgrade = (tier: 'pro' | 'business') => {
+    const paymentLink = tier === 'business' ? STRIPE_BUSINESS_PAYMENT_LINK : STRIPE_PRO_PAYMENT_LINK;
+    window.open(paymentLink, '_blank');
+>>>>>>> Stashed changes
   };
 
   const handleManageBilling = async () => {
@@ -234,16 +249,26 @@ export default function BillingPage() {
           <div>
             <h4 className="font-medium mb-2">What happens when I hit my daily limit?</h4>
             <p className="text-sm text-muted-foreground">
+<<<<<<< Updated upstream
               Daily limits only apply to built-in PageSpace AI. Your own API keys (OpenAI, Anthropic, Google, etc.) have no limits.
               Free users get 15 messages/day, Starter get 50/day, Professional get 200/day, Business get 500/day, and Enterprise get unlimited.
               Usage resets at midnight UTC each day.
+=======
+              The daily limits only apply to built-in PageSpace AI. Your own API keys (OpenAI, Anthropic, Google, etc.) have no limits.
+              For Free tier users, you get 25 calls per day. Pro users get 100 calls per day plus 10 Extra Thinking calls. Business users get 500 calls per day plus 50 Extra Thinking calls.
+>>>>>>> Stashed changes
             </p>
           </div>
           <div>
             <h4 className="font-medium mb-2">What are PageSpace&apos;s pricing options?</h4>
             <p className="text-sm text-muted-foreground">
+<<<<<<< Updated upstream
               PageSpace offers Free (15 messages/day), Starter ($29/mo), Professional ($79/mo), and Business ($199/mo) plans.
               For large organizations, we offer Enterprise solutions with both Cloud and On-Premise deployment options - contact sales for custom pricing.
+=======
+              PageSpace offers Personal plans at $29.99/month and Business plans at $199.99/month.
+              All plans include everything you need for productivity with generous limits compared to competitors.
+>>>>>>> Stashed changes
             </p>
           </div>
           <div>

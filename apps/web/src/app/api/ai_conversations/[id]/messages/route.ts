@@ -641,7 +641,11 @@ MENTION PROCESSING:
                   await broadcastUsageEvent({
                     userId,
                     operation: 'updated',
+<<<<<<< Updated upstream
                     subscriptionTier: currentUsageSummary.subscriptionTier as 'free' | 'starter' | 'professional' | 'business' | 'enterprise',
+=======
+                    subscriptionTier: currentUsageSummary.subscriptionTier as 'free' | 'pro' | 'business',
+>>>>>>> Stashed changes
                     normal: currentUsageSummary.normal,
                     extraThinking: currentUsageSummary.extraThinking
                   });

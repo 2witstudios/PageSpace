@@ -3,8 +3,13 @@
  * This replaces the complex sync logic with simple computed values
  */
 
+<<<<<<< Updated upstream
 export type SubscriptionTier = 'free' | 'starter' | 'professional' | 'business' | 'enterprise';
 export type StorageTier = 'free' | 'starter' | 'professional' | 'business' | 'enterprise';
+=======
+export type SubscriptionTier = 'free' | 'pro' | 'business';
+export type StorageTier = 'free' | 'pro' | 'enterprise';
+>>>>>>> Stashed changes
 
 export interface StorageConfig {
   tier: StorageTier;
@@ -19,7 +24,18 @@ export interface StorageConfig {
  * Get storage tier from subscription tier
  */
 export function getStorageTierFromSubscription(subscriptionTier: SubscriptionTier): StorageTier {
+<<<<<<< Updated upstream
   return subscriptionTier;
+=======
+  switch (subscriptionTier) {
+    case 'business':
+      return 'enterprise';
+    case 'pro':
+      return 'pro';
+    default:
+      return 'free';
+  }
+>>>>>>> Stashed changes
 }
 
 /**
@@ -27,6 +43,7 @@ export function getStorageTierFromSubscription(subscriptionTier: SubscriptionTie
  */
 export function getStorageQuotaFromSubscription(subscriptionTier: SubscriptionTier): number {
   switch (subscriptionTier) {
+<<<<<<< Updated upstream
     case 'free':
       return 100 * 1024 * 1024;           // 100MB
     case 'starter':
@@ -39,6 +56,14 @@ export function getStorageQuotaFromSubscription(subscriptionTier: SubscriptionTi
       return 100 * 1024 * 1024 * 1024;    // 100GB
     default:
       return 100 * 1024 * 1024;           // 100MB default
+=======
+    case 'business':
+      return 50 * 1024 * 1024 * 1024;  // 50GB for business
+    case 'pro':
+      return 2 * 1024 * 1024 * 1024;   // 2GB for pro
+    default:
+      return 500 * 1024 * 1024;        // 500MB for free
+>>>>>>> Stashed changes
   }
 }
 
@@ -47,6 +72,7 @@ export function getStorageQuotaFromSubscription(subscriptionTier: SubscriptionTi
  */
 export function getStorageConfigFromSubscription(subscriptionTier: SubscriptionTier): StorageConfig {
   switch (subscriptionTier) {
+<<<<<<< Updated upstream
     case 'free':
       return {
         tier: 'free',
@@ -91,15 +117,42 @@ export function getStorageConfigFromSubscription(subscriptionTier: SubscriptionT
         maxConcurrentUploads: 10,
         maxFileCount: 50000,
         features: ['100GB storage', '500MB per file', 'Dedicated processing', 'Advanced team features', 'SLA support']
+=======
+    case 'business':
+      return {
+        tier: 'enterprise',
+        quotaBytes: 50 * 1024 * 1024 * 1024,    // 50GB
+        maxFileSize: 100 * 1024 * 1024,         // 100MB
+        maxConcurrentUploads: 10,
+        maxFileCount: 5000,
+        features: ['50GB storage', '100MB per file', 'Enterprise processing', 'Priority support']
+      };
+    case 'pro':
+      return {
+        tier: 'pro',
+        quotaBytes: 2 * 1024 * 1024 * 1024,     // 2GB
+        maxFileSize: 50 * 1024 * 1024,          // 50MB
+        maxConcurrentUploads: 3,
+        maxFileCount: 500,
+        features: ['2GB storage', '50MB per file', 'Priority processing']
+>>>>>>> Stashed changes
       };
     default:
       return {
         tier: 'free',
+<<<<<<< Updated upstream
         quotaBytes: 100 * 1024 * 1024,          // 100MB
         maxFileSize: 10 * 1024 * 1024,          // 10MB
         maxConcurrentUploads: 1,
         maxFileCount: 50,
         features: ['100MB storage', '10MB per file', 'Basic processing']
+=======
+        quotaBytes: 500 * 1024 * 1024,          // 500MB
+        maxFileSize: 20 * 1024 * 1024,          // 20MB
+        maxConcurrentUploads: 2,
+        maxFileCount: 100,
+        features: ['500MB storage', '20MB per file', 'Basic processing']
+>>>>>>> Stashed changes
       };
   }
 }

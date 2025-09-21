@@ -25,16 +25,14 @@ COPY pnpm-workspace.yaml package.json pnpm-lock.yaml tsconfig.json ./
 COPY packages ./packages
 COPY apps/processor/package.json ./apps/processor/
 
-# Install all dependencies
-# Install dependencies (allow lockfile update since processor deps changed)
+# Install all dependencies including devDependencies
 RUN pnpm install --no-frozen-lockfile
 
 # Copy processor source code
 COPY apps/processor ./apps/processor
 
-# Build the processor service
-WORKDIR /app/apps/processor
-RUN pnpm build
+# Build the processor service using workspace filter
+RUN pnpm --filter @pagespace/processor build
 
 # Production stage
 FROM node:22.17.0-alpine AS production

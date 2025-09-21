@@ -10,7 +10,11 @@ import { useSocketStore } from '@/stores/socketStore';
 import type { UsageEventPayload } from '@/lib/socket-utils';
 
 interface UsageData {
+<<<<<<< Updated upstream
   subscriptionTier: 'free' | 'starter' | 'professional' | 'business' | 'enterprise';
+=======
+  subscriptionTier: 'free' | 'pro' | 'business';
+>>>>>>> Stashed changes
   normal: {
     current: number;
     limit: number;

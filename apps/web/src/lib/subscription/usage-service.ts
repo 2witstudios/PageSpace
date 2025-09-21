@@ -15,6 +15,7 @@ export interface UsageTrackingResult {
 export function getUsageLimits(subscriptionTier: string, providerType: ProviderType): number {
   if (providerType === 'normal') {
     switch (subscriptionTier) {
+<<<<<<< Updated upstream
       case 'free':
         return 15;
       case 'starter':
@@ -27,11 +28,20 @@ export function getUsageLimits(subscriptionTier: string, providerType: ProviderT
         return -1; // unlimited
       default:
         return 15; // default to free
+=======
+      case 'business':
+        return 500;  // 500 calls/day for business
+      case 'pro':
+        return 100;  // 100 calls/day for pro
+      default:
+        return 25;   // 25 calls/day for free
+>>>>>>> Stashed changes
     }
   }
 
   if (providerType === 'extra_thinking') {
     switch (subscriptionTier) {
+<<<<<<< Updated upstream
       case 'free':
         return 0; // no extra thinking for free
       case 'starter':
@@ -44,6 +54,14 @@ export function getUsageLimits(subscriptionTier: string, providerType: ProviderT
         return -1; // unlimited
       default:
         return 0; // default to no access
+=======
+      case 'business':
+        return 50;   // 50 calls/day for business
+      case 'pro':
+        return 10;   // 10 calls/day for pro
+      default:
+        return 0;    // 0 calls for free
+>>>>>>> Stashed changes
     }
   }
 

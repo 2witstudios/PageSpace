@@ -12,9 +12,14 @@ export interface StorageQuota {
 }
 
 // Map subscription tiers to storage tiers (deprecated - use subscription-utils instead)
+<<<<<<< Updated upstream
 export function mapSubscriptionToStorageTier(subscriptionTier: SubscriptionTier): StorageTier {
   const tier = getStorageTierFromSubscription(subscriptionTier);
   return tier;
+=======
+export function mapSubscriptionToStorageTier(subscriptionTier: 'free' | 'pro' | 'business'): 'free' | 'pro' | 'enterprise' {
+  return getStorageTierFromSubscription(subscriptionTier);
+>>>>>>> Stashed changes
 }
 
 export interface StorageCheckResult {
@@ -42,12 +47,12 @@ export const STORAGE_TIERS = {
     features: ['2GB storage', '50MB per file', 'Priority processing']
   },
   enterprise: {
-    name: 'Enterprise',
-    quotaBytes: 10 * 1024 * 1024 * 1024, // 10GB
+    name: 'Business',
+    quotaBytes: 50 * 1024 * 1024 * 1024, // 50GB
     maxFileSize: 100 * 1024 * 1024,      // 100MB
-    maxConcurrentUploads: 5,
-    maxFileCount: -1, // Unlimited
-    features: ['10GB storage', '100MB per file', 'Dedicated resources']
+    maxConcurrentUploads: 10,
+    maxFileCount: 5000,
+    features: ['50GB storage', '100MB per file', 'Enterprise processing', 'Priority support']
   }
 } as const;
 

@@ -36,7 +36,11 @@ export interface TaskEventPayload {
 export interface UsageEventPayload {
   userId: string;
   operation: UsageOperation;
+<<<<<<< Updated upstream
   subscriptionTier: 'free' | 'starter' | 'professional' | 'business' | 'enterprise';
+=======
+  subscriptionTier: 'free' | 'pro' | 'business';
+>>>>>>> Stashed changes
   normal: {
     current: number;
     limit: number;

@@ -119,9 +119,20 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
 
   const userId = user[0].id;
 
-  // Determine subscription tier
+  // Determine subscription tier based on price ID
   const isEntitled = ['active', 'trialing'].includes(subscription.status);
-  const subscriptionTier = isEntitled ? 'pro' : 'normal';
+  let subscriptionTier: 'free' | 'pro' | 'business';
+
+  if (!isEntitled) {
+    subscriptionTier = 'free';
+  } else {
+    // Get price ID to determine tier
+    const priceId = subscription.items.data[0].price.id;
+    // You'll need to configure these price IDs in your Stripe dashboard
+    // For now, we'll default to 'pro' for any active subscription
+    // TODO: Add logic to distinguish between pro and business based on price ID
+    subscriptionTier = 'pro'; // This should be updated based on actual price IDs
+  }
 
   // Upsert subscription record
   await db.insert(subscriptions).values({
@@ -171,10 +182,10 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
 
   const userId = user[0].id;
 
-  // Downgrade to normal tier
+  // Downgrade to free tier
   await db.update(users)
     .set({
-      subscriptionTier: 'normal',
+      subscriptionTier: 'free',
       updatedAt: new Date(),
     })
     .where(eq(users.id, userId));

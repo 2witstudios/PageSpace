@@ -49,7 +49,11 @@ interface UserData {
   currentAiProvider: string;
   currentAiModel: string;
   tokenVersion: number;
+<<<<<<< Updated upstream
   subscriptionTier: 'free' | 'starter' | 'professional' | 'business' | 'enterprise';
+=======
+  subscriptionTier: 'free' | 'pro' | 'business';
+>>>>>>> Stashed changes
   stats: UserStats;
   aiSettings: AiSetting[];
   recentTokens: RefreshToken[];
@@ -98,10 +102,18 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
     }));
   };
 
+<<<<<<< Updated upstream
   const updateSubscription = async (userId: string, newTier: 'free' | 'starter' | 'professional' | 'business' | 'enterprise') => {
     setUpdatingUsers(prev => ({ ...prev, [userId]: true }));
 
     try {
+=======
+  const toggleSubscription = async (userId: string, currentTier: 'free' | 'pro' | 'business') => {
+    setUpdatingUsers(prev => ({ ...prev, [userId]: true }));
+
+    try {
+      const newTier = currentTier === 'free' ? 'pro' : currentTier === 'pro' ? 'business' : 'free';
+>>>>>>> Stashed changes
       const response = await fetch(`/api/admin/users/${userId}/subscription`, {
         method: 'PUT',
         headers: {

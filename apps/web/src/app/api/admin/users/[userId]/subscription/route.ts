@@ -25,9 +25,15 @@ export async function PUT(
     const { subscriptionTier } = body;
 
     // Validate subscription tier
+<<<<<<< Updated upstream
     if (!subscriptionTier || !['free', 'starter', 'professional', 'business', 'enterprise'].includes(subscriptionTier)) {
       return NextResponse.json(
         { error: 'Invalid subscription tier. Must be "free", "starter", "professional", "business", or "enterprise"' },
+=======
+    if (!subscriptionTier || !['free', 'pro', 'business'].includes(subscriptionTier)) {
+      return NextResponse.json(
+        { error: 'Invalid subscription tier. Must be "free", "pro", or "business"' },
+>>>>>>> Stashed changes
         { status: 400 }
       );
     }
@@ -49,7 +55,11 @@ export async function PUT(
     await db
       .update(users)
       .set({
+<<<<<<< Updated upstream
         subscriptionTier: subscriptionTier as 'free' | 'starter' | 'professional' | 'business' | 'enterprise',
+=======
+        subscriptionTier: subscriptionTier as 'free' | 'pro' | 'business',
+>>>>>>> Stashed changes
         updatedAt: new Date(),
       })
       .where(eq(users.id, userId));

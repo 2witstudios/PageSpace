@@ -25,7 +25,7 @@ export const users = pgTable('users', {
   lastStorageCalculated: timestamp('lastStorageCalculated', { mode: 'date' }),
   // Subscription fields
   stripeCustomerId: text('stripeCustomerId').unique(),
-  subscriptionTier: text('subscriptionTier').default('free').notNull(), // 'free', 'starter', 'professional', 'business', or 'enterprise'
+  subscriptionTier: text('subscriptionTier').default('normal').notNull(), // 'normal' or 'pro'
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
 });

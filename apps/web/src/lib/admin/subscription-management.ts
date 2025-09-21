@@ -17,7 +17,11 @@ export interface SubscriptionUpdateResult {
  */
 export async function updateUserSubscriptionTier(
   userId: string,
+<<<<<<< Updated upstream
   newTier: 'free' | 'starter' | 'professional' | 'business' | 'enterprise',
+=======
+  newTier: 'free' | 'pro' | 'business',
+>>>>>>> Stashed changes
   adminUserId?: string
 ): Promise<SubscriptionUpdateResult> {
   try {
@@ -26,8 +30,13 @@ export async function updateUserSubscriptionTier(
       return { success: false, error: 'User ID is required' };
     }
 
+<<<<<<< Updated upstream
     if (!['free', 'starter', 'professional', 'business', 'enterprise'].includes(newTier)) {
       return { success: false, error: 'Invalid subscription tier. Must be "free", "starter", "professional", "business", or "enterprise"' };
+=======
+    if (!['free', 'pro', 'business'].includes(newTier)) {
+      return { success: false, error: 'Invalid subscription tier. Must be "free", "pro", or "business"' };
+>>>>>>> Stashed changes
     }
 
     // Check if user exists

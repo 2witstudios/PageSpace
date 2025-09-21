@@ -120,7 +120,11 @@ export default function Home() {
                       </li>
                       <li className="flex items-center gap-3">
                         <Zap className="w-5 h-5 text-primary flex-shrink-0" />
+<<<<<<< Updated upstream
                         <span>15 daily PageSpace AI messages</span>
+=======
+                        <span>25 daily PageSpace AI calls</span>
+>>>>>>> Stashed changes
                       </li>
                       <li className="flex items-center gap-3">
                         <Code className="w-5 h-5 text-primary flex-shrink-0" />
@@ -156,7 +160,11 @@ export default function Home() {
                     <div className="flex items-center justify-between">
                       <Badge variant="outline">Popular</Badge>
                       <div className="text-right">
+<<<<<<< Updated upstream
                         <div className="text-3xl font-bold">$29</div>
+=======
+                        <div className="text-3xl font-bold">$29.99</div>
+>>>>>>> Stashed changes
                         <div className="text-sm text-muted-foreground">/month</div>
                       </div>
                     </div>
@@ -173,7 +181,11 @@ export default function Home() {
                       </li>
                       <li className="flex items-center gap-3">
                         <Zap className="w-5 h-5 text-primary flex-shrink-0" />
+<<<<<<< Updated upstream
                         <span>50 daily PageSpace AI messages</span>
+=======
+                        <span>100 PageSpace AI calls/day</span>
+>>>>>>> Stashed changes
                       </li>
                       <li className="flex items-center gap-3">
                         <Code className="w-5 h-5 text-primary flex-shrink-0" />
@@ -257,6 +269,7 @@ export default function Home() {
                 </Card>
 
                 {/* Business Tier */}
+<<<<<<< Updated upstream
                 <Card className="relative border-2 hover:border-primary/50 transition-colors flex flex-col">
                   <CardHeader>
                     <div className="flex items-center justify-between">
@@ -310,22 +323,30 @@ export default function Home() {
                 </Card>
 
                 {/* Enterprise Tier */}
+=======
+>>>>>>> Stashed changes
                 <Card className="relative border-2 hover:border-primary/50 transition-colors flex flex-col">
                   <CardHeader>
                     <div className="flex items-center justify-between">
-                      <Badge variant="outline">Enterprise</Badge>
+                      <Badge variant="outline">Business</Badge>
                       <div className="text-right">
-                        <div className="text-3xl font-bold">Custom</div>
+                        <div className="text-3xl font-bold">$199.99</div>
+                        <div className="text-sm text-muted-foreground">/month</div>
                       </div>
                     </div>
-                    <CardTitle>Enterprise</CardTitle>
+                    <CardTitle>Business</CardTitle>
                     <CardDescription>
+<<<<<<< Updated upstream
                       Scalable solutions for large organizations
+=======
+                      Everything you need for teams and heavy usage
+>>>>>>> Stashed changes
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4 flex-grow">
                     <ul className="space-y-3">
                       <li className="flex items-center gap-3">
+<<<<<<< Updated upstream
                         <Cloud className="w-5 h-5 text-primary flex-shrink-0" />
                         <span>Cloud Enterprise - Managed infrastructure</span>
                       </li>
@@ -345,17 +366,38 @@ export default function Home() {
                         <Shield className="w-5 h-5 text-primary flex-shrink-0" />
                         <span>Enterprise security and compliance</span>
                       </li>
+=======
+                        <Check className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>50GB storage for documents, PDFs, and images</span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                        <Zap className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>500 PageSpace AI calls/day</span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                        <Shield className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>50 daily &quot;Extra Thinking&quot; sessions</span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                        <Users className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>Real-time collaboration</span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                        <GitMerge className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>Hierarchical AI agents</span>
+                      </li>
+>>>>>>> Stashed changes
                     </ul>
                     <div className="pt-4 border-t">
                       <p className="text-sm text-muted-foreground">
-                        Custom pricing based on deployment and requirements
+                        Perfect for teams, agencies, and power users
                       </p>
                     </div>
                   </CardContent>
                   <CardFooter>
-                    <Button asChild variant="outline" className="w-full" size="lg">
-                      <Link href="/contact">
-                        Contact Sales
+                    <Button asChild className="w-full" size="lg">
+                      <Link href="/settings/billing">
+                        Get Started
                       </Link>
                     </Button>
                   </CardFooter>
