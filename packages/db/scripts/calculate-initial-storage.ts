@@ -71,12 +71,12 @@ async function calculateInitialStorage() {
         console.log(`  Total size: ${formatBytes(totalSize)}`);
 
         // Check if user needs subscription upgrade (log warnings only)
-        const currentSubscription = user.subscriptionTier || 'normal';
+        const currentSubscription = user.subscriptionTier || 'free';
         const freeLimit = 524288000; // 500MB
         const proLimit = 2 * 1024 * 1024 * 1024; // 2GB
 
-        if (totalSize > freeLimit && currentSubscription === 'normal') {
-          console.log(`  ⚠️ User using ${formatBytes(totalSize)} but has normal subscription (${formatBytes(freeLimit)} limit)`);
+        if (totalSize > freeLimit && currentSubscription === 'free') {
+          console.log(`  ⚠️ User using ${formatBytes(totalSize)} but has free subscription (${formatBytes(freeLimit)} limit)`);
         } else if (totalSize > proLimit && currentSubscription === 'pro') {
           console.log(`  ⚠️ User using ${formatBytes(totalSize)} but only has pro subscription (${formatBytes(proLimit)} limit)`);
         }
@@ -126,7 +126,7 @@ async function calculateInitialStorage() {
         totalUsers: sql<number>`COUNT(*)`,
         totalStorage: sql<number>`SUM(storage_used_bytes)`,
         avgStorage: sql<number>`AVG(storage_used_bytes)`,
-        normalUsers: sql<number>`COUNT(*) FILTER (WHERE subscription_tier = 'normal')`,
+        normalUsers: sql<number>`COUNT(*) FILTER (WHERE subscription_tier = 'free')`,
         proUsers: sql<number>`COUNT(*) FILTER (WHERE subscription_tier = 'pro')`
       })
       .from(users);
@@ -136,7 +136,7 @@ async function calculateInitialStorage() {
     console.log(`  Total users: ${stats.totalUsers}`);
     console.log(`  Total storage used: ${formatBytes(Number(stats.totalStorage || 0))}`);
     console.log(`  Average per user: ${formatBytes(Number(stats.avgStorage || 0))}`);
-    console.log(`  Normal subscription users: ${stats.normalUsers}`);
+    console.log(`  Free subscription users: ${stats.normalUsers}`);
     console.log(`  Pro subscription users: ${stats.proUsers}`);
 
   } catch (error) {

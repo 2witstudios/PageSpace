@@ -8,7 +8,7 @@ export const AI_PROVIDERS = {
     name: 'PageSpace',
     models: {
       'gemini-2.5-flash': 'Normal',
-      'gemini-2.5-pro': 'Extra Thinking (Pro Only)',
+      'gemini-2.5-pro': 'Advanced (Pro/Business)',
     },
   },
   openrouter: {

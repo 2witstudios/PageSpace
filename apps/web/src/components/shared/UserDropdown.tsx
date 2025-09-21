@@ -105,7 +105,7 @@ export default function UserDropdown() {
           <DropdownMenuItem onClick={() => router.push('/settings/billing')}>
             <CreditCard className="mr-2 h-4 w-4" />
             <span>
-              Billing ({subscriptionInfo?.subscriptionTier === 'pro' ? 'Pro' : 'Free'})
+              Billing ({subscriptionInfo?.subscriptionTier === 'free' ? 'Free' : subscriptionInfo?.subscriptionTier === 'pro' ? 'Pro' : 'Business'})
             </span>
           </DropdownMenuItem>
           <DropdownMenuItem onClick={() => router.push('/account')}>

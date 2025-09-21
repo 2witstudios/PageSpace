@@ -49,7 +49,7 @@ interface UserData {
   currentAiProvider: string;
   currentAiModel: string;
   tokenVersion: number;
-  subscriptionTier: 'normal' | 'pro' | 'business';
+  subscriptionTier: 'free' | 'pro' | 'business';
   stats: UserStats;
   aiSettings: AiSetting[];
   recentTokens: RefreshToken[];
@@ -98,18 +98,18 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
     }));
   };
 
-  const toggleSubscription = async (userId: string, currentTier: 'normal' | 'pro' | 'business') => {
+  const toggleSubscription = async (userId: string, currentTier: 'free' | 'pro' | 'business') => {
     setUpdatingUsers(prev => ({ ...prev, [userId]: true }));
 
     try {
       // Cycle through tiers: normal -> pro -> business -> normal
-      let newTier: 'normal' | 'pro' | 'business';
-      if (currentTier === 'normal') {
+      let newTier: 'free' | 'pro' | 'business';
+      if (currentTier === 'free') {
         newTier = 'pro';
       } else if (currentTier === 'pro') {
         newTier = 'business';
       } else {
-        newTier = 'normal';
+        newTier = 'free';
       }
       const response = await fetch(`/api/admin/users/${userId}/subscription`, {
         method: 'PUT',
@@ -324,7 +324,7 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
                           </div>
                           <Button
                             size="sm"
-                            variant={user.subscriptionTier === 'normal' ? "default" : "destructive"}
+                            variant={user.subscriptionTier === 'free' ? "default" : "destructive"}
                             onClick={() => toggleSubscription(user.id, user.subscriptionTier)}
                             disabled={updatingUsers[user.id]}
                             className="w-full"
@@ -340,7 +340,7 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
                                 <span>Updated!</span>
                               </div>
                             ) : (
-                              user.subscriptionTier === 'normal' ? 'Upgrade to Pro' :
+                              user.subscriptionTier === 'free' ? 'Upgrade to Pro' :
                               user.subscriptionTier === 'pro' ? 'Upgrade to Business' : 'Downgrade to Free'
                             )}
                           </Button>

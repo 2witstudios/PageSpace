@@ -35,7 +35,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Compute storage config from subscription tier
-    const subscriptionTier = (user.subscriptionTier || 'normal') as SubscriptionTier;
+    const subscriptionTier = (user.subscriptionTier || 'free') as SubscriptionTier;
     const storageConfig = getStorageConfigFromSubscription(subscriptionTier);
 
     return NextResponse.json({

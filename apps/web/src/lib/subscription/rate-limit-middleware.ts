@@ -98,9 +98,14 @@ function getTomorrowMidnight(): Date {
 /**
  * Check if provider requires Pro subscription
  */
-export function requiresProSubscription(provider: string, model?: string): boolean {
-  // Check if this is the thinking model for PageSpace provider
-  return provider === 'pagespace' && model === 'gemini-2.5-pro';
+export function requiresProSubscription(provider: string, model: string | undefined, subscriptionTier: string | undefined): boolean {
+  const isThinkingModel = provider === 'pagespace' && model === 'gemini-2.5-pro';
+  if (!isThinkingModel) {
+    return false;
+  }
+
+  // Allow access for 'pro' and 'business' tiers
+  return subscriptionTier !== 'pro' && subscriptionTier !== 'business';
 }
 
 /**
@@ -110,7 +115,7 @@ export function createSubscriptionRequiredResponse(): NextResponse {
   return NextResponse.json(
     {
       error: 'Subscription required',
-      message: 'Extra Thinking provider requires a Pro subscription.',
+      message: 'Extra Thinking provider requires a Pro or Business subscription.',
       upgradeUrl: '/settings/billing',
     },
     { status: 403 }

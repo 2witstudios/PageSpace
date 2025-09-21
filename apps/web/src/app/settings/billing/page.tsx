@@ -2,17 +2,19 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { SubscriptionCard } from '@/components/billing/SubscriptionCard';
+import { PlanComparisonTable } from '@/components/billing/PlanComparisonTable';
 import { CheckCircle, XCircle, AlertCircle, ArrowLeft } from 'lucide-react';
+import { getNextPlan, type SubscriptionTier } from '@/lib/subscription/plans';
+
 // Stripe Payment Links for subscription upgrades
 const STRIPE_PRO_PAYMENT_LINK = 'https://buy.stripe.com/8x2fZjdczc7ffz0eF0eEo01';
 const STRIPE_BUSINESS_PAYMENT_LINK = 'https://buy.stripe.com/dRm9AV1tRfjrcmOdAWeEo03';
 
 interface SubscriptionData {
-  subscriptionTier: 'normal' | 'pro' | 'business';
+  subscriptionTier: 'free' | 'pro' | 'business';
   subscription?: {
     status: string;
     currentPeriodStart: string;
@@ -27,7 +29,7 @@ interface SubscriptionData {
 }
 
 interface UsageData {
-  normal: {
+  free: {
     current: number;
     limit: number;
     remaining: number;
@@ -75,7 +77,7 @@ export default function BillingPage() {
 
       setSubscriptionData(subscription);
       setUsageData({
-        normal: usage.normal,
+        free: usage.free,
         extraThinking: usage.extraThinking,
       });
 
@@ -87,11 +89,35 @@ export default function BillingPage() {
     }
   };
 
-  const handleUpgrade = () => {
-    // Choose payment link based on current subscription tier
-    const paymentLink = subscriptionData?.subscriptionTier === 'normal'
-      ? STRIPE_PRO_PAYMENT_LINK
-      : STRIPE_BUSINESS_PAYMENT_LINK;
+  const handleUpgrade = (targetTier?: SubscriptionTier) => {
+    if (!subscriptionData) return;
+
+    let paymentLink: string;
+
+    if (targetTier) {
+      // Upgrade to specific tier
+      if (targetTier === 'pro') {
+        paymentLink = STRIPE_PRO_PAYMENT_LINK;
+      } else if (targetTier === 'business') {
+        paymentLink = STRIPE_BUSINESS_PAYMENT_LINK;
+      } else {
+        console.error('Invalid target tier for upgrade:', targetTier);
+        return;
+      }
+    } else {
+      // Legacy upgrade to next tier
+      const nextPlan = getNextPlan(subscriptionData.subscriptionTier);
+      if (!nextPlan) {
+        console.error('No upgrade path available');
+        return;
+      }
+
+      paymentLink = nextPlan.stripePaymentLink || '';
+      if (!paymentLink) {
+        console.error('No payment link for next plan:', nextPlan.id);
+        return;
+      }
+    }
 
     window.open(paymentLink, '_blank');
   };
@@ -172,7 +198,8 @@ export default function BillingPage() {
   }
 
   return (
-    <div className="container mx-auto p-6 space-y-6">
+    <div className="container mx-auto p-6 space-y-8">
+      {/* Header */}
       <div>
         <Button
           variant="ghost"
@@ -183,17 +210,19 @@ export default function BillingPage() {
           <ArrowLeft className="h-4 w-4 mr-2" />
           Back to Settings
         </Button>
-        <h1 className="text-3xl font-bold">Billing & Subscription</h1>
-        <p className="text-muted-foreground">
-          Manage your PageSpace subscription and usage
-        </p>
+        <div className="text-center space-y-2">
+          <h1 className="text-4xl font-bold">Billing & Subscription</h1>
+          <p className="text-muted-foreground text-lg max-w-2xl mx-auto">
+            Manage your PageSpace subscription, view usage, and explore our plans
+          </p>
+        </div>
       </div>
 
       {/* Success/Cancel Alerts */}
       {success && (
-        <Alert className="border-green-200 bg-green-50">
+        <Alert className="border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950/20">
           <CheckCircle className="h-4 w-4 text-green-600" />
-          <AlertDescription className="text-green-800">
+          <AlertDescription className="text-green-800 dark:text-green-200">
             Welcome to PageSpace Pro! Your subscription is now active.
           </AlertDescription>
         </Alert>
@@ -216,45 +245,22 @@ export default function BillingPage() {
         </Alert>
       )}
 
-      {/* Main Subscription Card */}
-      <SubscriptionCard
-        subscription={subscriptionData}
-        usage={usageData}
+      {/* Current Subscription Overview */}
+      <div className="space-y-4">
+        <h2 className="text-2xl font-semibold text-center">Your Current Subscription</h2>
+        <SubscriptionCard
+          subscription={subscriptionData}
+          usage={usageData}
+          onManageBilling={handleManageBilling}
+        />
+      </div>
+
+      {/* Plan Comparison Table */}
+      <PlanComparisonTable
+        currentTier={subscriptionData.subscriptionTier}
         onUpgrade={handleUpgrade}
         onManageBilling={handleManageBilling}
       />
-
-      {/* FAQ or Additional Info */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Frequently Asked Questions</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div>
-            <h4 className="font-medium mb-2">What happens when I hit my daily limit?</h4>
-            <p className="text-sm text-muted-foreground">
-              Daily limits only apply to built-in PageSpace AI. Your own API keys (OpenAI, Anthropic, Google, etc.) have no limits.
-              Normal tier: 20 calls/day. Pro tier: 50 calls/day. Business tier: 500 calls/day.
-              Usage resets daily at midnight UTC. Extra Thinking is available for Pro (10/day) and Business (50/day) users.
-            </p>
-          </div>
-          <div>
-            <h4 className="font-medium mb-2">What are PageSpace&apos;s pricing options?</h4>
-            <p className="text-sm text-muted-foreground">
-              Normal: Free with 20 AI calls/day and 500MB storage.
-              Pro: $29.99/month with 50 AI calls/day, 10 Extra Thinking calls, and 2GB storage.
-              Business: $199.99/month with 500 AI calls/day, 50 Extra Thinking calls, and 50GB storage.
-            </p>
-          </div>
-          <div>
-            <h4 className="font-medium mb-2">Can I cancel anytime?</h4>
-            <p className="text-sm text-muted-foreground">
-              Yes! You can cancel your Pro or Business subscription anytime through the billing portal.
-              You&apos;ll keep your paid features until the end of your current billing period.
-            </p>
-          </div>
-        </CardContent>
-      </Card>
     </div>
   );
 }

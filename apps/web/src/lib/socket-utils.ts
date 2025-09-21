@@ -36,8 +36,8 @@ export interface TaskEventPayload {
 export interface UsageEventPayload {
   userId: string;
   operation: UsageOperation;
-  subscriptionTier: 'normal' | 'pro';
-  normal: {
+  subscriptionTier: 'free' | 'pro' | 'business';
+  free: {
     current: number;
     limit: number;
     remaining: number;
@@ -194,7 +194,7 @@ export async function broadcastUsageEvent(payload: UsageEventPayload): Promise<v
     console.log('🔔 Usage event broadcasted:', {
       userId: payload.userId,
       operation: payload.operation,
-      normal: `${payload.normal.current}/${payload.normal.limit}`,
+      free: `${payload.free.current}/${payload.free.limit}`,
       extraThinking: `${payload.extraThinking.current}/${payload.extraThinking.limit}`
     });
   } catch (error) {

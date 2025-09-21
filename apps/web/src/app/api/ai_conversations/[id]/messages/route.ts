@@ -715,8 +715,8 @@ MENTION PROCESSING:
                   await broadcastUsageEvent({
                     userId,
                     operation: 'updated',
-                    subscriptionTier: currentUsageSummary.subscriptionTier as 'normal' | 'pro',
-                    normal: currentUsageSummary.normal,
+                    subscriptionTier: currentUsageSummary.subscriptionTier as 'free' | 'pro',
+                    free: currentUsageSummary.free,
                     extraThinking: currentUsageSummary.extraThinking
                   });
 

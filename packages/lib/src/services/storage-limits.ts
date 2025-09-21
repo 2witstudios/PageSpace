@@ -12,7 +12,7 @@ export interface StorageQuota {
 }
 
 // Map subscription tiers to storage tiers (deprecated - use subscription-utils instead)
-export function mapSubscriptionToStorageTier(subscriptionTier: 'normal' | 'pro' | 'business'): 'free' | 'pro' | 'business' {
+export function mapSubscriptionToStorageTier(subscriptionTier: 'free' | 'pro' | 'business'): 'free' | 'pro' | 'business' {
   const tier = getStorageTierFromSubscription(subscriptionTier);
   return tier; // Return tier directly since we've removed enterprise
 }
@@ -39,7 +39,7 @@ export const STORAGE_TIERS = {
     maxFileSize: 50 * 1024 * 1024,      // 50MB
     maxConcurrentUploads: 3,
     maxFileCount: 500,
-    features: ['2GB storage', '50MB per file', 'Priority processing']
+    features: ['2GB storage', '50MB per file']
   },
   business: {
     name: 'Business',
@@ -47,7 +47,7 @@ export const STORAGE_TIERS = {
     maxFileSize: 100 * 1024 * 1024,      // 100MB
     maxConcurrentUploads: 10,
     maxFileCount: 5000,
-    features: ['50GB storage', '100MB per file', 'Enterprise processing']
+    features: ['50GB storage', '100MB per file']
   }
 } as const;
 
@@ -68,7 +68,7 @@ export async function getUserStorageQuota(userId: string): Promise<StorageQuota 
   if (!user) return null;
 
   // Compute storage config from subscription tier
-  const subscriptionTier = (user.subscriptionTier || 'normal') as SubscriptionTier;
+  const subscriptionTier = (user.subscriptionTier || 'free') as SubscriptionTier;
   const storageConfig = getStorageConfigFromSubscription(subscriptionTier);
 
   const quotaBytes = storageConfig.quotaBytes;
@@ -156,7 +156,7 @@ export async function checkConcurrentUploads(userId: string): Promise<boolean> {
 
   if (!user) return false;
 
-  const subscriptionTier = (user.subscriptionTier || 'normal') as SubscriptionTier;
+  const subscriptionTier = (user.subscriptionTier || 'free') as SubscriptionTier;
   const storageConfig = getStorageConfigFromSubscription(subscriptionTier);
 
   return (user.activeUploads || 0) < storageConfig.maxConcurrentUploads;

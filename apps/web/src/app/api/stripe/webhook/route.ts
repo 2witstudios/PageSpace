@@ -122,11 +122,11 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
   // Determine subscription tier based on price or subscription status
   const isEntitled = ['active', 'trialing'].includes(subscription.status);
 
-  let subscriptionTier: 'normal' | 'pro' | 'business';
+  let subscriptionTier: 'free' | 'pro' | 'business';
 
   if (!isEntitled) {
     // If not active/trialing, set to normal regardless of price
-    subscriptionTier = 'normal';
+    subscriptionTier = 'free';
   } else {
     // For active subscriptions, determine tier from price amount
     const priceAmount = subscription.items.data[0].price.unit_amount; // in cents
@@ -193,7 +193,7 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
   // Downgrade to normal tier
   await db.update(users)
     .set({
-      subscriptionTier: 'normal',
+      subscriptionTier: 'free',
       updatedAt: new Date(),
     })
     .where(eq(users.id, userId));
@@ -208,7 +208,7 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
     })
     .where(eq(subscriptions.stripeSubscriptionId, subscription.id));
 
-  console.log(`Downgraded user ${userId} to normal tier`);
+  console.log(`Downgraded user ${userId} to free tier`);
 }
 
 async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {

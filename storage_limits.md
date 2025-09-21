@@ -51,7 +51,7 @@ This document outlines a comprehensive storage management system for PageSpace, 
 ALTER TABLE users 
 ADD COLUMN storage_quota_bytes BIGINT DEFAULT 1073741824, -- 1GB default
 ADD COLUMN storage_used_bytes BIGINT DEFAULT 0,
-ADD COLUMN storage_tier TEXT DEFAULT 'free' CHECK (storage_tier IN ('free', 'pro', 'enterprise')),
+ADD COLUMN storage_tier TEXT DEFAULT 'free' CHECK (storage_tier IN ('free', 'pro', 'business')),
 ADD COLUMN last_storage_calculated TIMESTAMP DEFAULT NOW();
 
 -- Add indexes for performance
@@ -93,7 +93,7 @@ export interface StorageQuota {
   usedBytes: number;
   availableBytes: number;
   utilizationPercent: number;
-  tier: 'free' | 'pro' | 'enterprise';
+  tier: 'free' | 'pro' | 'business';
   warningLevel: 'none' | 'warning' | 'critical';
 }
 

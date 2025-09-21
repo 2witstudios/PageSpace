@@ -14,17 +14,17 @@ export interface UsageTrackingResult {
  */
 export function getUsageLimits(subscriptionTier: string, providerType: ProviderType): number {
   if (providerType === 'normal') {
-    // Normal tier: 20 calls/day, Pro tier: 50 calls/day, Business tier: 500 calls/day
+    // Free tier: 20 calls/day, Pro tier: 50 calls/day, Business tier: 500 calls/day
     if (subscriptionTier === 'business') return 500;
     if (subscriptionTier === 'pro') return 50;
-    return 20; // normal tier
+    return 20; // free tier
   }
 
   if (providerType === 'extra_thinking') {
-    // Extra thinking: 0 calls for normal, 10 calls for pro, 50 calls for business
+    // Extra thinking: 0 calls for free, 10 calls for pro, 50 calls for business
     if (subscriptionTier === 'business') return 50;
     if (subscriptionTier === 'pro') return 10;
-    return 0; // normal tier
+    return 0; // free tier
   }
 
   return 0;
@@ -74,7 +74,7 @@ export async function incrementUsage(
 
   // No access (normal tier trying extra thinking)
   if (limit === 0) {
-    console.log('❌ No access (Normal tier trying extra thinking):', { userId, providerType, subscriptionTier });
+    console.log('❌ No access (Free tier trying extra thinking):', { userId, providerType, subscriptionTier });
     return {
       success: false,
       currentCount: 0,
@@ -320,7 +320,7 @@ export async function getUserUsageSummary(userId: string) {
 
   return {
     subscriptionTier,
-    normal: {
+    free: {
       current: normalUsage,
       limit: normalLimit,
       remaining: normalLimit === -1 ? -1 : Math.max(0, normalLimit - normalUsage)

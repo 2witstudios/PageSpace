@@ -43,7 +43,7 @@ interface StorageInfo {
     usedBytes: number;
     availableBytes: number;
     utilizationPercent: number;
-    tier: 'free' | 'pro' | 'enterprise';
+    tier: 'free' | 'pro' | 'business';
     warningLevel: 'none' | 'warning' | 'critical';
     formattedUsed: string;
     formattedQuota: string;

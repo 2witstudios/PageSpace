@@ -244,7 +244,7 @@ export async function POST(request: Request) {
     const { requiresProSubscription, createSubscriptionRequiredResponse } = await import('@/lib/subscription/rate-limit-middleware');
 
     // Check if provider requires Pro subscription
-    if (requiresProSubscription(currentProvider, currentModel) && user?.subscriptionTier !== 'pro') {
+    if (requiresProSubscription(currentProvider, currentModel, user?.subscriptionTier)) {
       loggers.ai.warn('AI Chat API: Pro subscription required', {
         userId,
         provider: currentProvider,
@@ -827,8 +827,8 @@ MENTION PROCESSING:
                     await broadcastUsageEvent({
                       userId: userId!,
                       operation: 'updated',
-                      subscriptionTier: currentUsageSummary.subscriptionTier as 'normal' | 'pro',
-                      normal: currentUsageSummary.normal,
+                      subscriptionTier: currentUsageSummary.subscriptionTier as 'free' | 'pro',
+                      free: currentUsageSummary.free,
                       extraThinking: currentUsageSummary.extraThinking
                     });
 

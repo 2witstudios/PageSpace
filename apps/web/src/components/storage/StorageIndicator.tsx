@@ -10,7 +10,7 @@ import { AlertTriangle, HardDrive } from 'lucide-react';
 interface StorageIndicatorProps {
   used: number;
   quota: number;
-  tier?: 'free' | 'pro' | 'enterprise';
+  tier?: 'free' | 'pro' | 'business';
   showDetails?: boolean;
   className?: string;
   compact?: boolean;
@@ -111,7 +111,7 @@ interface StorageQuotaDetails {
     usedBytes: number;
     availableBytes: number;
     utilizationPercent: number;
-    tier: 'free' | 'pro' | 'enterprise';
+    tier: 'free' | 'pro' | 'business';
     warningLevel: 'none' | 'warning' | 'critical';
   };
   fileCount?: number;

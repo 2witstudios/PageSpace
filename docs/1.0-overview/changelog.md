@@ -1,5 +1,13 @@
 ### 2025-09-19
 
+## 2025-09-21
+
+### Fixed
+
+- Corrected a legacy code bug in the subscription plan service that improperly handled the new "Free | Pro | Business" tiers.
+- Updated the rate-limiting error message for advanced AI models to correctly mention that both "Pro" and "Business" tiers have access.
+- Renamed the "Extra Thinking (Pro Only)" AI model to "Advanced (Pro/Business)" to accurately reflect its availability across the new subscription tiers.
+- Verified that all subscription and rate-limiting logic now correctly supports the "Business" tier.
 - **AI Tool Simplification**: Simplified batch operations for better AI compatibility
   - **REMOVED**: Complex `batch_page_operations` tool with confusing `tempId` system
     - **Issue**: AI assistants struggled with `tempId` scoping and parameter requirements

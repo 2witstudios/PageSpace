@@ -136,7 +136,7 @@ export async function GET(req: Request) {
         role: 'user',
         // Storage tracking (quota/tier computed from subscriptionTier)
         storageUsedBytes: 0,
-        subscriptionTier: 'normal',
+        subscriptionTier: 'free',
       }).returning();
 
       user = newUser;

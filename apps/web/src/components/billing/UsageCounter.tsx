@@ -10,8 +10,8 @@ import { useSocketStore } from '@/stores/socketStore';
 import type { UsageEventPayload } from '@/lib/socket-utils';
 
 interface UsageData {
-  subscriptionTier: 'normal' | 'pro' | 'business';
-  normal: {
+  subscriptionTier: 'free' | 'pro' | 'business';
+  free: {
     current: number;
     limit: number;
     remaining: number;
@@ -36,7 +36,7 @@ export function UsageCounter() {
   const isPro = usage?.subscriptionTier === 'pro';
   const isBusiness = usage?.subscriptionTier === 'business';
   const isPaid = isPro || isBusiness;
-  const isNearLimit = usage && usage.normal.limit > 0 && usage.normal.remaining <= 10;
+  const isNearLimit = usage && usage.free.limit > 0 && usage.free.remaining <= 10;
 
   const handleBillingClick = () => {
     router.push('/settings/billing');
@@ -54,7 +54,7 @@ export function UsageCounter() {
         // Update SWR cache with new usage data
         mutate({
           subscriptionTier: payload.subscriptionTier,
-          normal: payload.normal,
+          free: payload.free,
           extraThinking: payload.extraThinking
         }, false); // Don't revalidate, trust the real-time data
       };
@@ -112,7 +112,7 @@ export function UsageCounter() {
             variant={isNearLimit ? "destructive" : "secondary"}
             className="text-xs font-medium"
           >
-            {usage.normal.current}/{usage.normal.limit}
+            {usage.free.current}/{usage.free.limit}
           </Badge>
           <span className="hidden lg:inline text-muted-foreground">today</span>
         </div>

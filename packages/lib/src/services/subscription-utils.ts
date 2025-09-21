@@ -3,7 +3,7 @@
  * This replaces the complex sync logic with simple computed values
  */
 
-export type SubscriptionTier = 'normal' | 'pro' | 'business';
+export type SubscriptionTier = 'free' | 'pro' | 'business';
 export type StorageTier = 'free' | 'pro' | 'business';
 
 export interface StorageConfig {
@@ -30,7 +30,7 @@ export function getStorageTierFromSubscription(subscriptionTier: SubscriptionTie
 export function getStorageQuotaFromSubscription(subscriptionTier: SubscriptionTier): number {
   if (subscriptionTier === 'business') return 50 * 1024 * 1024 * 1024; // 50GB for business
   if (subscriptionTier === 'pro') return 2 * 1024 * 1024 * 1024;      // 2GB for pro
-  return 500 * 1024 * 1024;                                          // 500MB for normal
+  return 500 * 1024 * 1024;                                          // 500MB for free
 }
 
 /**
@@ -44,7 +44,7 @@ export function getStorageConfigFromSubscription(subscriptionTier: SubscriptionT
       maxFileSize: 100 * 1024 * 1024,         // 100MB
       maxConcurrentUploads: 10,
       maxFileCount: 5000,
-      features: ['50GB storage', '100MB per file', 'Enterprise processing']
+      features: ['50GB storage', '100MB per file']
     };
   }
 
@@ -55,7 +55,7 @@ export function getStorageConfigFromSubscription(subscriptionTier: SubscriptionT
       maxFileSize: 50 * 1024 * 1024,          // 50MB
       maxConcurrentUploads: 3,
       maxFileCount: 500,
-      features: ['2GB storage', '50MB per file', 'Priority processing']
+      features: ['2GB storage', '50MB per file']
     };
   }
 
