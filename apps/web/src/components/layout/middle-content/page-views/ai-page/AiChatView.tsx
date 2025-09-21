@@ -33,6 +33,10 @@ interface ProviderSettings {
     pagespace?: { isConfigured: boolean; hasApiKey: boolean };
     openrouter: { isConfigured: boolean; hasApiKey: boolean };
     google: { isConfigured: boolean; hasApiKey: boolean };
+    openai?: { isConfigured: boolean; hasApiKey: boolean };
+    anthropic?: { isConfigured: boolean; hasApiKey: boolean };
+    xai?: { isConfigured: boolean; hasApiKey: boolean };
+    ollama?: { isConfigured: boolean; hasBaseUrl: boolean };
   };
   isAnyProviderConfigured: boolean;
 }

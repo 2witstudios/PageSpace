@@ -27,7 +27,7 @@ COPY apps/processor/package.json ./apps/processor/
 
 # Install all dependencies
 # Install dependencies (allow lockfile update since processor deps changed)
-RUN pnpm install --no-frozen-lockfile
+RUN pnpm install --no-frozen-lockfile --prod=false
 
 # Copy processor source code
 COPY apps/processor ./apps/processor

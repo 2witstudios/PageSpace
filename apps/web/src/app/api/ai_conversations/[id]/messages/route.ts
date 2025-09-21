@@ -4,6 +4,9 @@ import { incrementUsage, getUserUsageSummary } from '@/lib/subscription/usage-se
 import { broadcastUsageEvent } from '@/lib/socket-utils';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
+import { createOpenAI } from '@ai-sdk/openai';
+import { createAnthropic } from '@ai-sdk/anthropic';
+import { createXai } from '@ai-sdk/xai';
 import { createOllama } from 'ollama-ai-provider-v2';
 import { authenticateRequest } from '@/lib/auth-utils';
 import {
@@ -12,6 +15,12 @@ import {
   getUserGoogleSettings,
   createGoogleSettings,
   getDefaultPageSpaceSettings,
+  getUserOpenAISettings,
+  createOpenAISettings,
+  getUserAnthropicSettings,
+  createAnthropicSettings,
+  getUserXAISettings,
+  createXAISettings,
   getUserOllamaSettings,
   createOllamaSettings
 } from '@/lib/ai/ai-utils';
@@ -153,6 +162,9 @@ export async function POST(
       selectedModel,
       openRouterApiKey,
       googleApiKey,
+      openAIApiKey,
+      anthropicApiKey,
+      xaiApiKey,
       ollamaBaseUrl,
       locationContext,
       agentRole: roleString
@@ -370,6 +382,69 @@ export async function POST(
         baseURL: ollamaApiUrl,
       });
       model = ollamaProvider(currentModel);
+
+    } else if (currentProvider === 'openai') {
+      // Handle OpenAI setup
+      let openAISettings = await getUserOpenAISettings(userId);
+
+      if (!openAISettings && openAIApiKey) {
+        await createOpenAISettings(userId, openAIApiKey);
+        openAISettings = { apiKey: openAIApiKey, isConfigured: true };
+      }
+
+      if (!openAISettings) {
+        return NextResponse.json({
+          error: 'OpenAI API key not configured. Please provide an API key.'
+        }, { status: 400 });
+      }
+
+      // Create OpenAI provider instance with API key
+      const openai = createOpenAI({
+        apiKey: openAISettings.apiKey,
+      });
+      model = openai(currentModel);
+
+    } else if (currentProvider === 'anthropic') {
+      // Handle Anthropic setup
+      let anthropicSettings = await getUserAnthropicSettings(userId);
+
+      if (!anthropicSettings && anthropicApiKey) {
+        await createAnthropicSettings(userId, anthropicApiKey);
+        anthropicSettings = { apiKey: anthropicApiKey, isConfigured: true };
+      }
+
+      if (!anthropicSettings) {
+        return NextResponse.json({
+          error: 'Anthropic API key not configured. Please provide an API key.'
+        }, { status: 400 });
+      }
+
+      // Create Anthropic provider instance with API key
+      const anthropic = createAnthropic({
+        apiKey: anthropicSettings.apiKey,
+      });
+      model = anthropic(currentModel);
+
+    } else if (currentProvider === 'xai') {
+      // Handle xAI setup
+      let xaiSettings = await getUserXAISettings(userId);
+
+      if (!xaiSettings && xaiApiKey) {
+        await createXAISettings(userId, xaiApiKey);
+        xaiSettings = { apiKey: xaiApiKey, isConfigured: true };
+      }
+
+      if (!xaiSettings) {
+        return NextResponse.json({
+          error: 'xAI API key not configured. Please provide an API key.'
+        }, { status: 400 });
+      }
+
+      // Create xAI provider instance with API key
+      const xai = createXai({
+        apiKey: xaiSettings.apiKey,
+      });
+      model = xai(currentModel);
 
     } else {
       return NextResponse.json({

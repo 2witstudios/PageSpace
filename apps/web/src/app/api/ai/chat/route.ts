@@ -1008,12 +1008,21 @@ export async function GET(request: Request) {
     
     // Check PageSpace default settings
     const pageSpaceSettings = await getDefaultPageSpaceSettings();
-    
+
     // Check OpenRouter settings
     const openRouterSettings = await getUserOpenRouterSettings(userId);
-    
+
     // Check Google AI settings
     const googleSettings = await getUserGoogleSettings(userId);
+
+    // Check OpenAI settings
+    const openAISettings = await getUserOpenAISettings(userId);
+
+    // Check Anthropic settings
+    const anthropicSettings = await getUserAnthropicSettings(userId);
+
+    // Check xAI settings
+    const xaiSettings = await getUserXAISettings(userId);
 
     // Check Ollama settings
     const ollamaSettings = await getUserOllamaSettings(userId);
@@ -1034,12 +1043,24 @@ export async function GET(request: Request) {
           isConfigured: !!googleSettings?.isConfigured,
           hasApiKey: !!googleSettings?.apiKey,
         },
+        openai: {
+          isConfigured: !!openAISettings?.isConfigured,
+          hasApiKey: !!openAISettings?.apiKey,
+        },
+        anthropic: {
+          isConfigured: !!anthropicSettings?.isConfigured,
+          hasApiKey: !!anthropicSettings?.apiKey,
+        },
+        xai: {
+          isConfigured: !!xaiSettings?.isConfigured,
+          hasApiKey: !!xaiSettings?.apiKey,
+        },
         ollama: {
           isConfigured: !!ollamaSettings?.isConfigured,
           hasBaseUrl: !!ollamaSettings?.baseUrl,
         },
       },
-      isAnyProviderConfigured: !!pageSpaceSettings?.isConfigured || !!openRouterSettings?.isConfigured || !!googleSettings?.isConfigured || !!ollamaSettings?.isConfigured,
+      isAnyProviderConfigured: !!pageSpaceSettings?.isConfigured || !!openRouterSettings?.isConfigured || !!googleSettings?.isConfigured || !!openAISettings?.isConfigured || !!anthropicSettings?.isConfigured || !!xaiSettings?.isConfigured || !!ollamaSettings?.isConfigured,
     });
 
   } catch (error) {
