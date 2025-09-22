@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { streamText, convertToModelMessages, generateText } from 'ai';
+import { convertToModelMessages, generateText, stepCountIs } from 'ai';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -22,6 +22,98 @@ import { pageSpaceTools } from '@/lib/ai/ai-tools';
 import { buildTimestampSystemPrompt } from '@/lib/ai/timestamp-utils';
 import { ToolExecutionContext } from '@/lib/ai/types';
 import { loggers } from '@pagespace/lib/logger-config';
+
+/**
+ * Format tool execution results into human-readable text
+ */
+function formatToolExecutionResults(steps: unknown[]): string {
+  const toolResults: string[] = [];
+
+  steps.forEach((step) => {
+    // Type guard for step structure
+    if (typeof step === 'object' && step !== null) {
+      const stepObj = step as Record<string, unknown>;
+
+      if (Array.isArray(stepObj.toolCalls) && stepObj.toolCalls.length > 0) {
+        stepObj.toolCalls.forEach((toolCall: unknown, callIndex: number) => {
+          // Type guard for toolCall structure
+          if (typeof toolCall === 'object' && toolCall !== null) {
+            const toolCallObj = toolCall as Record<string, unknown>;
+            const toolResults = Array.isArray(stepObj.toolResults) ? stepObj.toolResults : [];
+            const toolResult = toolResults[callIndex];
+
+            // Format tool execution details
+            let resultText = `**Tool Used: ${toolCallObj.toolName || 'Unknown Tool'}**`;
+
+            // Add arguments if they exist and are meaningful
+            if (typeof toolCallObj.args === 'object' && toolCallObj.args !== null) {
+              const argKeys = Object.keys(toolCallObj.args);
+              if (argKeys.length <= 3) {
+                // Show compact args for simple calls
+                resultText += `\nArguments: ${JSON.stringify(toolCallObj.args)}`;
+              } else {
+                // Show summary for complex calls
+                resultText += `\nArguments: ${argKeys.length} parameters provided`;
+              }
+            }
+
+            // Add tool result/output
+            if (typeof toolResult === 'object' && toolResult !== null) {
+              const toolResultObj = toolResult as Record<string, unknown>;
+              if (toolResultObj.result) {
+                if (typeof toolResultObj.result === 'string') {
+                  // String results - truncate if very long
+                  const resultStr = toolResultObj.result.length > 500
+                    ? toolResultObj.result.substring(0, 500) + '...'
+                    : toolResultObj.result;
+                  resultText += `\nResult: ${resultStr}`;
+                } else if (typeof toolResultObj.result === 'object' && toolResultObj.result !== null) {
+                  // Object results - show summary or key fields
+                  const resultData = toolResultObj.result as Record<string, unknown>;
+                  if (resultData.success !== undefined) {
+                    resultText += `\nResult: ${resultData.success ? 'Success' : 'Failed'}`;
+                    if (typeof resultData.message === 'string') {
+                      resultText += ` - ${resultData.message}`;
+                    }
+                    if (typeof resultData.summary === 'string') {
+                      resultText += ` (${resultData.summary})`;
+                    }
+                  } else {
+                    resultText += `\nResult: ${JSON.stringify(toolResultObj.result, null, 2)}`;
+                  }
+                }
+              }
+            } else {
+              resultText += '\nResult: Tool executed successfully';
+            }
+
+            toolResults.push(resultText);
+          }
+        });
+      }
+
+      // Also check for text content in steps that might contain tool output descriptions
+      if (Array.isArray(stepObj.content)) {
+        stepObj.content.forEach((contentPart: unknown) => {
+          if (typeof contentPart === 'object' && contentPart !== null) {
+            const contentPartObj = contentPart as Record<string, unknown>;
+            if (contentPartObj.type === 'text' && typeof contentPartObj.text === 'string' && contentPartObj.text.trim()) {
+              // Only include if it's not just whitespace and adds meaningful info
+              const text = contentPartObj.text.trim();
+              if (text.length > 10 && !text.match(/^(I'll|Let me|I'm going to)/)) {
+                toolResults.push(`**Generated Text**: ${text}`);
+              }
+            }
+          }
+        });
+      }
+    }
+  });
+
+  return toolResults.length > 0
+    ? `\n\n--- Tool Execution Results ---\n${toolResults.join('\n\n')}`
+    : '';
+}
 
 /**
  * Get configured AI model for agent
@@ -224,6 +316,14 @@ export async function POST(request: Request) {
     // Generate response using the AI model
     let responseText = '';
     try {
+      loggers.api.debug('Starting agent consultation with tools', {
+        agentId,
+        agentTitle: agent.title,
+        toolsEnabled: Array.isArray(enabledTools) ? enabledTools.length : 0,
+        availableToolsCount: Object.keys(availableTools).length,
+        enabledToolsList: enabledTools
+      });
+
       const result = Object.keys(availableTools).length > 0
         ? await generateText({
             model,
@@ -238,6 +338,16 @@ export async function POST(request: Request) {
             temperature: 0.7,
             maxRetries: 3,
             experimental_context: executionContext,
+            stopWhen: stepCountIs(100), // Match AI SDK version
+            onStepFinish: ({ toolCalls, toolResults, text }) => {
+              loggers.api.debug('Agent tool execution step completed', {
+                agentId,
+                toolCallsCount: toolCalls?.length || 0,
+                toolCallNames: toolCalls?.map(tc => tc.toolName) || [],
+                toolResultsCount: toolResults?.length || 0,
+                stepText: text?.substring(0, 100) || 'No text'
+              });
+            }
           })
         : await generateText({
             model,
@@ -250,10 +360,79 @@ export async function POST(request: Request) {
             temperature: 0.7,
             maxRetries: 3,
             experimental_context: executionContext,
+            stopWhen: stepCountIs(100), // Match AI SDK version
           });
+
+      // Enhanced debugging: Log the complete result structure
+      loggers.api.debug('Agent consultation result structure', {
+        agentId,
+        hasText: !!result.text,
+        textLength: result.text?.length || 0,
+        textPreview: result.text?.substring(0, 100) || 'No text',
+        hasSteps: !!result.steps,
+        stepsCount: result.steps?.length || 0,
+        stepsStructure: result.steps?.map((step, i) => ({
+          stepIndex: i,
+          hasToolCalls: !!step.toolCalls,
+          toolCallsCount: step.toolCalls?.length || 0,
+          hasToolResults: !!step.toolResults,
+          toolResultsCount: step.toolResults?.length || 0,
+          hasContent: !!step.content,
+          contentPartsCount: step.content?.length || 0
+        })) || []
+      });
 
       // Extract response text with tool execution results
       responseText = result.text;
+
+      // Enhanced: Include tool execution results for complete MCP responses
+      if (result.steps && result.steps.length > 0) {
+        loggers.api.debug('Processing tool execution results', {
+          agentId,
+          stepsCount: result.steps.length,
+          originalTextLength: result.text?.length || 0
+        });
+
+        const toolExecutionSummary = formatToolExecutionResults(result.steps);
+
+        loggers.api.debug('Tool execution summary generated', {
+          agentId,
+          summaryLength: toolExecutionSummary?.length || 0,
+          summaryPreview: toolExecutionSummary?.substring(0, 200) || 'No summary generated'
+        });
+
+        if (toolExecutionSummary) {
+          responseText = responseText
+            ? `${responseText}${toolExecutionSummary}`
+            : toolExecutionSummary.replace(/^\n\n/, ''); // Remove leading newlines if no initial text
+
+          loggers.api.info('Enhanced agent response with tool execution results', {
+            agentId,
+            originalTextLength: result.text?.length || 0,
+            enhancedTextLength: responseText.length,
+            toolSteps: result.steps.length,
+            finalResponsePreview: responseText.substring(0, 300)
+          });
+        } else {
+          loggers.api.warn('No tool execution summary generated despite having steps', {
+            agentId,
+            stepsCount: result.steps.length,
+            stepsPreview: result.steps.map(step => ({
+              hasToolCalls: !!step.toolCalls,
+              toolCallsCount: step.toolCalls?.length || 0,
+              hasToolResults: !!step.toolResults,
+              hasContent: !!step.content
+            }))
+          });
+        }
+      } else {
+        loggers.api.debug('No tool execution steps found', {
+          agentId,
+          hasSteps: !!result.steps,
+          stepsCount: result.steps?.length || 0,
+          originalTextLength: result.text?.length || 0
+        });
+      }
 
       // Check for tool execution errors
       const toolErrors = result.steps?.flatMap(step =>
