@@ -37,6 +37,7 @@ interface ProviderSettings {
     anthropic?: { isConfigured: boolean; hasApiKey: boolean };
     xai?: { isConfigured: boolean; hasApiKey: boolean };
     ollama?: { isConfigured: boolean; hasBaseUrl: boolean };
+    glm?: { isConfigured: boolean; hasApiKey: boolean };
   };
   isAnyProviderConfigured: boolean;
 }
@@ -256,6 +257,11 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     // PageSpace provider is always configured if it has an API key
     if (provider === 'pagespace') {
       return providerSettings?.providers.pagespace?.isConfigured || false;
+    }
+    // GLM provider should check its own configuration directly
+    // (not the OpenAI configuration, even though GLM uses OpenAI-compatible backend)
+    if (provider === 'glm') {
+      return providerSettings?.providers.glm?.isConfigured || false;
     }
     // Map UI provider to backend provider for checking configuration
     const backendProvider = getBackendProvider(provider);

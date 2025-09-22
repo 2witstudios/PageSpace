@@ -21,6 +21,7 @@ interface ProviderSettings {
     anthropic: { isConfigured: boolean; hasApiKey: boolean };
     xai: { isConfigured: boolean; hasApiKey: boolean };
     ollama: { isConfigured: boolean; hasBaseUrl: boolean };
+    glm: { isConfigured: boolean; hasApiKey: boolean };
   };
   isAnyProviderConfigured: boolean;
 }
@@ -163,16 +164,22 @@ const AssistantSettingsTab: React.FC = () => {
 
   const isProviderConfigured = (provider: string): boolean => {
     if (!providerSettings?.providers) return false;
-    
+
     // PageSpace provider should check its own configuration directly
     // (not the user's OpenRouter configuration)
     if (provider === 'pagespace') {
       return providerSettings.providers.pagespace?.isConfigured || false;
     }
-    
+
+    // GLM provider should check its own configuration directly
+    // (not the OpenAI configuration, even though GLM uses OpenAI-compatible backend)
+    if (provider === 'glm') {
+      return providerSettings.providers.glm?.isConfigured || false;
+    }
+
     // Map UI provider to backend provider for checking configuration
     const backendProvider = getBackendProvider(provider);
-    
+
     // Check the appropriate provider configuration
     switch (backendProvider) {
       case 'openrouter':

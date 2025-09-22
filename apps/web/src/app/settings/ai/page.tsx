@@ -23,6 +23,7 @@ interface ProviderSettings {
     anthropic: { isConfigured: boolean; hasApiKey: boolean };
     xai: { isConfigured: boolean; hasApiKey: boolean };
     ollama: { isConfigured: boolean; hasBaseUrl: boolean };
+    glm: { isConfigured: boolean; hasApiKey: boolean };
   };
   isAnyProviderConfigured: boolean;
 }
@@ -36,11 +37,13 @@ export default function AiSettingsPage() {
   const [anthropicApiKey, setAnthropicApiKey] = useState<string>('');
   const [xaiApiKey, setXaiApiKey] = useState<string>('');
   const [ollamaBaseUrl, setOllamaBaseUrl] = useState<string>('');
+  const [glmApiKey, setGlmApiKey] = useState<string>('');
   const [showOpenRouterKey, setShowOpenRouterKey] = useState<boolean>(false);
   const [showGoogleKey, setShowGoogleKey] = useState<boolean>(false);
   const [showOpenAIKey, setShowOpenAIKey] = useState<boolean>(false);
   const [showAnthropicKey, setShowAnthropicKey] = useState<boolean>(false);
   const [showXaiKey, setShowXaiKey] = useState<boolean>(false);
+  const [showGlmKey, setShowGlmKey] = useState<boolean>(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -70,7 +73,7 @@ export default function AiSettingsPage() {
     return providerSettings?.providers[provider as keyof typeof providerSettings.providers]?.isConfigured || false;
   };
 
-  const handleSaveApiKey = async (provider: 'openrouter' | 'google' | 'openai' | 'anthropic' | 'xai') => {
+  const handleSaveApiKey = async (provider: 'openrouter' | 'google' | 'openai' | 'anthropic' | 'xai' | 'glm') => {
     setSaving(true);
     try {
       let apiKey = '';
@@ -89,6 +92,9 @@ export default function AiSettingsPage() {
           break;
         case 'xai':
           apiKey = xaiApiKey;
+          break;
+        case 'glm':
+          apiKey = glmApiKey;
           break;
       }
 
@@ -149,6 +155,9 @@ export default function AiSettingsPage() {
           break;
         case 'xai':
           setXaiApiKey('');
+          break;
+        case 'glm':
+          setGlmApiKey('');
           break;
       }
 
@@ -329,6 +338,17 @@ export default function AiSettingsPage() {
             <div className="flex items-center justify-between p-3 border rounded-lg">
               <span className="font-medium">Ollama (Local)</span>
               {isProviderConfigured('ollama') ? (
+                <Badge variant="default" className="bg-green-500">
+                  <CheckCircle className="h-3 w-3 mr-1" />
+                  Configured
+                </Badge>
+              ) : (
+                <Badge variant="secondary">Not Configured</Badge>
+              )}
+            </div>
+            <div className="flex items-center justify-between p-3 border rounded-lg">
+              <span className="font-medium">GLM Coder Plan</span>
+              {isProviderConfigured('glm') ? (
                 <Badge variant="default" className="bg-green-500">
                   <CheckCircle className="h-3 w-3 mr-1" />
                   Configured
@@ -712,10 +732,76 @@ export default function AiSettingsPage() {
         </CardContent>
       </Card>
 
+      {/* GLM Coder Plan API Key */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between">
+            <span>GLM Coder Plan API Key</span>
+            {isProviderConfigured('glm') && (
+              <Badge variant="default" className="bg-green-500">
+                <CheckCircle className="h-3 w-3 mr-1" />
+                Configured
+              </Badge>
+            )}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <label className="text-sm font-medium">API Key</label>
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <Input
+                  type={showGlmKey ? "text" : "password"}
+                  placeholder="Enter your GLM Coder Plan API key"
+                  value={glmApiKey}
+                  onChange={(e) => setGlmApiKey(e.target.value)}
+                  className="pr-10"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="absolute right-0 top-0 h-full px-3"
+                  onClick={() => setShowGlmKey(!showGlmKey)}
+                >
+                  {showGlmKey ? (
+                    <EyeOff className="h-4 w-4" />
+                  ) : (
+                    <Eye className="h-4 w-4" />
+                  )}
+                </Button>
+              </div>
+              <Button
+                onClick={() => handleSaveApiKey('glm')}
+                disabled={!glmApiKey.trim() || saving}
+              >
+                {saving ? 'Saving...' : 'Save Key'}
+              </Button>
+            </div>
+          </div>
+          <div className="text-sm text-muted-foreground">
+            <p>Get your API key from{' '}
+              <a
+                href="https://z.ai/manage-apikey/apikey-list"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 hover:underline"
+              >
+                Z.AI Platform
+              </a>
+            </p>
+            <p className="mt-2">GLM Coder Plan provides access to GLM-4.5 and GLM-4.5-air models optimized for coding tasks.</p>
+            <p className="mt-1">
+              <strong>Subscription required:</strong> You need an active GLM Coder Plan subscription from Z.AI to use these models.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
       <Alert>
         <AlertTriangle className="h-4 w-4" />
         <AlertDescription>
-          <strong>Security Notice:</strong> API keys are encrypted before storage and are never exposed in the browser. 
+          <strong>Security Notice:</strong> API keys are encrypted before storage and are never exposed in the browser.
           Only configure API keys from trusted providers. You can update or remove keys at any time.
         </AlertDescription>
       </Alert>

@@ -5,6 +5,7 @@ import { broadcastUsageEvent } from '@/lib/socket-utils';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createXai } from '@ai-sdk/xai';
 import { createOllama } from 'ollama-ai-provider-v2';
@@ -23,7 +24,8 @@ import {
   getUserXAISettings,
   createXAISettings,
   getUserOllamaSettings,
-  createOllamaSettings
+  createOllamaSettings,
+  getUserGLMSettings,
 } from '@/lib/ai/ai-utils';
 import { db, users, chatMessages, pages, eq } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
@@ -473,6 +475,24 @@ export async function POST(request: Request) {
       model = ollamaProvider(currentModel);
 
       console.log('✅ OLLAMA DEBUG: Ollama provider created successfully');
+
+    } else if (currentProvider === 'glm') {
+      // Handle GLM Coder Plan setup
+      const glmSettings = await getUserGLMSettings(userId);
+
+      if (!glmSettings) {
+        return NextResponse.json({
+          error: 'GLM API key not configured. Please configure your GLM Coder Plan API key in Settings > AI.'
+        }, { status: 400 });
+      }
+
+      // Create GLM provider instance using OpenAI-compatible endpoint
+      const glmProvider = createOpenAICompatible({
+        name: 'glm',
+        apiKey: glmSettings.apiKey,
+        baseURL: 'https://api.z.ai/api/coding/paas/v4',
+      });
+      model = glmProvider(currentModel);
 
     } else {
       return NextResponse.json({
@@ -1028,6 +1048,9 @@ export async function GET(request: Request) {
     // Check Ollama settings
     const ollamaSettings = await getUserOllamaSettings(userId);
 
+    // Check GLM settings
+    const glmSettings = await getUserGLMSettings(userId);
+
     return NextResponse.json({
       currentProvider,
       currentModel,
@@ -1060,8 +1083,12 @@ export async function GET(request: Request) {
           isConfigured: !!ollamaSettings?.isConfigured,
           hasBaseUrl: !!ollamaSettings?.baseUrl,
         },
+        glm: {
+          isConfigured: !!glmSettings?.isConfigured,
+          hasApiKey: !!glmSettings?.apiKey,
+        },
       },
-      isAnyProviderConfigured: !!pageSpaceSettings?.isConfigured || !!openRouterSettings?.isConfigured || !!googleSettings?.isConfigured || !!openAISettings?.isConfigured || !!anthropicSettings?.isConfigured || !!xaiSettings?.isConfigured || !!ollamaSettings?.isConfigured,
+      isAnyProviderConfigured: !!pageSpaceSettings?.isConfigured || !!openRouterSettings?.isConfigured || !!googleSettings?.isConfigured || !!openAISettings?.isConfigured || !!anthropicSettings?.isConfigured || !!xaiSettings?.isConfigured || !!ollamaSettings?.isConfigured || !!glmSettings?.isConfigured,
     });
 
   } catch (error) {

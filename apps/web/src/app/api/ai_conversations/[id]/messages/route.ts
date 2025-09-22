@@ -5,6 +5,7 @@ import { broadcastUsageEvent } from '@/lib/socket-utils';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createXai } from '@ai-sdk/xai';
 import { createOllama } from 'ollama-ai-provider-v2';
@@ -22,7 +23,9 @@ import {
   getUserXAISettings,
   createXAISettings,
   getUserOllamaSettings,
-  createOllamaSettings
+  createOllamaSettings,
+  getUserGLMSettings,
+  createGLMSettings
 } from '@/lib/ai/ai-utils';
 import { db, users, conversations, messages, eq, and, asc } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
@@ -168,6 +171,7 @@ export async function POST(
       anthropicApiKey,
       xaiApiKey,
       ollamaBaseUrl,
+      glmApiKey,
       locationContext,
       agentRole: roleString
     } = requestBody;
@@ -447,6 +451,29 @@ export async function POST(
         apiKey: xaiSettings.apiKey,
       });
       model = xai(currentModel);
+
+    } else if (currentProvider === 'glm') {
+      // Handle GLM Coder Plan setup
+      let glmSettings = await getUserGLMSettings(userId);
+
+      if (!glmSettings && glmApiKey) {
+        await createGLMSettings(userId, glmApiKey);
+        glmSettings = { apiKey: glmApiKey, isConfigured: true };
+      }
+
+      if (!glmSettings) {
+        return NextResponse.json({
+          error: 'GLM API key not configured. Please provide an API key.'
+        }, { status: 400 });
+      }
+
+      // Create GLM provider instance using OpenAI-compatible endpoint
+      const glmProvider = createOpenAICompatible({
+        name: 'glm',
+        apiKey: glmSettings.apiKey,
+        baseURL: 'https://api.z.ai/api/coding/paas/v4',
+      });
+      model = glmProvider(currentModel);
 
     } else {
       return NextResponse.json({

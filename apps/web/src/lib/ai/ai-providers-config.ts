@@ -220,12 +220,20 @@ export const AI_PROVIDERS = {
       'neural-chat:latest': 'Neural Chat',
     },
   },
+  glm: {
+    name: 'GLM Coder Plan',
+    models: {
+      'GLM-4.5': 'GLM-4.5 (Standard)',
+      'GLM-4.5-air': 'GLM-4.5 Air (Fast)',
+    },
+  },
 } as const;
 
 /**
  * Map UI provider to backend provider
  * Both openrouter and openrouter_free use 'openrouter' backend
  * PageSpace uses 'google' backend
+ * GLM uses 'openai' backend (OpenAI-compatible endpoints)
  * OpenAI, Anthropic, and xAI use their own backends
  */
 export function getBackendProvider(uiProvider: string): string {
@@ -234,6 +242,9 @@ export function getBackendProvider(uiProvider: string): string {
   }
   if (uiProvider === 'openrouter_free') {
     return 'openrouter';
+  }
+  if (uiProvider === 'glm') {
+    return 'openai';
   }
   return uiProvider;
 }
