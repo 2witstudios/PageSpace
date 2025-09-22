@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { streamText, convertToModelMessages } from 'ai';
+import { streamText, convertToModelMessages, generateText } from 'ai';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -20,6 +20,7 @@ import {
 import { db, pages, eq, chatMessages } from '@pagespace/db';
 import { pageSpaceTools } from '@/lib/ai/ai-tools';
 import { buildTimestampSystemPrompt } from '@/lib/ai/timestamp-utils';
+import { ToolExecutionContext } from '@/lib/ai/types';
 import { loggers } from '@pagespace/lib/logger-config';
 
 /**
@@ -159,15 +160,8 @@ export async function POST(request: Request) {
       .orderBy(chatMessages.createdAt)
       .limit(10);
 
-    // Build conversation messages
+    // Build conversation messages (exclude system - handled separately)
     const conversationMessages = [];
-
-    // Add system prompt with timestamp
-    const timestampPrompt = buildTimestampSystemPrompt();
-    conversationMessages.push({
-      role: 'system',
-      content: `${systemPrompt}\n\n${timestampPrompt}`
-    });
 
     // Add recent conversation context if available
     for (const msg of recentMessages) {
@@ -204,6 +198,20 @@ export async function POST(request: Request) {
       );
     }
 
+    // Build execution context for tool execution
+    const executionContext: ToolExecutionContext = {
+      userId,
+      conversationId: `agent-consult-${agentId}-${Date.now()}`,
+      locationContext: {
+        currentPage: {
+          id: agent.id,
+          title: agent.title,
+          type: agent.type,
+          path: `/${agent.title}` // Simplified path
+        }
+      }
+    };
+
     // Filter tools based on agent's enabled tools
     const availableTools = Array.isArray(enabledTools) && enabledTools.length > 0
       ? Object.fromEntries(
@@ -216,21 +224,47 @@ export async function POST(request: Request) {
     // Generate response using the AI model
     let responseText = '';
     try {
-      const result = await streamText({
-        model,
-        messages: convertToModelMessages(conversationMessages.map(m => ({
-          role: m.role as 'user' | 'assistant' | 'system',
-          content: m.content,
-          parts: [{ type: 'text', text: m.content }]
-        }))),
-        tools: availableTools,
-        toolChoice: 'auto',
-        temperature: 0.7,
-      });
+      const result = Object.keys(availableTools).length > 0
+        ? await generateText({
+            model,
+            system: `${systemPrompt}\n\n${buildTimestampSystemPrompt()}`,
+            messages: convertToModelMessages(conversationMessages.filter(m => m.role !== 'system').map(m => ({
+              role: m.role as 'user' | 'assistant' | 'system',
+              content: m.content,
+              parts: [{ type: 'text', text: m.content }]
+            }))),
+            tools: availableTools,
+            toolChoice: 'auto',
+            temperature: 0.7,
+            maxRetries: 3,
+            experimental_context: executionContext,
+          })
+        : await generateText({
+            model,
+            system: `${systemPrompt}\n\n${buildTimestampSystemPrompt()}`,
+            messages: convertToModelMessages(conversationMessages.filter(m => m.role !== 'system').map(m => ({
+              role: m.role as 'user' | 'assistant' | 'system',
+              content: m.content,
+              parts: [{ type: 'text', text: m.content }]
+            }))),
+            temperature: 0.7,
+            maxRetries: 3,
+            experimental_context: executionContext,
+          });
 
-      // Collect the full response
-      for await (const delta of result.textStream) {
-        responseText += delta;
+      // Extract response text with tool execution results
+      responseText = result.text;
+
+      // Check for tool execution errors
+      const toolErrors = result.steps?.flatMap(step =>
+        step.content?.filter(part => part.type === 'tool-error') || []
+      ) || [];
+
+      if (toolErrors.length > 0) {
+        loggers.api.warn('Agent consultation tool execution errors:', {
+          agentId,
+          errors: toolErrors,
+        });
       }
     } catch (aiError) {
       loggers.api.error('Agent consultation AI generation error:', aiError as Error);
