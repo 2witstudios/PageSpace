@@ -1,54 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db, drives, mcpTokens, eq, isNull, and } from '@pagespace/db';
+import { db, drives, eq } from '@pagespace/db';
 import { z } from 'zod/v4';
 import { slugify } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/socket-utils';
 import { loggers } from '@pagespace/lib/logger-config';
-
-// Validate MCP token and return user ID
-async function validateMCPToken(token: string): Promise<string | null> {
-  try {
-    if (!token || !token.startsWith('mcp_')) {
-      return null;
-    }
-
-    // Find the token in database (checking for non-revoked tokens)
-    const tokenData = await db.query.mcpTokens.findFirst({
-      where: and(
-        eq(mcpTokens.token, token),
-        isNull(mcpTokens.revokedAt)
-      ),
-    });
-
-    if (!tokenData) {
-      return null;
-    }
-
-    // Update last used timestamp
-    await db
-      .update(mcpTokens)
-      .set({ lastUsed: new Date() })
-      .where(eq(mcpTokens.id, tokenData.id));
-
-    return tokenData.userId;
-  } catch (error) {
-    loggers.api.error('MCP token validation error:', error as Error);
-    return null;
-  }
-}
-
-// Get user ID from MCP token
-async function getUserId(req: NextRequest): Promise<string | null> {
-  // Check for Bearer token (MCP authentication)
-  const authHeader = req.headers.get('authorization');
-  if (authHeader?.startsWith('Bearer mcp_')) {
-    const mcpToken = authHeader.substring(7); // Remove "Bearer " prefix
-    const userId = await validateMCPToken(mcpToken);
-    return userId; // Returns userId on success, null on failure
-  }
-
-  return null; // No valid auth header found
-}
+import { authenticateMCPRequest, isAuthError } from '@/lib/auth';
 
 // Schema for drive creation
 const createDriveSchema = z.object({
@@ -56,13 +12,13 @@ const createDriveSchema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  const userId = await getUserId(req);
-  
-  if (!userId) {
-    return new NextResponse('Unauthorized', { status: 401 });
+  const auth = await authenticateMCPRequest(req);
+  if (isAuthError(auth)) {
+    return auth.error;
   }
 
   try {
+    const userId = auth.userId;
     const body = await req.json();
     const { name } = createDriveSchema.parse(body);
     
@@ -101,13 +57,13 @@ export async function POST(req: NextRequest) {
 
 // GET endpoint to list drives (for completeness)
 export async function GET(req: NextRequest) {
-  const userId = await getUserId(req);
-  
-  if (!userId) {
-    return new NextResponse('Unauthorized', { status: 401 });
+  const auth = await authenticateMCPRequest(req);
+  if (isAuthError(auth)) {
+    return auth.error;
   }
 
   try {
+    const userId = auth.userId;
     // Get user's drives
     const userDrives = await db.query.drives.findMany({
       where: eq(drives.ownerId, userId),

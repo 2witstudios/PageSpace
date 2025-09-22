@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequest } from '@/lib/auth-utils';
+import { authenticateWebRequest, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logger-config';
 import {
   getUserOpenRouterSettings,
@@ -30,8 +30,9 @@ import { db, users, eq } from '@pagespace/db';
  */
 export async function GET(request: Request) {
   try {
-    const { userId, error } = await authenticateRequest(request);
-    if (error) return error;
+    const auth = await authenticateWebRequest(request);
+    if (isAuthError(auth)) return auth.error;
+    const { userId } = auth;
 
     // Get user's current provider settings
     const [user] = await db.select().from(users).where(eq(users.id, userId));
@@ -107,8 +108,9 @@ export async function GET(request: Request) {
  */
 export async function POST(request: Request) {
   try {
-    const { userId, error } = await authenticateRequest(request);
-    if (error) return error;
+    const auth = await authenticateWebRequest(request);
+    if (isAuthError(auth)) return auth.error;
+    const { userId } = auth;
 
     const body = await request.json();
     const { provider, apiKey, baseUrl } = body;
@@ -198,8 +200,9 @@ export async function POST(request: Request) {
  */
 export async function PATCH(request: Request) {
   try {
-    const { userId, error } = await authenticateRequest(request);
-    if (error) return error;
+    const auth = await authenticateWebRequest(request);
+    if (isAuthError(auth)) return auth.error;
+    const { userId } = auth;
 
     const body = await request.json();
     const { provider, model } = body;
@@ -260,8 +263,9 @@ export async function PATCH(request: Request) {
  */
 export async function DELETE(request: Request) {
   try {
-    const { userId, error } = await authenticateRequest(request);
-    if (error) return error;
+    const auth = await authenticateWebRequest(request);
+    if (isAuthError(auth)) return auth.error;
+    const { userId } = auth;
 
     const body = await request.json();
     const { provider } = body;

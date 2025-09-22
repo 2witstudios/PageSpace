@@ -1,4 +1,94 @@
+## 2025-09-22
+
+### Added
+
+- **Complete MCP Backend Implementation**: Finished implementation of all 13 new MCP tools with full backend API support
+  - **Agent Management APIs**: 4 new endpoints for complete AI agent lifecycle management
+    - **Created**: `/apps/web/src/app/api/agents/[agentId]/config/route.ts` - PUT endpoint for updating agent configuration
+      - **Features**: Update systemPrompt, enabledTools, aiProvider, aiModel for existing agents
+      - **Auth**: Edit permissions on agent page with comprehensive validation
+      - **Broadcasting**: Real-time Socket.IO events for configuration changes
+    - **Created**: `/apps/web/src/app/api/drives/[driveId]/agents/route.ts` - GET endpoint for listing agents in drive
+      - **Features**: List all AI_CHAT pages with agent configuration and permission filtering
+      - **Auth**: Drive access check + individual page view permissions
+      - **Query Parameters**: includeSystemPrompt, includeTools, driveSlug for flexible data retrieval
+    - **Created**: `/apps/web/src/app/api/agents/multi-drive/route.ts` - GET endpoint for cross-drive agent discovery
+      - **Features**: List agents across all accessible drives with grouping options
+      - **Auth**: Per-drive access validation + page-level permission checks
+      - **Query Parameters**: groupByDrive, includeSystemPrompt, includeTools for customizable responses
+    - **Created**: `/apps/web/src/app/api/agents/consult/route.ts` - POST endpoint for AI agent consultation
+      - **Features**: Ask questions to other AI agents using existing chat infrastructure
+      - **Auth**: View permissions on target agent with conversation context integration
+      - **AI Integration**: Full multi-provider support (OpenRouter, Google, OpenAI, Anthropic, xAI, Ollama)
+
+- **Enhanced Type Safety**: Full TypeScript compilation verification for all new endpoints
+  - **Next.js 15 Compatibility**: All endpoints follow async params pattern (`await context.params`)
+  - **Database Integration**: Proper handling of JSONB fields for enabledTools with type guards
+  - **Error Handling**: Comprehensive error responses with detailed validation messages
+  - **Provider Integration**: Robust AI provider configuration with fallback handling
+
+- **Complete MCP Tool Ecosystem**: All 13 MCP tools now have functional backend endpoints
+  - **Search APIs**: regex_search, glob_search, multi_drive_search (3/3 complete)
+  - **Batch Operations**: bulk_move_pages, bulk_rename_pages, bulk_delete_pages, bulk_update_content, create_folder_structure (5/5 complete)
+  - **Agent Management**: create_agent, update_agent_config, list_agents, multi_drive_list_agents, ask_agent (5/5 complete)
+
+### Technical Implementation
+
+- **Authentication Pattern**: All endpoints use standardized `authenticateRequest()` for security
+- **Permission System**: Leverages existing `canUserEditPage`, `canUserViewPage`, `getUserDriveAccess` functions
+- **Broadcasting Integration**: Real-time Socket.IO events for all state-modifying operations
+- **Database Transactions**: Atomic operations where appropriate for data consistency
+- **Response Format**: Consistent success/error structure matching MCP expectations
+- **Logging**: Structured logging for audit trails and debugging
+
+### Status Update
+
+- **Progress**: 100% Complete (13/13 endpoints implemented)
+- **Achievement**: All MCP v2.0.0 tools now have functional backend API endpoints
+- **Testing**: TypeScript compilation successful, integration patterns verified
+- **Documentation**: Complete implementation status tracked in `MCP_BACKEND_IMPLEMENTATION.md`
+
 ### 2025-09-19
+
+## 2025-01-21
+
+### Added
+
+- **AI Tool Calling Architecture Documentation**: Comprehensive documentation for PageSpace's advanced AI tool system
+  - **Created**: `docs/2.0-architecture/2.6-features/ai-tool-calling.md` - Complete architecture overview
+    - **Tool Integration Framework**: Core tool execution patterns and context handling
+    - **Permission-Based Filtering**: Role-based access control for AI tools
+    - **Multi-Step Operations**: Support for complex 100+ tool call workflows
+    - **Agent Communication System**: Sophisticated AI-to-AI consultation capabilities
+    - **Real-Time Broadcasting**: Tool execution results broadcast to all users
+  - **Created**: `docs/3.0-guides-and-tools/ai-tools-reference.md` - Comprehensive tool reference
+    - **13+ Tools Documented**: Complete reference for all workspace automation tools
+    - **6 Tool Categories**: Core operations, content editing, search, tasks, batch ops, agent management
+    - **Usage Examples**: Real-world scenarios and implementation patterns
+    - **Best Practices**: Guidelines for effective AI tool usage
+  - **Created**: `docs/2.0-architecture/2.6-features/model-capabilities.md` - Model capability detection system
+    - **Vision Detection**: Automatic vision support detection for 100+ models
+    - **Tool Capability Validation**: OpenRouter API integration for authoritative capability data
+    - **Graceful Degradation**: Intelligent fallbacks for unsupported features
+    - **Caching Strategy**: Performance-optimized capability detection
+
+- **Enhanced AI System Documentation**: Updated existing documentation with tool calling integration
+  - **Updated**: `docs/2.0-architecture/2.6-features/ai-system.md` - Expanded tool integration section
+    - **Tool Categories Overview**: Complete breakdown of 6 tool categories
+    - **Tool Execution Framework**: Advanced configuration and context handling
+    - **Capability-Aware Integration**: Model capability detection and adaptation
+  - **Updated**: `docs/2.0-architecture/2.4-api/ai.md` - Enhanced API documentation
+    - **Tool Execution Flow**: 5-step tool processing pipeline
+    - **Enhanced Database Operations**: Tool calls and results storage in JSON format
+    - **Permission Model**: Tool-specific validation and agent consultation permissions
+    - **Real-Time Collaboration**: Enhanced broadcasting for tool execution and agent communication
+
+- **Functions List Enhancement**: Updated comprehensive function documentation
+  - **Updated**: `docs/1.0-overview/1.5-functions-list.md` - Added missing AI tool functions
+    - **Enhanced Search Tools**: regex_search, glob_search, multi_drive_search with detailed parameters
+    - **Agent Communication**: list_agents, ask_agent with sophisticated cross-agent consultation
+    - **Model Capabilities**: Capability detection system functions
+    - **Updated Statistics**: 350+ documented functions across enhanced AI system
 
 ## 2025-09-21
 

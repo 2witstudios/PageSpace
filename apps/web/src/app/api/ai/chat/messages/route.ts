@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequest } from '@/lib/auth-utils';
+import { authenticateHybridRequest, isAuthError } from '@/lib/auth';
 import { db, chatMessages, eq, and } from '@pagespace/db';
 import { convertDbMessageToUIMessage } from '@/lib/ai/assistant-utils';
 import { loggers } from '@pagespace/lib/logger-config';
@@ -10,8 +10,8 @@ import { loggers } from '@pagespace/lib/logger-config';
  */
 export async function GET(request: Request) {
   try {
-    const { error } = await authenticateRequest(request);
-    if (error) return error;
+    const auth = await authenticateHybridRequest(request);
+    if (isAuthError(auth)) return auth.error;
 
     const { searchParams } = new URL(request.url);
     const pageId = searchParams.get('pageId');

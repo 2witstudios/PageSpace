@@ -28,37 +28,98 @@ PageSpace's AI system implements a **database-first, message-as-row architecture
 
 ### POST /api/ai/chat
 
-**Purpose:** Processes AI chat messages with immediate database persistence  
-**Auth Required:** Yes  
+**Purpose:** Processes AI chat messages with advanced tool calling and immediate database persistence
+**Auth Required:** Yes
 **Request Schema:**
 - `messages`: UIMessage[] (conversation history including new user message)
-- `pageId`: string (page ID of the AI_CHAT page)
-- `selectedProvider`: string (optional - 'openrouter' or 'google')
+- `chatId`: string (page ID of the AI_CHAT page)
+- `selectedProvider`: string (optional - 'openrouter', 'google', 'openai', 'anthropic', 'xai', 'ollama')
 - `selectedModel`: string (optional - model identifier)
 - `openRouterApiKey`: string (optional - API key for OpenRouter)
 - `googleApiKey`: string (optional - API key for Google AI)
+- `openAIApiKey`: string (optional - API key for OpenAI)
+- `anthropicApiKey`: string (optional - API key for Anthropic)
+- `xaiApiKey`: string (optional - API key for xAI)
+- `ollamaBaseUrl`: string (optional - Ollama instance URL)
+- `pageContext`: object (optional - current page context for tool execution)
 
-**Response:** Streaming UIMessage response with AI-generated content
+**Enhanced Features:**
+- **Advanced Tool Calling**: 13+ workspace automation tools across 6 categories
+- **Model Capability Detection**: Automatic vision and tool support detection
+- **Permission-Based Tool Filtering**: Tools filtered by agent role and custom configurations
+- **Multi-Step Operations**: Support for up to 100 tool calls per conversation
+- **Agent Communication**: AI agents can consult other specialized agents
+- **Real-Time Broadcasting**: Tool execution results broadcast to all connected users
 
-**Persistence Flow:**
-1. **User Message Saved Immediately**: The user's message is saved to `chat_messages` table upon receipt
-2. **AI Processing**: Message is processed by selected AI provider without re-saving existing messages
-3. **AI Response Saved**: The AI's response is saved to database when streaming completes
+**Tool Categories Available:**
+1. **Core Page Operations** (10 tools): list_drives, list_pages, read_page, create_page, etc.
+2. **Content Editing Tools** (4 tools): replace_lines, insert_lines, append_to_page, prepend_to_page
+3. **Advanced Search & Discovery** (3 tools): regex_search, glob_search, multi_drive_search
+4. **Task Management System** (6 tools): create_task_list, update_task_status, add_task, etc.
+5. **Batch Operations** (5 tools): bulk_delete_pages, bulk_update_content, bulk_move_pages, etc.
+6. **Agent Management** (5 tools): list_agents, ask_agent, create_agent, etc.
 
-**Database Operations:**
+**Tool Execution Flow:**
+1. **Capability Detection**: Model capabilities (vision, tools) automatically detected
+2. **Tool Filtering**: Tools filtered based on agent role and enabled tools configuration
+3. **Permission Validation**: Each tool execution validates user permissions
+4. **Multi-Step Processing**: Complex operations can chain multiple tool calls
+5. **Result Broadcasting**: Tool execution results broadcast to all conversation participants
+
+**Enhanced Database Operations:**
 ```sql
--- User message (saved immediately)
-INSERT INTO chat_messages (id, pageId, userId, role, content, createdAt, isActive)
-VALUES (?, ?, ?, 'user', ?, NOW(), true);
+-- User message with mention processing
+INSERT INTO chat_messages (id, pageId, userId, role, content, toolCalls, toolResults, createdAt, isActive, agentRole)
+VALUES (?, ?, ?, 'user', ?, NULL, NULL, NOW(), true, ?);
 
--- AI response (saved on completion)
-INSERT INTO chat_messages (id, pageId, userId, role, content, createdAt, isActive) 
-VALUES (?, ?, NULL, 'assistant', ?, NOW(), true);
+-- AI response with tool calls and results
+INSERT INTO chat_messages (id, pageId, userId, role, content, toolCalls, toolResults, createdAt, isActive, agentRole)
+VALUES (?, ?, NULL, 'assistant', ?, ?, ?, NOW(), true, ?);
 ```
 
-**Status Codes:** 200 (Streaming Response), 400 (Bad Request), 401 (Unauthorized), 500 (Internal Server Error)  
-**Next.js 15 Handler:** async function with streaming response  
-**Last Updated:** 2025-08-21
+**Tool Call Storage:**
+```typescript
+// Tool calls stored as JSON in database
+toolCalls: [
+  {
+    toolCallId: "call_123",
+    toolName: "create_page",
+    args: { driveId: "drive-456", title: "New Document", type: "DOCUMENT" }
+  }
+]
+
+// Tool results stored as JSON
+toolResults: [
+  {
+    toolCallId: "call_123",
+    result: { success: true, pageId: "page-789", title: "New Document" }
+  }
+]
+```
+
+**Enhanced AI Processing:**
+```typescript
+// Advanced streamText configuration
+const result = streamText({
+  model,
+  system: systemPrompt + mentionSystemPrompt + timestampSystemPrompt,
+  messages: convertToModelMessages(sanitizedMessages),
+  tools: filteredTools,  // Permission-based tool filtering
+  stopWhen: stepCountIs(100), // Allow complex multi-step operations
+  experimental_context: {
+    userId,
+    modelCapabilities: getModelCapabilities(currentModel, currentProvider),
+    locationContext: pageContext
+  },
+  maxRetries: 20 // Enhanced retry for rate limits
+});
+```
+
+**Response:** Streaming UIMessage response with AI-generated content and tool execution results
+
+**Status Codes:** 200 (Streaming Response), 400 (Bad Request), 401 (Unauthorized), 403 (Forbidden), 500 (Internal Server Error)
+**Next.js 15 Handler:** async function with streaming response and tool execution
+**Last Updated:** 2025-01-21
 
 ### GET /api/ai/chat
 
@@ -384,20 +445,85 @@ const aiPages = await db.select()
   ));
 ```
 
-### Permission Model
-AI conversations inherit the same permission system as other pages:
+### Enhanced Permission Model
+AI conversations inherit the same permission system as other pages with additional tool-specific validations:
+
 - **EDIT permission**: Required to send messages to the AI
 - **VIEW permission**: Required to read conversation history
+- **Tool execution permissions**: Each tool validates user permissions for the target operation
 - **Context inheritance**: AI can access parent page context based on user permissions
+- **Agent consultation permissions**: `ask_agent` tool validates access to target agents
 
-### Real-Time Collaboration
-Multiple users can participate in AI conversations through:
-- **Socket.IO integration**: Real-time message broadcasting
+```typescript
+// Tool permission validation example
+const accessLevel = await getUserAccessLevel(userId, pageId);
+if (!canUserEditPage(userId, pageId)) {
+  throw new Error('Insufficient permissions for this operation');
+}
+
+// Agent communication permission check
+const canViewAgent = await canUserViewPage(userId, agentId);
+if (!canViewAgent) {
+  throw new Error('Insufficient permissions to consult agent');
+}
+```
+
+### Enhanced Real-Time Collaboration
+Multiple users can participate in AI conversations with advanced real-time features:
+
+- **Socket.IO integration**: Real-time message and tool execution broadcasting
 - **Database consistency**: All users see the same message state
 - **Concurrent safety**: Database constraints prevent message conflicts
+- **Tool execution broadcasting**: Tool results broadcast to all conversation participants
+- **Agent communication updates**: Cross-agent consultations visible to all users
 
-### Cross-Drive Search
-AI conversations are searchable across drive boundaries because they exist in the unified page hierarchy with proper permission filtering.
+```typescript
+// Enhanced real-time broadcasting for tool execution
+await broadcastPageEvent({
+  type: 'tool_executed',
+  pageId: chatId,
+  userId,
+  metadata: {
+    toolName: 'create_page',
+    result: toolResult,
+    timestamp: new Date()
+  }
+});
+
+// Agent communication broadcasting
+await broadcastAgentEvent({
+  type: 'agent_consultation',
+  sourceAgentId: currentAgentId,
+  targetAgentId: consultedAgentId,
+  question: question,
+  response: agentResponse
+});
+```
+
+### Advanced Cross-Drive Search
+AI conversations and tool execution results are searchable across drive boundaries with enhanced capabilities:
+
+- **Cross-conversation search**: Find information across all AI interactions
+- **Tool execution history**: Search through tool calls and results
+- **Agent consultation logs**: Discover past agent-to-agent communications
+- **Permission filtering**: All searches respect user access controls
+
+```typescript
+// Enhanced search across AI conversations with tool context
+const searchResults = await multi_drive_search({
+  query: "project status",
+  searchType: "both", // content and tool results
+  includeToolResults: true,
+  includeAgentConsultations: true
+});
+
+// Search tool execution history
+const toolHistory = await searchToolExecutions({
+  toolName: "create_page",
+  userId: userId,
+  dateRange: { start: "2024-01-01", end: "2024-01-31" }
+});
+```
 
 ---
 
@@ -439,14 +565,42 @@ const messages = await db
   .orderBy(chatMessages.createdAt);
 ```
 
-### Benefits of Our Approach
+### Enhanced Benefits of Our Tool-Integrated Approach
 
-1. **No Message Duplication**: Each message saved exactly once
-2. **Real-Time Collaboration**: Multiple users share consistent state
-3. **Advanced Features**: Mentions, permissions, search all work seamlessly
-4. **Message Versioning**: `isActive` flag supports editing/regeneration
-5. **Audit Trails**: Complete history of who said what and when
-6. **Context Inheritance**: AI conversations understand their place in the page hierarchy
-7. **Permission Integration**: Access control works consistently with the rest of the system
+1. **No Message Duplication**: Each message saved exactly once with complete tool context
+2. **Real-Time Collaboration**: Multiple users share consistent state with tool execution visibility
+3. **Advanced Workspace Automation**: 13+ tools enable sophisticated multi-step operations
+4. **Tool Execution Audit Trails**: Complete history of AI-driven workspace changes
+5. **Permission-Aware Automation**: All tool operations respect user access controls
+6. **Agent Collaboration**: AI agents can consult each other for specialized expertise
+7. **Model Capability Adaptation**: Automatic detection and graceful degradation
+8. **Context Inheritance**: AI conversations understand their place in the page hierarchy
+9. **Persistent Task Management**: Cross-session task continuity and progress tracking
+10. **Batch Operation Support**: Atomic multi-page operations for efficiency
+11. **Advanced Search Integration**: AI can discover and analyze content across the workspace
+12. **Custom Agent Configuration**: Per-page tool permissions and specialized behaviors
 
-This architecture enables PageSpace's AI system to be a first-class citizen in the collaborative, hierarchical workspace rather than an isolated chat feature.
+### Tool-Enhanced Architecture Benefits
+
+**Traditional AI Chat:**
+```
+User → AI → Text Response
+```
+
+**PageSpace Tool-Enhanced AI:**
+```
+User → AI → Tool Execution → Workspace Changes → Contextual Response
+        ↓
+   Permission Validation
+   Real-time Broadcasting
+   Audit Trail Logging
+   Cross-Agent Communication
+   Task Management Integration
+```
+
+This architecture transforms AI from a simple chat interface into a powerful workspace automation system that can handle complex, multi-step operations while maintaining data consistency, security, and collaborative features. AI becomes a true workspace citizen capable of reading, creating, organizing, and managing content across the entire PageSpace ecosystem.
+
+For detailed information about specific tools and their usage, see:
+- [AI Tool Calling Architecture](../2.6-features/ai-tool-calling.md)
+- [AI Tools Reference Guide](../../../3.0-guides-and-tools/ai-tools-reference.md)
+- [Model Capabilities Detection](../2.6-features/model-capabilities.md)

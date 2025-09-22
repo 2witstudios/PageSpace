@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequest } from '@/lib/auth-utils';
+import { authenticateWebRequest, isAuthError } from '@/lib/auth';
 import { db, conversations, eq, and } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/logger-config';
 
@@ -11,8 +11,9 @@ export async function GET(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { userId, error } = await authenticateRequest(request);
-    if (error) return error;
+    const auth = await authenticateWebRequest(request);
+    if (isAuthError(auth)) return auth.error;
+    const { userId } = auth;
 
     const { id } = await context.params;
 
@@ -49,8 +50,9 @@ export async function PATCH(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { userId, error } = await authenticateRequest(request);
-    if (error) return error;
+    const auth = await authenticateWebRequest(request);
+    if (isAuthError(auth)) return auth.error;
+    const { userId } = auth;
 
     const { id } = await context.params;
     const body = await request.json();
@@ -91,8 +93,9 @@ export async function DELETE(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { userId, error } = await authenticateRequest(request);
-    if (error) return error;
+    const auth = await authenticateWebRequest(request);
+    if (isAuthError(auth)) return auth.error;
+    const { userId } = auth;
 
     const { id } = await context.params;
 

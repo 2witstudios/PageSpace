@@ -1,160 +1,86 @@
 import { NextResponse } from 'next/server';
-import { decodeToken, slugify } from '@pagespace/lib/server';
-import { parse } from 'cookie';
-import { drives, pages, driveMembers, pagePermissions, db, and, eq, inArray, not, mcpTokens, isNull } from '@pagespace/db';
+import { db, drives, pages, driveMembers, pagePermissions, eq, and, inArray, not } from '@pagespace/db';
+import { slugify } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/socket-utils';
 import { loggers } from '@pagespace/lib/logger-config';
 import { trackDriveOperation } from '@pagespace/lib/activity-tracker';
-
-// Validate MCP token and return user ID
-async function validateMCPToken(token: string): Promise<string | null> {
-  try {
-    if (!token || !token.startsWith('mcp_')) {
-      return null;
-    }
-
-    // Find the token in database (checking for non-revoked tokens)
-    const tokenData = await db.query.mcpTokens.findFirst({
-      where: and(
-        eq(mcpTokens.token, token),
-        isNull(mcpTokens.revokedAt)
-      ),
-    });
-
-    if (!tokenData) {
-      return null;
-    }
-
-    // Update last used timestamp
-    await db
-      .update(mcpTokens)
-      .set({ lastUsed: new Date() })
-      .where(eq(mcpTokens.id, tokenData.id));
-
-    loggers.api.debug('[DEBUG] MCP Token validation successful - User ID:', { userId: tokenData.userId });
-    return tokenData.userId;
-  } catch (error) {
-    loggers.api.error('MCP token validation error:', error as Error);
-    return null;
-  }
-}
-
-// Get user ID from either cookie or MCP token
-async function getUserId(req: Request): Promise<string | null> {
-  // Check for Bearer token (MCP authentication) first
-  const authHeader = req.headers.get('authorization');
-  if (authHeader?.startsWith('Bearer mcp_')) {
-    const mcpToken = authHeader.substring(7); // Remove "Bearer " prefix
-    const userId = await validateMCPToken(mcpToken);
-    if (userId) {
-      return userId;
-    }
-  }
-
-  // Fall back to cookie authentication
-  const cookieHeader = req.headers.get('cookie');
-  const cookies = parse(cookieHeader || '');
-  const accessToken = cookies.accessToken;
-
-  if (!accessToken) {
-    return null;
-  }
-
-  const decoded = await decodeToken(accessToken);
-  return decoded ? decoded.userId : null;
-}
+import { authenticateWebRequest, isAuthError } from '@/lib/auth';
 
 export async function GET(req: Request) {
-  const userId = await getUserId(req);
-
-  loggers.api.debug('[DEBUG] Drives API - User ID:', { userId });
-
-  if (!userId) {
-    return new NextResponse("Unauthorized", { status: 401 });
+  const auth = await authenticateWebRequest(req);
+  if (isAuthError(auth)) {
+    return auth.error;
   }
+
+  const userId = auth.userId;
+  loggers.api.debug('[DEBUG] Drives API - User ID:', { userId });
 
   // Check if we should include trashed drives
   const url = new URL(req.url);
   const includeTrash = url.searchParams.get('includeTrash') === 'true';
 
   try {
-    // 1. Get user's own drives
     const ownedDrives = await db.query.drives.findMany({
-      where: includeTrash 
+      where: includeTrash
         ? eq(drives.ownerId, userId)
-        : and(
-            eq(drives.ownerId, userId),
-            eq(drives.isTrashed, false)
-          ),
+        : and(eq(drives.ownerId, userId), eq(drives.isTrashed, false)),
     });
 
-    // 2. Get drives where user is a member (new RBAC system)
-    const memberDrives = await db.selectDistinct({ driveId: driveMembers.driveId })
+    const memberDrives = await db
+      .selectDistinct({ driveId: driveMembers.driveId })
       .from(driveMembers)
       .where(eq(driveMembers.userId, userId));
 
-    // 3. Get drives where user has page permissions (new RBAC system)
-    const permissionDrives = await db.selectDistinct({ driveId: pages.driveId })
+    const permissionDrives = await db
+      .selectDistinct({ driveId: pages.driveId })
       .from(pagePermissions)
       .leftJoin(pages, eq(pagePermissions.pageId, pages.id))
-      .where(and(
-        eq(pagePermissions.userId, userId),
-        eq(pagePermissions.canView, true)
-      ));
+      .where(and(eq(pagePermissions.userId, userId), eq(pagePermissions.canView, true)));
 
-    // 4. Combine all shared drive IDs (from members and page permissions)
     const allSharedDriveIds = new Set<string>();
-    memberDrives.forEach(d => d.driveId && allSharedDriveIds.add(d.driveId));
-    permissionDrives.forEach(d => d.driveId && allSharedDriveIds.add(d.driveId));
-    
+    memberDrives.forEach((d) => d.driveId && allSharedDriveIds.add(d.driveId));
+    permissionDrives.forEach((d) => d.driveId && allSharedDriveIds.add(d.driveId));
+
     const sharedDriveIds = Array.from(allSharedDriveIds);
 
-    // 5. Fetch the actual drive objects, excluding ones the user already owns
-    const sharedDrives = sharedDriveIds.length > 0 ? await db.query.drives.findMany({
-      where: includeTrash
-        ? and(
-            inArray(drives.id, sharedDriveIds),
-            not(eq(drives.ownerId, userId))
-          )
-        : and(
-            inArray(drives.id, sharedDriveIds),
-            not(eq(drives.ownerId, userId)),
-            eq(drives.isTrashed, false)
-          ),
-    }) : [];
+    const sharedDrives = sharedDriveIds.length
+      ? await db.query.drives.findMany({
+          where: includeTrash
+            ? and(inArray(drives.id, sharedDriveIds), not(eq(drives.ownerId, userId)))
+            : and(
+                inArray(drives.id, sharedDriveIds),
+                not(eq(drives.ownerId, userId)),
+                eq(drives.isTrashed, false),
+              ),
+        })
+      : [];
 
-    // 6. Combine and add the isOwned flag
     const allDrives = [
       ...ownedDrives.map((drive) => ({ ...drive, isOwned: true })),
       ...sharedDrives.map((drive) => ({ ...drive, isOwned: false })),
     ];
 
-    // Deduplicate in case a drive is both owned and shared (shouldn't happen with current logic, but good practice)
-    const uniqueDrives = Array.from(new Map(allDrives.map(d => [d.id, d])).values());
+    const uniqueDrives = Array.from(new Map(allDrives.map((d) => [d.id, d])).values());
 
-    loggers.api.debug('[DEBUG] Drives API - Found drives:', { 
-      count: uniqueDrives.length, 
-      drives: uniqueDrives.map(d => ({ id: d.id, name: d.name, slug: d.slug })) 
+    loggers.api.debug('[DEBUG] Drives API - Found drives:', {
+      count: uniqueDrives.length,
+      drives: uniqueDrives.map((d) => ({ id: d.id, name: d.name, slug: d.slug })),
     });
 
     return NextResponse.json(uniqueDrives);
   } catch (error) {
     loggers.api.error('Error fetching drives:', error as Error);
-    return NextResponse.json(
-      { error: 'Failed to fetch drives' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to fetch drives' }, { status: 500 });
   }
 }
 
 export async function POST(request: Request) {
-  const userId = await getUserId(request);
-
-  if (!userId) {
-    return new NextResponse("Unauthorized", { status: 401 });
+  const auth = await authenticateWebRequest(request);
+  if (isAuthError(auth)) {
+    return auth.error;
   }
 
-  const session = { user: { id: userId } };
+  const session = { user: { id: auth.userId } };
 
   try {
     const { name } = await request.json();
@@ -162,37 +88,37 @@ export async function POST(request: Request) {
     if (!name) {
       return NextResponse.json({ error: 'Missing name' }, { status: 400 });
     }
-    
+
     if (name.toLowerCase() === 'personal') {
-        return NextResponse.json({ error: 'Cannot create a drive named "Personal".' }, { status: 400 });
+      return NextResponse.json({ error: 'Cannot create a drive named "Personal".' }, { status: 400 });
     }
 
     const slug = slugify(name);
 
-    const newDrive = await db.insert(drives).values({
-      name,
-      slug,
-      ownerId: session.user.id,
-      isTrashed: false,
-      trashedAt: null,
-      updatedAt: new Date(),
-    }).returning();
+    const newDrive = await db
+      .insert(drives)
+      .values({
+        name,
+        slug,
+        ownerId: session.user.id,
+        isTrashed: false,
+        trashedAt: null,
+        updatedAt: new Date(),
+      })
+      .returning();
 
-    // Broadcast drive creation event
     await broadcastDriveEvent(
       createDriveEventPayload(newDrive[0].id, 'created', {
         name: newDrive[0].name,
         slug: newDrive[0].slug,
-      })
+      }),
     );
 
-    // Track drive creation
-    trackDriveOperation(userId, 'create', newDrive[0].id, {
+    trackDriveOperation(auth.userId, 'create', newDrive[0].id, {
       name: newDrive[0].name,
-      slug: newDrive[0].slug
+      slug: newDrive[0].slug,
     });
 
-    // Return the drive with the isOwned flag set to true
     return NextResponse.json({ ...newDrive[0], isOwned: true }, { status: 201 });
   } catch (error) {
     loggers.api.error('Error creating drive:', error as Error);

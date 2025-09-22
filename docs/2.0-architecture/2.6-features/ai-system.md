@@ -247,32 +247,132 @@ const results = await searchAIConversations({
 });
 ```
 
-### AI Tools Integration
+### Advanced AI Tool Integration
 
-PageSpace AI has access to powerful workspace tools for reading, creating, and modifying content:
+PageSpace AI has access to 13+ sophisticated workspace automation tools organized into six categories:
 
+#### Core Page Operations
 ```typescript
-// Available tools (from ai-tools.ts):
-const pageSpaceTools = {
+const coreTools = {
   list_drives,           // List all accessible workspaces
-  list_pages,            // Explore page hierarchies  
-  read_page,             // Read document content
-  create_page,           // Create new pages (any type)
+  list_pages,            // Explore page hierarchies with tree structure
+  read_page,             // Read document content with metadata
+  create_page,           // Create new pages (DOCUMENT, FOLDER, AI_CHAT, CHANNEL, CANVAS)
   rename_page,           // Rename existing pages
-  replace_lines,         // Edit specific document lines
+  trash_page,            // Delete individual pages
+  trash_page_with_children, // Delete page and all children recursively
+  restore_page,          // Restore from trash
+  move_page,             // Move/reorder pages in hierarchy
+  list_trash,            // View trashed items
+};
+```
+
+#### Content Editing Tools
+```typescript
+const editingTools = {
+  replace_lines,         // Precise line-based editing
   insert_lines,          // Insert content at specific positions
   append_to_page,        // Add content to end of page
   prepend_to_page,       // Add content to beginning of page
-  trash_page,            // Delete individual pages
-  trash_page_with_children, // Delete page and all children
-  restore_page,          // Restore from trash
-  move_page,             // Move/reorder pages
-  list_trash,            // View trashed items
 };
-
-// Tool execution with permission filtering
-const roleFilteredTools = ToolPermissionFilter.filterTools(pageSpaceTools, agentRole);
 ```
+
+#### Advanced Search & Discovery
+```typescript
+const searchTools = {
+  regex_search,          // Pattern-based content search across workspace
+  glob_search,           // Structural discovery using glob patterns (e.g., **/README*)
+  multi_drive_search,    // Cross-workspace search with permission filtering
+};
+```
+
+#### Task Management System
+```typescript
+const taskTools = {
+  create_task_list,      // Persistent task tracking across AI conversations
+  get_task_list,         // Progress monitoring with completion tracking
+  update_task_status,    // Status management (pending/in_progress/completed/blocked)
+  add_task,              // Dynamic task list expansion
+  add_task_note,         // Progress documentation and context preservation
+  resume_task_list,      // Cross-session task continuity
+};
+```
+
+#### Batch Operations
+```typescript
+const batchTools = {
+  bulk_delete_pages,     // Delete multiple pages atomically
+  bulk_update_content,   // Update content in multiple pages
+  bulk_move_pages,       // Mass page relocation with order preservation
+  bulk_rename_pages,     // Pattern-based bulk renaming
+  create_folder_structure, // Complex nested hierarchy creation
+};
+```
+
+#### Agent Management & Communication
+```typescript
+const agentTools = {
+  list_agents,           // Discover AI agents within specific drives
+  multi_drive_list_agents, // Discover agents across all accessible drives
+  ask_agent,             // Agent-to-agent communication for specialized consultation
+  create_agent,          // Create fully configured AI agents with custom prompts
+  update_agent_config,   // Modify existing agent settings and capabilities
+};
+```
+
+#### Tool Execution Framework
+
+```typescript
+// Advanced tool execution with context and permissions
+const result = await streamText({
+  model,
+  system: systemPrompt,
+  messages: convertToModelMessages(sanitizedMessages),
+  tools: filteredTools,  // Permission-based tool filtering
+  stopWhen: stepCountIs(100), // Allow complex multi-step operations
+  experimental_context: {
+    userId,
+    modelCapabilities: getModelCapabilities(currentModel, currentProvider),
+    locationContext: {
+      currentPage: { id: pageId, title: pageTitle, type: pageType },
+      driveId: driveId,
+      driveName: driveName,
+      driveSlug: driveSlug
+    }
+  },
+  maxRetries: 20 // Enhanced retry for rate limits
+});
+
+// Tool execution with permission filtering and audit trails
+const roleFilteredTools = ToolPermissionFilter.filterTools(pageSpaceTools, agentRole);
+
+// Custom tool sets for specialized agents
+const customTools = enabledTools?.length > 0
+  ? filterToolsByNames(pageSpaceTools, enabledTools)
+  : roleFilteredTools;
+```
+
+#### Capability-Aware Tool Integration
+
+Tools automatically adapt based on model capabilities:
+
+```typescript
+// Automatic model capability detection
+const modelCapabilities = await getModelCapabilities(currentModel, currentProvider);
+
+if (modelCapabilities.hasTools) {
+  // Enable full tool suite for tool-capable models
+  const toolResult = await executeWithTools(model, tools, messages);
+} else {
+  // Graceful degradation for non-tool models
+  const textResult = await executeTextOnly(model, messages);
+
+  // Suggest tool-capable alternatives
+  const suggestions = getSuggestedToolCapableModels(currentProvider);
+}
+```
+
+For comprehensive tool documentation, see [AI Tools Reference Guide](../../../3.0-guides-and-tools/ai-tools-reference.md) and [AI Tool Calling Architecture](./ai-tool-calling.md).
 
 ### Agent Role System
 
@@ -438,15 +538,25 @@ This architecture makes AI a collaborative workspace citizen rather than an isol
 ## Current Implementation Status
 
 ### ✅ Fully Implemented
-- **Multi-provider support**: PageSpace, OpenRouter, Google, OpenAI, Anthropic, xAI
+- **Multi-provider support**: PageSpace, OpenRouter, Google, OpenAI, Anthropic, xAI, Ollama
 - **100+ AI models**: From free Qwen/DeepSeek to premium Claude 4.1/GPT-5
 - **Database-first persistence**: Messages stored immediately in PostgreSQL
-- **AI tool integration**: 13 workspace tools for content manipulation
+- **Comprehensive AI tool integration**: 13+ workspace automation tools across 6 categories
+  - Core page operations (10 tools)
+  - Content editing tools (4 tools)
+  - Advanced search & discovery (3 tools)
+  - Task management system (6 tools)
+  - Batch operations (5 tools)
+  - Agent management & communication (5 tools)
 - **Agent role system**: PARTNER, PLANNER, and WRITER personalities with distinct capabilities
+- **Custom agent configuration**: Per-page system prompts, tool permissions, and AI provider settings
+- **Agent-to-agent communication**: Sophisticated consultation system with depth control
+- **Model capability detection**: Automatic vision and tool support detection
 - **Permission-based access**: Full integration with PageSpace's auth system
-- **Real-time collaboration**: Socket.IO for live message sync
-- **Page-specific settings**: Per-page AI provider/model configuration
-- **Advanced monitoring**: Usage tracking, cost analysis, token counting
+- **Real-time collaboration**: Socket.IO for live message sync with tool execution broadcasting
+- **Advanced monitoring**: Usage tracking, cost analysis, token counting, and tool usage analytics
+- **Tool execution framework**: Complex multi-step operations with up to 100 tool calls per conversation
+- **Graceful degradation**: Automatic fallbacks for models without tool support
 
 ### 🔄 In Development
 - **Message editing/regeneration**: Schema supports it, UI implementation pending

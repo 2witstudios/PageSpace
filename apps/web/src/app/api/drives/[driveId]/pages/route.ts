@@ -1,66 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { decodeToken, buildTree } from '@pagespace/lib/server';
-import { parse } from 'cookie';
-import { pages, drives, pageType, pagePermissions, db, and, eq, inArray, asc, sql, mcpTokens, isNull } from '@pagespace/db';
+import { buildTree } from '@pagespace/lib/server';
+import { pages, drives, pageType, pagePermissions, db, and, eq, inArray, asc, sql } from '@pagespace/db';
 import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/logger-config';
-
-// Validate MCP token and return user ID
-async function validateMCPToken(token: string): Promise<string | null> {
-  try {
-    if (!token || !token.startsWith('mcp_')) {
-      return null;
-    }
-
-    // Find the token in database (checking for non-revoked tokens)
-    const tokenData = await db.query.mcpTokens.findFirst({
-      where: and(
-        eq(mcpTokens.token, token),
-        isNull(mcpTokens.revokedAt)
-      ),
-    });
-
-    if (!tokenData) {
-      return null;
-    }
-
-    // Update last used timestamp
-    await db
-      .update(mcpTokens)
-      .set({ lastUsed: new Date() })
-      .where(eq(mcpTokens.id, tokenData.id));
-
-    return tokenData.userId;
-  } catch (error) {
-    loggers.api.error('MCP token validation error:', error as Error);
-    return null;
-  }
-}
-
-// Get user ID from either cookie or MCP token
-async function getUserId(req: NextRequest): Promise<string | null> {
-  // Check for Bearer token (MCP authentication) first
-  const authHeader = req.headers.get('authorization');
-  if (authHeader?.startsWith('Bearer mcp_')) {
-    const mcpToken = authHeader.substring(7); // Remove "Bearer " prefix
-    const userId = await validateMCPToken(mcpToken);
-    if (userId) {
-      return userId;
-    }
-  }
-
-  // Fall back to cookie authentication
-  const cookieHeader = req.headers.get('cookie');
-  const cookies = parse(cookieHeader || '');
-  const accessToken = cookies.accessToken;
-
-  if (!accessToken) {
-    return null;
-  }
-
-  const decoded = await decodeToken(accessToken);
-  return decoded ? decoded.userId : null;
-}
+import { authenticateWebRequest, isAuthError } from '@/lib/auth';
 
 async function getPermittedPages(driveId: string, userId: string) {
   // Check if user is a drive member - currently unused but will be needed for member-level permissions
@@ -120,11 +63,11 @@ export async function GET(
   request: NextRequest,
   context: { params: Promise<{ driveId: string }> }
 ) {
-  const userId = await getUserId(request);
-
-  if (!userId) {
-    return new NextResponse("Unauthorized", { status: 401 });
+  const auth = await authenticateWebRequest(request);
+  if (isAuthError(auth)) {
+    return auth.error;
   }
+  const userId = auth.userId;
 
   try {
     const { driveId } = await context.params;
@@ -176,11 +119,11 @@ export async function POST(
   request: NextRequest,
   context: { params: Promise<{ driveId: string }> }
 ) {
-  const userId = await getUserId(request);
-
-  if (!userId) {
-    return new NextResponse("Unauthorized", { status: 401 });
+  const auth = await authenticateWebRequest(request);
+  if (isAuthError(auth)) {
+    return auth.error;
   }
+  const userId = auth.userId;
 
   try {
     const { driveId } = await context.params;

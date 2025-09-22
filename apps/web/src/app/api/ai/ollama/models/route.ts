@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequest } from '@/lib/auth-utils';
+import { authenticateWebRequest, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logger-config';
 import { getUserOllamaSettings } from '@/lib/ai/ai-utils';
 
@@ -9,8 +9,9 @@ import { getUserOllamaSettings } from '@/lib/ai/ai-utils';
  */
 export async function GET(request: Request) {
   try {
-    const { userId, error } = await authenticateRequest(request);
-    if (error) return error;
+    const auth = await authenticateWebRequest(request);
+    if (isAuthError(auth)) return auth.error;
+    const { userId } = auth;
 
     // Get user's Ollama settings
     const ollamaSettings = await getUserOllamaSettings(userId);

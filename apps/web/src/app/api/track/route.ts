@@ -5,12 +5,16 @@
 
 import { NextResponse } from 'next/server';
 import { trackActivity, trackFeature, trackError } from '@pagespace/lib/activity-tracker';
-import { authenticateRequest } from '@/lib/auth-utils';
+import { authenticateWebRequest, isAuthError } from '@/lib/auth';
 
 export async function POST(request: Request) {
   try {
     // Try to get user ID but don't block if auth fails
-    const { userId } = await authenticateRequest(request).catch(() => ({ userId: undefined }));
+    let userId: string | undefined;
+    const auth = await authenticateWebRequest(request);
+    if (!isAuthError(auth)) {
+      userId = auth.userId;
+    }
     
     // Get client IP and user agent
     const ip = request.headers.get('x-forwarded-for')?.split(',')[0] || 

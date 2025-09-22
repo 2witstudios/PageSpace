@@ -1,12 +1,12 @@
 import { NextResponse } from 'next/server';
-import { pages, mentions, chatMessages, drives, db, and, eq, inArray, mcpTokens, isNull } from '@pagespace/db';
-import { decodeToken, canUserViewPage, canUserEditPage, canUserDeletePage } from '@pagespace/lib/server';
-import { parse } from 'cookie';
+import { pages, mentions, chatMessages, drives, db, and, eq, inArray } from '@pagespace/db';
+import { canUserViewPage, canUserEditPage, canUserDeletePage } from '@pagespace/lib/server';
 import { z } from "zod/v4";
 import * as cheerio from 'cheerio';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
 import { loggers } from '@pagespace/lib/logger-config';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
+import { authenticateWebRequest, isAuthError } from '@/lib/auth';
 
 // Content sanitization utility
 function sanitizeEmptyContent(content: string): string {
@@ -60,61 +60,6 @@ async function getDriveIdFromPageId(pageId: string): Promise<string | null> {
     .limit(1);
   
   return result[0]?.id || null;
-}
-
-// Validate MCP token and return user ID
-async function validateMCPToken(token: string): Promise<string | null> {
-  try {
-    if (!token || !token.startsWith('mcp_')) {
-      return null;
-    }
-
-    const tokenData = await db.query.mcpTokens.findFirst({
-      where: and(
-        eq(mcpTokens.token, token),
-        isNull(mcpTokens.revokedAt)
-      ),
-    });
-
-    if (!tokenData) {
-      return null;
-    }
-
-    await db
-      .update(mcpTokens)
-      .set({ lastUsed: new Date() })
-      .where(eq(mcpTokens.id, tokenData.id));
-
-    return tokenData.userId;
-  } catch (error) {
-    loggers.api.error('MCP token validation error:', error as Error);
-    return null;
-  }
-}
-
-// Get user ID from either cookie or MCP token
-async function getUserId(req: Request): Promise<string | null> {
-  // Check for Bearer token (MCP authentication) first
-  const authHeader = req.headers.get('authorization');
-  if (authHeader?.startsWith('Bearer mcp_')) {
-    const mcpToken = authHeader.substring(7); // Remove "Bearer " prefix
-    const userId = await validateMCPToken(mcpToken);
-    if (userId) {
-      return userId;
-    }
-  }
-
-  // Fall back to cookie authentication
-  const cookieHeader = req.headers.get('cookie');
-  const cookies = parse(cookieHeader || '');
-  const accessToken = cookies.accessToken;
-
-  if (!accessToken) {
-    return null;
-  }
-
-  const decoded = await decodeToken(accessToken);
-  return decoded ? decoded.userId : null;
 }
 
 function findMentionNodes(content: unknown): string[] {
@@ -184,11 +129,11 @@ async function recursivelyTrash(pageId: string, tx: TransactionType | DatabaseTy
 
 export async function GET(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
   const { pageId } = await params;
-  const userId = await getUserId(req);
-
-  if (!userId) {
-    return new NextResponse("Unauthorized", { status: 401 });
+  const auth = await authenticateWebRequest(req);
+  if (isAuthError(auth)) {
+    return auth.error;
   }
+  const userId = auth.userId;
 
   try {
     // Check user permissions first
@@ -241,11 +186,11 @@ const patchSchema = z.object({
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
   const { pageId } = await params;
-  const userId = await getUserId(req);
-
-  if (!userId) {
-    return new NextResponse("Unauthorized", { status: 401 });
+  const auth = await authenticateWebRequest(req);
+  if (isAuthError(auth)) {
+    return auth.error;
   }
+  const userId = auth.userId;
 
   try {
     // Check if user has edit permission
@@ -351,11 +296,11 @@ const deleteSchema = z.object({
 
 export async function DELETE(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
   const { pageId } = await params;
-  const userId = await getUserId(req);
-
-  if (!userId) {
-    return new NextResponse("Unauthorized", { status: 401 });
+  const auth = await authenticateWebRequest(req);
+  if (isAuthError(auth)) {
+    return auth.error;
   }
+  const userId = auth.userId;
 
   try {
     // Check if user has delete permission

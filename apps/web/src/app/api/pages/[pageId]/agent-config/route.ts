@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequest } from '@/lib/auth-utils';
+import { authenticateWebRequest, isAuthError } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/server';
 import { db, pages, eq } from '@pagespace/db';
 import { pageSpaceTools } from '@/lib/ai/ai-tools';
@@ -13,8 +13,9 @@ export async function GET(
   context: { params: Promise<{ pageId: string }> }
 ) {
   try {
-    const { userId, error } = await authenticateRequest(request);
-    if (error) return error;
+    const auth = await authenticateWebRequest(request);
+    if (isAuthError(auth)) return auth.error;
+    const { userId } = auth;
 
     const { pageId } = await context.params;
 
@@ -69,8 +70,9 @@ export async function PATCH(
   context: { params: Promise<{ pageId: string }> }
 ) {
   try {
-    const { userId, error } = await authenticateRequest(request);
-    if (error) return error;
+    const auth = await authenticateWebRequest(request);
+    if (isAuthError(auth)) return auth.error;
+    const { userId } = auth;
 
     const { pageId } = await context.params;
     const body = await request.json();

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequest } from '@/lib/auth-utils';
+import { authenticateWebRequest, isAuthError } from '@/lib/auth';
 import {
   getSystemHealth,
   getApiMetrics,
@@ -20,8 +20,8 @@ export async function GET(
   context: { params: Promise<{ metric: string }> }
 ) {
   try {
-    const { error } = await authenticateRequest(request);
-    if (error) return error;
+    const auth = await authenticateWebRequest(request);
+    if (isAuthError(auth)) return auth.error;
 
     const { metric } = await context.params;
     const { searchParams } = new URL(request.url);

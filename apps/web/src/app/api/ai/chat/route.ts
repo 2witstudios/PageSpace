@@ -8,7 +8,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createXai } from '@ai-sdk/xai';
 import { createOllama } from 'ollama-ai-provider-v2';
-import { authenticateRequest } from '@/lib/auth-utils';
+import { authenticateHybridRequest, isAuthError } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
 import {
   getUserOpenRouterSettings,
@@ -66,12 +66,12 @@ export async function POST(request: Request) {
     loggers.ai.info('AI Chat API: Starting request processing');
     
     // Authenticate the request
-    const authResult = await authenticateRequest(request);
-    userId = authResult.userId;
-    if (authResult.error) {
+    const authResult = await authenticateHybridRequest(request);
+    if (isAuthError(authResult)) {
       loggers.ai.warn('AI Chat API: Authentication failed');
       return authResult.error;
     }
+    userId = authResult.userId;
     loggers.ai.debug('AI Chat API: Authentication successful', { userId });
 
     // Parse request body for AI SDK v5 pattern
@@ -983,8 +983,9 @@ MENTION PROCESSING:
  */
 export async function GET(request: Request) {
   try {
-    const { userId, error } = await authenticateRequest(request);
-    if (error) return error;
+    const auth = await authenticateHybridRequest(request);
+    if (isAuthError(auth)) return auth.error;
+    const { userId } = auth;
 
     // Get pageId from query params
     const url = new URL(request.url);
@@ -1076,8 +1077,8 @@ export async function GET(request: Request) {
  */
 export async function PATCH(request: Request) {
   try {
-    const { error } = await authenticateRequest(request);
-    if (error) return error;
+    const auth = await authenticateHybridRequest(request);
+    if (isAuthError(auth)) return auth.error;
 
     const body = await request.json();
     const { pageId, provider, model } = body;

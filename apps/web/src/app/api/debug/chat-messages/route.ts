@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequest } from '@/lib/auth-utils';
+import { authenticateWebRequest, isAuthError } from '@/lib/auth';
 import { db, chatMessages, eq, and, desc } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/logger-config';
 
@@ -13,8 +13,8 @@ export async function GET(request: Request) {
   try {
     loggers.api.debug('🔍 Debug: GET /api/debug/chat-messages', {});
     
-    const { error } = await authenticateRequest(request);
-    if (error) return error;
+    const auth = await authenticateWebRequest(request);
+    if (isAuthError(auth)) return auth.error;
 
     const { searchParams } = new URL(request.url);
     const pageId = searchParams.get('pageId');
@@ -113,8 +113,8 @@ export async function POST(request: Request) {
   try {
     loggers.api.debug('🧪 Debug: POST /api/debug/chat-messages - Manual save test', {});
     
-    const { error } = await authenticateRequest(request);
-    if (error) return error;
+    const auth = await authenticateWebRequest(request);
+    if (isAuthError(auth)) return auth.error;
 
     const { pageId, testMessages }: { pageId: string; testMessages?: TestMessage[] } = await request.json();
 

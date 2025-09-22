@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequest } from '@/lib/auth-utils';
+import { authenticateWebRequest, isAuthError } from '@/lib/auth';
 import { db, conversations, eq, and, desc } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/logger-config';
 
@@ -9,8 +9,9 @@ import { loggers } from '@pagespace/lib/logger-config';
  */
 export async function GET(request: Request) {
   try {
-    const { userId, error } = await authenticateRequest(request);
-    if (error) return error;
+    const auth = await authenticateWebRequest(request);
+    if (isAuthError(auth)) return auth.error;
+    const { userId } = auth;
 
     // Just get ANY global conversation for this user (most recent by creation time)
     const globalConversation = await db

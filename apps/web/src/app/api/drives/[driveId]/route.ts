@@ -1,72 +1,9 @@
 import { NextResponse } from 'next/server';
-import { decodeToken } from '@pagespace/lib/server';
-import { parse } from 'cookie';
-import { drives, db, eq, and, mcpTokens, isNull, driveMembers } from '@pagespace/db';
+import { drives, db, eq, and, driveMembers } from '@pagespace/db';
 import { z } from 'zod';
 import { loggers } from '@pagespace/lib/logger-config';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/socket-utils';
-
-// Validate MCP token and return user ID
-async function validateMCPToken(token: string): Promise<string | null> {
-  try {
-    if (!token || !token.startsWith('mcp_')) {
-      return null;
-    }
-
-    const tokenData = await db.query.mcpTokens.findFirst({
-      where: and(
-        eq(mcpTokens.token, token),
-        isNull(mcpTokens.revokedAt)
-      ),
-    });
-
-    if (!tokenData) {
-      return null;
-    }
-
-    await db
-      .update(mcpTokens)
-      .set({ lastUsed: new Date() })
-      .where(eq(mcpTokens.id, tokenData.id));
-
-    return tokenData.userId;
-  } catch (error) {
-    loggers.api.error('MCP token validation error:', error as Error);
-    return null;
-  }
-}
-
-// Get user ID from either cookie or MCP token
-async function getUserId(req: Request): Promise<string | null> {
-  // Check for Bearer token (MCP authentication) first
-  const authHeader = req.headers.get('authorization');
-  if (authHeader?.startsWith('Bearer mcp_')) {
-    const mcpToken = authHeader.substring(7); // Remove "Bearer " prefix
-    const userId = await validateMCPToken(mcpToken);
-    if (userId) {
-      return userId;
-    }
-  }
-
-  // Fallback to cookie-based authentication
-  const cookieHeader = req.headers.get('cookie');
-  if (!cookieHeader) {
-    return null;
-  }
-
-  const cookies = parse(cookieHeader);
-  const authToken = cookies['accessToken'];
-  if (!authToken) {
-    return null;
-  }
-
-  const decoded = await decodeToken(authToken);
-  if (!decoded || !decoded.userId) {
-    return null;
-  }
-
-  return decoded.userId;
-}
+import { authenticateWebRequest, isAuthError } from '@/lib/auth';
 
 const patchSchema = z.object({
   name: z.string().optional(),
@@ -84,11 +21,11 @@ export async function GET(
 ) {
   try {
     const { driveId } = await context.params;
-    const userId = await getUserId(request);
-    
-    if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const auth = await authenticateWebRequest(request);
+    if (isAuthError(auth)) {
+      return auth.error;
     }
+    const userId = auth.userId;
 
     // First try to get the drive
     const drive = await db.query.drives.findFirst({
@@ -140,11 +77,11 @@ export async function PATCH(
 ) {
   try {
     const { driveId } = await context.params;
-    const userId = await getUserId(request);
-    
-    if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const auth = await authenticateWebRequest(request);
+    if (isAuthError(auth)) {
+      return auth.error;
     }
+    const userId = auth.userId;
 
     const body = await request.json();
     const validatedBody = patchSchema.parse(body);
@@ -205,11 +142,11 @@ export async function DELETE(
 ) {
   try {
     const { driveId } = await context.params;
-    const userId = await getUserId(request);
-    
-    if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const auth = await authenticateWebRequest(request);
+    if (isAuthError(auth)) {
+      return auth.error;
     }
+    const userId = auth.userId;
 
     // Find the drive and verify ownership
     const drive = await db.query.drives.findFirst({

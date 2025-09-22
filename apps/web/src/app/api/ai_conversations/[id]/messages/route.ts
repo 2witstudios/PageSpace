@@ -8,7 +8,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createXai } from '@ai-sdk/xai';
 import { createOllama } from 'ollama-ai-provider-v2';
-import { authenticateRequest } from '@/lib/auth-utils';
+import { authenticateWebRequest, isAuthError } from '@/lib/auth';
 import {
   getUserOpenRouterSettings,
   createOpenRouterSettings,
@@ -54,8 +54,9 @@ export async function GET(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { userId, error } = await authenticateRequest(request);
-    if (error) return error;
+    const auth = await authenticateWebRequest(request);
+    if (isAuthError(auth)) return auth.error;
+    const { userId } = auth;
 
     const { id } = await context.params;
 
@@ -121,11 +122,12 @@ export async function POST(
   try {
     loggers.api.debug('🚀 Global Assistant Chat API: Starting request processing', {});
     
-    const { userId, error } = await authenticateRequest(request);
-    if (error) {
+    const auth = await authenticateWebRequest(request);
+    if (isAuthError(auth)) {
       loggers.api.debug('❌ Global Assistant Chat API: Authentication failed', {});
-      return error;
+      return auth.error;
     }
+    const { userId } = auth;
 
     const { id: conversationId } = await context.params;
     loggers.api.debug('✅ Global Assistant Chat API: Authentication successful, userId:', { userId });
