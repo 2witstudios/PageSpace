@@ -10,10 +10,12 @@ import {
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
 import { loggers } from '@pagespace/lib/logger-config';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
-import { authenticateWebRequest, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+
+const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const };
 
 export async function POST(request: Request) {
-  const auth = await authenticateWebRequest(request);
+  const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
   if (isAuthError(auth)) {
     return auth.error;
   }

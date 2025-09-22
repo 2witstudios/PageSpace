@@ -3,7 +3,9 @@ import { pages, drives, db, and, eq } from '@pagespace/db';
 import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
 import { loggers } from '@pagespace/lib/logger-config';
-import { authenticateWebRequest, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+
+const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const };
 
 const reorderSchema = z.object({
   pageId: z.string(),
@@ -12,7 +14,7 @@ const reorderSchema = z.object({
 });
 
 export async function PATCH(request: Request) {
-  const auth = await authenticateWebRequest(request);
+  const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
   if (isAuthError(auth)) {
     return auth.error;
   }

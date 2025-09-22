@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
-import { authenticateMCPRequest, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+
+const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const };
 import { db, pages, drives, eq, and, desc, isNull } from '@pagespace/db';
 import { canUserEditPage } from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
@@ -12,7 +14,7 @@ import { loggers } from '@pagespace/lib/logger-config';
  */
 export async function POST(request: Request) {
   try {
-    const auth = await authenticateMCPRequest(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
     const { userId } = auth;
 

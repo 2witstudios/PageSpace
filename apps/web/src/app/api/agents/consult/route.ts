@@ -6,7 +6,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createXai } from '@ai-sdk/xai';
 import { createOllama } from 'ollama-ai-provider-v2';
-import { authenticateMCPRequest, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/server';
 import {
   getUserOpenRouterSettings,
@@ -196,7 +196,7 @@ async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: st
  */
 export async function POST(request: Request) {
   try {
-    const auth = await authenticateMCPRequest(request);
+    const auth = await authenticateRequestWithOptions(request, { allow: ['jwt', 'mcp'] as const });
     if (isAuthError(auth)) return auth.error;
     const { userId } = auth;
 

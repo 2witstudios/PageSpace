@@ -3,7 +3,9 @@ import { buildTree } from '@pagespace/lib/server';
 import { pages, drives, pageType, pagePermissions, db, and, eq, inArray, asc, sql } from '@pagespace/db';
 import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/logger-config';
-import { authenticateWebRequest, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+
+const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const };
 
 async function getPermittedPages(driveId: string, userId: string) {
   // Check if user is a drive member - currently unused but will be needed for member-level permissions
@@ -63,7 +65,7 @@ export async function GET(
   request: NextRequest,
   context: { params: Promise<{ driveId: string }> }
 ) {
-  const auth = await authenticateWebRequest(request);
+  const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
   if (isAuthError(auth)) {
     return auth.error;
   }
@@ -119,7 +121,7 @@ export async function POST(
   request: NextRequest,
   context: { params: Promise<{ driveId: string }> }
 ) {
-  const auth = await authenticateWebRequest(request);
+  const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
   if (isAuthError(auth)) {
     return auth.error;
   }

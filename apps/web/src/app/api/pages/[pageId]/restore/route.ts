@@ -3,7 +3,9 @@ import { pages, db, and, eq } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/logger-config';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
-import { authenticateWebRequest, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+
+const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const };
 
 async function recursivelyRestore(pageId: string, tx: typeof db) {
   await tx.update(pages).set({ isTrashed: false, trashedAt: null }).where(eq(pages.id, pageId));
@@ -32,7 +34,7 @@ async function recursivelyRestore(pageId: string, tx: typeof db) {
 
 export async function POST(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
   const { pageId } = await params;
-  const auth = await authenticateWebRequest(req);
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
   if (isAuthError(auth)) {
     return auth.error;
   }

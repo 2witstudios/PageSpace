@@ -2,14 +2,16 @@ import { NextResponse } from 'next/server';
 import { drives, pages, db, and, eq, asc } from '@pagespace/db';
 import { buildTree } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/logger-config';
-import { authenticateWebRequest, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+
+const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const };
 
 interface DriveParams {
   driveId: string;
 }
 
 export async function GET(request: Request, context: { params: Promise<DriveParams> }) {
-  const auth = await authenticateWebRequest(request);
+  const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
   if (isAuthError(auth)) {
     return auth.error;
   }

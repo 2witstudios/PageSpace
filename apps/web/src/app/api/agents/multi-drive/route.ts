@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
-import { authenticateMCPRequest, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+
+const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const };
 import { db, pages, drives, eq, and } from '@pagespace/db';
 import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/logger-config';
@@ -30,7 +32,7 @@ interface AgentSummary {
  */
 export async function GET(request: Request) {
   try {
-    const auth = await authenticateMCPRequest(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
     const { userId } = auth;
 

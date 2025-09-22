@@ -2,7 +2,9 @@ import { NextResponse } from 'next/server';
 import { drives, db, eq, and } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/logger-config';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/socket-utils';
-import { authenticateWebRequest, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+
+const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const };
 
 export async function POST(
   request: Request,
@@ -10,7 +12,7 @@ export async function POST(
 ) {
   try {
     const { driveId } = await context.params;
-    const auth = await authenticateWebRequest(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) {
       return auth.error;
     }

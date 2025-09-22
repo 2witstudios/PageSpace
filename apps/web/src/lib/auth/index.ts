@@ -35,6 +35,12 @@ export interface AuthError {
 
 export type AuthenticationResult = AuthResult | AuthError;
 
+export type AllowedTokenType = TokenType;
+
+export interface AuthenticateOptions {
+  allow: ReadonlyArray<AllowedTokenType>;
+}
+
 function unauthorized(message: string, status = 401): NextResponse {
   return NextResponse.json({ error: message }, { status });
 }
@@ -191,18 +197,7 @@ export async function authenticateWebRequest(request: Request): Promise<Authenti
 }
 
 export async function authenticateHybridRequest(request: Request): Promise<AuthenticationResult> {
-  const bearerToken = getBearerToken(request);
-
-  if (bearerToken?.startsWith(MCP_TOKEN_PREFIX)) {
-    return authenticateMCPRequest(request);
-  }
-
-  const webResult = await authenticateWebRequest(request);
-  if ('error' in webResult) {
-    return webResult;
-  }
-
-  return webResult;
+  return authenticateRequestWithOptions(request, { allow: ['mcp', 'jwt'] });
 }
 
 export function isAuthError(result: AuthenticationResult): result is AuthError {
@@ -215,4 +210,44 @@ export function isMCPAuthResult(result: AuthenticationResult): result is MCPAuth
 
 export function isWebAuthResult(result: AuthenticationResult): result is WebAuthResult {
   return !('error' in result) && result.tokenType === 'jwt';
+}
+
+export async function authenticateRequestWithOptions(
+  request: Request,
+  options: AuthenticateOptions,
+): Promise<AuthenticationResult> {
+  const { allow } = options;
+
+  if (!allow.length) {
+    return {
+      error: unauthorized('No authentication methods permitted for this endpoint', 500),
+    };
+  }
+
+  const allowedTypes = new Set(allow);
+  const allowMCP = allowedTypes.has('mcp');
+  const allowJWT = allowedTypes.has('jwt');
+
+  const bearerToken = getBearerToken(request);
+
+  if (bearerToken?.startsWith(MCP_TOKEN_PREFIX)) {
+    if (!allowMCP) {
+      return {
+        error: unauthorized('MCP tokens are not permitted for this endpoint'),
+      };
+    }
+    return authenticateMCPRequest(request);
+  }
+
+  if (allowJWT) {
+    return authenticateWebRequest(request);
+  }
+
+  if (allowMCP) {
+    return authenticateMCPRequest(request);
+  }
+
+  return {
+    error: unauthorized('No authentication methods permitted for this endpoint', 500),
+  };
 }

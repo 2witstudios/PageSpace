@@ -6,7 +6,7 @@ import * as cheerio from 'cheerio';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
 import { loggers } from '@pagespace/lib/logger-config';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
-import { authenticateWebRequest, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 // Content sanitization utility
 function sanitizeEmptyContent(content: string): string {

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateMCPRequest, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, pages, drives, eq, and } from '@pagespace/db';
 import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/logger-config';
@@ -30,7 +30,7 @@ export async function GET(
   context: { params: Promise<{ driveId: string }> }
 ) {
   try {
-    const auth = await authenticateMCPRequest(request);
+    const auth = await authenticateRequestWithOptions(request, { allow: ['jwt', 'mcp'] as const });
     if (isAuthError(auth)) return auth.error;
     const { userId } = auth;
 

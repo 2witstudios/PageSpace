@@ -3,7 +3,9 @@ import { drives, db, eq, and, driveMembers } from '@pagespace/db';
 import { z } from 'zod';
 import { loggers } from '@pagespace/lib/logger-config';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/socket-utils';
-import { authenticateWebRequest, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+
+const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const };
 
 const patchSchema = z.object({
   name: z.string().optional(),
@@ -21,7 +23,7 @@ export async function GET(
 ) {
   try {
     const { driveId } = await context.params;
-    const auth = await authenticateWebRequest(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) {
       return auth.error;
     }
@@ -77,7 +79,7 @@ export async function PATCH(
 ) {
   try {
     const { driveId } = await context.params;
-    const auth = await authenticateWebRequest(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) {
       return auth.error;
     }
@@ -142,7 +144,7 @@ export async function DELETE(
 ) {
   try {
     const { driveId } = await context.params;
-    const auth = await authenticateWebRequest(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) {
       return auth.error;
     }
