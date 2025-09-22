@@ -8,6 +8,8 @@ import { loggers } from '@pagespace/lib/logger-config';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
+const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const };
+
 // Content sanitization utility
 function sanitizeEmptyContent(content: string): string {
   if (!content || content.trim() === '') {
@@ -129,7 +131,7 @@ async function recursivelyTrash(pageId: string, tx: TransactionType | DatabaseTy
 
 export async function GET(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
   const { pageId } = await params;
-  const auth = await authenticateWebRequest(req);
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
   if (isAuthError(auth)) {
     return auth.error;
   }
@@ -186,7 +188,7 @@ const patchSchema = z.object({
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
   const { pageId } = await params;
-  const auth = await authenticateWebRequest(req);
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
   if (isAuthError(auth)) {
     return auth.error;
   }
@@ -296,7 +298,7 @@ const deleteSchema = z.object({
 
 export async function DELETE(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
   const { pageId } = await params;
-  const auth = await authenticateWebRequest(req);
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
   if (isAuthError(auth)) {
     return auth.error;
   }
