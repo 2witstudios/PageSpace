@@ -23,6 +23,81 @@ import { buildTimestampSystemPrompt } from '@/lib/ai/timestamp-utils';
 import { loggers } from '@pagespace/lib/logger-config';
 
 /**
+ * Get configured AI model for agent
+ */
+async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: string | null; aiModel?: string | null }) {
+  const { aiProvider, aiModel } = agentConfig;
+
+  switch (aiProvider) {
+    case 'openrouter': {
+      const settings = await getUserOpenRouterSettings(userId);
+      const defaultSettings = await getDefaultPageSpaceSettings();
+      const apiKey = settings?.apiKey || (defaultSettings?.provider === 'openrouter' ? defaultSettings.apiKey : undefined);
+      if (!apiKey) throw new Error('OpenRouter API key not configured');
+      const openrouter = createOpenRouter({ apiKey });
+      return openrouter(aiModel || 'anthropic/claude-3.5-sonnet');
+    }
+
+    case 'google': {
+      const settings = await getUserGoogleSettings(userId);
+      const defaultSettings = await getDefaultPageSpaceSettings();
+      const apiKey = settings?.apiKey || (defaultSettings?.provider === 'google' ? defaultSettings.apiKey : undefined);
+      if (!apiKey) throw new Error('Google AI API key not configured');
+      const google = createGoogleGenerativeAI({ apiKey });
+      return google(aiModel || 'gemini-2.5-flash');
+    }
+
+    case 'openai': {
+      const settings = await getUserOpenAISettings(userId);
+      const apiKey = settings?.apiKey;
+      if (!apiKey) throw new Error('OpenAI API key not configured');
+      const openai = createOpenAI({ apiKey });
+      return openai(aiModel || 'gpt-4');
+    }
+
+    case 'anthropic': {
+      const settings = await getUserAnthropicSettings(userId);
+      const apiKey = settings?.apiKey;
+      if (!apiKey) throw new Error('Anthropic API key not configured');
+      const anthropic = createAnthropic({ apiKey });
+      return anthropic(aiModel || 'claude-3-5-sonnet-20241022');
+    }
+
+    case 'xai': {
+      const settings = await getUserXAISettings(userId);
+      const apiKey = settings?.apiKey;
+      if (!apiKey) throw new Error('xAI API key not configured');
+      const xai = createXai({ apiKey });
+      return xai(aiModel || 'grok-beta');
+    }
+
+    case 'ollama': {
+      const settings = await getUserOllamaSettings(userId);
+      const baseURL = settings?.baseUrl || 'http://localhost:11434';
+      const ollama = createOllama({ baseURL });
+      return ollama(aiModel || 'llama3.1');
+    }
+
+    default: {
+      // Fall back to default PageSpace settings
+      const defaultSettings = await getDefaultPageSpaceSettings();
+      if (!defaultSettings) {
+        throw new Error('No AI provider configured');
+      }
+
+      // Only use Google AI as the default provider
+      if (defaultSettings.provider === 'google') {
+        const google = createGoogleGenerativeAI({ apiKey: defaultSettings.apiKey });
+        return google('gemini-2.5-flash');
+      }
+
+      // Should not reach here if properly configured, but throw clear error
+      throw new Error('Default AI provider must be Google AI with gemini-2.5-flash');
+    }
+  }
+}
+
+/**
  * POST /api/agents/consult
  * Consult another AI agent in the workspace for specialized knowledge or assistance
  */
@@ -75,8 +150,6 @@ export async function POST(request: Request) {
     // Get agent configuration
     const systemPrompt = agent.systemPrompt || 'You are a helpful AI assistant.';
     const enabledTools = agent.enabledTools || [];
-    const aiProvider = agent.aiProvider || 'openrouter';
-    const aiModel = agent.aiModel || 'anthropic/claude-3-5-sonnet';
 
     // Get recent conversation history for context (last 10 messages)
     const recentMessages = await db
@@ -116,64 +189,13 @@ export async function POST(request: Request) {
       content: consultationMessage
     });
 
-    // Get user AI settings for provider configuration
-    let providerInstance;
+    // Get configured AI model for agent
     let model;
-
     try {
-      switch (aiProvider) {
-        case 'openrouter': {
-          const settings = await getUserOpenRouterSettings(userId);
-          const defaultSettings = await getDefaultPageSpaceSettings();
-          const apiKey = settings?.apiKey || (defaultSettings?.provider === 'openrouter' ? defaultSettings.apiKey : undefined);
-          if (!apiKey) throw new Error('OpenRouter API key not configured');
-          providerInstance = createOpenRouter({ apiKey });
-          model = providerInstance(aiModel);
-          break;
-        }
-        case 'google': {
-          const settings = await getUserGoogleSettings(userId);
-          const defaultSettings = await getDefaultPageSpaceSettings();
-          const apiKey = settings?.apiKey || (defaultSettings?.provider === 'google' ? defaultSettings.apiKey : undefined);
-          if (!apiKey) throw new Error('Google API key not configured');
-          providerInstance = createGoogleGenerativeAI({ apiKey });
-          model = providerInstance(aiModel);
-          break;
-        }
-        case 'openai': {
-          const settings = await getUserOpenAISettings(userId);
-          const apiKey = settings?.apiKey;
-          if (!apiKey) throw new Error('OpenAI API key not configured');
-          providerInstance = createOpenAI({ apiKey });
-          model = providerInstance(aiModel);
-          break;
-        }
-        case 'anthropic': {
-          const settings = await getUserAnthropicSettings(userId);
-          const apiKey = settings?.apiKey;
-          if (!apiKey) throw new Error('Anthropic API key not configured');
-          providerInstance = createAnthropic({ apiKey });
-          model = providerInstance(aiModel);
-          break;
-        }
-        case 'xai': {
-          const settings = await getUserXAISettings(userId);
-          const apiKey = settings?.apiKey;
-          if (!apiKey) throw new Error('xAI API key not configured');
-          providerInstance = createXai({ apiKey });
-          model = providerInstance(aiModel);
-          break;
-        }
-        case 'ollama': {
-          const settings = await getUserOllamaSettings(userId);
-          const baseURL = settings?.baseUrl || 'http://localhost:11434';
-          providerInstance = createOllama({ baseURL });
-          model = providerInstance(aiModel);
-          break;
-        }
-        default:
-          throw new Error(`Unsupported AI provider: ${aiProvider}`);
-      }
+      model = await getConfiguredModel(userId, {
+        aiProvider: agent.aiProvider,
+        aiModel: agent.aiModel
+      });
     } catch (providerError) {
       loggers.api.error('Agent consultation provider setup error:', providerError as Error);
       return NextResponse.json(
@@ -232,8 +254,8 @@ export async function POST(request: Request) {
         id: agent.id,
         title: agent.title,
         systemPrompt: systemPrompt.substring(0, 100) + (systemPrompt.length > 100 ? '...' : ''),
-        provider: aiProvider,
-        model: aiModel,
+        provider: agent.aiProvider || 'default',
+        model: agent.aiModel || 'default',
         enabledToolsCount: Array.isArray(enabledTools) ? enabledTools.length : 0
       },
       question,
@@ -242,8 +264,8 @@ export async function POST(request: Request) {
       metadata: {
         conversationLength: recentMessages.length,
         toolsAvailable: Array.isArray(enabledTools) ? enabledTools.length : 0,
-        provider: aiProvider,
-        model: aiModel,
+        provider: agent.aiProvider || 'default',
+        model: agent.aiModel || 'default',
         responseLength: responseText.length,
         timestamp: new Date().toISOString()
       },
