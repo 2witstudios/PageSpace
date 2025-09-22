@@ -7,8 +7,8 @@ export const AI_PROVIDERS = {
   pagespace: {
     name: 'PageSpace',
     models: {
-      'gemini-2.5-flash': 'Normal',
-      'gemini-2.5-pro': 'Advanced (Pro/Business)',
+      'GLM-4.5-air': 'Normal',
+      'GLM-4.5': 'Advanced (Pro/Business)',
     },
   },
   openrouter: {
@@ -232,13 +232,13 @@ export const AI_PROVIDERS = {
 /**
  * Map UI provider to backend provider
  * Both openrouter and openrouter_free use 'openrouter' backend
- * PageSpace uses 'google' backend
+ * PageSpace uses 'glm' backend (OpenAI-compatible endpoints)
  * GLM uses 'openai' backend (OpenAI-compatible endpoints)
  * OpenAI, Anthropic, and xAI use their own backends
  */
 export function getBackendProvider(uiProvider: string): string {
   if (uiProvider === 'pagespace') {
-    return 'google';
+    return 'glm';
   }
   if (uiProvider === 'openrouter_free') {
     return 'openrouter';
@@ -253,9 +253,9 @@ export function getBackendProvider(uiProvider: string): string {
  * Get default model for a provider
  */
 export function getDefaultModel(provider: string): string {
-  // Always return gemini-2.5-flash for PageSpace provider
+  // Always return GLM-4.5-air for PageSpace provider
   if (provider === 'pagespace') {
-    return 'gemini-2.5-flash';
+    return 'GLM-4.5-air';
   }
 
   // Always return gemini-2.5-flash for Google provider
@@ -265,7 +265,7 @@ export function getDefaultModel(provider: string): string {
 
   const providerConfig = AI_PROVIDERS[provider as keyof typeof AI_PROVIDERS];
   if (!providerConfig) {
-    return 'gemini-2.5-flash'; // fallback default to Gemini 2.5 Flash
+    return 'GLM-4.5-air'; // fallback default to GLM 4.5 Air
   }
 
   return Object.keys(providerConfig.models)[0];

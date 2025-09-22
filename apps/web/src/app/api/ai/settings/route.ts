@@ -26,6 +26,7 @@ import {
   deleteGLMSettings
 } from '@/lib/ai/ai-utils';
 import { db, users, eq } from '@pagespace/db';
+import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 
 /**
  * GET /api/ai/settings
@@ -66,7 +67,8 @@ export async function GET(request: Request) {
 
     return NextResponse.json({
       currentProvider: user?.currentAiProvider || 'pagespace',
-      currentModel: user?.currentAiModel || 'qwen/qwen3-coder:free',
+      currentModel: user?.currentAiModel || 'GLM-4.5-air',
+      userSubscriptionTier: user?.subscriptionTier || 'free',
       providers: {
         pagespace: {
           isConfigured: !!pageSpaceSettings?.isConfigured,
@@ -232,6 +234,27 @@ export async function PATCH(request: Request) {
       return NextResponse.json(
         { error: 'Model is required' },
         { status: 400 }
+      );
+    }
+
+    // Get user's subscription tier to check access permissions
+    const [user] = await db.select().from(users).where(eq(users.id, userId));
+    if (!user) {
+      return NextResponse.json(
+        { error: 'User not found' },
+        { status: 404 }
+      );
+    }
+
+    // Check if user is trying to select PageSpace extra thinking model without proper subscription
+    if (requiresProSubscription(provider, model, user.subscriptionTier)) {
+      return NextResponse.json(
+        {
+          error: 'Subscription required',
+          message: 'PageSpace Extra Thinking (Advanced) requires a Pro or Business subscription.',
+          upgradeUrl: '/settings/billing',
+        },
+        { status: 403 }
       );
     }
 

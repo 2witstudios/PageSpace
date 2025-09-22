@@ -240,7 +240,7 @@ export async function POST(request: Request) {
     // Get user's current AI provider settings
     const [user] = await db.select().from(users).where(eq(users.id, userId));
     const currentProvider = selectedProvider || user?.currentAiProvider || 'pagespace';
-    const currentModel = selectedModel || user?.currentAiModel || 'gemini-2.5-flash';
+    const currentModel = selectedModel || user?.currentAiModel || 'GLM-4.5-air';
 
     // Pro subscription check for special providers
     const { requiresProSubscription, createSubscriptionRequiredResponse } = await import('@/lib/subscription/rate-limit-middleware');
@@ -312,13 +312,19 @@ export async function POST(request: Request) {
           });
           const baseModel = googleProvider(currentModel);
           model = baseModel;
-        } else {
-          // Fallback to OpenRouter for backwards compatibility
-          const openrouter = createOpenRouter({
+        } else if (pageSpaceSettings.provider === 'glm') {
+          // Use GLM provider with OpenAI-compatible endpoint
+          const glmProvider = createOpenAICompatible({
+            name: 'glm',
             apiKey: pageSpaceSettings.apiKey,
+            baseURL: 'https://api.z.ai/api/coding/paas/v4',
           });
-          const baseModel = openrouter.chat(currentModel);
+          const baseModel = glmProvider(currentModel);
           model = baseModel;
+        } else {
+          return NextResponse.json({
+            error: `Unsupported PageSpace provider: ${pageSpaceSettings.provider}`
+          }, { status: 400 });
         }
       }
     } else if (currentProvider === 'openrouter') {
@@ -794,7 +800,7 @@ MENTION PROCESSING:
               const isPageSpaceProvider = currentProvider === 'pagespace';
 
               // Determine if this is thinking model based on model name
-              const isThinkingModel = currentModel === 'gemini-2.5-pro';
+              const isThinkingModel = currentModel === 'GLM-4.5';
 
               loggers.ai.info('AI Chat API: USAGE TRACKING DECISION', {
                 userId,

@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { Settings, CheckCircle, XCircle, Key, ExternalLink } from 'lucide-react';
+import { Settings, CheckCircle, XCircle, Key, ExternalLink, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import { AI_PROVIDERS, getBackendProvider } from '@/lib/ai/ai-providers-config';
 
@@ -24,13 +24,14 @@ interface ProviderSettings {
     glm: { isConfigured: boolean; hasApiKey: boolean };
   };
   isAnyProviderConfigured: boolean;
+  userSubscriptionTier?: string;
 }
 
 const AssistantSettingsTab: React.FC = () => {
   const router = useRouter();
   const [providerSettings, setProviderSettings] = useState<ProviderSettings | null>(null);
   const [selectedProvider, setSelectedProvider] = useState<string>('pagespace');
-  const [selectedModel, setSelectedModel] = useState<string>('qwen/qwen3-coder:free');
+  const [selectedModel, setSelectedModel] = useState<string>('GLM-4.5-air');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -94,6 +95,15 @@ const AssistantSettingsTab: React.FC = () => {
 
         setSelectedProvider(uiProvider);
         setSelectedModel(data.currentModel);
+
+        // Check if current model is accessible to user, if not, reset to default
+        if (uiProvider === 'pagespace' && data.currentModel === 'GLM-4.5') {
+          const userTier = data.userSubscriptionTier;
+          if (userTier !== 'pro' && userTier !== 'business') {
+            // Free user has restricted model selected, reset to default
+            setSelectedModel('GLM-4.5-air');
+          }
+        }
 
         // If current provider is Ollama, eagerly fetch models to avoid empty dropdown
         if (uiProvider === 'ollama') {
@@ -162,6 +172,21 @@ const AssistantSettingsTab: React.FC = () => {
     return AI_PROVIDERS[selectedProvider as keyof typeof AI_PROVIDERS]?.models || {};
   };
 
+  // Check if a model requires Pro/Business subscription
+  const requiresSubscription = (provider: string, model: string): boolean => {
+    return provider === 'pagespace' && model === 'GLM-4.5';
+  };
+
+  // Check if user has access to a model
+  const hasModelAccess = (provider: string, model: string): boolean => {
+    if (!requiresSubscription(provider, model)) {
+      return true; // All users can access non-subscription models
+    }
+
+    const userTier = providerSettings?.userSubscriptionTier;
+    return userTier === 'pro' || userTier === 'business';
+  };
+
   const isProviderConfigured = (provider: string): boolean => {
     if (!providerSettings?.providers) return false;
 
@@ -219,6 +244,18 @@ const AssistantSettingsTab: React.FC = () => {
 
       if (!response.ok) {
         const error = await response.json();
+
+        // Handle subscription-specific errors with upgrade option
+        if (response.status === 403 && error.upgradeUrl) {
+          toast.error(error.message || 'Subscription required', {
+            action: {
+              label: 'Upgrade',
+              onClick: () => router.push(error.upgradeUrl)
+            }
+          });
+          return;
+        }
+
         throw new Error(error.error || 'Failed to save settings');
       }
 
@@ -374,11 +411,27 @@ const AssistantSettingsTab: React.FC = () => {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {Object.entries(getCurrentProviderModels()).map(([key, name]) => (
-                      <SelectItem key={key} value={key}>
-                        {name}
-                      </SelectItem>
-                    ))}
+                    {Object.entries(getCurrentProviderModels()).map(([key, name]) => {
+                      const hasAccess = hasModelAccess(selectedProvider, key);
+                      const needsSubscription = requiresSubscription(selectedProvider, key);
+
+                      return (
+                        <SelectItem
+                          key={key}
+                          value={key}
+                          disabled={!hasAccess}
+                        >
+                          <div className="flex items-center justify-between w-full">
+                            <span className={!hasAccess ? 'text-muted-foreground' : ''}>{name}</span>
+                            {needsSubscription && !hasAccess && (
+                              <Badge variant="outline" className="text-xs ml-2">
+                                Pro/Business
+                              </Badge>
+                            )}
+                          </div>
+                        </SelectItem>
+                      );
+                    })}
                   </SelectContent>
                 </Select>
               </div>
@@ -392,6 +445,36 @@ const AssistantSettingsTab: React.FC = () => {
               </Button>
             </CardContent>
           </Card>
+
+          {/* Upgrade notification for restricted models */}
+          {selectedProvider === 'pagespace' &&
+           !hasModelAccess('pagespace', 'GLM-4.5') && (
+            <Card className="border-blue-200 bg-blue-50 dark:bg-blue-950/20">
+              <CardContent className="pt-6">
+                <div className="text-center space-y-3">
+                  <div className="h-8 w-8 mx-auto rounded-full bg-blue-100 dark:bg-blue-900 flex items-center justify-center">
+                    <Zap className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-blue-900 dark:text-blue-100">
+                      Unlock Extra Thinking
+                    </p>
+                    <p className="text-xs text-blue-700 dark:text-blue-300 mt-1">
+                      Advanced AI reasoning with Pro or Business
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => router.push('/settings/billing')}
+                    className="w-full border-blue-300 text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:text-blue-300 dark:hover:bg-blue-900"
+                  >
+                    View Upgrade Options
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           {/* API Key Management Link */}
           {!providerSettings?.isAnyProviderConfigured && (

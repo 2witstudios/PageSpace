@@ -18,7 +18,7 @@ export const users = pgTable('users', {
   tokenVersion: integer('tokenVersion').default(0).notNull(),
   role: userRole('role').default('user').notNull(),
   currentAiProvider: text('currentAiProvider').default('pagespace').notNull(),
-  currentAiModel: text('currentAiModel').default('gemini-2.5-flash').notNull(),
+  currentAiModel: text('currentAiModel').default('GLM-4.5-air').notNull(),
   // Storage tracking fields (quota/tier now computed from subscriptionTier)
   storageUsedBytes: real('storageUsedBytes').default(0).notNull(),
   activeUploads: integer('activeUploads').default(0).notNull(),

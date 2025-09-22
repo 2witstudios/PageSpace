@@ -251,7 +251,7 @@ export async function POST(
     // Get user's current AI provider settings
     const [user] = await db.select().from(users).where(eq(users.id, userId));
     const currentProvider = selectedProvider || user?.currentAiProvider || 'pagespace';
-    const currentModel = selectedModel || user?.currentAiModel || 'gemini-2.5-flash';
+    const currentModel = selectedModel || user?.currentAiModel || 'GLM-4.5-air';
     
     // Update user's current provider/model if changed
     if (selectedProvider && selectedModel && 
@@ -298,12 +298,18 @@ export async function POST(
             apiKey: pageSpaceSettings.apiKey,
           });
           model = googleProvider(currentModel);
-        } else {
-          // Fallback to OpenRouter for backwards compatibility
-          const openrouter = createOpenRouter({
+        } else if (pageSpaceSettings.provider === 'glm') {
+          // Use GLM provider with OpenAI-compatible endpoint
+          const glmProvider = createOpenAICompatible({
+            name: 'glm',
             apiKey: pageSpaceSettings.apiKey,
+            baseURL: 'https://api.z.ai/api/coding/paas/v4',
           });
-          model = openrouter.chat(currentModel);
+          model = glmProvider(currentModel);
+        } else {
+          return NextResponse.json({
+            error: `Unsupported PageSpace provider: ${pageSpaceSettings.provider}`
+          }, { status: 400 });
         }
       }
     } else if (currentProvider === 'openrouter') {
@@ -701,7 +707,7 @@ MENTION PROCESSING:
             if (isPageSpaceProvider) {
               try {
                 // Determine if this is thinking model based on model name
-                const isThinkingModel = currentModel === 'gemini-2.5-pro';
+                const isThinkingModel = currentModel === 'GLM-4.5';
                 const providerType = isThinkingModel ? 'extra_thinking' : 'normal';
 
                 loggers.api.info('Global Assistant API: CALLING incrementUsage', {

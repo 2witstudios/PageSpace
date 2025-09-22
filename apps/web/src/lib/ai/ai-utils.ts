@@ -7,14 +7,24 @@ import { createId } from '@paralleldrive/cuid2';
 
 /**
  * Gets default PageSpace API settings
- * Returns the default Google AI API key configured for the app (Gemini 2.5 Flash)
+ * Returns the default GLM API key configured for the app (GLM 4.5 Air/Standard)
  */
 export async function getDefaultPageSpaceSettings(): Promise<{
   apiKey: string;
   isConfigured: boolean;
-  provider: 'google' | 'openrouter';
+  provider: 'glm' | 'google' | 'openrouter';
 } | null> {
-  // First try Google AI (new default)
+  // First try GLM (current default for PageSpace)
+  const glmApiKey = process.env.GLM_DEFAULT_API_KEY;
+  if (glmApiKey && glmApiKey !== 'your_glm_api_key_here') {
+    return {
+      apiKey: glmApiKey,
+      isConfigured: true,
+      provider: 'glm',
+    };
+  }
+
+  // Fallback to Google AI for backwards compatibility
   const googleApiKey = process.env.GOOGLE_AI_DEFAULT_API_KEY;
   if (googleApiKey && googleApiKey !== 'your_google_ai_api_key_here') {
     return {
