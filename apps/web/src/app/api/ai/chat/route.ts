@@ -3,29 +3,23 @@ import { streamText, convertToModelMessages, UIMessage, stepCountIs, createUIMes
 import { incrementUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
 import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 import { broadcastUsageEvent } from '@/lib/socket-utils';
-import { createOpenRouter } from '@openrouter/ai-sdk-provider';
-import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import { createOpenAI } from '@ai-sdk/openai';
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { createAnthropic } from '@ai-sdk/anthropic';
-import { createXai } from '@ai-sdk/xai';
-import { createOllama } from 'ollama-ai-provider-v2';
 import { authenticateHybridRequest, isAuthError } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
 import {
+  createAIProvider,
+  updateUserProviderSettings,
+  createProviderErrorResponse,
+  isProviderError,
+  type ProviderRequest
+} from '@/lib/ai/provider-factory';
+import {
   getUserOpenRouterSettings,
-  createOpenRouterSettings,
   getUserGoogleSettings,
-  createGoogleSettings,
   getDefaultPageSpaceSettings,
   getUserOpenAISettings,
-  createOpenAISettings,
   getUserAnthropicSettings,
-  createAnthropicSettings,
   getUserXAISettings,
-  createXAISettings,
   getUserOllamaSettings,
-  createOllamaSettings,
   getUserGLMSettings,
 } from '@/lib/ai/ai-utils';
 import { db, users, chatMessages, pages, eq } from '@pagespace/db';
@@ -99,6 +93,7 @@ export async function POST(request: Request) {
       anthropicApiKey,
       xaiApiKey,
       ollamaBaseUrl,
+      glmApiKey,
       pageContext,
       // Note: agentRole no longer needed - handled server-side via page configuration
     }: {
@@ -112,6 +107,7 @@ export async function POST(request: Request) {
       anthropicApiKey?: string,
       xaiApiKey?: string,
       ollamaBaseUrl?: string,
+      glmApiKey?: string,
       pageContext?: {
         pageId: string,
         pageTitle: string,
@@ -278,234 +274,29 @@ export async function POST(request: Request) {
     }
 
 
-    // Handle multi-provider setup and validation
-    let model;
+    // Create AI provider using factory service
+    const providerRequest: ProviderRequest = {
+      selectedProvider,
+      selectedModel,
+      googleApiKey,
+      openRouterApiKey,
+      openAIApiKey,
+      anthropicApiKey,
+      xaiApiKey,
+      ollamaBaseUrl,
+      glmApiKey,
+    };
 
-    if (currentProvider === 'pagespace') {
-      // Use default PageSpace settings (Google AI backend supports both standard and pro models)
-      const pageSpaceSettings = await getDefaultPageSpaceSettings();
+    const providerResult = await createAIProvider(userId, providerRequest);
 
-      if (!pageSpaceSettings) {
-        // Fall back to user's Google settings if no default key
-        let googleSettings = await getUserGoogleSettings(userId);
-
-        if (!googleSettings && googleApiKey) {
-          await createGoogleSettings(userId, googleApiKey);
-          googleSettings = { apiKey: googleApiKey, isConfigured: true };
-        }
-
-        if (!googleSettings) {
-          return NextResponse.json({
-            error: 'No default API key configured. Please provide your own Google AI API key.'
-          }, { status: 400 });
-        }
-
-        const googleProvider = createGoogleGenerativeAI({
-          apiKey: googleSettings.apiKey,
-        });
-        const baseModel = googleProvider(currentModel);
-        model = baseModel;
-      } else {
-        // Use the appropriate provider based on the configuration
-        if (pageSpaceSettings.provider === 'google') {
-          const googleProvider = createGoogleGenerativeAI({
-            apiKey: pageSpaceSettings.apiKey,
-          });
-          const baseModel = googleProvider(currentModel);
-          model = baseModel;
-        } else if (pageSpaceSettings.provider === 'glm') {
-          // Use GLM provider with OpenAI-compatible endpoint
-          const glmProvider = createOpenAICompatible({
-            name: 'glm',
-            apiKey: pageSpaceSettings.apiKey,
-            baseURL: 'https://api.z.ai/api/coding/paas/v4',
-          });
-          const baseModel = glmProvider(currentModel);
-          model = baseModel;
-        } else {
-          return NextResponse.json({
-            error: `Unsupported PageSpace provider: ${pageSpaceSettings.provider}`
-          }, { status: 400 });
-        }
-      }
-    } else if (currentProvider === 'openrouter') {
-      // Handle OpenRouter setup
-      let openRouterSettings = await getUserOpenRouterSettings(userId);
-      
-      if (!openRouterSettings && openRouterApiKey) {
-        await createOpenRouterSettings(userId, openRouterApiKey);
-        openRouterSettings = { apiKey: openRouterApiKey, isConfigured: true };
-      }
-
-      if (!openRouterSettings) {
-        return NextResponse.json({ 
-          error: 'OpenRouter API key not configured. Please provide an API key.' 
-        }, { status: 400 });
-      }
-
-      const openrouter = createOpenRouter({
-        apiKey: openRouterSettings.apiKey,
-      });
-      
-      model = openrouter.chat(currentModel);
-      
-    } else if (currentProvider === 'openrouter_free') {
-      // Handle OpenRouter Free - uses user's OpenRouter key same as regular OpenRouter
-      let openRouterSettings = await getUserOpenRouterSettings(userId);
-      
-      if (!openRouterSettings && openRouterApiKey) {
-        await createOpenRouterSettings(userId, openRouterApiKey);
-        openRouterSettings = { apiKey: openRouterApiKey, isConfigured: true };
-      }
-
-      if (!openRouterSettings) {
-        return NextResponse.json({ 
-          error: 'OpenRouter API key not configured. Please provide an API key for free models.' 
-        }, { status: 400 });
-      }
-
-      const openrouter = createOpenRouter({
-        apiKey: openRouterSettings.apiKey,
-      });
-      
-      model = openrouter.chat(currentModel);
-      
-    } else if (currentProvider === 'google') {
-      // Handle Google AI setup
-      let googleSettings = await getUserGoogleSettings(userId);
-      
-      if (!googleSettings && googleApiKey) {
-        await createGoogleSettings(userId, googleApiKey);
-        googleSettings = { apiKey: googleApiKey, isConfigured: true };
-      }
-
-      if (!googleSettings) {
-        return NextResponse.json({ 
-          error: 'Google AI API key not configured. Please provide an API key.' 
-        }, { status: 400 });
-      }
-
-      // Create Google provider instance with API key
-      const googleProvider = createGoogleGenerativeAI({
-        apiKey: googleSettings.apiKey,
-      });
-      model = googleProvider(currentModel);
-      
-    } else if (currentProvider === 'openai') {
-      // Handle OpenAI setup
-      let openAISettings = await getUserOpenAISettings(userId);
-      
-      if (!openAISettings && openAIApiKey) {
-        await createOpenAISettings(userId, openAIApiKey);
-        openAISettings = { apiKey: openAIApiKey, isConfigured: true };
-      }
-
-      if (!openAISettings) {
-        return NextResponse.json({ 
-          error: 'OpenAI API key not configured. Please provide an API key.' 
-        }, { status: 400 });
-      }
-
-      // Create OpenAI provider instance with API key
-      const openai = createOpenAI({
-        apiKey: openAISettings.apiKey,
-      });
-      model = openai(currentModel);
-      
-    } else if (currentProvider === 'anthropic') {
-      // Handle Anthropic setup
-      let anthropicSettings = await getUserAnthropicSettings(userId);
-      
-      if (!anthropicSettings && anthropicApiKey) {
-        await createAnthropicSettings(userId, anthropicApiKey);
-        anthropicSettings = { apiKey: anthropicApiKey, isConfigured: true };
-      }
-
-      if (!anthropicSettings) {
-        return NextResponse.json({ 
-          error: 'Anthropic API key not configured. Please provide an API key.' 
-        }, { status: 400 });
-      }
-
-      // Create Anthropic provider instance with API key
-      const anthropic = createAnthropic({
-        apiKey: anthropicSettings.apiKey,
-      });
-      model = anthropic(currentModel);
-      
-    } else if (currentProvider === 'xai') {
-      // Handle xAI setup
-      let xaiSettings = await getUserXAISettings(userId);
-
-      if (!xaiSettings && xaiApiKey) {
-        await createXAISettings(userId, xaiApiKey);
-        xaiSettings = { apiKey: xaiApiKey, isConfigured: true };
-      }
-
-      if (!xaiSettings) {
-        return NextResponse.json({
-          error: 'xAI API key not configured. Please provide an API key.'
-        }, { status: 400 });
-      }
-
-      // Create xAI provider instance with API key
-      const xai = createXai({
-        apiKey: xaiSettings.apiKey,
-      });
-      model = xai(currentModel);
-
-    } else if (currentProvider === 'ollama') {
-      // Handle Ollama setup
-      let ollamaSettings = await getUserOllamaSettings(userId);
-
-      if (!ollamaSettings && ollamaBaseUrl) {
-        await createOllamaSettings(userId, ollamaBaseUrl);
-        ollamaSettings = { baseUrl: ollamaBaseUrl, isConfigured: true };
-      }
-
-      if (!ollamaSettings) {
-        return NextResponse.json({
-          error: 'Ollama base URL not configured. Please provide a base URL for your local Ollama instance.'
-        }, { status: 400 });
-      }
-
-      // Create Ollama provider instance with base URL
-      // Add /api suffix for ollama-ai-provider-v2 which expects full API endpoint
-      const ollamaApiUrl = `${ollamaSettings.baseUrl}/api`;
-      console.log('🔧 OLLAMA DEBUG: User baseURL:', ollamaSettings.baseUrl);
-      console.log('🔧 OLLAMA DEBUG: Provider baseURL:', ollamaApiUrl);
-      console.log('🔧 OLLAMA DEBUG: Current model:', currentModel);
-
-      const ollamaProvider = createOllama({
-        baseURL: ollamaApiUrl,
-      });
-      model = ollamaProvider(currentModel);
-
-      console.log('✅ OLLAMA DEBUG: Ollama provider created successfully');
-
-    } else if (currentProvider === 'glm') {
-      // Handle GLM Coder Plan setup
-      const glmSettings = await getUserGLMSettings(userId);
-
-      if (!glmSettings) {
-        return NextResponse.json({
-          error: 'GLM API key not configured. Please configure your GLM Coder Plan API key in Settings > AI.'
-        }, { status: 400 });
-      }
-
-      // Create GLM provider instance using OpenAI-compatible endpoint
-      const glmProvider = createOpenAICompatible({
-        name: 'glm',
-        apiKey: glmSettings.apiKey,
-        baseURL: 'https://api.z.ai/api/coding/paas/v4',
-      });
-      model = glmProvider(currentModel);
-
-    } else {
-      return NextResponse.json({
-        error: `Unsupported AI provider: ${currentProvider}`
-      }, { status: 400 });
+    if (isProviderError(providerResult)) {
+      return createProviderErrorResponse(providerResult);
     }
+
+    const { model } = providerResult;
+
+    // Update user's current provider/model if changed
+    await updateUserProviderSettings(userId, selectedProvider, selectedModel);
 
     // Filter tools based on custom enabled tools or use all tools if not configured
     let filteredTools;

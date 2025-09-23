@@ -2,6 +2,8 @@
  * Socket.IO utilities for broadcasting page tree and drive events
  */
 
+import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
+
 export type PageOperation = 'created' | 'updated' | 'moved' | 'deleted' | 'restored' | 'trashed' | 'content-updated';
 export type DriveOperation = 'created' | 'updated' | 'deleted';
 export type TaskOperation = 'task_list_created' | 'task_added' | 'task_updated' | 'task_completed';
@@ -61,14 +63,16 @@ export async function broadcastPageEvent(payload: PageEventPayload): Promise<voi
   }
 
   try {
+    const requestBody = JSON.stringify({
+      channelId: `drive:${payload.driveId}`,
+      event: `page:${payload.operation}`,
+      payload,
+    });
+
     await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        channelId: `drive:${payload.driveId}`,
-        event: `page:${payload.operation}`,
-        payload,
-      }),
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
     });
   } catch (error) {
     // Log error but don't throw - broadcasting failures shouldn't break operations
@@ -88,14 +92,16 @@ export async function broadcastDriveEvent(payload: DriveEventPayload): Promise<v
   }
 
   try {
+    const requestBody = JSON.stringify({
+      channelId: 'global:drives',
+      event: `drive:${payload.operation}`,
+      payload,
+    });
+
     await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        channelId: 'global:drives',
-        event: `drive:${payload.operation}`,
-        payload,
-      }),
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
     });
   } catch (error) {
     // Log error but don't throw - broadcasting failures shouldn't break operations
@@ -154,14 +160,16 @@ export async function broadcastTaskEvent(payload: TaskEventPayload): Promise<voi
   }
 
   try {
+    const requestBody = JSON.stringify({
+      channelId: `user:${payload.userId}:tasks`,
+      event: `task:${payload.type}`,
+      payload,
+    });
+
     await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        channelId: `user:${payload.userId}:tasks`,
-        event: `task:${payload.type}`,
-        payload,
-      }),
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
     });
   } catch (error) {
     // Log error but don't throw - broadcasting failures shouldn't break operations
@@ -181,14 +189,16 @@ export async function broadcastUsageEvent(payload: UsageEventPayload): Promise<v
   }
 
   try {
+    const requestBody = JSON.stringify({
+      channelId: `notifications:${payload.userId}`,
+      event: `usage:${payload.operation}`,
+      payload,
+    });
+
     await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        channelId: `notifications:${payload.userId}`,
-        event: `usage:${payload.operation}`,
-        payload,
-      }),
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
     });
 
     console.log('🔔 Usage event broadcasted:', {

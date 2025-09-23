@@ -14,6 +14,7 @@
     "./activity-tracker": "./src/activity-tracker.ts",
     "./ai-monitoring": "./src/ai-monitoring.ts",
     "./auth-utils": "./src/auth-utils.ts",
+    "./broadcast-auth": "./src/broadcast-auth.ts",
     "./scribe-processor": "./src/scribe-processor.ts",
     "./services/storage-limits": "./src/services/storage-limits.ts",
     "./services/subscription-utils": "./src/services/subscription-utils.ts",
@@ -45,6 +46,9 @@
       ],
       "auth-utils": [
         "./src/auth-utils.ts"
+      ],
+      "broadcast-auth": [
+        "./src/broadcast-auth.ts"
       ],
       "scribe-processor": [
         "./src/scribe-processor.ts"

@@ -2,32 +2,15 @@ import { NextResponse } from 'next/server';
 import { streamText, convertToModelMessages, stepCountIs, UIMessage } from 'ai';
 import { incrementUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
 import { broadcastUsageEvent } from '@/lib/socket-utils';
-import { createOpenRouter } from '@openrouter/ai-sdk-provider';
-import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import { createOpenAI } from '@ai-sdk/openai';
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { createAnthropic } from '@ai-sdk/anthropic';
-import { createXai } from '@ai-sdk/xai';
-import { createOllama } from 'ollama-ai-provider-v2';
 import { authenticateWebRequest, isAuthError } from '@/lib/auth';
 import {
-  getUserOpenRouterSettings,
-  createOpenRouterSettings,
-  getUserGoogleSettings,
-  createGoogleSettings,
-  getDefaultPageSpaceSettings,
-  getUserOpenAISettings,
-  createOpenAISettings,
-  getUserAnthropicSettings,
-  createAnthropicSettings,
-  getUserXAISettings,
-  createXAISettings,
-  getUserOllamaSettings,
-  createOllamaSettings,
-  getUserGLMSettings,
-  createGLMSettings
-} from '@/lib/ai/ai-utils';
-import { db, users, conversations, messages, eq, and, asc } from '@pagespace/db';
+  createAIProvider,
+  updateUserProviderSettings,
+  createProviderErrorResponse,
+  isProviderError,
+  type ProviderRequest
+} from '@/lib/ai/provider-factory';
+import { db, conversations, messages, eq, and, desc, gt, lt } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { pageSpaceTools } from '@/lib/ai/ai-tools';
 import { 
@@ -79,18 +62,56 @@ export async function GET(
       }, { status: 404 });
     }
 
-    // Get messages for this conversation
+    // Parse pagination parameters
+    const { searchParams } = new URL(request.url);
+    const limit = Math.min(parseInt(searchParams.get('limit') || '50'), 200);
+    const cursor = searchParams.get('cursor'); // Message ID for cursor-based pagination
+    const direction = searchParams.get('direction') || 'before'; // 'before' or 'after'
+
+    // Build query conditions
+    const conditions = [
+      eq(messages.conversationId, id),
+      eq(messages.isActive, true)
+    ];
+
+    // Add cursor condition if provided
+    if (cursor) {
+      // First, get the timestamp of the cursor message
+      const [cursorMessage] = await db
+        .select({ createdAt: messages.createdAt })
+        .from(messages)
+        .where(eq(messages.id, cursor))
+        .limit(1);
+
+      if (cursorMessage) {
+        if (direction === 'before') {
+          // Get messages created before the cursor (older messages)
+          conditions.push(lt(messages.createdAt, cursorMessage.createdAt));
+        } else {
+          // Get messages created after the cursor (newer messages)
+          conditions.push(gt(messages.createdAt, cursorMessage.createdAt));
+        }
+      }
+    }
+
+    // Get messages with pagination
+    // Order by createdAt DESC to get newest first, then reverse for chronological display
     const conversationMessages = await db
       .select()
       .from(messages)
-      .where(and(
-        eq(messages.conversationId, id),
-        eq(messages.isActive, true)
-      ))
-      .orderBy(asc(messages.createdAt));
+      .where(and(...conditions))
+      .orderBy(desc(messages.createdAt))
+      .limit(limit + 1); // Get one extra to check if there are more
+
+    // Check if there are more messages
+    const hasMore = conversationMessages.length > limit;
+    const messagesToReturn = hasMore ? conversationMessages.slice(0, limit) : conversationMessages;
+
+    // Reverse messages to show in chronological order (oldest first)
+    const orderedMessages = messagesToReturn.reverse();
 
     // Convert to UIMessage format with proper tool call reconstruction
-    const uiMessages = conversationMessages.map(msg => 
+    const uiMessages = orderedMessages.map(msg =>
       convertGlobalAssistantMessageToUIMessage({
         id: msg.id,
         conversationId: msg.conversationId,
@@ -106,7 +127,25 @@ export async function GET(
       })
     );
 
-    return NextResponse.json(uiMessages);
+    // Determine cursors for pagination
+    const nextCursor = hasMore && orderedMessages.length > 0
+      ? orderedMessages[0].id // First message (oldest) for loading even older messages
+      : null;
+
+    const prevCursor = orderedMessages.length > 0
+      ? orderedMessages[orderedMessages.length - 1].id // Last message (newest) for loading newer messages
+      : null;
+
+    return NextResponse.json({
+      messages: uiMessages,
+      pagination: {
+        hasMore,
+        nextCursor,
+        prevCursor,
+        limit,
+        direction
+      }
+    });
   } catch (error) {
     loggers.api.error('Error fetching messages:', error as Error);
     return NextResponse.json({ 
@@ -248,244 +287,29 @@ export async function POST(
       }
     }
     
-    // Get user's current AI provider settings
-    const [user] = await db.select().from(users).where(eq(users.id, userId));
-    const currentProvider = selectedProvider || user?.currentAiProvider || 'pagespace';
-    const currentModel = selectedModel || user?.currentAiModel || 'GLM-4.5-air';
-    
+    // Create AI provider using factory service
+    const providerRequest: ProviderRequest = {
+      selectedProvider,
+      selectedModel,
+      googleApiKey,
+      openRouterApiKey,
+      openAIApiKey,
+      anthropicApiKey,
+      xaiApiKey,
+      ollamaBaseUrl,
+      glmApiKey,
+    };
+
+    const providerResult = await createAIProvider(userId, providerRequest);
+
+    if (isProviderError(providerResult)) {
+      return createProviderErrorResponse(providerResult);
+    }
+
+    const { model, provider: currentProvider, modelName: currentModel } = providerResult;
+
     // Update user's current provider/model if changed
-    if (selectedProvider && selectedModel && 
-        (selectedProvider !== user?.currentAiProvider || selectedModel !== user?.currentAiModel)) {
-      await db
-        .update(users)
-        .set({
-          currentAiProvider: selectedProvider,
-          currentAiModel: selectedModel,
-        })
-        .where(eq(users.id, userId));
-    }
-
-    // Handle multi-provider setup and validation
-    let model;
-
-    if (currentProvider === 'pagespace') {
-      // Use default PageSpace settings (now Google AI with Gemini 2.5 Flash)
-      const pageSpaceSettings = await getDefaultPageSpaceSettings();
-
-      if (!pageSpaceSettings) {
-        // Fall back to user's Google settings if no default key
-        let googleSettings = await getUserGoogleSettings(userId);
-
-        if (!googleSettings && googleApiKey) {
-          await createGoogleSettings(userId, googleApiKey);
-          googleSettings = { apiKey: googleApiKey, isConfigured: true };
-        }
-
-        if (!googleSettings) {
-          return NextResponse.json({
-            error: 'No default API key configured. Please provide your own Google AI API key.'
-          }, { status: 400 });
-        }
-
-        const googleProvider = createGoogleGenerativeAI({
-          apiKey: googleSettings.apiKey,
-        });
-        model = googleProvider(currentModel);
-      } else {
-        // Use the appropriate provider based on the configuration
-        if (pageSpaceSettings.provider === 'google') {
-          const googleProvider = createGoogleGenerativeAI({
-            apiKey: pageSpaceSettings.apiKey,
-          });
-          model = googleProvider(currentModel);
-        } else if (pageSpaceSettings.provider === 'glm') {
-          // Use GLM provider with OpenAI-compatible endpoint
-          const glmProvider = createOpenAICompatible({
-            name: 'glm',
-            apiKey: pageSpaceSettings.apiKey,
-            baseURL: 'https://api.z.ai/api/coding/paas/v4',
-          });
-          model = glmProvider(currentModel);
-        } else {
-          return NextResponse.json({
-            error: `Unsupported PageSpace provider: ${pageSpaceSettings.provider}`
-          }, { status: 400 });
-        }
-      }
-    } else if (currentProvider === 'openrouter') {
-      let openRouterSettings = await getUserOpenRouterSettings(userId);
-      
-      if (!openRouterSettings && openRouterApiKey) {
-        await createOpenRouterSettings(userId, openRouterApiKey);
-        openRouterSettings = { apiKey: openRouterApiKey, isConfigured: true };
-      }
-
-      if (!openRouterSettings) {
-        return NextResponse.json({ 
-          error: 'OpenRouter API key not configured. Please provide an API key.' 
-        }, { status: 400 });
-      }
-
-      const openrouter = createOpenRouter({
-        apiKey: openRouterSettings.apiKey,
-      });
-      
-      model = openrouter.chat(currentModel);
-      
-    } else if (currentProvider === 'openrouter_free') {
-      // Handle OpenRouter Free - uses user's OpenRouter key same as regular OpenRouter
-      let openRouterSettings = await getUserOpenRouterSettings(userId);
-      
-      if (!openRouterSettings && openRouterApiKey) {
-        await createOpenRouterSettings(userId, openRouterApiKey);
-        openRouterSettings = { apiKey: openRouterApiKey, isConfigured: true };
-      }
-
-      if (!openRouterSettings) {
-        return NextResponse.json({ 
-          error: 'OpenRouter API key not configured. Please provide an API key for free models.' 
-        }, { status: 400 });
-      }
-
-      const openrouter = createOpenRouter({
-        apiKey: openRouterSettings.apiKey,
-      });
-      
-      model = openrouter.chat(currentModel);
-      
-    } else if (currentProvider === 'google') {
-      let googleSettings = await getUserGoogleSettings(userId);
-      
-      if (!googleSettings && googleApiKey) {
-        await createGoogleSettings(userId, googleApiKey);
-        googleSettings = { apiKey: googleApiKey, isConfigured: true };
-      }
-
-      if (!googleSettings) {
-        return NextResponse.json({ 
-          error: 'Google AI API key not configured. Please provide an API key.' 
-        }, { status: 400 });
-      }
-
-      const googleProvider = createGoogleGenerativeAI({
-        apiKey: googleSettings.apiKey,
-      });
-      model = googleProvider(currentModel);
-
-    } else if (currentProvider === 'ollama') {
-      // Handle Ollama setup
-      let ollamaSettings = await getUserOllamaSettings(userId);
-
-      if (!ollamaSettings && ollamaBaseUrl) {
-        await createOllamaSettings(userId, ollamaBaseUrl);
-        ollamaSettings = { baseUrl: ollamaBaseUrl, isConfigured: true };
-      }
-
-      if (!ollamaSettings) {
-        return NextResponse.json({
-          error: 'Ollama base URL not configured. Please provide a base URL for your local Ollama instance.'
-        }, { status: 400 });
-      }
-
-      // Create Ollama provider instance with base URL
-      // Add /api suffix for ollama-ai-provider-v2 which expects full API endpoint
-      const ollamaApiUrl = `${ollamaSettings.baseUrl}/api`;
-      const ollamaProvider = createOllama({
-        baseURL: ollamaApiUrl,
-      });
-      model = ollamaProvider(currentModel);
-
-    } else if (currentProvider === 'openai') {
-      // Handle OpenAI setup
-      let openAISettings = await getUserOpenAISettings(userId);
-
-      if (!openAISettings && openAIApiKey) {
-        await createOpenAISettings(userId, openAIApiKey);
-        openAISettings = { apiKey: openAIApiKey, isConfigured: true };
-      }
-
-      if (!openAISettings) {
-        return NextResponse.json({
-          error: 'OpenAI API key not configured. Please provide an API key.'
-        }, { status: 400 });
-      }
-
-      // Create OpenAI provider instance with API key
-      const openai = createOpenAI({
-        apiKey: openAISettings.apiKey,
-      });
-      model = openai(currentModel);
-
-    } else if (currentProvider === 'anthropic') {
-      // Handle Anthropic setup
-      let anthropicSettings = await getUserAnthropicSettings(userId);
-
-      if (!anthropicSettings && anthropicApiKey) {
-        await createAnthropicSettings(userId, anthropicApiKey);
-        anthropicSettings = { apiKey: anthropicApiKey, isConfigured: true };
-      }
-
-      if (!anthropicSettings) {
-        return NextResponse.json({
-          error: 'Anthropic API key not configured. Please provide an API key.'
-        }, { status: 400 });
-      }
-
-      // Create Anthropic provider instance with API key
-      const anthropic = createAnthropic({
-        apiKey: anthropicSettings.apiKey,
-      });
-      model = anthropic(currentModel);
-
-    } else if (currentProvider === 'xai') {
-      // Handle xAI setup
-      let xaiSettings = await getUserXAISettings(userId);
-
-      if (!xaiSettings && xaiApiKey) {
-        await createXAISettings(userId, xaiApiKey);
-        xaiSettings = { apiKey: xaiApiKey, isConfigured: true };
-      }
-
-      if (!xaiSettings) {
-        return NextResponse.json({
-          error: 'xAI API key not configured. Please provide an API key.'
-        }, { status: 400 });
-      }
-
-      // Create xAI provider instance with API key
-      const xai = createXai({
-        apiKey: xaiSettings.apiKey,
-      });
-      model = xai(currentModel);
-
-    } else if (currentProvider === 'glm') {
-      // Handle GLM Coder Plan setup
-      let glmSettings = await getUserGLMSettings(userId);
-
-      if (!glmSettings && glmApiKey) {
-        await createGLMSettings(userId, glmApiKey);
-        glmSettings = { apiKey: glmApiKey, isConfigured: true };
-      }
-
-      if (!glmSettings) {
-        return NextResponse.json({
-          error: 'GLM API key not configured. Please provide an API key.'
-        }, { status: 400 });
-      }
-
-      // Create GLM provider instance using OpenAI-compatible endpoint
-      const glmProvider = createOpenAICompatible({
-        name: 'glm',
-        apiKey: glmSettings.apiKey,
-        baseURL: 'https://api.z.ai/api/coding/paas/v4',
-      });
-      model = glmProvider(currentModel);
-
-    } else {
-      return NextResponse.json({
-        error: `Unsupported AI provider: ${currentProvider}`
-      }, { status: 400 });
-    }
+    await updateUserProviderSettings(userId, selectedProvider, selectedModel);
 
     // Get agent role with fallback to default
     const agentRole = AgentRoleUtils.getRoleFromString(roleString);

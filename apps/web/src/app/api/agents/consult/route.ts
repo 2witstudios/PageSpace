@@ -1,22 +1,12 @@
 import { NextResponse } from 'next/server';
 import { convertToModelMessages, generateText, stepCountIs } from 'ai';
-import { createOpenRouter } from '@openrouter/ai-sdk-provider';
-import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import { createOpenAI } from '@ai-sdk/openai';
-import { createAnthropic } from '@ai-sdk/anthropic';
-import { createXai } from '@ai-sdk/xai';
-import { createOllama } from 'ollama-ai-provider-v2';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/server';
 import {
-  getUserOpenRouterSettings,
-  getUserGoogleSettings,
-  getDefaultPageSpaceSettings,
-  getUserOpenAISettings,
-  getUserAnthropicSettings,
-  getUserXAISettings,
-  getUserOllamaSettings
-} from '@/lib/ai/ai-utils';
+  createAIProvider,
+  isProviderError,
+  type ProviderRequest
+} from '@/lib/ai/provider-factory';
 import { db, pages, eq, chatMessages } from '@pagespace/db';
 import { pageSpaceTools } from '@/lib/ai/ai-tools';
 import { buildTimestampSystemPrompt } from '@/lib/ai/timestamp-utils';
@@ -116,78 +106,28 @@ function formatToolExecutionResults(steps: unknown[]): string {
 }
 
 /**
- * Get configured AI model for agent
+ * Get configured AI model for agent using the centralized provider factory
+ * Handles provider-specific setup and fallbacks
  */
 async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: string | null; aiModel?: string | null }) {
   const { aiProvider, aiModel } = agentConfig;
 
-  switch (aiProvider) {
-    case 'openrouter': {
-      const settings = await getUserOpenRouterSettings(userId);
-      const defaultSettings = await getDefaultPageSpaceSettings();
-      const apiKey = settings?.apiKey || (defaultSettings?.provider === 'openrouter' ? defaultSettings.apiKey : undefined);
-      if (!apiKey) throw new Error('OpenRouter API key not configured');
-      const openrouter = createOpenRouter({ apiKey });
-      return openrouter(aiModel || 'anthropic/claude-3.5-sonnet');
-    }
+  // Use default provider/model if agent doesn't have specific configuration
+  const selectedProvider = aiProvider || 'pagespace';
+  const selectedModel = aiModel || (selectedProvider === 'pagespace' ? 'GLM-4.5-air' : undefined);
 
-    case 'google': {
-      const settings = await getUserGoogleSettings(userId);
-      const defaultSettings = await getDefaultPageSpaceSettings();
-      const apiKey = settings?.apiKey || (defaultSettings?.provider === 'google' ? defaultSettings.apiKey : undefined);
-      if (!apiKey) throw new Error('Google AI API key not configured');
-      const google = createGoogleGenerativeAI({ apiKey });
-      return google(aiModel || 'gemini-2.5-flash');
-    }
+  const providerRequest: ProviderRequest = {
+    selectedProvider,
+    selectedModel,
+  };
 
-    case 'openai': {
-      const settings = await getUserOpenAISettings(userId);
-      const apiKey = settings?.apiKey;
-      if (!apiKey) throw new Error('OpenAI API key not configured');
-      const openai = createOpenAI({ apiKey });
-      return openai(aiModel || 'gpt-4');
-    }
+  const providerResult = await createAIProvider(userId, providerRequest);
 
-    case 'anthropic': {
-      const settings = await getUserAnthropicSettings(userId);
-      const apiKey = settings?.apiKey;
-      if (!apiKey) throw new Error('Anthropic API key not configured');
-      const anthropic = createAnthropic({ apiKey });
-      return anthropic(aiModel || 'claude-3-5-sonnet-20241022');
-    }
-
-    case 'xai': {
-      const settings = await getUserXAISettings(userId);
-      const apiKey = settings?.apiKey;
-      if (!apiKey) throw new Error('xAI API key not configured');
-      const xai = createXai({ apiKey });
-      return xai(aiModel || 'grok-beta');
-    }
-
-    case 'ollama': {
-      const settings = await getUserOllamaSettings(userId);
-      const baseURL = settings?.baseUrl || 'http://localhost:11434';
-      const ollama = createOllama({ baseURL });
-      return ollama(aiModel || 'llama3.1');
-    }
-
-    default: {
-      // Fall back to default PageSpace settings
-      const defaultSettings = await getDefaultPageSpaceSettings();
-      if (!defaultSettings) {
-        throw new Error('No AI provider configured');
-      }
-
-      // Only use Google AI as the default provider
-      if (defaultSettings.provider === 'google') {
-        const google = createGoogleGenerativeAI({ apiKey: defaultSettings.apiKey });
-        return google('gemini-2.5-flash');
-      }
-
-      // Should not reach here if properly configured, but throw clear error
-      throw new Error('Default AI provider must be Google AI with gemini-2.5-flash');
-    }
+  if (isProviderError(providerResult)) {
+    throw new Error(providerResult.error);
   }
+
+  return providerResult.model;
 }
 
 /**

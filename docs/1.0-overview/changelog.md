@@ -1,5 +1,20 @@
 ## 2025-09-23
 
+### Refactored AI Provider Factory (14:30 UTC)
+
+- **Eliminated Code Duplication**: Extracted duplicated provider/model selection logic into centralized `AIProviderFactory` service
+  - **Removed**: ~400+ lines of duplicated provider logic across multiple AI routes
+  - **Added**: `apps/web/src/lib/ai/provider-factory.ts` - Centralized provider factory service
+  - **Refactored**: 4 files now use shared factory instead of duplicate logic:
+    - `apps/web/src/app/api/ai_conversations/[id]/messages/route.ts`
+    - `apps/web/src/app/api/ai/chat/route.ts`
+    - `apps/web/src/app/api/agents/consult/route.ts`
+    - `apps/web/src/lib/ai/tools/agent-communication-tools.ts`
+  - **Improved**: Consistent error handling and validation across all AI provider implementations
+  - **Enhanced**: TypeScript type safety with proper `LanguageModel` typing
+  - **Maintainability**: Single location for adding new providers or updating provider logic
+  - **DRY Principle**: Follows Don't Repeat Yourself principle for better code organization
+
 ### Security Fix - Page AI Settings PATCH Handler
 
 - **Fixed Critical Authorization Vulnerability**: Page AI settings PATCH endpoint (`/api/ai/chat`) now properly enforces permission checks

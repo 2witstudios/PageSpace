@@ -7,10 +7,15 @@ import { pages, drives, driveMembers, pagePermissions } from '@pagespace/db';
  */
 export async function getUserAccessLevel(
   userId: string,
-  pageId: string
+  pageId: string,
+  options: { silent?: boolean } = {}
 ): Promise<{ canView: boolean; canEdit: boolean; canShare: boolean; canDelete: boolean } | null> {
-  console.log(`[PERMISSIONS] Checking access for userId: ${userId}, pageId: ${pageId}`);
-  
+  const { silent = false } = options;
+
+  if (!silent) {
+    console.log(`[PERMISSIONS] Checking access for userId: ${userId}, pageId: ${pageId}`);
+  }
+
   // 1. Get the page and its drive
   const page = await db.select({
     id: pages.id,
@@ -23,15 +28,21 @@ export async function getUserAccessLevel(
   .limit(1);
 
   if (page.length === 0) {
-    console.log(`[PERMISSIONS] Page not found: ${pageId}`);
+    if (!silent) {
+      console.log(`[PERMISSIONS] Page not found: ${pageId}`);
+    }
     return null; // Page not found
   }
 
-  console.log(`[PERMISSIONS] Page found - driveId: ${page[0].driveId}, driveOwnerId: ${page[0].driveOwnerId}`);
+  if (!silent) {
+    console.log(`[PERMISSIONS] Page found - driveId: ${page[0].driveId}, driveOwnerId: ${page[0].driveOwnerId}`);
+  }
 
   // 2. Check if user is drive owner (has all permissions)
   if (page[0].driveOwnerId === userId) {
-    console.log(`[PERMISSIONS] User is drive owner - granting full access`);
+    if (!silent) {
+      console.log(`[PERMISSIONS] User is drive owner - granting full access`);
+    }
     return {
       canView: true,
       canEdit: true,
@@ -40,7 +51,9 @@ export async function getUserAccessLevel(
     };
   }
 
-  console.log(`[PERMISSIONS] User is NOT drive owner - checking explicit permissions`);
+  if (!silent) {
+    console.log(`[PERMISSIONS] User is NOT drive owner - checking explicit permissions`);
+  }
 
   // 3. Check direct page permissions
   const permission = await db.select()
@@ -52,11 +65,15 @@ export async function getUserAccessLevel(
     .limit(1);
 
   if (permission.length === 0) {
-    console.log(`[PERMISSIONS] No explicit permissions found - denying access`);
+    if (!silent) {
+      console.log(`[PERMISSIONS] No explicit permissions found - denying access`);
+    }
     return null; // No access
   }
 
-  console.log(`[PERMISSIONS] Found explicit permissions - canView: ${permission[0].canView}, canEdit: ${permission[0].canEdit}`);
+  if (!silent) {
+    console.log(`[PERMISSIONS] Found explicit permissions - canView: ${permission[0].canView}, canEdit: ${permission[0].canEdit}`);
+  }
 
   return {
     canView: permission[0].canView,
@@ -157,7 +174,7 @@ export async function getUserAccessiblePagesInDrive(
     const allPages = await db.select({ id: pages.id })
       .from(pages)
       .where(eq(pages.driveId, driveId));
-    
+
     return allPages.map(p => p.id);
   }
 
@@ -172,6 +189,107 @@ export async function getUserAccessiblePagesInDrive(
     ));
 
   return permissions.map(p => p.pageId);
+}
+
+/**
+ * Page with permission details type
+ */
+export type PageWithPermissions = {
+  id: string;
+  title: string;
+  type: string;
+  parentId: string | null;
+  position: number;
+  isTrashed: boolean;
+  permissions: {
+    canView: boolean;
+    canEdit: boolean;
+    canShare: boolean;
+    canDelete: boolean;
+  };
+};
+
+/**
+ * Get all pages a user has access to in a drive with full page details and permissions
+ * Optimized to avoid N+1 queries by using batch permission checks
+ */
+export async function getUserAccessiblePagesInDriveWithDetails(
+  userId: string,
+  driveId: string
+): Promise<PageWithPermissions[]> {
+  // Check if user is drive owner
+  const drive = await db.select()
+    .from(drives)
+    .where(eq(drives.id, driveId))
+    .limit(1);
+
+  if (drive.length === 0) {
+    return [];
+  }
+
+  if (drive[0].ownerId === userId) {
+    // Owner has access to all pages with full permissions
+    const allPages = await db.select({
+      id: pages.id,
+      title: pages.title,
+      type: pages.type,
+      parentId: pages.parentId,
+      position: pages.position,
+      isTrashed: pages.isTrashed,
+    })
+    .from(pages)
+    .where(and(
+      eq(pages.driveId, driveId),
+      eq(pages.isTrashed, false)
+    ));
+
+    return allPages.map(page => ({
+      ...page,
+      permissions: {
+        canView: true,
+        canEdit: true,
+        canShare: true,
+        canDelete: true,
+      }
+    }));
+  }
+
+  // Get pages with explicit permissions via JOIN
+  const pagesWithPermissions = await db.select({
+    id: pages.id,
+    title: pages.title,
+    type: pages.type,
+    parentId: pages.parentId,
+    position: pages.position,
+    isTrashed: pages.isTrashed,
+    canView: pagePermissions.canView,
+    canEdit: pagePermissions.canEdit,
+    canShare: pagePermissions.canShare,
+    canDelete: pagePermissions.canDelete,
+  })
+  .from(pages)
+  .innerJoin(pagePermissions, eq(pages.id, pagePermissions.pageId))
+  .where(and(
+    eq(pages.driveId, driveId),
+    eq(pages.isTrashed, false),
+    eq(pagePermissions.userId, userId),
+    eq(pagePermissions.canView, true)
+  ));
+
+  return pagesWithPermissions.map(page => ({
+    id: page.id,
+    title: page.title,
+    type: page.type,
+    parentId: page.parentId,
+    position: page.position,
+    isTrashed: page.isTrashed,
+    permissions: {
+      canView: page.canView,
+      canEdit: page.canEdit,
+      canShare: page.canShare,
+      canDelete: page.canDelete,
+    }
+  }));
 }
 
 /**
