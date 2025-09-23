@@ -1,5 +1,9 @@
 import { db, eq, users } from '@pagespace/db';
 import { getStorageConfigFromSubscription } from '@pagespace/lib/services/subscription-utils';
+import { loggers } from '@pagespace/lib/logger-config';
+import { maskIdentifier } from '@/lib/logging/mask';
+
+const adminLogger = loggers.system.child({ module: 'subscription-management' });
 
 export interface SubscriptionUpdateResult {
   success: boolean;
@@ -78,15 +82,15 @@ export async function updateUserSubscriptionTier(
     const storageConfig = getStorageConfigFromSubscription(newTier);
 
     // Log the change
-    console.log(`Subscription tier updated for user ${userId}:`, {
+    adminLogger.info('Subscription tier updated', {
+      userId: maskIdentifier(userId),
       from: existingUser.subscriptionTier,
       to: newTier,
-      adminUserId: adminUserId || 'system',
+      actor: adminUserId ? maskIdentifier(adminUserId) : 'system',
       storageUpdate: {
         tier: storageConfig.tier,
         quota: storageConfig.quotaBytes,
       },
-      timestamp: new Date().toISOString(),
     });
 
     return {
@@ -98,7 +102,11 @@ export async function updateUserSubscriptionTier(
     };
 
   } catch (error) {
-    console.error('Error updating user subscription tier:', error);
+    adminLogger.error('Failed to update user subscription tier', error instanceof Error ? error : undefined, {
+      userId: maskIdentifier(userId),
+      attemptedTier: newTier,
+      actor: adminUserId ? maskIdentifier(adminUserId) : 'system',
+    });
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error occurred'
@@ -115,7 +123,7 @@ export async function updateUserSubscriptionTier(
  * @deprecated Storage limits are now computed from subscription tier
  */
 export async function findMismatchedUsers(): Promise<never[]> {
-  console.log('findMismatchedUsers is deprecated - storage limits are now computed from subscription tier');
+  adminLogger.info('findMismatchedUsers is deprecated - storage limits are now computed from subscription tier');
   return [];
 }
 
@@ -126,6 +134,6 @@ export async function reconcileAllSubscriptionTiers(): Promise<{
   totalFixed: number;
   results: Array<{ userId: string; success: boolean; error?: string }>;
 }> {
-  console.log('reconcileAllSubscriptionTiers is deprecated - storage limits are now computed from subscription tier');
+  adminLogger.info('reconcileAllSubscriptionTiers is deprecated - storage limits are now computed from subscription tier');
   return { totalFixed: 0, results: [] };
 }

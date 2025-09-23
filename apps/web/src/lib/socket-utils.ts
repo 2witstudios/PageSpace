@@ -3,6 +3,8 @@
  */
 
 import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
+import { loggers } from '@pagespace/lib/logger-config';
+import { maskIdentifier } from '@/lib/logging/mask';
 
 export type PageOperation = 'created' | 'updated' | 'moved' | 'deleted' | 'restored' | 'trashed' | 'content-updated';
 export type DriveOperation = 'created' | 'updated' | 'deleted';
@@ -51,6 +53,9 @@ export interface UsageEventPayload {
   };
 }
 
+const realtimeLogger = loggers.realtime.child({ module: 'socket-utils' });
+const verboseRealtimeLogging = process.env.NODE_ENV !== 'production';
+
 /**
  * Broadcasts a page event to the realtime server
  * @param payload - The event payload to broadcast
@@ -58,7 +63,10 @@ export interface UsageEventPayload {
 export async function broadcastPageEvent(payload: PageEventPayload): Promise<void> {
   // Only broadcast if realtime URL is configured
   if (!process.env.INTERNAL_REALTIME_URL) {
-    console.warn('INTERNAL_REALTIME_URL not configured, skipping page event broadcast');
+    realtimeLogger.warn('Realtime URL not configured, skipping page event broadcast', {
+      event: 'page',
+      channel: `drive:${maskIdentifier(payload.driveId)}`
+    });
     return;
   }
 
@@ -76,7 +84,14 @@ export async function broadcastPageEvent(payload: PageEventPayload): Promise<voi
     });
   } catch (error) {
     // Log error but don't throw - broadcasting failures shouldn't break operations
-    console.error('Failed to broadcast page event:', error);
+    realtimeLogger.error(
+      'Failed to broadcast page event',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'page',
+        channel: `drive:${maskIdentifier(payload.driveId)}`
+      }
+    );
   }
 }
 
@@ -87,7 +102,9 @@ export async function broadcastPageEvent(payload: PageEventPayload): Promise<voi
 export async function broadcastDriveEvent(payload: DriveEventPayload): Promise<void> {
   // Only broadcast if realtime URL is configured
   if (!process.env.INTERNAL_REALTIME_URL) {
-    console.warn('INTERNAL_REALTIME_URL not configured, skipping drive event broadcast');
+    realtimeLogger.warn('Realtime URL not configured, skipping drive event broadcast', {
+      event: 'drive'
+    });
     return;
   }
 
@@ -105,7 +122,13 @@ export async function broadcastDriveEvent(payload: DriveEventPayload): Promise<v
     });
   } catch (error) {
     // Log error but don't throw - broadcasting failures shouldn't break operations
-    console.error('Failed to broadcast drive event:', error);
+    realtimeLogger.error(
+      'Failed to broadcast drive event',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'drive'
+      }
+    );
   }
 }
 
@@ -155,7 +178,9 @@ export function createDriveEventPayload(
 export async function broadcastTaskEvent(payload: TaskEventPayload): Promise<void> {
   // Only broadcast if realtime URL is configured
   if (!process.env.INTERNAL_REALTIME_URL) {
-    console.warn('INTERNAL_REALTIME_URL not configured, skipping task event broadcast');
+    realtimeLogger.warn('Realtime URL not configured, skipping task event broadcast', {
+      event: 'task'
+    });
     return;
   }
 
@@ -173,7 +198,14 @@ export async function broadcastTaskEvent(payload: TaskEventPayload): Promise<voi
     });
   } catch (error) {
     // Log error but don't throw - broadcasting failures shouldn't break operations
-    console.error('Failed to broadcast task event:', error);
+    realtimeLogger.error(
+      'Failed to broadcast task event',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'task',
+        channel: `user:${maskIdentifier(payload.userId)}:tasks`
+      }
+    );
   }
 }
 
@@ -184,7 +216,9 @@ export async function broadcastTaskEvent(payload: TaskEventPayload): Promise<voi
 export async function broadcastUsageEvent(payload: UsageEventPayload): Promise<void> {
   // Only broadcast if realtime URL is configured
   if (!process.env.INTERNAL_REALTIME_URL) {
-    console.warn('INTERNAL_REALTIME_URL not configured, skipping usage event broadcast');
+    realtimeLogger.warn('Realtime URL not configured, skipping usage event broadcast', {
+      event: 'usage'
+    });
     return;
   }
 
@@ -201,14 +235,23 @@ export async function broadcastUsageEvent(payload: UsageEventPayload): Promise<v
       body: requestBody,
     });
 
-    console.log('🔔 Usage event broadcasted:', {
-      userId: payload.userId,
-      operation: payload.operation,
-      standard: `${payload.standard.current}/${payload.standard.limit}`,
-      pro: `${payload.pro.current}/${payload.pro.limit}`
-    });
+    if (verboseRealtimeLogging) {
+      realtimeLogger.debug('Usage event broadcasted', {
+        userId: maskIdentifier(payload.userId),
+        operation: payload.operation,
+        standard: `${payload.standard.current}/${payload.standard.limit}`,
+        pro: `${payload.pro.current}/${payload.pro.limit}`
+      });
+    }
   } catch (error) {
     // Log error but don't throw - broadcasting failures shouldn't break operations
-    console.error('Failed to broadcast usage event:', error);
+    realtimeLogger.error(
+      'Failed to broadcast usage event',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'usage',
+        channel: `notifications:${maskIdentifier(payload.userId)}`
+      }
+    );
   }
 }

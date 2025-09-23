@@ -2,9 +2,13 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { db, pages, drives, eq, and, desc, isNull } from '@pagespace/db';
 import { canUserEditPage } from '@pagespace/lib';
+import { loggers } from '@pagespace/lib/logger-config';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
+import { maskIdentifier } from '@/lib/logging/mask';
 import { ToolExecutionContext } from '../types';
 import { pageSpaceTools } from '../ai-tools';
+
+const agentLogger = loggers.ai.child({ module: 'agent-tools' });
 
 export const agentTools = {
   /**
@@ -174,7 +178,12 @@ export const agentTools = {
           ]
         };
       } catch (error) {
-        console.error('Error creating agent:', error);
+        agentLogger.error('Failed to create AI agent', error instanceof Error ? error : undefined, {
+          userId: maskIdentifier(userId),
+          driveId: maskIdentifier(driveId),
+          parentId: maskIdentifier(parentId || undefined),
+          title,
+        });
         throw new Error(`Failed to create AI agent: ${error instanceof Error ? error.message : String(error)}`);
       }
     },
@@ -288,7 +297,11 @@ export const agentTools = {
           ]
         };
       } catch (error) {
-        console.error('Error updating agent configuration:', error);
+        agentLogger.error('Failed to update AI agent configuration', error instanceof Error ? error : undefined, {
+          userId: maskIdentifier(userId),
+          agentId: maskIdentifier(agentId),
+          agentPath,
+        });
         throw new Error(`Failed to update agent configuration at ${agentPath}: ${error instanceof Error ? error.message : String(error)}`);
       }
     },

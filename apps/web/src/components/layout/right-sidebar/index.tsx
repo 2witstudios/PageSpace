@@ -6,10 +6,16 @@ import { MessageSquare, History, Settings } from 'lucide-react';
 import AssistantChatTab from './ai-assistant/AssistantChatTab';
 import AssistantHistoryTab from './ai-assistant/AssistantHistoryTab';
 import AssistantSettingsTab from './ai-assistant/AssistantSettingsTab';
+import { createClientLogger } from '@/lib/logging/client-logger';
+
+const panelLogger = createClientLogger({ namespace: 'ui', component: 'right-sidebar' });
 
 export default function RightPanel() {
   const pathname = usePathname();
-  console.log('🔍 RightPanel pathname:', pathname, 'type:', typeof pathname);
+  panelLogger.debug('Evaluating RightPanel pathname', {
+    pathname,
+    pathnameType: typeof pathname,
+  });
 
   // Treat dashboard and drive root pages the same (no chat tab)
   let isDashboardOrDrive = false;
@@ -18,18 +24,24 @@ export default function RightPanel() {
   if (pathname && typeof pathname === 'string') {
     try {
       const matchResult = pathname.match(/^\/dashboard\/[^/]+$/);
-      console.log('🎯 RightPanel match result:', matchResult);
+      panelLogger.debug('RightPanel pathname match evaluated', {
+        matchFound: Boolean(matchResult),
+      });
       isDashboardOrDrive = pathname === '/dashboard' || !!matchResult;
     } catch (error) {
-      console.error('💥 RightPanel pathname.match error:', error);
+      panelLogger.error('Failed to evaluate pathname match in RightPanel', {
+        error: error instanceof Error ? error : String(error),
+      });
       isDashboardOrDrive = false;
     }
   } else {
-    console.log('⚠️ RightPanel: pathname is null/undefined, defaulting to false');
+    panelLogger.warn('RightPanel received null or undefined pathname');
     isDashboardOrDrive = false;
   }
 
-  console.log('📍 RightPanel isDashboardOrDrive:', isDashboardOrDrive);
+  panelLogger.debug('RightPanel computed dashboard/drive state', {
+    isDashboardOrDrive,
+  });
   
   // Determine default tab based on context
   const defaultTab = isDashboardOrDrive ? 'history' : 'chat';

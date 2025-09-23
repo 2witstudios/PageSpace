@@ -1,6 +1,10 @@
 import { db, userAiSettings, eq, and } from '@pagespace/db';
 import { decrypt } from '@pagespace/lib/server';
 import { createId } from '@paralleldrive/cuid2';
+import { loggers } from '@pagespace/lib/logger-config';
+import { maskIdentifier } from '@/lib/logging/mask';
+
+const aiLogger = loggers.ai.child({ module: 'ai-utils' });
 
 // Note: Message persistence is now handled by ChatStorageAdapter
 // This file only contains AI provider settings management
@@ -73,7 +77,9 @@ export async function getUserOpenRouterSettings(userId: string): Promise<{
       isConfigured: true,
     };
   } catch (error) {
-    console.error('Failed to decrypt OpenRouter API key:', error);
+    aiLogger.error('Failed to decrypt OpenRouter API key', error instanceof Error ? error : undefined, {
+      userId: maskIdentifier(userId),
+    });
     return null;
   }
 }
@@ -143,7 +149,9 @@ export async function getUserGoogleSettings(userId: string): Promise<{
       isConfigured: true,
     };
   } catch (error) {
-    console.error('Failed to decrypt Google API key:', error);
+    aiLogger.error('Failed to decrypt Google API key', error instanceof Error ? error : undefined, {
+      userId: maskIdentifier(userId),
+    });
     return null;
   }
 }
@@ -251,7 +259,9 @@ export async function getUserOpenAISettings(userId: string): Promise<{
       isConfigured: true,
     };
   } catch (error) {
-    console.error('Failed to decrypt OpenAI API key:', error);
+    aiLogger.error('Failed to decrypt OpenAI API key', error instanceof Error ? error : undefined, {
+      userId: maskIdentifier(userId),
+    });
     return null;
   }
 }
@@ -340,7 +350,9 @@ export async function getUserAnthropicSettings(userId: string): Promise<{
       isConfigured: true,
     };
   } catch (error) {
-    console.error('Failed to decrypt Anthropic API key:', error);
+    aiLogger.error('Failed to decrypt Anthropic API key', error instanceof Error ? error : undefined, {
+      userId: maskIdentifier(userId),
+    });
     return null;
   }
 }
@@ -429,7 +441,9 @@ export async function getUserXAISettings(userId: string): Promise<{
       isConfigured: true,
     };
   } catch (error) {
-    console.error('Failed to decrypt xAI API key:', error);
+    aiLogger.error('Failed to decrypt xAI API key', error instanceof Error ? error : undefined, {
+      userId: maskIdentifier(userId),
+    });
     return null;
   }
 }
@@ -532,7 +546,22 @@ export async function createOllamaSettings(
   // Remove trailing slash if present
   formattedUrl = formattedUrl.replace(/\/$/, '');
 
-  console.log('🔧 OLLAMA DEBUG: Storing clean baseURL:', formattedUrl);
+  const baseUrlSummary = (() => {
+    try {
+      const parsed = new URL(formattedUrl);
+      return {
+        origin: `${parsed.protocol}//${parsed.hostname}${parsed.port ? `:${parsed.port}` : ''}`,
+        hasCustomPath: parsed.pathname !== '/',
+      };
+    } catch {
+      return { origin: formattedUrl };
+    }
+  })();
+
+  aiLogger.debug('Persisting Ollama base URL', {
+    userId: maskIdentifier(userId),
+    ...baseUrlSummary,
+  });
 
   // Check if settings already exist
   const existingSettings = await db.query.userAiSettings.findFirst({
@@ -608,7 +637,9 @@ export async function getUserGLMSettings(userId: string): Promise<{
       isConfigured: true,
     };
   } catch (error) {
-    console.error('Failed to decrypt GLM API key:', error);
+    aiLogger.error('Failed to decrypt GLM API key', error instanceof Error ? error : undefined, {
+      userId: maskIdentifier(userId),
+    });
     return null;
   }
 }
