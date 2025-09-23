@@ -124,6 +124,66 @@ class MetricsCollector {
 // Initialize metrics collector
 const metricsCollector = MetricsCollector.getInstance();
 
+interface MonitoringIngestPayload {
+  type: 'api-request';
+  requestId: string;
+  timestamp: string;
+  method: string;
+  endpoint: string;
+  statusCode: number;
+  duration: number;
+  requestSize?: number;
+  responseSize?: number;
+  userId?: string;
+  sessionId?: string;
+  ip?: string;
+  userAgent?: string;
+  error?: string;
+  errorName?: string;
+  errorStack?: string;
+  cacheHit?: boolean;
+  cacheKey?: string;
+  driveId?: string;
+  pageId?: string;
+  metadata?: Record<string, unknown>;
+  query?: Record<string, unknown>;
+}
+
+const DEFAULT_INGEST_PATH = '/api/internal/monitoring/ingest';
+
+function queueMonitoringIngest(request: NextRequest, payload: MonitoringIngestPayload): void {
+  const ingestKey = process.env.MONITORING_INGEST_KEY;
+  if (!ingestKey) {
+    return;
+  }
+
+  try {
+    const ingestPath = process.env.MONITORING_INGEST_PATH || DEFAULT_INGEST_PATH;
+    const url = new URL(ingestPath, request.nextUrl.origin);
+
+    fetch(url.toString(), {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-monitoring-ingest-key': ingestKey,
+      },
+      body: JSON.stringify(payload),
+      cache: 'no-store',
+      keepalive: true,
+    }).catch((error) => {
+      loggers.performance.debug('Failed to forward monitoring payload', {
+        error: (error as Error).message,
+        endpoint: payload.endpoint,
+      });
+    });
+  } catch (error) {
+    loggers.performance.debug('Unable to construct monitoring ingest request', {
+      error: (error as Error).message,
+      endpoint: payload.endpoint,
+    });
+  }
+}
+
 /**
  * Extract user ID from JWT cookie
  */
@@ -174,6 +234,7 @@ function shouldMonitor(pathname: string): boolean {
     '/favicon.ico',
     '/robots.txt',
     '/sitemap.xml',
+    '/api/internal/monitoring/ingest',
     '.js',
     '.css',
     '.png',
@@ -205,6 +266,7 @@ export async function monitoringMiddleware(
 
   // Generate request ID
   const requestId = createId();
+  const startedAt = new Date();
   const startTime = Date.now();
 
   // Extract context
@@ -237,13 +299,35 @@ export async function monitoringMiddleware(
       method: request.method,
       statusCode,
       duration,
-      timestamp: new Date(),
+      timestamp: startedAt,
       userId,
       ip: context.ip,
       userAgent: context.userAgent,
       requestSize,
       responseSize
     });
+
+    if (pathname.startsWith('/api')) {
+      const isServerError = statusCode >= 500;
+      queueMonitoringIngest(request, {
+        type: 'api-request',
+        requestId,
+        timestamp: startedAt.toISOString(),
+        method: request.method.toUpperCase(),
+        endpoint: pathname,
+        statusCode,
+        duration,
+        requestSize,
+        responseSize,
+        userId,
+        sessionId: context.sessionId,
+        ip: context.ip,
+        userAgent: context.userAgent,
+        query: context.query as Record<string, unknown> | undefined,
+        error: isServerError ? `HTTP ${statusCode}` : undefined,
+        errorName: isServerError ? 'HttpError' : undefined,
+      });
+    }
 
     // Log response
     logResponse(request, statusCode, startTime, {
@@ -269,6 +353,8 @@ export async function monitoringMiddleware(
   } catch (error) {
     const duration = Date.now() - startTime;
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    const errorName = error instanceof Error ? error.name : 'Error';
+    const errorStack = error instanceof Error ? error.stack : undefined;
 
     // Track error metrics
     await metricsCollector.track({
@@ -276,12 +362,34 @@ export async function monitoringMiddleware(
       method: request.method,
       statusCode: 500,
       duration,
-      timestamp: new Date(),
+      timestamp: startedAt,
       userId,
       ip: context.ip,
       userAgent: context.userAgent,
       error: errorMessage
     });
+
+    if (pathname.startsWith('/api')) {
+      queueMonitoringIngest(request, {
+        type: 'api-request',
+        requestId,
+        timestamp: startedAt.toISOString(),
+        method: request.method.toUpperCase(),
+        endpoint: pathname,
+        statusCode: 500,
+        duration,
+        requestSize: getRequestSize(request),
+        responseSize: 0,
+        userId,
+        sessionId: context.sessionId,
+        ip: context.ip,
+        userAgent: context.userAgent,
+        error: errorMessage,
+        errorName,
+        errorStack,
+        query: context.query as Record<string, unknown> | undefined,
+      });
+    }
 
     // Log error
     requestLogger.error(`Request failed: ${context.method} ${context.endpoint}`, error as Error, {

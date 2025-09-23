@@ -2,33 +2,89 @@
  * Database queries for monitoring dashboard
  */
 
-import { 
-  db, 
-  apiMetrics, 
-  userActivities, 
-  aiUsageLogs, 
+import {
+  db,
+  apiMetrics,
+  userActivities,
+  aiUsageLogs,
+  systemLogs,
+  errorLogs,
   sql,
   eq,
   and,
+  or,
   gte,
   lte,
   desc,
   count
 } from '@pagespace/db';
+import type { SQL } from 'drizzle-orm';
 
 /**
  * Get system health overview
  */
-export async function getSystemHealth() {
-  // Return mock data since monitoring tables don't exist yet
+export async function getSystemHealth(startDate?: Date, endDate?: Date) {
+  const logConditions: SQL[] = [];
+
+  if (startDate) {
+    logConditions.push(gte(systemLogs.timestamp, startDate));
+  }
+  if (endDate) {
+    logConditions.push(lte(systemLogs.timestamp, endDate));
+  }
+
+  const logsByLevel = await db
+    .select({
+      level: systemLogs.level,
+      count: sql<number>`COUNT(*)::int`,
+    })
+    .from(systemLogs)
+    .where(logConditions.length > 0 ? and(...logConditions) : undefined)
+    .groupBy(systemLogs.level);
+
+  const errorConditions: SQL[] = [...logConditions];
+
+  const recentErrors = await db
+    .select({
+      id: errorLogs.id,
+      timestamp: errorLogs.timestamp,
+      message: errorLogs.message,
+      errorName: errorLogs.name,
+      errorMessage: errorLogs.stack,
+      endpoint: errorLogs.endpoint,
+      userId: errorLogs.userId,
+    })
+    .from(errorLogs)
+    .where(errorConditions.length > 0 ? and(...errorConditions) : undefined)
+    .orderBy(desc(errorLogs.timestamp))
+    .limit(20);
+
+  const userConditions: SQL[] = [];
+
+  if (startDate) {
+    userConditions.push(gte(userActivities.timestamp, startDate));
+  }
+  if (endDate) {
+    userConditions.push(lte(userActivities.timestamp, endDate));
+  }
+
+  const activeUsers = await db
+    .select({
+      count: sql<number>`COUNT(DISTINCT ${userActivities.userId})::int`,
+    })
+    .from(userActivities)
+    .where(userConditions.length > 0 ? and(...userConditions) : undefined);
+
   return {
-    logsByLevel: [
-      { level: 'info', count: 0 },
-      { level: 'warn', count: 0 },
-      { level: 'error', count: 0 }
-    ],
-    recentErrors: [],
-    activeUserCount: 0,
+    logsByLevel: logsByLevel.map((entry) => ({
+      level: entry.level,
+      count: entry.count,
+    })),
+    recentErrors: recentErrors.map((entry) => ({
+      ...entry,
+      errorMessage: entry.errorMessage || entry.message,
+    })),
+    activeUserCount: activeUsers[0]?.count || 0,
   };
 }
 
@@ -248,12 +304,91 @@ export async function getAiUsageMetrics(startDate?: Date, endDate?: Date) {
 /**
  * Get error analytics
  */
-export async function getErrorAnalytics() {
-  // Return mock data since monitoring tables don't exist yet
+export async function getErrorAnalytics(startDate?: Date, endDate?: Date) {
+  const errorLevelConditions: SQL[] = [eq(systemLogs.level, 'error' as const)];
+
+  if (startDate) {
+    errorLevelConditions.push(gte(systemLogs.timestamp, startDate));
+  }
+  if (endDate) {
+    errorLevelConditions.push(lte(systemLogs.timestamp, endDate));
+  }
+
+  const errorTrendsRaw = await db
+    .select({
+      hour: sql<string>`DATE_TRUNC('hour', ${systemLogs.timestamp})`,
+      category: systemLogs.category,
+      count: sql<number>`COUNT(*)::int`,
+    })
+    .from(systemLogs)
+    .where(and(...errorLevelConditions))
+    .groupBy(
+      sql`DATE_TRUNC('hour', ${systemLogs.timestamp})`,
+      systemLogs.category,
+    )
+    .orderBy(desc(sql`DATE_TRUNC('hour', ${systemLogs.timestamp})`))
+    .limit(168);
+
+  const errorLogConditions: SQL[] = [];
+
+  if (startDate) {
+    errorLogConditions.push(gte(errorLogs.timestamp, startDate));
+  }
+  if (endDate) {
+    errorLogConditions.push(lte(errorLogs.timestamp, endDate));
+  }
+
+  const errorPatternsRaw = await db
+    .select({
+      name: errorLogs.name,
+      endpoint: errorLogs.endpoint,
+      count: sql<number>`COUNT(*)::int`,
+    })
+    .from(errorLogs)
+    .where(errorLogConditions.length > 0 ? and(...errorLogConditions) : undefined)
+    .groupBy(errorLogs.name, errorLogs.endpoint)
+    .orderBy(desc(sql`COUNT(*)`))
+    .limit(20);
+
+  const failedLoginConditions: SQL[] = [
+    eq(systemLogs.category, 'auth'),
+    or(eq(systemLogs.level, 'warn' as const), eq(systemLogs.level, 'error' as const)),
+  ];
+
+  if (startDate) {
+    failedLoginConditions.push(gte(systemLogs.timestamp, startDate));
+  }
+  if (endDate) {
+    failedLoginConditions.push(lte(systemLogs.timestamp, endDate));
+  }
+
+  const failedLogins = await db
+    .select({
+      timestamp: systemLogs.timestamp,
+      ip: systemLogs.ip,
+      metadata: systemLogs.metadata,
+    })
+    .from(systemLogs)
+    .where(and(...failedLoginConditions))
+    .orderBy(desc(systemLogs.timestamp))
+    .limit(25);
+
   return {
-    errorTrends: [],
-    errorPatterns: [],
-    failedLogins: [],
+    errorTrends: errorTrendsRaw.map((item) => ({
+      hour: item.hour,
+      category: item.category ?? 'other',
+      count: item.count.toString(),
+    })),
+    errorPatterns: errorPatternsRaw.map((pattern) => ({
+      name: pattern.name ?? 'Unknown Error',
+      category: pattern.endpoint ?? 'general',
+      count: pattern.count,
+    })),
+    failedLogins: failedLogins.map((login) => ({
+      timestamp: login.timestamp,
+      ip: login.ip,
+      metadata: login.metadata as Record<string, unknown> | null,
+    })),
   };
 }
 

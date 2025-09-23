@@ -1,5 +1,13 @@
 import { NextResponse } from 'next/server';
-import { streamText, convertToModelMessages, UIMessage, stepCountIs, createUIMessageStream, createUIMessageStreamResponse } from 'ai';
+import {
+  streamText,
+  convertToModelMessages,
+  UIMessage,
+  stepCountIs,
+  createUIMessageStream,
+  createUIMessageStreamResponse,
+  type LanguageModelUsage,
+} from 'ai';
 import { incrementUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
 import { broadcastUsageEvent } from '@/lib/socket-utils';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
@@ -198,10 +206,12 @@ export async function POST(request: Request) {
     
     // Save user's message immediately to database (database-first approach)
     const userMessage = messages[messages.length - 1]; // Last message is the new user message
+    let userPromptContent: string | undefined;
     if (userMessage && userMessage.role === 'user') {
       try {
         const messageId = userMessage.id || createId();
         const messageContent = extractMessageContent(userMessage);
+        userPromptContent = messageContent;
         
         // Process @mentions in the user message
         const processedMessage = processMentionsInMessage(messageContent);
@@ -572,6 +582,7 @@ export async function POST(request: Request) {
     // Create UI message stream with visual content injection support
     // This handles the case where tools return visual content that needs to be injected into the stream
     let result;
+    let usagePromise: Promise<LanguageModelUsage | undefined> | undefined;
     try {
       const stream = createUIMessageStream({
         originalMessages: sanitizedMessages,
@@ -724,6 +735,15 @@ MENTION PROCESSING:
             }, // Pass userId and model capabilities to tools
             maxRetries: 20 // Increase from default 2 to 20 for better handling of rate limits
           });
+
+          usagePromise = aiResult.totalUsage
+            .then((usage) => usage)
+            .catch((error) => {
+              loggers.ai.debug('AI Chat API: Failed to retrieve token usage from stream', {
+                error: error instanceof Error ? error.message : 'Unknown error',
+              });
+              return undefined;
+            });
 
           // Stream the AI response directly to the client
           for await (const chunk of aiResult.toUIMessageStream()) {
@@ -900,16 +920,23 @@ MENTION PROCESSING:
 
               // Track enhanced AI usage with token counting and cost calculation
               const duration = Date.now() - startTime;
-              
+
+              const usage = usagePromise ? await usagePromise : undefined;
+              const inputTokens = usage?.inputTokens ?? undefined;
+              const outputTokens = usage?.outputTokens ?? undefined;
+              const totalTokens =
+                usage?.totalTokens ??
+                ((usage?.inputTokens || 0) + (usage?.outputTokens || 0) || undefined);
+
               // Use enhanced AI monitoring with token usage from SDK
               await AIMonitoring.trackUsage({
                 userId: userId!,
                 provider: currentProvider,
                 model: currentModel,
-                inputTokens: undefined,
-                outputTokens: undefined, 
-                totalTokens: undefined,
-                prompt: undefined, // Last user message
+                inputTokens,
+                outputTokens,
+                totalTokens,
+                prompt: userPromptContent?.substring(0, 1000),
                 completion: messageContent?.substring(0, 1000),
                 duration,
                 conversationId: chatId,
@@ -921,7 +948,9 @@ MENTION PROCESSING:
                   pageName: page.title,
                   toolCallsCount: extractedToolCalls.length,
                   toolResultsCount: extractedToolResults.length,
-                  hasTools: extractedToolCalls.length > 0 || extractedToolResults.length > 0
+                  hasTools: extractedToolCalls.length > 0 || extractedToolResults.length > 0,
+                  reasoningTokens: usage?.reasoningTokens,
+                  cachedInputTokens: usage?.cachedInputTokens,
                 }
               });
               
@@ -980,12 +1009,19 @@ MENTION PROCESSING:
       model: selectedModel,
       responseTime: Date.now() - startTime
     });
-    
+
+    const usage = usagePromise ? await usagePromise : undefined;
+
     // Track AI usage even for errors using enhanced monitoring
     await AIMonitoring.trackUsage({
       userId: userId || 'unknown',
       provider: selectedProvider || 'unknown',
       model: selectedModel || 'unknown',
+      inputTokens: usage?.inputTokens ?? undefined,
+      outputTokens: usage?.outputTokens ?? undefined,
+      totalTokens:
+        usage?.totalTokens ??
+        ((usage?.inputTokens || 0) + (usage?.outputTokens || 0) || undefined),
       duration: Date.now() - startTime,
       conversationId: chatId,
       pageId: chatId,
@@ -993,7 +1029,9 @@ MENTION PROCESSING:
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error',
       metadata: {
-        errorType: error instanceof Error ? error.name : 'UnknownError'
+        errorType: error instanceof Error ? error.name : 'UnknownError',
+        reasoningTokens: usage?.reasoningTokens,
+        cachedInputTokens: usage?.cachedInputTokens,
       }
     });
     

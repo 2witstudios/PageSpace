@@ -33,7 +33,7 @@ export async function GET(
     
     switch (metric) {
       case 'system-health':
-        data = await getSystemHealth();
+        data = await getSystemHealth(startDate, endDate);
         break;
         
       case 'api-metrics':
@@ -49,7 +49,7 @@ export async function GET(
         break;
         
       case 'error-logs':
-        data = await getErrorAnalytics();
+        data = await getErrorAnalytics(startDate, endDate);
         break;
         
       case 'performance':
