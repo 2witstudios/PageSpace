@@ -1,6 +1,6 @@
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { Server, Socket } from 'socket.io';
-import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib';
+import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions-cached';
 import { decodeToken } from '@pagespace/lib/server';
 import { verifyBroadcastSignature } from '@pagespace/lib/broadcast-auth';
 import * as dotenv from 'dotenv';

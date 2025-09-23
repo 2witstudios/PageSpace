@@ -13,7 +13,8 @@ export const loggers = {
   realtime: logger.child({ category: 'realtime' }),
   performance: logger.child({ category: 'performance' }),
   security: logger.child({ category: 'security' }),
-  system: logger.child({ category: 'system' })
+  system: logger.child({ category: 'system' }),
+  processor: logger.child({ category: 'processor' })
 };
 
 /**

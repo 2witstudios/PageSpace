@@ -1,7 +1,8 @@
 import { promises as fs } from 'fs';
+import { createReadStream } from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { CacheEntry, ImagePreset } from '../types';
+import { CacheEntry } from '../types';
 
 export class ContentStore {
   private cachePath: string;
@@ -116,6 +117,61 @@ export class ContentStore {
     await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
 
     return { contentHash, path: originalPath };
+  }
+
+  /**
+   * Save original file from disk path (more memory efficient than buffer method)
+   * This method avoids loading the entire file into memory for large files
+   */
+  async saveOriginalFromFile(
+    tempFilePath: string,
+    originalName: string,
+    precomputedHash?: string
+  ): Promise<{ contentHash: string; path: string }> {
+    const contentHash = precomputedHash ?? await this.hashFile(tempFilePath);
+    const originalPath = await this.getOriginalPath(contentHash);
+    const dir = path.dirname(originalPath);
+
+    await fs.mkdir(dir, { recursive: true });
+
+    // Move/copy the file from temp location to final location
+    await fs.copyFile(tempFilePath, originalPath);
+
+    // Get file stats for metadata
+    const stats = await fs.stat(originalPath);
+
+    // Save original metadata
+    const metadataPath = path.join(dir, 'metadata.json');
+    const metadata = {
+      originalName,
+      contentHash,
+      size: stats.size,
+      savedAt: new Date()
+    };
+    await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
+
+    return { contentHash, path: originalPath };
+  }
+
+  async originalExists(contentHash: string): Promise<boolean> {
+    try {
+      const originalPath = await this.getOriginalPath(contentHash);
+      await fs.access(originalPath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async hashFile(filePath: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const hash = crypto.createHash('sha256');
+      const stream = createReadStream(filePath);
+
+      stream.on('error', reject);
+      stream.on('data', chunk => hash.update(chunk));
+      stream.on('end', () => resolve(hash.digest('hex')));
+    });
   }
 
   async getOriginal(contentHash: string): Promise<Buffer | null> {

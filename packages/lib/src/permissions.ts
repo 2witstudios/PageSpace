@@ -1,5 +1,7 @@
 import { db, and, eq } from '@pagespace/db';
 import { pages, drives, driveMembers, pagePermissions } from '@pagespace/db';
+import { permissionCache } from './services/permission-cache';
+import { loggers } from './logger-config';
 
 /**
  * Get user access level for a page
@@ -10,77 +12,89 @@ export async function getUserAccessLevel(
   pageId: string,
   options: { silent?: boolean } = {}
 ): Promise<{ canView: boolean; canEdit: boolean; canShare: boolean; canDelete: boolean } | null> {
-  const { silent = false } = options;
+  const { silent = true } = options; // Default to silent for better performance
 
-  if (!silent) {
-    console.log(`[PERMISSIONS] Checking access for userId: ${userId}, pageId: ${pageId}`);
-  }
-
-  // 1. Get the page and its drive
-  const page = await db.select({
-    id: pages.id,
-    driveId: pages.driveId,
-    driveOwnerId: drives.ownerId,
-  })
-  .from(pages)
-  .leftJoin(drives, eq(pages.driveId, drives.id))
-  .where(eq(pages.id, pageId))
-  .limit(1);
-
-  if (page.length === 0) {
+  try {
     if (!silent) {
-      console.log(`[PERMISSIONS] Page not found: ${pageId}`);
+      loggers.api.debug(`[PERMISSIONS] Checking access for userId: ${userId}, pageId: ${pageId}`);
     }
-    return null; // Page not found
-  }
 
-  if (!silent) {
-    console.log(`[PERMISSIONS] Page found - driveId: ${page[0].driveId}, driveOwnerId: ${page[0].driveOwnerId}`);
-  }
-
-  // 2. Check if user is drive owner (has all permissions)
-  if (page[0].driveOwnerId === userId) {
-    if (!silent) {
-      console.log(`[PERMISSIONS] User is drive owner - granting full access`);
-    }
-    return {
-      canView: true,
-      canEdit: true,
-      canShare: true,
-      canDelete: true,
-    };
-  }
-
-  if (!silent) {
-    console.log(`[PERMISSIONS] User is NOT drive owner - checking explicit permissions`);
-  }
-
-  // 3. Check direct page permissions
-  const permission = await db.select()
-    .from(pagePermissions)
-    .where(and(
-      eq(pagePermissions.pageId, pageId),
-      eq(pagePermissions.userId, userId)
-    ))
+    // 1. Get the page and its drive
+    const page = await db.select({
+      id: pages.id,
+      driveId: pages.driveId,
+      driveOwnerId: drives.ownerId,
+    })
+    .from(pages)
+    .leftJoin(drives, eq(pages.driveId, drives.id))
+    .where(eq(pages.id, pageId))
     .limit(1);
 
-  if (permission.length === 0) {
-    if (!silent) {
-      console.log(`[PERMISSIONS] No explicit permissions found - denying access`);
+    if (page.length === 0) {
+      if (!silent) {
+        loggers.api.debug(`[PERMISSIONS] Page not found: ${pageId}`);
+      }
+      return null; // Page not found
     }
-    return null; // No access
-  }
 
-  if (!silent) {
-    console.log(`[PERMISSIONS] Found explicit permissions - canView: ${permission[0].canView}, canEdit: ${permission[0].canEdit}`);
-  }
+    const pageData = page[0];
 
-  return {
-    canView: permission[0].canView,
-    canEdit: permission[0].canEdit,
-    canShare: permission[0].canShare,
-    canDelete: permission[0].canDelete,
-  };
+    if (!silent) {
+      loggers.api.debug(`[PERMISSIONS] Page found - driveId: ${pageData.driveId}, driveOwnerId: ${pageData.driveOwnerId}`);
+    }
+
+    // 2. Check if user is drive owner (has all permissions)
+    if (pageData.driveOwnerId === userId) {
+      if (!silent) {
+        loggers.api.debug(`[PERMISSIONS] User is drive owner - granting full access`);
+      }
+      return {
+        canView: true,
+        canEdit: true,
+        canShare: true,
+        canDelete: true,
+      };
+    }
+
+    if (!silent) {
+      loggers.api.debug(`[PERMISSIONS] User is NOT drive owner - checking explicit permissions`);
+    }
+
+    // 3. Check direct page permissions
+    const permission = await db.select()
+      .from(pagePermissions)
+      .where(and(
+        eq(pagePermissions.pageId, pageId),
+        eq(pagePermissions.userId, userId)
+      ))
+      .limit(1);
+
+    if (permission.length === 0) {
+      if (!silent) {
+        loggers.api.debug(`[PERMISSIONS] No explicit permissions found - denying access`);
+      }
+      return null; // No access
+    }
+
+    if (!silent) {
+      loggers.api.debug(`[PERMISSIONS] Found explicit permissions - canView: ${permission[0].canView}, canEdit: ${permission[0].canEdit}`);
+    }
+
+    return {
+      canView: permission[0].canView,
+      canEdit: permission[0].canEdit,
+      canShare: permission[0].canShare,
+      canDelete: permission[0].canDelete,
+    };
+
+  } catch (error) {
+    loggers.api.error('[PERMISSIONS] Error checking user access level', {
+      userId,
+      pageId,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return null; // Deny access on error
+  }
 }
 
 /**
@@ -306,6 +320,13 @@ export async function grantPagePermissions(
   },
   grantedBy: string
 ): Promise<void> {
+  const pageRecord = await db.select({ driveId: pages.driveId })
+    .from(pages)
+    .where(eq(pages.id, pageId))
+    .limit(1);
+
+  const driveId = pageRecord[0]?.driveId;
+
   // Check if permission already exists
   const existing = await db.select()
     .from(pagePermissions)
@@ -340,6 +361,11 @@ export async function grantPagePermissions(
         grantedBy,
       });
   }
+
+  await Promise.all([
+    permissionCache.invalidateUserCache(userId),
+    driveId ? permissionCache.invalidateDriveCache(driveId) : Promise.resolve()
+  ]);
 }
 
 /**
@@ -349,11 +375,23 @@ export async function revokePagePermissions(
   pageId: string,
   userId: string
 ): Promise<void> {
+  const pageRecord = await db.select({ driveId: pages.driveId })
+    .from(pages)
+    .where(eq(pages.id, pageId))
+    .limit(1);
+
+  const driveId = pageRecord[0]?.driveId;
+
   await db.delete(pagePermissions)
     .where(and(
       eq(pagePermissions.pageId, pageId),
       eq(pagePermissions.userId, userId)
     ));
+
+  await Promise.all([
+    permissionCache.invalidateUserCache(userId),
+    driveId ? permissionCache.invalidateDriveCache(driveId) : Promise.resolve()
+  ]);
 }
 
 
@@ -363,44 +401,72 @@ export async function revokePagePermissions(
  */
 export async function getUserDriveAccess(
   userId: string,
-  driveId: string
+  driveId: string,
+  options: { silent?: boolean } = {}
 ): Promise<boolean> {
-  console.log(`[DRIVE_ACCESS] Checking access for userId: ${userId}, driveId: ${driveId}`);
-  
-  // Get drive by ID
-  const drive = await db.select()
-    .from(drives)
-    .where(eq(drives.id, driveId))
-    .limit(1);
+  const { silent = true } = options; // Default to silent for better performance
 
-  if (drive.length === 0) {
-    console.log(`[DRIVE_ACCESS] Drive not found: ${driveId}`);
-    return false;
+  try {
+    if (!silent) {
+      loggers.api.debug(`[DRIVE_ACCESS] Checking access for userId: ${userId}, driveId: ${driveId}`);
+    }
+
+    // Get drive by ID
+    const drive = await db.select()
+      .from(drives)
+      .where(eq(drives.id, driveId))
+      .limit(1);
+
+    if (drive.length === 0) {
+      if (!silent) {
+        loggers.api.debug(`[DRIVE_ACCESS] Drive not found: ${driveId}`);
+      }
+      return false;
+    }
+
+    const driveData = drive[0];
+
+    if (!silent) {
+      loggers.api.debug(`[DRIVE_ACCESS] Drive found - id: ${driveData.id}, ownerId: ${driveData.ownerId}`);
+    }
+
+    // Check if user is owner
+    if (driveData.ownerId === userId) {
+      if (!silent) {
+        loggers.api.debug(`[DRIVE_ACCESS] User is drive owner - granting access`);
+      }
+      return true;
+    }
+
+    if (!silent) {
+      loggers.api.debug(`[DRIVE_ACCESS] User is NOT drive owner - checking page permissions`);
+    }
+
+    // Check if user has any page permissions in this drive
+    const pageAccess = await db.select({ id: pagePermissions.id })
+      .from(pagePermissions)
+      .leftJoin(pages, eq(pagePermissions.pageId, pages.id))
+      .where(and(
+        eq(pages.driveId, driveData.id),
+        eq(pagePermissions.userId, userId),
+        eq(pagePermissions.canView, true)
+      ))
+      .limit(1);
+
+    const hasAccess = pageAccess.length > 0;
+
+    if (!silent) {
+      loggers.api.debug(`[DRIVE_ACCESS] Page access check result: ${hasAccess}`);
+    }
+
+    return hasAccess;
+
+  } catch (error) {
+    loggers.api.error('[DRIVE_ACCESS] Error checking user drive access', {
+      userId,
+      driveId,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return false; // Deny access on error
   }
-
-  console.log(`[DRIVE_ACCESS] Drive found - id: ${drive[0].id}, ownerId: ${drive[0].ownerId}`);
-
-  // Check if user is owner
-  if (drive[0].ownerId === userId) {
-    console.log(`[DRIVE_ACCESS] User is drive owner - granting access`);
-    return true;
-  }
-
-  console.log(`[DRIVE_ACCESS] User is NOT drive owner - checking page permissions`);
-
-  // Check if user has any page permissions in this drive
-  const pageAccess = await db.select({ id: pagePermissions.id })
-    .from(pagePermissions)
-    .leftJoin(pages, eq(pagePermissions.pageId, pages.id))
-    .where(and(
-      eq(pages.driveId, drive[0].id),
-      eq(pagePermissions.userId, userId),
-      eq(pagePermissions.canView, true)
-    ))
-    .limit(1);
-
-  const hasAccess = pageAccess.length > 0;
-  console.log(`[DRIVE_ACCESS] Page access check result: ${hasAccess}`);
-  
-  return hasAccess;
 }

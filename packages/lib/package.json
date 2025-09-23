@@ -19,7 +19,9 @@
     "./services/storage-limits": "./src/services/storage-limits.ts",
     "./services/subscription-utils": "./src/services/subscription-utils.ts",
     "./services/upload-semaphore": "./src/services/upload-semaphore.ts",
-    "./services/memory-monitor": "./src/services/memory-monitor.ts"
+    "./services/memory-monitor": "./src/services/memory-monitor.ts",
+    "./services/permission-cache": "./src/services/permission-cache.ts",
+    "./permissions-cached": "./src/permissions-cached.ts"
   },
   "typesVersions": {
     "*": {
@@ -64,11 +66,18 @@
       ],
       "services/memory-monitor": [
         "./src/services/memory-monitor.ts"
+      ],
+      "services/permission-cache": [
+        "./src/services/permission-cache.ts"
+      ],
+      "permissions-cached": [
+        "./src/permissions-cached.ts"
       ]
     }
   },
   "dependencies": {
     "@paralleldrive/cuid2": "^2.2.2",
+    "ioredis": "^5.8.0",
     "jose": "^6.0.11",
     "mammoth": "^1.10.0",
     "pdf-parse-debugging-disabled": "^1.1.1",

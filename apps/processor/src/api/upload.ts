@@ -2,47 +2,96 @@ import { Router } from 'express';
 import type { Router as ExpressRouter } from 'express';
 import multer from 'multer';
 import crypto from 'crypto';
+import fs from 'fs/promises';
+import { createReadStream } from 'fs';
+import path from 'path';
 import { contentStore, queueManager } from '../server';
-import { needsTextExtraction } from '../workers/text-extractor';
-import { needsOCR } from '../workers/ocr-processor';
-import { Readable } from 'stream';
+import { processorLogger } from '../logger';
 
 const router = Router();
 
-// Configure multer for streaming to disk
-const storage = multer.memoryStorage(); // We'll handle the streaming ourselves
+// Configure multer for disk storage to avoid memory exhaustion
+const storage = multer.diskStorage({
+  destination: async (req, file, cb) => {
+    try {
+      // Use a temporary directory within the container
+      const tempDir = path.join(process.env.CACHE_PATH || '/data/cache', 'temp-uploads');
+      await fs.mkdir(tempDir, { recursive: true });
+      cb(null, tempDir);
+    } catch (error) {
+      processorLogger.error('Failed to create temp upload directory', error as Error, {
+        cachePath: process.env.CACHE_PATH,
+        originalname: file.originalname
+      });
+      cb(error as Error, '');
+    }
+  },
+  filename: (req, file, cb) => {
+    // Generate unique filename to avoid conflicts
+    const uniqueName = `${Date.now()}-${Math.round(Math.random() * 1E9)}-${file.originalname}`;
+    cb(null, uniqueName);
+  }
+});
 
 const upload = multer({
   storage,
   limits: {
-    fileSize: parseInt(process.env.STORAGE_MAX_FILE_SIZE_MB || '20') * 1024 * 1024, // 20MB default for VPS
-    files: 3 // Max 3 files at once (reduced for VPS)
+    fileSize: parseInt(process.env.STORAGE_MAX_FILE_SIZE_MB || '50') * 1024 * 1024, // Increased to 50MB with disk storage
+    files: 5 // Can handle more files with disk storage
+  },
+  fileFilter: (req, file, cb) => {
+    // Add basic file validation
+    if (!file.originalname || file.originalname.length === 0) {
+      cb(new Error('Invalid filename'));
+      return;
+    }
+    cb(null, true);
   }
 });
 
-// Single file upload with streaming
+// Single file upload with disk storage
 router.post('/single', upload.single('file'), async (req, res) => {
+  let tempFilePath: string | undefined;
+
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No file provided' });
     }
 
-    const { buffer, originalname, mimetype, size } = req.file;
+    const { path: tempPath, originalname, mimetype, size } = req.file;
     const { pageId, userId } = req.body;
+    tempFilePath = tempPath;
 
-    console.log(`Uploading file: ${originalname} (${size} bytes)`);
+    processorLogger.info('Processing uploaded file', {
+      originalname,
+      size,
+      tempPath
+    });
 
-    // Calculate content hash
-    const contentHash = crypto.createHash('sha256').update(buffer).digest('hex');
+    // Calculate content hash from the temporary file
+    const contentHash = await computeFileHash(tempPath);
 
     // Check if file already exists (deduplication)
-    const existing = await contentStore.getOriginal(contentHash);
-    if (existing) {
-      console.log(`File already exists with hash: ${contentHash}`);
-      
+    const alreadyStored = await contentStore.originalExists(contentHash);
+    if (alreadyStored) {
+      processorLogger.info('Upload deduplicated', {
+        contentHash,
+        originalname
+      });
+
+      // Clean up temporary file
+      try {
+        await fs.unlink(tempPath);
+      } catch (cleanupError) {
+        processorLogger.warn('Failed to clean up temp upload after dedupe', {
+          tempPath,
+          error: cleanupError instanceof Error ? cleanupError.message : cleanupError
+        });
+      }
+
       // Still queue processing jobs if needed
       await queueProcessingJobs(contentHash, originalname, mimetype, pageId);
-      
+
       return res.json({
         success: true,
         contentHash,
@@ -52,9 +101,24 @@ router.post('/single', upload.single('file'), async (req, res) => {
       });
     }
 
-    // Save original file
-    const { path } = await contentStore.saveOriginal(buffer, originalname);
-    console.log(`Saved original file to: ${path}`);
+    // Save original file from disk (much more efficient than memory)
+    const { path: finalPath } = await contentStore.saveOriginalFromFile(tempPath, originalname, contentHash);
+    processorLogger.info('Saved original upload', {
+      contentHash,
+      finalPath,
+      originalname
+    });
+
+    // Clean up temporary file after successful save
+    try {
+      await fs.unlink(tempPath);
+      tempFilePath = undefined; // Mark as cleaned up
+    } catch (cleanupError) {
+      processorLogger.warn('Failed to clean up temp upload after save', {
+        tempPath,
+        error: cleanupError instanceof Error ? cleanupError.message : cleanupError
+      });
+    }
 
     // Queue processing jobs based on file type
     const jobs = await queueProcessingJobs(contentHash, originalname, mimetype, pageId);
@@ -64,21 +128,40 @@ router.post('/single', upload.single('file'), async (req, res) => {
       contentHash,
       deduplicated: false,
       size,
-      path,
+      path: finalPath,
       jobs
     });
 
   } catch (error) {
-    console.error('Upload error:', error);
-    res.status(500).json({ 
+    processorLogger.error('Upload error', error as Error, {
+      tempFilePath,
+      pageId: req.body?.pageId,
+      userId: req.body?.userId
+    });
+
+    // Clean up temporary file on error
+    if (tempFilePath) {
+      try {
+        await fs.unlink(tempFilePath);
+      } catch (cleanupError) {
+        processorLogger.warn('Failed to clean up temp upload after error', {
+          tempFilePath,
+          error: cleanupError instanceof Error ? cleanupError.message : cleanupError
+        });
+      }
+    }
+
+    res.status(500).json({
       error: 'Upload failed',
       message: error instanceof Error ? error.message : 'Unknown error'
     });
   }
 });
 
-// Multiple file upload
+// Multiple file upload with disk storage
 router.post('/multiple', upload.array('files', 10), async (req, res) => {
+  const tempFilePaths: string[] = [];
+
   try {
     if (!req.files || !Array.isArray(req.files)) {
       return res.status(400).json({ error: 'No files provided' });
@@ -87,29 +170,60 @@ router.post('/multiple', upload.array('files', 10), async (req, res) => {
     const { pageId, userId } = req.body;
     const results = [];
 
+    // Track temp files for cleanup
     for (const file of req.files) {
-      const { buffer, originalname, mimetype, size } = file;
-      
-      // Calculate content hash
-      const contentHash = crypto.createHash('sha256').update(buffer).digest('hex');
+      tempFilePaths.push(file.path);
+    }
 
-      // Check for deduplication
-      const existing = await contentStore.getOriginal(contentHash);
-      
-      if (!existing) {
-        await contentStore.saveOriginal(buffer, originalname);
+    for (const file of req.files) {
+      const { path: tempPath, originalname, mimetype, size } = file;
+
+      try {
+        // Calculate content hash from file
+        const contentHash = await computeFileHash(tempPath);
+
+        // Check for deduplication
+        const alreadyStored = await contentStore.originalExists(contentHash);
+
+        if (!alreadyStored) {
+          await contentStore.saveOriginalFromFile(tempPath, originalname, contentHash);
+        }
+
+        // Queue processing jobs
+        const jobs = await queueProcessingJobs(contentHash, originalname, mimetype, pageId);
+
+        results.push({
+          originalname,
+          contentHash,
+          size,
+          deduplicated: alreadyStored,
+          jobs
+        });
+
+      } catch (fileError) {
+        processorLogger.error(`Error processing file ${originalname}`, fileError as Error, {
+          tempPath,
+          pageId,
+          userId
+        });
+        results.push({
+          originalname,
+          error: `Failed to process file: ${fileError instanceof Error ? fileError.message : 'Unknown error'}`,
+          success: false
+        });
       }
+    }
 
-      // Queue processing jobs
-      const jobs = await queueProcessingJobs(contentHash, originalname, mimetype, pageId);
-
-      results.push({
-        originalname,
-        contentHash,
-        size,
-        deduplicated: !!existing,
-        jobs
-      });
+    // Clean up all temporary files
+    for (const tempPath of tempFilePaths) {
+      try {
+        await fs.unlink(tempPath);
+      } catch (cleanupError) {
+        processorLogger.warn('Failed to clean up temp upload after multi-file processing', {
+          tempPath,
+          error: cleanupError instanceof Error ? cleanupError.message : cleanupError
+        });
+      }
     }
 
     res.json({
@@ -118,8 +232,23 @@ router.post('/multiple', upload.array('files', 10), async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Multiple upload error:', error);
-    res.status(500).json({ 
+    processorLogger.error('Multiple upload error', error as Error, {
+      count: tempFilePaths.length
+    });
+
+    // Clean up temporary files on error
+    for (const tempPath of tempFilePaths) {
+      try {
+        await fs.unlink(tempPath);
+      } catch (cleanupError) {
+        processorLogger.warn('Failed to clean up temp upload after multi-upload error', {
+          tempPath,
+          error: cleanupError instanceof Error ? cleanupError.message : cleanupError
+        });
+      }
+    }
+
+    res.status(500).json({
       error: 'Upload failed',
       message: error instanceof Error ? error.message : 'Unknown error'
     });
@@ -157,3 +286,14 @@ async function getQueuedJobs(contentHash: string, mimeType: string): Promise<any
 }
 
 export const uploadRouter: ExpressRouter = router;
+
+async function computeFileHash(filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash('sha256');
+    const stream = createReadStream(filePath);
+
+    stream.on('error', reject);
+    stream.on('data', chunk => hash.update(chunk));
+    stream.on('end', () => resolve(hash.digest('hex')));
+  });
+}

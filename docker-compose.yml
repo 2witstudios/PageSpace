@@ -55,6 +55,8 @@ services:
         condition: service_completed_successfully
       processor:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     volumes:
       - file_storage:/app/storage
     env_file: .env
@@ -63,6 +65,7 @@ services:
       - NEXT_PUBLIC_REALTIME_URL=${NEXT_PUBLIC_REALTIME_URL}
       - FILE_STORAGE_PATH=/app/storage
       - PROCESSOR_URL=http://processor:3003
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-pagespace_redis}@redis:6379
       - PORT=3000
       - NODE_OPTIONS=--max-old-space-size=640
     deploy:
@@ -139,17 +142,45 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     env_file: .env
     environment:
       - DATABASE_URL=postgresql://user:password@postgres:5432/pagespace
       - PORT=${REALTIME_PORT}
       - CORS_ORIGIN=${WEB_APP_URL}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-pagespace_redis}@redis:6379
     deploy:
       resources:
         limits:
           memory: 256M
 
-  
+  redis:
+    image: redis:7.4-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-pagespace_redis}
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD:-pagespace_redis}
+      --maxmemory 128mb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD:-pagespace_redis}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 160M
+    restart: unless-stopped
 
   # Optional nginx service for efficient static file serving
   nginx:
@@ -173,3 +204,4 @@ volumes:
   postgres_data:
   file_storage:
   cache_storage:
+  redis_data:

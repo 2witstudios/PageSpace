@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, eq, and, or, ilike, pages, drives, users, userProfiles, inArray } from '@pagespace/db';
 import { verifyAuth } from '@/lib/auth';
-import { getUserAccessLevel } from '@pagespace/lib/server';
+import { getBatchPagePermissions } from '@pagespace/lib/permissions-cached';
 import { loggers } from '@pagespace/lib/logger-config';
 
 interface SearchResult {
@@ -104,10 +104,14 @@ export async function GET(request: Request) {
       )
       .limit(20);
 
+      // Batch check permissions for all pages at once (eliminates N+1 queries)
+      const pageIds = pageResults.map(page => page.id);
+      const permissionsMap = await getBatchPagePermissions(user.id, pageIds);
+
       // Filter by permissions and add to results
       for (const page of pageResults) {
-        const accessLevel = await getUserAccessLevel(user.id, page.id);
-        if (!accessLevel) continue;
+        const permissions = permissionsMap.get(page.id);
+        if (!permissions?.canView) continue;
 
         results.push({
           id: page.id,

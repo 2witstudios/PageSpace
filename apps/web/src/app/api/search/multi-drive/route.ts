@@ -3,7 +3,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const };
 import { db, pages, drives, eq, and, sql } from '@pagespace/db';
-import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/server';
+import { getBatchPagePermissions, getUserDriveAccess } from '@pagespace/lib/permissions-cached';
 import { loggers } from '@pagespace/lib/logger-config';
 
 /**
@@ -47,11 +47,33 @@ export async function GET(request: Request) {
 
     const results = [];
 
-    for (const drive of userDrives) {
-      // Check drive access
-      const hasDriveAccess = await getUserDriveAccess(userId, drive.id);
-      if (!hasDriveAccess) continue;
+    // First, batch check drive access for all drives
+    const driveAccessChecks = await Promise.all(
+      userDrives.map(async (drive) => ({
+        drive,
+        hasAccess: await getUserDriveAccess(userId, drive.id)
+      }))
+    );
 
+    // Filter to only accessible drives
+    const accessibleDrives = driveAccessChecks
+      .filter(({ hasAccess }) => hasAccess)
+      .map(({ drive }) => drive);
+
+    // Collect all search results from accessible drives
+    const allSearchResults: Array<{
+      page: {
+        id: string;
+        title: string;
+        type: string;
+        content: string;
+      };
+      driveId: string;
+      driveName: string;
+      driveSlug: string;
+    }> = [];
+
+    for (const drive of accessibleDrives) {
       // Build search conditions
       let searchWhereConditions;
       if (searchType === 'regex') {
@@ -83,20 +105,48 @@ export async function GET(request: Request) {
 
       const drivePages = await driveQuery.limit(maxResultsPerDrive);
 
-      // Filter by permissions
-      const driveResults = [];
+      // Add to collection for batch permission checking
       for (const page of drivePages) {
-        const accessLevel = await getUserAccessLevel(userId, page.id);
-        if (accessLevel?.canView) {
-          driveResults.push({
-            pageId: page.id,
-            title: page.title,
-            type: page.type,
-            excerpt: page.content.substring(0, 150) + '...',
-          });
-        }
+        allSearchResults.push({
+          page,
+          driveId: drive.id,
+          driveName: drive.name,
+          driveSlug: drive.slug
+        });
       }
+    }
 
+    // Batch check permissions for all search results at once
+    const allPageIds = allSearchResults.map(result => result.page.id);
+    const permissionsMap = await getBatchPagePermissions(userId, allPageIds);
+
+    // Group results by drive and filter by permissions
+    const driveResultsMap = new Map<string, Array<{
+      pageId: string;
+      title: string;
+      type: string;
+      excerpt: string;
+    }>>();
+
+    for (const { page, driveId } of allSearchResults) {
+      const permissions = permissionsMap.get(page.id);
+      if (permissions?.canView) {
+        if (!driveResultsMap.has(driveId)) {
+          driveResultsMap.set(driveId, []);
+        }
+
+        driveResultsMap.get(driveId)!.push({
+          pageId: page.id,
+          title: page.title,
+          type: page.type,
+          excerpt: page.content.substring(0, 150) + '...',
+        });
+      }
+    }
+
+    // Build final results structure
+    for (const drive of accessibleDrives) {
+      const driveResults = driveResultsMap.get(drive.id) || [];
       if (driveResults.length > 0) {
         results.push({
           driveId: drive.id,
