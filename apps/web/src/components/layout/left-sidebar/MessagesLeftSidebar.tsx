@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -29,23 +29,60 @@ interface Conversation {
   };
 }
 
+interface ConversationsResponse {
+  conversations: Conversation[];
+  pagination: {
+    hasMore: boolean;
+    nextCursor: string | null;
+    limit: number;
+  };
+}
+
 export default function MessagesLeftSidebar() {
   const router = useRouter();
   const params = useParams();
   const [searchQuery, setSearchQuery] = useState('');
+  const [allConversations, setAllConversations] = useState<Conversation[]>([]);
+  const [pagination, setPagination] = useState<{ hasMore: boolean; nextCursor: string | null; limit: number } | null>(null);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
 
-  const { data, error } = useSWR<{ conversations: Conversation[] }>(
-    '/api/messages/conversations',
+  const { data, error } = useSWR<ConversationsResponse>(
+    '/api/messages/conversations?limit=20',
     fetcher,
     {
-      refreshInterval: 5000, // Refresh every 5 seconds
+      refreshInterval: 10000, // Refresh every 10 seconds (reduced frequency due to pagination)
     }
   );
 
-  const filteredConversations = data?.conversations?.filter((conv) => {
+  // Update state when initial data loads
+  useEffect(() => {
+    if (data) {
+      setAllConversations(data.conversations);
+      setPagination(data.pagination);
+    }
+  }, [data]);
+
+  const loadMoreConversations = async () => {
+    if (!pagination?.hasMore || !pagination?.nextCursor || isLoadingMore) return;
+
+    setIsLoadingMore(true);
+    try {
+      const response = await fetch(`/api/messages/conversations?limit=20&cursor=${pagination.nextCursor}`);
+      const moreData: ConversationsResponse = await response.json();
+
+      setAllConversations(prev => [...prev, ...moreData.conversations]);
+      setPagination(moreData.pagination);
+    } catch (error) {
+      console.error('Failed to load more conversations:', error);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  };
+
+  const filteredConversations = allConversations.filter((conv) => {
     const displayName = conv.otherUser.displayName || conv.otherUser.name;
     return displayName.toLowerCase().includes(searchQuery.toLowerCase());
-  }) || [];
+  });
 
   const handleNewConversation = () => {
     router.push('/dashboard/messages/new');
@@ -145,6 +182,21 @@ export default function MessagesLeftSidebar() {
               </Link>
             );
           })}
+
+          {/* Load More Button */}
+          {!searchQuery && pagination?.hasMore && (
+            <div className="p-2 mt-4">
+              <Button
+                onClick={loadMoreConversations}
+                disabled={isLoadingMore}
+                variant="outline"
+                size="sm"
+                className="w-full"
+              >
+                {isLoadingMore ? 'Loading...' : 'Load More Conversations'}
+              </Button>
+            </div>
+          )}
           </div>
         </ScrollArea>
       </div>

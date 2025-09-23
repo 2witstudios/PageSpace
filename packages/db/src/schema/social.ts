@@ -75,6 +75,8 @@ export const directMessages = pgTable('direct_messages', {
     conversationCreatedIdx: index('direct_messages_conversation_created_idx').on(table.conversationId, table.createdAt),
     // Index for unread messages
     conversationIsReadIdx: index('direct_messages_conversation_is_read_idx').on(table.conversationId, table.isRead),
+    // Composite index for efficient unread count queries (conversationId, senderId, isRead)
+    unreadCountIdx: index('direct_messages_unread_count_idx').on(table.conversationId, table.senderId, table.isRead),
   }
 });
 

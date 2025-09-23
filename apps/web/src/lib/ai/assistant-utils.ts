@@ -1,10 +1,32 @@
 import { UIMessage } from 'ai';
 import { db, chatMessages, messages } from '@pagespace/db';
+import { loggers } from '@pagespace/lib/logger-config';
 
 /**
  * Assistant utilities for AI tool calling and message handling
  * Provides helper functions for tool execution, permission checking, and message conversion
  */
+
+/**
+ * Safe debug logging utilities for AI content
+ * Prevents sensitive user content from being logged while maintaining operational visibility
+ */
+const isAIDebugEnabled = process.env.AI_DEBUG_LOGGING === 'true';
+
+function createContentMetadata(content: string): object {
+  return {
+    length: content.length,
+    hasContent: content.length > 0,
+    isEmpty: content.trim() === '',
+    preview: content.length > 0 ? `[CONTENT_REDACTED:${content.length}chars]` : '[EMPTY]'
+  };
+}
+
+function debugLogAI(message: string, data?: object): void {
+  if (isAIDebugEnabled) {
+    loggers.ai.debug(message, data);
+  }
+}
 
 interface ToolCall {
   toolCallId: string;
@@ -69,32 +91,42 @@ interface GlobalAssistantMessage {
  */
 export function extractMessageContent(message: UIMessage): string {
   if (!message.parts) {
-    console.log('🔍 extractMessageContent: No parts in message');
+    debugLogAI('extractMessageContent: No parts in message');
     return '';
   }
-  
-  console.log('🔍 extractMessageContent: Message has', message.parts.length, 'parts');
-  console.log('🔍 extractMessageContent: Part types:', message.parts.map(p => p.type));
-  
+
+  debugLogAI('extractMessageContent: Message analysis', {
+    partsCount: message.parts.length,
+    partTypes: message.parts.map(p => p.type)
+  });
+
   const textParts = message.parts.filter(part => part.type === 'text');
-  console.log('🔍 extractMessageContent: Found', textParts.length, 'text parts');
-  
-  // Log each text part for debugging
-  textParts.forEach((part, index) => {
+  debugLogAI('extractMessageContent: Text parts analysis', {
+    textPartsFound: textParts.length
+  });
+
+  // Create safe metadata for each text part
+  const textPartsMetadata = textParts.map((part, index) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const text = (part as any).text || '';
-    console.log(`🔍 extractMessageContent: Text part ${index + 1}: "${text.substring(0, 100)}${text.length > 100 ? '...' : ''}"`);
+    return {
+      partIndex: index + 1,
+      ...createContentMetadata(text)
+    };
   });
-  
+
+  debugLogAI('extractMessageContent: Text parts metadata', {
+    parts: textPartsMetadata
+  });
+
   const textContent = textParts
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     .map(part => (part as any).text || '')
     .filter(text => text.trim() !== '')
     .join('');
-  
-  console.log('🔍 extractMessageContent: Final extracted content length:', textContent.length);
-  console.log('🔍 extractMessageContent: Content preview:', textContent.substring(0, 200));
-  
+
+  debugLogAI('extractMessageContent: Final result', createContentMetadata(textContent));
+
   return textContent;
 }
 
@@ -148,7 +180,7 @@ export function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): UIMessa
     try {
       const parsed = JSON.parse(dbMessage.content);
       if (parsed.textParts && parsed.partsOrder) {
-        console.log('🔄 Reconstructing message with structured content:', {
+        debugLogAI('Reconstructing message with structured content', {
           textPartsCount: parsed.textParts.length,
           totalPartsCount: parsed.partsOrder.length
         });
@@ -157,7 +189,7 @@ export function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): UIMessa
       }
     } catch {
       // Content is plain text, not structured
-      console.log('🔄 Using plain text content for message:', dbMessage.id);
+      debugLogAI('Using plain text content for message', { messageId: dbMessage.id });
     }
   }
   
@@ -300,7 +332,10 @@ export async function saveMessageToDatabase({
         originalContent: content, // Keep original for backward compatibility
       });
       
-      console.log('💾 Saving structured content with', textParts.length, 'text parts and', partsOrder.length, 'total parts');
+      debugLogAI('Saving structured content', {
+        textPartsCount: textParts.length,
+        totalPartsCount: partsOrder.length
+      });
     }
 
     await db.insert(chatMessages).values({
@@ -330,7 +365,7 @@ export function convertGlobalAssistantMessageToUIMessage(dbMessage: GlobalAssist
     try {
       const parsed = JSON.parse(dbMessage.content);
       if (parsed.textParts && parsed.partsOrder) {
-        console.log('🔄 Global Assistant: Reconstructing message with structured content:', {
+        debugLogAI('Global Assistant: Reconstructing message with structured content', {
           textPartsCount: parsed.textParts.length,
           totalPartsCount: parsed.partsOrder.length
         });
@@ -339,7 +374,7 @@ export function convertGlobalAssistantMessageToUIMessage(dbMessage: GlobalAssist
       }
     } catch {
       // Content is plain text, not structured
-      console.log('🔄 Global Assistant: Using plain text content for message:', dbMessage.id);
+      debugLogAI('Global Assistant: Using plain text content for message', { messageId: dbMessage.id });
     }
   }
   
@@ -483,7 +518,10 @@ export async function saveGlobalAssistantMessageToDatabase({
         originalContent: content, // Keep original for backward compatibility
       });
       
-      console.log('💾 Global Assistant: Saving structured content with', textParts.length, 'text parts and', partsOrder.length, 'total parts');
+      debugLogAI('Global Assistant: Saving structured content', {
+        textPartsCount: textParts.length,
+        totalPartsCount: partsOrder.length
+      });
     }
 
     await db.insert(messages).values({
@@ -499,7 +537,7 @@ export async function saveGlobalAssistantMessageToDatabase({
       agentRole: agentRole || 'PARTNER', // Default to PARTNER if not specified
     });
     
-    console.log('✅ Global Assistant: Message saved to database with tools');
+    debugLogAI('Global Assistant: Message saved to database with tools');
   } catch (error) {
     console.error('Error saving global assistant message to database:', error);
     throw error;

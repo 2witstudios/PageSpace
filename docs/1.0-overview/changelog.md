@@ -1,3 +1,27 @@
+## 2025-09-23
+
+### Security Fix - Page AI Settings PATCH Handler
+
+- **Fixed Critical Authorization Vulnerability**: Page AI settings PATCH endpoint (`/api/ai/chat`) now properly enforces permission checks
+  - **Added**: Permission enforcement using `canUserEditPage()` before allowing AI provider/model updates
+  - **Added**: Provider/model combination validation with subscription requirement checks
+  - **Added**: Enhanced input validation with proper type checking and sanitization
+  - **Added**: Comprehensive test suite covering authorization, validation, and edge cases
+  - **Security Impact**: Prevents cross-tenant tampering and quota abuse by unauthorized users
+  - **Error Handling**: Returns 403 Forbidden for unauthorized users, 400 for invalid inputs
+  - **Validation**: Validates provider whitelist, model format, subscription requirements
+  - **Location**: `apps/web/src/app/api/ai/chat/route.ts:1172-1283`
+  - **Tests**: `apps/web/src/app/api/ai/chat/route.test.ts`
+
+### Security Fix - Page Chat Messages
+
+- **Fixed Critical Authorization Vulnerability**: Page chat messages endpoint (`/api/ai/chat/messages`) now properly validates user permissions
+  - **Added**: Permission check using `canUserViewPage()` before returning chat messages
+  - **Security Impact**: Prevents unauthorized access to page chat histories
+  - **Error Handling**: Returns 403 Forbidden with descriptive error message for unauthorized users
+  - **Consistency**: Now follows same permission pattern as other page-based endpoints
+  - **Location**: `apps/web/src/app/api/ai/chat/messages/route.ts:24-31`
+
 ## 2025-09-22
 
 ### Added
