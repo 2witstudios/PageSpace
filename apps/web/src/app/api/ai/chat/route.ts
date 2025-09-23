@@ -66,6 +66,7 @@ export async function POST(request: Request) {
   let chatId: string | undefined;
   let selectedProvider: string | undefined;
   let selectedModel: string | undefined;
+  let usagePromise: Promise<LanguageModelUsage | undefined> | undefined;
   
   try {
     loggers.ai.info('AI Chat API: Starting request processing');
@@ -378,7 +379,6 @@ export async function POST(request: Request) {
     // Create UI message stream with visual content injection support
     // This handles the case where tools return visual content that needs to be injected into the stream
     let result;
-    let usagePromise: Promise<LanguageModelUsage | undefined> | undefined;
     try {
       const stream = createUIMessageStream({
         originalMessages: sanitizedMessages,

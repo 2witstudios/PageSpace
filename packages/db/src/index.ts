@@ -9,6 +9,9 @@ export {
   like, ilike, exists, between, gt, gte, lt, lte, ne, isNull, isNotNull
 } from 'drizzle-orm';
 
+// Re-export types
+export type { SQL } from 'drizzle-orm';
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: false,

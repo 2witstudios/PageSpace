@@ -18,7 +18,7 @@ import {
   desc,
   count
 } from '@pagespace/db';
-import type { SQL } from 'drizzle-orm';
+import type { SQL } from '@pagespace/db';
 
 /**
  * Get system health overview
@@ -352,7 +352,7 @@ export async function getErrorAnalytics(startDate?: Date, endDate?: Date) {
 
   const failedLoginConditions: SQL[] = [
     eq(systemLogs.category, 'auth'),
-    or(eq(systemLogs.level, 'warn' as const), eq(systemLogs.level, 'error' as const)),
+    or(eq(systemLogs.level, 'warn' as const), eq(systemLogs.level, 'error' as const))!,
   ];
 
   if (startDate) {
