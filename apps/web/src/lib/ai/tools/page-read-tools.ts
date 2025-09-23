@@ -1,7 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db, pages, eq, and, asc } from '@pagespace/db';
-import { buildTree, getUserAccessLevel, getUserDriveAccess, getPageTypeEmoji, isFolderPage, PageType } from '@pagespace/lib';
+import { buildTree, getUserAccessLevel, getUserDriveAccess, getUserAccessiblePagesInDriveWithDetails, getPageTypeEmoji, isFolderPage, PageType } from '@pagespace/lib';
 import { ToolExecutionContext } from '../types';
 import { getSuggestedVisionModels } from '../model-capabilities';
 
@@ -28,31 +28,11 @@ export const pageReadTools = {
           throw new Error(`You don't have access to the "${driveSlug}" workspace`);
         }
 
-        // Get all pages in the drive using the drive ID
-        const drivePages = await db
-          .select({
-            id: pages.id,
-            title: pages.title,
-            type: pages.type,
-            parentId: pages.parentId,
-            position: pages.position,
-            isTrashed: pages.isTrashed,
-          })
-          .from(pages)
-          .where(and(
-            eq(pages.driveId, driveId),
-            eq(pages.isTrashed, false)
-          ))
-          .orderBy(asc(pages.position));
+        // Get all pages user has access to in the drive (optimized single query)
+        const visiblePages = await getUserAccessiblePagesInDriveWithDetails(userId, driveId);
 
-        // Filter pages based on user permissions
-        const visiblePages: typeof drivePages = [];
-        for (const page of drivePages) {
-          const accessLevel = await getUserAccessLevel(userId, page.id);
-          if (accessLevel?.canView) {
-            visiblePages.push(page);
-          }
-        }
+        // Sort by position to maintain order
+        visiblePages.sort((a, b) => a.position - b.position);
 
         // Build flat list of paths with type indicators
         const buildPageList = (parentId: string | null = null, parentPath: string = `/${driveSlug || driveId}`): string[] => {
@@ -127,8 +107,8 @@ export const pageReadTools = {
           throw new Error(`Page with ID "${pageId}" not found`);
         }
 
-        // Check user access permissions
-        const accessLevel = await getUserAccessLevel(userId, page.id);
+        // Check user access permissions (silent to reduce log noise)
+        const accessLevel = await getUserAccessLevel(userId, page.id, { silent: true });
         if (!accessLevel) {
           throw new Error('Insufficient permissions to read this document');
         }
@@ -380,8 +360,8 @@ export const pageReadTools = {
           throw new Error('Current page not found or has been deleted');
         }
 
-        // Check user access permissions
-        const accessLevel = await getUserAccessLevel(userId, page.id);
+        // Check user access permissions (silent to reduce log noise)
+        const accessLevel = await getUserAccessLevel(userId, page.id, { silent: true });
         if (!accessLevel) {
           throw new Error('Insufficient permissions to read this page');
         }

@@ -48,6 +48,8 @@ const AssistantChatTab: React.FC = () => {
   const [initialMessages, setInitialMessages] = useState<UIMessage[]>([]);
   const [input, setInput] = useState<string>('');
   const [currentAgentRole, setCurrentAgentRole] = useState<AgentRole>(AgentRoleUtils.getDefaultRole());
+  const [pagination, setPagination] = useState<{ hasMore: boolean; nextCursor: string | null } | null>(null);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
@@ -329,16 +331,24 @@ const AssistantChatTab: React.FC = () => {
         const configData: ProviderSettings = await configResponse.json();
         setProviderSettings(configData);
         
-        // Load messages for current conversation
+        // Load messages for current conversation (with pagination)
         try {
-          const messagesResponse = await fetch(`/api/ai_conversations/${currentConversationId}/messages`, {
+          const messagesResponse = await fetch(`/api/ai_conversations/${currentConversationId}/messages?limit=50`, {
             credentials: 'include',
           });
           if (messagesResponse.ok) {
-            const existingMessages = await messagesResponse.json();
-            setInitialMessages(existingMessages);
+            const messageData = await messagesResponse.json();
+            // Handle both old format (array) and new format (object with messages and pagination)
+            if (Array.isArray(messageData)) {
+              setInitialMessages(messageData);
+              setPagination(null);
+            } else {
+              setInitialMessages(messageData.messages || []);
+              setPagination(messageData.pagination || null);
+            }
           } else {
             setInitialMessages([]);
+            setPagination(null);
           }
         } catch (error) {
           console.error('Failed to load conversation messages:', error);
@@ -375,6 +385,37 @@ const AssistantChatTab: React.FC = () => {
       window.removeEventListener('ai-settings-updated', handleSettingsUpdate);
     };
   }, []);
+
+  const loadMoreMessages = async () => {
+    if (!currentConversationId || !pagination?.hasMore || !pagination?.nextCursor || isLoadingMore) {
+      return;
+    }
+
+    setIsLoadingMore(true);
+    try {
+      const response = await fetch(
+        `/api/ai_conversations/${currentConversationId}/messages?limit=25&cursor=${pagination.nextCursor}&direction=before`,
+        { credentials: 'include' }
+      );
+
+      if (response.ok) {
+        const messageData = await response.json();
+        const olderMessages = Array.isArray(messageData) ? messageData : messageData.messages || [];
+
+        // Prepend older messages to the existing ones
+        setInitialMessages(prev => [...olderMessages, ...prev]);
+
+        // Update pagination info
+        if (!Array.isArray(messageData) && messageData.pagination) {
+          setPagination(messageData.pagination);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load more messages:', error);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  };
 
   const handleNewConversation = async () => {
     try {
@@ -462,13 +503,35 @@ const AssistantChatTab: React.FC = () => {
       <div className="flex-grow overflow-hidden">
         <ScrollArea className="h-full p-3" ref={scrollAreaRef}>
           <div className="space-y-3">
+            {/* Load More Messages Button */}
+            {pagination?.hasMore && messages.length > 0 && (
+              <div className="flex justify-center py-2">
+                <Button
+                  onClick={loadMoreMessages}
+                  disabled={isLoadingMore}
+                  variant="outline"
+                  size="sm"
+                  className="text-xs"
+                >
+                  {isLoadingMore ? (
+                    <>
+                      <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                      Loading...
+                    </>
+                  ) : (
+                    'Load older messages'
+                  )}
+                </Button>
+              </div>
+            )}
+
             {messages.length === 0 ? (
               <div className="flex items-center justify-center h-20 text-muted-foreground text-xs text-center">
                 <div>
                   <p className="font-medium">Global Assistant</p>
                   <p className="text-xs">
-                    {locationContext 
-                      ? `Context-aware help for ${locationContext.currentPage?.title || locationContext.currentDrive?.name}` 
+                    {locationContext
+                      ? `Context-aware help for ${locationContext.currentPage?.title || locationContext.currentDrive?.name}`
                       : 'Ask me anything about your workspace'
                     }
                   </p>

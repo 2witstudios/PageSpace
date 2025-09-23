@@ -2,6 +2,7 @@ import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { Server, Socket } from 'socket.io';
 import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib';
 import { decodeToken } from '@pagespace/lib/server';
+import { verifyBroadcastSignature } from '@pagespace/lib/broadcast-auth';
 import * as dotenv from 'dotenv';
 import { db, eq, or } from '@pagespace/db';
 import { users } from '@pagespace/db/src/schema/auth';
@@ -19,16 +20,51 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
         });
         req.on('end', () => {
             try {
+                // Verify HMAC signature before processing
+                const signatureHeader = req.headers['x-broadcast-signature'] as string;
+                if (!signatureHeader) {
+                    loggers.realtime.warn('Broadcast request missing signature header', {
+                        ip: req.socket.remoteAddress,
+                        userAgent: req.headers['user-agent']
+                    });
+                    res.writeHead(401, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Authentication required' }));
+                    return;
+                }
+
+                if (!verifyBroadcastSignature(signatureHeader, body)) {
+                    loggers.realtime.error('Broadcast request signature verification failed', {
+                        ip: req.socket.remoteAddress,
+                        userAgent: req.headers['user-agent'],
+                        hasSignature: !!signatureHeader,
+                        bodyLength: body.length
+                    });
+                    res.writeHead(401, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Authentication failed' }));
+                    return;
+                }
+
                 const { channelId, event, payload } = JSON.parse(body);
                 if (channelId && event && payload) {
                     io.to(channelId).emit(event, payload);
+                    loggers.realtime.debug('Broadcast event sent successfully', {
+                        channelId,
+                        event,
+                        payloadKeys: Object.keys(payload)
+                    });
                     res.writeHead(200, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({ success: true }));
                 } else {
+                    loggers.realtime.warn('Invalid broadcast payload structure', {
+                        hasChannelId: !!channelId,
+                        hasEvent: !!event,
+                        hasPayload: !!payload
+                    });
                     res.writeHead(400, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({ error: 'Invalid broadcast payload' }));
                 }
             } catch (error) {
+                loggers.realtime.error('Broadcast request processing error', error as Error);
                 res.writeHead(400, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: 'Invalid JSON' }));
             }

@@ -264,13 +264,15 @@ const GlobalAssistantView: React.FC = () => {
           try {
             const [conversationResponse, messagesResponse] = await Promise.all([
               fetch(`/api/ai_conversations/${currentConversationId}`),
-              fetch(`/api/ai_conversations/${currentConversationId}/messages`)
+              fetch(`/api/ai_conversations/${currentConversationId}/messages?limit=50`)
             ]);
-            
+
             if (conversationResponse.ok && messagesResponse.ok) {
               const conversation = await conversationResponse.json();
-              const existingMessages = await messagesResponse.json();
-              
+              const messageData = await messagesResponse.json();
+              // Handle both old format (array) and new format (object with messages and pagination)
+              const existingMessages = Array.isArray(messageData) ? messageData : messageData.messages || [];
+
               setCurrentConversation(conversation);
               setInitialMessages(existingMessages);
               setMessages([]); // Clear current messages to force reload

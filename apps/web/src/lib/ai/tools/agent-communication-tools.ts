@@ -1,11 +1,6 @@
 import { tool, stepCountIs } from 'ai';
 import { z } from 'zod';
 import { generateText, convertToModelMessages, UIMessage } from 'ai';
-import { createOpenRouter } from '@openrouter/ai-sdk-provider';
-import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import { createOpenAI } from '@ai-sdk/openai';
-import { createAnthropic } from '@ai-sdk/anthropic';
-import { createXai } from '@ai-sdk/xai';
 import { db, pages, chatMessages, drives, eq, and, asc, sql } from '@pagespace/db';
 import { canUserViewPage } from '@pagespace/lib/server';
 import { convertDbMessageToUIMessage, sanitizeMessagesForModel } from '@/lib/ai/assistant-utils';
@@ -16,14 +11,11 @@ import { searchTools } from './search-tools';
 import { taskManagementTools } from './task-management-tools';
 import { batchOperationsTools } from './batch-operations-tools';
 import { agentTools } from './agent-tools';
-import { 
-  getUserOpenRouterSettings,
-  getUserGoogleSettings, 
-  getUserOpenAISettings,
-  getUserAnthropicSettings,
-  getUserXAISettings,
-  getDefaultPageSpaceSettings
-} from '@/lib/ai/ai-utils';
+import {
+  createAIProvider,
+  isProviderError,
+  type ProviderRequest
+} from '@/lib/ai/provider-factory';
 import { buildTimestampSystemPrompt } from '@/lib/ai/timestamp-utils';
 import { ToolExecutionContext } from '../types';
 import { loggers } from '@pagespace/lib/logger-config';
@@ -34,74 +26,28 @@ const MAX_AGENT_DEPTH = 3;
 const MAX_CONVERSATION_WINDOW = 50; // Limit messages for performance
 
 /**
- * Get configured AI model for agent
+ * Get configured AI model for agent using the centralized provider factory
+ * Handles provider-specific setup and fallbacks
  */
 async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: string | null; aiModel?: string | null }) {
   const { aiProvider, aiModel } = agentConfig;
-  
-  switch (aiProvider) {
-    case 'openrouter': {
-      const settings = await getUserOpenRouterSettings(userId);
-      if (!settings?.apiKey) {
-        throw new Error('OpenRouter API key not configured');
-      }
-      const openrouter = createOpenRouter({ apiKey: settings.apiKey });
-      return openrouter(aiModel || 'anthropic/claude-3.5-sonnet');
-    }
-    
-    case 'google': {
-      const settings = await getUserGoogleSettings(userId);
-      if (!settings?.apiKey) {
-        throw new Error('Google AI API key not configured');
-      }
-      const google = createGoogleGenerativeAI({ apiKey: settings.apiKey });
-      return google(aiModel || 'gemini-2.5-flash');
-    }
-    
-    case 'openai': {
-      const settings = await getUserOpenAISettings(userId);
-      if (!settings?.apiKey) {
-        throw new Error('OpenAI API key not configured');
-      }
-      const openai = createOpenAI({ apiKey: settings.apiKey });
-      return openai(aiModel || 'gpt-4');
-    }
-    
-    case 'anthropic': {
-      const settings = await getUserAnthropicSettings(userId);
-      if (!settings?.apiKey) {
-        throw new Error('Anthropic API key not configured');
-      }
-      const anthropic = createAnthropic({ apiKey: settings.apiKey });
-      return anthropic(aiModel || 'claude-3-5-sonnet-20241022');
-    }
-    
-    case 'xai': {
-      const settings = await getUserXAISettings(userId);
-      if (!settings?.apiKey) {
-        throw new Error('xAI API key not configured');
-      }
-      const xai = createXai({ apiKey: settings.apiKey });
-      return xai(aiModel || 'grok-beta');
-    }
-    
-    default: {
-      // Fall back to default PageSpace settings
-      const defaultSettings = await getDefaultPageSpaceSettings();
-      if (!defaultSettings) {
-        throw new Error('No AI provider configured');
-      }
 
-      // Only use Google AI as the default provider
-      if (defaultSettings.provider === 'google') {
-        const google = createGoogleGenerativeAI({ apiKey: defaultSettings.apiKey });
-        return google('gemini-2.5-flash');
-      }
+  // Use default provider/model if agent doesn't have specific configuration
+  const selectedProvider = aiProvider || 'pagespace';
+  const selectedModel = aiModel || (selectedProvider === 'pagespace' ? 'GLM-4.5-air' : undefined);
 
-      // Should not reach here if properly configured, but throw clear error
-      throw new Error('Default AI provider must be Google AI with gemini-2.5-flash');
-    }
+  const providerRequest: ProviderRequest = {
+    selectedProvider,
+    selectedModel,
+  };
+
+  const providerResult = await createAIProvider(userId, providerRequest);
+
+  if (isProviderError(providerResult)) {
+    throw new Error(providerResult.error);
   }
+
+  return providerResult.model;
 }
 
 /**
