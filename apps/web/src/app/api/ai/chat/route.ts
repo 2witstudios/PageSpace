@@ -230,7 +230,11 @@ export async function POST(request: Request) {
         loggers.ai.debug('AI Chat API: User message saved to database');
       } catch (error) {
         loggers.ai.error('AI Chat API: Failed to save user message', error as Error);
-        // Don't fail the request - continue with AI processing
+        return NextResponse.json({
+          error: 'Failed to save message to database',
+          details: error instanceof Error ? error.message : 'Unknown database error',
+          userMessage: userMessage // Preserve user input for retry
+        }, { status: 500 });
       }
     }
     

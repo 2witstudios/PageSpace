@@ -284,6 +284,11 @@ export async function POST(
         loggers.api.debug('✅ Global Assistant Chat API: User message saved to database', {});
       } catch (error) {
         loggers.api.error('❌ Global Assistant Chat API: Failed to save user message:', error as Error);
+        return NextResponse.json({
+          error: 'Failed to save message to database',
+          details: error instanceof Error ? error.message : 'Unknown database error',
+          userMessage: userMessage // Preserve user input for retry
+        }, { status: 500 });
       }
     }
     
