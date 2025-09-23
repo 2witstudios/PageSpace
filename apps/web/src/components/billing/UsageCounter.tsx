@@ -117,7 +117,7 @@ export function UsageCounter() {
           <span className="hidden lg:inline text-muted-foreground">today</span>
         </div>
 
-        {/* Extended Thinking for Pro and Business Users */}
+        {/* Pro AI for Pro and Business Users */}
         {isPaid && usage.pro.limit > 0 && (
           <div className="flex items-center gap-1 text-muted-foreground">
             <span className="hidden md:inline">•</span>
@@ -125,7 +125,7 @@ export function UsageCounter() {
             <Badge variant="secondary" className="text-xs">
               {usage.pro.current}/{usage.pro.limit}
             </Badge>
-            <span className="hidden lg:inline text-xs">thinking</span>
+            <span className="hidden lg:inline text-xs">pro</span>
           </div>
         )}
       </div>

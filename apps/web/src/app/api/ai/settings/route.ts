@@ -246,7 +246,7 @@ export async function PATCH(request: Request) {
       );
     }
 
-    // Check if user is trying to select PageSpace extra thinking model without proper subscription
+    // Check if user is trying to select PageSpace pro AI model without proper subscription
     if (requiresProSubscription(provider, model, user.subscriptionTier)) {
       return NextResponse.json(
         {

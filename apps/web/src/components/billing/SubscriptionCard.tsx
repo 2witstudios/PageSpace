@@ -73,7 +73,7 @@ export function SubscriptionCard({
   const standardUsagePercentage = usage.standard.limit === -1 ? 0 :
     (usage.standard.current / usage.standard.limit) * 100;
 
-  // Calculate extra thinking usage percentage
+  // Calculate pro AI usage percentage
   const proPercentage = usage.pro.limit === 0 ? 0 :
     (usage.pro.current / usage.pro.limit) * 100;
 
