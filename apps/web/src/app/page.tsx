@@ -173,11 +173,11 @@ export default function Home() {
                       </li>
                       <li className="flex items-center gap-3">
                         <Zap className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>50 daily PageSpace AI calls</span>
+                        <span>100 daily PageSpace AI calls</span>
                       </li>
                       <li className="flex items-center gap-3">
                         <Shield className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>10 daily &quot;Extra Thinking&quot; sessions (advanced reasoning)</span>
+                        <span>50 daily &quot;Pro AI&quot; sessions (advanced reasoning)</span>
                       </li>
                       <li className="flex items-center gap-3">
                         <Users className="w-5 h-5 text-primary flex-shrink-0" />
@@ -230,7 +230,7 @@ export default function Home() {
                       </li>
                       <li className="flex items-center gap-3">
                         <Shield className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>50 daily &quot;Extra Thinking&quot; sessions</span>
+                        <span>100 daily &quot;Pro AI&quot; sessions</span>
                       </li>
                       <li className="flex items-center gap-3">
                         <Users className="w-5 h-5 text-primary flex-shrink-0" />

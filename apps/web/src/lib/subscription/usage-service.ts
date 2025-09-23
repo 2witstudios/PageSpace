@@ -1,6 +1,6 @@
 import { db, eq, and, aiUsageDaily, users, sql } from '@pagespace/db';
 
-export type ProviderType = 'normal' | 'extra_thinking';
+export type ProviderType = 'standard' | 'pro';
 
 export interface UsageTrackingResult {
   success: boolean;
@@ -13,17 +13,17 @@ export interface UsageTrackingResult {
  * Get usage limits based on subscription tier
  */
 export function getUsageLimits(subscriptionTier: string, providerType: ProviderType): number {
-  if (providerType === 'normal') {
-    // Free tier: 20 calls/day, Pro tier: 50 calls/day, Business tier: 500 calls/day
+  if (providerType === 'standard') {
+    // Free tier: 20 calls/day, Pro tier: 100 calls/day, Business tier: 500 calls/day
     if (subscriptionTier === 'business') return 500;
-    if (subscriptionTier === 'pro') return 50;
+    if (subscriptionTier === 'pro') return 100;
     return 20; // free tier
   }
 
-  if (providerType === 'extra_thinking') {
-    // Extra thinking: 0 calls for free, 10 calls for pro, 50 calls for business
-    if (subscriptionTier === 'business') return 50;
-    if (subscriptionTier === 'pro') return 10;
+  if (providerType === 'pro') {
+    // Pro AI: 0 calls for free, 50 calls for pro, 100 calls for business
+    if (subscriptionTier === 'business') return 100;
+    if (subscriptionTier === 'pro') return 50;
     return 0; // free tier
   }
 
@@ -72,9 +72,9 @@ export async function incrementUsage(
   });
 
 
-  // No access (normal tier trying extra thinking)
+  // No access (free tier trying pro AI)
   if (limit === 0) {
-    console.log('❌ No access (Free tier trying extra thinking):', { userId, providerType, subscriptionTier });
+    console.log('❌ No access (Free tier trying pro AI):', { userId, providerType, subscriptionTier });
     return {
       success: false,
       currentCount: 0,
@@ -312,23 +312,23 @@ export async function getUserUsageSummary(userId: string) {
     usageRecords.map(record => [record.providerType as ProviderType, record.count])
   );
 
-  const normalUsage = usageMap.get('normal') || 0;
-  const extraThinkingUsage = usageMap.get('extra_thinking') || 0;
+  const standardUsage = usageMap.get('standard') || 0;
+  const proUsage = usageMap.get('pro') || 0;
 
-  const normalLimit = getUsageLimits(subscriptionTier, 'normal');
-  const extraThinkingLimit = getUsageLimits(subscriptionTier, 'extra_thinking');
+  const standardLimit = getUsageLimits(subscriptionTier, 'standard');
+  const proLimit = getUsageLimits(subscriptionTier, 'pro');
 
   return {
     subscriptionTier,
-    free: {
-      current: normalUsage,
-      limit: normalLimit,
-      remaining: normalLimit === -1 ? -1 : Math.max(0, normalLimit - normalUsage)
+    standard: {
+      current: standardUsage,
+      limit: standardLimit,
+      remaining: standardLimit === -1 ? -1 : Math.max(0, standardLimit - standardUsage)
     },
-    extraThinking: {
-      current: extraThinkingUsage,
-      limit: extraThinkingLimit,
-      remaining: Math.max(0, extraThinkingLimit - extraThinkingUsage)
+    pro: {
+      current: proUsage,
+      limit: proLimit,
+      remaining: Math.max(0, proLimit - proUsage)
     }
   };
 }

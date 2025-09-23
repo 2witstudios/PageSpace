@@ -251,7 +251,7 @@ export async function PATCH(request: Request) {
       return NextResponse.json(
         {
           error: 'Subscription required',
-          message: 'PageSpace Extra Thinking (Advanced) requires a Pro or Business subscription.',
+          message: 'PageSpace Pro AI requires a Pro or Business subscription.',
           upgradeUrl: '/settings/billing',
         },
         { status: 403 }

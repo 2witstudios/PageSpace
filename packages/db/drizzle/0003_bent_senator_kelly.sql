@@ -1,0 +1,1 @@
+ALTER TABLE "users" ALTER COLUMN "currentAiModel" SET DEFAULT 'GLM-4.5-air';

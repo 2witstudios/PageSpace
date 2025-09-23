@@ -281,7 +281,7 @@ export async function POST(request: Request) {
     let model;
 
     if (currentProvider === 'pagespace') {
-      // Use default PageSpace settings (Google AI backend supports both normal and thinking models)
+      // Use default PageSpace settings (Google AI backend supports both standard and pro models)
       const pageSpaceSettings = await getDefaultPageSpaceSettings();
 
       if (!pageSpaceSettings) {
@@ -799,22 +799,22 @@ MENTION PROCESSING:
               // Track usage for PageSpace providers only (rate limiting/quota tracking)
               const isPageSpaceProvider = currentProvider === 'pagespace';
 
-              // Determine if this is thinking model based on model name
-              const isThinkingModel = currentModel === 'GLM-4.5';
+              // Determine if this is pro model based on model name
+              const isProModel = currentModel === 'GLM-4.5';
 
               loggers.ai.info('AI Chat API: USAGE TRACKING DECISION', {
                 userId,
                 currentProvider,
                 currentModel,
                 isPageSpaceProvider,
-                isThinkingModel,
+                isProModel,
                 messageId,
                 timestamp: new Date().toISOString()
               });
 
               if (isPageSpaceProvider) {
                 try {
-                  const providerType = isThinkingModel ? 'extra_thinking' : 'normal';
+                  const providerType = isProModel ? 'pro' : 'standard';
 
                   loggers.ai.info('AI Chat API: CALLING incrementUsage', {
                     userId,
@@ -854,8 +854,8 @@ MENTION PROCESSING:
                       userId: userId!,
                       operation: 'updated',
                       subscriptionTier: currentUsageSummary.subscriptionTier as 'free' | 'pro',
-                      free: currentUsageSummary.free,
-                      extraThinking: currentUsageSummary.extraThinking
+                      standard: currentUsageSummary.standard,
+                      pro: currentUsageSummary.pro
                     });
 
                     console.log('🔔 Usage broadcast sent for Page AI');

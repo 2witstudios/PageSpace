@@ -37,12 +37,12 @@ export interface UsageEventPayload {
   userId: string;
   operation: UsageOperation;
   subscriptionTier: 'free' | 'pro' | 'business';
-  free: {
+  standard: {
     current: number;
     limit: number;
     remaining: number;
   };
-  extraThinking: {
+  pro: {
     current: number;
     limit: number;
     remaining: number;
@@ -194,8 +194,8 @@ export async function broadcastUsageEvent(payload: UsageEventPayload): Promise<v
     console.log('🔔 Usage event broadcasted:', {
       userId: payload.userId,
       operation: payload.operation,
-      free: `${payload.free.current}/${payload.free.limit}`,
-      extraThinking: `${payload.extraThinking.current}/${payload.extraThinking.limit}`
+      standard: `${payload.standard.current}/${payload.standard.limit}`,
+      pro: `${payload.pro.current}/${payload.pro.limit}`
     });
   } catch (error) {
     // Log error but don't throw - broadcasting failures shouldn't break operations

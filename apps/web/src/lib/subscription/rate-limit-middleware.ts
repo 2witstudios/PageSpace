@@ -17,8 +17,8 @@ export async function checkAIRateLimit(
   model?: string
 ): Promise<RateLimitResult> {
   // Determine provider type based on model name for PageSpace provider
-  const isThinkingModel = provider === 'pagespace' && model === 'GLM-4.5';
-  const providerType: ProviderType = isThinkingModel ? 'extra_thinking' : 'normal';
+  const isProModel = provider === 'pagespace' && model === 'GLM-4.5';
+  const providerType: ProviderType = isProModel ? 'pro' : 'standard';
 
   try {
     const result = await incrementUsage(userId, providerType);
@@ -61,9 +61,9 @@ export function createRateLimitResponse(
 ): NextResponse {
   const resetTimeString = resetTime || getTomorrowMidnight();
 
-  const errorMessage = providerType === 'extra_thinking'
-    ? `Extra Thinking calls limited to ${limit} per day. Upgrade to Pro or Business for more access.`
-    : `AI calls limited to ${limit} per day. Upgrade to Pro (50/day) or Business (500/day) for more calls.`;
+  const errorMessage = providerType === 'pro'
+    ? `Pro AI calls limited to ${limit} per day. Upgrade to Pro or Business for more access.`
+    : `Standard AI calls limited to ${limit} per day. Upgrade to Pro (100/day) or Business (500/day) for more calls.`;
 
   return NextResponse.json(
     {
@@ -99,8 +99,8 @@ function getTomorrowMidnight(): Date {
  * Check if provider requires Pro subscription
  */
 export function requiresProSubscription(provider: string, model: string | undefined, subscriptionTier: string | undefined): boolean {
-  const isThinkingModel = provider === 'pagespace' && model === 'GLM-4.5';
-  if (!isThinkingModel) {
+  const isProModel = provider === 'pagespace' && model === 'GLM-4.5';
+  if (!isProModel) {
     return false;
   }
 
@@ -115,7 +115,7 @@ export function createSubscriptionRequiredResponse(): NextResponse {
   return NextResponse.json(
     {
       error: 'Subscription required',
-      message: 'Extra Thinking provider requires a Pro or Business subscription.',
+      message: 'Pro AI provider requires a Pro or Business subscription.',
       upgradeUrl: '/settings/billing',
     },
     { status: 403 }

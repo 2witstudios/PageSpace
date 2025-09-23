@@ -29,12 +29,12 @@ interface SubscriptionData {
 }
 
 interface UsageData {
-  free: {
+  standard: {
     current: number;
     limit: number;
     remaining: number;
   };
-  extraThinking: {
+  pro: {
     current: number;
     limit: number;
     remaining: number;
@@ -77,8 +77,8 @@ export default function BillingPage() {
 
       setSubscriptionData(subscription);
       setUsageData({
-        free: usage.free,
-        extraThinking: usage.extraThinking,
+        standard: usage.standard,
+        pro: usage.pro,
       });
 
     } catch (err) {

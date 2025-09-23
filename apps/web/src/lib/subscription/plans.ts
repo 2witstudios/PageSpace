@@ -29,7 +29,7 @@ export interface PlanDefinition {
   description: string;
   limits: {
     aiCalls: number;
-    extraThinking: number;
+    pro: number;
     storage: {
       bytes: number;
       formatted: string;
@@ -64,7 +64,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     description: 'Perfect for getting started with PageSpace',
     limits: {
       aiCalls: 20,
-      extraThinking: 0,
+      pro: 0,
       storage: {
         bytes: 500 * 1024 * 1024, // 500MB
         formatted: '500MB',
@@ -80,7 +80,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
       { name: '20MB max file size', included: true },
       { name: 'Basic processing', included: true },
       { name: 'Community support', included: true },
-      { name: 'Extra Thinking calls', included: false },
+      { name: 'Pro AI calls', included: false },
       { name: 'Priority processing', included: false },
       { name: 'Advanced AI models', included: false },
       { name: 'Priority support', included: false },
@@ -108,8 +108,8 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     highlighted: true,
     stripePaymentLink: STRIPE_PRO_PAYMENT_LINK,
     limits: {
-      aiCalls: 50,
-      extraThinking: 10,
+      aiCalls: 100,
+      pro: 50,
       storage: {
         bytes: 2 * 1024 * 1024 * 1024, // 2GB
         formatted: '2GB',
@@ -120,14 +120,14 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
       },
     },
     features: [
-      { name: '50 AI calls per day', included: true, description: '2.5x more than Free' },
-      { name: '10 Extra Thinking calls', included: true, description: 'Advanced AI reasoning' },
+      { name: '100 AI calls per day', included: true, description: '5x more than Free' },
+      { name: '50 Pro AI calls', included: true, description: 'Advanced AI reasoning' },
       { name: '2GB storage', included: true, description: '4x more than Free' },
       { name: '50MB max file size', included: true, description: '2.5x larger files' },
       { name: 'Priority processing', included: true },
       { name: 'Advanced AI models', included: true },
       { name: 'Priority support', included: true },
-      { name: 'Extra Thinking calls', included: true },
+      { name: 'Pro AI calls', included: true },
       { name: 'Community support', included: true },
       { name: 'Enterprise features', included: false },
     ],
@@ -153,7 +153,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     stripePaymentLink: STRIPE_BUSINESS_PAYMENT_LINK,
     limits: {
       aiCalls: 500,
-      extraThinking: 50,
+      pro: 100,
       storage: {
         bytes: 50 * 1024 * 1024 * 1024, // 50GB
         formatted: '50GB',
@@ -165,14 +165,14 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     },
     features: [
       { name: '500 AI calls per day', included: true, description: '25x more than Free' },
-      { name: '50 Extra Thinking calls', included: true, description: 'Maximum AI reasoning' },
+      { name: '100 Pro AI calls', included: true, description: 'Maximum AI reasoning' },
       { name: '50GB storage', included: true, description: '100x more than Free' },
       { name: '100MB max file size', included: true, description: '5x larger files' },
       { name: 'Enterprise processing', included: true },
       { name: 'Advanced AI models', included: true },
       { name: 'Priority support', included: true },
       { name: 'Enterprise features', included: true },
-      { name: 'Extra Thinking calls', included: true },
+      { name: 'Pro AI calls', included: true },
       { name: 'Community support', included: true },
     ],
   },

@@ -706,9 +706,9 @@ MENTION PROCESSING:
 
             if (isPageSpaceProvider) {
               try {
-                // Determine if this is thinking model based on model name
-                const isThinkingModel = currentModel === 'GLM-4.5';
-                const providerType = isThinkingModel ? 'extra_thinking' : 'normal';
+                // Determine if this is pro model based on model name
+                const isProModel = currentModel === 'GLM-4.5';
+                const providerType = isProModel ? 'pro' : 'standard';
 
                 loggers.api.info('Global Assistant API: CALLING incrementUsage', {
                   userId,
@@ -751,8 +751,8 @@ MENTION PROCESSING:
                     userId,
                     operation: 'updated',
                     subscriptionTier: currentUsageSummary.subscriptionTier as 'free' | 'pro',
-                    free: currentUsageSummary.free,
-                    extraThinking: currentUsageSummary.extraThinking
+                    standard: currentUsageSummary.standard,
+                    pro: currentUsageSummary.pro
                   });
 
                   console.log('🔔 Usage broadcast sent for Global Assistant');

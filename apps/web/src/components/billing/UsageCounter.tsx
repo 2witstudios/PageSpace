@@ -11,12 +11,12 @@ import type { UsageEventPayload } from '@/lib/socket-utils';
 
 interface UsageData {
   subscriptionTier: 'free' | 'pro' | 'business';
-  free: {
+  standard: {
     current: number;
     limit: number;
     remaining: number;
   };
-  extraThinking: {
+  pro: {
     current: number;
     limit: number;
     remaining: number;
@@ -36,7 +36,7 @@ export function UsageCounter() {
   const isPro = usage?.subscriptionTier === 'pro';
   const isBusiness = usage?.subscriptionTier === 'business';
   const isPaid = isPro || isBusiness;
-  const isNearLimit = usage && usage.free.limit > 0 && usage.free.remaining <= 10;
+  const isNearLimit = usage && usage.standard.limit > 0 && usage.standard.remaining <= 10;
 
   const handleBillingClick = () => {
     router.push('/settings/billing');
@@ -54,8 +54,8 @@ export function UsageCounter() {
         // Update SWR cache with new usage data
         mutate({
           subscriptionTier: payload.subscriptionTier,
-          free: payload.free,
-          extraThinking: payload.extraThinking
+          standard: payload.standard,
+          pro: payload.pro
         }, false); // Don't revalidate, trust the real-time data
       };
 
@@ -112,18 +112,18 @@ export function UsageCounter() {
             variant={isNearLimit ? "destructive" : "secondary"}
             className="text-xs font-medium"
           >
-            {usage.free.current}/{usage.free.limit}
+            {usage.standard.current}/{usage.standard.limit}
           </Badge>
           <span className="hidden lg:inline text-muted-foreground">today</span>
         </div>
 
         {/* Extended Thinking for Pro and Business Users */}
-        {isPaid && usage.extraThinking.limit > 0 && (
+        {isPaid && usage.pro.limit > 0 && (
           <div className="flex items-center gap-1 text-muted-foreground">
             <span className="hidden md:inline">•</span>
             <Crown className="h-3 w-3 text-yellow-500" />
             <Badge variant="secondary" className="text-xs">
-              {usage.extraThinking.current}/{usage.extraThinking.limit}
+              {usage.pro.current}/{usage.pro.limit}
             </Badge>
             <span className="hidden lg:inline text-xs">thinking</span>
           </div>

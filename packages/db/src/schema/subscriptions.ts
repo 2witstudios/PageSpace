@@ -38,7 +38,7 @@ export const aiUsageDaily = pgTable('ai_usage_daily', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
   date: date('date').notNull(), // UTC date
-  providerType: text('providerType').notNull(), // 'normal' or 'extra_thinking'
+  providerType: text('providerType').notNull(), // 'standard' or 'pro'
   count: integer('count').default(0).notNull(),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),

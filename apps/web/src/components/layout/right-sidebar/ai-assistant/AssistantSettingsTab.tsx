@@ -457,7 +457,7 @@ const AssistantSettingsTab: React.FC = () => {
                   </div>
                   <div>
                     <p className="text-sm font-medium text-blue-900 dark:text-blue-100">
-                      Unlock Extra Thinking
+                      Unlock Pro AI
                     </p>
                     <p className="text-xs text-blue-700 dark:text-blue-300 mt-1">
                       Advanced AI reasoning with Pro or Business

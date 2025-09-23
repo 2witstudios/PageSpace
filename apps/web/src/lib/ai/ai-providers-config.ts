@@ -7,8 +7,8 @@ export const AI_PROVIDERS = {
   pagespace: {
     name: 'PageSpace',
     models: {
-      'GLM-4.5-air': 'Normal',
-      'GLM-4.5': 'Advanced (Pro/Business)',
+      'GLM-4.5-air': 'Standard',
+      'GLM-4.5': 'Pro (Pro/Business)',
     },
   },
   openrouter: {

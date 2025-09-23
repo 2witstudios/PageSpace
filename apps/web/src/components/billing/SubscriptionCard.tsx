@@ -25,12 +25,12 @@ interface SubscriptionData {
 }
 
 interface UsageData {
-  free: {
+  standard: {
     current: number;
     limit: number;
     remaining: number;
   };
-  extraThinking: {
+  pro: {
     current: number;
     limit: number;
     remaining: number;
@@ -70,15 +70,15 @@ export function SubscriptionCard({
   const storageQuotaMB = Math.round(subscription.storage.quota / (1024 * 1024));
 
   // Calculate AI usage percentage
-  const normalUsagePercentage = usage.free.limit === -1 ? 0 :
-    (usage.free.current / usage.free.limit) * 100;
+  const standardUsagePercentage = usage.standard.limit === -1 ? 0 :
+    (usage.standard.current / usage.standard.limit) * 100;
 
   // Calculate extra thinking usage percentage
-  const extraThinkingPercentage = usage.extraThinking.limit === 0 ? 0 :
-    (usage.extraThinking.current / usage.extraThinking.limit) * 100;
+  const proPercentage = usage.pro.limit === 0 ? 0 :
+    (usage.pro.current / usage.pro.limit) * 100;
 
   // Check for usage warnings
-  const isNearLimit = (usage.free.current / usage.free.limit) > 0.8;
+  const isNearLimit = (usage.standard.current / usage.standard.limit) > 0.8;
   const isStorageNearLimit = storagePercentage > 80;
 
   return (
@@ -136,9 +136,9 @@ export function SubscriptionCard({
               <Zap className="h-4 w-4" />
               <span className="text-sm font-medium">AI Calls Today</span>
             </div>
-            <Progress value={normalUsagePercentage} className="h-2" />
+            <Progress value={standardUsagePercentage} className="h-2" />
             <div className="text-xs text-muted-foreground">
-              {usage.free.current} / {usage.free.limit} used
+              {usage.standard.current} / {usage.standard.limit} used
             </div>
           </div>
 
@@ -154,23 +154,23 @@ export function SubscriptionCard({
             </div>
           </div>
 
-          {/* Extra Thinking or Empty Slot */}
-          {usage.extraThinking.limit > 0 ? (
+          {/* Pro AI or Empty Slot */}
+          {usage.pro.limit > 0 ? (
             <div className="space-y-2">
               <div className="flex items-center gap-2">
                 <Crown className="h-4 w-4 text-yellow-500" />
-                <span className="text-sm font-medium">Extra Thinking</span>
+                <span className="text-sm font-medium">Pro AI</span>
               </div>
-              <Progress value={extraThinkingPercentage} className="h-2" />
+              <Progress value={proPercentage} className="h-2" />
               <div className="text-xs text-muted-foreground">
-                {usage.extraThinking.current} / {usage.extraThinking.limit} used
+                {usage.pro.current} / {usage.pro.limit} used
               </div>
             </div>
           ) : (
             <div className="space-y-2 opacity-50">
               <div className="flex items-center gap-2">
                 <Crown className="h-4 w-4" />
-                <span className="text-sm font-medium">Extra Thinking</span>
+                <span className="text-sm font-medium">Pro AI</span>
               </div>
               <div className="h-2 bg-gray-200 rounded-full dark:bg-gray-700"></div>
               <div className="text-xs text-muted-foreground">

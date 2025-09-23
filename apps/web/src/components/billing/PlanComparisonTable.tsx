@@ -95,12 +95,12 @@ export function PlanComparisonTable({
                 </tr>
 
                 <tr className="border-b">
-                  <td className="py-4 pr-6 font-medium">Extra Thinking Calls</td>
+                  <td className="py-4 pr-6 font-medium">Pro AI Calls</td>
                   {plans.map((plan) => (
                     <td key={plan.id} className="text-center py-4 px-4">
-                      {plan.limits.extraThinking > 0 ? (
+                      {plan.limits.pro > 0 ? (
                         <div>
-                          <div className="font-semibold text-yellow-600">{plan.limits.extraThinking}</div>
+                          <div className="font-semibold text-yellow-600">{plan.limits.pro}</div>
                           <div className="text-xs text-muted-foreground">per day</div>
                         </div>
                       ) : (
@@ -166,10 +166,10 @@ export function PlanComparisonTable({
           </div>
 
           <div>
-            <h4 className="font-medium mb-2">What is Extra Thinking?</h4>
+            <h4 className="font-medium mb-2">What is Pro AI?</h4>
             <p className="text-sm text-muted-foreground">
-              Extra Thinking enables advanced AI reasoning capabilities for complex problems.
-              Available for Pro (10/day) and Business (50/day) users.
+              Pro AI enables advanced AI reasoning capabilities for complex problems.
+              Available for Pro (50/day) and Business (100/day) users.
             </p>
           </div>
 
