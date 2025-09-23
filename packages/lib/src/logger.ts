@@ -75,11 +75,15 @@ class Logger {
   private startTime: number = Date.now();
 
   private constructor(config: Partial<LoggerConfig> = {}) {
+    const configuredDestination = (process.env.LOG_DESTINATION || '').trim();
+    const destination = (configuredDestination as 'console' | 'database' | 'both') ||
+      (process.env.MONITORING_INGEST_KEY ? 'both' : 'console');
+
     this.config = {
       level: this.parseLogLevel(process.env.LOG_LEVEL || 'info'),
-      format: (process.env.LOG_FORMAT as 'json' | 'pretty') || 
+      format: (process.env.LOG_FORMAT as 'json' | 'pretty') ||
               (process.env.NODE_ENV === 'production' ? 'json' : 'pretty'),
-      destination: (process.env.LOG_DESTINATION as 'console' | 'database' | 'both') || 'console',
+      destination,
       batchSize: parseInt(process.env.LOG_BATCH_SIZE || '100'),
       flushInterval: parseInt(process.env.LOG_FLUSH_INTERVAL || '5000'),
       enablePerformance: process.env.LOG_PERFORMANCE !== 'false',

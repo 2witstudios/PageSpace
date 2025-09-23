@@ -131,11 +131,12 @@ export async function writeApiMetrics(metrics: {
   requestId?: string;
   cacheHit?: boolean;
   cacheKey?: string;
+  timestamp?: Date;
 }): Promise<void> {
   try {
     await db.insert(apiMetrics).values({
       id: createId(),
-      timestamp: new Date(),
+      timestamp: metrics.timestamp ?? new Date(),
       endpoint: metrics.endpoint,
       method: metrics.method as any,
       statusCode: metrics.statusCode,
