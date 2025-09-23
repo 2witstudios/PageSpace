@@ -4,17 +4,38 @@
 
 import { RolePromptBuilder } from './role-prompts';
 import { AgentRole } from './agent-roles';
+import { loggers } from '@pagespace/lib/logger-config';
+
+const isTestLoggingEnabled = process.env.AI_DEBUG_LOGGING === 'true';
+
+function createPromptMetadata(prompt: string): object {
+  return {
+    length: prompt.length,
+    wordCount: prompt.split(/\s+/).length,
+    preview: `[PROMPT_REDACTED:${prompt.length}chars]`
+  };
+}
+
+function testLog(message: string, data?: object): void {
+  if (isTestLoggingEnabled) {
+    if (data) {
+      loggers.ai.debug(message, data);
+    } else {
+      loggers.ai.debug(message);
+    }
+  }
+}
 
 // Test function to generate and display prompts
 export function testEnhancedPrompts() {
-  console.log('='.repeat(80));
-  console.log('TESTING ENHANCED PAGESPACE AI PROMPTS');
-  console.log('='.repeat(80));
+  testLog('='.repeat(80));
+  testLog('TESTING ENHANCED PAGESPACE AI PROMPTS');
+  testLog('='.repeat(80));
 
   // Test PARTNER role prompt
-  console.log('\n' + '='.repeat(40));
-  console.log('PARTNER ROLE - Collaborative AI');
-  console.log('='.repeat(40));
+  testLog('\n' + '='.repeat(40));
+  testLog('PARTNER ROLE - Collaborative AI');
+  testLog('='.repeat(40));
   const partnerPrompt = RolePromptBuilder.buildSystemPrompt(
     AgentRole.PARTNER,
     'drive',
@@ -24,12 +45,12 @@ export function testEnhancedPrompts() {
       driveId: 'clq2n3x4m0001',
     }
   );
-  console.log(partnerPrompt.substring(0, 1500) + '...\n');
+  testLog('Partner prompt generated', createPromptMetadata(partnerPrompt));
 
   // Test PLANNER role prompt
-  console.log('='.repeat(40));
-  console.log('PLANNER ROLE - Strategic Assistant');
-  console.log('='.repeat(40));
+  testLog('='.repeat(40));
+  testLog('PLANNER ROLE - Strategic Assistant');
+  testLog('='.repeat(40));
   const plannerPrompt = RolePromptBuilder.buildSystemPrompt(
     AgentRole.PLANNER,
     'page',
@@ -39,22 +60,22 @@ export function testEnhancedPrompts() {
       breadcrumbs: ['Projects', 'Q4 Planning', 'Roadmap'],
     }
   );
-  console.log(plannerPrompt.substring(0, 1500) + '...\n');
+  testLog('Planner prompt generated', createPromptMetadata(plannerPrompt));
 
   // Test WRITER role prompt
-  console.log('='.repeat(40));
-  console.log('WRITER ROLE - Execution Focused');
-  console.log('='.repeat(40));
+  testLog('='.repeat(40));
+  testLog('WRITER ROLE - Execution Focused');
+  testLog('='.repeat(40));
   const writerPrompt = RolePromptBuilder.buildSystemPrompt(
     AgentRole.WRITER,
     'dashboard',
   );
-  console.log(writerPrompt.substring(0, 1500) + '...\n');
+  testLog('Writer prompt generated', createPromptMetadata(writerPrompt));
 
   // Test specific sections
-  console.log('='.repeat(40));
-  console.log('KEY IMPROVEMENTS VERIFICATION');
-  console.log('='.repeat(40));
+  testLog('='.repeat(40));
+  testLog('KEY IMPROVEMENTS VERIFICATION');
+  testLog('='.repeat(40));
 
   const improvements = [
     'PARALLELIZE operations',
@@ -67,10 +88,12 @@ export function testEnhancedPrompts() {
     'glob_search',
   ];
 
-  improvements.forEach(improvement => {
+  const improvementResults = improvements.map(improvement => {
     const found = partnerPrompt.includes(improvement);
-    console.log(`✓ ${improvement}: ${found ? '✅ FOUND' : '❌ MISSING'}`);
+    return { improvement, found };
   });
+
+  testLog('Improvements verification', { results: improvementResults });
 
   // Count tool instruction sections
   const toolSections = [
@@ -83,21 +106,28 @@ export function testEnhancedPrompts() {
     'ERROR RECOVERY',
   ];
 
-  console.log('\n' + '='.repeat(40));
-  console.log('TOOL INSTRUCTION SECTIONS');
-  console.log('='.repeat(40));
+  testLog('\n' + '='.repeat(40));
+  testLog('TOOL INSTRUCTION SECTIONS');
+  testLog('='.repeat(40));
 
-  toolSections.forEach(section => {
+  const sectionResults = toolSections.map(section => {
     const found = partnerPrompt.includes(section);
-    console.log(`${found ? '✅' : '❌'} ${section}`);
+    return { section, found };
   });
 
-  console.log('\n' + '='.repeat(80));
-  console.log('PROMPT LENGTH ANALYSIS');
-  console.log('='.repeat(80));
-  console.log(`Partner Prompt Length: ${partnerPrompt.length} characters`);
-  console.log(`Planner Prompt Length: ${plannerPrompt.length} characters`);
-  console.log(`Writer Prompt Length: ${writerPrompt.length} characters`);
+  testLog('Tool instruction sections verification', { results: sectionResults });
+
+  testLog('\n' + '='.repeat(80));
+  testLog('PROMPT LENGTH ANALYSIS');
+  testLog('='.repeat(80));
+
+  const lengthAnalysis = {
+    partnerPromptLength: partnerPrompt.length,
+    plannerPromptLength: plannerPrompt.length,
+    writerPromptLength: writerPrompt.length
+  };
+
+  testLog('Prompt length analysis', lengthAnalysis);
 
   return {
     partnerPrompt,

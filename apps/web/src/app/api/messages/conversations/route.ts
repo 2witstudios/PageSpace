@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
-import { db, dmConversations, users, userProfiles, directMessages, connections, eq, and, or, desc, sql } from '@pagespace/db';
+import { db, dmConversations, connections, eq, and, or, sql } from '@pagespace/db';
 import { verifyAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logger-config';
 
-// GET /api/messages/conversations - Get user's DM conversations
+// GET /api/messages/conversations - Get user's DM conversations with pagination
 export async function GET(request: Request) {
   try {
     const user = await verifyAuth(request);
@@ -11,77 +11,135 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    // Get all conversations where user is a participant
-    const conversations = await db
-      .select({
-        id: dmConversations.id,
-        participant1Id: dmConversations.participant1Id,
-        participant2Id: dmConversations.participant2Id,
-        lastMessageAt: dmConversations.lastMessageAt,
-        lastMessagePreview: dmConversations.lastMessagePreview,
-        participant1LastRead: dmConversations.participant1LastRead,
-        participant2LastRead: dmConversations.participant2LastRead,
-        createdAt: dmConversations.createdAt,
-      })
-      .from(dmConversations)
-      .where(
-        or(
-          eq(dmConversations.participant1Id, user.id),
-          eq(dmConversations.participant2Id, user.id)
-        )
+    const { searchParams } = new URL(request.url);
+    const limit = Math.min(parseInt(searchParams.get('limit') || '20'), 100);
+    const cursor = searchParams.get('cursor'); // ISO timestamp
+    const direction = searchParams.get('direction') || 'after'; // 'before' or 'after'
+
+    // Single optimized query using CTE to eliminate N+1 problem
+    const conversationDetails = await db.execute(sql`
+      WITH conversation_data AS (
+        SELECT
+          c.id,
+          c.participant1_id,
+          c.participant2_id,
+          c.last_message_at,
+          c.last_message_preview,
+          c.participant1_last_read,
+          c.participant2_last_read,
+          c.created_at,
+          CASE
+            WHEN c.participant1_id = ${user.id} THEN c.participant2_id
+            ELSE c.participant1_id
+          END as other_user_id,
+          CASE
+            WHEN c.participant1_id = ${user.id} THEN c.participant1_last_read
+            ELSE c.participant2_last_read
+          END as last_read
+        FROM dm_conversations c
+        WHERE c.participant1_id = ${user.id} OR c.participant2_id = ${user.id}
+        ${cursor ? (direction === 'before'
+          ? sql`AND c.last_message_at > ${cursor}`
+          : sql`AND c.last_message_at < ${cursor}`)
+          : sql``}
+        ORDER BY c.last_message_at DESC NULLS LAST
+        LIMIT ${limit}
+      ),
+      unread_counts AS (
+        SELECT
+          dm.conversation_id,
+          COUNT(*) as unread_count
+        FROM direct_messages dm
+        INNER JOIN conversation_data cd ON dm.conversation_id = cd.id
+        WHERE dm.sender_id = cd.other_user_id
+          AND dm.is_read = false
+        GROUP BY dm.conversation_id
       )
-      .orderBy(desc(dmConversations.lastMessageAt));
+      SELECT
+        cd.id,
+        cd.participant1_id,
+        cd.participant2_id,
+        cd.last_message_at,
+        cd.last_message_preview,
+        cd.participant1_last_read,
+        cd.participant2_last_read,
+        cd.created_at,
+        cd.last_read,
+        u.id as other_user_id,
+        u.name as other_user_name,
+        u.email as other_user_email,
+        u.image as other_user_image,
+        up.username as other_user_username,
+        up.display_name as other_user_display_name,
+        up.avatar_url as other_user_avatar_url,
+        COALESCE(uc.unread_count, 0) as unread_count
+      FROM conversation_data cd
+      LEFT JOIN users u ON u.id = cd.other_user_id
+      LEFT JOIN user_profiles up ON up.user_id = cd.other_user_id
+      LEFT JOIN unread_counts uc ON uc.conversation_id = cd.id
+      ORDER BY cd.last_message_at DESC NULLS LAST
+    `);
 
-    // Get user details and unread counts for each conversation
-    const conversationDetails = await Promise.all(
-      conversations.map(async (conv) => {
-        const otherUserId = conv.participant1Id === user.id
-          ? conv.participant2Id
-          : conv.participant1Id;
+    // Transform the raw results to match the expected format
+    interface ConversationRow {
+      id: string;
+      participant1_id: string;
+      participant2_id: string;
+      last_message_at: string | null;
+      last_message_preview: string | null;
+      participant1_last_read: string | null;
+      participant2_last_read: string | null;
+      created_at: string;
+      last_read: string | null;
+      other_user_id: string;
+      other_user_name: string;
+      other_user_email: string;
+      other_user_image: string | null;
+      other_user_username: string | null;
+      other_user_display_name: string | null;
+      other_user_avatar_url: string | null;
+      unread_count: string;
+    }
 
-        // Get other user's details
-        const [otherUser] = await db
-          .select({
-            id: users.id,
-            name: users.name,
-            email: users.email,
-            image: users.image,
-            username: userProfiles.username,
-            displayName: userProfiles.displayName,
-            avatarUrl: userProfiles.avatarUrl,
-          })
-          .from(users)
-          .leftJoin(userProfiles, eq(users.id, userProfiles.userId))
-          .where(eq(users.id, otherUserId))
-          .limit(1);
+    const conversations = conversationDetails.rows.map((row) => {
+      const typedRow = row as unknown as ConversationRow;
+      return {
+        id: typedRow.id,
+        participant1Id: typedRow.participant1_id,
+        participant2Id: typedRow.participant2_id,
+        lastMessageAt: typedRow.last_message_at,
+        lastMessagePreview: typedRow.last_message_preview,
+        participant1LastRead: typedRow.participant1_last_read,
+        participant2LastRead: typedRow.participant2_last_read,
+        createdAt: typedRow.created_at,
+        lastRead: typedRow.last_read,
+        otherUser: {
+          id: typedRow.other_user_id,
+          name: typedRow.other_user_name,
+          email: typedRow.other_user_email,
+          image: typedRow.other_user_image,
+          username: typedRow.other_user_username,
+          displayName: typedRow.other_user_display_name,
+          avatarUrl: typedRow.other_user_avatar_url,
+        },
+        unreadCount: parseInt(typedRow.unread_count) || 0,
+      };
+    });
 
-        // Get last read timestamp for current user
-        const lastRead = conv.participant1Id === user.id
-          ? conv.participant1LastRead
-          : conv.participant2LastRead;
+    // Determine if there are more conversations (for pagination)
+    const hasMore = conversations.length === limit;
+    const nextCursor = conversations.length > 0
+      ? conversations[conversations.length - 1].lastMessageAt
+      : null;
 
-        // Count unread messages
-        const [unreadCount] = await db
-          .select({ count: sql<number>`count(*)::int` })
-          .from(directMessages)
-          .where(
-            and(
-              eq(directMessages.conversationId, conv.id),
-              eq(directMessages.senderId, otherUserId),
-              eq(directMessages.isRead, false)
-            )
-          );
-
-        return {
-          ...conv,
-          otherUser,
-          unreadCount: unreadCount?.count || 0,
-          lastRead,
-        };
-      })
-    );
-
-    return NextResponse.json({ conversations: conversationDetails });
+    return NextResponse.json({
+      conversations,
+      pagination: {
+        hasMore,
+        nextCursor,
+        limit
+      }
+    });
   } catch (error) {
     loggers.api.error('Error fetching conversations:', error as Error);
     return NextResponse.json(

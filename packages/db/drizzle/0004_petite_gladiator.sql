@@ -1,0 +1,2 @@
+ALTER TABLE "users" ALTER COLUMN "currentAiModel" SET DEFAULT 'GLM-4.5-air';--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "direct_messages_unread_count_idx" ON "direct_messages" USING btree ("conversationId","senderId","isRead");

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { streamText, convertToModelMessages, UIMessage, stepCountIs, createUIMessageStream, createUIMessageStreamResponse } from 'ai';
 import { incrementUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
+import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 import { broadcastUsageEvent } from '@/lib/socket-utils';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
@@ -1106,6 +1107,67 @@ export async function GET(request: Request) {
 }
 
 /**
+ * Validate provider and model combination
+ * Ensures the provider/model pair is supported and user has access
+ */
+async function validateProviderModel(
+  provider: string,
+  model: string,
+  userId: string
+): Promise<{ valid: boolean; reason?: string }> {
+  // Define valid providers
+  const validProviders = [
+    'pagespace',
+    'openrouter',
+    'openrouter_free',
+    'google',
+    'openai',
+    'anthropic',
+    'xai',
+    'ollama',
+    'glm'
+  ];
+
+  // Check if provider is valid
+  if (!validProviders.includes(provider)) {
+    return {
+      valid: false,
+      reason: `Invalid provider: ${provider}. Supported providers: ${validProviders.join(', ')}`
+    };
+  }
+
+  // Validate model string format (basic sanity check)
+  if (!model || typeof model !== 'string' || model.length > 100) {
+    return {
+      valid: false,
+      reason: 'Invalid model format'
+    };
+  }
+
+  // Check subscription requirements for pro models
+  try {
+    const [user] = await db.select().from(users).where(eq(users.id, userId));
+    if (requiresProSubscription(provider, model, user?.subscriptionTier)) {
+      return {
+        valid: false,
+        reason: 'Pro or Business subscription required for this model'
+      };
+    }
+  } catch (error) {
+    loggers.ai.error('Error checking subscription requirements', error as Error);
+    return {
+      valid: false,
+      reason: 'Unable to validate subscription requirements'
+    };
+  }
+
+  // Additional provider-specific validation could go here
+  // For now, basic validation is sufficient
+
+  return { valid: true };
+}
+
+/**
  * PATCH handler to update page-specific AI settings
  */
 export async function PATCH(request: Request) {
@@ -1114,26 +1176,48 @@ export async function PATCH(request: Request) {
     if (isAuthError(auth)) return auth.error;
 
     const body = await request.json();
+
+    // Enhanced input validation with type checking
+    if (!body || typeof body !== 'object') {
+      return NextResponse.json(
+        { error: 'Invalid request body' },
+        { status: 400 }
+      );
+    }
+
     const { pageId, provider, model } = body;
 
-    // Validate input
-    if (!pageId) {
+    // Validate pageId (should be a CUID)
+    if (!pageId || typeof pageId !== 'string' || pageId.length < 10 || pageId.length > 30) {
       return NextResponse.json(
-        { error: 'pageId is required' },
+        { error: 'Invalid pageId format' },
         { status: 400 }
       );
     }
 
-    if (!provider || !model) {
+    // Validate provider
+    if (!provider || typeof provider !== 'string' || provider.length > 50) {
       return NextResponse.json(
-        { error: 'Provider and model are required' },
+        { error: 'Provider is required and must be a valid string' },
         { status: 400 }
       );
     }
+
+    // Validate model
+    if (!model || typeof model !== 'string' || model.length > 100) {
+      return NextResponse.json(
+        { error: 'Model is required and must be a valid string' },
+        { status: 400 }
+      );
+    }
+
+    // Sanitize inputs (trim whitespace and basic cleanup)
+    const sanitizedProvider = provider.trim();
+    const sanitizedModel = model.trim();
+    const sanitizedPageId = pageId.trim();
 
     // Verify the user has access to this page
-    // TODO: Add proper permission check here
-    const [page] = await db.select().from(pages).where(eq(pages.id, pageId));
+    const [page] = await db.select().from(pages).where(eq(pages.id, sanitizedPageId));
     if (!page) {
       return NextResponse.json(
         { error: 'Page not found' },
@@ -1141,20 +1225,56 @@ export async function PATCH(request: Request) {
       );
     }
 
+    // Check if user has permission to edit this page (SECURITY: Critical permission enforcement)
+    const canEdit = await canUserEditPage(auth.userId, sanitizedPageId);
+    if (!canEdit) {
+      loggers.ai.warn('AI Settings PATCH: User lacks edit permission', {
+        userId: auth.userId,
+        pageId: sanitizedPageId
+      });
+      return NextResponse.json(
+        { error: 'You do not have permission to modify this page' },
+        { status: 403 }
+      );
+    }
+
+    // Validate provider and model combination (SECURITY: Validate permitted combinations)
+    const validation = await validateProviderModel(sanitizedProvider, sanitizedModel, auth.userId);
+    if (!validation.valid) {
+      loggers.ai.warn('AI Settings PATCH: Invalid provider/model combination', {
+        userId: auth.userId,
+        pageId: sanitizedPageId,
+        provider: sanitizedProvider,
+        model: sanitizedModel,
+        reason: validation.reason
+      });
+      return NextResponse.json(
+        { error: validation.reason || 'Invalid provider/model combination' },
+        { status: 400 }
+      );
+    }
+
     // Update page settings
     await db
       .update(pages)
       .set({
-        aiProvider: provider,
-        aiModel: model,
+        aiProvider: sanitizedProvider,
+        aiModel: sanitizedModel,
       })
-      .where(eq(pages.id, pageId));
+      .where(eq(pages.id, sanitizedPageId));
+
+    loggers.ai.info('AI Settings PATCH: Page settings updated successfully', {
+      userId: auth.userId,
+      pageId: sanitizedPageId,
+      provider: sanitizedProvider,
+      model: sanitizedModel
+    });
 
     return NextResponse.json({
       success: true,
       message: 'Page AI settings updated successfully',
-      provider,
-      model,
+      provider: sanitizedProvider,
+      model: sanitizedModel,
     });
   } catch (error) {
     loggers.ai.error('Failed to update page AI settings', error as Error);
