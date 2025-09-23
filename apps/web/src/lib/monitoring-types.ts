@@ -42,6 +42,7 @@ export interface UserActivityData {
   }>;
   mostActiveUsers: Array<{
     userId: string;
+    userName: string;
     actionCount: number;
   }>;
   featureUsage: Array<{
@@ -69,6 +70,7 @@ export interface AiUsageData {
   successRate: number;
   topSpenders: Array<{
     userId: string;
+    userName: string;
     totalCost: number;
     requestCount: number;
   }>;

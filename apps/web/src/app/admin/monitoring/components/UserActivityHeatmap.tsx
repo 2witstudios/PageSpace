@@ -103,7 +103,7 @@ export default function UserActivityHeatmap({ data, isLoading }: UserActivityHea
                 {data?.mostActiveUsers?.map((user, i) => (
                   <div key={i} className="flex justify-between items-center">
                     <span className="text-sm font-medium">
-                      User #{user.userId.substring(0, 8)}...
+                      {user.userName}
                     </span>
                     <Badge variant="secondary">{user.actionCount} actions</Badge>
                   </div>

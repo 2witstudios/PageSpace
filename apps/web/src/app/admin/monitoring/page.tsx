@@ -5,24 +5,20 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
-import { RefreshCw, Download, Activity, DollarSign, Users, AlertTriangle } from 'lucide-react';
+import { RefreshCw, Download, DollarSign, Users, AlertTriangle } from 'lucide-react';
 import { format } from 'date-fns';
-import type { 
-  SystemHealthData, 
-  ApiMetricsData, 
-  UserActivityData, 
-  AiUsageData, 
-  ErrorAnalyticsData, 
-  PerformanceMetricsData 
+import type {
+  SystemHealthData,
+  UserActivityData,
+  AiUsageData,
+  ErrorAnalyticsData
 } from '@/lib/monitoring-types';
 
 // Component imports
 import SystemHealthWidget from './components/SystemHealthWidget';
-import ApiMetricsChart from './components/ApiMetricsChart';
 import UserActivityHeatmap from './components/UserActivityHeatmap';
 import AiUsageBreakdown from './components/AiUsageBreakdown';
 import ErrorRateGraph from './components/ErrorRateGraph';
-import PerformanceMetrics from './components/PerformanceMetrics';
 
 export default function MonitoringDashboard() {
   const [dateRange, setDateRange] = useState<'24h' | '7d' | '30d'>('24h');
@@ -32,31 +28,25 @@ export default function MonitoringDashboard() {
   
   // Data states
   const [systemHealth, setSystemHealth] = useState<SystemHealthData | null>(null);
-  const [apiMetrics, setApiMetrics] = useState<ApiMetricsData | null>(null);
   const [userActivity, setUserActivity] = useState<UserActivityData | null>(null);
   const [aiUsage, setAiUsage] = useState<AiUsageData | null>(null);
   const [errorLogs, setErrorLogs] = useState<ErrorAnalyticsData | null>(null);
-  const [performance, setPerformance] = useState<PerformanceMetricsData | null>(null);
 
   // Fetch all metrics
   const fetchAllMetrics = useCallback(async () => {
     setIsLoading(true);
     try {
-      const [health, api, users, ai, errors, perf] = await Promise.all([
+      const [health, users, ai, errors] = await Promise.all([
         fetch(`/api/monitoring/system-health?range=${dateRange}`).then(r => r.json()),
-        fetch(`/api/monitoring/api-metrics?range=${dateRange}`).then(r => r.json()),
         fetch(`/api/monitoring/user-activity?range=${dateRange}`).then(r => r.json()),
         fetch(`/api/monitoring/ai-usage?range=${dateRange}`).then(r => r.json()),
         fetch(`/api/monitoring/error-logs?range=${dateRange}`).then(r => r.json()),
-        fetch(`/api/monitoring/performance?range=${dateRange}`).then(r => r.json()),
       ]);
 
       setSystemHealth(health.data);
-      setApiMetrics(api.data);
       setUserActivity(users.data);
       setAiUsage(ai.data);
       setErrorLogs(errors.data);
-      setPerformance(perf.data);
       setLastUpdated(new Date());
     } catch (error) {
       console.error('Failed to fetch monitoring data:', error);
@@ -89,11 +79,9 @@ export default function MonitoringDashboard() {
       timestamp: new Date().toISOString(),
       dateRange,
       systemHealth,
-      apiMetrics,
       userActivity,
       aiUsage,
       errorLogs,
-      performance,
     };
     
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -159,7 +147,7 @@ export default function MonitoringDashboard() {
       </div>
 
       {/* Quick Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Active Users</CardTitle>
@@ -167,20 +155,7 @@ export default function MonitoringDashboard() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{systemHealth?.activeUserCount || 0}</div>
-            <p className="text-xs text-muted-foreground">Currently active</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">API Requests</CardTitle>
-            <Activity className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{apiMetrics?.totalRequests || 0}</div>
-            <p className="text-xs text-muted-foreground">
-              Error rate: {apiMetrics?.errorRate?.toFixed(1) || 0}%
-            </p>
+            <p className="text-xs text-muted-foreground">Last 15 minutes</p>
           </CardContent>
         </Card>
 
@@ -217,28 +192,19 @@ export default function MonitoringDashboard() {
 
       {/* Main Dashboard Tabs */}
       <Tabs defaultValue="overview" className="space-y-4">
-        <TabsList className="grid w-full grid-cols-6">
+        <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="api">API</TabsTrigger>
           <TabsTrigger value="users">Users</TabsTrigger>
           <TabsTrigger value="ai">AI Usage</TabsTrigger>
           <TabsTrigger value="errors">Errors</TabsTrigger>
-          <TabsTrigger value="performance">Performance</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="space-y-4">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <SystemHealthWidget data={systemHealth} isLoading={isLoading} />
-            <ApiMetricsChart data={apiMetrics} isLoading={isLoading} />
-          </div>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <AiUsageBreakdown data={aiUsage} isLoading={isLoading} />
-            <ErrorRateGraph data={errorLogs} isLoading={isLoading} />
           </div>
-        </TabsContent>
-
-        <TabsContent value="api" className="space-y-4">
-          <ApiMetricsChart data={apiMetrics} isLoading={isLoading} detailed />
+          <ErrorRateGraph data={errorLogs} isLoading={isLoading} />
         </TabsContent>
 
         <TabsContent value="users" className="space-y-4">
@@ -251,10 +217,6 @@ export default function MonitoringDashboard() {
 
         <TabsContent value="errors" className="space-y-4">
           <ErrorRateGraph data={errorLogs} isLoading={isLoading} detailed />
-        </TabsContent>
-
-        <TabsContent value="performance" className="space-y-4">
-          <PerformanceMetrics data={performance} isLoading={isLoading} />
         </TabsContent>
       </Tabs>
     </div>

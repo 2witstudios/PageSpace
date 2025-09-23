@@ -9,6 +9,7 @@ import {
   aiUsageLogs,
   systemLogs,
   errorLogs,
+  users,
   sql,
   eq,
   and,
@@ -59,21 +60,14 @@ export async function getSystemHealth(startDate?: Date, endDate?: Date) {
     .orderBy(desc(errorLogs.timestamp))
     .limit(20);
 
-  const userConditions: SQL[] = [];
-
-  if (startDate) {
-    userConditions.push(gte(userActivities.timestamp, startDate));
-  }
-  if (endDate) {
-    userConditions.push(lte(userActivities.timestamp, endDate));
-  }
-
+  // Get active users in last 15 minutes for the summary card
+  const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
   const activeUsers = await db
     .select({
       count: sql<number>`COUNT(DISTINCT ${userActivities.userId})::int`,
     })
     .from(userActivities)
-    .where(userConditions.length > 0 ? and(...userConditions) : undefined);
+    .where(gte(userActivities.timestamp, fifteenMinutesAgo));
 
   return {
     logsByLevel: logsByLevel.map((entry) => ({
@@ -184,11 +178,13 @@ export async function getUserActivity(startDate?: Date, endDate?: Date) {
   const mostActiveUsers = await db
     .select({
       userId: userActivities.userId,
+      userName: users.name,
       actionCount: count(),
     })
     .from(userActivities)
+    .innerJoin(users, eq(userActivities.userId, users.id))
     .where(conditions.length > 0 ? and(...conditions) : undefined)
-    .groupBy(userActivities.userId)
+    .groupBy(userActivities.userId, users.name)
     .orderBy(desc(count()))
     .limit(10);
 
@@ -283,12 +279,14 @@ export async function getAiUsageMetrics(startDate?: Date, endDate?: Date) {
   const topSpenders = await db
     .select({
       userId: aiUsageLogs.userId,
+      userName: users.name,
       totalCost: sql<number>`SUM(COALESCE(${aiUsageLogs.cost}, 0))`,
       requestCount: count(),
     })
     .from(aiUsageLogs)
+    .innerJoin(users, eq(aiUsageLogs.userId, users.id))
     .where(conditions.length > 0 ? and(...conditions) : undefined)
-    .groupBy(aiUsageLogs.userId)
+    .groupBy(aiUsageLogs.userId, users.name)
     .orderBy(desc(sql`SUM(COALESCE(${aiUsageLogs.cost}, 0))`))
     .limit(5);
 

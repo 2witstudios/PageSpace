@@ -132,7 +132,15 @@ export async function middleware(req: NextRequest) {
       }
     }
 
-    return NextResponse.next();
+    const requestHeaders = new Headers(req.headers);
+    requestHeaders.set('x-user-id', decoded.userId);
+    requestHeaders.set('x-user-role', decoded.role);
+
+    return NextResponse.next({
+      request: {
+        headers: requestHeaders,
+      },
+    });
   });
 }
 

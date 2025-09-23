@@ -192,8 +192,11 @@ async function extractUserId(request: NextRequest): Promise<string | undefined> 
     const token = request.cookies.get('accessToken')?.value;
     if (!token) return undefined;
 
-    // TODO: Verify and decode JWT properly
-    // For now, just return undefined
+    // Check if user ID is already available in headers (set by main middleware)
+    const userIdHeader = request.headers.get('x-user-id');
+    if (userIdHeader) return userIdHeader;
+
+    // For now, return undefined until proper JWT decoding is implemented
     return undefined;
   } catch (error) {
     loggers.auth.debug('Failed to extract user ID from token', { error: (error as Error).message });

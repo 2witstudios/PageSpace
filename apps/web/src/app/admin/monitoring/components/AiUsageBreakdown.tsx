@@ -91,7 +91,7 @@ export default function AiUsageBreakdown({ data, isLoading, detailed = false }: 
                   {data?.topSpenders?.map((user, i) => (
                     <div key={i} className="flex justify-between items-center">
                       <span className="text-sm text-muted-foreground">
-                        User #{user.userId.substring(0, 8)}...
+                        {user.userName}
                       </span>
                       <div className="flex gap-2">
                         <Badge variant="outline">{user.requestCount} requests</Badge>
