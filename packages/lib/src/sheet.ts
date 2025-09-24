@@ -61,6 +61,29 @@ export interface SheetDoc {
   sheets: SheetDocSheet[];
 }
 
+export interface SheetExternalReferenceToken {
+  raw: string;
+  label: string;
+  normalizedLabel: string;
+  identifier?: string;
+  mentionType?: string;
+}
+
+export interface SheetExternalReferenceResolution {
+  pageId: string;
+  pageTitle: string;
+  sheet?: SheetData;
+  error?: string;
+}
+
+export interface SheetEvaluationOptions {
+  pageId?: string;
+  pageTitle?: string;
+  resolveExternalReference?: (
+    reference: SheetExternalReferenceToken
+  ) => SheetExternalReferenceResolution | null | undefined;
+}
+
 export interface SheetEvaluationCell {
   address: SheetCellAddress;
   raw: string;
@@ -83,6 +106,7 @@ type TokenType =
   | 'number'
   | 'string'
   | 'cell'
+  | 'page'
   | 'identifier'
   | 'operator'
   | 'paren'
@@ -106,6 +130,7 @@ type OperatorToken =
 interface Token {
   type: TokenType;
   value: string;
+  meta?: Record<string, unknown>;
 }
 
 interface NumberLiteralNode {
@@ -125,6 +150,19 @@ interface CellReferenceNode {
 
 interface RangeNode {
   type: 'Range';
+  start: CellReferenceNode;
+  end: CellReferenceNode;
+}
+
+interface ExternalCellReferenceNode {
+  type: 'ExternalCellReference';
+  page: SheetExternalReferenceToken;
+  reference: SheetCellAddress;
+}
+
+interface ExternalRangeNode {
+  type: 'ExternalRange';
+  page: SheetExternalReferenceToken;
   start: CellReferenceNode;
   end: CellReferenceNode;
 }
@@ -153,16 +191,20 @@ type ASTNode =
   | StringLiteralNode
   | CellReferenceNode
   | RangeNode
+  | ExternalCellReferenceNode
+  | ExternalRangeNode
   | UnaryExpressionNode
   | BinaryExpressionNode
   | FunctionCallNode;
 
 type EvalValue = SheetPrimitive | SheetPrimitive[];
 
-type AncestorSet = Set<SheetCellAddress>;
+type AncestorSet = Set<string>;
 
 const numberRegex = /^-?(?:\d+\.?\d*|\.\d+)$/;
 const cellRegex = /^[A-Z]+\d+$/;
+const externalReferenceRegex =
+  /^@\[(?<label>[^\]]+)\](?:\((?<identifier>[^):]+)(?::(?<mentionType>[^)]+))?\))?:(?<address>[A-Z]+\d+)$/i;
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -438,12 +480,16 @@ function normalizeSheetDocObject(value: Record<string, unknown>): SheetDoc {
 
         const dependsOn = Array.isArray(dependencyValue.depends_on)
           ? dependencyValue.depends_on
-              .map((item) => (typeof item === 'string' ? normalizeCellAddress(item) : null))
+              .map((item) =>
+                typeof item === 'string' ? normalizeDependencyReference(item) : null
+              )
               .filter((ref): ref is string => Boolean(ref))
           : [];
         const dependents = Array.isArray(dependencyValue.dependents)
           ? dependencyValue.dependents
-              .map((item) => (typeof item === 'string' ? normalizeCellAddress(item) : null))
+              .map((item) =>
+                typeof item === 'string' ? normalizeDependencyReference(item) : null
+              )
               .filter((ref): ref is string => Boolean(ref))
           : [];
 
@@ -831,6 +877,52 @@ function normalizeCellAddress(address: string | undefined): SheetCellAddress | n
   return cellRegex.test(upper) ? upper : null;
 }
 
+function normalizeDependencyReference(reference: string | undefined): string | null {
+  if (!reference) {
+    return null;
+  }
+
+  const trimmed = reference.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const upper = trimmed.toUpperCase();
+  if (cellRegex.test(upper)) {
+    return upper;
+  }
+
+  const match = trimmed.match(externalReferenceRegex);
+  if (!match || !match.groups) {
+    return null;
+  }
+
+  const label = (match.groups.label ?? '').trim();
+  if (!label) {
+    return null;
+  }
+
+  const identifier = match.groups.identifier ? match.groups.identifier.trim() : undefined;
+  const mentionType = match.groups.mentionType ? match.groups.mentionType.trim() : undefined;
+  const address = match.groups.address ? match.groups.address.toUpperCase() : undefined;
+
+  if (!address || !cellRegex.test(address)) {
+    return null;
+  }
+
+  const idPart = identifier ? `(${identifier}${mentionType ? `:${mentionType}` : ''})` : '';
+  return `@[${label}]${idPart}:${address}`;
+}
+
+function formatExternalReference(page: SheetExternalReferenceToken, address: SheetCellAddress): string {
+  const normalizedAddress = address.toUpperCase();
+  const label = page.label.trim();
+  const identifier = page.identifier?.trim();
+  const mentionType = page.mentionType?.trim();
+  const idPart = identifier ? `(${identifier}${mentionType ? `:${mentionType}` : ''})` : '';
+  return `@[${label}]${idPart}:${normalizedAddress}`;
+}
+
 function toCamelCase(value: string): string {
   return value.replace(/_([a-z])/g, (_, char: string) => char.toUpperCase());
 }
@@ -929,6 +1021,66 @@ function tokenize(formula: string): Token[] {
 
     if (/\s/.test(char)) {
       index += 1;
+      continue;
+    }
+
+    if (char === '@' && formula[index + 1] === '[') {
+      let end = index + 2;
+      let label = '';
+      while (end < formula.length && formula[end] !== ']') {
+        label += formula[end];
+        end += 1;
+      }
+      if (end >= formula.length) {
+        throw new Error('Unterminated page reference');
+      }
+
+      const trimmedLabel = label.trim();
+      if (!trimmedLabel) {
+        throw new Error('Page reference label cannot be empty');
+      }
+
+      let cursor = end + 1;
+      let identifier: string | undefined;
+      let mentionType: string | undefined;
+      let rawSuffix = '';
+
+      if (formula[cursor] === '(') {
+        cursor += 1;
+        let metaEnd = cursor;
+        while (metaEnd < formula.length && formula[metaEnd] !== ')') {
+          metaEnd += 1;
+        }
+        if (metaEnd >= formula.length) {
+          throw new Error('Unterminated page reference identifier');
+        }
+        const metaContent = formula.slice(cursor, metaEnd).trim();
+        rawSuffix = metaContent ? `(${metaContent})` : '';
+        if (metaContent) {
+          const colonIndex = metaContent.indexOf(':');
+          if (colonIndex === -1) {
+            identifier = metaContent.trim();
+          } else {
+            identifier = metaContent.slice(0, colonIndex).trim();
+            const typePart = metaContent.slice(colonIndex + 1).trim();
+            if (typePart) {
+              mentionType = typePart;
+            }
+          }
+        }
+        cursor = metaEnd + 1;
+      }
+
+      const rawMention = `@[${trimmedLabel}]${rawSuffix}`;
+      const pageMeta: SheetExternalReferenceToken = {
+        raw: rawMention,
+        label: trimmedLabel,
+        normalizedLabel: trimmedLabel.toLowerCase(),
+        identifier: identifier && identifier.length > 0 ? identifier : undefined,
+        mentionType: mentionType,
+      };
+      tokens.push({ type: 'page', value: rawMention, meta: { page: pageMeta } });
+      index = cursor;
       continue;
     }
 
@@ -1177,6 +1329,30 @@ class FormulaParser {
       };
     }
 
+    if (this.match('page')) {
+      const token = this.previous();
+      const meta = token.meta?.page as SheetExternalReferenceToken | undefined;
+      if (!meta) {
+        throw new Error('Invalid page reference');
+      }
+      this.consume('colon', ':', 'Expected ":" after page reference');
+      const start = this.parseCellReference();
+      if (this.match('colon')) {
+        const end = this.parseCellReference();
+        return {
+          type: 'ExternalRange',
+          page: meta,
+          start,
+          end,
+        };
+      }
+      return {
+        type: 'ExternalCellReference',
+        page: meta,
+        reference: start.reference,
+      };
+    }
+
     if (this.match('cell')) {
       return {
         type: 'CellReference',
@@ -1280,6 +1456,16 @@ class FormulaParser {
 
   private previous(): Token {
     return this.tokens[this.position - 1];
+  }
+
+  private parseCellReference(): CellReferenceNode {
+    if (this.match('cell')) {
+      return {
+        type: 'CellReference',
+        reference: this.previous().value,
+      };
+    }
+    throw new Error('Expected cell reference after page reference');
   }
 }
 
@@ -1486,13 +1672,13 @@ function evaluateFunction(
   }
 }
 
-function collectDependencies(node: ASTNode): SheetCellAddress[] {
-  const references = new Set<SheetCellAddress>();
+function collectDependencies(node: ASTNode): string[] {
+  const references = new Set<string>();
 
   const visit = (current: ASTNode) => {
     switch (current.type) {
       case 'CellReference': {
-        const normalized = normalizeCellAddress(current.reference);
+        const normalized = normalizeDependencyReference(current.reference);
         if (normalized) {
           references.add(normalized);
         }
@@ -1501,7 +1687,26 @@ function collectDependencies(node: ASTNode): SheetCellAddress[] {
       case 'Range': {
         const expanded = expandRange(current.start.reference, current.end.reference);
         for (const address of expanded) {
-          const normalized = normalizeCellAddress(address);
+          const normalized = normalizeDependencyReference(address);
+          if (normalized) {
+            references.add(normalized);
+          }
+        }
+        break;
+      }
+      case 'ExternalCellReference': {
+        const formatted = formatExternalReference(current.page, current.reference);
+        const normalized = normalizeDependencyReference(formatted);
+        if (normalized) {
+          references.add(normalized);
+        }
+        break;
+      }
+      case 'ExternalRange': {
+        const expanded = expandRange(current.start.reference, current.end.reference);
+        for (const address of expanded) {
+          const formatted = formatExternalReference(current.page, address);
+          const normalized = normalizeDependencyReference(formatted);
           if (normalized) {
             references.add(normalized);
           }
@@ -1532,18 +1737,23 @@ function collectDependencies(node: ASTNode): SheetCellAddress[] {
   return Array.from(references);
 }
 
-function evaluateNode(
-  node: ASTNode,
-  getCell: (reference: string, ancestors: AncestorSet) => SheetEvaluationCell,
-  ancestors: AncestorSet
-): EvalValue {
+interface NodeEvaluationContext {
+  getCell: (reference: string, ancestors: AncestorSet) => SheetEvaluationCell;
+  getExternalCell: (
+    page: SheetExternalReferenceToken,
+    reference: string,
+    ancestors: AncestorSet
+  ) => SheetEvaluationCell;
+}
+
+function evaluateNode(node: ASTNode, context: NodeEvaluationContext, ancestors: AncestorSet): EvalValue {
   switch (node.type) {
     case 'NumberLiteral':
       return node.value;
     case 'StringLiteral':
       return node.value;
     case 'CellReference': {
-      const cell = getCell(node.reference, ancestors);
+      const cell = context.getCell(node.reference, ancestors);
       if (cell.error) {
         throw new Error(cell.error);
       }
@@ -1552,7 +1762,24 @@ function evaluateNode(
     case 'Range': {
       const addresses = expandRange(node.start.reference, node.end.reference);
       return addresses.map((address) => {
-        const cell = getCell(address, ancestors);
+        const cell = context.getCell(address, ancestors);
+        if (cell.error) {
+          throw new Error(cell.error);
+        }
+        return cell.value;
+      });
+    }
+    case 'ExternalCellReference': {
+      const cell = context.getExternalCell(node.page, node.reference, ancestors);
+      if (cell.error) {
+        throw new Error(cell.error);
+      }
+      return cell.value;
+    }
+    case 'ExternalRange': {
+      const addresses = expandRange(node.start.reference, node.end.reference);
+      return addresses.map((address) => {
+        const cell = context.getExternalCell(node.page, address, ancestors);
         if (cell.error) {
           throw new Error(cell.error);
         }
@@ -1560,14 +1787,14 @@ function evaluateNode(
       });
     }
     case 'UnaryExpression': {
-      const argument = evaluateNode(node.argument, getCell, ancestors);
+      const argument = evaluateNode(node.argument, context, ancestors);
       const value = flattenValue(argument)[0];
       const numeric = coerceNumber(value);
       return node.operator === '-' ? -numeric : numeric;
     }
     case 'BinaryExpression': {
-      const leftValue = flattenValue(evaluateNode(node.left, getCell, ancestors))[0];
-      const rightValue = flattenValue(evaluateNode(node.right, getCell, ancestors))[0];
+      const leftValue = flattenValue(evaluateNode(node.left, context, ancestors))[0];
+      const rightValue = flattenValue(evaluateNode(node.right, context, ancestors))[0];
 
       switch (node.operator) {
         case '+': {
@@ -1621,26 +1848,138 @@ function evaluateNode(
       }
     }
     case 'FunctionCall': {
-      return evaluateFunction(node.name, node.args, (child) => evaluateNode(child, getCell, ancestors));
+      return evaluateFunction(node.name, node.args, (child) => evaluateNode(child, context, ancestors));
     }
     default:
       throw new Error('Unsupported expression');
   }
 }
 
+const LOCAL_PAGE_KEY = '__LOCAL_PAGE__';
+
+interface EvaluationEnvironment {
+  options: SheetEvaluationOptions;
+  caches: Map<string, Map<SheetCellAddress, SheetEvaluationCell>>;
+  sheets: Map<string, SheetData>;
+  pageTitles: Map<string, string>;
+  resolutionCache: Map<string, SheetExternalReferenceResolution>;
+}
+
+function getPageCache(
+  env: EvaluationEnvironment,
+  pageKey: string
+): Map<SheetCellAddress, SheetEvaluationCell> {
+  let cache = env.caches.get(pageKey);
+  if (!cache) {
+    cache = new Map();
+    env.caches.set(pageKey, cache);
+  }
+  return cache;
+}
+
+function getSheetForPage(env: EvaluationEnvironment, pageKey: string): SheetData {
+  const sheet = env.sheets.get(pageKey);
+  if (!sheet) {
+    throw new Error(`Missing sheet data for page ${pageKey}`);
+  }
+  return sheet;
+}
+
+function formatAncestorKey(pageKey: string, address: SheetCellAddress): string {
+  return `${pageKey}|${address}`;
+}
+
+function resolveExternalSheet(
+  page: SheetExternalReferenceToken,
+  env: EvaluationEnvironment
+): SheetExternalReferenceResolution {
+  if (env.resolutionCache.has(page.raw)) {
+    return env.resolutionCache.get(page.raw)!;
+  }
+
+  if (!env.options.resolveExternalReference) {
+    const fallback: SheetExternalReferenceResolution = {
+      pageId: page.identifier ?? page.raw,
+      pageTitle: page.label,
+      error: 'Cross-page references are not supported in this context',
+    };
+    env.resolutionCache.set(page.raw, fallback);
+    return fallback;
+  }
+
+  const provided = env.options.resolveExternalReference(page);
+  if (!provided) {
+    const fallback: SheetExternalReferenceResolution = {
+      pageId: page.identifier ?? page.raw,
+      pageTitle: page.label,
+      error: `Referenced page "${page.label}" is not available`,
+    };
+    env.resolutionCache.set(page.raw, fallback);
+    return fallback;
+  }
+
+  const normalized: SheetExternalReferenceResolution = {
+    pageId: provided.pageId || page.identifier || page.raw,
+    pageTitle: provided.pageTitle || page.label,
+    sheet: provided.sheet,
+    error: provided.error,
+  };
+
+  env.resolutionCache.set(page.raw, normalized);
+
+  if (normalized.sheet) {
+    env.sheets.set(normalized.pageId, normalized.sheet);
+    if (!env.caches.has(normalized.pageId)) {
+      env.caches.set(normalized.pageId, new Map());
+    }
+    if (!env.pageTitles.has(normalized.pageId)) {
+      env.pageTitles.set(normalized.pageId, normalized.pageTitle);
+    }
+  }
+
+  return normalized;
+}
+
+function evaluateExternalReferenceCell(
+  page: SheetExternalReferenceToken,
+  address: SheetCellAddress,
+  env: EvaluationEnvironment,
+  ancestors: AncestorSet
+): SheetEvaluationCell {
+  const resolution = resolveExternalSheet(page, env);
+  if (!resolution.sheet || resolution.error) {
+    return {
+      address: address.toUpperCase(),
+      raw: '',
+      value: '',
+      display: '#ERROR',
+      type: 'empty',
+      error:
+        resolution.error ?? `Referenced page "${page.label}" is not available`,
+      dependsOn: [],
+      dependents: [],
+    };
+  }
+
+  return evaluateCellInternal(address, resolution.pageId, env, ancestors);
+}
+
 function evaluateCellInternal(
   address: SheetCellAddress,
-  sheet: SheetData,
-  cache: Map<SheetCellAddress, SheetEvaluationCell>,
+  pageKey: string,
+  env: EvaluationEnvironment,
   ancestors: AncestorSet
 ): SheetEvaluationCell {
   const normalized = address.toUpperCase();
+  const cache = getPageCache(env, pageKey);
 
   if (cache.has(normalized)) {
     return cache.get(normalized)!;
   }
 
-  if (ancestors.has(normalized)) {
+  const ancestorKey = formatAncestorKey(pageKey, normalized);
+  if (ancestors.has(ancestorKey)) {
+    const sheet = getSheetForPage(env, pageKey);
     const circular: SheetEvaluationCell = {
       address: normalized,
       raw: sheet.cells[normalized] ?? '',
@@ -1655,8 +1994,9 @@ function evaluateCellInternal(
     return circular;
   }
 
+  const sheet = getSheetForPage(env, pageKey);
   const nextAncestors = new Set(ancestors);
-  nextAncestors.add(normalized);
+  nextAncestors.add(ancestorKey);
 
   const rawInput = sheet.cells[normalized] ?? '';
   const trimmed = rawInput.trim();
@@ -1675,7 +2015,7 @@ function evaluateCellInternal(
     };
   } else if (trimmed.startsWith('=')) {
     const formula = trimmed.slice(1);
-    let dependencies: SheetCellAddress[] = [];
+    let dependencies: string[] = [];
     try {
       const tokens = tokenize(formula);
       if (tokens.length === 0) {
@@ -1686,11 +2026,23 @@ function evaluateCellInternal(
       dependencies = uniqueSorted(collectDependencies(ast));
       const evaluated = evaluateNode(
         ast,
-        (reference, ancestorsSet) => evaluateCellInternal(reference, sheet, cache, ancestorsSet),
+        {
+          getCell: (reference, ancestorsSet) =>
+            evaluateCellInternal(reference, pageKey, env, ancestorsSet),
+          getExternalCell: (pageRef, reference, ancestorsSet) =>
+            evaluateExternalReferenceCell(pageRef, reference, env, ancestorsSet),
+        },
         nextAncestors
       );
       const value = flattenValue(evaluated)[0];
-      const type = value === '' ? 'empty' : typeof value === 'number' ? 'number' : typeof value === 'boolean' ? 'boolean' : 'string';
+      const type =
+        value === ''
+          ? 'empty'
+          : typeof value === 'number'
+          ? 'number'
+          : typeof value === 'boolean'
+          ? 'boolean'
+          : 'string';
       result = {
         address: normalized,
         raw: rawInput,
@@ -1740,10 +2092,20 @@ function evaluateCellInternal(
   return result;
 }
 
-export function evaluateSheet(sheet: SheetData): SheetEvaluation {
+export function evaluateSheet(
+  sheet: SheetData,
+  options: SheetEvaluationOptions = {}
+): SheetEvaluation {
   const rowCount = Math.max(1, sheet.rowCount);
   const columnCount = Math.max(1, sheet.columnCount);
-  const cache = new Map<SheetCellAddress, SheetEvaluationCell>();
+  const pageKey = options.pageId ?? LOCAL_PAGE_KEY;
+  const env: EvaluationEnvironment = {
+    options,
+    caches: new Map([[pageKey, new Map()]]),
+    sheets: new Map([[pageKey, sheet]]),
+    pageTitles: new Map([[pageKey, options.pageTitle ?? 'Sheet']]),
+    resolutionCache: new Map(),
+  };
   const byAddress: Record<string, SheetEvaluationCell> = {};
   const display: string[][] = Array.from({ length: rowCount }, () => Array(columnCount).fill(''));
   const errors: (string | null)[][] = Array.from({ length: rowCount }, () => Array(columnCount).fill(null));
@@ -1751,7 +2113,7 @@ export function evaluateSheet(sheet: SheetData): SheetEvaluation {
   for (let row = 0; row < rowCount; row++) {
     for (let column = 0; column < columnCount; column++) {
       const address = encodeCellAddress(row, column);
-      const cell = evaluateCellInternal(address, sheet, cache, new Set());
+      const cell = evaluateCellInternal(address, pageKey, env, new Set());
       byAddress[address] = cell;
       display[row][column] = cell.error ? '#ERROR' : cell.display;
       errors[row][column] = cell.error ?? null;
@@ -1787,6 +2149,67 @@ export function evaluateSheet(sheet: SheetData): SheetEvaluation {
     errors,
     dependencies,
   };
+}
+
+function collectExternalReferencesFromNode(
+  node: ASTNode,
+  references: Map<string, SheetExternalReferenceToken>
+): void {
+  switch (node.type) {
+    case 'ExternalCellReference':
+      if (!references.has(node.page.raw)) {
+        references.set(node.page.raw, node.page);
+      }
+      break;
+    case 'ExternalRange':
+      if (!references.has(node.page.raw)) {
+        references.set(node.page.raw, node.page);
+      }
+      break;
+    case 'UnaryExpression':
+      collectExternalReferencesFromNode(node.argument, references);
+      break;
+    case 'BinaryExpression':
+      collectExternalReferencesFromNode(node.left, references);
+      collectExternalReferencesFromNode(node.right, references);
+      break;
+    case 'FunctionCall':
+      for (const arg of node.args) {
+        collectExternalReferencesFromNode(arg, references);
+      }
+      break;
+    default:
+      break;
+  }
+}
+
+export function collectExternalReferences(
+  sheet: SheetData
+): SheetExternalReferenceToken[] {
+  const references = new Map<string, SheetExternalReferenceToken>();
+
+  for (const value of Object.values(sheet.cells)) {
+    const rawValue = typeof value === 'string' ? value : String(value ?? '');
+    const trimmed = rawValue.trim();
+    if (!trimmed.startsWith('=')) {
+      continue;
+    }
+
+    const formula = trimmed.slice(1);
+    try {
+      const tokens = tokenize(formula);
+      if (tokens.length === 0) {
+        continue;
+      }
+      const parser = new FormulaParser(tokens);
+      const ast = parser.parse();
+      collectExternalReferencesFromNode(ast, references);
+    } catch {
+      continue;
+    }
+  }
+
+  return Array.from(references.values());
 }
 
 export function sanitizeSheetData(sheet: SheetData): SheetData {

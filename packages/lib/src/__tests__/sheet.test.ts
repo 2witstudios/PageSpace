@@ -6,6 +6,7 @@ import {
   decodeCellAddress,
   encodeCellAddress,
   evaluateSheet,
+  collectExternalReferences,
   parseSheetDocString,
   parseSheetContent,
   sanitizeSheetData,
@@ -62,11 +63,6 @@ describe('sheet data helpers', () => {
     const sanitized = sanitizeSheetData(parsed);
     const serialized = serializeSheetContent(sanitized);
     assert.equal(serialized.trimStart().startsWith(SHEETDOC_MAGIC), true);
-
-    // Add console output to see the SheetDoc format
-    console.log('\n=== EXAMPLE SHEETDOC FORMAT ===');
-    console.log(serialized);
-    console.log('=== END SHEETDOC FORMAT ===\n');
 
     const sheetDoc = parseSheetDocString(serialized);
     assert.equal(sheetDoc.sheets.length > 0, true);
@@ -171,6 +167,70 @@ describe('sheet evaluation', () => {
     assert.equal(primarySheet.cells.B1?.value, 13);
     assert.equal(primarySheet.dependencies.A2.dependsOn.includes('A1'), true);
     assert.equal(primarySheet.dependencies.A1.dependents.includes('A2'), true);
+  });
+
+  it('extracts external page references from formulas', () => {
+    const sheet = createEmptySheet(4, 4);
+    sheet.cells.A1 = '=@[Sales Report](sales-1):B1 + @[Sales Report]:B2';
+    sheet.cells.A2 = '=SUM(@[Ops Summary](ops-9):A1:A3)';
+
+    const references = collectExternalReferences(sheet);
+
+    assert.equal(references.length, 3);
+    const rawMentions = references.map((ref) => ref.raw).sort();
+    assert.deepEqual(rawMentions, [
+      '@[Ops Summary](ops-9)',
+      '@[Sales Report]',
+      '@[Sales Report](sales-1)',
+    ]);
+    const salesWithId = references.find((ref) => ref.identifier === 'sales-1');
+    assert.ok(salesWithId);
+    assert.equal(salesWithId?.label, 'Sales Report');
+  });
+
+  it('evaluates formulas with external page references', () => {
+    const mainSheet = createEmptySheet(6, 4);
+    mainSheet.cells.A1 = '=@[Sales](sales-1):B1 + @[Sales](sales-1):B2';
+    mainSheet.cells.A2 = '=SUM(@[Sales](sales-1):B1:B3)';
+    mainSheet.cells.A3 = '=@[Budget]:C1';
+    mainSheet.cells.A4 = '=IF(@[Sales](sales-1):B1>5, "ok", "bad")';
+    mainSheet.cells.A5 = '=@[Missing]:A1';
+
+    const salesSheet = createEmptySheet(5, 5);
+    salesSheet.cells.B1 = '10';
+    salesSheet.cells.B2 = '5';
+    salesSheet.cells.B3 = '1';
+
+    const budgetSheet = createEmptySheet(3, 3);
+    budgetSheet.cells.C1 = '42';
+
+    const resolver = (reference: ReturnType<typeof collectExternalReferences>[number]) => {
+      if (reference.identifier === 'sales-1' || reference.label === 'Sales') {
+        return { pageId: 'sales-1', pageTitle: 'Sales', sheet: salesSheet };
+      }
+      if (reference.label === 'Budget') {
+        return { pageId: 'budget-1', pageTitle: 'Budget', sheet: budgetSheet };
+      }
+      return {
+        pageId: reference.identifier ?? reference.raw,
+        pageTitle: reference.label,
+        error: `Referenced page "${reference.label}" is not available`,
+      };
+    };
+
+    const evaluation = evaluateSheet(mainSheet, {
+      pageId: 'main',
+      pageTitle: 'Main Sheet',
+      resolveExternalReference: resolver,
+    });
+
+    assert.equal(getDisplay(evaluation, 'A1'), '15');
+    assert.equal(getDisplay(evaluation, 'A2'), '16');
+    assert.equal(getDisplay(evaluation, 'A3'), '42');
+    assert.equal(getDisplay(evaluation, 'A4'), 'ok');
+    assert.equal(getDisplay(evaluation, 'A5'), '#ERROR');
+    assert.equal(getError(evaluation, 'A5'), 'Referenced page "Missing" is not available');
+    assert.ok(evaluation.byAddress.A2.dependsOn.some((ref) => ref.includes('@[Sales]')));
   });
 });
 

@@ -6,7 +6,7 @@ import { positioningService, Position } from '@/services/positioningService';
 import { MentionFormatter, MentionFormatType } from '@/lib/mentions/mentionConfig';
 
 export interface UseSuggestionProps {
-  inputRef: React.RefObject<HTMLTextAreaElement | null>;
+  inputRef: React.RefObject<HTMLTextAreaElement | HTMLInputElement | null>;
   onValueChange: (value: string) => void;
   trigger?: string;
   allowedTypes?: MentionType[];
@@ -15,6 +15,7 @@ export interface UseSuggestionProps {
   mentionFormat?: MentionFormatType;
   variant?: 'chat' | 'document';
   popupPlacement?: 'top' | 'bottom';
+  appendSpace?: boolean;
 }
 
 export interface UseSuggestionResult {
@@ -42,39 +43,33 @@ export function useSuggestion({
   mentionFormat = 'label',
   variant = 'chat',
   popupPlacement = 'bottom',
+  appendSpace = true,
 }: UseSuggestionProps): UseSuggestionResult {
   const context = useSuggestionContext();
 
-  // Helper functions to detect input type and get unified API
-  const isTextarea = useCallback(() => {
-    const element = inputRef.current;
-    return element && 'tagName' in element && element.tagName === 'TEXTAREA';
-  }, [inputRef]);
-
   const getValue = useCallback((): string => {
     const element = inputRef.current;
-    if (isTextarea()) {
-      return (element as HTMLTextAreaElement).value;
+    if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
+      return element.value;
     }
     return '';
-  }, [inputRef, isTextarea]);
+  }, [inputRef]);
 
 
   const getSelectionStart = useCallback((): number => {
     const element = inputRef.current;
-    if (isTextarea()) {
-      return (element as HTMLTextAreaElement).selectionStart;
+    if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
+      return element.selectionStart ?? 0;
     }
     return 0;
-  }, [inputRef, isTextarea]);
+  }, [inputRef]);
 
   const setSelectionStart = useCallback((position: number) => {
     const element = inputRef.current;
-    if (isTextarea()) {
-      const textarea = element as HTMLTextAreaElement;
-      textarea.setSelectionRange(position, position);
+    if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
+      element.setSelectionRange(position, position);
     }
-  }, [inputRef, isTextarea]);
+  }, [inputRef]);
 
   // Track when we're temporarily disabling mention detection after insertion
   const suppressMentionDetection = useRef(false);
@@ -107,7 +102,8 @@ export function useSuggestion({
         mentionFormat
       );
 
-      const newValue = `${textBeforeMention}${mentionText} ${textAfterCursor}`;
+      const insertion = appendSpace ? `${mentionText} ` : mentionText;
+      const newValue = `${textBeforeMention}${insertion}${textAfterCursor}`;
       
       // Temporarily suppress mention detection to avoid interference
       suppressMentionDetection.current = true;
@@ -115,12 +111,13 @@ export function useSuggestion({
       onValueChange(newValue);
 
       // Set cursor position after the mention synchronously
-      const newCursorPos = textBeforeMention.length + mentionText.length + 1;
+      const newCursorPos =
+        textBeforeMention.length + mentionText.length + (appendSpace ? 1 : 0);
       setSelectionStart(newCursorPos);
-      
+
       // Focus the element
-      if (isTextarea()) {
-        (element as HTMLTextAreaElement).focus();
+      if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
+        element.focus();
       }
       
       // Close both the suggestion core and the context to hide the popup
@@ -175,24 +172,25 @@ export function useSuggestion({
         if (!context.isOpen) {
           // Calculate position based on variant and input type
           let position: Position | null = null;
-          
+
           if (variant === 'document') {
-            // For document variant, use inline positioning near cursor
-            if (isTextarea()) {
-              position = positioningService.calculateInlinePosition({
-                element: element as HTMLTextAreaElement,
-              });
-            }
-          } else {
-            // For chat variant, use above positioning
-            if (isTextarea()) {
+            if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
               position = positioningService.calculateTextareaPosition({
-                element: element as HTMLTextAreaElement,
+                element,
                 textBeforeCursor,
               });
+            } else {
+              position = positioningService.calculateInlinePosition({
+                element,
+              });
             }
+          } else if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
+            position = positioningService.calculateTextareaPosition({
+              element,
+              textBeforeCursor,
+            });
           }
-          
+
           if (position) {
             context.open(position);
           }
@@ -210,13 +208,12 @@ export function useSuggestion({
       }
     }
   }, [
-    onValueChange, 
-    inputRef, 
-    trigger, 
-    context, 
-    suggestion.actions, 
-    getSelectionStart, 
-    isTextarea,
+    onValueChange,
+    inputRef,
+    trigger,
+    context,
+    suggestion.actions,
+    getSelectionStart,
     variant
   ]);
 
