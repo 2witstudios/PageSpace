@@ -98,7 +98,7 @@ The database is organized into the following schema files:
 **Columns:**
 - `id`: `text` (Primary Key) - Unique identifier for the page
 - `title`: `text` - The title of the page
-- `type`: `pageType` ENUM - Page type: 'FOLDER', 'DOCUMENT', 'DATABASE', 'CHANNEL', 'AI_CHAT', 'CANVAS'
+- `type`: `pageType` ENUM - Page type: 'FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'FILE', 'SHEET'
 - `content`: `text` (Default: '') - The content of the page
 - `position`: `real` - The position of the page within its parent
 - `isTrashed`: `boolean` (Default: false) - Whether the page is in the trash

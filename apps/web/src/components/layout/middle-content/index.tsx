@@ -14,6 +14,7 @@ import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 import { getPageTypeComponent } from '@pagespace/lib/client';
 import CanvasPageView from './page-views/canvas/CanvasPageView';
 import GlobalAssistantView from './page-views/dashboard/GlobalAssistantView';
+import SheetView from './page-views/sheet/SheetView';
 
 
 const PageContent = ({ pageId }: { pageId: string | null }) => {
@@ -44,6 +45,7 @@ const PageContent = ({ pageId }: { pageId: string | null }) => {
     DocumentView,
     CanvasPageView,
     FileViewer,
+    SheetView,
   };
   
   const componentName = getPageTypeComponent(page.type);

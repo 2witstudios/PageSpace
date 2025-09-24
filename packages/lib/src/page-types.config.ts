@@ -1,4 +1,5 @@
 import { PageType } from './enums';
+import { createEmptySheet, serializeSheetContent } from './sheet';
 
 export interface PageTypeCapabilities {
   canHaveChildren: boolean;
@@ -20,7 +21,7 @@ export interface PageTypeConfig {
   type: PageType;
   displayName: string;
   description: string;
-  iconName: 'Folder' | 'FileText' | 'MessageSquare' | 'Sparkles' | 'Palette' | 'FileIcon';
+  iconName: 'Folder' | 'FileText' | 'MessageSquare' | 'Sparkles' | 'Palette' | 'FileIcon' | 'Table';
   emoji: string;
   capabilities: PageTypeCapabilities;
   defaultContent: () => any;
@@ -154,6 +155,26 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     uiComponent: 'FileViewer',
     layoutViewType: 'document',
   },
+  [PageType.SHEET]: {
+    type: PageType.SHEET,
+    displayName: 'Sheet',
+    description: 'Interactive spreadsheet with formulas',
+    iconName: 'Table',
+    emoji: '📊',
+    capabilities: {
+      canHaveChildren: false,
+      canAcceptUploads: false,
+      canBeConverted: false,
+      requiresAuth: false,
+      supportsRealtime: true,
+      supportsVersioning: true,
+      supportsAI: true,
+    },
+    defaultContent: () => serializeSheetContent(createEmptySheet()),
+    allowedChildTypes: [],
+    uiComponent: 'SheetView',
+    layoutViewType: 'document',
+  },
 };
 
 // Helper functions
@@ -199,6 +220,10 @@ export function isDocumentPage(type: PageType): boolean {
 
 export function isFilePage(type: PageType): boolean {
   return type === PageType.FILE;
+}
+
+export function isSheetPage(type: PageType): boolean {
+  return type === PageType.SHEET;
 }
 
 export function supportsAI(type: PageType): boolean {

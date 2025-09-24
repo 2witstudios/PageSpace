@@ -13,7 +13,7 @@
 **Status Codes:** 200 (OK), 400 (Bad Request), 401 (Unauthorized), 404 (Drive Not Found), 500 (Internal Server Error)
 **Implementation Notes:**
 - Cross-drive search finds all accessible drives (owned or member of)
-- Page results include all page types (DOCUMENT, FOLDER, CHANNEL, AI_CHAT) under 'page' mention type
+- Page results include all page types (DOCUMENT, FOLDER, CHANNEL, AI_CHAT, SHEET) under 'page' mention type
 - User results only include users who have access to the searched drives
 - Results are filtered by user permissions and sorted by relevance
 **Next.js 15 Handler:** async function returning NextResponse
@@ -25,7 +25,7 @@
 **Auth Required:** Yes (supports both cookie and MCP Bearer token authentication)
 **Request Schema:**
 - `title`: string
-- `type`: "DOCUMENT" | "FOLDER" | "CHANNEL" | "AI_CHAT"
+- `type`: "DOCUMENT" | "FOLDER" | "CHANNEL" | "AI_CHAT" | "CANVAS" | "SHEET"
 - `parentId`: string | null
 - `driveId`: string
 - `content`: any (optional)
@@ -243,6 +243,7 @@ export const mentions = pgTable('mentions', {
 
 When a mention is used, the system will fetch the content of the mentioned page and inject it into the AI's context. The content that is fetched depends on the type of page:
 - **DOCUMENT**: The content of the page.
+- **SHEET**: Evaluated grid snapshot (first 50 rows × 26 columns) and raw cell inputs for formulas.
 - **AI_CHAT**: The last 10 messages from the chat.
 - **CHANNEL**: The last 10 messages from the channel.
 - **FOLDER**: A list of the files in the folder.
@@ -254,7 +255,7 @@ interface MentionSuggestion {
   label: string;
   type: 'page' | 'user';
   data: {
-    pageType?: 'DOCUMENT' | 'FOLDER' | 'CHANNEL' | 'AI_CHAT';
+    pageType?: 'DOCUMENT' | 'FOLDER' | 'CHANNEL' | 'AI_CHAT' | 'SHEET';
     driveId?: string;
   };
   description?: string;

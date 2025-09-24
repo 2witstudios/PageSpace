@@ -551,11 +551,11 @@ export const batchOperationsTools = {
       parentId: z.string().optional().describe('Parent page ID (omit for root)'),
       structure: z.array(z.object({
         title: z.string(),
-        type: z.enum(['FOLDER', 'DOCUMENT', 'AI_CHAT', 'CHANNEL', 'CANVAS']),
+        type: z.enum(['FOLDER', 'DOCUMENT', 'AI_CHAT', 'CHANNEL', 'CANVAS', 'SHEET']),
         content: z.string().optional(),
         children: z.array(z.lazy(() => z.object({
           title: z.string(),
-          type: z.enum(['FOLDER', 'DOCUMENT', 'AI_CHAT', 'CHANNEL', 'CANVAS']),
+          type: z.enum(['FOLDER', 'DOCUMENT', 'AI_CHAT', 'CHANNEL', 'CANVAS', 'SHEET']),
           content: z.string().optional(),
         }))).optional(),
       })).describe('Hierarchical structure to create'),

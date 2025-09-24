@@ -6,7 +6,7 @@ export interface Position {
 }
 
 export interface TextareaPositionParams {
-  element: HTMLTextAreaElement;
+  element: HTMLTextAreaElement | HTMLInputElement;
   textBeforeCursor: string;
   preferredWidth?: number;
 }

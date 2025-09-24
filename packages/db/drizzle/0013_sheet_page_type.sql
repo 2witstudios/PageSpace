@@ -1,0 +1,1 @@
+ALTER TYPE "public"."PageType" ADD VALUE IF NOT EXISTS 'SHEET';

@@ -6,13 +6,14 @@ The current page type handling in PageSpace is distributed across multiple files
 
 ## Current Page Types
 
-The system currently supports 6 page types defined in `/packages/lib/src/enums.ts:1-8`:
+The system currently supports 7 page types defined in `/packages/lib/src/enums.ts:1-8`:
 - `FOLDER` - Hierarchical containers for other pages
 - `DOCUMENT` - Rich text documents
 - `CHANNEL` - Team discussion channels
 - `AI_CHAT` - AI conversation spaces with agent configuration
 - `CANVAS` - Custom HTML/CSS pages
 - `FILE` - Uploaded files with metadata
+- `SHEET` - Interactive spreadsheets with formula support
 
 Database enum definition: `/packages/db/src/schema/core.ts:5`
 
