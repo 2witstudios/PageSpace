@@ -12,6 +12,7 @@ import {
   SheetExternalReferenceToken,
   collectExternalReferences,
   encodeCellAddress,
+  decodeCellAddress,
   evaluateSheet,
   PageType,
   parseSheetContent,
@@ -32,6 +33,19 @@ interface SheetViewProps {
 type GridSelection = {
   row: number;
   column: number;
+};
+
+type GridRange = {
+  start: GridSelection;
+  end: GridSelection;
+};
+
+type SelectionState = {
+  type: 'single';
+  cell: GridSelection;
+} | {
+  type: 'range';
+  range: GridRange;
 };
 
 type ExternalSheetState =
@@ -67,6 +81,75 @@ const clampSelection = (selection: GridSelection, sheet: SheetData): GridSelecti
   column: Math.min(Math.max(selection.column, 0), Math.max(0, sheet.columnCount - 1)),
 });
 
+const clampRange = (range: GridRange, sheet: SheetData): GridRange => ({
+  start: clampSelection(range.start, sheet),
+  end: clampSelection(range.end, sheet),
+});
+
+// Get the primary cell for a selection (for formula display and editing)
+const getPrimaryCell = (selection: SelectionState): GridSelection => {
+  return selection.type === 'single' ? selection.cell : selection.range.start;
+};
+
+// Check if a cell is within the current selection
+const isCellInSelection = (row: number, column: number, selection: SelectionState): boolean => {
+  if (selection.type === 'single') {
+    return selection.cell.row === row && selection.cell.column === column;
+  }
+
+  const { start, end } = selection.range;
+  const minRow = Math.min(start.row, end.row);
+  const maxRow = Math.max(start.row, end.row);
+  const minCol = Math.min(start.column, end.column);
+  const maxCol = Math.max(start.column, end.column);
+
+  return row >= minRow && row <= maxRow && column >= minCol && column <= maxCol;
+};
+
+// Get selection address string for display
+const getSelectionAddress = (selection: SelectionState): string => {
+  if (selection.type === 'single') {
+    return encodeCellAddress(selection.cell.row, selection.cell.column);
+  }
+
+  const { start, end } = selection.range;
+  if (start.row === end.row && start.column === end.column) {
+    return encodeCellAddress(start.row, start.column);
+  }
+
+  const startAddr = encodeCellAddress(start.row, start.column);
+  const endAddr = encodeCellAddress(end.row, end.column);
+  return `${startAddr}:${endAddr}`;
+};
+
+// Adjust formula references when pasting
+const adjustFormulaReferences = (formula: string, rowOffset: number, colOffset: number): string => {
+  if (!formula.startsWith('=')) {
+    return formula;
+  }
+
+  // Simple regex to find cell references like A1, B2, etc.
+  const cellRefRegex = /([A-Z]+)(\d+)/g;
+
+  return formula.replace(cellRefRegex, (match, colLetters, rowNum) => {
+    try {
+      // Parse the original reference
+      const originalRef = `${colLetters}${rowNum}`;
+      const { row: origRow, column: origCol } = decodeCellAddress(originalRef);
+
+      // Apply offset
+      const newRow = Math.max(0, origRow + rowOffset);
+      const newCol = Math.max(0, origCol + colOffset);
+
+      // Return the adjusted reference
+      return encodeCellAddress(newRow, newCol);
+    } catch {
+      // If parsing fails, return original
+      return match;
+    }
+  });
+};
+
 const getColumnLabel = (columnIndex: number) => encodeCellAddress(0, columnIndex).replace(/\d+/g, '');
 
 // Utility function to check if a key should trigger direct cell editing
@@ -76,7 +159,7 @@ const isPrintableKey = (key: string): boolean => {
     return true;
   }
   // Special cases that should start editing
-  return key === 'F2' || key === 'Delete' || key === 'Backspace';
+  return key === 'F2';
 };
 
 // Get the DOM rectangle for a specific cell
@@ -92,10 +175,37 @@ const getCellRect = (row: number, column: number, gridElement: HTMLElement | nul
 const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
   const initialSheet = useMemo(() => sanitizeSheetData(parseSheetContent(page.content)), [page.content]);
   const [sheet, setSheet] = useState<SheetData>(initialSheet);
-  const [selectedCell, setSelectedCell] = useState<GridSelection>({ row: 0, column: 0 });
+  const [selection, setSelection] = useState<SelectionState>({
+    type: 'single',
+    cell: { row: 0, column: 0 }
+  });
   const [formulaValue, setFormulaValue] = useState('');
   const [isFormulaFocused, setIsFormulaFocused] = useState(false);
   const [isReadOnly, setIsReadOnly] = useState(false);
+
+  // Mouse drag selection state
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState<GridSelection | null>(null);
+
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState<{
+    show: boolean;
+    x: number;
+    y: number;
+    cell: GridSelection | null;
+  }>({
+    show: false,
+    x: 0,
+    y: 0,
+    cell: null
+  });
+
+  // Copy mode state
+  const [copiedData, setCopiedData] = useState<{
+    mode: 'formulas' | 'values';
+    data: string;
+    source: SelectionState;
+  } | null>(null);
 
   // Floating editor state
   const [editingCell, setEditingCell] = useState<GridSelection | null>(null);
@@ -414,12 +524,15 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
   );
 
   const evaluation = useMemo(() => evaluateSheet(sheet, evaluationOptions), [sheet, evaluationOptions]);
-  const currentSelection = clampSelection(selectedCell, sheet);
+  const currentSelection = selection.type === 'single'
+    ? clampSelection(selection.cell, sheet)
+    : clampSelection(selection.range.start, sheet);
   const currentAddress = encodeCellAddress(currentSelection.row, currentSelection.column);
   const currentCell = evaluation.byAddress[currentAddress];
   const currentError = currentCell?.error;
   const currentDisplay = currentCell?.error ? '#ERROR' : currentCell?.display ?? '';
   const currentRaw = sheet.cells[currentAddress] ?? '';
+  const selectionAddress = getSelectionAddress(selection);
 
   const suggestionContext = useSuggestionContext();
   const handleFormulaValueChange = useCallback(
@@ -482,9 +595,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       let initialValue = currentValue;
 
       // Handle special keys
-      if (key === 'Delete' || key === 'Backspace') {
-        initialValue = '';
-      } else if (key === 'F2') {
+      if (key === 'F2') {
         // F2 starts editing with current value
         initialValue = currentValue;
       } else if (key && isPrintableKey(key) && key.length === 1) {
@@ -621,10 +732,349 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     }));
   }, [applySheetUpdate, isReadOnly]);
 
+  const handleCellMouseDown = useCallback(
+    (row: number, column: number, event: React.MouseEvent) => {
+      if (isReadOnly) return;
+
+      event.preventDefault();
+      const cell = clampSelection({ row, column }, sheet);
+
+      setIsDragging(true);
+      setDragStart(cell);
+      setSelection({
+        type: 'single',
+        cell
+      });
+      setIsFormulaFocused(false);
+
+      // Close context menu
+      setContextMenu(prev => ({ ...prev, show: false }));
+
+      // Exit editing mode if selecting a different cell
+      if (editingCell && (editingCell.row !== cell.row || editingCell.column !== cell.column)) {
+        setEditingCell(null);
+        setEditingValue('');
+        setEditingCellRect(null);
+        setInitialKey(undefined);
+      }
+
+      requestAnimationFrame(() => {
+        gridRef.current?.focus({ preventScroll: true });
+      });
+    },
+    [sheet, editingCell, isReadOnly]
+  );
+
+  const handleCellRightClick = useCallback(
+    (row: number, column: number, event: React.MouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const cell = clampSelection({ row, column }, sheet);
+
+      // Update selection if right-clicking a different cell
+      if (!isCellInSelection(row, column, selection)) {
+        setSelection({
+          type: 'single',
+          cell
+        });
+      }
+
+      // Show context menu at cursor position
+      setContextMenu({
+        show: true,
+        x: event.clientX,
+        y: event.clientY,
+        cell
+      });
+    },
+    [sheet, selection]
+  );
+
+  const handleCellMouseEnter = useCallback(
+    (row: number, column: number) => {
+      if (!isDragging || !dragStart) return;
+
+      const endCell = clampSelection({ row, column }, sheet);
+      const startCell = dragStart;
+
+      if (startCell.row === endCell.row && startCell.column === endCell.column) {
+        setSelection({
+          type: 'single',
+          cell: startCell
+        });
+      } else {
+        setSelection({
+          type: 'range',
+          range: {
+            start: startCell,
+            end: endCell
+          }
+        });
+      }
+    },
+    [isDragging, dragStart, sheet]
+  );
+
+  const handleMouseUp = useCallback(() => {
+    if (isDragging) {
+      setIsDragging(false);
+      setDragStart(null);
+    }
+  }, [isDragging]);
+
+  // Add global mouse up listener to handle drag end outside grid
+  useEffect(() => {
+    if (isDragging) {
+      document.addEventListener('mouseup', handleMouseUp);
+      return () => {
+        document.removeEventListener('mouseup', handleMouseUp);
+      };
+    }
+  }, [isDragging, handleMouseUp]);
+
+  // Parse clipboard data to detect table structure
+  const parseClipboardData = useCallback((text: string) => {
+    const lines = text.split(/\r?\n/).filter(line => line.length > 0);
+    if (lines.length === 0) return null;
+
+    // Try tab-separated first, then comma-separated
+    let cells: string[][] = [];
+    let maxColumns = 0;
+
+    // Check if it's tab-separated
+    const hasTabSeparation = lines.some(line => line.includes('\t'));
+
+    if (hasTabSeparation) {
+      cells = lines.map(line => line.split('\t'));
+    } else {
+      // Check for comma separation
+      const hasCommaSeparation = lines.some(line => line.includes(','));
+      if (hasCommaSeparation) {
+        cells = lines.map(line => line.split(',').map(cell => cell.trim()));
+      } else {
+        // Single column data
+        cells = lines.map(line => [line]);
+      }
+    }
+
+    maxColumns = Math.max(...cells.map(row => row.length));
+
+    // Pad rows to have consistent column count
+    cells = cells.map(row => {
+      while (row.length < maxColumns) {
+        row.push('');
+      }
+      return row;
+    });
+
+    return {
+      data: cells,
+      rows: cells.length,
+      columns: maxColumns
+    };
+  }, []);
+
+  // Handle paste operation
+  const handlePaste = useCallback(
+    async (mode: 'auto' | 'values' | 'formulas' = 'auto', event?: ClipboardEvent) => {
+      if (isReadOnly || editingCell) return;
+
+      event?.preventDefault();
+
+      try {
+        const clipboardText = await navigator.clipboard.readText();
+        const tableData = parseClipboardData(clipboardText);
+
+        if (!tableData) return;
+
+        const primaryCell = getPrimaryCell(selection);
+        const startRow = primaryCell.row;
+        const startCol = primaryCell.column;
+
+        // Check if we need to expand the sheet
+        const requiredRows = Math.max(sheet.rowCount, startRow + tableData.rows);
+        const requiredCols = Math.max(sheet.columnCount, startCol + tableData.columns);
+
+        // Determine paste behavior
+        const isInternalPaste = copiedData && copiedData.data === clipboardText;
+        const pasteMode = mode === 'auto' ?
+          (isInternalPaste ? copiedData.mode : 'values') :
+          mode;
+
+        applySheetUpdate((previous) => {
+          const nextCells = { ...previous.cells };
+
+          // Apply paste data with proper handling for formulas
+          for (let row = 0; row < tableData.rows; row++) {
+            for (let col = 0; col < tableData.columns; col++) {
+              const cellAddress = encodeCellAddress(startRow + row, startCol + col);
+              let value = tableData.data[row][col].trim();
+
+              if (value === '') {
+                delete nextCells[cellAddress];
+                continue;
+              }
+
+              // Handle formula adjustment if pasting formulas and it's an internal paste
+              if (pasteMode === 'formulas' && isInternalPaste && copiedData && value.startsWith('=')) {
+                // Calculate offset from original copy position
+                const copyStart = copiedData.source.type === 'single'
+                  ? copiedData.source.cell
+                  : copiedData.source.range.start;
+
+                const rowOffset = (startRow + row) - (copyStart.row + row);
+                const colOffset = (startCol + col) - (copyStart.column + col);
+
+                // Only adjust if there's an offset
+                if (rowOffset !== 0 || colOffset !== 0) {
+                  value = adjustFormulaReferences(value, rowOffset, colOffset);
+                }
+              } else if (pasteMode === 'values' && value.startsWith('=')) {
+                // For values mode, don't paste formulas - this shouldn't happen with proper copy
+                // but handle it gracefully
+                continue;
+              }
+
+              nextCells[cellAddress] = value;
+            }
+          }
+
+          return {
+            ...previous,
+            version: previous.version + 1,
+            rowCount: requiredRows,
+            columnCount: requiredCols,
+            cells: nextCells,
+          };
+        });
+
+        // Update selection to show pasted range if multi-cell
+        if (tableData.rows > 1 || tableData.columns > 1) {
+          setSelection({
+            type: 'range',
+            range: {
+              start: { row: startRow, column: startCol },
+              end: {
+                row: startRow + tableData.rows - 1,
+                column: startCol + tableData.columns - 1
+              }
+            }
+          });
+        }
+
+        const modeText = pasteMode === 'formulas' ? ' (formulas)' :
+                         pasteMode === 'values' ? ' (values)' : '';
+        toast.success(`Pasted ${tableData.rows} row(s) and ${tableData.columns} column(s)${modeText}`);
+      } catch (error) {
+        console.error('Paste failed:', error);
+        toast.error('Failed to paste clipboard data');
+      }
+    },
+    [isReadOnly, editingCell, selection, sheet, parseClipboardData, applySheetUpdate, copiedData]
+  );
+
+  // Handle copy operation
+  const handleCopy = useCallback(
+    async (mode: 'formulas' | 'values' = 'formulas', event?: KeyboardEvent) => {
+      if (editingCell) return; // Don't copy while editing
+
+      event?.preventDefault();
+
+      try {
+        let copyData = '';
+
+        if (selection.type === 'single') {
+          // Copy single cell
+          const cellAddress = encodeCellAddress(selection.cell.row, selection.cell.column);
+          if (mode === 'formulas') {
+            copyData = sheet.cells[cellAddress] ?? '';
+          } else {
+            copyData = evaluation.display[selection.cell.row]?.[selection.cell.column] ?? '';
+          }
+        } else {
+          // Copy range of cells
+          const { start, end } = selection.range;
+          const minRow = Math.min(start.row, end.row);
+          const maxRow = Math.max(start.row, end.row);
+          const minCol = Math.min(start.column, end.column);
+          const maxCol = Math.max(start.column, end.column);
+
+          const rows: string[] = [];
+          for (let row = minRow; row <= maxRow; row++) {
+            const cols: string[] = [];
+            for (let col = minCol; col <= maxCol; col++) {
+              if (mode === 'formulas') {
+                const cellAddress = encodeCellAddress(row, col);
+                const cellValue = sheet.cells[cellAddress] ?? '';
+                cols.push(cellValue);
+              } else {
+                const displayValue = evaluation.display[row]?.[col] ?? '';
+                cols.push(displayValue);
+              }
+            }
+            rows.push(cols.join('\t')); // Tab-separated values
+          }
+          copyData = rows.join('\n'); // Newline-separated rows
+        }
+
+        await navigator.clipboard.writeText(copyData);
+
+        // Store copied data info for paste behavior
+        setCopiedData({
+          mode,
+          data: copyData,
+          source: selection
+        });
+
+        const cellCount = selection.type === 'single' ? 1 :
+          Math.abs(selection.range.end.row - selection.range.start.row + 1) *
+          Math.abs(selection.range.end.column - selection.range.start.column + 1);
+
+        const modeText = mode === 'formulas' ? 'formulas' : 'values';
+        toast.success(`Copied ${cellCount} cell${cellCount > 1 ? 's' : ''} (${modeText}) to clipboard`);
+      } catch (error) {
+        console.error('Copy failed:', error);
+        toast.error('Failed to copy to clipboard');
+      }
+    },
+    [editingCell, selection, sheet.cells, evaluation.display]
+  );
+
+  // Add paste event listener
+  useEffect(() => {
+    const gridElement = gridRef.current;
+    if (gridElement) {
+      const pasteHandler = (event: ClipboardEvent) => handlePaste('auto', event);
+      gridElement.addEventListener('paste', pasteHandler);
+      return () => {
+        gridElement.removeEventListener('paste', pasteHandler);
+      };
+    }
+  }, [handlePaste]);
+
+  // Close context menu on clicks outside
+  useEffect(() => {
+    if (contextMenu.show) {
+      const handleClickOutside = () => {
+        setContextMenu(prev => ({ ...prev, show: false }));
+      };
+      document.addEventListener('click', handleClickOutside);
+      document.addEventListener('contextmenu', handleClickOutside);
+      return () => {
+        document.removeEventListener('click', handleClickOutside);
+        document.removeEventListener('contextmenu', handleClickOutside);
+      };
+    }
+  }, [contextMenu.show]);
+
   const handleCellSelect = useCallback(
     (row: number, column: number) => {
       const next = clampSelection({ row, column }, sheet);
-      setSelectedCell(next);
+      setSelection({
+        type: 'single',
+        cell: next
+      });
       setIsFormulaFocused(false);
 
       // Exit editing mode if selecting a different cell
@@ -644,15 +1094,50 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
 
   const handleGridKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
-      if (!selectedCell) return;
       const { key, shiftKey, ctrlKey, metaKey } = event;
-      let { row, column } = clampSelection(selectedCell, sheet);
+      const primaryCell = getPrimaryCell(selection);
+      let { row, column } = clampSelection(primaryCell, sheet);
 
       // Don't interfere if we're already editing
       if (editingCell) return;
 
+      // Handle copy shortcut
+      if ((ctrlKey || metaKey) && key.toLowerCase() === 'c') {
+        event.preventDefault();
+        handleCopy();
+        return;
+      }
+
       // Don't trigger editing for modifier key combinations (except F2)
       if ((ctrlKey || metaKey) && key !== 'F2') {
+        return;
+      }
+
+      // Handle Delete and Backspace as instant delete actions
+      if (key === 'Delete' || key === 'Backspace') {
+        if (isReadOnly) {
+          toast.error("You don't have permission to edit this sheet");
+          return;
+        }
+
+        event.preventDefault();
+        const cellAddress = encodeCellAddress(row, column);
+
+        applySheetUpdate((previous) => {
+          const nextCells = { ...previous.cells };
+          delete nextCells[cellAddress];
+          return {
+            ...previous,
+            version: previous.version + 1,
+            cells: nextCells,
+          };
+        });
+
+        // Update formula bar to show empty value
+        setFormulaValue('');
+
+        // Announce deletion to screen readers
+        setAnnouncement(`Cell ${cellAddress} cleared`);
         return;
       }
 
@@ -712,9 +1197,12 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
           return;
       }
 
-      setSelectedCell({ row, column });
+      setSelection({
+        type: 'single',
+        cell: { row, column }
+      });
     },
-    [isReadOnly, selectedCell, sheet, editingCell, startCellEdit]
+    [isReadOnly, selection, sheet, editingCell, startCellEdit, handleCopy, applySheetUpdate, setFormulaValue, setAnnouncement]
   );
 
   const handleFormulaKeyDown = useCallback(
@@ -766,7 +1254,10 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
   }, [page.content, page.id]);
 
   useEffect(() => {
-    setSelectedCell({ row: 0, column: 0 });
+    setSelection({
+      type: 'single',
+      cell: { row: 0, column: 0 }
+    });
   }, [page.id]);
 
   // Update sheet when document content updates
@@ -821,11 +1312,20 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
 
   // Clamp selection if sheet dimensions shrink
   useEffect(() => {
-    setSelectedCell((prev) => ({
-      row: Math.min(Math.max(prev.row, 0), Math.max(0, sheet.rowCount - 1)),
-      column: Math.min(Math.max(prev.column, 0), Math.max(0, sheet.columnCount - 1)),
-    }));
-  }, [sheet.columnCount, sheet.rowCount]);
+    setSelection((prev) => {
+      if (prev.type === 'single') {
+        return {
+          type: 'single',
+          cell: clampSelection(prev.cell, sheet)
+        };
+      } else {
+        return {
+          type: 'range',
+          range: clampRange(prev.range, sheet)
+        };
+      }
+    });
+  }, [sheet.columnCount, sheet.rowCount, sheet]);
 
   // Permission check
   useEffect(() => {
@@ -917,8 +1417,10 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     <div className="flex h-full flex-col">
       <div className="border-b bg-muted/40">
         <div className="grid grid-cols-[80px_1fr_auto] items-center gap-2 px-4 pt-3 pb-1">
-          <span className="text-xs font-medium uppercase text-muted-foreground">Cell</span>
-          <div className="font-semibold">{currentAddress}</div>
+          <span className="text-xs font-medium uppercase text-muted-foreground">
+            {selection.type === 'range' ? 'Range' : 'Cell'}
+          </span>
+          <div className="font-semibold">{selectionAddress}</div>
           <div className="text-xs text-muted-foreground">Value: {currentDisplay || '—'}</div>
         </div>
         <div className="grid grid-cols-[80px_1fr_auto] items-center gap-2 px-4 pb-3">
@@ -1023,7 +1525,8 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
                 </th>
                 {Array.from({ length: sheet.columnCount }).map((_, columnIndex) => {
                   const cellAddress = encodeCellAddress(rowIndex, columnIndex);
-                  const isSelected = currentSelection.row === rowIndex && currentSelection.column === columnIndex;
+                  const isSelected = isCellInSelection(rowIndex, columnIndex, selection);
+                  const isPrimaryCell = currentSelection.row === rowIndex && currentSelection.column === columnIndex;
                   const cellError = evaluation.errors[rowIndex]?.[columnIndex];
                   const displayValue = evaluation.display[rowIndex]?.[columnIndex] ?? '';
                   return (
@@ -1037,15 +1540,20 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
                       aria-readonly={isReadOnly}
                       aria-label={`${cellAddress}: ${displayValue || 'empty'}`}
                       data-cell={cellAddress}
-                      tabIndex={isSelected ? 0 : -1}
+                      tabIndex={isPrimaryCell ? 0 : -1}
                       className={cn(
                         'h-10 min-w-[120px] cursor-pointer border border-border bg-background px-3 align-middle',
                         'transition-colors hover:bg-muted/40 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-inset',
-                        isSelected && 'bg-primary/10 outline outline-2 outline-offset-[-2px] outline-primary',
+                        isSelected && 'bg-primary/10',
+                        isPrimaryCell && 'outline outline-2 outline-offset-[-2px] outline-primary',
                         cellError && 'bg-destructive/10 text-destructive',
-                        editingCell && editingCell.row === rowIndex && editingCell.column === columnIndex && 'opacity-50'
+                        editingCell && editingCell.row === rowIndex && editingCell.column === columnIndex && 'opacity-50',
+                        isDragging && 'select-none'
                       )}
+                      onMouseDown={(e) => handleCellMouseDown(rowIndex, columnIndex, e)}
+                      onMouseEnter={() => handleCellMouseEnter(rowIndex, columnIndex)}
                       onClick={() => handleCellSelect(rowIndex, columnIndex)}
+                      onContextMenu={(e) => handleCellRightClick(rowIndex, columnIndex, e)}
                       onDoubleClick={() => {
                         if (!isReadOnly) {
                           startCellEdit(rowIndex, columnIndex);
@@ -1079,6 +1587,66 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         initialKey={initialKey}
         driveId={page.driveId}
       />
+
+      {/* Context Menu */}
+      {contextMenu.show && (
+        <div
+          className="fixed z-50 bg-background border border-border rounded-md shadow-lg py-1 min-w-[160px]"
+          style={{
+            left: `${Math.min(contextMenu.x, window.innerWidth - 180)}px`,
+            top: `${Math.min(contextMenu.y, window.innerHeight - 200)}px`,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div
+            className="flex items-center px-3 py-2 text-sm cursor-pointer hover:bg-muted transition-colors"
+            onClick={() => {
+              handleCopy('formulas');
+              setContextMenu(prev => ({ ...prev, show: false }));
+            }}
+          >
+            Copy
+          </div>
+          <div
+            className="flex items-center px-3 py-2 text-sm cursor-pointer hover:bg-muted transition-colors"
+            onClick={() => {
+              handleCopy('values');
+              setContextMenu(prev => ({ ...prev, show: false }));
+            }}
+          >
+            Copy Values
+          </div>
+          <div className="h-px bg-border my-1" />
+          <div
+            className={cn(
+              "flex items-center px-3 py-2 text-sm cursor-pointer hover:bg-muted transition-colors",
+              (!copiedData && !navigator.clipboard) && "opacity-50 cursor-not-allowed"
+            )}
+            onClick={() => {
+              if (copiedData || navigator.clipboard) {
+                handlePaste('auto');
+                setContextMenu(prev => ({ ...prev, show: false }));
+              }
+            }}
+          >
+            Paste
+          </div>
+          <div
+            className={cn(
+              "flex items-center px-3 py-2 text-sm cursor-pointer hover:bg-muted transition-colors",
+              (!copiedData && !navigator.clipboard) && "opacity-50 cursor-not-allowed"
+            )}
+            onClick={() => {
+              if (copiedData || navigator.clipboard) {
+                handlePaste('values');
+                setContextMenu(prev => ({ ...prev, show: false }));
+              }
+            }}
+          >
+            Paste Values
+          </div>
+        </div>
+      )}
 
       {/* Screen reader announcements */}
       <div
