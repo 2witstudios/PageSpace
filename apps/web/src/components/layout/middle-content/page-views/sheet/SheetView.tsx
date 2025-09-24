@@ -17,6 +17,7 @@ import {
 } from '@pagespace/lib';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { FloatingCellEditor } from './FloatingCellEditor';
 
 interface SheetViewProps {
   page: TreePage;
@@ -34,6 +35,26 @@ const clampSelection = (selection: GridSelection, sheet: SheetData): GridSelecti
 
 const getColumnLabel = (columnIndex: number) => encodeCellAddress(0, columnIndex).replace(/\d+/g, '');
 
+// Utility function to check if a key should trigger direct cell editing
+const isPrintableKey = (key: string): boolean => {
+  // Single printable characters (letters, numbers, symbols)
+  if (key.length === 1 && key.match(/[\x20-\x7E]/)) {
+    return true;
+  }
+  // Special cases that should start editing
+  return key === 'F2' || key === 'Delete' || key === 'Backspace';
+};
+
+// Get the DOM rectangle for a specific cell
+const getCellRect = (row: number, column: number, gridElement: HTMLElement | null): DOMRect | null => {
+  if (!gridElement) return null;
+
+  const cellElement = gridElement.querySelector(`[data-cell="${encodeCellAddress(row, column)}"]`);
+  if (!cellElement) return null;
+
+  return cellElement.getBoundingClientRect();
+};
+
 const SheetView: React.FC<SheetViewProps> = ({ page }) => {
   const initialSheet = useMemo(() => sanitizeSheetData(parseSheetContent(page.content)), [page.content]);
   const [sheet, setSheet] = useState<SheetData>(initialSheet);
@@ -41,6 +62,24 @@ const SheetView: React.FC<SheetViewProps> = ({ page }) => {
   const [formulaValue, setFormulaValue] = useState('');
   const [isFormulaFocused, setIsFormulaFocused] = useState(false);
   const [isReadOnly, setIsReadOnly] = useState(false);
+
+  // Floating editor state
+  const [editingCell, setEditingCell] = useState<GridSelection | null>(null);
+  const [editingValue, setEditingValue] = useState('');
+  const [editingCellRect, setEditingCellRect] = useState<DOMRect | null>(null);
+  const [initialKey, setInitialKey] = useState<string | undefined>(undefined);
+
+  // Accessibility announcements
+  const [announcement, setAnnouncement] = useState('');
+
+  // Clear announcements after a delay
+  useEffect(() => {
+    if (announcement) {
+      const timer = setTimeout(() => setAnnouncement(''), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [announcement]);
+
   const formulaInputRef = useRef<HTMLInputElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const socket = useSocket();
@@ -78,6 +117,113 @@ const SheetView: React.FC<SheetViewProps> = ({ page }) => {
     },
     [saveWithDebounce, updateContent]
   );
+
+  // Start editing a cell with optional initial key
+  const startCellEdit = useCallback(
+    (row: number, column: number, key?: string) => {
+      if (isReadOnly) {
+        toast.error("You don't have permission to edit this sheet");
+        return;
+      }
+
+      const cellAddress = encodeCellAddress(row, column);
+      const cellRect = getCellRect(row, column, gridRef.current);
+
+      if (!cellRect) return;
+
+      const currentValue = sheet.cells[cellAddress] ?? '';
+      let initialValue = currentValue;
+
+      // Handle special keys
+      if (key === 'Delete' || key === 'Backspace') {
+        initialValue = '';
+      } else if (key === 'F2') {
+        // F2 starts editing with current value
+        initialValue = currentValue;
+      } else if (key && isPrintableKey(key) && key.length === 1) {
+        // Replace content with the typed character
+        initialValue = key;
+      }
+
+      setEditingCell({ row, column });
+      setEditingValue(initialValue);
+      setEditingCellRect(cellRect);
+      setInitialKey(key && key.length === 1 ? key : undefined);
+
+      // Update formula bar to match
+      setFormulaValue(initialValue);
+
+      // Announce edit mode to screen readers
+      setAnnouncement(`Editing cell ${cellAddress}`);
+    },
+    [sheet.cells, isReadOnly]
+  );
+
+  // Commit cell edit
+  const commitCellEdit = useCallback(
+    (value: string) => {
+      if (!editingCell || isReadOnly) return;
+
+      const cellAddress = encodeCellAddress(editingCell.row, editingCell.column);
+      const trimmed = value;
+
+      applySheetUpdate((previous) => {
+        const nextCells = { ...previous.cells };
+        if (trimmed.trim() === '') {
+          delete nextCells[cellAddress];
+        } else {
+          nextCells[cellAddress] = trimmed;
+        }
+        return {
+          ...previous,
+          version: previous.version + 1,
+          cells: nextCells,
+        };
+      });
+
+      // Exit editing mode
+      setEditingCell(null);
+      setEditingValue('');
+      setEditingCellRect(null);
+      setInitialKey(undefined);
+
+      // Update formula bar
+      setFormulaValue(trimmed);
+
+      // Announce completion to screen readers
+      setAnnouncement(`Cell ${cellAddress} updated`);
+
+      // Return focus to grid
+      requestAnimationFrame(() => {
+        gridRef.current?.focus({ preventScroll: true });
+      });
+    },
+    [editingCell, isReadOnly, applySheetUpdate]
+  );
+
+  // Cancel cell edit
+  const cancelCellEdit = useCallback(() => {
+    if (!editingCell) return;
+
+    const cellAddress = encodeCellAddress(editingCell.row, editingCell.column);
+    const originalValue = sheet.cells[cellAddress] ?? '';
+
+    // Restore original values
+    setEditingCell(null);
+    setEditingValue('');
+    setEditingCellRect(null);
+    setInitialKey(undefined);
+    setFormulaValue(originalValue);
+
+    // Announce cancellation to screen readers
+    const cancelledCellAddress = encodeCellAddress(editingCell.row, editingCell.column);
+    setAnnouncement(`Edit cancelled for cell ${cancelledCellAddress}`);
+
+    // Return focus to grid
+    requestAnimationFrame(() => {
+      gridRef.current?.focus({ preventScroll: true });
+    });
+  }, [editingCell, sheet.cells]);
 
   const handleCommitFormula = useCallback(
     (value: string) => {
@@ -133,18 +279,42 @@ const SheetView: React.FC<SheetViewProps> = ({ page }) => {
       const next = clampSelection({ row, column }, sheet);
       setSelectedCell(next);
       setIsFormulaFocused(false);
+
+      // Exit editing mode if selecting a different cell
+      if (editingCell && (editingCell.row !== next.row || editingCell.column !== next.column)) {
+        setEditingCell(null);
+        setEditingValue('');
+        setEditingCellRect(null);
+        setInitialKey(undefined);
+      }
+
       requestAnimationFrame(() => {
         gridRef.current?.focus({ preventScroll: true });
       });
     },
-    [sheet]
+    [sheet, editingCell]
   );
 
   const handleGridKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
       if (!selectedCell) return;
-      const { key, shiftKey } = event;
+      const { key, shiftKey, ctrlKey, metaKey } = event;
       let { row, column } = clampSelection(selectedCell, sheet);
+
+      // Don't interfere if we're already editing
+      if (editingCell) return;
+
+      // Don't trigger editing for modifier key combinations (except F2)
+      if ((ctrlKey || metaKey) && key !== 'F2') {
+        return;
+      }
+
+      // Check if this key should start direct cell editing
+      if (isPrintableKey(key)) {
+        event.preventDefault();
+        startCellEdit(row, column, key);
+        return;
+      }
 
       switch (key) {
         case 'ArrowUp':
@@ -183,33 +353,46 @@ const SheetView: React.FC<SheetViewProps> = ({ page }) => {
         case 'Enter':
           event.preventDefault();
           if (!isReadOnly) {
-            formulaInputRef.current?.focus();
-            formulaInputRef.current?.select();
+            // Enter can either start editing or move to next row
+            if (shiftKey) {
+              row = Math.max(0, row - 1);
+            } else {
+              row = Math.min(sheet.rowCount - 1, row + 1);
+            }
           }
-          return;
+          break;
         default:
           return;
       }
 
       setSelectedCell({ row, column });
     },
-    [isReadOnly, selectedCell, sheet]
+    [isReadOnly, selectedCell, sheet, editingCell, startCellEdit]
   );
 
   const handleFormulaKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLInputElement>) => {
       if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault();
-        handleCommitFormula(formulaValue);
+        if (editingCell) {
+          // Commit the floating editor value
+          commitCellEdit(formulaValue);
+        } else {
+          handleCommitFormula(formulaValue);
+        }
         event.currentTarget.blur();
       }
       if (event.key === 'Escape') {
         event.preventDefault();
-        setFormulaValue(currentRaw);
+        if (editingCell) {
+          cancelCellEdit();
+        } else {
+          setFormulaValue(currentRaw);
+        }
         event.currentTarget.blur();
       }
     },
-    [currentRaw, formulaValue, handleCommitFormula]
+    [currentRaw, formulaValue, handleCommitFormula, editingCell, commitCellEdit, cancelCellEdit]
   );
 
   // Initialize sheet when page changes
@@ -232,13 +415,48 @@ const SheetView: React.FC<SheetViewProps> = ({ page }) => {
     }
   }, [documentState]);
 
+  // Update cell rectangle when editing cell changes or on scroll/resize
+  useEffect(() => {
+    if (!editingCell) return;
+
+    const updateCellRect = () => {
+      const rect = getCellRect(editingCell.row, editingCell.column, gridRef.current);
+      if (rect) {
+        setEditingCellRect(rect);
+      } else {
+        // Cell is no longer visible, cancel editing
+        cancelCellEdit();
+      }
+    };
+
+    // Update immediately
+    updateCellRect();
+
+    // Add scroll and resize listeners
+    const gridElement = gridRef.current;
+    const handleScroll = () => updateCellRect();
+    const handleResize = () => updateCellRect();
+
+    if (gridElement) {
+      gridElement.addEventListener('scroll', handleScroll, { passive: true });
+    }
+    window.addEventListener('resize', handleResize, { passive: true });
+
+    return () => {
+      if (gridElement) {
+        gridElement.removeEventListener('scroll', handleScroll);
+      }
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [editingCell, cancelCellEdit]);
+
   // Update formula bar when selection or sheet changes
   useEffect(() => {
     const normalized = encodeCellAddress(currentSelection.row, currentSelection.column);
-    if (!isFormulaFocused) {
+    if (!isFormulaFocused && !editingCell) {
       setFormulaValue(sheet.cells[normalized] ?? '');
     }
-  }, [currentSelection.column, currentSelection.row, isFormulaFocused, sheet.cells]);
+  }, [currentSelection.column, currentSelection.row, isFormulaFocused, editingCell, sheet.cells]);
 
   // Clamp selection if sheet dimensions shrink
   useEffect(() => {
@@ -347,14 +565,29 @@ const SheetView: React.FC<SheetViewProps> = ({ page }) => {
           <input
             ref={formulaInputRef}
             value={formulaValue}
-            onFocus={() => setIsFormulaFocused(true)}
+            onFocus={() => {
+              setIsFormulaFocused(true);
+              // If we're not already editing, start editing the current cell
+              if (!editingCell) {
+                const { row, column } = currentSelection;
+                startCellEdit(row, column);
+              }
+            }}
             onBlur={(event) => {
               setIsFormulaFocused(false);
-              if (event.target.value !== currentRaw) {
+              if (editingCell && event.target.value !== currentRaw) {
+                commitCellEdit(event.target.value);
+              } else if (!editingCell && event.target.value !== currentRaw) {
                 handleCommitFormula(event.target.value);
               }
             }}
-            onChange={(event) => setFormulaValue(event.target.value)}
+            onChange={(event) => {
+              setFormulaValue(event.target.value);
+              // Keep floating editor in sync
+              if (editingCell) {
+                setEditingValue(event.target.value);
+              }
+            }}
             onKeyDown={handleFormulaKeyDown}
             disabled={isReadOnly}
             className={cn(
@@ -378,17 +611,28 @@ const SheetView: React.FC<SheetViewProps> = ({ page }) => {
       </div>
       <div
         ref={gridRef}
+        role="grid"
+        aria-label="Spreadsheet"
+        aria-rowcount={sheet.rowCount}
+        aria-colcount={sheet.columnCount}
+        aria-activedescendant={`cell-${currentAddress}`}
         tabIndex={0}
         onKeyDown={handleGridKeyDown}
         className="flex-1 overflow-auto focus:outline-none"
       >
-        <table className="min-w-max border-collapse text-sm">
+        <table className="min-w-max border-collapse text-sm" role="presentation">
           <thead>
-            <tr>
-              <th className="sticky left-0 top-0 z-20 h-8 w-14 border border-border bg-muted text-left text-xs font-semibold text-muted-foreground"></th>
+            <tr role="row">
+              <th
+                role="columnheader"
+                className="sticky left-0 top-0 z-20 h-8 w-14 border border-border bg-muted text-left text-xs font-semibold text-muted-foreground"
+                aria-label="Row headers"
+              ></th>
               {Array.from({ length: sheet.columnCount }).map((_, columnIndex) => (
                 <th
                   key={`column-${columnIndex}`}
+                  role="columnheader"
+                  aria-colindex={columnIndex + 1}
                   className="sticky top-0 z-10 h-8 min-w-[120px] border border-border bg-muted px-3 text-left text-xs font-semibold text-muted-foreground"
                 >
                   {getColumnLabel(columnIndex)}
@@ -398,8 +642,12 @@ const SheetView: React.FC<SheetViewProps> = ({ page }) => {
           </thead>
           <tbody>
             {Array.from({ length: sheet.rowCount }).map((_, rowIndex) => (
-              <tr key={`row-${rowIndex}`}>
-                <th className="sticky left-0 z-10 h-10 border border-border bg-muted px-2 text-left text-xs font-semibold text-muted-foreground">
+              <tr key={`row-${rowIndex}`} role="row">
+                <th
+                  role="rowheader"
+                  aria-rowindex={rowIndex + 1}
+                  className="sticky left-0 z-10 h-10 border border-border bg-muted px-2 text-left text-xs font-semibold text-muted-foreground"
+                >
                   {rowIndex + 1}
                 </th>
                 {Array.from({ length: sheet.columnCount }).map((_, columnIndex) => {
@@ -410,17 +658,26 @@ const SheetView: React.FC<SheetViewProps> = ({ page }) => {
                   return (
                     <td
                       key={cellAddress}
+                      id={`cell-${cellAddress}`}
+                      role="gridcell"
+                      aria-rowindex={rowIndex + 1}
+                      aria-colindex={columnIndex + 1}
+                      aria-selected={isSelected}
+                      aria-readonly={isReadOnly}
+                      aria-label={`${cellAddress}: ${displayValue || 'empty'}`}
+                      data-cell={cellAddress}
+                      tabIndex={isSelected ? 0 : -1}
                       className={cn(
                         'h-10 min-w-[120px] cursor-pointer border border-border bg-background px-3 align-middle',
-                        'transition-colors hover:bg-muted/40',
+                        'transition-colors hover:bg-muted/40 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-inset',
                         isSelected && 'bg-primary/10 outline outline-2 outline-offset-[-2px] outline-primary',
-                        cellError && 'bg-destructive/10 text-destructive'
+                        cellError && 'bg-destructive/10 text-destructive',
+                        editingCell && editingCell.row === rowIndex && editingCell.column === columnIndex && 'opacity-50'
                       )}
                       onClick={() => handleCellSelect(rowIndex, columnIndex)}
                       onDoubleClick={() => {
                         if (!isReadOnly) {
-                          formulaInputRef.current?.focus();
-                          formulaInputRef.current?.select();
+                          startCellEdit(rowIndex, columnIndex);
                         }
                       }}
                     >
@@ -434,6 +691,31 @@ const SheetView: React.FC<SheetViewProps> = ({ page }) => {
             ))}
           </tbody>
         </table>
+      </div>
+
+      {/* Floating Cell Editor */}
+      <FloatingCellEditor
+        value={editingValue}
+        cellRect={editingCellRect}
+        isVisible={!!editingCell}
+        onCommit={commitCellEdit}
+        onCancel={cancelCellEdit}
+        onValueChange={(value) => {
+          setEditingValue(value);
+          setFormulaValue(value); // Keep formula bar in sync
+        }}
+        isReadOnly={isReadOnly}
+        initialKey={initialKey}
+      />
+
+      {/* Screen reader announcements */}
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+      >
+        {announcement}
       </div>
     </div>
   );
