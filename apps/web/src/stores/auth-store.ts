@@ -17,20 +17,24 @@ interface AuthState {
   isAuthenticated: boolean;
   lastAuthCheck: number | null;
   hasHydrated: boolean;
-  
+
   // Token refresh state
   isRefreshing: boolean;
   refreshTimeoutId: NodeJS.Timeout | null;
-  
+
   // Session state
   sessionStartTime: number | null;
   lastActivity: number | null;
   lastActivityUpdate: number | null; // Track when we last updated activity
-  
+
   // Failed auth attempt tracking
   failedAuthAttempts: number;
   lastFailedAuthCheck: number | null;
-  
+
+  // Deduplication state
+  _authPromise: Promise<void> | null; // Track in-flight auth requests
+  _serverSessionInitialized: boolean; // Track if server session was loaded
+
   // Actions
   setUser: (user: User | null) => void;
   setLoading: (loading: boolean) => void;
@@ -43,6 +47,8 @@ interface AuthState {
   recordFailedAuth: () => void;
   clearFailedAttempts: () => void;
   reset: () => void;
+  loadSession: (force?: boolean) => Promise<void>;
+  initializeFromServer: (initialUser: User | null) => void;
 }
 
 const ACTIVITY_TIMEOUT = 60 * 60 * 1000; // 60 minutes (more forgiving)
@@ -67,6 +73,8 @@ export const useAuthStore = create<AuthState>()(
       lastActivityUpdate: null,
       failedAuthAttempts: 0,
       lastFailedAuthCheck: null,
+      _authPromise: null,
+      _serverSessionInitialized: false,
 
       // Actions
       setUser: (user) => {
@@ -146,12 +154,12 @@ export const useAuthStore = create<AuthState>()(
 
       reset: () => {
         const state = get();
-        
+
         // Clear any pending refresh timeout
         if (state.refreshTimeoutId) {
           clearTimeout(state.refreshTimeoutId);
         }
-        
+
         set({
           user: null,
           isLoading: false,
@@ -164,7 +172,87 @@ export const useAuthStore = create<AuthState>()(
           lastActivityUpdate: null,
           failedAuthAttempts: 0,
           lastFailedAuthCheck: null,
+          _authPromise: null,
+          _serverSessionInitialized: false,
         });
+      },
+
+      // Initialize store with server session data (prevents initial auth check spam)
+      initializeFromServer: (initialUser) => {
+        set({
+          user: initialUser,
+          isAuthenticated: !!initialUser,
+          lastAuthCheck: Date.now(),
+          _serverSessionInitialized: true,
+          sessionStartTime: initialUser ? Date.now() : null,
+          lastActivity: initialUser ? Date.now() : null,
+        });
+      },
+
+      // Deduplicated session loading with promise caching
+      loadSession: async (force = false) => {
+        const state = get();
+
+        // Return existing promise if already loading (deduplication)
+        if (state._authPromise && !force) {
+          return state._authPromise;
+        }
+
+        // Skip if circuit breaker is active
+        if (!force && authStoreHelpers.shouldSkipAuthCheck()) {
+          console.log('[AUTH_STORE] Skipping auth check - circuit breaker active');
+          return;
+        }
+
+        // Create new auth promise
+        const authPromise = (async () => {
+          try {
+            const response = await fetch('/api/auth/me', {
+              credentials: 'include',
+            });
+
+            if (response.ok) {
+              const userData = await response.json();
+              set({
+                user: userData,
+                isAuthenticated: true,
+                lastAuthCheck: Date.now(),
+                failedAuthAttempts: 0,
+                lastFailedAuthCheck: null,
+              });
+              // Update activity for new session
+              get().updateActivity();
+            } else if (response.status === 401) {
+              // Unauthorized - clear user and record failure
+              set({
+                user: null,
+                isAuthenticated: false,
+                failedAuthAttempts: state.failedAuthAttempts + 1,
+                lastFailedAuthCheck: Date.now(),
+              });
+            } else {
+              // Other errors - record failure but don't clear user
+              set({
+                failedAuthAttempts: state.failedAuthAttempts + 1,
+                lastFailedAuthCheck: Date.now(),
+              });
+            }
+          } catch (error) {
+            console.error('[AUTH_STORE] Session load failed:', error);
+            // Network error - record failure
+            set({
+              failedAuthAttempts: state.failedAuthAttempts + 1,
+              lastFailedAuthCheck: Date.now(),
+            });
+          } finally {
+            // Clear promise when done
+            set({ _authPromise: null });
+          }
+        })();
+
+        // Store promise for deduplication
+        set({ _authPromise: authPromise });
+        return authPromise;
       },
     }),
     {
@@ -222,12 +310,12 @@ export const authStoreHelpers = {
   // Check if too many failed auth attempts recently (circuit breaker)
   shouldSkipAuthCheck: (): boolean => {
     const state = useAuthStore.getState();
-    
+
     // No failed attempts - allow auth check
     if (state.failedAuthAttempts === 0 || !state.lastFailedAuthCheck) {
       return false;
     }
-    
+
     // Check if timeout has passed
     const timeSinceLastFailure = Date.now() - state.lastFailedAuthCheck;
     if (timeSinceLastFailure > FAILED_AUTH_TIMEOUT) {
@@ -235,8 +323,77 @@ export const authStoreHelpers = {
       useAuthStore.getState().clearFailedAttempts();
       return false;
     }
-    
+
     // Too many recent failures - skip auth check
     return state.failedAuthAttempts >= MAX_FAILED_AUTH_ATTEMPTS;
+  },
+
+  // Check if auth check is needed (considering server initialization)
+  shouldLoadSession: (): boolean => {
+    const state = useAuthStore.getState();
+
+    // Skip if circuit breaker is active
+    if (authStoreHelpers.shouldSkipAuthCheck()) {
+      return false;
+    }
+
+    // Skip if already loading
+    if (state._authPromise) {
+      return false;
+    }
+
+    // Always load if not hydrated yet
+    if (!state.hasHydrated) {
+      return true;
+    }
+
+    // If server session was initialized, only reload if stale
+    if (state._serverSessionInitialized) {
+      return authStoreHelpers.needsAuthCheck();
+    }
+
+    // No server data and no recent check - load session
+    return !state.lastAuthCheck || authStoreHelpers.needsAuthCheck();
+  },
+
+  // Initialize store from server session (called during app startup)
+  initializeFromServer: (initialUser: User | null): void => {
+    useAuthStore.getState().initializeFromServer(initialUser);
+  },
+
+  // Load session with deduplication (main method for auth checks)
+  loadSession: (force = false): Promise<void> => {
+    return useAuthStore.getState().loadSession(force);
+  },
+
+  // Initialize auth event listeners (call once at app startup)
+  initializeEventListeners: (): void => {
+    if (typeof window === 'undefined') return;
+
+    const handleAuthRefreshed = () => {
+      console.log('[AUTH_STORE] Token refreshed - updating session');
+      // Token was refreshed successfully, update auth state silently
+      authStoreHelpers.loadSession();
+    };
+
+    const handleAuthExpired = async () => {
+      console.log('[AUTH_STORE] Token expired - logging out');
+      // Token expired and couldn't be refreshed, clear session
+      const state = useAuthStore.getState();
+      state.endSession();
+
+      // Redirect to login page
+      if (typeof window !== 'undefined') {
+        window.location.href = '/auth/signin';
+      }
+    };
+
+    // Remove existing listeners to prevent duplicates
+    window.removeEventListener('auth:refreshed', handleAuthRefreshed);
+    window.removeEventListener('auth:expired', handleAuthExpired);
+
+    // Add new listeners
+    window.addEventListener('auth:refreshed', handleAuthRefreshed);
+    window.addEventListener('auth:expired', handleAuthExpired);
   },
 };

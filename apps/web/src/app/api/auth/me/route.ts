@@ -23,7 +23,10 @@ export async function GET(req: Request) {
     return Response.json({ error: 'User not found' }, { status: 404 });
   }
 
-  console.log(`[AUTH] User profile loaded: ${user.email} (provider: ${user.provider}, id: ${user.id})`);
+  // Only log in debug mode to reduce auth spam
+  if (process.env.NODE_ENV === 'development' && process.env.DEBUG_AUTH === 'true') {
+    console.log(`[AUTH] User profile loaded: ${user.email} (provider: ${user.provider}, id: ${user.id})`);
+  }
 
   return Response.json({
     id: user.id,

@@ -42,119 +42,28 @@ export function useAuth(): {
     startSession,
     endSession,
     updateActivity,
-    recordFailedAuth,
-    clearFailedAttempts,
   } = useAuthStore();
 
   const { refreshToken, startTokenRefresh, stopTokenRefresh } = useTokenRefresh();
   const router = useRouter();
   const tokenRefreshActiveRef = useRef(false);
 
-  // Helper function to check if we should attempt auth check
-  // Note: HttpOnly cookies aren't visible to document.cookie, so we'll always attempt auth check
-  const shouldAttemptAuthCheck = useCallback(() => {
-    return typeof document !== 'undefined';
-  }, []);
 
-  // Silent auth check - doesn't trigger loading states (used for background token refresh)
-  const silentCheckAuth = useCallback(async () => {
-    // Circuit breaker - skip if too many recent failures
-    if (authStoreHelpers.shouldSkipAuthCheck()) {
-      console.log('[AUTH_HOOK] Skipping silent auth check - too many recent failures (circuit breaker)');
-      return;
-    }
-
-    console.log('[AUTH_HOOK] Starting silent auth check (no loading state)');
-    
-    try {
-      const response = await fetch('/api/auth/me', {
-        credentials: 'include',
-      });
-
-      console.log(`[AUTH_HOOK] Silent auth response status: ${response.status}`);
-
-      if (response.ok) {
-        const userData = await response.json();
-        console.log(`[AUTH_HOOK] Silent auth - User data received: ${userData.email} (id: ${userData.id})`);
-        setUser(userData);
-        updateActivity();
-        // Clear any failed attempts on success
-        clearFailedAttempts();
-      } else if (response.status === 401) {
-        console.log('[AUTH_HOOK] Silent auth - 401 Unauthorized - clearing user and recording failed attempt');
-        // Record failed attempt and clear user on 401 (unauthorized)
-        recordFailedAuth();
-        setUser(null);
-      } else {
-        console.log(`[AUTH_HOOK] Silent auth - Other error ${response.status} - not clearing user state`);
-        // For other errors (network, server), don't clear user state
-      }
-    } catch (error) {
-      console.error('💥 Silent auth check failed with error:', error);
-      // Record failed attempt on network errors
-      recordFailedAuth();
-      // Only clear user on network errors if we don't have a user yet
-      if (!user) {
-        console.log('[AUTH_HOOK] Silent auth - Network error with no user - clearing state');
-        setUser(null);
-      }
-    }
-    console.log('[AUTH_HOOK] Silent auth check completed');
-  }, [setUser, updateActivity, user, recordFailedAuth, clearFailedAttempts]);
-
-  // Check authentication status (with loading state for user-initiated checks)
+  // Check authentication status - delegates to store method (maintains backward compatibility)
   const checkAuth = useCallback(async () => {
     if (isLoading) {
       console.log('[AUTH_HOOK] Skipping auth check - already loading');
       return;
     }
 
-    // Circuit breaker - skip if too many recent failures
-    if (authStoreHelpers.shouldSkipAuthCheck()) {
-      console.log('[AUTH_HOOK] Skipping auth check - too many recent failures (circuit breaker)');
-      return;
-    }
-
-    console.log('[AUTH_HOOK] Starting auth check');
+    // Use store's deduplicated loadSession method with loading state
     setLoading(true);
-    
     try {
-      const response = await fetch('/api/auth/me', {
-        credentials: 'include',
-      });
-
-      console.log(`[AUTH_HOOK] Auth response status: ${response.status}`);
-
-      if (response.ok) {
-        const userData = await response.json();
-        console.log(`[AUTH_HOOK] User data received: ${userData.email} (id: ${userData.id})`);
-        setUser(userData);
-        updateActivity();
-        // Clear any failed attempts on success
-        clearFailedAttempts();
-      } else if (response.status === 401) {
-        console.log('[AUTH_HOOK] 401 Unauthorized - clearing user and recording failed attempt');
-        // Record failed attempt and clear user on 401 (unauthorized)
-        recordFailedAuth();
-        setUser(null);
-      } else {
-        console.log(`[AUTH_HOOK] Other error ${response.status} - not clearing user state`);
-        // For other errors (network, server), don't clear user state
-      }
-    } catch (error) {
-      console.error('💥 Auth check failed with error:', error);
-      // Record failed attempt on network errors
-      recordFailedAuth();
-      // Only clear user on network errors if we don't have a user yet
-      if (!user) {
-        console.log('[AUTH_HOOK] Network error with no user - clearing state');
-        setUser(null);
-      }
+      await authStoreHelpers.loadSession();
     } finally {
       setLoading(false);
-      console.log('[AUTH_HOOK] Auth check completed');
     }
-  }, [isLoading, setUser, setLoading, updateActivity, user, recordFailedAuth, clearFailedAttempts]);
+  }, [isLoading, setLoading]);
 
   // Login function
   const login = useCallback(async (email: string, password: string) => {
@@ -211,11 +120,12 @@ export function useAuth(): {
   const refreshAuth = useCallback(async () => {
     const success = await refreshToken();
     if (success) {
-      await checkAuth();
+      // Force reload session after token refresh
+      await authStoreHelpers.loadSession(true);
     } else {
       await logout();
     }
-  }, [refreshToken, checkAuth, logout]);
+  }, [refreshToken, logout]);
 
 
   // Session management and token refresh startup
@@ -256,35 +166,23 @@ export function useAuth(): {
     }
   }, [hasHydrated, setHydrated]);
 
-  // Initial auth check - only run after hydration
+  // Initial auth check - simplified with store-level deduplication
   useEffect(() => {
-    const canAttemptAuth = shouldAttemptAuthCheck();
-    
+    if (!hasHydrated) return;
+
     // Check for OAuth success parameter (from Google callback)
     const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
     const isOAuthSuccess = urlParams?.get('auth') === 'success';
-    
-    if (isOAuthSuccess) {
-      console.log('[AUTH_HOOK] OAuth success parameter detected - will force auth check');
-    }
-    
-    // Circuit breaker check - skip if too many failed attempts
-    const shouldSkipDueToFailures = authStoreHelpers.shouldSkipAuthCheck();
-    
-    const shouldCheckAuth = hasHydrated && !shouldSkipDueToFailures && (
-      // Case 1: We have persisted user data but need to validate (stale check)
-      (user && authStoreHelpers.needsAuthCheck()) ||
-      // Case 2: No user data but we're hydrated (attempt auth check for HttpOnly cookies)
-      // CRITICAL FIX: Only check if we haven't had a recent auth check
-      (!user && canAttemptAuth && authStoreHelpers.needsAuthCheck()) ||
-      // Case 3: OAuth success - force auth check regardless
-      isOAuthSuccess
-    );
 
-    if (shouldCheckAuth) {
-      console.log(`[AUTH_HOOK] Auth check triggered - hasHydrated: ${hasHydrated}, user: ${!!user}, isOAuthSuccess: ${isOAuthSuccess}, shouldSkipDueToFailures: ${shouldSkipDueToFailures}`);
-      checkAuth();
-      
+    // Use store helper to determine if session load is needed
+    const shouldLoad = authStoreHelpers.shouldLoadSession() || isOAuthSuccess;
+
+    if (shouldLoad) {
+      console.log(`[AUTH_HOOK] Loading session - hasHydrated: ${hasHydrated}, isOAuthSuccess: ${isOAuthSuccess}`);
+
+      // Use store's deduplicated loadSession
+      authStoreHelpers.loadSession(isOAuthSuccess); // Force reload for OAuth success
+
       // Clean up OAuth success parameter from URL after auth check
       if (isOAuthSuccess && typeof window !== 'undefined') {
         console.log('[AUTH_HOOK] Cleaning up OAuth success parameter from URL');
@@ -293,29 +191,14 @@ export function useAuth(): {
         window.history.replaceState({}, '', newUrl.toString());
       }
     }
-  }, [hasHydrated, user, shouldAttemptAuthCheck, checkAuth]);
+  }, [hasHydrated]);
 
-  // Listen for auth events from the fetch wrapper
+  // Initialize auth event listeners once (moved to store level for deduplication)
   useEffect(() => {
-    const handleAuthRefreshed = () => {
-      // Token was refreshed successfully, update auth state silently (no loading state)
-      // This prevents UI disruption during automatic token refreshes
-      silentCheckAuth();
-    };
-
-    const handleAuthExpired = () => {
-      // Token expired and couldn't be refreshed, logout
-      logout();
-    };
-
-    window.addEventListener('auth:refreshed', handleAuthRefreshed);
-    window.addEventListener('auth:expired', handleAuthExpired);
-
-    return () => {
-      window.removeEventListener('auth:refreshed', handleAuthRefreshed);
-      window.removeEventListener('auth:expired', handleAuthExpired);
-    };
-  }, [silentCheckAuth, logout]);
+    // Only initialize event listeners once across all hook instances
+    // This prevents duplicate event listeners when multiple components use useAuth
+    authStoreHelpers.initializeEventListeners();
+  }, []); // Empty dependency array ensures this runs only once
 
   // Track user activity
   useEffect(() => {
