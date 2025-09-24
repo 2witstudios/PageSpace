@@ -190,6 +190,7 @@ export default function CreatePageDialog({ parentId, isOpen, setIsOpen, onPageCr
                   <SelectItem value="CHANNEL">Channel</SelectItem>
                   <SelectItem value="AI_CHAT">AI Chat</SelectItem>
                   <SelectItem value="CANVAS">Canvas</SelectItem>
+                  <SelectItem value="SHEET">Sheet</SelectItem>
                   <SelectItem value="FILE">File Upload</SelectItem>
                 </SelectContent>
               </Select>

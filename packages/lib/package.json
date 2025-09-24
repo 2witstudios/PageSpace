@@ -4,6 +4,9 @@
   "license": "AGPL-3.0",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
+  "scripts": {
+    "test": "tsx --test src/__tests__/*.test.ts"
+  },
   "exports": {
     ".": "./src/index.ts",
     "./client": "./src/client.ts",

@@ -96,7 +96,7 @@ export async function POST(request: Request) {
     const newPage = await db.transaction(async (tx) => {
       interface APIPageInsertData {
         title: string;
-        type: 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS';
+        type: 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'SHEET';
         parentId: string | null;
         driveId: string;
         content: string;
@@ -110,7 +110,7 @@ export async function POST(request: Request) {
 
       const pageData: APIPageInsertData = {
         title,
-        type: type as 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS',
+        type: type as 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'SHEET',
         parentId,
         driveId: drive.id,
         content: content || getDefaultContent(type as PageTypeEnum),

@@ -64,4 +64,4 @@ Organization anticipates growth and new features:
 - Sandbox components ensure safe preview and execution environments.
 - `workspace-selector.tsx` is the file for the `DriveSwitcher` component, located under `left-sidebar/`.
 - Page settings components like `ShareDialog` and `PermissionsList` are located under `middle-content/content-header/page-settings/`.
-- The `PageType` enum includes `FOLDER`, `DOCUMENT`, `DATABASE`, `CHANNEL`, `AI_CHAT`, and `CANVAS`.
+- The `PageType` enum includes `FOLDER`, `DOCUMENT`, `CHANNEL`, `AI_CHAT`, `CANVAS`, `FILE`, and `SHEET`.

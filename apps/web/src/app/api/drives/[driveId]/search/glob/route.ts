@@ -34,7 +34,7 @@ export async function GET(
 
     // Parse includeTypes
     const includeTypes = includeTypesParam ?
-      includeTypesParam.split(',').filter(t => ['FOLDER', 'DOCUMENT', 'AI_CHAT', 'CHANNEL', 'CANVAS'].includes(t)) :
+      includeTypesParam.split(',').filter(t => ['FOLDER', 'DOCUMENT', 'AI_CHAT', 'CHANNEL', 'CANVAS', 'SHEET'].includes(t)) :
       null;
 
     // Check drive access
@@ -64,7 +64,7 @@ export async function GET(
       ? and(
           eq(pages.driveId, driveId),
           eq(pages.isTrashed, false),
-          inArray(pages.type, includeTypes as Array<'FOLDER' | 'DOCUMENT' | 'AI_CHAT' | 'CHANNEL' | 'CANVAS'>)
+          inArray(pages.type, includeTypes as Array<'FOLDER' | 'DOCUMENT' | 'AI_CHAT' | 'CHANNEL' | 'CANVAS' | 'SHEET'>)
         )
       : and(
           eq(pages.driveId, driveId),

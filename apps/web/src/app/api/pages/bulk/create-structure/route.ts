@@ -42,9 +42,9 @@ export async function POST(request: Request) {
           { status: 400 }
         );
       }
-      if (!['FOLDER', 'DOCUMENT', 'AI_CHAT', 'CHANNEL', 'CANVAS'].includes(item.type)) {
+      if (!['FOLDER', 'DOCUMENT', 'AI_CHAT', 'CHANNEL', 'CANVAS', 'SHEET'].includes(item.type)) {
         return NextResponse.json(
-          { error: 'Invalid type. Must be one of: FOLDER, DOCUMENT, AI_CHAT, CHANNEL, CANVAS' },
+          { error: 'Invalid type. Must be one of: FOLDER, DOCUMENT, AI_CHAT, CHANNEL, CANVAS, SHEET' },
           { status: 400 }
         );
       }
@@ -86,7 +86,7 @@ export async function POST(request: Request) {
           .insert(pages)
           .values({
             title: item.title,
-            type: item.type as 'FOLDER' | 'DOCUMENT' | 'AI_CHAT' | 'CHANNEL' | 'CANVAS',
+            type: item.type as 'FOLDER' | 'DOCUMENT' | 'AI_CHAT' | 'CHANNEL' | 'CANVAS' | 'SHEET',
             content: item.content || '',
             driveId,
             parentId: currentParentId,

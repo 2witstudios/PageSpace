@@ -336,7 +336,7 @@ export const pageWriteTools = {
       driveId: z.string().describe('The unique ID of the drive to create the page in'),
       parentId: z.string().optional().describe('The unique ID of the parent page from list_pages - REQUIRED when creating inside any page (folder, document, channel, etc). Only omit for root-level pages in the drive.'),
       title: z.string().describe('The title of the new page'),
-      type: z.enum(['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS']).describe('The type of page to create'),
+      type: z.enum(['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET']).describe('The type of page to create'),
       content: z.string().optional().describe('Optional initial content for the page'),
       // Agent configuration fields (only for AI_CHAT type)
       systemPrompt: z.string().optional().describe('System prompt for AI agent behavior (only for AI_CHAT pages). Defines how the agent should behave and respond.'),
@@ -424,7 +424,7 @@ export const pageWriteTools = {
         // Prepare page data with proper typing
         interface PageInsertData {
           title: string;
-          type: 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS';
+          type: 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'SHEET';
           content: string;
           position: number;
           driveId: string;

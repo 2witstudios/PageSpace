@@ -13,7 +13,7 @@ import { useDocument } from '@/hooks/useDocument';
 import { usePageStore } from '@/hooks/usePage';
 import { Button } from '@/components/ui/button';
 import { Download } from 'lucide-react';
-import { isDocumentPage, isFilePage } from '@pagespace/lib/client';
+import { isDocumentPage, isFilePage, isSheetPage } from '@pagespace/lib/client';
 
 interface ContentHeaderProps {
   children?: React.ReactNode;
@@ -30,6 +30,7 @@ export function ViewHeader({ children }: ContentHeaderProps = {}) {
   const page = pageResult?.node;
 
   const pageIsDocument = page ? isDocumentPage(page.type) : false;
+  const pageIsSheet = page ? isSheetPage(page.type) : false;
   const pageIsFile = page ? isFilePage(page.type) : false;
 
   const {
@@ -70,7 +71,9 @@ export function ViewHeader({ children }: ContentHeaderProps = {}) {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <EditableTitle />
-          {pageIsDocument && <SaveStatusIndicator isDirty={document?.isDirty || false} isSaving={isSaving} />}
+          {(pageIsDocument || pageIsSheet) && (
+            <SaveStatusIndicator isDirty={document?.isDirty || false} isSaving={isSaving} />
+          )}
         </div>
         <div className="flex items-center gap-2">
           {pageIsDocument && <EditorToggles />}

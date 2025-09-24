@@ -1,11 +1,12 @@
 import React from 'react';
-import { 
-  FileText, 
-  Folder, 
-  MessageSquare, 
-  Sparkles, 
-  Palette, 
-  FileIcon 
+import {
+  FileText,
+  Folder,
+  MessageSquare,
+  Sparkles,
+  Palette,
+  FileIcon,
+  Table
 } from 'lucide-react';
 import { PageType, getPageTypeIconName } from '@pagespace/lib';
 
@@ -22,6 +23,7 @@ const iconMap = {
   Sparkles,
   Palette,
   FileIcon,
+  Table,
 } as const;
 
 export function PageTypeIcon({ type, className }: PageTypeIconProps) {

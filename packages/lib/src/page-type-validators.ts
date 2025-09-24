@@ -1,5 +1,6 @@
 import { PageType } from './enums';
 import { getPageTypeConfig } from './page-types.config';
+import { parseSheetContent } from './sheet';
 
 export interface ValidationResult {
   valid: boolean;
@@ -64,6 +65,16 @@ export function validatePageCreation(
 
     case PageType.CANVAS:
       // Canvas pages can start empty
+      break;
+
+    case PageType.SHEET:
+      if (data.content) {
+        try {
+          parseSheetContent(data.content);
+        } catch {
+          errors.push('Invalid sheet content');
+        }
+      }
       break;
   }
 
@@ -147,6 +158,18 @@ export function validatePageUpdate(
             JSON.parse(data.content);
           } catch {
             errors.push('Content must be valid JSON for channel/chat pages');
+          }
+        }
+        break;
+
+      case PageType.SHEET:
+        if (typeof data.content !== 'string') {
+          errors.push('Content must be a string for sheet pages');
+        } else {
+          try {
+            parseSheetContent(data.content);
+          } catch {
+            errors.push('Content must be valid sheet data');
           }
         }
         break;

@@ -169,7 +169,7 @@ export const searchTools = {
     inputSchema: z.object({
       driveId: z.string().describe('The unique ID of the drive to search in'),
       pattern: z.string().describe('Glob pattern to match page titles/paths (e.g., "**/README*", "docs/**/*.md", "meeting-*")'),
-      includeTypes: z.array(z.enum(['FOLDER', 'DOCUMENT', 'AI_CHAT', 'CHANNEL', 'CANVAS'])).optional().describe('Filter by page types'),
+      includeTypes: z.array(z.enum(['FOLDER', 'DOCUMENT', 'AI_CHAT', 'CHANNEL', 'CANVAS', 'SHEET'])).optional().describe('Filter by page types'),
       maxResults: z.number().optional().default(100).describe('Maximum number of results to return'),
     }),
     execute: async ({ driveId, pattern, includeTypes, maxResults = 100 }, { experimental_context: context }) => {

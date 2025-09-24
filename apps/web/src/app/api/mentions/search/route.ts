@@ -138,7 +138,7 @@ export async function GET(request: Request) {
           label: page.title,
           type: mentionType,
           data: {
-            pageType: page.type as 'DOCUMENT' | 'FOLDER' | 'CHANNEL' | 'AI_CHAT',
+            pageType: page.type as 'DOCUMENT' | 'FOLDER' | 'CHANNEL' | 'AI_CHAT' | 'SHEET',
             driveId: page.driveId,
           },
           description,

@@ -9,7 +9,7 @@ export interface BaseMention {
 }
 
 export interface PageMentionData {
-  pageType: 'DOCUMENT' | 'FOLDER' | 'AI_CHAT' | 'CHANNEL';
+  pageType: 'DOCUMENT' | 'FOLDER' | 'AI_CHAT' | 'CHANNEL' | 'SHEET';
   driveId: string;
 }
 

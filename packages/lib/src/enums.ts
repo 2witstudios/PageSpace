@@ -5,6 +5,7 @@ export enum PageType {
   AI_CHAT = 'AI_CHAT',
   CANVAS = 'CANVAS',
   FILE = 'FILE',
+  SHEET = 'SHEET',
 }
 
 export enum PermissionAction {
