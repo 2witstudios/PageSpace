@@ -62,6 +62,14 @@ export function getPageContentForAI(page: Page & { channelMessages?: any[], chil
                 contentString += "Folder is empty.\n";
             }
             break;
+        case PageType.SHEET:
+            if (page.content && typeof page.content === 'string' && page.content.trim() !== '') {
+                contentString += "Sheet Data (CSV format):\n";
+                contentString += `${page.content}\n`;
+            } else {
+                contentString += "Sheet is empty.\n";
+            }
+            break;
         default:
             contentString += `Content extraction not implemented for page type: ${page.type}.\n`;
     }

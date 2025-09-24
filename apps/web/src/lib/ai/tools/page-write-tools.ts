@@ -331,12 +331,12 @@ export const pageWriteTools = {
    * Create new documents, folders, or other content
    */
   create_page: tool({
-    description: 'Create new pages in the workspace. Supports all page types: FOLDER (hierarchical organization), DOCUMENT (text content), AI_CHAT (AI conversation spaces with optional agent configuration), CHANNEL (team discussions), CANVAS (custom HTML/CSS pages), DATABASE (deprecated). Any page type can contain any other page type as children with infinite nesting. For AI_CHAT pages, can optionally configure system prompt and enabled tools.',
+    description: 'Create new pages in the workspace. Supports all page types: FOLDER (hierarchical organization), DOCUMENT (text content), AI_CHAT (AI conversation spaces with optional agent configuration), CHANNEL (team discussions), CANVAS (custom HTML/CSS pages), SHEET (spreadsheet-style grid with formulas), DATABASE (deprecated). Any page type can contain any other page type as children with infinite nesting. For AI_CHAT pages, can optionally configure system prompt and enabled tools.',
     inputSchema: z.object({
       driveId: z.string().describe('The unique ID of the drive to create the page in'),
       parentId: z.string().optional().describe('The unique ID of the parent page from list_pages - REQUIRED when creating inside any page (folder, document, channel, etc). Only omit for root-level pages in the drive.'),
       title: z.string().describe('The title of the new page'),
-      type: z.enum(['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS']).describe('The type of page to create'),
+      type: z.enum(['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET']).describe('The type of page to create'),
       content: z.string().optional().describe('Optional initial content for the page'),
       // Agent configuration fields (only for AI_CHAT type)
       systemPrompt: z.string().optional().describe('System prompt for AI agent behavior (only for AI_CHAT pages). Defines how the agent should behave and respond.'),
@@ -424,7 +424,7 @@ export const pageWriteTools = {
         // Prepare page data with proper typing
         interface PageInsertData {
           title: string;
-          type: 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS';
+        type: 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'SHEET';
           content: string;
           position: number;
           driveId: string;

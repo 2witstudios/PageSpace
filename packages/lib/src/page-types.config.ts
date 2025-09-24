@@ -20,7 +20,7 @@ export interface PageTypeConfig {
   type: PageType;
   displayName: string;
   description: string;
-  iconName: 'Folder' | 'FileText' | 'MessageSquare' | 'Sparkles' | 'Palette' | 'FileIcon';
+  iconName: 'Folder' | 'FileText' | 'MessageSquare' | 'Sparkles' | 'Palette' | 'FileIcon' | 'Table';
   emoji: string;
   capabilities: PageTypeCapabilities;
   defaultContent: () => any;
@@ -152,6 +152,27 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     defaultContent: () => '',
     allowedChildTypes: [],
     uiComponent: 'FileViewer',
+    layoutViewType: 'document',
+  },
+  [PageType.SHEET]: {
+    type: PageType.SHEET,
+    displayName: 'Sheet',
+    description: 'Structured grid with formulas and calculations',
+    iconName: 'Table',
+    emoji: '📊',
+    capabilities: {
+      canHaveChildren: false,
+      canAcceptUploads: false,
+      canBeConverted: false,
+      requiresAuth: false,
+      supportsRealtime: false,
+      supportsVersioning: true,
+      supportsAI: false,
+    },
+    defaultContent: () =>
+      ['Item,Quantity,Price,Total', 'Apples,3,1.50,=B2*C2', 'Oranges,2,1.25,=B3*C3', 'Total,,,=SUM(D2:D3)'].join('\n'),
+    allowedChildTypes: [],
+    uiComponent: 'SheetView',
     layoutViewType: 'document',
   },
 };

@@ -65,6 +65,9 @@ export function validatePageCreation(
     case PageType.CANVAS:
       // Canvas pages can start empty
       break;
+    case PageType.SHEET:
+      // Sheets initialize from CSV content
+      break;
   }
 
   // Run custom validation if defined
@@ -134,8 +137,9 @@ export function validatePageUpdate(
     switch (type) {
       case PageType.DOCUMENT:
       case PageType.CANVAS:
+      case PageType.SHEET:
         if (typeof data.content !== 'string') {
-          errors.push('Content must be a string for document/canvas pages');
+          errors.push('Content must be a string for document/canvas/sheet pages');
         }
         break;
       

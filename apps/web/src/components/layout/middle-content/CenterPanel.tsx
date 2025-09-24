@@ -18,6 +18,7 @@ import CanvasPageView from './page-views/canvas/CanvasPageView';
 import GlobalAssistantView from './page-views/dashboard/GlobalAssistantView';
 import { memo } from 'react';
 import { useLayoutStore } from '@/stores/useLayoutStore';
+import SheetView from './page-views/sheet/SheetView';
 
 // Memoized page content component to prevent unnecessary re-renders
 const PageContent = memo(({ pageId }: { pageId: string | null }) => {
@@ -67,6 +68,7 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
     DocumentView,
     CanvasPageView,
     FileViewer,
+    SheetView,
   };
   
   const componentName = getPageTypeComponent(page.type);
