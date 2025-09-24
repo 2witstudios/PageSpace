@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { TreePage } from '@/hooks/usePageTree';
+import { TreePage, usePageTree } from '@/hooks/usePageTree';
 import { useDocument } from '@/hooks/useDocument';
 import { useSocket } from '@/hooks/useSocket';
 import { useAuth } from '@/hooks/use-auth';
@@ -9,8 +9,11 @@ import { PageEventPayload } from '@/lib/socket-utils';
 import { toast } from 'sonner';
 import {
   SheetData,
+  SheetExternalReferenceToken,
+  collectExternalReferences,
   encodeCellAddress,
   evaluateSheet,
+  PageType,
   parseSheetContent,
   sanitizeSheetData,
   serializeSheetContent,
@@ -18,6 +21,9 @@ import {
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { FloatingCellEditor } from './FloatingCellEditor';
+import { useSuggestion } from '@/hooks/useSuggestion';
+import { SuggestionProvider, useSuggestionContext } from '@/components/providers/SuggestionProvider';
+import SuggestionPopup from '@/components/mentions/SuggestionPopup';
 
 interface SheetViewProps {
   page: TreePage;
@@ -27,6 +33,34 @@ type GridSelection = {
   row: number;
   column: number;
 };
+
+type ExternalSheetState =
+  | {
+      status: 'loading';
+      label: string;
+      identifier?: string;
+      mentionType?: string;
+      pageId: string;
+      title: string;
+    }
+  | {
+      status: 'ready';
+      label: string;
+      identifier?: string;
+      mentionType?: string;
+      pageId: string;
+      title: string;
+      sheet: SheetData;
+    }
+  | {
+      status: 'error';
+      label: string;
+      identifier?: string;
+      mentionType?: string;
+      pageId?: string;
+      title?: string;
+      error: string;
+    };
 
 const clampSelection = (selection: GridSelection, sheet: SheetData): GridSelection => ({
   row: Math.min(Math.max(selection.row, 0), Math.max(0, sheet.rowCount - 1)),
@@ -55,7 +89,7 @@ const getCellRect = (row: number, column: number, gridElement: HTMLElement | nul
   return cellElement.getBoundingClientRect();
 };
 
-const SheetView: React.FC<SheetViewProps> = ({ page }) => {
+const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
   const initialSheet = useMemo(() => sanitizeSheetData(parseSheetContent(page.content)), [page.content]);
   const [sheet, setSheet] = useState<SheetData>(initialSheet);
   const [selectedCell, setSelectedCell] = useState<GridSelection>({ row: 0, column: 0 });
@@ -84,6 +118,114 @@ const SheetView: React.FC<SheetViewProps> = ({ page }) => {
   const gridRef = useRef<HTMLDivElement>(null);
   const socket = useSocket();
   const { user } = useAuth();
+  const { tree } = usePageTree(page.driveId);
+  const [externalSheets, setExternalSheets] = useState<Record<string, ExternalSheetState>>({});
+  const externalFetchesRef = useRef<Set<string>>(new Set());
+  const externalReferences = useMemo(() => collectExternalReferences(sheet), [sheet]);
+  const flattenedPages = useMemo(() => {
+    const items: TreePage[] = [];
+    const walk = (nodes: TreePage[]) => {
+      for (const node of nodes) {
+        items.push(node);
+        if (node.children && node.children.length > 0) {
+          walk(node.children);
+        }
+      }
+    };
+    if (tree && tree.length > 0) {
+      walk(tree);
+    }
+    return items;
+  }, [tree]);
+
+  const parentMap = useMemo(() => {
+    const map = new Map<string, string | null>();
+    for (const node of flattenedPages) {
+      map.set(node.id, node.parentId ?? null);
+    }
+    return map;
+  }, [flattenedPages]);
+
+  const resolveReferenceTarget = useCallback(
+    (reference: SheetExternalReferenceToken) => {
+      if (reference.identifier) {
+        const byId = flattenedPages.find(
+          (node) => node.id === reference.identifier && node.type === PageType.SHEET
+        );
+        if (byId) {
+          return { pageId: byId.id, title: byId.title };
+        }
+      }
+
+      const normalizedLabel = reference.label.trim().toLowerCase();
+      const labelMatches = flattenedPages.filter(
+        (node) =>
+          node.type === PageType.SHEET && node.title.trim().toLowerCase() === normalizedLabel
+      );
+
+      if (labelMatches.length === 1) {
+        return { pageId: labelMatches[0].id, title: labelMatches[0].title };
+      }
+
+      if (labelMatches.length > 1) {
+        const getAncestorChain = (id?: string | null) => {
+          const chain: string[] = [];
+          const visited = new Set<string>();
+          let current: string | null | undefined = id ?? null;
+          while (current) {
+            if (visited.has(current)) {
+              break;
+            }
+            chain.push(current);
+            visited.add(current);
+            current = parentMap.get(current) ?? null;
+          }
+          return chain;
+        };
+
+        const currentAncestors = new Set(getAncestorChain(page.id));
+
+        const ranked = labelMatches
+          .map((node) => {
+            const chain = getAncestorChain(node.id);
+            const sharedDepth = chain.reduce(
+              (depth, ancestor) => (currentAncestors.has(ancestor) ? depth + 1 : depth),
+              0
+            );
+            return {
+              node,
+              isSibling: node.parentId === page.parentId,
+              sharedDepth,
+              depth: chain.length,
+              position: typeof node.position === 'number' ? node.position : Number.MAX_SAFE_INTEGER,
+            };
+          })
+          .sort((a, b) => {
+            if (a.isSibling !== b.isSibling) {
+              return a.isSibling ? -1 : 1;
+            }
+            if (b.sharedDepth !== a.sharedDepth) {
+              return b.sharedDepth - a.sharedDepth;
+            }
+            if (a.depth !== b.depth) {
+              return a.depth - b.depth;
+            }
+            if (a.position !== b.position) {
+              return a.position - b.position;
+            }
+            return a.node.title.localeCompare(b.node.title);
+          });
+
+        if (ranked.length > 0) {
+          const { node } = ranked[0];
+          return { pageId: node.id, title: node.title };
+        }
+      }
+
+      return null;
+    },
+    [flattenedPages, page.id, page.parentId, parentMap]
+  );
 
   const {
     document: documentState,
@@ -94,13 +236,213 @@ const SheetView: React.FC<SheetViewProps> = ({ page }) => {
     forceSave,
   } = useDocument(page.id, page.content);
 
-  const evaluation = useMemo(() => evaluateSheet(sheet), [sheet]);
+  useEffect(() => {
+    setExternalSheets((prev) => {
+      const next: Record<string, ExternalSheetState> = {};
+      let changed = false;
+
+      for (const reference of externalReferences) {
+        if (prev[reference.raw]) {
+          next[reference.raw] = prev[reference.raw];
+        } else {
+          changed = true;
+        }
+      }
+
+      if (!changed && Object.keys(next).length === Object.keys(prev).length) {
+        return prev;
+      }
+
+      return next;
+    });
+  }, [externalReferences]);
+
+  useEffect(() => {
+    externalReferences.forEach((reference) => {
+      const existing = externalSheets[reference.raw];
+      if (existing && (existing.status === 'loading' || existing.status === 'ready')) {
+        return;
+      }
+
+      const target = resolveReferenceTarget(reference);
+      if (!target) {
+        setExternalSheets((prev) => ({
+          ...prev,
+          [reference.raw]: {
+            status: 'error',
+            label: reference.label,
+            identifier: reference.identifier,
+            mentionType: reference.mentionType,
+            error: `Referenced page "${reference.label}" could not be found`,
+          },
+        }));
+        return;
+      }
+
+      if (externalFetchesRef.current.has(reference.raw)) {
+        return;
+      }
+
+      externalFetchesRef.current.add(reference.raw);
+
+      setExternalSheets((prev) => ({
+        ...prev,
+        [reference.raw]: {
+          status: 'loading',
+          label: reference.label,
+          identifier: reference.identifier,
+          mentionType: reference.mentionType,
+          pageId: target.pageId,
+          title: target.title,
+        },
+      }));
+
+      fetch(`/api/pages/${target.pageId}`)
+        .then(async (response) => {
+          if (!response.ok) {
+            if (response.status === 403) {
+              throw new Error(`You do not have access to "${target.title}"`);
+            }
+            throw new Error('Failed to load referenced page');
+          }
+
+          const contentType = response.headers.get('content-type');
+          if (!contentType || !contentType.includes('application/json')) {
+            const fallbackMessage = await response
+              .text()
+              .then((text) => text.trim())
+              .catch(() => '');
+            throw new Error(
+              fallbackMessage || 'Received unexpected response when loading referenced page'
+            );
+          }
+
+          let parsedResponse: unknown;
+          try {
+            parsedResponse = await response.json();
+          } catch {
+            throw new Error('Failed to parse referenced page response');
+          }
+
+          if (!parsedResponse || typeof parsedResponse !== 'object') {
+            throw new Error('Referenced page response was not valid JSON');
+          }
+
+          const data = parsedResponse as { type?: PageType; content?: unknown };
+
+          if (data.type && data.type !== PageType.SHEET) {
+            throw new Error(`Referenced page "${target.title}" is not a sheet`);
+          }
+
+          if (!('content' in data)) {
+            throw new Error('Referenced page response did not include any content');
+          }
+
+          const parsed = sanitizeSheetData(parseSheetContent(data.content));
+          setExternalSheets((prev) => ({
+            ...prev,
+            [reference.raw]: {
+              status: 'ready',
+              label: reference.label,
+              identifier: reference.identifier,
+              mentionType: reference.mentionType,
+              pageId: target.pageId,
+              title: target.title,
+              sheet: parsed,
+            },
+          }));
+        })
+        .catch((error) => {
+          const message = error instanceof Error ? error.message : 'Failed to load referenced page';
+          setExternalSheets((prev) => ({
+            ...prev,
+            [reference.raw]: {
+              status: 'error',
+              label: reference.label,
+              identifier: reference.identifier,
+              mentionType: reference.mentionType,
+              pageId: target.pageId,
+              title: target.title,
+              error: message,
+            },
+          }));
+        })
+        .finally(() => {
+          externalFetchesRef.current.delete(reference.raw);
+        });
+    });
+  }, [externalReferences, externalSheets, resolveReferenceTarget]);
+
+  const evaluationOptions = useMemo(
+    () => ({
+      pageId: page.id,
+      pageTitle: page.title,
+      resolveExternalReference: (reference: SheetExternalReferenceToken) => {
+        const entry = externalSheets[reference.raw];
+        if (!entry) {
+          return {
+            pageId: reference.identifier ?? reference.raw,
+            pageTitle: reference.label,
+            error: `Referenced page "${reference.label}" is loading`,
+          };
+        }
+
+        if (entry.status === 'ready') {
+          return {
+            pageId: entry.pageId,
+            pageTitle: entry.title,
+            sheet: entry.sheet,
+          };
+        }
+
+        if (entry.status === 'loading') {
+          return {
+            pageId: entry.pageId,
+            pageTitle: entry.title,
+            error: `Referenced page "${entry.title}" is loading`,
+          };
+        }
+
+        return {
+          pageId: entry.pageId ?? reference.identifier ?? reference.raw,
+          pageTitle: entry.title ?? reference.label,
+          error: entry.error,
+        };
+      },
+    }),
+    [externalSheets, page.id, page.title]
+  );
+
+  const evaluation = useMemo(() => evaluateSheet(sheet, evaluationOptions), [sheet, evaluationOptions]);
   const currentSelection = clampSelection(selectedCell, sheet);
   const currentAddress = encodeCellAddress(currentSelection.row, currentSelection.column);
   const currentCell = evaluation.byAddress[currentAddress];
   const currentError = currentCell?.error;
   const currentDisplay = currentCell?.error ? '#ERROR' : currentCell?.display ?? '';
   const currentRaw = sheet.cells[currentAddress] ?? '';
+
+  const suggestionContext = useSuggestionContext();
+  const handleFormulaValueChange = useCallback(
+    (value: string) => {
+      setFormulaValue(value);
+      if (editingCell) {
+        setEditingValue(value);
+      }
+    },
+    [editingCell]
+  );
+
+  const suggestion = useSuggestion({
+    inputRef: formulaInputRef as React.RefObject<HTMLTextAreaElement | HTMLInputElement>,
+    onValueChange: handleFormulaValueChange,
+    trigger: '@',
+    allowedTypes: ['page'],
+    driveId: page.driveId,
+    mentionFormat: 'markdown-typed',
+    variant: 'chat',
+    popupPlacement: 'bottom',
+    appendSpace: false,
+  });
 
   const applySheetUpdate = useCallback(
     (updater: (previous: SheetData) => SheetData, shouldPersist = true) => {
@@ -372,6 +714,11 @@ const SheetView: React.FC<SheetViewProps> = ({ page }) => {
 
   const handleFormulaKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLInputElement>) => {
+      suggestion.handleKeyDown(event);
+      if (event.defaultPrevented || suggestionContext.isOpen) {
+        return;
+      }
+
       if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault();
         if (editingCell) {
@@ -392,7 +739,16 @@ const SheetView: React.FC<SheetViewProps> = ({ page }) => {
         event.currentTarget.blur();
       }
     },
-    [currentRaw, formulaValue, handleCommitFormula, editingCell, commitCellEdit, cancelCellEdit]
+    [
+      suggestion,
+      suggestionContext.isOpen,
+      editingCell,
+      commitCellEdit,
+      formulaValue,
+      handleCommitFormula,
+      cancelCellEdit,
+      currentRaw,
+    ]
   );
 
   // Initialize sheet when page changes
@@ -562,40 +918,50 @@ const SheetView: React.FC<SheetViewProps> = ({ page }) => {
         </div>
         <div className="grid grid-cols-[80px_1fr_auto] items-center gap-2 px-4 pb-3">
           <span className="text-xs font-medium uppercase text-muted-foreground">Formula</span>
-          <input
-            ref={formulaInputRef}
-            value={formulaValue}
-            onFocus={() => {
-              setIsFormulaFocused(true);
-              // If we're not already editing, start editing the current cell
-              if (!editingCell) {
-                const { row, column } = currentSelection;
-                startCellEdit(row, column);
-              }
-            }}
-            onBlur={(event) => {
-              setIsFormulaFocused(false);
-              if (editingCell && event.target.value !== currentRaw) {
-                commitCellEdit(event.target.value);
-              } else if (!editingCell && event.target.value !== currentRaw) {
-                handleCommitFormula(event.target.value);
-              }
-            }}
-            onChange={(event) => {
-              setFormulaValue(event.target.value);
-              // Keep floating editor in sync
-              if (editingCell) {
-                setEditingValue(event.target.value);
-              }
-            }}
-            onKeyDown={handleFormulaKeyDown}
-            disabled={isReadOnly}
-            className={cn(
-              'w-full rounded border border-input bg-background px-2 py-1 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20',
-              isReadOnly && 'cursor-not-allowed opacity-75'
-            )}
-            placeholder="Enter a value or formula (e.g. =SUM(A1:A5))"
-          />
+          <div className="relative">
+            <input
+              ref={formulaInputRef}
+              value={formulaValue}
+              onFocus={() => {
+                setIsFormulaFocused(true);
+                // If we're not already editing, start editing the current cell
+                if (!editingCell) {
+                  const { row, column } = currentSelection;
+                  startCellEdit(row, column);
+                }
+              }}
+              onBlur={(event) => {
+                setIsFormulaFocused(false);
+                if (editingCell && event.target.value !== currentRaw) {
+                  commitCellEdit(event.target.value);
+                } else if (!editingCell && event.target.value !== currentRaw) {
+                  handleCommitFormula(event.target.value);
+                }
+              }}
+              onChange={(event) => {
+                suggestion.handleValueChange(event.target.value);
+              }}
+              onKeyDown={handleFormulaKeyDown}
+              disabled={isReadOnly}
+              className={cn(
+                'w-full rounded border border-input bg-background px-2 py-1 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20',
+                isReadOnly && 'cursor-not-allowed opacity-75'
+              )}
+              placeholder="Enter a value or formula (e.g. =SUM(A1:A5))"
+            />
+            <SuggestionPopup
+              isOpen={suggestionContext.isOpen}
+              items={suggestionContext.items}
+              selectedIndex={suggestionContext.selectedIndex}
+              position={suggestionContext.position}
+              loading={suggestionContext.loading}
+              error={suggestionContext.error}
+              onSelect={suggestion.actions.selectSuggestion}
+              onSelectionChange={suggestion.actions.selectItem}
+              variant="inline"
+              popupPlacement="bottom"
+            />
+          </div>
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={handleAddColumn} disabled={isReadOnly}>
               + Column
@@ -720,5 +1086,11 @@ const SheetView: React.FC<SheetViewProps> = ({ page }) => {
     </div>
   );
 };
+
+const SheetView: React.FC<SheetViewProps> = (props) => (
+  <SuggestionProvider>
+    <SheetViewComponent {...props} />
+  </SuggestionProvider>
+);
 
 export default SheetView;
