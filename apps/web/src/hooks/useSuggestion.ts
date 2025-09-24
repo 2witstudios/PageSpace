@@ -16,6 +16,7 @@ export interface UseSuggestionProps {
   variant?: 'chat' | 'document';
   popupPlacement?: 'top' | 'bottom';
   appendSpace?: boolean;
+  triggerPattern?: RegExp;
 }
 
 export interface UseSuggestionResult {
@@ -44,8 +45,14 @@ export function useSuggestion({
   variant = 'chat',
   popupPlacement = 'bottom',
   appendSpace = true,
+  triggerPattern,
 }: UseSuggestionProps): UseSuggestionResult {
   const context = useSuggestionContext();
+
+  // Default pattern: @ must be at start or preceded by whitespace (existing behavior)
+  // Sheet pattern should allow formula operators like: ( = + - * / , < > ! and whitespace
+  const defaultTriggerPattern = /^$|^\s$/; // At start of string or preceded by whitespace
+  const effectiveTriggerPattern = triggerPattern || defaultTriggerPattern;
 
   const getValue = useCallback((): string => {
     const element = inputRef.current;
@@ -151,7 +158,7 @@ export function useSuggestion({
     // Find the most recent @ that could be a trigger
     const mentionTriggerIndex = textBeforeCursor.lastIndexOf(trigger);
 
-    if (mentionTriggerIndex !== -1 && (mentionTriggerIndex === 0 || /\s/.test(textBeforeCursor[mentionTriggerIndex - 1]))) {
+    if (mentionTriggerIndex !== -1 && (mentionTriggerIndex === 0 || effectiveTriggerPattern.test(textBeforeCursor[mentionTriggerIndex - 1]))) {
       const textAfterTrigger = textBeforeCursor.substring(mentionTriggerIndex + 1);
       
       // Check if this @ is part of an existing mention by looking for patterns that indicate a completed mention
@@ -214,7 +221,8 @@ export function useSuggestion({
     context,
     suggestion.actions,
     getSelectionStart,
-    variant
+    variant,
+    effectiveTriggerPattern
   ]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {

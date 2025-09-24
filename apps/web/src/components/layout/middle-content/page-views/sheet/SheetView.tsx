@@ -432,6 +432,10 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     [editingCell]
   );
 
+  // Sheet-specific trigger pattern: allows @ after formula operators and whitespace
+  // Allows: ( = + - * / , < > ! and whitespace characters, or at start of string
+  const sheetTriggerPattern = /^$|^[\s(=+\-*/,<>!]$/;
+
   const suggestion = useSuggestion({
     inputRef: formulaInputRef as React.RefObject<HTMLTextAreaElement | HTMLInputElement>,
     onValueChange: handleFormulaValueChange,
@@ -442,6 +446,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     variant: 'chat',
     popupPlacement: 'bottom',
     appendSpace: false,
+    triggerPattern: sheetTriggerPattern,
   });
 
   const applySheetUpdate = useCallback(
@@ -1072,6 +1077,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         }}
         isReadOnly={isReadOnly}
         initialKey={initialKey}
+        driveId={page.driveId}
       />
 
       {/* Screen reader announcements */}

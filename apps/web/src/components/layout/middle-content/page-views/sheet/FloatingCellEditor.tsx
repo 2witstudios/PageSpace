@@ -2,6 +2,9 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
+import { useSuggestion } from '@/hooks/useSuggestion';
+import { useSuggestionContext } from '@/components/providers/SuggestionProvider';
+import SuggestionPopup from '@/components/mentions/SuggestionPopup';
 
 interface FloatingCellEditorProps {
   value: string;
@@ -12,6 +15,7 @@ interface FloatingCellEditorProps {
   onValueChange: (value: string) => void;
   isReadOnly?: boolean;
   initialKey?: string;
+  driveId?: string;
 }
 
 export const FloatingCellEditor: React.FC<FloatingCellEditorProps> = ({
@@ -23,12 +27,38 @@ export const FloatingCellEditor: React.FC<FloatingCellEditorProps> = ({
   onValueChange,
   isReadOnly = false,
   initialKey,
+  driveId,
 }) => {
   const inputRef = useRef<HTMLInputElement>(null);
   const [mounted, setMounted] = useState(false);
+  const suggestionContext = useSuggestionContext();
+
+  // Sheet-specific trigger pattern: allows @ after formula operators and whitespace
+  // Allows: ( = + - * / , < > ! and whitespace characters, or at start of string
+  const sheetTriggerPattern = /^$|^[\s(=+\-*/,<>!]$/;
+
+  // Add mention support
+  const suggestion = useSuggestion({
+    inputRef: inputRef as React.RefObject<HTMLTextAreaElement | HTMLInputElement>,
+    onValueChange,
+    trigger: '@',
+    allowedTypes: ['page'],
+    driveId,
+    mentionFormat: 'markdown-typed',
+    variant: 'chat',
+    popupPlacement: 'bottom',
+    appendSpace: false,
+    triggerPattern: sheetTriggerPattern,
+  });
 
   const handleKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLInputElement>) => {
+      // Handle mention suggestions first
+      suggestion.handleKeyDown(event);
+      if (event.defaultPrevented || suggestionContext.isOpen) {
+        return;
+      }
+
       event.stopPropagation(); // Prevent grid navigation
 
       switch (event.key) {
@@ -49,7 +79,7 @@ export const FloatingCellEditor: React.FC<FloatingCellEditorProps> = ({
           break;
         case 'ArrowUp':
         case 'ArrowDown':
-          // Allow navigation to commit and move
+          // Allow navigation to commit and move (only if suggestions aren't open)
           if (!event.shiftKey) {
             event.preventDefault();
             onCommit(value);
@@ -57,7 +87,7 @@ export const FloatingCellEditor: React.FC<FloatingCellEditorProps> = ({
           break;
       }
     },
-    [value, onCommit, onCancel]
+    [value, onCommit, onCancel, suggestion, suggestionContext.isOpen]
   );
 
   const handleBlur = useCallback(
@@ -134,7 +164,7 @@ export const FloatingCellEditor: React.FC<FloatingCellEditorProps> = ({
         ref={inputRef}
         type="text"
         value={value}
-        onChange={(e) => onValueChange(e.target.value)}
+        onChange={(e) => suggestion.handleValueChange(e.target.value)}
         onKeyDown={handleKeyDown}
         onBlur={handleBlur}
         className={cn(
@@ -155,6 +185,20 @@ export const FloatingCellEditor: React.FC<FloatingCellEditorProps> = ({
       <div id="cell-editor-instructions" className="sr-only">
         Press Enter to confirm, Escape to cancel, or Tab to move to next cell
       </div>
+
+      {/* Mention Suggestions Popup */}
+      <SuggestionPopup
+        isOpen={suggestionContext.isOpen}
+        items={suggestionContext.items}
+        selectedIndex={suggestionContext.selectedIndex}
+        position={suggestionContext.position}
+        loading={suggestionContext.loading}
+        error={suggestionContext.error}
+        onSelect={suggestion.actions.selectSuggestion}
+        onSelectionChange={suggestion.actions.selectItem}
+        variant="inline"
+        popupPlacement="bottom"
+      />
     </div>
   );
 };
