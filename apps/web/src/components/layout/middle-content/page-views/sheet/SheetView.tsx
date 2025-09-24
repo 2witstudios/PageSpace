@@ -12,6 +12,7 @@ import {
   SheetExternalReferenceToken,
   collectExternalReferences,
   encodeCellAddress,
+  decodeCellAddress,
   evaluateSheet,
   PageType,
   parseSheetContent,
@@ -121,6 +122,34 @@ const getSelectionAddress = (selection: SelectionState): string => {
   return `${startAddr}:${endAddr}`;
 };
 
+// Adjust formula references when pasting
+const adjustFormulaReferences = (formula: string, rowOffset: number, colOffset: number): string => {
+  if (!formula.startsWith('=')) {
+    return formula;
+  }
+
+  // Simple regex to find cell references like A1, B2, etc.
+  const cellRefRegex = /([A-Z]+)(\d+)/g;
+
+  return formula.replace(cellRefRegex, (match, colLetters, rowNum) => {
+    try {
+      // Parse the original reference
+      const originalRef = `${colLetters}${rowNum}`;
+      const { row: origRow, column: origCol } = decodeCellAddress(originalRef);
+
+      // Apply offset
+      const newRow = Math.max(0, origRow + rowOffset);
+      const newCol = Math.max(0, origCol + colOffset);
+
+      // Return the adjusted reference
+      return encodeCellAddress(newRow, newCol);
+    } catch {
+      // If parsing fails, return original
+      return match;
+    }
+  });
+};
+
 const getColumnLabel = (columnIndex: number) => encodeCellAddress(0, columnIndex).replace(/\d+/g, '');
 
 // Utility function to check if a key should trigger direct cell editing
@@ -130,7 +159,7 @@ const isPrintableKey = (key: string): boolean => {
     return true;
   }
   // Special cases that should start editing
-  return key === 'F2' || key === 'Delete' || key === 'Backspace';
+  return key === 'F2';
 };
 
 // Get the DOM rectangle for a specific cell
@@ -157,6 +186,26 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
   // Mouse drag selection state
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState<GridSelection | null>(null);
+
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState<{
+    show: boolean;
+    x: number;
+    y: number;
+    cell: GridSelection | null;
+  }>({
+    show: false,
+    x: 0,
+    y: 0,
+    cell: null
+  });
+
+  // Copy mode state
+  const [copiedData, setCopiedData] = useState<{
+    mode: 'formulas' | 'values';
+    data: string;
+    source: SelectionState;
+  } | null>(null);
 
   // Floating editor state
   const [editingCell, setEditingCell] = useState<GridSelection | null>(null);
@@ -546,9 +595,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       let initialValue = currentValue;
 
       // Handle special keys
-      if (key === 'Delete' || key === 'Backspace') {
-        initialValue = '';
-      } else if (key === 'F2') {
+      if (key === 'F2') {
         // F2 starts editing with current value
         initialValue = currentValue;
       } else if (key && isPrintableKey(key) && key.length === 1) {
@@ -700,6 +747,9 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       });
       setIsFormulaFocused(false);
 
+      // Close context menu
+      setContextMenu(prev => ({ ...prev, show: false }));
+
       // Exit editing mode if selecting a different cell
       if (editingCell && (editingCell.row !== cell.row || editingCell.column !== cell.column)) {
         setEditingCell(null);
@@ -713,6 +763,32 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       });
     },
     [sheet, editingCell, isReadOnly]
+  );
+
+  const handleCellRightClick = useCallback(
+    (row: number, column: number, event: React.MouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const cell = clampSelection({ row, column }, sheet);
+
+      // Update selection if right-clicking a different cell
+      if (!isCellInSelection(row, column, selection)) {
+        setSelection({
+          type: 'single',
+          cell
+        });
+      }
+
+      // Show context menu at cursor position
+      setContextMenu({
+        show: true,
+        x: event.clientX,
+        y: event.clientY,
+        cell
+      });
+    },
+    [sheet, selection]
   );
 
   const handleCellMouseEnter = useCallback(
@@ -801,10 +877,10 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
 
   // Handle paste operation
   const handlePaste = useCallback(
-    async (event: ClipboardEvent) => {
+    async (mode: 'auto' | 'values' | 'formulas' = 'auto', event?: ClipboardEvent) => {
       if (isReadOnly || editingCell) return;
 
-      event.preventDefault();
+      event?.preventDefault();
 
       try {
         const clipboardText = await navigator.clipboard.readText();
@@ -820,20 +896,47 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         const requiredRows = Math.max(sheet.rowCount, startRow + tableData.rows);
         const requiredCols = Math.max(sheet.columnCount, startCol + tableData.columns);
 
+        // Determine paste behavior
+        const isInternalPaste = copiedData && copiedData.data === clipboardText;
+        const pasteMode = mode === 'auto' ?
+          (isInternalPaste ? copiedData.mode : 'values') :
+          mode;
+
         applySheetUpdate((previous) => {
           const nextCells = { ...previous.cells };
 
-          // Apply paste data
+          // Apply paste data with proper handling for formulas
           for (let row = 0; row < tableData.rows; row++) {
             for (let col = 0; col < tableData.columns; col++) {
               const cellAddress = encodeCellAddress(startRow + row, startCol + col);
-              const value = tableData.data[row][col].trim();
+              let value = tableData.data[row][col].trim();
 
               if (value === '') {
                 delete nextCells[cellAddress];
-              } else {
-                nextCells[cellAddress] = value;
+                continue;
               }
+
+              // Handle formula adjustment if pasting formulas and it's an internal paste
+              if (pasteMode === 'formulas' && isInternalPaste && copiedData && value.startsWith('=')) {
+                // Calculate offset from original copy position
+                const copyStart = copiedData.source.type === 'single'
+                  ? copiedData.source.cell
+                  : copiedData.source.range.start;
+
+                const rowOffset = (startRow + row) - (copyStart.row + row);
+                const colOffset = (startCol + col) - (copyStart.column + col);
+
+                // Only adjust if there's an offset
+                if (rowOffset !== 0 || colOffset !== 0) {
+                  value = adjustFormulaReferences(value, rowOffset, colOffset);
+                }
+              } else if (pasteMode === 'values' && value.startsWith('=')) {
+                // For values mode, don't paste formulas - this shouldn't happen with proper copy
+                // but handle it gracefully
+                continue;
+              }
+
+              nextCells[cellAddress] = value;
             }
           }
 
@@ -860,18 +963,20 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
           });
         }
 
-        toast.success(`Pasted ${tableData.rows} row(s) and ${tableData.columns} column(s)`);
+        const modeText = pasteMode === 'formulas' ? ' (formulas)' :
+                         pasteMode === 'values' ? ' (values)' : '';
+        toast.success(`Pasted ${tableData.rows} row(s) and ${tableData.columns} column(s)${modeText}`);
       } catch (error) {
         console.error('Paste failed:', error);
         toast.error('Failed to paste clipboard data');
       }
     },
-    [isReadOnly, editingCell, selection, sheet, parseClipboardData, applySheetUpdate]
+    [isReadOnly, editingCell, selection, sheet, parseClipboardData, applySheetUpdate, copiedData]
   );
 
   // Handle copy operation
   const handleCopy = useCallback(
-    async (event?: KeyboardEvent) => {
+    async (mode: 'formulas' | 'values' = 'formulas', event?: KeyboardEvent) => {
       if (editingCell) return; // Don't copy while editing
 
       event?.preventDefault();
@@ -882,8 +987,11 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         if (selection.type === 'single') {
           // Copy single cell
           const cellAddress = encodeCellAddress(selection.cell.row, selection.cell.column);
-          const cellValue = sheet.cells[cellAddress] ?? '';
-          copyData = cellValue;
+          if (mode === 'formulas') {
+            copyData = sheet.cells[cellAddress] ?? '';
+          } else {
+            copyData = evaluation.display[selection.cell.row]?.[selection.cell.column] ?? '';
+          }
         } else {
           // Copy range of cells
           const { start, end } = selection.range;
@@ -896,9 +1004,14 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
           for (let row = minRow; row <= maxRow; row++) {
             const cols: string[] = [];
             for (let col = minCol; col <= maxCol; col++) {
-              const cellAddress = encodeCellAddress(row, col);
-              const cellValue = sheet.cells[cellAddress] ?? '';
-              cols.push(cellValue);
+              if (mode === 'formulas') {
+                const cellAddress = encodeCellAddress(row, col);
+                const cellValue = sheet.cells[cellAddress] ?? '';
+                cols.push(cellValue);
+              } else {
+                const displayValue = evaluation.display[row]?.[col] ?? '';
+                cols.push(displayValue);
+              }
             }
             rows.push(cols.join('\t')); // Tab-separated values
           }
@@ -907,29 +1020,53 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
 
         await navigator.clipboard.writeText(copyData);
 
+        // Store copied data info for paste behavior
+        setCopiedData({
+          mode,
+          data: copyData,
+          source: selection
+        });
+
         const cellCount = selection.type === 'single' ? 1 :
           Math.abs(selection.range.end.row - selection.range.start.row + 1) *
           Math.abs(selection.range.end.column - selection.range.start.column + 1);
 
-        toast.success(`Copied ${cellCount} cell${cellCount > 1 ? 's' : ''} to clipboard`);
+        const modeText = mode === 'formulas' ? 'formulas' : 'values';
+        toast.success(`Copied ${cellCount} cell${cellCount > 1 ? 's' : ''} (${modeText}) to clipboard`);
       } catch (error) {
         console.error('Copy failed:', error);
         toast.error('Failed to copy to clipboard');
       }
     },
-    [editingCell, selection, sheet.cells]
+    [editingCell, selection, sheet.cells, evaluation.display]
   );
 
   // Add paste event listener
   useEffect(() => {
     const gridElement = gridRef.current;
     if (gridElement) {
-      gridElement.addEventListener('paste', handlePaste);
+      const pasteHandler = (event: ClipboardEvent) => handlePaste('auto', event);
+      gridElement.addEventListener('paste', pasteHandler);
       return () => {
-        gridElement.removeEventListener('paste', handlePaste);
+        gridElement.removeEventListener('paste', pasteHandler);
       };
     }
   }, [handlePaste]);
+
+  // Close context menu on clicks outside
+  useEffect(() => {
+    if (contextMenu.show) {
+      const handleClickOutside = () => {
+        setContextMenu(prev => ({ ...prev, show: false }));
+      };
+      document.addEventListener('click', handleClickOutside);
+      document.addEventListener('contextmenu', handleClickOutside);
+      return () => {
+        document.removeEventListener('click', handleClickOutside);
+        document.removeEventListener('contextmenu', handleClickOutside);
+      };
+    }
+  }, [contextMenu.show]);
 
   const handleCellSelect = useCallback(
     (row: number, column: number) => {
@@ -973,6 +1110,34 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
 
       // Don't trigger editing for modifier key combinations (except F2)
       if ((ctrlKey || metaKey) && key !== 'F2') {
+        return;
+      }
+
+      // Handle Delete and Backspace as instant delete actions
+      if (key === 'Delete' || key === 'Backspace') {
+        if (isReadOnly) {
+          toast.error("You don't have permission to edit this sheet");
+          return;
+        }
+
+        event.preventDefault();
+        const cellAddress = encodeCellAddress(row, column);
+
+        applySheetUpdate((previous) => {
+          const nextCells = { ...previous.cells };
+          delete nextCells[cellAddress];
+          return {
+            ...previous,
+            version: previous.version + 1,
+            cells: nextCells,
+          };
+        });
+
+        // Update formula bar to show empty value
+        setFormulaValue('');
+
+        // Announce deletion to screen readers
+        setAnnouncement(`Cell ${cellAddress} cleared`);
         return;
       }
 
@@ -1037,7 +1202,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         cell: { row, column }
       });
     },
-    [isReadOnly, selection, sheet, editingCell, startCellEdit, handleCopy]
+    [isReadOnly, selection, sheet, editingCell, startCellEdit, handleCopy, applySheetUpdate, setFormulaValue, setAnnouncement]
   );
 
   const handleFormulaKeyDown = useCallback(
@@ -1388,6 +1553,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
                       onMouseDown={(e) => handleCellMouseDown(rowIndex, columnIndex, e)}
                       onMouseEnter={() => handleCellMouseEnter(rowIndex, columnIndex)}
                       onClick={() => handleCellSelect(rowIndex, columnIndex)}
+                      onContextMenu={(e) => handleCellRightClick(rowIndex, columnIndex, e)}
                       onDoubleClick={() => {
                         if (!isReadOnly) {
                           startCellEdit(rowIndex, columnIndex);
@@ -1421,6 +1587,66 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         initialKey={initialKey}
         driveId={page.driveId}
       />
+
+      {/* Context Menu */}
+      {contextMenu.show && (
+        <div
+          className="fixed z-50 bg-background border border-border rounded-md shadow-lg py-1 min-w-[160px]"
+          style={{
+            left: `${Math.min(contextMenu.x, window.innerWidth - 180)}px`,
+            top: `${Math.min(contextMenu.y, window.innerHeight - 200)}px`,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div
+            className="flex items-center px-3 py-2 text-sm cursor-pointer hover:bg-muted transition-colors"
+            onClick={() => {
+              handleCopy('formulas');
+              setContextMenu(prev => ({ ...prev, show: false }));
+            }}
+          >
+            Copy
+          </div>
+          <div
+            className="flex items-center px-3 py-2 text-sm cursor-pointer hover:bg-muted transition-colors"
+            onClick={() => {
+              handleCopy('values');
+              setContextMenu(prev => ({ ...prev, show: false }));
+            }}
+          >
+            Copy Values
+          </div>
+          <div className="h-px bg-border my-1" />
+          <div
+            className={cn(
+              "flex items-center px-3 py-2 text-sm cursor-pointer hover:bg-muted transition-colors",
+              (!copiedData && !navigator.clipboard) && "opacity-50 cursor-not-allowed"
+            )}
+            onClick={() => {
+              if (copiedData || navigator.clipboard) {
+                handlePaste('auto');
+                setContextMenu(prev => ({ ...prev, show: false }));
+              }
+            }}
+          >
+            Paste
+          </div>
+          <div
+            className={cn(
+              "flex items-center px-3 py-2 text-sm cursor-pointer hover:bg-muted transition-colors",
+              (!copiedData && !navigator.clipboard) && "opacity-50 cursor-not-allowed"
+            )}
+            onClick={() => {
+              if (copiedData || navigator.clipboard) {
+                handlePaste('values');
+                setContextMenu(prev => ({ ...prev, show: false }));
+              }
+            }}
+          >
+            Paste Values
+          </div>
+        </div>
+      )}
 
       {/* Screen reader announcements */}
       <div
