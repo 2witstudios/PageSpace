@@ -1,10 +1,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  SHEETDOC_MAGIC,
   createEmptySheet,
   decodeCellAddress,
   encodeCellAddress,
   evaluateSheet,
+  parseSheetDocString,
   parseSheetContent,
   sanitizeSheetData,
   serializeSheetContent,
@@ -57,9 +59,21 @@ describe('sheet data helpers', () => {
     assert.equal(parsed.cells.B2, '3');
     assert.equal(parsed.cells.invalid, undefined);
 
-    const serialized = serializeSheetContent(parsed);
+    const sanitized = sanitizeSheetData(parsed);
+    const serialized = serializeSheetContent(sanitized);
+    assert.equal(serialized.trimStart().startsWith(SHEETDOC_MAGIC), true);
+
+    const sheetDoc = parseSheetDocString(serialized);
+    assert.equal(sheetDoc.sheets.length > 0, true);
+    const primarySheet = sheetDoc.sheets[0];
+    assert.equal(primarySheet.cells.A1?.value, 42);
+    assert.equal(primarySheet.cells.B2?.value, 3);
+
     const roundTripped = parseSheetContent(serialized);
-    assert.deepEqual(roundTripped, parsed);
+    assert.equal(roundTripped.version, 1);
+    assert.equal(roundTripped.rowCount, sanitized.rowCount);
+    assert.equal(roundTripped.columnCount, sanitized.columnCount);
+    assert.deepEqual(roundTripped.cells, sanitized.cells);
   });
 });
 
@@ -128,6 +142,30 @@ describe('sheet evaluation', () => {
     assert.equal(getError(evaluation, 'B1'), 'Division by zero');
     assert.equal(getDisplay(evaluation, 'B2'), '#ERROR');
     assert.equal(getError(evaluation, 'B2'), 'Circular reference detected');
+  });
+
+  it('exposes dependency metadata and serializes SheetDoc values', () => {
+    const sheet = createEmptySheet(3, 3);
+    sheet.cells.A1 = '5';
+    sheet.cells.A2 = '=A1*2';
+    sheet.cells.B1 = '=A2+3';
+
+    const evaluation = evaluateSheet(sheet);
+
+    assert.deepEqual(evaluation.byAddress.A2.dependsOn, ['A1']);
+    assert.deepEqual(evaluation.byAddress.A1.dependents, ['A2']);
+    assert.deepEqual(evaluation.dependencies.A2.dependsOn, ['A1']);
+    assert.equal(evaluation.dependencies.A1.dependents.includes('A2'), true);
+
+    const serialized = serializeSheetContent(sheet);
+    const sheetDoc = parseSheetDocString(serialized);
+    const primarySheet = sheetDoc.sheets[0];
+
+    assert.equal(primarySheet.cells.A2?.formula, '=A1*2');
+    assert.equal(primarySheet.cells.A2?.value, 10);
+    assert.equal(primarySheet.cells.B1?.value, 13);
+    assert.equal(primarySheet.dependencies.A2.dependsOn.includes('A1'), true);
+    assert.equal(primarySheet.dependencies.A1.dependents.includes('A2'), true);
   });
 });
 
