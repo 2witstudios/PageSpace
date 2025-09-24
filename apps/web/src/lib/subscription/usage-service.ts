@@ -1,4 +1,6 @@
 import { db, eq, and, aiUsageDaily, users, sql } from '@pagespace/db';
+import { loggers } from '@pagespace/lib/logger-config';
+import { maskIdentifier } from '@/lib/logging/mask';
 
 export type ProviderType = 'standard' | 'pro';
 
@@ -8,6 +10,9 @@ export interface UsageTrackingResult {
   limit: number;
   remainingCalls: number;
 }
+
+const usageLogger = loggers.api.child({ module: 'subscription-usage' });
+const verboseUsageLogging = process.env.AI_DEBUG_LOGGING === 'true' || process.env.NODE_ENV !== 'production';
 
 /**
  * Get usage limits based on subscription tier
@@ -40,12 +45,16 @@ export async function incrementUsage(
 ): Promise<UsageTrackingResult> {
   const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
 
-  console.log('🔍 incrementUsage CALLED:', {
-    userId,
+  const maskedUserId = maskIdentifier(userId);
+  const baseMetadata = {
+    userId: maskedUserId,
     providerType,
-    today,
-    timestamp: new Date().toISOString()
-  });
+    date: today
+  };
+
+  if (verboseUsageLogging) {
+    usageLogger.debug('Increment usage invoked', baseMetadata);
+  }
 
   // Get user's subscription tier
   const user = await db.select({
@@ -56,25 +65,30 @@ export async function incrementUsage(
     .limit(1);
 
   if (!user.length) {
-    console.error('❌ User not found:', { userId });
+    usageLogger.warn('User not found when incrementing usage', baseMetadata);
     throw new Error('User not found');
   }
 
   const subscriptionTier = user[0].subscriptionTier;
   const limit = getUsageLimits(subscriptionTier, providerType);
 
-  console.log('📊 User subscription info:', {
-    userId,
-    subscriptionTier,
-    providerType,
-    limit,
-    today
-  });
+  if (verboseUsageLogging) {
+    usageLogger.debug('Resolved usage limits', {
+      ...baseMetadata,
+      subscriptionTier,
+      limit
+    });
+  }
 
 
   // No access (free tier trying pro AI)
   if (limit === 0) {
-    console.log('❌ No access (Free tier trying pro AI):', { userId, providerType, subscriptionTier });
+    if (verboseUsageLogging) {
+      usageLogger.debug('Usage access denied for subscription tier', {
+        ...baseMetadata,
+        subscriptionTier
+      });
+    }
     return {
       success: false,
       currentCount: 0,
@@ -84,8 +98,6 @@ export async function incrementUsage(
   }
 
   try {
-    console.log('🔄 Attempting atomic increment...', { userId, today, providerType, limit });
-
     // Atomic increment with limit check
     const result = await db
       .update(aiUsageDaily)
@@ -103,18 +115,17 @@ export async function incrementUsage(
       )
       .returning({ count: aiUsageDaily.count });
 
-    console.log('📈 Atomic increment result:', { result, length: result.length });
-
     if (result.length > 0) {
       // Successfully incremented
       const currentCount = result[0].count;
-      console.log('✅ Successfully incremented usage:', {
-        userId,
-        providerType,
-        currentCount,
-        limit,
-        remaining: limit - currentCount
-      });
+      if (verboseUsageLogging) {
+        usageLogger.debug('Usage incremented', {
+          ...baseMetadata,
+          currentCount,
+          limit,
+          remaining: limit - currentCount
+        });
+      }
 
       return {
         success: true,
@@ -126,10 +137,8 @@ export async function incrementUsage(
 
     // Either limit reached or no existing record
     // Try to insert new record
-    console.log('🆕 No existing record found, attempting to create new record...', { userId, today, providerType });
-
     try {
-      const insertResult = await db
+      await db
         .insert(aiUsageDaily)
         .values({
           userId,
@@ -139,14 +148,14 @@ export async function incrementUsage(
         })
         .returning({ count: aiUsageDaily.count });
 
-      console.log('✅ Successfully created new usage record:', {
-        userId,
-        providerType,
-        insertResult,
-        currentCount: 1,
-        limit,
-        remaining: limit - 1
-      });
+      if (verboseUsageLogging) {
+        usageLogger.debug('Usage record created', {
+          ...baseMetadata,
+          currentCount: 1,
+          limit,
+          remaining: limit - 1
+        });
+      }
 
       return {
         success: true,
@@ -156,25 +165,27 @@ export async function incrementUsage(
       };
 
     } catch (insertError) {
-      console.log('⚠️ Insert failed (likely conflict), checking current usage...', {
-        userId,
-        providerType,
-        error: insertError instanceof Error ? insertError.message : insertError
-      });
+      if (verboseUsageLogging) {
+        usageLogger.debug('Usage record insert conflicted, reading current usage', {
+          ...baseMetadata,
+          error: insertError instanceof Error ? insertError.message : String(insertError)
+        });
+      }
 
       // Insert failed (likely due to conflict), check current usage
       const current = await getCurrentUsage(userId, providerType);
 
-      console.log('📊 Current usage after insert failure:', {
-        userId,
-        providerType,
-        currentUsage: current
-      });
+      if (verboseUsageLogging) {
+        usageLogger.debug('Current usage after insert conflict', {
+          ...baseMetadata,
+          currentCount: current.currentCount,
+          limit
+        });
+      }
 
       if (current.currentCount >= limit) {
-        console.log('❌ Limit reached after insert failure:', {
-          userId,
-          providerType,
+        usageLogger.warn('Usage limit reached after insert conflict', {
+          ...baseMetadata,
           currentCount: current.currentCount,
           limit
         });
@@ -206,6 +217,14 @@ export async function incrementUsage(
 
       if (retryResult.length > 0) {
         const currentCount = retryResult[0].count;
+        if (verboseUsageLogging) {
+          usageLogger.debug('Usage increment succeeded after retry', {
+            ...baseMetadata,
+            currentCount,
+            limit,
+            remaining: limit - currentCount
+          });
+        }
         return {
           success: true,
           currentCount,
@@ -215,16 +234,22 @@ export async function incrementUsage(
       }
 
       // Limit exceeded
-      return {
+      const limitReachedResult = {
         success: false,
         currentCount: current.currentCount,
         limit,
         remainingCalls: 0
       };
+      usageLogger.warn('Usage limit reached during retry', {
+        ...baseMetadata,
+        currentCount: limitReachedResult.currentCount,
+        limit
+      });
+      return limitReachedResult;
     }
 
   } catch (error) {
-    console.error('Error incrementing usage:', error);
+    usageLogger.error('Failed to increment usage', error instanceof Error ? error : undefined, baseMetadata);
     throw error;
   }
 }

@@ -1,4 +1,5 @@
 import { MentionType } from '@/types/mentions';
+import { createClientLogger } from '@/lib/logging/client-logger';
 
 export type MentionFormatType = 'label' | 'markdown' | 'markdown-typed';
 
@@ -64,7 +65,9 @@ export class MentionFormatter {
   ): string {
     const formatConfig = MENTION_FORMATS[formatType];
     if (!formatConfig) {
-      console.warn(`Unknown mention format: ${formatType}, falling back to label`);
+      mentionLogger.warn('Unknown mention format requested, falling back to label', {
+        formatType,
+      });
       return MENTION_FORMATS.label.template(label, id, type);
     }
     return formatConfig.template(label, id, type);
@@ -73,7 +76,9 @@ export class MentionFormatter {
   static getConfigForInputType(inputType: 'textarea' | 'richline'): InputTypeConfig {
     const config = INPUT_TYPE_CONFIGS[inputType];
     if (!config) {
-      console.warn(`Unknown input type: ${inputType}, falling back to textarea config`);
+      mentionLogger.warn('Unknown input type requested, using textarea defaults', {
+        inputType,
+      });
       return INPUT_TYPE_CONFIGS.textarea;
     }
     return config;
@@ -108,6 +113,8 @@ export const DEFAULT_GLOBAL_CONFIG: GlobalMentionConfig = {
 
 let globalConfig = { ...DEFAULT_GLOBAL_CONFIG };
 
+const mentionLogger = createClientLogger({ namespace: 'mentions', component: 'mention-config' });
+
 export const MentionConfigManager = {
   setGlobalConfig: (config: Partial<GlobalMentionConfig>) => {
     globalConfig = { ...globalConfig, ...config };
@@ -132,9 +139,10 @@ export const MentionConfigManager = {
       if (MentionFormatter.validateFormat(requestedFormat, inputType)) {
         return requestedFormat;
       } else {
-        console.warn(
-          `Format ${requestedFormat} not supported for ${inputType}, using default`
-        );
+        mentionLogger.warn('Unsupported mention format requested, using input default', {
+          requestedFormat,
+          inputType,
+        });
         return inputConfig.defaultFormat;
       }
     }

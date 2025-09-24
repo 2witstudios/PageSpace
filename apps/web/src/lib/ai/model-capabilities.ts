@@ -1,3 +1,7 @@
+import { loggers } from '@pagespace/lib/logger-config';
+
+const capabilityLogger = loggers.ai.child({ module: 'model-capabilities' });
+
 /**
  * Model Capabilities Detection
  * Identifies which AI models support vision, audio, and other features
@@ -200,10 +204,12 @@ async function fetchOpenRouterToolCapabilities(): Promise<Map<string, boolean>> 
     // Set cache expiry to 1 hour from now
     openRouterCacheExpiry = now + (60 * 60 * 1000);
 
-    console.log(`Cached tool capabilities for ${openRouterModelsCache.size} OpenRouter models`);
+    capabilityLogger.debug('Cached OpenRouter tool capability metadata', {
+      modelCount: openRouterModelsCache.size,
+    });
     return openRouterModelsCache;
   } catch (error) {
-    console.warn('Failed to fetch OpenRouter model capabilities:', error);
+    capabilityLogger.warn('Failed to fetch OpenRouter model capabilities', error instanceof Error ? error : undefined);
     // Return empty map on error, fallback to runtime discovery
     return new Map();
   }
@@ -238,7 +244,7 @@ export async function hasToolCapability(model: string, provider: string): Promis
       toolCapabilityCache.set(cacheKey, hasTools);
       return hasTools;
     } catch (error) {
-      console.warn(`Failed to check OpenRouter capability for ${model}:`, error);
+      capabilityLogger.warn(`Failed to check OpenRouter capability for ${model}`, error instanceof Error ? error : undefined);
       // Fall through to default behavior
     }
   }

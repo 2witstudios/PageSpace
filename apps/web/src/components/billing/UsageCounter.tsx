@@ -8,6 +8,10 @@ import { Crown, Zap, AlertCircle } from 'lucide-react';
 import useSWR from 'swr';
 import { useSocketStore } from '@/stores/socketStore';
 import type { UsageEventPayload } from '@/lib/socket-utils';
+import { createClientLogger } from '@/lib/logging/client-logger';
+import { maskIdentifier } from '@/lib/logging/mask';
+
+const usageLogger = createClientLogger({ namespace: 'usage', component: 'usage-counter' });
 
 interface UsageData {
   subscriptionTier: 'free' | 'pro' | 'business';
@@ -49,7 +53,12 @@ export function UsageCounter() {
 
     if (socket) {
       const handleUsageUpdated = (payload: UsageEventPayload) => {
-        console.log('🔔 Received usage update:', payload);
+        usageLogger.debug('Received usage update payload', {
+          userId: maskIdentifier(payload.userId),
+          subscriptionTier: payload.subscriptionTier,
+          standard: payload.standard,
+          pro: payload.pro,
+        });
 
         // Update SWR cache with new usage data
         mutate({

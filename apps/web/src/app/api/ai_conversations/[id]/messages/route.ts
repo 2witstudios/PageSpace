@@ -28,6 +28,7 @@ import { RolePromptBuilder } from '@/lib/ai/role-prompts';
 import { ToolPermissionFilter } from '@/lib/ai/tool-permissions';
 import { getModelCapabilities } from '@/lib/ai/model-capabilities';
 import { loggers } from '@pagespace/lib/logger-config';
+import { maskIdentifier } from '@/lib/logging/mask';
 
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
@@ -162,6 +163,7 @@ export async function POST(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
+    const usageLogger = loggers.api.child({ module: 'global-assistant-usage' });
     loggers.api.debug('🚀 Global Assistant Chat API: Starting request processing', {});
     
     const auth = await authenticateWebRequest(request);
@@ -524,13 +526,16 @@ MENTION PROCESSING:
             // Track usage for PageSpace providers only (rate limiting/quota tracking)
             const isPageSpaceProvider = currentProvider === 'pagespace';
 
-            loggers.api.info('Global Assistant API: USAGE TRACKING DECISION', {
-              userId,
-              currentProvider,
+            const maskedUserId = maskIdentifier(userId);
+            const maskedConversationId = maskIdentifier(conversationId);
+            const maskedMessageId = maskIdentifier(messageId);
+
+            usageLogger.info('Global Assistant usage tracking decision', {
+              userId: maskedUserId,
+              provider: currentProvider,
               isPageSpaceProvider,
-              messageId,
-              conversationId,
-              timestamp: new Date().toISOString()
+              messageId: maskedMessageId,
+              conversationId: maskedConversationId,
             });
 
             if (isPageSpaceProvider) {
@@ -539,37 +544,26 @@ MENTION PROCESSING:
                 const isProModel = currentModel === 'GLM-4.5';
                 const providerType = isProModel ? 'pro' : 'standard';
 
-                loggers.api.info('Global Assistant API: CALLING incrementUsage', {
-                  userId,
+                usageLogger.debug('Incrementing usage for Global Assistant response', {
+                  userId: maskedUserId,
                   provider: currentProvider,
                   providerType,
-                  messageId,
-                  conversationId,
-                  timestamp: new Date().toISOString()
+                  messageId: maskedMessageId,
+                  conversationId: maskedConversationId,
                 });
 
                 const usageResult = await incrementUsage(userId, providerType);
 
-                loggers.api.info('Global Assistant API: USAGE TRACKED SUCCESSFULLY', {
-                  userId,
+                usageLogger.info('Global Assistant usage incremented', {
+                  userId: maskedUserId,
                   provider: currentProvider,
                   providerType,
-                  messageId,
-                  conversationId,
-                  usageResult,
-                  timestamp: new Date().toISOString()
-                });
-
-                // Also log to console for immediate visibility
-                console.log('🟢 GLOBAL ASSISTANT USAGE TRACKED:', {
-                  userId,
-                  provider: currentProvider,
-                  providerType,
-                  conversationId,
+                  messageId: maskedMessageId,
+                  conversationId: maskedConversationId,
                   currentCount: usageResult.currentCount,
                   limit: usageResult.limit,
                   remaining: usageResult.remainingCalls,
-                  success: usageResult.success
+                  success: usageResult.success,
                 });
 
                 // Broadcast usage event for real-time updates
@@ -584,47 +578,33 @@ MENTION PROCESSING:
                     pro: currentUsageSummary.pro
                   });
 
-                  console.log('🔔 Usage broadcast sent for Global Assistant');
+                  usageLogger.debug('Global Assistant usage broadcast sent', {
+                    userId: maskedUserId,
+                    conversationId: maskedConversationId,
+                  });
                 } catch (broadcastError) {
-                  console.error('Failed to broadcast usage event (non-fatal):', broadcastError);
+                  usageLogger.error('Global Assistant usage broadcast failed', broadcastError instanceof Error ? broadcastError : undefined, {
+                    userId: maskedUserId,
+                    conversationId: maskedConversationId,
+                  });
                 }
 
               } catch (usageError) {
-                loggers.api.error('Global Assistant API: USAGE TRACKING FAILED', usageError as Error, {
-                  userId,
+                usageLogger.error('Global Assistant usage tracking failed', usageError as Error, {
+                  userId: maskedUserId,
                   provider: currentProvider,
-                  messageId,
-                  conversationId,
-                  timestamp: new Date().toISOString()
-                });
-
-                // Also log to console for immediate visibility
-                console.error('🔴 GLOBAL ASSISTANT USAGE TRACKING FAILED:', {
-                  userId,
-                  provider: currentProvider,
-                  conversationId,
-                  error: usageError instanceof Error ? usageError.message : usageError,
-                  stack: usageError instanceof Error ? usageError.stack : undefined
+                  messageId: maskedMessageId,
+                  conversationId: maskedConversationId,
                 });
 
                 // Don't fail the request - usage tracking errors shouldn't break the chat
               }
             } else {
-              loggers.api.info('Global Assistant API: SKIPPING usage tracking for non-PageSpace provider', {
+              usageLogger.debug('Skipping usage tracking for non-PageSpace provider', {
                 provider: currentProvider,
-                isPageSpaceProvider,
-                userId,
-                messageId,
-                conversationId,
-                timestamp: new Date().toISOString()
-              });
-
-              // Also log to console for immediate visibility
-              console.log('⚪ GLOBAL ASSISTANT USAGE TRACKING SKIPPED:', {
-                provider: currentProvider,
-                conversationId,
-                reason: 'Not a PageSpace provider',
-                expectedProviders: ['pagespace']
+                userId: maskedUserId,
+                messageId: maskedMessageId,
+                conversationId: maskedConversationId,
               });
             }
           } catch (error) {

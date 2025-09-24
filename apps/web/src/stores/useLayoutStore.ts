@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { getLayoutViewType, PageType } from '@pagespace/lib';
 import { toast } from 'sonner';
+import { createClientLogger } from '@/lib/logging/client-logger';
 
 // Types
 export interface DocumentState {
@@ -68,38 +69,54 @@ interface LayoutState {
 }
 
 // Utility functions
+const layoutLogger = createClientLogger({ namespace: 'ui', component: 'layout-store' });
+
 const extractPageId = (url: string): string | null => {
-  console.log('🔍 extractPageId called with url:', url, 'type:', typeof url);
+  layoutLogger.debug('extractPageId invoked', { urlType: typeof url });
 
   if (!url || typeof url !== 'string') {
-    console.error('❌ extractPageId: Invalid URL parameter', { url, type: typeof url });
+    layoutLogger.error('extractPageId received invalid URL parameter', {
+      url,
+      urlType: typeof url,
+    });
     return null;
   }
 
   try {
     const match = url.match(/\/dashboard\/[^\/]+\/([^\/\?#]+)/);
-    console.log('🎯 extractPageId match result:', match);
+    layoutLogger.debug('extractPageId regex evaluated', {
+      matchFound: Boolean(match),
+    });
     return match ? match[1] : null;
   } catch (error) {
-    console.error('💥 extractPageId error:', error);
+    layoutLogger.error('extractPageId failed to evaluate regex', {
+      error: error instanceof Error ? error : String(error),
+    });
     return null;
   }
 };
 
 const extractDriveId = (url: string): string | null => {
-  console.log('🔍 extractDriveId called with url:', url, 'type:', typeof url);
+  layoutLogger.debug('extractDriveId invoked', { urlType: typeof url });
 
   if (!url || typeof url !== 'string') {
-    console.error('❌ extractDriveId: Invalid URL parameter', { url, type: typeof url });
+    layoutLogger.error('extractDriveId received invalid URL parameter', {
+      url,
+      urlType: typeof url,
+    });
     return null;
   }
 
   try {
     const match = url.match(/\/dashboard\/([^\/\?#]+)/);
-    console.log('🎯 extractDriveId match result:', match);
+    layoutLogger.debug('extractDriveId regex evaluated', {
+      matchFound: Boolean(match),
+    });
     return match ? match[1] : null;
   } catch (error) {
-    console.error('💥 extractDriveId error:', error);
+    layoutLogger.error('extractDriveId failed to evaluate regex', {
+      error: error instanceof Error ? error : String(error),
+    });
     return null;
   }
 };
@@ -165,7 +182,10 @@ export const useLayoutStore = create<LayoutState>()(
             if (currentDoc?.isDirty) {
               // Don't await - save in background
               saveDocumentToServer(currentDoc).catch(error => {
-                console.error('Background save failed:', error);
+                layoutLogger.error('Background save failed during navigation', {
+                  pageId: currentDoc.id,
+                  error: error instanceof Error ? error : String(error),
+                });
               });
             }
           }
@@ -227,15 +247,21 @@ export const useLayoutStore = create<LayoutState>()(
               });
             }
           }).catch(error => {
-            console.error('Failed to load page data:', error);
+            layoutLogger.error('Failed to load page data in background', {
+              pageId,
+              error: error instanceof Error ? error : String(error),
+            });
             // Show error but don't revert navigation
             toast.error('Failed to load page content', {
               description: 'Content will load when available'
             });
           });
-          
+
         } catch (error) {
-          console.error('Navigation failed:', error);
+          layoutLogger.error('Navigation failed', {
+            pageId,
+            error: error instanceof Error ? error : String(error),
+          });
           toast.error('Failed to navigate to page', {
             description: error instanceof Error ? error.message : 'Unknown error'
           });
@@ -410,7 +436,10 @@ async function saveDocumentToServer(document: DocumentState): Promise<void> {
     
     toast.success('Page saved successfully!');
   } catch (error) {
-    console.error('Failed to save document:', error);
+    layoutLogger.error('Failed to save document to server', {
+      pageId: document.id,
+      error: error instanceof Error ? error : String(error),
+    });
     toast.error('Failed to save page content');
     throw error;
   }

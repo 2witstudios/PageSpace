@@ -1,5 +1,7 @@
 'use client';
 
+import { createClientLogger } from '@/lib/logging/client-logger';
+
 interface FetchOptions extends RequestInit {
   skipAuth?: boolean;
   maxRetries?: number;
@@ -16,6 +18,7 @@ class AuthFetch {
   private isRefreshing = false;
   private refreshQueue: QueuedRequest[] = [];
   private refreshPromise: Promise<boolean> | null = null;
+  private logger = createClientLogger({ namespace: 'auth', component: 'auth-fetch' });
 
   async fetch(url: string, options?: FetchOptions): Promise<Response> {
     const { skipAuth = false, maxRetries = 1, ...fetchOptions } = options || {};
@@ -33,11 +36,17 @@ class AuthFetch {
 
     // If we get a 401 and haven't retried yet, try to refresh
     if (response.status === 401 && maxRetries > 0) {
-      console.log('🔑 Got 401, attempting token refresh before retry');
-      
+      this.logger.warn('Received 401 response, attempting token refresh before retry', {
+        url,
+        retriesRemaining: maxRetries,
+      });
+
       // If we're already refreshing, queue this request
       if (this.isRefreshing) {
-        console.log('⏳ Already refreshing, queueing request');
+        this.logger.debug('Token refresh already in progress, queuing request', {
+          url,
+          queuedRequests: this.refreshQueue.length + 1,
+        });
         return this.queueRequest(url, { ...options, maxRetries: maxRetries - 1 });
       }
 
@@ -45,14 +54,14 @@ class AuthFetch {
       const refreshSuccess = await this.refreshToken();
 
       if (refreshSuccess) {
-        console.log('✅ Token refresh successful, retrying original request');
+        this.logger.info('Token refresh successful, retrying original request', { url });
         // Retry the original request
         response = await fetch(url, {
           ...fetchOptions,
           credentials: 'include',
         });
       } else {
-        console.log('❌ Token refresh failed, returning 401 response');
+        this.logger.error('Token refresh failed, returning 401 response', { url });
       }
     }
 
@@ -133,15 +142,21 @@ class AuthFetch {
 
       if (response.status === 429 || response.status >= 500) {
         // Rate limiting or server errors - don't logout, just fail silently
-        console.log(`Token refresh failed with ${response.status}, will retry later`);
+        this.logger.warn('Token refresh request returned retryable status', {
+          status: response.status,
+        });
         return false;
       }
 
       // For other client errors, don't logout
-      console.error('Token refresh failed with status:', response.status);
+      this.logger.error('Token refresh request failed with non-retryable status', {
+        status: response.status,
+      });
       return false;
     } catch (error) {
-      console.error('Token refresh error:', error);
+      this.logger.error('Token refresh request threw an error', {
+        error: error instanceof Error ? error : String(error),
+      });
       return false;
     }
   }

@@ -46,6 +46,7 @@ import { RolePromptBuilder } from '@/lib/ai/role-prompts';
 import { ToolPermissionFilter } from '@/lib/ai/tool-permissions';
 import { AgentRole } from '@/lib/ai/agent-roles';
 import { loggers } from '@pagespace/lib/logger-config';
+import { maskIdentifier } from '@/lib/logging/mask';
 import { trackFeature } from '@pagespace/lib/activity-tracker';
 import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
 import { getModelCapabilities } from '@/lib/ai/model-capabilities';
@@ -67,7 +68,9 @@ export async function POST(request: Request) {
   let selectedProvider: string | undefined;
   let selectedModel: string | undefined;
   let usagePromise: Promise<LanguageModelUsage | undefined> | undefined;
-  
+  const usageLogger = loggers.ai.child({ module: 'page-ai-usage' });
+  const permissionLogger = loggers.ai.child({ module: 'page-ai-permissions' });
+
   try {
     loggers.ai.info('AI Chat API: Starting request processing');
     
@@ -157,24 +160,46 @@ export async function POST(request: Request) {
     }
 
     // Check if user has permission to view and edit this AI chat page
-    console.log(`[AI_PERMISSIONS] Checking permissions for userId: ${userId}, chatId: ${chatId}`);
+    const maskedUserId = maskIdentifier(userId);
+    const maskedChatId = maskIdentifier(chatId);
+    permissionLogger.debug('Evaluating Page AI permissions', {
+      userId: maskedUserId,
+      chatId: maskedChatId,
+    });
     const canView = await canUserViewPage(userId, chatId);
-    console.log(`[AI_PERMISSIONS] Can view: ${canView}`);
+    permissionLogger.debug('Page AI view permission evaluated', {
+      userId: maskedUserId,
+      chatId: maskedChatId,
+      allowed: canView,
+    });
     if (!canView) {
-      loggers.ai.warn('AI Chat API: User lacks view permission', { userId, chatId });
-      console.error(`[AI_PERMISSIONS] DENIED - User ${userId} cannot view chat ${chatId}`);
+      loggers.ai.warn('AI Chat API: User lacks view permission', { userId: maskedUserId, chatId: maskedChatId });
+      permissionLogger.warn('Page AI view permission denied', {
+        userId: maskedUserId,
+        chatId: maskedChatId,
+      });
       return NextResponse.json({ error: 'You do not have permission to view this AI chat' }, { status: 403 });
     }
 
     const canEdit = await canUserEditPage(userId, chatId);
-    console.log(`[AI_PERMISSIONS] Can edit: ${canEdit}`);
+    permissionLogger.debug('Page AI edit permission evaluated', {
+      userId: maskedUserId,
+      chatId: maskedChatId,
+      allowed: canEdit,
+    });
     if (!canEdit) {
-      loggers.ai.warn('AI Chat API: User lacks edit permission', { userId, chatId });
-      console.error(`[AI_PERMISSIONS] DENIED - User ${userId} cannot edit chat ${chatId}`);
+      loggers.ai.warn('AI Chat API: User lacks edit permission', { userId: maskedUserId, chatId: maskedChatId });
+      permissionLogger.warn('Page AI edit permission denied', {
+        userId: maskedUserId,
+        chatId: maskedChatId,
+      });
       return NextResponse.json({ error: 'You do not have permission to send messages in this AI chat' }, { status: 403 });
     }
-    
-    console.log(`[AI_PERMISSIONS] GRANTED - User ${userId} has full access to chat ${chatId}`);
+
+    permissionLogger.info('Page AI permissions granted', {
+      userId: maskedUserId,
+      chatId: maskedChatId,
+    });
     
     loggers.ai.info('AI Chat API: Validation passed', { 
       messageCount: messages.length, 
@@ -618,48 +643,40 @@ MENTION PROCESSING:
               // Determine if this is pro model based on model name
               const isProModel = currentModel === 'GLM-4.5';
 
-              loggers.ai.info('AI Chat API: USAGE TRACKING DECISION', {
-                userId,
-                currentProvider,
-                currentModel,
+              const maskedUserId = maskIdentifier(userId);
+              const maskedMessageId = maskIdentifier(messageId);
+
+              usageLogger.info('Page AI usage tracking decision', {
+                userId: maskedUserId,
+                provider: currentProvider,
+                model: currentModel,
                 isPageSpaceProvider,
                 isProModel,
-                messageId,
-                timestamp: new Date().toISOString()
+                messageId: maskedMessageId,
               });
 
               if (isPageSpaceProvider) {
                 try {
                   const providerType = isProModel ? 'pro' : 'standard';
 
-                  loggers.ai.info('AI Chat API: CALLING incrementUsage', {
-                    userId,
+                  usageLogger.debug('Incrementing usage for Page AI response', {
+                    userId: maskedUserId,
                     provider: currentProvider,
                     providerType,
-                    messageId,
-                    timestamp: new Date().toISOString()
+                    messageId: maskedMessageId,
                   });
 
                   const usageResult = await incrementUsage(userId!, providerType);
 
-                  loggers.ai.info('AI Chat API: USAGE TRACKED SUCCESSFULLY', {
-                    userId,
+                  usageLogger.info('Page AI usage incremented', {
+                    userId: maskedUserId,
                     provider: currentProvider,
                     providerType,
-                    messageId,
-                    usageResult,
-                    timestamp: new Date().toISOString()
-                  });
-
-                  // Also log to console for immediate visibility
-                  console.log('🟢 USAGE TRACKED:', {
-                    userId,
-                    provider: currentProvider,
-                    providerType,
+                    messageId: maskedMessageId,
                     currentCount: usageResult.currentCount,
                     limit: usageResult.limit,
                     remaining: usageResult.remainingCalls,
-                    success: usageResult.success
+                    success: usageResult.success,
                   });
 
                   // Broadcast usage event for real-time updates
@@ -674,43 +691,29 @@ MENTION PROCESSING:
                       pro: currentUsageSummary.pro
                     });
 
-                    console.log('🔔 Usage broadcast sent for Page AI');
+                    usageLogger.debug('Page AI usage broadcast sent', {
+                      userId: maskedUserId,
+                    });
                   } catch (broadcastError) {
-                    console.error('Failed to broadcast usage event (non-fatal):', broadcastError);
+                    usageLogger.error('Page AI usage broadcast failed', broadcastError instanceof Error ? broadcastError : undefined, {
+                      userId: maskedUserId,
+                    });
                   }
 
                 } catch (usageError) {
-                  loggers.ai.error('AI Chat API: USAGE TRACKING FAILED', usageError as Error, {
-                    userId,
+                  usageLogger.error('Page AI usage tracking failed', usageError as Error, {
+                    userId: maskedUserId,
                     provider: currentProvider,
-                    messageId,
-                    timestamp: new Date().toISOString()
-                  });
-
-                  // Also log to console for immediate visibility
-                  console.error('🔴 USAGE TRACKING FAILED:', {
-                    userId,
-                    provider: currentProvider,
-                    error: usageError instanceof Error ? usageError.message : usageError,
-                    stack: usageError instanceof Error ? usageError.stack : undefined
+                    messageId: maskedMessageId,
                   });
 
                   // Don't fail the request - usage tracking errors shouldn't break the chat
                 }
               } else {
-                loggers.ai.info('AI Chat API: SKIPPING usage tracking for non-PageSpace provider', {
+                usageLogger.debug('Skipping usage tracking for non-PageSpace provider', {
                   provider: currentProvider,
-                  isPageSpaceProvider,
-                  userId,
-                  messageId,
-                  timestamp: new Date().toISOString()
-                });
-
-                // Also log to console for immediate visibility
-                console.log('⚪ USAGE TRACKING SKIPPED:', {
-                  provider: currentProvider,
-                  reason: 'Not a PageSpace provider',
-                  expectedProviders: ['pagespace']
+                  userId: maskedUserId,
+                  messageId: maskedMessageId,
                 });
               }
 
