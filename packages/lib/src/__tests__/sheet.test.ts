@@ -63,6 +63,11 @@ describe('sheet data helpers', () => {
     const serialized = serializeSheetContent(sanitized);
     assert.equal(serialized.trimStart().startsWith(SHEETDOC_MAGIC), true);
 
+    // Add console output to see the SheetDoc format
+    console.log('\n=== EXAMPLE SHEETDOC FORMAT ===');
+    console.log(serialized);
+    console.log('=== END SHEETDOC FORMAT ===\n');
+
     const sheetDoc = parseSheetDocString(serialized);
     assert.equal(sheetDoc.sheets.length > 0, true);
     const primarySheet = sheetDoc.sheets[0];

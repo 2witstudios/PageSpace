@@ -1,5 +1,5 @@
 import { PageType } from './enums';
-import { createEmptySheet } from './sheet';
+import { createEmptySheet, serializeSheetContent } from './sheet';
 
 export interface PageTypeCapabilities {
   canHaveChildren: boolean;
@@ -170,7 +170,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsVersioning: true,
       supportsAI: true,
     },
-    defaultContent: () => JSON.stringify(createEmptySheet()),
+    defaultContent: () => serializeSheetContent(createEmptySheet()),
     allowedChildTypes: [],
     uiComponent: 'SheetView',
     layoutViewType: 'document',

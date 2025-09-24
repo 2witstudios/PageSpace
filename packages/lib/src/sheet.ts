@@ -712,7 +712,12 @@ export function stringifySheetDoc(doc: SheetDoc): string {
         lines.push(`notes = ${formatTomlValue(cell.notes)}`);
       }
       if (cell.error) {
-        lines.push(`error = ${formatInlineTable(cell.error)}`);
+        const errorRecord: Record<string, unknown> = {
+          type: cell.error.type,
+          ...(cell.error.message ? { message: cell.error.message } : {}),
+          ...(cell.error.details ? { details: cell.error.details } : {}),
+        };
+        lines.push(`error = ${formatInlineTable(errorRecord)}`);
       }
     }
 
