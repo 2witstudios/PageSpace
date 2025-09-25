@@ -21,75 +21,75 @@ export async function GET(request: Request) {
       WITH conversation_data AS (
         SELECT
           c.id,
-          c.participant1_id,
-          c.participant2_id,
-          c.last_message_at,
-          c.last_message_preview,
-          c.participant1_last_read,
-          c.participant2_last_read,
-          c.created_at,
+          c."participant1Id",
+          c."participant2Id",
+          c."lastMessageAt",
+          c."lastMessagePreview",
+          c."participant1LastRead",
+          c."participant2LastRead",
+          c."createdAt",
           CASE
-            WHEN c.participant1_id = ${user.id} THEN c.participant2_id
-            ELSE c.participant1_id
+            WHEN c."participant1Id" = ${user.id} THEN c."participant2Id"
+            ELSE c."participant1Id"
           END as other_user_id,
           CASE
-            WHEN c.participant1_id = ${user.id} THEN c.participant1_last_read
-            ELSE c.participant2_last_read
+            WHEN c."participant1Id" = ${user.id} THEN c."participant1LastRead"
+            ELSE c."participant2LastRead"
           END as last_read
         FROM dm_conversations c
-        WHERE c.participant1_id = ${user.id} OR c.participant2_id = ${user.id}
+        WHERE c."participant1Id" = ${user.id} OR c."participant2Id" = ${user.id}
         ${cursor ? (direction === 'before'
-          ? sql`AND c.last_message_at > ${cursor}`
-          : sql`AND c.last_message_at < ${cursor}`)
+          ? sql`AND c."lastMessageAt" > ${cursor}`
+          : sql`AND c."lastMessageAt" < ${cursor}`)
           : sql``}
-        ORDER BY c.last_message_at DESC NULLS LAST
+        ORDER BY c."lastMessageAt" DESC NULLS LAST
         LIMIT ${limit}
       ),
       unread_counts AS (
         SELECT
-          dm.conversation_id,
+          dm."conversationId",
           COUNT(*) as unread_count
         FROM direct_messages dm
-        INNER JOIN conversation_data cd ON dm.conversation_id = cd.id
-        WHERE dm.sender_id = cd.other_user_id
-          AND dm.is_read = false
-        GROUP BY dm.conversation_id
+        INNER JOIN conversation_data cd ON dm."conversationId" = cd.id
+        WHERE dm."senderId" = cd.other_user_id
+          AND dm."isRead" = false
+        GROUP BY dm."conversationId"
       )
       SELECT
         cd.id,
-        cd.participant1_id,
-        cd.participant2_id,
-        cd.last_message_at,
-        cd.last_message_preview,
-        cd.participant1_last_read,
-        cd.participant2_last_read,
-        cd.created_at,
+        cd."participant1Id",
+        cd."participant2Id",
+        cd."lastMessageAt",
+        cd."lastMessagePreview",
+        cd."participant1LastRead",
+        cd."participant2LastRead",
+        cd."createdAt",
         cd.last_read,
         u.id as other_user_id,
         u.name as other_user_name,
         u.email as other_user_email,
         u.image as other_user_image,
         up.username as other_user_username,
-        up.display_name as other_user_display_name,
-        up.avatar_url as other_user_avatar_url,
+        up."displayName" as other_user_display_name,
+        up."avatarUrl" as other_user_avatar_url,
         COALESCE(uc.unread_count, 0) as unread_count
       FROM conversation_data cd
       LEFT JOIN users u ON u.id = cd.other_user_id
-      LEFT JOIN user_profiles up ON up.user_id = cd.other_user_id
-      LEFT JOIN unread_counts uc ON uc.conversation_id = cd.id
-      ORDER BY cd.last_message_at DESC NULLS LAST
+      LEFT JOIN user_profiles up ON up."userId" = cd.other_user_id
+      LEFT JOIN unread_counts uc ON uc."conversationId" = cd.id
+      ORDER BY cd."lastMessageAt" DESC NULLS LAST
     `);
 
     // Transform the raw results to match the expected format
     interface ConversationRow {
       id: string;
-      participant1_id: string;
-      participant2_id: string;
-      last_message_at: string | null;
-      last_message_preview: string | null;
-      participant1_last_read: string | null;
-      participant2_last_read: string | null;
-      created_at: string;
+      participant1Id: string;
+      participant2Id: string;
+      lastMessageAt: string | null;
+      lastMessagePreview: string | null;
+      participant1LastRead: string | null;
+      participant2LastRead: string | null;
+      createdAt: string;
       last_read: string | null;
       other_user_id: string;
       other_user_name: string;
@@ -105,13 +105,13 @@ export async function GET(request: Request) {
       const typedRow = row as unknown as ConversationRow;
       return {
         id: typedRow.id,
-        participant1Id: typedRow.participant1_id,
-        participant2Id: typedRow.participant2_id,
-        lastMessageAt: typedRow.last_message_at,
-        lastMessagePreview: typedRow.last_message_preview,
-        participant1LastRead: typedRow.participant1_last_read,
-        participant2LastRead: typedRow.participant2_last_read,
-        createdAt: typedRow.created_at,
+        participant1Id: typedRow.participant1Id,
+        participant2Id: typedRow.participant2Id,
+        lastMessageAt: typedRow.lastMessageAt,
+        lastMessagePreview: typedRow.lastMessagePreview,
+        participant1LastRead: typedRow.participant1LastRead,
+        participant2LastRead: typedRow.participant2LastRead,
+        createdAt: typedRow.createdAt,
         lastRead: typedRow.last_read,
         otherUser: {
           id: typedRow.other_user_id,
