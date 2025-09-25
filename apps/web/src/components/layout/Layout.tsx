@@ -15,7 +15,13 @@ import { useHasHydrated } from "@/hooks/useHasHydrated";
 import { usePerformanceMonitor } from "@/hooks/usePerformanceMonitor";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, memo, useState } from "react";
-import { Sheet, SheetContent } from "@/components/ui/sheet";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 
 interface LayoutProps {
   children?: React.ReactNode;
@@ -277,6 +283,10 @@ function Layout({ children }: LayoutProps) {
             }}
           >
             <SheetContent side="left" className="w-full max-w-[22rem] border-r p-0 sm:max-w-sm">
+              <SheetHeader className="sr-only">
+                <SheetTitle>Navigation menu</SheetTitle>
+                <SheetDescription>Browse spaces and files</SheetDescription>
+              </SheetHeader>
               <MemoizedSidebar variant="overlay" className="h-full w-full" />
             </SheetContent>
           </Sheet>
@@ -291,6 +301,10 @@ function Layout({ children }: LayoutProps) {
             }}
           >
             <SheetContent side="right" className="w-full max-w-[22rem] border-l p-0 sm:max-w-sm">
+              <SheetHeader className="sr-only">
+                <SheetTitle>Assistant panel</SheetTitle>
+                <SheetDescription>Chat with the global assistant</SheetDescription>
+              </SheetHeader>
               <MemoizedRightPanel variant="overlay" className="h-full w-full" />
             </SheetContent>
           </Sheet>
