@@ -161,7 +161,7 @@ export default function ConnectionsPage() {
     })
       .then(res => res.json())
       .then(data => {
-        router.push(`/messages/${data.conversation.id}`);
+        router.push(`/dashboard/messages/${data.conversation.id}`);
       })
       .catch(() => {
         toast.error('Failed to start conversation');
