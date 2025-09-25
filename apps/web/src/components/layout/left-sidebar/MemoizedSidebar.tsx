@@ -2,7 +2,7 @@
 
 import { memo } from 'react';
 import { usePathname } from 'next/navigation';
-import Sidebar from './index';
+import Sidebar, { type SidebarProps } from './index';
 import MessagesLeftSidebar from './MessagesLeftSidebar';
 
 /**
@@ -10,15 +10,15 @@ import MessagesLeftSidebar from './MessagesLeftSidebar';
  * This helps avoid infinite loops in the layout system
  * Renders MessagesLeftSidebar when on messages route
  */
-const MemoizedSidebar = memo(() => {
+const MemoizedSidebar = memo((props: SidebarProps) => {
   const pathname = usePathname();
   const isMessagesRoute = pathname?.startsWith('/dashboard/messages');
 
   if (isMessagesRoute) {
-    return <MessagesLeftSidebar />;
+    return <MessagesLeftSidebar {...props} />;
   }
 
-  return <Sidebar />;
+  return <Sidebar {...props} />;
 });
 
 MemoizedSidebar.displayName = 'MemoizedSidebar';

@@ -142,7 +142,7 @@ export default function StorageDashboard() {
 
   if (loading) {
     return (
-      <div className="container mx-auto py-10 px-10">
+      <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10">
         <div className="space-y-6">
           <Skeleton className="h-8 w-48" />
           <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
@@ -157,7 +157,7 @@ export default function StorageDashboard() {
 
   if (!storageInfo) {
     return (
-      <div className="container mx-auto py-10 px-10">
+      <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10">
         <Alert variant="destructive">
           <AlertTriangle className="h-4 w-4" />
           <AlertTitle>Error</AlertTitle>
@@ -171,7 +171,7 @@ export default function StorageDashboard() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="container mx-auto py-10 px-10">
+      <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10">
         <div className="mb-8">
         <Button
           variant="ghost"
@@ -182,7 +182,7 @@ export default function StorageDashboard() {
           <ArrowLeft className="h-4 w-4 mr-2" />
           Back to Dashboard
         </Button>
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-3xl font-bold mb-2">Storage Dashboard</h1>
             <p className="text-muted-foreground">
@@ -194,6 +194,7 @@ export default function StorageDashboard() {
             disabled={reconciling}
             variant="outline"
             size="sm"
+            className="w-full sm:w-auto"
           >
             <RefreshCw className={`h-4 w-4 mr-2 ${reconciling ? 'animate-spin' : ''}`} />
             Reconcile Storage
@@ -233,7 +234,7 @@ export default function StorageDashboard() {
               value={quota.utilizationPercent}
               className="h-3"
             />
-            <div className="flex justify-between text-sm">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
               <span className="text-muted-foreground">
                 {quota.formattedAvailable} available
               </span>
@@ -247,7 +248,7 @@ export default function StorageDashboard() {
         {/* Tier Information Card */}
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center justify-between">
+          <CardTitle className="flex flex-wrap items-center justify-between gap-2">
               <span>Storage Plan</span>
               <Badge variant="secondary" className="text-xs">
                 {tierInfo.name}
@@ -257,18 +258,18 @@ export default function StorageDashboard() {
           </CardHeader>
           <CardContent className="space-y-2">
             <div className="text-sm space-y-1">
-              <div className="flex justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-muted-foreground">Total Files:</span>
                 <span className="font-medium">
                   {totalFiles}
                   {tierInfo.maxFileCount > 0 && ` / ${tierInfo.maxFileCount}`}
                 </span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-muted-foreground">Max File Size:</span>
                 <span className="font-medium">{formatBytes(tierInfo.maxFileSize)}</span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-muted-foreground">Concurrent Uploads:</span>
                 <span className="font-medium">{tierInfo.maxConcurrentUploads}</span>
               </div>
@@ -318,28 +319,30 @@ export default function StorageDashboard() {
             <CardDescription>Storage usage across your drives</CardDescription>
           </CardHeader>
           <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Drive Name</TableHead>
-                  <TableHead className="text-right">Files</TableHead>
-                  <TableHead className="text-right">Storage Used</TableHead>
-                  <TableHead className="text-right">Percentage</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {storageByDrive.map((drive) => (
-                  <TableRow key={drive.driveId}>
-                    <TableCell className="font-medium">{drive.driveName}</TableCell>
-                    <TableCell className="text-right">{drive.fileCount}</TableCell>
-                    <TableCell className="text-right">{drive.formattedSize}</TableCell>
-                    <TableCell className="text-right">
-                      {Math.round((drive.totalSize / quota.usedBytes) * 100)}%
-                    </TableCell>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Drive Name</TableHead>
+                    <TableHead className="text-right">Files</TableHead>
+                    <TableHead className="text-right">Storage Used</TableHead>
+                    <TableHead className="text-right">Percentage</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {storageByDrive.map((drive) => (
+                    <TableRow key={drive.driveId}>
+                      <TableCell className="font-medium">{drive.driveName}</TableCell>
+                      <TableCell className="text-right">{drive.fileCount}</TableCell>
+                      <TableCell className="text-right">{drive.formattedSize}</TableCell>
+                      <TableCell className="text-right">
+                        {Math.round((drive.totalSize / quota.usedBytes) * 100)}%
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           </CardContent>
         </Card>
       )}

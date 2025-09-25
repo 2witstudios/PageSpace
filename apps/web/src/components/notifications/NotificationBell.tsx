@@ -51,7 +51,7 @@ export default function NotificationBell() {
           )}
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-96 p-0" align="end">
+      <PopoverContent className="w-[min(24rem,90vw)] max-w-sm p-0" align="end">
         <NotificationDropdown />
       </PopoverContent>
     </Popover>

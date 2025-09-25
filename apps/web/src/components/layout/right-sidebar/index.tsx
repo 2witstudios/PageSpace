@@ -1,142 +1,160 @@
-'use client';
+"use client";
 
-import { useState, useEffect } from 'react';
-import { usePathname } from 'next/navigation';
-import { MessageSquare, History, Settings } from 'lucide-react';
-import AssistantChatTab from './ai-assistant/AssistantChatTab';
-import AssistantHistoryTab from './ai-assistant/AssistantHistoryTab';
-import AssistantSettingsTab from './ai-assistant/AssistantSettingsTab';
-import { createClientLogger } from '@/lib/logging/client-logger';
+import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
+import { History, MessageSquare, Settings } from "lucide-react";
 
-const panelLogger = createClientLogger({ namespace: 'ui', component: 'right-sidebar' });
+import { cn } from "@/lib/utils";
+import { createClientLogger } from "@/lib/logging/client-logger";
 
-export default function RightPanel() {
+import AssistantChatTab from "./ai-assistant/AssistantChatTab";
+import AssistantHistoryTab from "./ai-assistant/AssistantHistoryTab";
+import AssistantSettingsTab from "./ai-assistant/AssistantSettingsTab";
+
+export interface RightPanelProps {
+  className?: string;
+  variant?: "desktop" | "overlay";
+}
+
+const panelLogger = createClientLogger({ namespace: "ui", component: "right-sidebar" });
+
+export default function RightPanel({ className, variant = "desktop" }: RightPanelProps) {
   const pathname = usePathname();
-  panelLogger.debug('Evaluating RightPanel pathname', {
+  panelLogger.debug("Evaluating RightPanel pathname", {
     pathname,
     pathnameType: typeof pathname,
   });
 
-  // Treat dashboard and drive root pages the same (no chat tab)
   let isDashboardOrDrive = false;
 
-  // Safely handle pathname that might be null/undefined
-  if (pathname && typeof pathname === 'string') {
+  if (pathname && typeof pathname === "string") {
     try {
       const matchResult = pathname.match(/^\/dashboard\/[^/]+$/);
-      panelLogger.debug('RightPanel pathname match evaluated', {
+      panelLogger.debug("RightPanel pathname match evaluated", {
         matchFound: Boolean(matchResult),
       });
-      isDashboardOrDrive = pathname === '/dashboard' || !!matchResult;
+      isDashboardOrDrive = pathname === "/dashboard" || Boolean(matchResult);
     } catch (error) {
-      panelLogger.error('Failed to evaluate pathname match in RightPanel', {
+      panelLogger.error("Failed to evaluate pathname match in RightPanel", {
         error: error instanceof Error ? error : String(error),
       });
       isDashboardOrDrive = false;
     }
   } else {
-    panelLogger.warn('RightPanel received null or undefined pathname');
+    panelLogger.warn("RightPanel received null or undefined pathname");
     isDashboardOrDrive = false;
   }
 
-  panelLogger.debug('RightPanel computed dashboard/drive state', {
+  panelLogger.debug("RightPanel computed dashboard/drive state", {
     isDashboardOrDrive,
   });
-  
-  // Determine default tab based on context
-  const defaultTab = isDashboardOrDrive ? 'history' : 'chat';
+
+  const defaultTab = isDashboardOrDrive ? "history" : "chat";
   const [activeTab, setActiveTab] = useState<string>(defaultTab);
 
-  // Remember tab state across sessions, but respect context
   useEffect(() => {
-    const savedTab = localStorage.getItem('globalAssistantActiveTab');
-    
-    // If on dashboard or drive root, don't allow 'chat' tab
-    if (isDashboardOrDrive && savedTab === 'chat') {
-      setActiveTab('history');
-    } else if (savedTab && ['chat', 'history', 'settings'].includes(savedTab)) {
-      // Only set saved tab if it's valid for current context
-      if (!isDashboardOrDrive || savedTab !== 'chat') {
+    const savedTab = localStorage.getItem("globalAssistantActiveTab");
+
+    if (isDashboardOrDrive && savedTab === "chat") {
+      setActiveTab("history");
+    } else if (savedTab && ["chat", "history", "settings"].includes(savedTab)) {
+      if (!isDashboardOrDrive || savedTab !== "chat") {
         setActiveTab(savedTab);
       }
     }
   }, [isDashboardOrDrive]);
 
-  // Listen for storage events to update tab when buttons are clicked
   useEffect(() => {
     const handleStorageChange = () => {
-      const savedTab = localStorage.getItem('globalAssistantActiveTab');
-      if (savedTab && ['history', 'settings'].includes(savedTab)) {
+      const savedTab = localStorage.getItem("globalAssistantActiveTab");
+      if (savedTab && ["history", "settings"].includes(savedTab)) {
         setActiveTab(savedTab);
       }
     };
 
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
+    window.addEventListener("storage", handleStorageChange);
+    return () => window.removeEventListener("storage", handleStorageChange);
   }, []);
 
   const handleTabChange = (tab: string) => {
     setActiveTab(tab);
-    localStorage.setItem('globalAssistantActiveTab', tab);
+    localStorage.setItem("globalAssistantActiveTab", tab);
   };
 
   return (
-    <aside className="hidden sm:flex w-80 border-l bg-sidebar text-sidebar-foreground flex-col h-full">
-      {/* Custom Tab Header */}
+    <aside
+      className={cn(
+        "flex h-full w-full flex-col border-l bg-sidebar text-sidebar-foreground",
+        variant === "overlay" && "shadow-lg",
+        className,
+      )}
+    >
       <div className="border-b bg-muted/30">
-        <div className={isDashboardOrDrive ? "grid grid-cols-2" : "grid grid-cols-3"}>
-          {/* Only show Chat tab when not on dashboard or drive root */}
+        <div
+          className={cn(
+            "grid gap-1 px-1 py-1 text-xs font-medium sm:text-sm",
+            isDashboardOrDrive ? "grid-cols-2" : "grid-cols-3",
+          )}
+        >
           {!isDashboardOrDrive && (
             <button
-              onClick={() => handleTabChange('chat')}
-              className={`flex items-center justify-center space-x-1 py-3 text-sm font-medium transition-colors relative
-                ${activeTab === 'chat' 
-                  ? 'text-foreground bg-background' 
-                  : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'}`}
+              onClick={() => handleTabChange("chat")}
+              className={cn(
+                "relative flex items-center justify-center gap-1 rounded-md px-2 py-2 transition-colors",
+                activeTab === "chat"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+              )}
+              aria-pressed={activeTab === "chat"}
             >
               <MessageSquare className="h-4 w-4" />
               <span className="hidden md:inline">Chat</span>
-              {activeTab === 'chat' && (
-                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />
+              {activeTab === "chat" && (
+                <div className="absolute bottom-0 left-1/2 h-0.5 w-1/2 -translate-x-1/2 bg-primary" />
               )}
             </button>
           )}
-          
+
           <button
-            onClick={() => handleTabChange('history')}
-            className={`flex items-center justify-center space-x-1 py-3 text-sm font-medium transition-colors relative
-              ${activeTab === 'history' 
-                ? 'text-foreground bg-background' 
-                : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'}`}
+            onClick={() => handleTabChange("history")}
+            className={cn(
+              "relative flex items-center justify-center gap-1 rounded-md px-2 py-2 transition-colors",
+              activeTab === "history"
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+            )}
+            aria-pressed={activeTab === "history"}
           >
             <History className="h-4 w-4" />
             <span className="hidden md:inline">History</span>
-            {activeTab === 'history' && (
-              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />
+            {activeTab === "history" && (
+              <div className="absolute bottom-0 left-1/2 h-0.5 w-1/2 -translate-x-1/2 bg-primary" />
             )}
           </button>
-          
+
           <button
-            onClick={() => handleTabChange('settings')}
-            className={`flex items-center justify-center space-x-1 py-3 text-sm font-medium transition-colors relative
-              ${activeTab === 'settings' 
-                ? 'text-foreground bg-background' 
-                : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'}`}
+            onClick={() => handleTabChange("settings")}
+            className={cn(
+              "relative flex items-center justify-center gap-1 rounded-md px-2 py-2 transition-colors",
+              activeTab === "settings"
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+            )}
+            aria-pressed={activeTab === "settings"}
           >
             <Settings className="h-4 w-4" />
             <span className="hidden md:inline">Settings</span>
-            {activeTab === 'settings' && (
-              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />
+            {activeTab === "settings" && (
+              <div className="absolute bottom-0 left-1/2 h-0.5 w-1/2 -translate-x-1/2 bg-primary" />
             )}
           </button>
         </div>
       </div>
-      
-      {/* Tab Content - Simple conditional rendering */}
-      <div className="flex-grow min-h-0 overflow-hidden">
-        {activeTab === 'chat' && <AssistantChatTab />}
-        {activeTab === 'history' && <AssistantHistoryTab />}
-        {activeTab === 'settings' && <AssistantSettingsTab />}
+
+      <div className="min-h-0 flex-1 overflow-hidden">
+        {activeTab === "chat" && <AssistantChatTab />}
+        {activeTab === "history" && <AssistantHistoryTab />}
+        {activeTab === "settings" && <AssistantSettingsTab />}
       </div>
     </aside>
   );

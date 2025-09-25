@@ -16,8 +16,8 @@ export default function AdminLayoutClient({
                      pathname.includes('/support') ? 'support' : 'users';
 
   return (
-    <div className="min-h-screen bg-background p-6">
-      <div className="max-w-7xl mx-auto">
+    <div className="min-h-screen bg-background px-4 py-6 sm:px-6 lg:px-10">
+      <div className="mx-auto max-w-7xl">
         <Card className="mb-6">
           <CardHeader>
             <CardTitle>Admin Dashboard</CardTitle>
@@ -28,7 +28,7 @@ export default function AdminLayoutClient({
         </Card>
 
         <Tabs value={currentTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-4 max-w-[800px]">
+          <TabsList className="flex w-full flex-wrap gap-2 overflow-x-auto rounded-lg bg-muted/50 p-1">
             <TabsTrigger value="monitoring" asChild>
               <Link href="/admin/monitoring">Monitoring</Link>
             </TabsTrigger>

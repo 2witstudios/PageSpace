@@ -236,34 +236,36 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
                         <Database className="h-4 w-4 mr-2" />
                         Content Statistics
                       </h4>
-                      <Table>
-                        <TableBody>
-                          <TableRow>
-                            <TableCell className="font-medium">Drives</TableCell>
-                            <TableCell>{user.stats.drives}</TableCell>
-                          </TableRow>
-                          <TableRow>
-                            <TableCell className="font-medium">Pages</TableCell>
-                            <TableCell>{user.stats.pages}</TableCell>
-                          </TableRow>
-                          <TableRow>
-                            <TableCell className="font-medium">Page Messages</TableCell>
-                            <TableCell>{user.stats.chatMessages}</TableCell>
-                          </TableRow>
-                          <TableRow>
-                            <TableCell className="font-medium">Drive Messages</TableCell>
-                            <TableCell>{user.stats.driveChatMessages}</TableCell>
-                          </TableRow>
-                          <TableRow>
-                            <TableCell className="font-medium">Global Messages</TableCell>
-                            <TableCell>{user.stats.globalMessages}</TableCell>
-                          </TableRow>
-                          <TableRow>
-                            <TableCell className="font-medium">Active Sessions</TableCell>
-                            <TableCell>{user.stats.refreshTokens}</TableCell>
-                          </TableRow>
-                        </TableBody>
-                      </Table>
+                      <div className="overflow-x-auto">
+                        <Table>
+                          <TableBody>
+                            <TableRow>
+                              <TableCell className="font-medium">Drives</TableCell>
+                              <TableCell>{user.stats.drives}</TableCell>
+                            </TableRow>
+                            <TableRow>
+                              <TableCell className="font-medium">Pages</TableCell>
+                              <TableCell>{user.stats.pages}</TableCell>
+                            </TableRow>
+                            <TableRow>
+                              <TableCell className="font-medium">Page Messages</TableCell>
+                              <TableCell>{user.stats.chatMessages}</TableCell>
+                            </TableRow>
+                            <TableRow>
+                              <TableCell className="font-medium">Drive Messages</TableCell>
+                              <TableCell>{user.stats.driveChatMessages}</TableCell>
+                            </TableRow>
+                            <TableRow>
+                              <TableCell className="font-medium">Global Messages</TableCell>
+                              <TableCell>{user.stats.globalMessages}</TableCell>
+                            </TableRow>
+                            <TableRow>
+                              <TableCell className="font-medium">Active Sessions</TableCell>
+                              <TableCell>{user.stats.refreshTokens}</TableCell>
+                            </TableRow>
+                          </TableBody>
+                        </Table>
+                      </div>
                     </div>
 
                     {/* AI Settings and Account Info */}
