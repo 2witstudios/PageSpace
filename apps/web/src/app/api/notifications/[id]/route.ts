@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { parse } from 'cookie';
 import { decodeToken } from '@pagespace/lib/server';
 import { deleteNotification } from '@pagespace/lib';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 
 export async function DELETE(
   req: Request,

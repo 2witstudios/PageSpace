@@ -3,7 +3,7 @@ import { db, eq, and } from '@pagespace/db';
 import { driveMembers, drives, pagePermissions, pages } from '@pagespace/db';
 import { verifyAuth } from '@/lib/auth';
 import { createDriveNotification } from '@pagespace/lib';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 
 interface PermissionEntry {
   pageId: string;

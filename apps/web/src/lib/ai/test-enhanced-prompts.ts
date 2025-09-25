@@ -4,7 +4,7 @@
 
 import { RolePromptBuilder } from './role-prompts';
 import { AgentRole } from './agent-roles';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 
 const isTestLoggingEnabled = process.env.AI_DEBUG_LOGGING === 'true';
 

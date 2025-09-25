@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { pages, favorites, pageTags, pagePermissions, chatMessages, channelMessages, db, eq } from '@pagespace/db';
 import { decodeToken } from '@pagespace/lib/server';
 import { parse } from 'cookie';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 
 async function recursivelyDelete(pageId: string, tx: typeof db) {
     const children = await tx.select({ id: pages.id }).from(pages).where(eq(pages.parentId, pageId));

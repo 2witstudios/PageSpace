@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/button";
 import { useDriveStore } from "@/hooks/useDrive";
 import { Skeleton } from "@/components/ui/skeleton";
 import CreateDriveDialog from "@/components/layout/left-sidebar/CreateDriveDialog";
-import { Drive } from "@pagespace/lib";
+import { Drive } from "@pagespace/lib/client-safe";
 
 export default function DriveSwitcher() {
   const router = useRouter();

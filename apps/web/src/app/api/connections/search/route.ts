@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, users, userProfiles, connections, eq, and, or } from '@pagespace/db';
 import { verifyAuth } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 
 // GET /api/connections/search - Search for users by email to connect with
 export async function GET(request: Request) {

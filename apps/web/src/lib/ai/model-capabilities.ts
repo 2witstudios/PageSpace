@@ -1,4 +1,4 @@
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 
 const capabilityLogger = loggers.ai.child({ module: 'model-capabilities' });
 

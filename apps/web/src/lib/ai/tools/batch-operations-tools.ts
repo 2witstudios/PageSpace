@@ -1,7 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db, pages, eq, and, inArray, sql } from '@pagespace/db';
-import { canUserEditPage, canUserDeletePage, getUserDriveAccess } from '@pagespace/lib';
+import { canUserEditPage, canUserDeletePage, getUserDriveAccess } from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
 import { ToolExecutionContext } from '../types';
 

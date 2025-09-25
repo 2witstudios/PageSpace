@@ -1,6 +1,6 @@
 import { generateCSRFToken, getSessionIdFromJWT, decodeToken } from '@pagespace/lib/server';
 import { parse } from 'cookie';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 
 export async function GET(req: Request) {
   try {

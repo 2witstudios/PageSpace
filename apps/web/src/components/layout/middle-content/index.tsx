@@ -11,7 +11,7 @@ import ChannelView from './page-views/channel/ChannelView';
 import DocumentView from './page-views/document/DocumentView';
 import FileViewer from './page-views/file/FileViewer';
 import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
-import { getPageTypeComponent } from '@pagespace/lib/client';
+import { getPageTypeComponent } from '@pagespace/lib/client-safe';
 import CanvasPageView from './page-views/canvas/CanvasPageView';
 import GlobalAssistantView from './page-views/dashboard/GlobalAssistantView';
 import SheetView from './page-views/sheet/SheetView';

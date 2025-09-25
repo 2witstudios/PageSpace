@@ -4,7 +4,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const };
 import { db, pages, drives, eq, and, inArray } from '@pagespace/db';
 import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/server';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 
 /**
  * GET /api/drives/[driveId]/search/glob

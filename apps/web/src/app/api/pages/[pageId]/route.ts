@@ -4,7 +4,7 @@ import { canUserViewPage, canUserEditPage, canUserDeletePage } from '@pagespace/
 import { z } from "zod/v4";
 import * as cheerio from 'cheerio';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 

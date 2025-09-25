@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { useDocumentStore } from '@/stores/useDocumentStore';
 import { useParams } from 'next/navigation';
 import useSWR from 'swr';
-import { PageType, isDocumentPage, isCanvasPage } from '@pagespace/lib';
+import { PageType, isDocumentPage, isCanvasPage } from '@pagespace/lib/client-safe';
 
 const fetcher = (url: string) => fetch(url).then(res => res.json());
 

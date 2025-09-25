@@ -3,8 +3,13 @@
  */
 
 import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
-import { loggers } from '@pagespace/lib/logger-config';
+import { browserLoggers } from '@pagespace/lib/logger-browser';
+import { isNodeEnvironment } from '@pagespace/lib/utils/environment';
 import { maskIdentifier } from '@/lib/logging/mask';
+
+// Use browser-safe logger for all environments
+// This prevents Node.js-specific API errors in browser contexts
+const loggers = browserLoggers;
 
 export type PageOperation = 'created' | 'updated' | 'moved' | 'deleted' | 'restored' | 'trashed' | 'content-updated';
 export type DriveOperation = 'created' | 'updated' | 'deleted';
@@ -54,7 +59,16 @@ export interface UsageEventPayload {
 }
 
 const realtimeLogger = loggers.realtime.child({ module: 'socket-utils' });
-const verboseRealtimeLogging = process.env.NODE_ENV !== 'production';
+
+// Safely access environment variables
+const getEnvVar = (name: string, fallback = '') => {
+  if (isNodeEnvironment()) {
+    return process.env[name] || fallback;
+  }
+  return fallback;
+};
+
+const verboseRealtimeLogging = getEnvVar('NODE_ENV') !== 'production';
 
 /**
  * Broadcasts a page event to the realtime server
@@ -62,7 +76,8 @@ const verboseRealtimeLogging = process.env.NODE_ENV !== 'production';
  */
 export async function broadcastPageEvent(payload: PageEventPayload): Promise<void> {
   // Only broadcast if realtime URL is configured
-  if (!process.env.INTERNAL_REALTIME_URL) {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
     realtimeLogger.warn('Realtime URL not configured, skipping page event broadcast', {
       event: 'page',
       channel: `drive:${maskIdentifier(payload.driveId)}`
@@ -77,7 +92,7 @@ export async function broadcastPageEvent(payload: PageEventPayload): Promise<voi
       payload,
     });
 
-    await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
+    await fetch(`${realtimeUrl}/api/broadcast`, {
       method: 'POST',
       headers: createSignedBroadcastHeaders(requestBody),
       body: requestBody,
@@ -101,7 +116,8 @@ export async function broadcastPageEvent(payload: PageEventPayload): Promise<voi
  */
 export async function broadcastDriveEvent(payload: DriveEventPayload): Promise<void> {
   // Only broadcast if realtime URL is configured
-  if (!process.env.INTERNAL_REALTIME_URL) {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
     realtimeLogger.warn('Realtime URL not configured, skipping drive event broadcast', {
       event: 'drive'
     });
@@ -115,7 +131,7 @@ export async function broadcastDriveEvent(payload: DriveEventPayload): Promise<v
       payload,
     });
 
-    await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
+    await fetch(`${realtimeUrl}/api/broadcast`, {
       method: 'POST',
       headers: createSignedBroadcastHeaders(requestBody),
       body: requestBody,
@@ -177,7 +193,8 @@ export function createDriveEventPayload(
  */
 export async function broadcastTaskEvent(payload: TaskEventPayload): Promise<void> {
   // Only broadcast if realtime URL is configured
-  if (!process.env.INTERNAL_REALTIME_URL) {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
     realtimeLogger.warn('Realtime URL not configured, skipping task event broadcast', {
       event: 'task'
     });
@@ -191,7 +208,7 @@ export async function broadcastTaskEvent(payload: TaskEventPayload): Promise<voi
       payload,
     });
 
-    await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
+    await fetch(`${realtimeUrl}/api/broadcast`, {
       method: 'POST',
       headers: createSignedBroadcastHeaders(requestBody),
       body: requestBody,
@@ -215,7 +232,8 @@ export async function broadcastTaskEvent(payload: TaskEventPayload): Promise<voi
  */
 export async function broadcastUsageEvent(payload: UsageEventPayload): Promise<void> {
   // Only broadcast if realtime URL is configured
-  if (!process.env.INTERNAL_REALTIME_URL) {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
     realtimeLogger.warn('Realtime URL not configured, skipping usage event broadcast', {
       event: 'usage'
     });
@@ -229,7 +247,7 @@ export async function broadcastUsageEvent(payload: UsageEventPayload): Promise<v
       payload,
     });
 
-    await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
+    await fetch(`${realtimeUrl}/api/broadcast`, {
       method: 'POST',
       headers: createSignedBroadcastHeaders(requestBody),
       body: requestBody,

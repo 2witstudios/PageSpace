@@ -1,5 +1,5 @@
 import { db, eq, and, aiUsageDaily, users, sql } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 
 export type ProviderType = 'standard' | 'pro';

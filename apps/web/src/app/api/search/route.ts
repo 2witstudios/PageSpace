@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { db, eq, and, or, ilike, pages, drives, users, userProfiles, inArray } from '@pagespace/db';
 import { verifyAuth } from '@/lib/auth';
-import { getBatchPagePermissions } from '@pagespace/lib/permissions-cached';
-import { loggers } from '@pagespace/lib/logger-config';
+import { getBatchPagePermissions } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/server';
 
 interface SearchResult {
   id: string;

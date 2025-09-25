@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { channelMessages, db, eq, asc } from '@pagespace/db';
 import { decodeToken, canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
 import { parse } from 'cookie';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 
 export async function GET(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
   const { pageId } = await params;

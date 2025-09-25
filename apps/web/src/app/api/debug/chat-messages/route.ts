@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateWebRequest, isAuthError } from '@/lib/auth';
 import { db, chatMessages, eq, and, desc } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 
 /**
  * Debug endpoint to test chat message persistence

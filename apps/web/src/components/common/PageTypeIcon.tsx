@@ -8,7 +8,7 @@ import {
   FileIcon,
   Table
 } from 'lucide-react';
-import { PageType, getPageTypeIconName } from '@pagespace/lib';
+import { PageType, getPageTypeIconName } from '@pagespace/lib/client-safe';
 
 interface PageTypeIconProps {
   type: PageType;

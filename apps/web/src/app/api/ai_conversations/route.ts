@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { authenticateWebRequest, isAuthError } from '@/lib/auth';
 import { db, conversations, eq, and, desc } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;

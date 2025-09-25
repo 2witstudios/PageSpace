@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { decodeToken } from '@pagespace/lib/server';
 import { parse } from 'cookie';
 import { drives, db, eq, and } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/socket-utils';
 
 // Get user ID from cookie

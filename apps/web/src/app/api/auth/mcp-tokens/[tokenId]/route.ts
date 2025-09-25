@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db, mcpTokens, eq, and } from '@pagespace/db';
 import { decodeToken } from '@pagespace/lib/server';
 import { parse } from 'cookie';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 
 // DELETE: Revoke an MCP token
 export async function DELETE(

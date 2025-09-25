@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { buildTree } from '@pagespace/lib/server';
 import { pages, drives, pageType, pagePermissions, db, and, eq, inArray, asc, sql } from '@pagespace/db';
 import { z } from 'zod/v4';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const };

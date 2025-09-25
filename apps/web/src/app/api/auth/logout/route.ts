@@ -1,7 +1,7 @@
 import { refreshTokens } from '@pagespace/db';
 import { db, eq } from '@pagespace/db';
 import { parse, serialize } from 'cookie';
-import { loggers, logAuthEvent } from '@pagespace/lib/logger-config';
+import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { decodeToken } from '@pagespace/lib/server';
 

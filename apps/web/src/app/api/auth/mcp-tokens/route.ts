@@ -4,7 +4,7 @@ import { decodeToken } from '@pagespace/lib/server';
 import { parse } from 'cookie';
 import * as crypto from 'crypto';
 import { z } from 'zod/v4';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 
 // Generate a secure MCP token with prefix
 function generateMCPToken(): string {

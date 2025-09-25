@@ -1,6 +1,6 @@
 import { z } from 'zod/v4';
 import { checkRateLimit, RATE_LIMIT_CONFIGS } from '@pagespace/lib/server';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 
 const googleSigninSchema = z.object({
   returnUrl: z.string().optional(),

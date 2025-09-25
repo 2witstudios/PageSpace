@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { drives, pages, db, and, eq, asc } from '@pagespace/db';
 import { buildTree } from '@pagespace/lib/server';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const };

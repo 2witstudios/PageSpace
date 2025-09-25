@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { decodeToken } from '@pagespace/lib/server';
 import { parse } from 'cookie';
 import { monitoringMiddleware } from '@/middleware/monitoring';
-import { loggers, logAuthEvent, logSecurityEvent } from '@pagespace/lib/logger-config';
+import { loggers, logAuthEvent, logSecurityEvent } from '@pagespace/lib/server';
 import { validateMCPToken } from '@/lib/auth';
 
 const MCP_BEARER_PREFIX = 'Bearer mcp_';

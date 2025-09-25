@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, connections, users, userProfiles, eq, and, or, desc } from '@pagespace/db';
 import { verifyAuth } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 import { createNotification } from '@pagespace/lib';
 
 // GET /api/connections - Get user's connections

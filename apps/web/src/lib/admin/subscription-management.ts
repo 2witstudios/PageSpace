@@ -1,6 +1,6 @@
 import { db, eq, users } from '@pagespace/db';
 import { getStorageConfigFromSubscription } from '@pagespace/lib/services/subscription-utils';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 
 const adminLogger = loggers.system.child({ module: 'subscription-management' });

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { drives, db, eq, and, driveMembers } from '@pagespace/db';
 import { z } from 'zod';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/socket-utils';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 

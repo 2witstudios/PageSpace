@@ -6,7 +6,7 @@ import { db, pages, drives, eq, and, desc, isNull } from '@pagespace/db';
 import { canUserEditPage } from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
 import { pageSpaceTools } from '@/lib/ai/ai-tools';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 
 /**
  * POST /api/agents/create

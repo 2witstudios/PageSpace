@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, dmConversations, connections, eq, and, or, sql } from '@pagespace/db';
 import { verifyAuth } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 
 // GET /api/messages/conversations - Get user's DM conversations with pagination
 export async function GET(request: Request) {

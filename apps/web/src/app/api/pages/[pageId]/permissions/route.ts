@@ -5,7 +5,7 @@ import { parse } from 'cookie';
 import { createId } from '@paralleldrive/cuid2';
 import { z } from 'zod/v4';
 import { createPermissionNotification } from '@pagespace/lib';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 
 export async function GET(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
   const { pageId } = await params;

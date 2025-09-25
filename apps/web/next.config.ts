@@ -13,6 +13,8 @@ const nextConfig: NextConfig = {
         net: false,
         tls: false,
         'pg-native': false,
+        process: false,
+        os: false,
       };
       config.plugins.push(
         new MonacoWebpackPlugin({

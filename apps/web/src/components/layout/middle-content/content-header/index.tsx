@@ -13,7 +13,7 @@ import { useDocument } from '@/hooks/useDocument';
 import { usePageStore } from '@/hooks/usePage';
 import { Button } from '@/components/ui/button';
 import { Download } from 'lucide-react';
-import { isDocumentPage, isFilePage, isSheetPage } from '@pagespace/lib/client';
+import { isDocumentPage, isFilePage, isSheetPage } from '@pagespace/lib/client-safe';
 
 interface ContentHeaderProps {
   children?: React.ReactNode;

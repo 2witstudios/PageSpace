@@ -1,3 +1,22 @@
+## 2025-09-25
+
+### Browser Compatibility Fix - Memory Usage Error (16:56 UTC)
+
+- **Fixed Critical Browser Error**: Resolved `TypeError: i.memoryUsage is not a function` in browser environments
+  - **Root Cause**: Client-side React components importing `socket-utils.ts` which imported Node.js-specific logger
+  - **Solution**: Created browser-safe logger implementation to prevent Node.js API calls in browser context
+  - **Added**: `packages/lib/src/logger-browser.ts` - Browser-compatible logger with environment detection
+  - **Added**: `packages/lib/src/utils/environment.ts` - Runtime environment detection utilities
+  - **Updated**: `apps/web/src/lib/socket-utils.ts` - Now uses browser-safe logger instead of Node.js logger
+  - **Updated**: `packages/lib/package.json` - Added exports for new browser-safe modules
+  - **Impact**: Prevents JavaScript runtime errors when client components import server utilities
+  - **Compatibility**: Works in both Node.js server context and browser client context
+  - **Files Modified**:
+    - `packages/lib/src/logger-browser.ts` (new)
+    - `packages/lib/src/utils/environment.ts` (new)
+    - `apps/web/src/lib/socket-utils.ts`
+    - `packages/lib/package.json`
+
 ## 2025-09-23
 
 ### Refactored AI Provider Factory (14:30 UTC)

@@ -9,7 +9,7 @@ import {
   getPerformanceMetrics,
   getDateRange
 } from '@/lib/monitoring-queries';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 
 /**
  * GET /api/monitoring/[metric]
