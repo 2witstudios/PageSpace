@@ -6,7 +6,6 @@ import MemoizedSidebar from "@/components/layout/left-sidebar/MemoizedSidebar";
 import CenterPanel from "@/components/layout/middle-content/CenterPanel";
 import MemoizedRightPanel from "@/components/layout/right-sidebar/MemoizedRightPanel";
 import { NavigationProvider } from "@/components/layout/NavigationProvider";
-import { useMobile } from "@/hooks/use-mobile";
 import { useBreakpoint } from "@/hooks/use-breakpoint";
 import { useResponsivePanels } from "@/hooks/use-responsive-panels";
 import { motion, AnimatePresence } from "motion/react";
@@ -25,7 +24,7 @@ interface LayoutProps {
 function Layout({ children }: LayoutProps) {
   const { isLoading, isAuthenticated } = useAuth();
   const router = useRouter();
-  const isMobile = useMobile();
+  const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
   const {
     leftSidebarOpen,
     rightSidebarOpen,
@@ -46,11 +45,11 @@ function Layout({ children }: LayoutProps) {
   usePerformanceMonitor();
 
   useEffect(() => {
-    if (!isMobile) {
+    if (!isSheetBreakpoint) {
       setLeftSheetOpen(false);
       setRightSheetOpen(false);
     }
-  }, [isMobile]);
+  }, [isSheetBreakpoint]);
 
   // Handle authentication redirect with Next.js router for faster navigation
   useEffect(() => {
@@ -79,7 +78,7 @@ function Layout({ children }: LayoutProps) {
   }, [hasHydrated, isLoading, isAuthenticated, router]);
 
   const handleLeftPanelToggle = useCallback(() => {
-    if (isMobile) {
+    if (isSheetBreakpoint) {
       setLeftSheetOpen((open) => {
         const nextOpen = !open;
         if (nextOpen && rightSheetOpen) {
@@ -104,7 +103,7 @@ function Layout({ children }: LayoutProps) {
 
     toggleLeftSidebar();
   }, [
-    isMobile,
+    isSheetBreakpoint,
     rightSheetOpen,
     shouldOverlaySidebars,
     leftSidebarOpen,
@@ -115,7 +114,7 @@ function Layout({ children }: LayoutProps) {
   ]);
 
   const handleRightPanelToggle = useCallback(() => {
-    if (isMobile) {
+    if (isSheetBreakpoint) {
       setRightSheetOpen((open) => {
         const nextOpen = !open;
         if (nextOpen && leftSheetOpen) {
@@ -140,7 +139,7 @@ function Layout({ children }: LayoutProps) {
 
     toggleRightSidebar();
   }, [
-    isMobile,
+    isSheetBreakpoint,
     leftSheetOpen,
     shouldOverlaySidebars,
     leftSidebarOpen,
@@ -190,7 +189,7 @@ function Layout({ children }: LayoutProps) {
           )}
 
           <AnimatePresence>
-            {shouldOverlaySidebars && !isMobile && leftSidebarOpen && (
+            {shouldOverlaySidebars && !isSheetBreakpoint && leftSidebarOpen && (
               <motion.div
                 key="left-sidebar"
                 initial={{ x: -320, opacity: 0 }}
@@ -223,7 +222,7 @@ function Layout({ children }: LayoutProps) {
           )}
 
           <AnimatePresence>
-            {shouldOverlaySidebars && !isMobile && rightSidebarOpen && (
+            {shouldOverlaySidebars && !isSheetBreakpoint && rightSidebarOpen && (
               <motion.div
                 key="right-sidebar"
                 initial={{ x: 320, opacity: 0 }}
@@ -240,7 +239,7 @@ function Layout({ children }: LayoutProps) {
           </AnimatePresence>
 
           <AnimatePresence>
-            {shouldOverlaySidebars && !isMobile && (leftSidebarOpen || rightSidebarOpen) && (
+            {shouldOverlaySidebars && !isSheetBreakpoint && (leftSidebarOpen || rightSidebarOpen) && (
               <motion.button
                 key="panel-overlay"
                 type="button"
@@ -266,7 +265,7 @@ function Layout({ children }: LayoutProps) {
         <DebugPanel />
       </div>
 
-      {isMobile && (
+      {isSheetBreakpoint && (
         <>
           <Sheet
             open={leftSheetOpen}
