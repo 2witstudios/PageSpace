@@ -11,6 +11,7 @@ import { formatDistanceToNow } from 'date-fns';
 import useSWR from 'swr';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
+import type { SidebarProps } from './index';
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
@@ -38,7 +39,7 @@ interface ConversationsResponse {
   };
 }
 
-export default function MessagesLeftSidebar() {
+export default function MessagesLeftSidebar({ className, variant = 'desktop' }: SidebarProps) {
   const router = useRouter();
   const params = useParams();
   const [searchQuery, setSearchQuery] = useState('');
@@ -89,8 +90,14 @@ export default function MessagesLeftSidebar() {
   };
 
   return (
-    <aside className="hidden sm:block w-80 border-r bg-sidebar text-sidebar-foreground h-full">
-      <div className="flex h-full flex-col gap-2 px-1 py-2">
+    <aside
+      className={cn(
+        'flex h-full w-full flex-col border-r bg-sidebar text-sidebar-foreground',
+        variant === 'overlay' && 'shadow-lg',
+        className,
+      )}
+    >
+      <div className="flex h-full flex-col gap-3 px-4 py-4 sm:px-3">
         {/* Header */}
         <div className="p-4 border-b border-border">
         <div className="flex items-center justify-between mb-4">

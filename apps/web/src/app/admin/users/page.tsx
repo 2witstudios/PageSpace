@@ -82,7 +82,7 @@ export default function AdminUsersPage() {
             <Skeleton className="h-4 w-96" />
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
               {[...Array(4)].map((_, i) => (
                 <div key={i} className="text-center">
                   <Skeleton className="h-8 w-16 mx-auto mb-2" />
@@ -145,7 +145,7 @@ export default function AdminUsersPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+          <div className="grid grid-cols-1 gap-4 text-sm sm:grid-cols-2 xl:grid-cols-4">
             <div className="text-center">
               <div className="text-2xl font-bold text-primary">{users.length}</div>
               <div className="text-muted-foreground flex items-center justify-center">

@@ -61,6 +61,8 @@ interface LayoutState {
   restoreView: (pageId: string) => void;
   toggleLeftSidebar: () => void;
   toggleRightSidebar: () => void;
+  setLeftSidebarOpen: (open: boolean) => void;
+  setRightSidebarOpen: (open: boolean) => void;
   setTreeExpanded: (nodeId: string, expanded: boolean) => void;
   setTreeScrollPosition: (position: number) => void;
   updateDocument: (pageId: string, updates: Partial<DocumentState>) => void;
@@ -321,9 +323,17 @@ export const useLayoutStore = create<LayoutState>()(
       toggleLeftSidebar: () => {
         set((state) => ({ leftSidebarOpen: !state.leftSidebarOpen }));
       },
-      
+
       toggleRightSidebar: () => {
         set((state) => ({ rightSidebarOpen: !state.rightSidebarOpen }));
+      },
+
+      setLeftSidebarOpen: (open: boolean) => {
+        set({ leftSidebarOpen: open });
+      },
+
+      setRightSidebarOpen: (open: boolean) => {
+        set({ rightSidebarOpen: open });
       },
       
       setTreeExpanded: (nodeId: string, expanded: boolean) => {

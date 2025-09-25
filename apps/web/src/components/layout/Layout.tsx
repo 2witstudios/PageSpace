@@ -7,13 +7,15 @@ import CenterPanel from "@/components/layout/middle-content/CenterPanel";
 import MemoizedRightPanel from "@/components/layout/right-sidebar/MemoizedRightPanel";
 import { NavigationProvider } from "@/components/layout/NavigationProvider";
 import { useMobile } from "@/hooks/use-mobile";
+import { useBreakpoint } from "@/hooks/use-breakpoint";
+import { useResponsivePanels } from "@/hooks/use-responsive-panels";
 import { motion, AnimatePresence } from "motion/react";
 import { DebugPanel } from "./DebugPanel";
 import { useLayoutStore } from "@/stores/useLayoutStore";
 import { useHasHydrated } from "@/hooks/useHasHydrated";
 import { usePerformanceMonitor } from "@/hooks/usePerformanceMonitor";
 import { useRouter } from "next/navigation";
-import { useEffect, memo } from "react";
+import { useCallback, useEffect, memo } from "react";
 
 interface LayoutProps {
   children?: React.ReactNode;
@@ -28,8 +30,13 @@ function Layout({ children }: LayoutProps) {
     rightSidebarOpen,
     toggleLeftSidebar,
     toggleRightSidebar,
+    setLeftSidebarOpen,
+    setRightSidebarOpen,
   } = useLayoutStore();
   const hasHydrated = useHasHydrated();
+  const shouldOverlaySidebars = useBreakpoint("(max-width: 1279px)");
+
+  useResponsivePanels();
 
   
   // Monitor performance
@@ -61,6 +68,52 @@ function Layout({ children }: LayoutProps) {
     }
   }, [hasHydrated, isLoading, isAuthenticated, router]);
 
+  const handleLeftPanelToggle = useCallback(() => {
+    if (shouldOverlaySidebars) {
+      if (leftSidebarOpen) {
+        setLeftSidebarOpen(false);
+      } else {
+        if (rightSidebarOpen) {
+          setRightSidebarOpen(false);
+        }
+        setLeftSidebarOpen(true);
+      }
+      return;
+    }
+
+    toggleLeftSidebar();
+  }, [
+    shouldOverlaySidebars,
+    leftSidebarOpen,
+    rightSidebarOpen,
+    setLeftSidebarOpen,
+    setRightSidebarOpen,
+    toggleLeftSidebar,
+  ]);
+
+  const handleRightPanelToggle = useCallback(() => {
+    if (shouldOverlaySidebars) {
+      if (rightSidebarOpen) {
+        setRightSidebarOpen(false);
+      } else {
+        if (leftSidebarOpen) {
+          setLeftSidebarOpen(false);
+        }
+        setRightSidebarOpen(true);
+      }
+      return;
+    }
+
+    toggleRightSidebar();
+  }, [
+    shouldOverlaySidebars,
+    leftSidebarOpen,
+    rightSidebarOpen,
+    setLeftSidebarOpen,
+    setRightSidebarOpen,
+    toggleRightSidebar,
+  ]);
+
   // Optimize loading checks - show UI earlier for better perceived performance
   if (isLoading || !hasHydrated) {
     return (
@@ -87,91 +140,93 @@ function Layout({ children }: LayoutProps) {
 
   return (
     <NavigationProvider>
-      <div className="flex flex-col h-screen overflow-hidden">
+      <div className="flex h-[100dvh] min-h-dvh flex-col overflow-hidden bg-background">
         <TopBar
-          onToggleLeftPanel={toggleLeftSidebar}
-          onToggleRightPanel={toggleRightSidebar}
+          onToggleLeftPanel={handleLeftPanelToggle}
+          onToggleRightPanel={handleRightPanelToggle}
         />
-        
-        <div className="flex flex-grow overflow-hidden relative">
-          {/* Desktop Left Sidebar */}
-          {leftSidebarOpen && !isMobile && (
-            <div className="flex-shrink-0 w-80 overflow-hidden transition-all duration-200 ease-in-out">
-              <MemoizedSidebar />
+
+        <div className="relative flex flex-1 min-h-0 overflow-hidden">
+          {!shouldOverlaySidebars && leftSidebarOpen && (
+            <div className="relative hidden h-full flex-shrink-0 border-r bg-sidebar/80 backdrop-blur xl:flex xl:w-[18rem] 2xl:w-80">
+              <MemoizedSidebar className="h-full w-full" />
             </div>
           )}
 
-          {/* Mobile Left Sidebar */}
           <AnimatePresence>
-            {isMobile && leftSidebarOpen && (
-              <>
-                <motion.div
-                  initial={{ x: -320, opacity: 0 }}
-                  animate={{ x: 0, opacity: 1 }}
-                  exit={{ x: -320, opacity: 0 }}
-                  transition={{ duration: 0.2, ease: "easeInOut" }}
-                  className="absolute top-0 left-0 h-full z-40"
-                >
-                  <MemoizedSidebar />
-                </motion.div>
-                
-                {/* Mobile Overlay */}
-                <motion.div
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.2 }}
-                  className="absolute inset-0 bg-black/30 z-30"
-                  onClick={toggleLeftSidebar}
-                />
-              </>
+            {shouldOverlaySidebars && leftSidebarOpen && (
+              <motion.div
+                key="left-sidebar"
+                initial={{ x: -320, opacity: 0 }}
+                animate={{ x: 0, opacity: 1 }}
+                exit={{ x: -320, opacity: 0 }}
+                transition={{ duration: 0.2, ease: "easeInOut" }}
+                className="absolute inset-y-0 left-0 z-40 flex h-full max-w-full"
+              >
+                <div className={isMobile ? "h-full w-screen" : "h-full w-[min(22rem,90vw)] max-w-sm"}>
+                  <MemoizedSidebar variant="overlay" className="h-full w-full" />
+                </div>
+              </motion.div>
             )}
           </AnimatePresence>
 
-          {/* Main Content Area */}
-          <main className="flex-1 min-w-0 overflow-hidden bg-background relative">
-            {/* Use our center panel instead of children */}
-            {children || <CenterPanel />}
+          <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+            {children ? (
+              <div className="flex flex-1 flex-col min-h-0 overflow-y-auto">
+                {children}
+              </div>
+            ) : (
+              <CenterPanel />
+            )}
           </main>
 
-          {/* Desktop Right Sidebar */}
-          {rightSidebarOpen && !isMobile && (
-            <div className="flex-shrink-0 w-80 overflow-hidden transition-all duration-200 ease-in-out">
-              <MemoizedRightPanel />
+          {!shouldOverlaySidebars && rightSidebarOpen && (
+            <div className="relative hidden h-full flex-shrink-0 border-l bg-sidebar/80 backdrop-blur xl:flex xl:w-[18rem] 2xl:w-80">
+              <MemoizedRightPanel className="h-full w-full" />
             </div>
           )}
 
-          {/* Mobile Right Sidebar */}
           <AnimatePresence>
-            {isMobile && rightSidebarOpen && (
-              <>
-                <motion.div
-                  initial={{ x: 320, opacity: 0 }}
-                  animate={{ x: 0, opacity: 1 }}
-                  exit={{ x: 320, opacity: 0 }}
-                  transition={{ duration: 0.2, ease: "easeInOut" }}
-                  className="absolute top-0 right-0 h-full z-40"
-                >
-                  <MemoizedRightPanel />
-                </motion.div>
-                
-                {/* Mobile Overlay (if not already shown for left sidebar) */}
-                {!leftSidebarOpen && (
-                  <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.2 }}
-                    className="absolute inset-0 bg-black/30 z-30"
-                    onClick={toggleRightSidebar}
-                  />
-                )}
-              </>
+            {shouldOverlaySidebars && rightSidebarOpen && (
+              <motion.div
+                key="right-sidebar"
+                initial={{ x: 320, opacity: 0 }}
+                animate={{ x: 0, opacity: 1 }}
+                exit={{ x: 320, opacity: 0 }}
+                transition={{ duration: 0.2, ease: "easeInOut" }}
+                className="absolute inset-y-0 right-0 z-40 flex h-full max-w-full"
+              >
+                <div className={isMobile ? "h-full w-screen" : "h-full w-[min(22rem,90vw)] max-w-sm"}>
+                  <MemoizedRightPanel variant="overlay" className="h-full w-full" />
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <AnimatePresence>
+            {shouldOverlaySidebars && (leftSidebarOpen || rightSidebarOpen) && (
+              <motion.button
+                key="panel-overlay"
+                type="button"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.2 }}
+                className="absolute inset-0 z-30 bg-black/40"
+                aria-label="Close side panels"
+                onClick={() => {
+                  if (leftSidebarOpen) {
+                    setLeftSidebarOpen(false);
+                  }
+                  if (rightSidebarOpen) {
+                    setRightSidebarOpen(false);
+                  }
+                }}
+              />
             )}
           </AnimatePresence>
         </div>
-        
-        {/* Debug Panel for Development */}
+
         <DebugPanel />
       </div>
     </NavigationProvider>

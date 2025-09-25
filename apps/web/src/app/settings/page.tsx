@@ -20,7 +20,7 @@ export default function SettingsPage() {
       title: "Account",
       description: "Manage your account and profile",
       icon: User,
-      href: "/account",
+      href: "/settings/account",
       available: true,
     },
     {
@@ -47,7 +47,7 @@ export default function SettingsPage() {
   ];
 
   return (
-    <div className="container mx-auto py-10 px-10">
+    <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10">
       <div className="mb-8">
         <Button
           variant="ghost"
@@ -64,7 +64,7 @@ export default function SettingsPage() {
         </p>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
+      <div className="grid gap-4 sm:grid-cols-2">
         {settingsCategories.map((category) => (
           <Link 
             key={category.href}
