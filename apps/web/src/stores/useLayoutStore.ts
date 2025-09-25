@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { getLayoutViewType, PageType } from '@pagespace/lib';
+import { getLayoutViewType, PageType } from '@pagespace/lib/client-safe';
 import { toast } from 'sonner';
 import { createClientLogger } from '@/lib/logging/client-logger';
 

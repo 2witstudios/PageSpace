@@ -27,7 +27,7 @@ import { AgentRoleUtils } from '@/lib/ai/agent-roles';
 import { RolePromptBuilder } from '@/lib/ai/role-prompts';
 import { ToolPermissionFilter } from '@/lib/ai/tool-permissions';
 import { getModelCapabilities } from '@/lib/ai/model-capabilities';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 
 // Allow streaming responses up to 5 minutes

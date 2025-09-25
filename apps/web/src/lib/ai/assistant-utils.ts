@@ -1,6 +1,6 @@
 import { UIMessage } from 'ai';
 import { db, chatMessages, messages } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 
 /**
  * Assistant utilities for AI tool calling and message handling

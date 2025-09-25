@@ -7,7 +7,7 @@ import {
   or,
   count
 } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 import { verifyAdminAuth } from '@/lib/auth';
 
 export async function GET(request: Request) {

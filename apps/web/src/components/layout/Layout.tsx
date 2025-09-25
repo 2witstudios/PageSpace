@@ -6,7 +6,6 @@ import MemoizedSidebar from "@/components/layout/left-sidebar/MemoizedSidebar";
 import CenterPanel from "@/components/layout/middle-content/CenterPanel";
 import MemoizedRightPanel from "@/components/layout/right-sidebar/MemoizedRightPanel";
 import { NavigationProvider } from "@/components/layout/NavigationProvider";
-import { useMobile } from "@/hooks/use-mobile";
 import { useBreakpoint } from "@/hooks/use-breakpoint";
 import { useResponsivePanels } from "@/hooks/use-responsive-panels";
 import { motion, AnimatePresence } from "motion/react";
@@ -15,7 +14,14 @@ import { useLayoutStore } from "@/stores/useLayoutStore";
 import { useHasHydrated } from "@/hooks/useHasHydrated";
 import { usePerformanceMonitor } from "@/hooks/usePerformanceMonitor";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, memo } from "react";
+import { useCallback, useEffect, memo, useState } from "react";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 
 interface LayoutProps {
   children?: React.ReactNode;
@@ -24,7 +30,7 @@ interface LayoutProps {
 function Layout({ children }: LayoutProps) {
   const { isLoading, isAuthenticated } = useAuth();
   const router = useRouter();
-  const isMobile = useMobile();
+  const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
   const {
     leftSidebarOpen,
     rightSidebarOpen,
@@ -35,12 +41,21 @@ function Layout({ children }: LayoutProps) {
   } = useLayoutStore();
   const hasHydrated = useHasHydrated();
   const shouldOverlaySidebars = useBreakpoint("(max-width: 1279px)");
+  const [leftSheetOpen, setLeftSheetOpen] = useState(false);
+  const [rightSheetOpen, setRightSheetOpen] = useState(false);
 
   useResponsivePanels();
 
-  
+
   // Monitor performance
   usePerformanceMonitor();
+
+  useEffect(() => {
+    if (!isSheetBreakpoint) {
+      setLeftSheetOpen(false);
+      setRightSheetOpen(false);
+    }
+  }, [isSheetBreakpoint]);
 
   // Handle authentication redirect with Next.js router for faster navigation
   useEffect(() => {
@@ -69,6 +84,17 @@ function Layout({ children }: LayoutProps) {
   }, [hasHydrated, isLoading, isAuthenticated, router]);
 
   const handleLeftPanelToggle = useCallback(() => {
+    if (isSheetBreakpoint) {
+      setLeftSheetOpen((open) => {
+        const nextOpen = !open;
+        if (nextOpen && rightSheetOpen) {
+          setRightSheetOpen(false);
+        }
+        return nextOpen;
+      });
+      return;
+    }
+
     if (shouldOverlaySidebars) {
       if (leftSidebarOpen) {
         setLeftSidebarOpen(false);
@@ -83,6 +109,8 @@ function Layout({ children }: LayoutProps) {
 
     toggleLeftSidebar();
   }, [
+    isSheetBreakpoint,
+    rightSheetOpen,
     shouldOverlaySidebars,
     leftSidebarOpen,
     rightSidebarOpen,
@@ -92,6 +120,17 @@ function Layout({ children }: LayoutProps) {
   ]);
 
   const handleRightPanelToggle = useCallback(() => {
+    if (isSheetBreakpoint) {
+      setRightSheetOpen((open) => {
+        const nextOpen = !open;
+        if (nextOpen && leftSheetOpen) {
+          setLeftSheetOpen(false);
+        }
+        return nextOpen;
+      });
+      return;
+    }
+
     if (shouldOverlaySidebars) {
       if (rightSidebarOpen) {
         setRightSidebarOpen(false);
@@ -106,6 +145,8 @@ function Layout({ children }: LayoutProps) {
 
     toggleRightSidebar();
   }, [
+    isSheetBreakpoint,
+    leftSheetOpen,
     shouldOverlaySidebars,
     leftSidebarOpen,
     rightSidebarOpen,
@@ -154,7 +195,7 @@ function Layout({ children }: LayoutProps) {
           )}
 
           <AnimatePresence>
-            {shouldOverlaySidebars && leftSidebarOpen && (
+            {shouldOverlaySidebars && !isSheetBreakpoint && leftSidebarOpen && (
               <motion.div
                 key="left-sidebar"
                 initial={{ x: -320, opacity: 0 }}
@@ -163,7 +204,7 @@ function Layout({ children }: LayoutProps) {
                 transition={{ duration: 0.2, ease: "easeInOut" }}
                 className="absolute inset-y-0 left-0 z-40 flex h-full max-w-full"
               >
-                <div className={isMobile ? "h-full w-screen" : "h-full w-[min(22rem,90vw)] max-w-sm"}>
+                <div className="h-full w-[min(22rem,90vw)] max-w-sm">
                   <MemoizedSidebar variant="overlay" className="h-full w-full" />
                 </div>
               </motion.div>
@@ -187,7 +228,7 @@ function Layout({ children }: LayoutProps) {
           )}
 
           <AnimatePresence>
-            {shouldOverlaySidebars && rightSidebarOpen && (
+            {shouldOverlaySidebars && !isSheetBreakpoint && rightSidebarOpen && (
               <motion.div
                 key="right-sidebar"
                 initial={{ x: 320, opacity: 0 }}
@@ -196,7 +237,7 @@ function Layout({ children }: LayoutProps) {
                 transition={{ duration: 0.2, ease: "easeInOut" }}
                 className="absolute inset-y-0 right-0 z-40 flex h-full max-w-full"
               >
-                <div className={isMobile ? "h-full w-screen" : "h-full w-[min(22rem,90vw)] max-w-sm"}>
+                <div className="h-full w-[min(22rem,90vw)] max-w-sm">
                   <MemoizedRightPanel variant="overlay" className="h-full w-full" />
                 </div>
               </motion.div>
@@ -204,7 +245,7 @@ function Layout({ children }: LayoutProps) {
           </AnimatePresence>
 
           <AnimatePresence>
-            {shouldOverlaySidebars && (leftSidebarOpen || rightSidebarOpen) && (
+            {shouldOverlaySidebars && !isSheetBreakpoint && (leftSidebarOpen || rightSidebarOpen) && (
               <motion.button
                 key="panel-overlay"
                 type="button"
@@ -229,6 +270,46 @@ function Layout({ children }: LayoutProps) {
 
         <DebugPanel />
       </div>
+
+      {isSheetBreakpoint && (
+        <>
+          <Sheet
+            open={leftSheetOpen}
+            onOpenChange={(open) => {
+              setLeftSheetOpen(open);
+              if (open) {
+                setRightSheetOpen(false);
+              }
+            }}
+          >
+            <SheetContent side="left" className="w-full max-w-[22rem] border-r p-0 sm:max-w-sm">
+              <SheetHeader className="sr-only">
+                <SheetTitle>Navigation menu</SheetTitle>
+                <SheetDescription>Browse spaces and files</SheetDescription>
+              </SheetHeader>
+              <MemoizedSidebar variant="overlay" className="h-full w-full" />
+            </SheetContent>
+          </Sheet>
+
+          <Sheet
+            open={rightSheetOpen}
+            onOpenChange={(open) => {
+              setRightSheetOpen(open);
+              if (open) {
+                setLeftSheetOpen(false);
+              }
+            }}
+          >
+            <SheetContent side="right" className="w-full max-w-[22rem] border-l p-0 sm:max-w-sm">
+              <SheetHeader className="sr-only">
+                <SheetTitle>Assistant panel</SheetTitle>
+                <SheetDescription>Chat with the global assistant</SheetDescription>
+              </SheetHeader>
+              <MemoizedRightPanel variant="overlay" className="h-full w-full" />
+            </SheetContent>
+          </Sheet>
+        </>
+      )}
     </NavigationProvider>
   );
 }

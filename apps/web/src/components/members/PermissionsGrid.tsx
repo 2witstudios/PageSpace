@@ -5,7 +5,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
 import { ChevronRight, ChevronDown } from 'lucide-react';
 import { PageTypeIcon } from '@/components/common/PageTypeIcon';
-import { PageType } from '@pagespace/lib';
+import { PageType } from '@pagespace/lib/client-safe';
 
 interface PageNode {
   id: string;

@@ -8,11 +8,18 @@
     "test": "tsx --test src/__tests__/*.test.ts"
   },
   "exports": {
-    ".": "./src/index.ts",
+    ".": {
+      "browser": "./src/client-safe.ts",
+      "node": "./src/index.ts",
+      "default": "./src/client-safe.ts"
+    },
+    "./server": "./src/index.ts",
     "./client": "./src/client.ts",
-    "./server": "./src/server.ts",
+    "./client-safe": "./src/client-safe.ts",
     "./logger": "./src/logger.ts",
-    "./logger-config": "./src/logger-config.ts",
+    "./logger-config": {
+      "node": "./src/logger-config.ts"
+    },
     "./logger-database": "./src/logger-database.ts",
     "./activity-tracker": "./src/activity-tracker.ts",
     "./ai-monitoring": "./src/ai-monitoring.ts",
@@ -23,16 +30,25 @@
     "./services/subscription-utils": "./src/services/subscription-utils.ts",
     "./services/upload-semaphore": "./src/services/upload-semaphore.ts",
     "./services/memory-monitor": "./src/services/memory-monitor.ts",
-    "./services/permission-cache": "./src/services/permission-cache.ts",
-    "./permissions-cached": "./src/permissions-cached.ts"
+    "./services/permission-cache": {
+      "node": "./src/services/permission-cache.ts"
+    },
+    "./permissions-cached": {
+      "node": "./src/permissions-cached.ts"
+    },
+    "./logger-browser": "./src/logger-browser.ts",
+    "./utils/environment": "./src/utils/environment.ts"
   },
   "typesVersions": {
     "*": {
+      "server": [
+        "./src/index.ts"
+      ],
       "client": [
         "./src/client.ts"
       ],
-      "server": [
-        "./src/server.ts"
+      "client-safe": [
+        "./src/client-safe.ts"
       ],
       "logger": [
         "./src/logger.ts"
@@ -75,6 +91,12 @@
       ],
       "permissions-cached": [
         "./src/permissions-cached.ts"
+      ],
+      "logger-browser": [
+        "./src/logger-browser.ts"
+      ],
+      "utils/environment": [
+        "./src/utils/environment.ts"
       ]
     }
   },
@@ -85,6 +107,7 @@
     "jose": "^6.0.11",
     "mammoth": "^1.10.0",
     "pdf-parse-debugging-disabled": "^1.1.1",
-    "pg-boss": "^10.3.2"
+    "pg-boss": "^10.3.2",
+    "server-only": "^0.0.1"
   }
 }

@@ -1,5 +1,5 @@
 import React from 'react';
-import { PageType, isFolderPage } from '@pagespace/lib';
+import { PageType, isFolderPage } from '@pagespace/lib/client-safe';
 import { 
   FileText, 
   FolderOpen, 

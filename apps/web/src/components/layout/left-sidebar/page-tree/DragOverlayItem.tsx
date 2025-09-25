@@ -3,7 +3,7 @@
 import { TreePage } from "../../../../hooks/usePageTree";
 import { GripVertical } from "lucide-react";
 import { PageTypeIcon } from "@/components/common/PageTypeIcon";
-import { PageType } from '@pagespace/lib';
+import { PageType } from '@pagespace/lib/client-safe';
 
 interface DragOverlayItemProps {
   node: TreePage;

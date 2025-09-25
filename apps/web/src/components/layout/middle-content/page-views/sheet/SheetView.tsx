@@ -18,7 +18,7 @@ import {
   parseSheetContent,
   sanitizeSheetData,
   serializeSheetContent,
-} from '@pagespace/lib';
+} from '@pagespace/lib/client-safe';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { FloatingCellEditor } from './FloatingCellEditor';

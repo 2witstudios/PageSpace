@@ -23,7 +23,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { useNotificationStore } from '@/stores/notificationStore';
 import { cn } from '@/lib/utils';
-import { isConnectionRequest } from '@pagespace/lib';
+import { isConnectionRequest } from '@pagespace/lib/client-safe';
 
 const NotificationIcon = ({ type }: { type: string }) => {
   switch (type) {

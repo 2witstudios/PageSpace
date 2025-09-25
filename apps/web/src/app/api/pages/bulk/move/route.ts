@@ -5,7 +5,7 @@ const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const };
 import { db, pages, eq, and, sql } from '@pagespace/db';
 import { canUserEditPage, getUserDriveAccess } from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 
 /**
  * POST /api/pages/bulk/move

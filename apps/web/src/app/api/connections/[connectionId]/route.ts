@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, connections, users, userProfiles, eq } from '@pagespace/db';
 import { verifyAuth } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 import { createNotification } from '@pagespace/lib';
 
 // PATCH /api/connections/[connectionId] - Accept, reject, or block a connection

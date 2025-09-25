@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateWebRequest, isAuthError } from '@/lib/auth';
 import { db, conversations, eq, and } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 
 /**
  * GET - Get a specific conversation with its messages

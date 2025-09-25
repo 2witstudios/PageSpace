@@ -5,7 +5,7 @@ const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const };
 import { db, pages, eq, and, inArray } from '@pagespace/db';
 import { canUserDeletePage, canUserEditPage } from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 
 /**
  * POST /api/pages/bulk/delete

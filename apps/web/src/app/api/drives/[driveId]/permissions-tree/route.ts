@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { db, eq, and } from '@pagespace/db';
 import { drives, pages, pagePermissions } from '@pagespace/db';
 import { verifyAuth } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 
 interface PageNode {
   id: string;

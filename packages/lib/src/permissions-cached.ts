@@ -1,7 +1,10 @@
 import { db, and, eq, inArray } from '@pagespace/db';
 import { pages, drives, pagePermissions } from '@pagespace/db';
-import { permissionCache, PermissionLevel } from './services/permission-cache';
+import { PermissionCache, PermissionLevel } from './services/permission-cache';
 import { loggers } from './logger-config';
+
+// Lazy initialization to prevent module-level instantiation
+const getPermissionCache = () => PermissionCache.getInstance();
 
 /**
  * Cached permission functions - drop-in replacements for the original permission functions
@@ -32,7 +35,7 @@ export async function getUserAccessLevel(
   try {
     // Check cache first (unless bypassed)
     if (!bypassCache) {
-      const cached = await permissionCache.getPagePermission(userId, pageId);
+      const cached = await getPermissionCache().getPagePermission(userId, pageId);
       if (cached) {
         if (!silent) {
           loggers.api.debug(`[PERMISSIONS] Cache hit for userId: ${userId}, pageId: ${pageId}`);
@@ -115,7 +118,7 @@ export async function getUserAccessLevel(
     }
 
     // Cache the result for future requests
-    await permissionCache.setPagePermission(
+    await getPermissionCache().setPagePermission(
       userId,
       pageId,
       pageData.driveId,
@@ -156,7 +159,7 @@ export async function getUserDriveAccess(
   try {
     // Check cache first (unless bypassed)
     if (!bypassCache) {
-      const cached = await permissionCache.getDriveAccess(userId, driveId);
+      const cached = await getPermissionCache().getDriveAccess(userId, driveId);
       if (cached) {
         if (!silent) {
           loggers.api.debug(`[DRIVE_ACCESS] Cache hit for userId: ${userId}, driveId: ${driveId} - result: ${cached.hasAccess}`);
@@ -181,7 +184,7 @@ export async function getUserDriveAccess(
       }
 
       // Cache negative result
-      await permissionCache.setDriveAccess(userId, driveId, false, false, 60);
+      await getPermissionCache().setDriveAccess(userId, driveId, false, false, 60);
       return false;
     }
 
@@ -195,7 +198,7 @@ export async function getUserDriveAccess(
       }
 
       // Cache positive result
-      await permissionCache.setDriveAccess(userId, driveId, true, true, 60);
+      await getPermissionCache().setDriveAccess(userId, driveId, true, true, 60);
       return true;
     }
 
@@ -217,7 +220,7 @@ export async function getUserDriveAccess(
     }
 
     // Cache the result
-    await permissionCache.setDriveAccess(userId, driveId, hasAccess, false, 60);
+    await getPermissionCache().setDriveAccess(userId, driveId, hasAccess, false, 60);
 
     return hasAccess;
 
@@ -251,7 +254,7 @@ export async function getBatchPagePermissions(
 
   try {
     // Get cached permissions first
-    const cachedPermissions = await permissionCache.getBatchPagePermissions(userId, pageIds);
+    const cachedPermissions = await getPermissionCache().getBatchPagePermissions(userId, pageIds);
     const uncachedPageIds: string[] = [];
 
     // Separate cached from uncached
@@ -324,7 +327,7 @@ export async function getBatchPagePermissions(
       results.set(row.pageId, permissions);
 
       // Cache the result
-      await permissionCache.setPagePermission(
+      await getPermissionCache().setPagePermission(
         userId,
         row.pageId,
         row.driveId,
@@ -402,7 +405,7 @@ export async function canUserDeletePage(
  * Invalidate cache when user permissions change
  */
 export async function invalidateUserPermissions(userId: string): Promise<void> {
-  await permissionCache.invalidateUserCache(userId);
+  await getPermissionCache().invalidateUserCache(userId);
   loggers.api.info(`[PERMISSIONS] Invalidated cache for user ${userId}`);
 }
 
@@ -410,7 +413,7 @@ export async function invalidateUserPermissions(userId: string): Promise<void> {
  * Invalidate cache when drive permissions change
  */
 export async function invalidateDrivePermissions(driveId: string): Promise<void> {
-  await permissionCache.invalidateDriveCache(driveId);
+  await getPermissionCache().invalidateDriveCache(driveId);
   loggers.api.info(`[PERMISSIONS] Invalidated cache for drive ${driveId}`);
 }
 
@@ -418,5 +421,5 @@ export async function invalidateDrivePermissions(driveId: string): Promise<void>
  * Get permission cache statistics
  */
 export function getPermissionCacheStats() {
-  return permissionCache.getCacheStats();
+  return getPermissionCache().getCacheStats();
 }

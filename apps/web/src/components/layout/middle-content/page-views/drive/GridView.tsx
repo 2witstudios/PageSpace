@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { GridViewProps } from './types';
 import { PageTypeIcon } from '@/components/common/PageTypeIcon';
-import { PageType } from '@pagespace/lib';
+import { PageType } from '@pagespace/lib/client-safe';
 
 export function GridView({ items }: GridViewProps) {
   const params = useParams();

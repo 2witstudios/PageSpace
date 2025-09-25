@@ -4,7 +4,7 @@ import { z } from 'zod/v4';
 import { generateAccessToken, generateRefreshToken, checkRateLimit, resetRateLimit, RATE_LIMIT_CONFIGS, slugify } from '@pagespace/lib/server';
 import { serialize } from 'cookie';
 import { createId } from '@paralleldrive/cuid2';
-import { loggers, logAuthEvent } from '@pagespace/lib/logger-config';
+import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { OAuth2Client } from 'google-auth-library';
 import { NextResponse } from 'next/server';

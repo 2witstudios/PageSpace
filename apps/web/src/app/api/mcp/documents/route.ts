@@ -4,7 +4,7 @@ import { getUserAccessLevel } from '@pagespace/lib/server';
 import { z } from 'zod/v4';
 import prettier from 'prettier';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 import { authenticateMCPRequest, isAuthError } from '@/lib/auth';
 
 // Get the current page ID for the user

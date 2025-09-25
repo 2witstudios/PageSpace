@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, eq, and, or, ilike, userProfiles, users } from '@pagespace/db';
 import { verifyAuth } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 
 export async function GET(request: Request) {
   try {

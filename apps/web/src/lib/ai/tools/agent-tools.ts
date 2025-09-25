@@ -1,8 +1,8 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db, pages, drives, eq, and, desc, isNull } from '@pagespace/db';
-import { canUserEditPage } from '@pagespace/lib';
-import { loggers } from '@pagespace/lib/logger-config';
+import { canUserEditPage } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { ToolExecutionContext } from '../types';

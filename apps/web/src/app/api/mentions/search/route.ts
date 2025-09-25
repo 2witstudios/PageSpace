@@ -3,7 +3,7 @@ import { decodeToken, getUserAccessLevel } from '@pagespace/lib/server';
 import { parse } from 'cookie';
 import { pages, users, db, and, eq, ilike, drives, inArray } from '@pagespace/db';
 import { MentionSuggestion, MentionType } from '@/types/mentions';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 
 // Helper function to get all drives a user has access to
 async function getUserAccessibleDrives(userId: string): Promise<Array<{id: string, name: string, slug: string}>> {

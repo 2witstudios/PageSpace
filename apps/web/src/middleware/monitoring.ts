@@ -5,7 +5,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createId } from '@paralleldrive/cuid2';
-import { logger, loggers, extractRequestContext, logResponse } from '@pagespace/lib/logger-config';
+import { logger, loggers, extractRequestContext, logResponse } from '@pagespace/lib/server';
 
 // In-memory storage for analytics (will be replaced with database)
 interface RequestMetrics {

@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import { z } from 'zod/v4';
 import { slugify, generateAccessToken, generateRefreshToken } from '@pagespace/lib/server';
 import { createId } from '@paralleldrive/cuid2';
-import { loggers, logAuthEvent } from '@pagespace/lib/logger-config';
+import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { serialize } from 'cookie';
 // Removed AI defaults dependency

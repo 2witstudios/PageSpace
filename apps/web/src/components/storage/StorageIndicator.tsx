@@ -4,7 +4,7 @@ import React from 'react';
 import { Progress } from '@/components/ui/progress';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { cn } from '@/lib/utils';
-import { formatBytes } from '@pagespace/lib/services/storage-limits';
+import { formatBytes } from '@pagespace/lib/client-safe';
 import { AlertTriangle, HardDrive } from 'lucide-react';
 
 interface StorageIndicatorProps {

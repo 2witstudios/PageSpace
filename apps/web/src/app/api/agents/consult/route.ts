@@ -11,7 +11,7 @@ import { db, pages, eq, chatMessages } from '@pagespace/db';
 import { pageSpaceTools } from '@/lib/ai/ai-tools';
 import { buildTimestampSystemPrompt } from '@/lib/ai/timestamp-utils';
 import { ToolExecutionContext } from '@/lib/ai/types';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 
 /**
  * Format tool execution results into human-readable text

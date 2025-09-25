@@ -2,7 +2,7 @@ import { users, db, eq } from '@pagespace/db';
 import { decodeToken } from '@pagespace/lib/server';
 import { parse } from 'cookie';
 import bcrypt from 'bcryptjs';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 
 export async function POST(req: Request) {
   const cookieHeader = req.headers.get('cookie');

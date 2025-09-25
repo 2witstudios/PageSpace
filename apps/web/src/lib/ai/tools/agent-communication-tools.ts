@@ -18,7 +18,7 @@ import {
 } from '@/lib/ai/provider-factory';
 import { buildTimestampSystemPrompt } from '@/lib/ai/timestamp-utils';
 import { ToolExecutionContext } from '../types';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 import { AI_PROVIDERS, getModelDisplayName } from '@/lib/ai/ai-providers-config';
 
 // Constants

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, directMessages, dmConversations, eq, and, or, desc, lt } from '@pagespace/db';
 import { verifyAuth } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 import { createOrUpdateMessageNotification } from '@pagespace/lib';
 
 // GET /api/messages/[conversationId] - Get messages in a conversation

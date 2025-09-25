@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, eq, users } from '@pagespace/db';
 import { verifyAdminAuth } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 
 export async function PUT(
   request: NextRequest,

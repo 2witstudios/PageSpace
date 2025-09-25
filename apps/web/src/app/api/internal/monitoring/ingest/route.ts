@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { createId } from '@paralleldrive/cuid2';
 import { db, systemLogs } from '@pagespace/db';
 import { writeApiMetrics, writeError } from '@pagespace/lib/logger-database';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/server';
 
 interface ApiRequestPayload {
   type: 'api-request';

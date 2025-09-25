@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
-import { getBatchPagePermissions } from '@pagespace/lib/permissions-cached';
-import { loggers } from '@pagespace/lib/logger-config';
+import { getBatchPagePermissions } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/server';
 
 /**
  * Batch Permission Check API
@@ -153,7 +153,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Import cache stats function dynamically to avoid circular dependencies
-    const { getPermissionCacheStats } = await import('@pagespace/lib/permissions-cached');
+    const { getPermissionCacheStats } = await import('@pagespace/lib/server');
     const stats = getPermissionCacheStats();
 
     return NextResponse.json({
