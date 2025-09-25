@@ -15,7 +15,8 @@ import { useLayoutStore } from "@/stores/useLayoutStore";
 import { useHasHydrated } from "@/hooks/useHasHydrated";
 import { usePerformanceMonitor } from "@/hooks/usePerformanceMonitor";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, memo } from "react";
+import { useCallback, useEffect, memo, useState } from "react";
+import { Sheet, SheetContent } from "@/components/ui/sheet";
 
 interface LayoutProps {
   children?: React.ReactNode;
@@ -35,12 +36,21 @@ function Layout({ children }: LayoutProps) {
   } = useLayoutStore();
   const hasHydrated = useHasHydrated();
   const shouldOverlaySidebars = useBreakpoint("(max-width: 1279px)");
+  const [leftSheetOpen, setLeftSheetOpen] = useState(false);
+  const [rightSheetOpen, setRightSheetOpen] = useState(false);
 
   useResponsivePanels();
 
-  
+
   // Monitor performance
   usePerformanceMonitor();
+
+  useEffect(() => {
+    if (!isMobile) {
+      setLeftSheetOpen(false);
+      setRightSheetOpen(false);
+    }
+  }, [isMobile]);
 
   // Handle authentication redirect with Next.js router for faster navigation
   useEffect(() => {
@@ -69,6 +79,17 @@ function Layout({ children }: LayoutProps) {
   }, [hasHydrated, isLoading, isAuthenticated, router]);
 
   const handleLeftPanelToggle = useCallback(() => {
+    if (isMobile) {
+      setLeftSheetOpen((open) => {
+        const nextOpen = !open;
+        if (nextOpen && rightSheetOpen) {
+          setRightSheetOpen(false);
+        }
+        return nextOpen;
+      });
+      return;
+    }
+
     if (shouldOverlaySidebars) {
       if (leftSidebarOpen) {
         setLeftSidebarOpen(false);
@@ -83,6 +104,8 @@ function Layout({ children }: LayoutProps) {
 
     toggleLeftSidebar();
   }, [
+    isMobile,
+    rightSheetOpen,
     shouldOverlaySidebars,
     leftSidebarOpen,
     rightSidebarOpen,
@@ -92,6 +115,17 @@ function Layout({ children }: LayoutProps) {
   ]);
 
   const handleRightPanelToggle = useCallback(() => {
+    if (isMobile) {
+      setRightSheetOpen((open) => {
+        const nextOpen = !open;
+        if (nextOpen && leftSheetOpen) {
+          setLeftSheetOpen(false);
+        }
+        return nextOpen;
+      });
+      return;
+    }
+
     if (shouldOverlaySidebars) {
       if (rightSidebarOpen) {
         setRightSidebarOpen(false);
@@ -106,6 +140,8 @@ function Layout({ children }: LayoutProps) {
 
     toggleRightSidebar();
   }, [
+    isMobile,
+    leftSheetOpen,
     shouldOverlaySidebars,
     leftSidebarOpen,
     rightSidebarOpen,
@@ -154,7 +190,7 @@ function Layout({ children }: LayoutProps) {
           )}
 
           <AnimatePresence>
-            {shouldOverlaySidebars && leftSidebarOpen && (
+            {shouldOverlaySidebars && !isMobile && leftSidebarOpen && (
               <motion.div
                 key="left-sidebar"
                 initial={{ x: -320, opacity: 0 }}
@@ -163,7 +199,7 @@ function Layout({ children }: LayoutProps) {
                 transition={{ duration: 0.2, ease: "easeInOut" }}
                 className="absolute inset-y-0 left-0 z-40 flex h-full max-w-full"
               >
-                <div className={isMobile ? "h-full w-screen" : "h-full w-[min(22rem,90vw)] max-w-sm"}>
+                <div className="h-full w-[min(22rem,90vw)] max-w-sm">
                   <MemoizedSidebar variant="overlay" className="h-full w-full" />
                 </div>
               </motion.div>
@@ -187,7 +223,7 @@ function Layout({ children }: LayoutProps) {
           )}
 
           <AnimatePresence>
-            {shouldOverlaySidebars && rightSidebarOpen && (
+            {shouldOverlaySidebars && !isMobile && rightSidebarOpen && (
               <motion.div
                 key="right-sidebar"
                 initial={{ x: 320, opacity: 0 }}
@@ -196,7 +232,7 @@ function Layout({ children }: LayoutProps) {
                 transition={{ duration: 0.2, ease: "easeInOut" }}
                 className="absolute inset-y-0 right-0 z-40 flex h-full max-w-full"
               >
-                <div className={isMobile ? "h-full w-screen" : "h-full w-[min(22rem,90vw)] max-w-sm"}>
+                <div className="h-full w-[min(22rem,90vw)] max-w-sm">
                   <MemoizedRightPanel variant="overlay" className="h-full w-full" />
                 </div>
               </motion.div>
@@ -204,7 +240,7 @@ function Layout({ children }: LayoutProps) {
           </AnimatePresence>
 
           <AnimatePresence>
-            {shouldOverlaySidebars && (leftSidebarOpen || rightSidebarOpen) && (
+            {shouldOverlaySidebars && !isMobile && (leftSidebarOpen || rightSidebarOpen) && (
               <motion.button
                 key="panel-overlay"
                 type="button"
@@ -229,6 +265,38 @@ function Layout({ children }: LayoutProps) {
 
         <DebugPanel />
       </div>
+
+      {isMobile && (
+        <>
+          <Sheet
+            open={leftSheetOpen}
+            onOpenChange={(open) => {
+              setLeftSheetOpen(open);
+              if (open) {
+                setRightSheetOpen(false);
+              }
+            }}
+          >
+            <SheetContent side="left" className="w-full max-w-[22rem] border-r p-0 sm:max-w-sm">
+              <MemoizedSidebar variant="overlay" className="h-full w-full" />
+            </SheetContent>
+          </Sheet>
+
+          <Sheet
+            open={rightSheetOpen}
+            onOpenChange={(open) => {
+              setRightSheetOpen(open);
+              if (open) {
+                setLeftSheetOpen(false);
+              }
+            }}
+          >
+            <SheetContent side="right" className="w-full max-w-[22rem] border-l p-0 sm:max-w-sm">
+              <MemoizedRightPanel variant="overlay" className="h-full w-full" />
+            </SheetContent>
+          </Sheet>
+        </>
+      )}
     </NavigationProvider>
   );
 }
