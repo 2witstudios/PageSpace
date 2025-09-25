@@ -500,7 +500,7 @@ const AssistantChatTab: React.FC = () => {
       </div>
 
       {/* Messages Area */}
-      <div className="flex-grow overflow-hidden">
+      <div className="flex-1 min-h-0 overflow-hidden">
         <ScrollArea className="h-full p-3" ref={scrollAreaRef}>
           <div className="space-y-3">
             {/* Load More Messages Button */}

@@ -94,13 +94,13 @@ function Layout({ children }: LayoutProps) {
 
   return (
     <NavigationProvider>
-      <div className="flex min-h-dvh flex-col overflow-hidden bg-background">
+      <div className="flex h-[100dvh] min-h-dvh flex-col overflow-hidden bg-background">
         <TopBar
           onToggleLeftPanel={toggleLeftSidebar}
           onToggleRightPanel={toggleRightSidebar}
         />
 
-        <div className="relative flex flex-1 overflow-hidden">
+        <div className="relative flex flex-1 min-h-0 overflow-hidden">
           {!shouldOverlaySidebars && leftSidebarOpen && (
             <div className="relative hidden h-full flex-shrink-0 border-r bg-sidebar/80 backdrop-blur xl:flex xl:w-[18rem] 2xl:w-80">
               <MemoizedSidebar className="h-full w-full" />
@@ -124,7 +124,7 @@ function Layout({ children }: LayoutProps) {
             )}
           </AnimatePresence>
 
-          <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+          <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             {children || <CenterPanel />}
           </main>
 
