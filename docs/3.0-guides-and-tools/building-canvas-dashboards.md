@@ -180,7 +180,7 @@ Canvas dashboards support multiple ways to create navigation:
 <a href="/dashboard">Home</a>
 <a href="/dashboard/drive-id/page-id">Specific Page</a>
 <a href="/settings">Settings</a>
-<a href="/account">Account</a>
+<a href="/settings/account">Account</a>
 ```
 
 ### Getting Your Drive and Page IDs

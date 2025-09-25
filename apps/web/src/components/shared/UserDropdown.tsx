@@ -108,7 +108,7 @@ export default function UserDropdown() {
               Billing ({subscriptionInfo?.subscriptionTier === 'free' ? 'Free' : subscriptionInfo?.subscriptionTier === 'pro' ? 'Pro' : 'Business'})
             </span>
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => router.push('/account')}>
+          <DropdownMenuItem onClick={() => router.push('/settings/account')}>
             <LayoutDashboard className="mr-2 h-4 w-4" />
             <span>Account</span>
           </DropdownMenuItem>

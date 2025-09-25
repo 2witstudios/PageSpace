@@ -20,7 +20,7 @@ export default function SettingsPage() {
       title: "Account",
       description: "Manage your account and profile",
       icon: User,
-      href: "/account",
+      href: "/settings/account",
       available: true,
     },
     {
