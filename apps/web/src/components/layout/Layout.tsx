@@ -15,7 +15,7 @@ import { useLayoutStore } from "@/stores/useLayoutStore";
 import { useHasHydrated } from "@/hooks/useHasHydrated";
 import { usePerformanceMonitor } from "@/hooks/usePerformanceMonitor";
 import { useRouter } from "next/navigation";
-import { useEffect, memo } from "react";
+import { useCallback, useEffect, memo } from "react";
 
 interface LayoutProps {
   children?: React.ReactNode;
@@ -68,6 +68,52 @@ function Layout({ children }: LayoutProps) {
     }
   }, [hasHydrated, isLoading, isAuthenticated, router]);
 
+  const handleLeftPanelToggle = useCallback(() => {
+    if (shouldOverlaySidebars) {
+      if (leftSidebarOpen) {
+        setLeftSidebarOpen(false);
+      } else {
+        if (rightSidebarOpen) {
+          setRightSidebarOpen(false);
+        }
+        setLeftSidebarOpen(true);
+      }
+      return;
+    }
+
+    toggleLeftSidebar();
+  }, [
+    shouldOverlaySidebars,
+    leftSidebarOpen,
+    rightSidebarOpen,
+    setLeftSidebarOpen,
+    setRightSidebarOpen,
+    toggleLeftSidebar,
+  ]);
+
+  const handleRightPanelToggle = useCallback(() => {
+    if (shouldOverlaySidebars) {
+      if (rightSidebarOpen) {
+        setRightSidebarOpen(false);
+      } else {
+        if (leftSidebarOpen) {
+          setLeftSidebarOpen(false);
+        }
+        setRightSidebarOpen(true);
+      }
+      return;
+    }
+
+    toggleRightSidebar();
+  }, [
+    shouldOverlaySidebars,
+    leftSidebarOpen,
+    rightSidebarOpen,
+    setLeftSidebarOpen,
+    setRightSidebarOpen,
+    toggleRightSidebar,
+  ]);
+
   // Optimize loading checks - show UI earlier for better perceived performance
   if (isLoading || !hasHydrated) {
     return (
@@ -96,8 +142,8 @@ function Layout({ children }: LayoutProps) {
     <NavigationProvider>
       <div className="flex h-[100dvh] min-h-dvh flex-col overflow-hidden bg-background">
         <TopBar
-          onToggleLeftPanel={toggleLeftSidebar}
-          onToggleRightPanel={toggleRightSidebar}
+          onToggleLeftPanel={handleLeftPanelToggle}
+          onToggleRightPanel={handleRightPanelToggle}
         />
 
         <div className="relative flex flex-1 min-h-0 overflow-hidden">
