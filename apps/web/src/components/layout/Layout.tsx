@@ -171,7 +171,13 @@ function Layout({ children }: LayoutProps) {
           </AnimatePresence>
 
           <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-            {children || <CenterPanel />}
+            {children ? (
+              <div className="flex flex-1 flex-col min-h-0 overflow-y-auto">
+                {children}
+              </div>
+            ) : (
+              <CenterPanel />
+            )}
           </main>
 
           {!shouldOverlaySidebars && rightSidebarOpen && (
