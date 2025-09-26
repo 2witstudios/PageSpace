@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { pages, favorites, pageTags, pagePermissions, chatMessages, channelMessages, db, eq } from '@pagespace/db';
-import { decodeToken } from '@pagespace/lib/server';
+import { decodeToken, canUserDeletePage } from '@pagespace/lib/server';
 import { parse } from 'cookie';
 import { loggers } from '@pagespace/lib/server';
 
@@ -30,9 +30,14 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
     return new NextResponse("Unauthorized", { status: 401 });
   }
 
-  const decoded = decodeToken(accessToken);
-  if (!decoded) {
+  const decoded = await decodeToken(accessToken);
+  if (!decoded?.userId) {
     return new NextResponse("Unauthorized", { status: 401 });
+  }
+
+  const canDelete = await canUserDeletePage(decoded.userId, pageId);
+  if (!canDelete) {
+    return new NextResponse("Forbidden", { status: 403 });
   }
 
   try {

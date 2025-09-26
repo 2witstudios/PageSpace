@@ -13,8 +13,8 @@ export async function GET(request: Request) {
     return new NextResponse("Unauthorized", { status: 401 });
   }
 
-  const decoded = decodeToken(accessToken);
-  if (!decoded) {
+  const decoded = await decodeToken(accessToken);
+  if (!decoded?.userId) {
     return new NextResponse("Unauthorized", { status: 401 });
   }
 
