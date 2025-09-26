@@ -12,7 +12,7 @@ export default function TermsOfService() {
             ← Back to Home
           </Link>
           <h1 className="text-4xl font-bold mb-2">Terms of Service</h1>
-          <p className="text-muted-foreground">Last updated: August 20, 2025</p>
+          <p className="text-muted-foreground">Last updated: January 21, 2025</p>
         </div>
 
         <div className="prose prose-lg max-w-none dark:prose-invert">
@@ -84,7 +84,7 @@ export default function TermsOfService() {
           <section className="mb-8">
             <h2 className="text-2xl font-semibold mb-4">6. Intellectual Property</h2>
             <p className="mb-4">
-              The PageSpace software and its original content are owned by PageSpace and protected by copyright and other intellectual property laws. Your content remains yours, and PageSpace does not claim ownership of user-generated content.
+              The PageSpace software and its original content are owned by Jonathan Woodall and protected by copyright and other intellectual property laws. Your content remains yours, and PageSpace does not claim ownership of user-generated content.
             </p>
           </section>
 
@@ -98,7 +98,7 @@ export default function TermsOfService() {
           <section className="mb-8">
             <h2 className="text-2xl font-semibold mb-4">8. Limitation of Liability</h2>
             <p className="mb-4">
-              IN NO EVENT SHALL PAGESPACE BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF OR IN CONNECTION WITH YOUR USE OF THE SERVICE.
+              IN NO EVENT SHALL JONATHAN WOODALL OR PAGESPACE BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF OR IN CONNECTION WITH YOUR USE OF THE SERVICE.
             </p>
           </section>
 
@@ -117,10 +117,98 @@ export default function TermsOfService() {
           </section>
 
           <section className="mb-8">
-            <h2 className="text-2xl font-semibold mb-4">11. Contact Information</h2>
+            <h2 className="text-2xl font-semibold mb-4">11. Subscription Services and Billing</h2>
+            <h3 className="text-xl font-semibold mb-3">11.1 Subscription Plans</h3>
             <p className="mb-4">
-              If you have any questions about these Terms, please contact us through the PageSpace community or support channels.
+              PageSpace offers the following subscription plans:
             </p>
+            <ul className="list-disc pl-6 mb-4">
+              <li><strong>Free Plan:</strong> 20 AI calls per day, 500MB storage, basic processing</li>
+              <li><strong>Pro Plan ($29.99/month):</strong> 50 AI calls per day, 10 Extra Thinking calls, 2GB storage, priority processing</li>
+              <li><strong>Business Plan ($199.99/month):</strong> 500 AI calls per day, 50 Extra Thinking calls, 50GB storage, enterprise features</li>
+            </ul>
+
+            <h3 className="text-xl font-semibold mb-3">11.2 Billing and Payment</h3>
+            <ul className="list-disc pl-6 mb-4">
+              <li>Subscriptions are billed monthly in advance via Stripe</li>
+              <li>Payment is due immediately upon subscription activation</li>
+              <li>Failed payments may result in service suspension</li>
+              <li>You may cancel your subscription at any time through your account settings</li>
+              <li>Cancellation takes effect at the end of your current billing period</li>
+              <li>No refunds are provided for partial months of service</li>
+            </ul>
+
+            <h3 className="text-xl font-semibold mb-3">11.3 Usage Limits</h3>
+            <p className="mb-4">
+              Each subscription plan includes specific usage limits. Exceeding these limits may result in service throttling or temporary suspension until your next billing cycle.
+            </p>
+          </section>
+
+          <section className="mb-8">
+            <h2 className="text-2xl font-semibold mb-4">12. Service Availability</h2>
+            <p className="mb-4">
+              While we strive to provide reliable service, PageSpace is provided on an "as-is" basis:
+            </p>
+            <ul className="list-disc pl-6 mb-4">
+              <li>We do not guarantee 100% uptime or uninterrupted service</li>
+              <li>Scheduled maintenance will be announced in advance when possible</li>
+              <li>We reserve the right to modify or discontinue features with reasonable notice</li>
+              <li>Third-party AI services may experience their own outages affecting our service</li>
+            </ul>
+          </section>
+
+          <section className="mb-8">
+            <h2 className="text-2xl font-semibold mb-4">13. Account Termination</h2>
+            <h3 className="text-xl font-semibold mb-3">13.1 Termination by You</h3>
+            <p className="mb-4">
+              You may terminate your account at any time through your account settings. Upon termination:
+            </p>
+            <ul className="list-disc pl-6 mb-4">
+              <li>Your subscription will be canceled at the end of the current billing period</li>
+              <li>You will retain access to your data until account deletion</li>
+              <li>You may request data export before account deletion by contacting support</li>
+            </ul>
+
+            <h3 className="text-xl font-semibold mb-3">13.2 Termination by Us</h3>
+            <p className="mb-4">
+              We may suspend or terminate your account for:
+            </p>
+            <ul className="list-disc pl-6 mb-4">
+              <li>Violation of these Terms of Service</li>
+              <li>Abuse of our services or excessive resource usage</li>
+              <li>Illegal activities or harassment of other users</li>
+              <li>Non-payment of subscription fees</li>
+              <li>Extended inactivity (after 90 days notice)</li>
+            </ul>
+          </section>
+
+          <section className="mb-8">
+            <h2 className="text-2xl font-semibold mb-4">14. Data and Privacy</h2>
+            <p className="mb-4">
+              Your use of PageSpace is also governed by our Privacy Policy. By using our service, you agree to our data collection and processing practices as described in the Privacy Policy.
+            </p>
+            <p className="mb-4">
+              Upon account deletion, we will delete your personal data within 30 days, except where we are required to retain it by law or for legitimate business purposes (such as billing records).
+            </p>
+          </section>
+
+          <section className="mb-8">
+            <h2 className="text-2xl font-semibold mb-4">15. Governing Law</h2>
+            <p className="mb-4">
+              These Terms of Service shall be governed by and construed in accordance with the laws of the State of Texas, without regard to its conflict of law provisions. Any disputes arising from these Terms or your use of the Service shall be resolved in the courts of Texas.
+            </p>
+          </section>
+
+          <section className="mb-8">
+            <h2 className="text-2xl font-semibold mb-4">16. Contact Information</h2>
+            <p className="mb-4">
+              PageSpace is operated by Jonathan Woodall as a sole proprietorship. If you have any questions about these Terms, please contact us at:
+            </p>
+            <ul className="list-disc pl-6 mb-4">
+              <li><strong>Email:</strong> 2witstudios@gmail.com</li>
+              <li><strong>Support:</strong> Available through the in-app help system</li>
+              <li><strong>Community:</strong> <a href="https://discord.gg/kve8qgzZ8x" className="text-primary hover:underline">PageSpace Discord</a></li>
+            </ul>
           </section>
         </div>
       </div>
