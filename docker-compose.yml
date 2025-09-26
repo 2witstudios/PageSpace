@@ -14,6 +14,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - internal
     deploy:
       resources:
         limits:
@@ -41,6 +43,8 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    networks:
+      - internal
 
   web:
     build:
@@ -68,10 +72,14 @@ services:
       - REDIS_URL=redis://:${REDIS_PASSWORD:-pagespace_redis}@redis:6379
       - PORT=3000
       - NODE_OPTIONS=--max-old-space-size=640
+      - SERVICE_JWT_SECRET=${SERVICE_JWT_SECRET}
     deploy:
       resources:
         limits:
           memory: 768M
+    networks:
+      - internal
+      - frontend
 
   # Permission fixer - runs once to fix existing volume permissions
   processor-permissions:
@@ -89,13 +97,15 @@ services:
         echo "Permissions fixed successfully"
       '
     restart: "no"
+    networks:
+      - internal
 
   processor:
     build:
       context: .
       dockerfile: apps/processor/Dockerfile
-    ports:
-      - "3003:3003"
+    expose:
+      - "3003"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -115,6 +125,10 @@ services:
       - NODE_OPTIONS=--max-old-space-size=1024
       - ENABLE_OCR=${ENABLE_OCR:-false}
       - ENABLE_EXTERNAL_OCR=${ENABLE_EXTERNAL_OCR:-false}
+      - SERVICE_JWT_SECRET=${SERVICE_JWT_SECRET}
+      - PROCESSOR_AUTH_REQUIRED=${PROCESSOR_AUTH_REQUIRED:-true}
+      - PROCESSOR_UPLOAD_RATE_LIMIT=${PROCESSOR_UPLOAD_RATE_LIMIT:-100}
+      - PROCESSOR_UPLOAD_RATE_WINDOW=${PROCESSOR_UPLOAD_RATE_WINDOW:-3600}
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:3003/health', (r) => {r.statusCode === 200 ? process.exit(0) : process.exit(1)})"]
       interval: 30s
@@ -126,6 +140,8 @@ services:
         limits:
           memory: 1280M
     restart: unless-stopped
+    networks:
+      - internal
     user: "1000:1000"
     read_only: true
     tmpfs:
@@ -154,6 +170,9 @@ services:
       resources:
         limits:
           memory: 256M
+    networks:
+      - internal
+      - frontend
 
   redis:
     image: redis:7.4-alpine
@@ -181,6 +200,8 @@ services:
         limits:
           memory: 160M
     restart: unless-stopped
+    networks:
+      - internal
 
   # Optional nginx service for efficient static file serving
   nginx:
@@ -199,6 +220,15 @@ services:
           memory: 128M
     profiles:
       - production
+    networks:
+      - frontend
+
+networks:
+  internal:
+    driver: bridge
+    internal: true
+  frontend:
+    driver: bridge
 
 volumes:
   postgres_data:

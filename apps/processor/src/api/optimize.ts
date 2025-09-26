@@ -3,16 +3,36 @@ import type { Router as ExpressRouter } from 'express';
 import { contentStore, queueManager } from '../server';
 import { IMAGE_PRESETS } from '../types';
 import { processImage, prepareImageForAI } from '../workers/image-processor';
+import { InvalidContentHashError, isValidContentHash } from '../cache/content-store';
 
 const router = Router();
 
 // Optimize image endpoint - synchronous if cached, async if not
 router.post('/', async (req, res) => {
   try {
+    const auth = req.serviceAuth;
+    if (!auth) {
+      return res.status(401).json({ error: 'Service authentication required' });
+    }
+
     const { contentHash, preset = 'ai-chat', fileId, waitForProcessing = false } = req.body;
 
     if (!contentHash) {
       return res.status(400).json({ error: 'contentHash is required' });
+    }
+
+    if (!isValidContentHash(contentHash)) {
+      return res.status(400).json({ error: 'Invalid content hash' });
+    }
+
+    const tenantId = auth.tenantId;
+    if (!tenantId) {
+      return res.status(400).json({ error: 'Tenant context is required' });
+    }
+
+    const allowed = await contentStore.tenantHasAccess(contentHash, tenantId);
+    if (!allowed) {
+      return res.status(403).json({ error: 'Access denied for requested file' });
     }
 
     if (!IMAGE_PRESETS[preset]) {
@@ -70,8 +90,12 @@ router.post('/', async (req, res) => {
     });
 
   } catch (error) {
+    if (error instanceof InvalidContentHashError) {
+      return res.status(400).json({ error: 'Invalid content hash' });
+    }
+
     console.error('Optimization error:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Optimization failed',
       message: error instanceof Error ? error.message : 'Unknown error'
     });
@@ -81,10 +105,29 @@ router.post('/', async (req, res) => {
 // Batch optimize endpoint for multiple presets
 router.post('/batch', async (req, res) => {
   try {
+    const auth = req.serviceAuth;
+    if (!auth) {
+      return res.status(401).json({ error: 'Service authentication required' });
+    }
+
     const { contentHash, presets = ['ai-chat', 'thumbnail'], fileId } = req.body;
 
     if (!contentHash) {
       return res.status(400).json({ error: 'contentHash is required' });
+    }
+
+    if (!isValidContentHash(contentHash)) {
+      return res.status(400).json({ error: 'Invalid content hash' });
+    }
+
+    const tenantId = auth.tenantId;
+    if (!tenantId) {
+      return res.status(400).json({ error: 'Tenant context is required' });
+    }
+
+    const allowed = await contentStore.tenantHasAccess(contentHash, tenantId);
+    if (!allowed) {
+      return res.status(403).json({ error: 'Access denied for requested file' });
     }
 
     const results: any = {};
@@ -129,8 +172,12 @@ router.post('/batch', async (req, res) => {
     });
 
   } catch (error) {
+    if (error instanceof InvalidContentHashError) {
+      return res.status(400).json({ error: 'Invalid content hash' });
+    }
+
     console.error('Batch optimization error:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Batch optimization failed',
       message: error instanceof Error ? error.message : 'Unknown error'
     });
@@ -140,10 +187,29 @@ router.post('/batch', async (req, res) => {
 // Prepare image for AI endpoint
 router.post('/prepare-for-ai', async (req, res) => {
   try {
+    const auth = req.serviceAuth;
+    if (!auth) {
+      return res.status(401).json({ error: 'Service authentication required' });
+    }
+
     const { contentHash, provider = 'openai', returnBase64 = false } = req.body;
 
     if (!contentHash) {
       return res.status(400).json({ error: 'contentHash is required' });
+    }
+
+    if (!isValidContentHash(contentHash)) {
+      return res.status(400).json({ error: 'Invalid content hash' });
+    }
+
+    const tenantId = auth.tenantId;
+    if (!tenantId) {
+      return res.status(400).json({ error: 'Tenant context is required' });
+    }
+
+    const allowed = await contentStore.tenantHasAccess(contentHash, tenantId);
+    if (!allowed) {
+      return res.status(403).json({ error: 'Access denied for requested file' });
     }
 
     // Prepare image optimized for AI
@@ -175,8 +241,12 @@ router.post('/prepare-for-ai', async (req, res) => {
     });
 
   } catch (error) {
+    if (error instanceof InvalidContentHashError) {
+      return res.status(400).json({ error: 'Invalid content hash' });
+    }
+
     console.error('AI preparation error:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'AI preparation failed',
       message: error instanceof Error ? error.message : 'Unknown error'
     });

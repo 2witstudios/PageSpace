@@ -10,6 +10,7 @@ import { QueueManager } from './workers/queue-manager';
 import { ingestRouter } from './api/ingest';
 import avatarRouter from './api/avatar';
 import dotenv from 'dotenv';
+import { authenticateService, requirePermission } from './middleware/auth';
 
 // Load environment variables
 dotenv.config();
@@ -43,34 +44,44 @@ app.get('/health', (req, res) => {
 });
 
 // API Routes
-app.use('/api/upload', uploadRouter);
-app.use('/api/optimize', imageRouter);
-app.use('/api/ingest', ingestRouter);
-app.use('/api/avatar', avatarRouter);
-app.use('/cache', cacheRouter);
+app.use('/api/upload', authenticateService, requirePermission('files:write'), uploadRouter);
+app.use('/api/optimize', authenticateService, requirePermission('files:optimize'), imageRouter);
+app.use('/api/ingest', authenticateService, requirePermission('files:ingest'), ingestRouter);
+app.use('/api/avatar', authenticateService, requirePermission('avatars:write'), avatarRouter);
+app.use('/cache', authenticateService, requirePermission('files:read'), cacheRouter);
 
 // Queue status endpoint
-app.get('/api/queue/status', async (req, res) => {
-  try {
-    const status = await queueManager.getQueueStatus();
-    res.json(status);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to get queue status' });
+app.get(
+  '/api/queue/status',
+  authenticateService,
+  requirePermission('queue:read'),
+  async (req, res) => {
+    try {
+      const status = await queueManager.getQueueStatus();
+      res.json(status);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to get queue status' });
+    }
   }
-});
+);
 
 // Job status endpoint
-app.get('/api/job/:jobId', async (req, res) => {
-  try {
-    const job = await queueManager.getJob(req.params.jobId);
-    if (!job) {
-      return res.status(404).json({ error: 'Job not found' });
+app.get(
+  '/api/job/:jobId',
+  authenticateService,
+  requirePermission('queue:read'),
+  async (req, res) => {
+    try {
+      const job = await queueManager.getJob(req.params.jobId);
+      if (!job) {
+        return res.status(404).json({ error: 'Job not found' });
+      }
+      res.json(job);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to get job status' });
     }
-    res.json(job);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to get job status' });
   }
-});
+);
 
 // Error handling
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
