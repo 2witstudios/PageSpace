@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
 import { db, pages, eq } from '@pagespace/db';
-import { PageType, isFilePage } from '@pagespace/lib';
+import { PageType, canUserViewPage, isFilePage } from '@pagespace/lib';
 
 interface RouteParams {
   params: Promise<{
@@ -37,8 +37,10 @@ export async function GET(
       return NextResponse.json({ error: 'Not a file' }, { status: 400 });
     }
 
-    // TODO: Check user permissions for the file
-    // For now, we'll assume if they're authenticated they have access
+    const canView = await canUserViewPage(user.id, page.id);
+    if (!canView) {
+      return NextResponse.json({ error: 'You do not have access to this file' }, { status: 403 });
+    }
 
     if (!page.filePath) {
       return NextResponse.json({ error: 'File path not found' }, { status: 500 });

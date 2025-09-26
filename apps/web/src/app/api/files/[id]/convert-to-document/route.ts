@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
 import { db, pages, eq } from '@pagespace/db';
-import { PageType, canConvertToType } from '@pagespace/lib';
+import { PageType, canConvertToType, canUserEditPage, canUserViewPage } from '@pagespace/lib';
 import mammoth from 'mammoth';
 import { createId } from '@paralleldrive/cuid2';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
@@ -61,8 +61,15 @@ export async function POST(
       return NextResponse.json({ error: 'File is not a Word document' }, { status: 400 });
     }
 
-    // TODO: Check user permissions for the file
-    // For now, we'll assume if they're authenticated they have access
+    const canView = await canUserViewPage(user.id, filePage.id);
+    if (!canView) {
+      return NextResponse.json({ error: 'You do not have access to this file' }, { status: 403 });
+    }
+
+    const canEdit = await canUserEditPage(user.id, filePage.id);
+    if (!canEdit) {
+      return NextResponse.json({ error: 'You do not have permission to convert this file' }, { status: 403 });
+    }
 
     if (!filePage.filePath) {
       return NextResponse.json({ error: 'File path not found' }, { status: 500 });

@@ -4,6 +4,7 @@ export * from './csrf-utils';
 export * from './encryption-utils';
 export * from './page-content-parser';
 export * from './permissions';
+export * from './permissions-cached';
 export * from './rate-limit-utils';
 export * from './tree-utils';
 export * from './utils';
@@ -11,3 +12,6 @@ export * from './enums';
 export * from './types';
 export * from './file-processor';
 export * from './services/subscription-utils';
+
+// Re-export specific functions for backward compatibility
+export { isUserDriveMember } from './permissions';

@@ -1,5 +1,5 @@
 import { db, and, eq, inArray } from '@pagespace/db';
-import { pages, drives, pagePermissions } from '@pagespace/db';
+import { pages, drives, driveMembers, pagePermissions } from '@pagespace/db';
 import { PermissionCache, PermissionLevel } from './services/permission-cache';
 import { loggers } from './logger-config';
 
@@ -143,6 +143,7 @@ export async function getUserAccessLevel(
 
 /**
  * Check if user has access to a drive by drive ID (cached version)
+ * Returns true when the user owns the drive, is a drive member, or has page-level permissions within the drive.
  *
  * Performance improvements:
  * - Checks cache before database queries
@@ -200,6 +201,32 @@ export async function getUserDriveAccess(
       // Cache positive result
       await getPermissionCache().setDriveAccess(userId, driveId, true, true, 60);
       return true;
+    }
+
+    if (!silent) {
+      loggers.api.debug('[DRIVE_ACCESS] Checking drive membership');
+    }
+
+    // Drive members inherit access
+    const membership = await db.select({ id: driveMembers.id })
+      .from(driveMembers)
+      .where(and(
+        eq(driveMembers.driveId, driveData.id),
+        eq(driveMembers.userId, userId)
+      ))
+      .limit(1);
+
+    if (membership.length > 0) {
+      if (!silent) {
+        loggers.api.debug('[DRIVE_ACCESS] User is a drive member - granting access');
+      }
+
+      await getPermissionCache().setDriveAccess(userId, driveId, true, false, 60);
+      return true;
+    }
+
+    if (!silent) {
+      loggers.api.debug('[DRIVE_ACCESS] User is not a drive member - checking page permissions');
     }
 
     // Check if user has any page permissions in this drive
