@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db, pages, eq } from '@pagespace/db';
+import { createServiceToken } from '@pagespace/lib/auth-utils';
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
 
 export async function GET(
@@ -43,7 +44,16 @@ export async function GET(
     }
     
     // For pending/processing, check processor queue status
-    const statusResp = await fetch(`${PROCESSOR_URL}/api/queue/status`);
+    const serviceToken = await createServiceToken('web', ['queue:read'], {
+      tenantId: 'system', // System-level operation for queue status
+      expirationTime: '2m'
+    });
+
+    const statusResp = await fetch(`${PROCESSOR_URL}/api/queue/status`, {
+      headers: {
+        'Authorization': `Bearer ${serviceToken}`
+      }
+    });
     type QueueBucket = { active?: number; pending?: number; completed?: number; failed?: number };
     type QueueStatusMap = Record<string, QueueBucket>;
     let queueInfo: QueueStatusMap = {};

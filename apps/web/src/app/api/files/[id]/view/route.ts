@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
 import { db, pages, eq } from '@pagespace/db';
 import { PageType, isFilePage } from '@pagespace/lib';
+import { createServiceToken } from '@pagespace/lib/auth-utils';
 
 interface RouteParams {
   params: Promise<{
@@ -55,8 +56,19 @@ export async function GET(
     });
 
     try {
+      // Create service JWT token for processor authentication
+      const serviceToken = await createServiceToken('web', ['files:read'], {
+        userId: user.id,
+        tenantId: user.id,
+        expirationTime: '5m'
+      });
+
       // Request the original file from processor service
-      const fileResponse = await fetch(`${PROCESSOR_URL}/cache/${contentHash}/original`);
+      const fileResponse = await fetch(`${PROCESSOR_URL}/cache/${contentHash}/original`, {
+        headers: {
+          'Authorization': `Bearer ${serviceToken}`
+        }
+      });
       
       if (!fileResponse.ok) {
         throw new Error(`Processor returned ${fileResponse.status}: ${fileResponse.statusText}`);

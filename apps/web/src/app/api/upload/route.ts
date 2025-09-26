@@ -12,6 +12,7 @@ import {
 } from '@pagespace/lib/services/storage-limits';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkMemoryMiddleware } from '@pagespace/lib/services/memory-monitor';
+import { createServiceToken } from '@pagespace/lib/auth-utils';
 
 // Define allowed file types and size limits
 
@@ -127,8 +128,18 @@ export async function POST(request: NextRequest) {
     processorFormData.append('userId', user.id);
 
     try {
+      // Create service JWT token for processor authentication
+      const serviceToken = await createServiceToken('web', ['files:write'], {
+        userId: user.id,
+        tenantId: user.id,
+        expirationTime: '10m'
+      });
+
       const processorResponse = await fetch(`${PROCESSOR_URL}/api/upload/single`, {
         method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${serviceToken}`
+        },
         body: processorFormData,
       });
 

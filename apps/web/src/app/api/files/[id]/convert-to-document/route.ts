@@ -5,6 +5,7 @@ import { PageType, canConvertToType } from '@pagespace/lib';
 import mammoth from 'mammoth';
 import { createId } from '@paralleldrive/cuid2';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
+import { createServiceToken } from '@pagespace/lib/auth-utils';
 
 interface RouteParams {
   params: Promise<{
@@ -78,8 +79,18 @@ export async function POST(
       processorUrl: `${PROCESSOR_URL}/cache/${contentHash}/original`,
     });
 
+    // Create service JWT token for processor authentication
+    const serviceToken = await createServiceToken('web', ['files:read'], {
+      userId: user.id,
+      tenantId: user.id,
+      expirationTime: '5m'
+    });
+
     // Request the original file from processor service
     const fileResponse = await fetch(`${PROCESSOR_URL}/cache/${contentHash}/original`, {
+      headers: {
+        'Authorization': `Bearer ${serviceToken}`
+      },
       signal: AbortSignal.timeout(30000), // 30 second timeout
     });
 

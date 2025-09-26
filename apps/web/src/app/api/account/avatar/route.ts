@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
 import { db, users, eq } from '@pagespace/db';
+import { createServiceToken } from '@pagespace/lib/auth-utils';
 
 // Maximum file size: 5MB
 const MAX_FILE_SIZE = 5 * 1024 * 1024;
@@ -50,8 +51,17 @@ export async function POST(request: NextRequest) {
       if (!oldUser[0].image.startsWith('http://') && !oldUser[0].image.startsWith('https://')) {
         // Send delete request to processor
         try {
+          const serviceToken = await createServiceToken('web', ['avatars:write'], {
+            userId: user.id,
+            tenantId: user.id,
+            expirationTime: '2m'
+          });
+
           await fetch(`${PROCESSOR_URL}/api/avatar/${user.id}`, {
             method: 'DELETE',
+            headers: {
+              'Authorization': `Bearer ${serviceToken}`
+            }
           });
         } catch (error) {
           console.log('Could not delete old avatar:', error);
@@ -64,8 +74,18 @@ export async function POST(request: NextRequest) {
     processorFormData.append('file', file);
     processorFormData.append('userId', user.id);
 
+    // Create service JWT token for processor authentication
+    const serviceToken = await createServiceToken('web', ['avatars:write'], {
+      userId: user.id,
+      tenantId: user.id,
+      expirationTime: '5m'
+    });
+
     const processorResponse = await fetch(`${PROCESSOR_URL}/api/avatar/upload`, {
       method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${serviceToken}`
+      },
       body: processorFormData,
     });
 
@@ -115,8 +135,17 @@ export async function DELETE(request: NextRequest) {
     if (!currentUser[0].image.startsWith('http://') && !currentUser[0].image.startsWith('https://')) {
       // Send delete request to processor
       try {
+        const serviceToken = await createServiceToken('web', ['avatars:write'], {
+          userId: user.id,
+          tenantId: user.id,
+          expirationTime: '2m'
+        });
+
         await fetch(`${PROCESSOR_URL}/api/avatar/${user.id}`, {
           method: 'DELETE',
+          headers: {
+            'Authorization': `Bearer ${serviceToken}`
+          }
         });
       } catch (error) {
         console.log('Could not delete avatar file:', error);
