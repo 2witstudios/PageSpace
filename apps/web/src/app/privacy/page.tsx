@@ -201,7 +201,7 @@ export default function PrivacyPolicy() {
           <section className="mb-8">
             <h2 className="text-2xl font-semibold mb-4">13. Payment and Billing Information</h2>
             <p className="mb-4">
-              When you purchase a subscription, payment processing is handled by Stripe, Inc. We do not store your credit card information on our servers. Stripe's privacy policy governs the collection and use of payment information.
+              When you purchase a subscription, payment processing is handled by Stripe, Inc. We do not store your credit card information on our servers. Stripe&apos;s privacy policy governs the collection and use of payment information.
             </p>
             <p className="mb-4">
               We receive and store information about your subscription status, billing history, and usage metrics necessary for providing our services and managing your account.
@@ -226,7 +226,7 @@ export default function PrivacyPolicy() {
               <li><strong>Community:</strong> <a href="https://discord.gg/kve8qgzZ8x" className="text-primary hover:underline">PageSpace Discord</a></li>
             </ul>
             <p className="mb-4">
-              For data protection requests (access, deletion, portability), please use the subject line "Data Protection Request" in your email.
+              For data protection requests (access, deletion, portability), please use the subject line &quot;Data Protection Request&quot; in your email.
             </p>
           </section>
         </div>

@@ -147,7 +147,7 @@ export default function TermsOfService() {
           <section className="mb-8">
             <h2 className="text-2xl font-semibold mb-4">12. Service Availability</h2>
             <p className="mb-4">
-              While we strive to provide reliable service, PageSpace is provided on an "as-is" basis:
+              While we strive to provide reliable service, PageSpace is provided on an &quot;as-is&quot; basis:
             </p>
             <ul className="list-disc pl-6 mb-4">
               <li>We do not guarantee 100% uptime or uninterrupted service</li>
