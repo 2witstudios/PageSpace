@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
 import { db, pages, drives, eq, isNull } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
-import { PageType, canUserEditPage, isUserDriveMember } from '@pagespace/lib/server';
+import { PageType, canUserEditPage, getUserDriveAccess } from '@pagespace/lib/server';
 import {
   checkStorageQuota,
   updateStorageUsage,
@@ -68,7 +68,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    const hasDriveAccess = await isUserDriveMember(user.id, driveId);
+    const hasDriveAccess = await getUserDriveAccess(user.id, driveId);
     if (!hasDriveAccess) {
       return NextResponse.json({ error: 'You do not have permission to upload to this drive' }, { status: 403 });
     }
