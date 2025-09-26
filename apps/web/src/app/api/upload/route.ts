@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
 import { db, pages, drives, eq, isNull } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
-import { PageType } from '@pagespace/lib/server';
+import { PageType, canUserEditPage, isUserDriveMember } from '@pagespace/lib/server';
 import {
   checkStorageQuota,
   updateStorageUsage,
@@ -59,6 +59,35 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Drive ID is required' }, { status: 400 });
     }
 
+    // Verify drive exists and user has access
+    const drive = await db.query.drives.findFirst({
+      where: eq(drives.id, driveId),
+    });
+
+    if (!drive) {
+      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+    }
+
+    const hasDriveAccess = await isUserDriveMember(user.id, driveId);
+    if (!hasDriveAccess) {
+      return NextResponse.json({ error: 'You do not have permission to upload to this drive' }, { status: 403 });
+    }
+
+    if (parentId) {
+      const parentPage = await db.query.pages.findFirst({
+        where: eq(pages.id, parentId),
+      });
+
+      if (!parentPage || parentPage.driveId !== driveId) {
+        return NextResponse.json({ error: 'Invalid parent page' }, { status: 400 });
+      }
+
+      const canEditParent = await canUserEditPage(user.id, parentId);
+      if (!canEditParent) {
+        return NextResponse.json({ error: 'You do not have permission to upload to this folder' }, { status: 403 });
+      }
+    }
+
     // Check memory availability first
     const memCheck = await checkMemoryMiddleware();
     if (!memCheck.allowed) {
@@ -98,15 +127,6 @@ export async function POST(request: NextRequest) {
 
     // Check if mime type is allowed (with fallback for unknown types)
     const mimeType = file.type || 'application/octet-stream';
-    
-    // Verify drive exists and user has access
-    const drive = await db.query.drives.findFirst({
-      where: eq(drives.id, driveId),
-    });
-
-    if (!drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
-    }
 
     // Generate page ID
     const pageId = createId();

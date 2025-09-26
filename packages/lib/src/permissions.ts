@@ -397,7 +397,7 @@ export async function revokePagePermissions(
 
 /**
  * Check if user has access to a drive by drive ID
- * Returns true if user owns the drive or has any page permissions in the drive
+ * Returns true if user owns the drive, is a member of the drive, or has any page permissions in the drive
  */
 export async function getUserDriveAccess(
   userId: string,
@@ -439,7 +439,27 @@ export async function getUserDriveAccess(
     }
 
     if (!silent) {
-      loggers.api.debug(`[DRIVE_ACCESS] User is NOT drive owner - checking page permissions`);
+      loggers.api.debug('[DRIVE_ACCESS] User is NOT drive owner - checking drive membership');
+    }
+
+    // Drive members inherit access to the entire drive
+    const membership = await db.select({ id: driveMembers.id })
+      .from(driveMembers)
+      .where(and(
+        eq(driveMembers.driveId, driveData.id),
+        eq(driveMembers.userId, userId)
+      ))
+      .limit(1);
+
+    if (membership.length > 0) {
+      if (!silent) {
+        loggers.api.debug('[DRIVE_ACCESS] User is a drive member - granting access');
+      }
+      return true;
+    }
+
+    if (!silent) {
+      loggers.api.debug('[DRIVE_ACCESS] User is not a drive member - checking page permissions');
     }
 
     // Check if user has any page permissions in this drive
