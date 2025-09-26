@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { decodeToken } from '@pagespace/lib/server';
+import { decodeToken, canUserViewPage } from '@pagespace/lib/server';
 import { parse } from 'cookie';
 import { pages, db, eq } from '@pagespace/db';
 
@@ -41,9 +41,14 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     return new NextResponse("Unauthorized", { status: 401 });
   }
 
-  const decoded = decodeToken(accessToken);
-  if (!decoded) {
+  const decoded = await decodeToken(accessToken);
+  if (!decoded?.userId) {
     return new NextResponse("Unauthorized", { status: 401 });
+  }
+
+  const canView = await canUserViewPage(decoded.userId, pageId);
+  if (!canView) {
+    return new NextResponse("Forbidden", { status: 403 });
   }
 
   const breadcrumbs = await getBreadcrumbs(pageId);
