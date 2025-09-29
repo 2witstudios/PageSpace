@@ -126,6 +126,7 @@ export async function POST(request: NextRequest) {
     processorFormData.append('file', file);
     processorFormData.append('pageId', pageId);
     processorFormData.append('userId', user.id);
+    processorFormData.append('driveId', driveId);
 
     try {
       // Create service JWT token for processor authentication
