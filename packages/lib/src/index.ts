@@ -21,6 +21,19 @@ export * from './sheet';
 
 // Auth and security utilities (server-only)
 export * from './auth-utils';
+export {
+  createServiceToken as createServiceTokenV2,
+  verifyServiceToken as verifyServiceTokenV2,
+  authenticateServiceToken,
+  decodeServiceTokenHeader,
+  hasScope,
+  assertScope,
+  hasScope as hasServiceScope,
+  assertScope as assertServiceScope,
+  type ServiceTokenClaims,
+  type ServiceTokenOptions,
+  type ServiceScope,
+} from './services/service-auth';
 export * from './csrf-utils';
 export * from './encryption-utils';
 export * from './rate-limit-utils';

@@ -386,7 +386,7 @@ export class FileProcessor {
           });
           
           if (response.ok) {
-            const data = await response.json();
+            const data: any = await response.json();
             const extractedText = data.choices[0]?.message?.content || '';
             
             if (extractedText && extractedText !== 'NO_TEXT_FOUND') {
@@ -443,7 +443,7 @@ export class FileProcessor {
           });
           
           if (response.ok) {
-            const data = await response.json();
+            const data: any = await response.json();
             const extractedText = data.content[0]?.text || '';
             
             if (extractedText && extractedText !== 'NO_TEXT_FOUND') {

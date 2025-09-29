@@ -2,9 +2,10 @@
   "name": "@pagespace/db",
   "version": "0.1.0",
   "license": "AGPL-3.0",
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
     "db:migrate": "tsx --env-file=../../.env src/migrate.ts",
     "db:studio": "drizzle-kit studio",
     "db:seed": "tsx --env-file=../../.env src/seed.ts",

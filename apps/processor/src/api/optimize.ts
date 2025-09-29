@@ -4,6 +4,7 @@ import { contentStore, queueManager } from '../server';
 import { IMAGE_PRESETS } from '../types';
 import { processImage, prepareImageForAI } from '../workers/image-processor';
 import { InvalidContentHashError, isValidContentHash } from '../cache/content-store';
+import { assertFileAccess } from '../services/rbac';
 
 const router = Router();
 
@@ -25,13 +26,14 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'Invalid content hash' });
     }
 
-    const tenantId = auth.tenantId;
-    if (!tenantId) {
-      return res.status(400).json({ error: 'Tenant context is required' });
+    const userId = auth.userId;
+    if (!userId) {
+      return res.status(401).json({ error: 'Service authentication required' });
     }
 
-    const allowed = await contentStore.tenantHasAccess(contentHash, tenantId);
-    if (!allowed) {
+    try {
+      await assertFileAccess(userId, contentHash, 'view');
+    } catch {
       return res.status(403).json({ error: 'Access denied for requested file' });
     }
 
@@ -120,13 +122,14 @@ router.post('/batch', async (req, res) => {
       return res.status(400).json({ error: 'Invalid content hash' });
     }
 
-    const tenantId = auth.tenantId;
-    if (!tenantId) {
-      return res.status(400).json({ error: 'Tenant context is required' });
+    const userId = auth.userId;
+    if (!userId) {
+      return res.status(401).json({ error: 'Service authentication required' });
     }
 
-    const allowed = await contentStore.tenantHasAccess(contentHash, tenantId);
-    if (!allowed) {
+    try {
+      await assertFileAccess(userId, contentHash, 'view');
+    } catch {
       return res.status(403).json({ error: 'Access denied for requested file' });
     }
 
@@ -202,13 +205,14 @@ router.post('/prepare-for-ai', async (req, res) => {
       return res.status(400).json({ error: 'Invalid content hash' });
     }
 
-    const tenantId = auth.tenantId;
-    if (!tenantId) {
-      return res.status(400).json({ error: 'Tenant context is required' });
+    const userId = auth.userId;
+    if (!userId) {
+      return res.status(401).json({ error: 'Service authentication required' });
     }
 
-    const allowed = await contentStore.tenantHasAccess(contentHash, tenantId);
-    if (!allowed) {
+    try {
+      await assertFileAccess(userId, contentHash, 'view');
+    } catch {
       return res.status(403).json({ error: 'Access denied for requested file' });
     }
 

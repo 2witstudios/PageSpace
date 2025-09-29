@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
 import { db, users, eq } from '@pagespace/db';
-import { createServiceToken } from '@pagespace/lib/auth-utils';
+import {
+  createServiceToken,
+  verifyServiceToken,
+  type ServiceTokenClaims,
+} from '@pagespace/lib/auth-utils';
 
 // Maximum file size: 5MB
 const MAX_FILE_SIZE = 5 * 1024 * 1024;
@@ -11,6 +15,37 @@ const ALLOWED_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'ima
 
 // Processor service URL
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
+
+interface AvatarServiceToken {
+  token: string;
+  claims: ServiceTokenClaims;
+}
+
+const REQUIRED_AVATAR_SCOPES: ServiceTokenClaims['scopes'] = ['avatars:write'];
+
+async function createAvatarServiceToken(userId: string, expirationTime: string): Promise<AvatarServiceToken> {
+  const token = await createServiceToken('web', REQUIRED_AVATAR_SCOPES, {
+    userId,
+    tenantId: userId,
+    expirationTime,
+  });
+
+  const claims = await verifyServiceToken(token);
+  if (!claims) {
+    throw new Error('Avatar service token verification failed');
+  }
+
+  const missingScopes = REQUIRED_AVATAR_SCOPES.filter((scope) => !claims.scopes.includes(scope));
+  if (missingScopes.length > 0) {
+    throw new Error(
+      `Avatar service token missing required scopes: ${missingScopes.join(', ')} (scopes: ${
+        claims.scopes.join(', ') || 'none'
+      })`
+    );
+  }
+
+  return { token, claims };
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -51,11 +86,7 @@ export async function POST(request: NextRequest) {
       if (!oldUser[0].image.startsWith('http://') && !oldUser[0].image.startsWith('https://')) {
         // Send delete request to processor
         try {
-          const serviceToken = await createServiceToken('web', ['avatars:write'], {
-            userId: user.id,
-            tenantId: user.id,
-            expirationTime: '2m'
-          });
+          const { token: serviceToken } = await createAvatarServiceToken(user.id, '2m');
 
           await fetch(`${PROCESSOR_URL}/api/avatar/${user.id}`, {
             method: 'DELETE',
@@ -75,13 +106,15 @@ export async function POST(request: NextRequest) {
     processorFormData.append('userId', user.id);
 
     // Create service JWT token for processor authentication
-    const serviceToken = await createServiceToken('web', ['avatars:write'], {
+    const { token: serviceToken, claims: serviceTokenClaims } = await createAvatarServiceToken(user.id, '5m');
+
+    const uploadUrl = `${PROCESSOR_URL}/api/avatar/upload`;
+    console.log('Uploading avatar to processor', {
+      url: uploadUrl,
       userId: user.id,
-      tenantId: user.id,
-      expirationTime: '5m'
     });
 
-    const processorResponse = await fetch(`${PROCESSOR_URL}/api/avatar/upload`, {
+    const processorResponse = await fetch(uploadUrl, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${serviceToken}`
@@ -91,6 +124,13 @@ export async function POST(request: NextRequest) {
 
     if (!processorResponse.ok) {
       const errorData = await processorResponse.json().catch(() => ({}));
+      console.error('Processor avatar upload rejected', {
+        status: processorResponse.status,
+        error: errorData.error,
+        requiredScope: errorData.requiredScope,
+        tokenScopes: serviceTokenClaims.scopes,
+        userId: user.id,
+      });
       throw new Error(errorData.error || 'Failed to upload avatar to processor');
     }
 
@@ -135,11 +175,7 @@ export async function DELETE(request: NextRequest) {
     if (!currentUser[0].image.startsWith('http://') && !currentUser[0].image.startsWith('https://')) {
       // Send delete request to processor
       try {
-        const serviceToken = await createServiceToken('web', ['avatars:write'], {
-          userId: user.id,
-          tenantId: user.id,
-          expirationTime: '2m'
-        });
+        const { token: serviceToken } = await createAvatarServiceToken(user.id, '2m');
 
         await fetch(`${PROCESSOR_URL}/api/avatar/${user.id}`, {
           method: 'DELETE',

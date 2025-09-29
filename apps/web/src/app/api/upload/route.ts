@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
-import { db, pages, drives, eq, isNull } from '@pagespace/db';
+import { db, pages, drives, filePages, files, eq, isNull } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { PageType, canUserEditPage, getUserDriveAccess } from '@pagespace/lib/server';
 import {
@@ -33,6 +33,7 @@ export async function POST(request: NextRequest) {
   let uploadSlotReleased = false;
   let uploadSlot: string | null = null;
   let userId: string | null = null;
+  let pageCreated = false;
 
   try {
     // Verify authentication
@@ -152,7 +153,8 @@ export async function POST(request: NextRequest) {
       // Create service JWT token for processor authentication
       const serviceToken = await createServiceToken('web', ['files:write'], {
         userId: user.id,
-        tenantId: user.id,
+        tenantId: pageId,
+        driveIds: [driveId],
         expirationTime: '10m'
       });
 
@@ -170,7 +172,9 @@ export async function POST(request: NextRequest) {
       }
 
       const processorResult = await processorResponse.json();
-      const { contentHash, deduplicated, size, jobs } = processorResult;
+      const { contentHash, deduplicated, size, jobs, path: storedPath } = processorResult;
+      const resolvedSize = typeof size === 'number' ? size : file.size;
+      const storagePath = typeof storedPath === 'string' && storedPath.length > 0 ? storedPath : contentHash;
 
       // Calculate position for new page
       let calculatedPosition: number;
@@ -248,25 +252,90 @@ export async function POST(request: NextRequest) {
         contentHash, // Store content hash for deduplication
       };
 
-      // Create page entry
-      const [newPage] = await db.insert(pages).values({
-        id: pageId,
-        title: title || sanitizedFileName, // Use sanitized name for title
-        type: PageType.FILE,
-        content: '', // Will be populated by background job for text files
-        processingStatus: deduplicated ? 'completed' :
-                         (mimeType.startsWith('image/') ? 'visual' : 'pending'),
-        position: calculatedPosition,
-        driveId,
-        parentId: parentId || null,
-        fileSize: size,
-        mimeType,
-        originalFileName: sanitizedFileName, // Store sanitized filename
-        filePath: contentHash, // Store content hash as file identifier
-        fileMetadata,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      }).returning();
+      // Persist page, file metadata, and linkage atomically
+      const newPage = await db.transaction(async (tx) => {
+        const [createdPage] = await tx.insert(pages).values({
+          id: pageId,
+          title: title || sanitizedFileName, // Use sanitized name for title
+          type: PageType.FILE,
+          content: '', // Will be populated by background job for text/ocr results
+          processingStatus: deduplicated ? 'completed' :
+            (mimeType.startsWith('image/') ? 'visual' : 'pending'),
+          position: calculatedPosition,
+          driveId,
+          parentId: parentId || null,
+          fileSize: resolvedSize,
+          mimeType,
+          originalFileName: sanitizedFileName, // Store sanitized filename
+          filePath: contentHash, // Store content hash as file identifier
+          fileMetadata,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        }).returning();
+
+        const canonicalStoragePath = storagePath ?? contentHash;
+
+        const inserted = await tx
+          .insert(files)
+          .values({
+            id: contentHash,
+            driveId,
+            sizeBytes: resolvedSize,
+            mimeType,
+            storagePath: canonicalStoragePath,
+            createdBy: user.id,
+          })
+          .onConflictDoNothing()
+          .returning();
+
+        if (inserted.length === 0) {
+          const existing = await tx.query.files.findFirst({
+            where: eq(files.id, contentHash),
+          });
+
+          if (!existing) {
+            throw new Error('Failed to load existing file metadata for deduplicated upload');
+          }
+
+          const requiresUpdate =
+            existing.mimeType !== mimeType ||
+            existing.sizeBytes !== resolvedSize ||
+            existing.storagePath !== canonicalStoragePath;
+
+          if (requiresUpdate) {
+            await tx
+              .update(files)
+              .set({
+                mimeType,
+                sizeBytes: resolvedSize,
+                storagePath: canonicalStoragePath,
+                updatedAt: new Date(),
+              })
+              .where(eq(files.id, contentHash));
+          }
+        }
+
+        await tx
+          .insert(filePages)
+          .values({
+            fileId: contentHash,
+            pageId,
+            linkedBy: user.id,
+            linkSource: 'web-upload',
+          })
+          .onConflictDoUpdate({
+            target: filePages.pageId,
+            set: {
+              fileId: contentHash,
+              linkedBy: user.id,
+              linkedAt: new Date(),
+              linkSource: 'web-upload',
+            },
+          });
+
+        return createdPage;
+      });
+      pageCreated = true;
 
       // Update user storage usage (has its own transaction internally)
       await updateStorageUsage(user.id, file.size, {
@@ -350,9 +419,14 @@ export async function POST(request: NextRequest) {
       // Clean up on error
       if (!uploadSlotReleased && uploadSlot && userId) {
         uploadSemaphore.releaseUploadSlot(uploadSlot);
+        uploadSlotReleased = true;
         await updateActiveUploads(userId, -1);
       }
       
+      if (pageCreated) {
+        throw processorError;
+      }
+
       // Fallback: Still create the page entry but mark as failed
       const fileMetadata: FileMetadata = {
         uploadedAt: new Date().toISOString(),
@@ -392,6 +466,7 @@ export async function POST(request: NextRequest) {
     // Clean up on error
     if (!uploadSlotReleased && uploadSlot && userId) {
       uploadSemaphore.releaseUploadSlot(uploadSlot);
+      uploadSlotReleased = true;
       await updateActiveUploads(userId, -1);
     }
 
@@ -403,6 +478,7 @@ export async function POST(request: NextRequest) {
     // Ensure upload slot is always released
     if (!uploadSlotReleased && uploadSlot && userId) {
       uploadSemaphore.releaseUploadSlot(uploadSlot);
+      uploadSlotReleased = true;
       await updateActiveUploads(userId, -1);
     }
   }

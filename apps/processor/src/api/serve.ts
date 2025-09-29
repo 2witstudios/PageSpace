@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import type { Router as ExpressRouter } from 'express';
-import path from 'path';
 import { contentStore } from '../server';
 import { InvalidContentHashError, isValidContentHash } from '../cache/content-store';
+import { assertFileAccess, checkFileAccess } from '../services/rbac';
+import { db, files, pages, eq } from '@pagespace/db';
 
 const router = Router();
 
@@ -20,13 +21,18 @@ router.get('/:contentHash/original', async (req, res) => {
       return res.status(400).json({ error: 'Invalid content hash' });
     }
 
-    const tenantId = auth.tenantId;
-    if (!tenantId) {
-      return res.status(400).json({ error: 'Tenant context is required' });
+    const userId = auth.userId;
+    if (!userId) {
+      return res.status(401).json({ error: 'Service authentication required' });
     }
 
-    const allowed = await contentStore.tenantHasAccess(contentHash, tenantId);
-    if (!allowed) {
+    let accessInfo;
+    try {
+      accessInfo = await checkFileAccess(userId, contentHash, 'view');
+      if (!accessInfo.allowed) {
+        throw new Error('Access denied');
+      }
+    } catch {
       return res.status(403).json({ error: 'Access denied for requested file' });
     }
 
@@ -36,42 +42,42 @@ router.get('/:contentHash/original', async (req, res) => {
       return res.status(404).json({ error: 'Original file not found' });
     }
 
-    // Try to get metadata for content type
-    const metadataPath = path.join(
-      path.dirname(await contentStore.getOriginalPath(contentHash)),
-      'metadata.json'
-    );
-    
-    let contentType = 'application/octet-stream';
     let originalName = 'file';
-    
-    try {
-      const fs = await import('fs');
-      const metadata = JSON.parse(await fs.promises.readFile(metadataPath, 'utf-8'));
-      originalName = metadata.originalName || 'file';
-      
-      // Guess content type from original name
-      const ext = path.extname(originalName).toLowerCase();
-      const mimeTypes: Record<string, string> = {
-        '.jpg': 'image/jpeg',
-        '.jpeg': 'image/jpeg',
-        '.png': 'image/png',
-        '.gif': 'image/gif',
-        '.webp': 'image/webp',
-        '.pdf': 'application/pdf',
-        '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        '.txt': 'text/plain',
-        '.md': 'text/markdown'
-      };
-      
-      contentType = mimeTypes[ext] || contentType;
-    } catch {
-      // Metadata not available
+    let contentType = 'application/octet-stream';
+    let contentLength = buffer.length;
+
+    const fileRecord = await db.query.files.findFirst({
+      where: eq(files.id, contentHash),
+    });
+
+    if (typeof fileRecord?.sizeBytes === 'number') {
+      contentLength = fileRecord.sizeBytes;
+    }
+
+    if (fileRecord?.mimeType) {
+      contentType = fileRecord.mimeType;
+    }
+
+    const linkedPageId = accessInfo?.pageId;
+    if (linkedPageId) {
+      const pageRecord = await db.query.pages.findFirst({
+        where: eq(pages.id, linkedPageId),
+      });
+
+      if (pageRecord?.originalFileName) {
+        originalName = pageRecord.originalFileName;
+      } else if (pageRecord?.title) {
+        originalName = pageRecord.title;
+      }
+
+      if (!fileRecord?.mimeType && pageRecord?.mimeType) {
+        contentType = pageRecord.mimeType;
+      }
     }
 
     res.set({
       'Content-Type': contentType,
-      'Content-Length': buffer.length.toString(),
+      'Content-Length': contentLength.toString(),
       'Content-Disposition': `inline; filename="${originalName}"`,
       'Cache-Control': 'public, max-age=31536000, immutable',
       'ETag': `"${contentHash}-original"`,
@@ -108,13 +114,14 @@ router.get('/:contentHash/:preset', async (req, res) => {
       return res.status(400).json({ error: 'Invalid content hash' });
     }
 
-    const tenantId = auth.tenantId;
-    if (!tenantId) {
-      return res.status(400).json({ error: 'Tenant context is required' });
+    const userId = auth.userId;
+    if (!userId) {
+      return res.status(401).json({ error: 'Service authentication required' });
     }
 
-    const allowed = await contentStore.tenantHasAccess(contentHash, tenantId);
-    if (!allowed) {
+    try {
+      await assertFileAccess(userId, contentHash, 'view');
+    } catch {
       return res.status(403).json({ error: 'Access denied for requested file' });
     }
 
@@ -183,13 +190,14 @@ router.get('/:contentHash/metadata', async (req, res) => {
       return res.status(400).json({ error: 'Invalid content hash' });
     }
 
-    const tenantId = auth.tenantId;
-    if (!tenantId) {
-      return res.status(400).json({ error: 'Tenant context is required' });
+    const userId = auth.userId;
+    if (!userId) {
+      return res.status(401).json({ error: 'Service authentication required' });
     }
 
-    const allowed = await contentStore.tenantHasAccess(contentHash, tenantId);
-    if (!allowed) {
+    try {
+      await assertFileAccess(userId, contentHash, 'view');
+    } catch {
       return res.status(403).json({ error: 'Access denied for requested file' });
     }
 

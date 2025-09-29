@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import type { Router as ExpressRouter } from 'express';
-import { queueManager, contentStore } from '../server';
+import { queueManager } from '../server';
 import { getPageForIngestion } from '../db';
 import { InvalidContentHashError, isValidContentHash } from '../cache/content-store';
+import { assertFileAccess } from '../services/rbac';
 
 const router = Router();
 
@@ -13,9 +14,9 @@ router.post('/by-page/:pageId', async (req, res) => {
       return res.status(401).json({ error: 'Service authentication required' });
     }
 
-    const tenantId = req.serviceAuth.tenantId;
-    if (!tenantId) {
-      return res.status(400).json({ error: 'Tenant context is required' });
+    const userId = req.serviceAuth.userId;
+    if (!userId) {
+      return res.status(401).json({ error: 'Service authentication required' });
     }
 
     const { pageId } = req.params;
@@ -34,8 +35,9 @@ router.post('/by-page/:pageId', async (req, res) => {
       return res.status(400).json({ error: 'Page content hash is invalid' });
     }
 
-    const allowed = await contentStore.tenantHasAccess(contentHash, tenantId);
-    if (!allowed) {
+    try {
+      await assertFileAccess(userId, contentHash, 'edit');
+    } catch {
       return res.status(403).json({ error: 'Access denied for requested file' });
     }
 
@@ -59,4 +61,3 @@ router.post('/by-page/:pageId', async (req, res) => {
 });
 
 export const ingestRouter: ExpressRouter = router;
-

@@ -8,18 +8,24 @@ import path from 'path';
 import { contentStore, queueManager } from '../server';
 import { processorLogger } from '../logger';
 import { rateLimitUpload } from '../middleware/rate-limit';
-import { hasServicePermission } from '../middleware/auth';
+import { hasServiceScope } from '../middleware/auth';
+import { resolvePathWithin, sanitizeExtension } from '../utils/security';
 
 const router = Router();
+
+const CACHE_ROOT = path.resolve(process.env.CACHE_PATH || '/data/cache');
+const TEMP_UPLOADS_DIR = resolvePathWithin(CACHE_ROOT, 'temp-uploads');
+
+if (!TEMP_UPLOADS_DIR) {
+  throw new Error('Invalid upload cache path configuration');
+}
 
 // Configure multer for disk storage to avoid memory exhaustion
 const storage = multer.diskStorage({
   destination: async (req, file, cb) => {
     try {
-      // Use a temporary directory within the container
-      const tempDir = path.join(process.env.CACHE_PATH || '/data/cache', 'temp-uploads');
-      await fs.mkdir(tempDir, { recursive: true });
-      cb(null, tempDir);
+      await fs.mkdir(TEMP_UPLOADS_DIR, { recursive: true });
+      cb(null, TEMP_UPLOADS_DIR);
     } catch (error) {
       processorLogger.error('Failed to create temp upload directory', error as Error, {
         cachePath: process.env.CACHE_PATH,
@@ -29,9 +35,27 @@ const storage = multer.diskStorage({
     }
   },
   filename: (req, file, cb) => {
-    // Generate unique filename to avoid conflicts
-    const uniqueName = `${Date.now()}-${Math.round(Math.random() * 1E9)}-${file.originalname}`;
-    cb(null, uniqueName);
+    try {
+      const safeExt = sanitizeExtension(file.originalname);
+      const uniqueName = `${Date.now()}-${crypto.randomUUID()}${safeExt}`;
+      const safePath = resolvePathWithin(TEMP_UPLOADS_DIR, uniqueName);
+
+      if (!safePath) {
+        processorLogger.warn('Rejected unsafe upload filename', {
+          originalname: file.originalname,
+          generatedName: uniqueName
+        });
+        cb(new Error('Unsafe upload path generated'), uniqueName);
+        return;
+      }
+
+      cb(null, path.basename(safePath));
+    } catch (error) {
+      processorLogger.error('Failed to generate safe upload filename', error as Error, {
+        originalname: file.originalname
+      });
+      cb(new Error('Failed to generate safe upload filename'), '');
+    }
   }
 });
 
@@ -77,9 +101,9 @@ router.post('/single', upload.single('file'), async (req, res) => {
       return res.status(401).json({ error: 'Service authentication required' });
     }
 
-    const tenantId = auth.tenantId;
-    if (!tenantId) {
-      return res.status(400).json({ error: 'Tenant context is required' });
+    const resourcePageId = auth.claims.resource;
+    if (!resourcePageId) {
+      return res.status(403).json({ error: 'Service token missing page scope' });
     }
 
     const driveId = typeof req.body?.driveId === 'string' ? req.body.driveId : undefined;
@@ -87,24 +111,37 @@ router.post('/single', upload.single('file'), async (req, res) => {
       return res.status(400).json({ error: 'driveId is required' });
     }
 
+    if (!auth.driveId || auth.driveId !== driveId) {
+      return res.status(403).json({ error: 'Service token drive does not match requested drive' });
+    }
+
+    const pageId = typeof req.body?.pageId === 'string' ? req.body.pageId : undefined;
+    if (!pageId) {
+      return res.status(400).json({ error: 'pageId is required' });
+    }
+
+    if (resourcePageId && resourcePageId !== pageId) {
+      return res.status(403).json({ error: 'Service token resource does not match requested page' });
+    }
+
     const providedUserId = typeof req.body?.userId === 'string' ? req.body.userId : undefined;
     if (
       auth.userId &&
       providedUserId &&
       providedUserId !== auth.userId &&
-      !hasServicePermission(auth, 'files:write:any')
+      !hasServiceScope(auth, 'files:write:any')
     ) {
       return res.status(403).json({ error: 'Cannot upload on behalf of another user' });
     }
 
     const uploaderId = auth.userId ?? providedUserId;
+    const tenantId = auth.tenantId;
 
     if (!req.file) {
       return res.status(400).json({ error: 'No file provided' });
     }
 
     const { path: tempPath, originalname, mimetype, size } = req.file;
-    const { pageId } = req.body;
     tempFilePath = tempPath;
 
     processorLogger.info('Processing uploaded file', {
@@ -119,16 +156,6 @@ router.post('/single', upload.single('file'), async (req, res) => {
     // Check if file already exists (deduplication)
     const alreadyStored = await contentStore.originalExists(contentHash);
     if (alreadyStored) {
-      const allowed = await contentStore.tenantHasAccess(contentHash, tenantId);
-      if (!allowed) {
-        processorLogger.warn('Upload attempt blocked due to cross-tenant deduplication', {
-          contentHash,
-          tenantId,
-          service: auth.service
-        });
-        return res.status(403).json({ error: 'File belongs to a different tenant' });
-      }
-
       await contentStore.appendUploadMetadata(contentHash, {
         tenantId,
         driveId,
@@ -141,7 +168,6 @@ router.post('/single', upload.single('file'), async (req, res) => {
         originalname
       });
 
-      // Clean up temporary file
       try {
         await fs.unlink(tempPath);
       } catch (cleanupError) {
@@ -151,7 +177,6 @@ router.post('/single', upload.single('file'), async (req, res) => {
         });
       }
 
-      // Still queue processing jobs if needed
       await queueProcessingJobs(contentHash, originalname, mimetype, pageId);
 
       return res.json({
@@ -240,9 +265,9 @@ router.post('/multiple', upload.array('files', 10), async (req, res) => {
       return res.status(401).json({ error: 'Service authentication required' });
     }
 
-    const tenantId = auth.tenantId;
-    if (!tenantId) {
-      return res.status(400).json({ error: 'Tenant context is required' });
+    const resourcePageId = auth.claims.resource;
+    if (!resourcePageId) {
+      return res.status(403).json({ error: 'Service token missing page scope' });
     }
 
     const driveId = typeof req.body?.driveId === 'string' ? req.body.driveId : undefined;
@@ -250,23 +275,31 @@ router.post('/multiple', upload.array('files', 10), async (req, res) => {
       return res.status(400).json({ error: 'driveId is required' });
     }
 
+    if (!auth.driveId || auth.driveId !== driveId) {
+      return res.status(403).json({ error: 'Service token drive does not match requested drive' });
+    }
+
     const providedUserId = typeof req.body?.userId === 'string' ? req.body.userId : undefined;
     if (
       auth.userId &&
       providedUserId &&
       providedUserId !== auth.userId &&
-      !hasServicePermission(auth, 'files:write:any')
+      !hasServiceScope(auth, 'files:write:any')
     ) {
       return res.status(403).json({ error: 'Cannot upload on behalf of another user' });
     }
 
     const uploaderId = auth.userId ?? providedUserId;
+    const tenantId = auth.tenantId;
 
     if (!req.files || !Array.isArray(req.files)) {
       return res.status(400).json({ error: 'No files provided' });
     }
 
-    const { pageId } = req.body;
+    const pageId = typeof req.body?.pageId === 'string' ? req.body.pageId : undefined;
+    if (resourcePageId && pageId && resourcePageId !== pageId) {
+      return res.status(403).json({ error: 'Service token resource does not match requested page' });
+    }
     const results = [];
 
     // Track temp files for cleanup
@@ -293,21 +326,6 @@ router.post('/multiple', upload.array('files', 10), async (req, res) => {
           });
         }
         if (alreadyStored) {
-          const allowed = await contentStore.tenantHasAccess(contentHash, tenantId);
-          if (!allowed) {
-            processorLogger.warn('Blocked cross-tenant dedupe during multi upload', {
-              contentHash,
-              tenantId,
-              service: auth.service
-            });
-            results.push({
-              originalname,
-              error: 'File belongs to a different tenant',
-              success: false
-            });
-            continue;
-          }
-
           await contentStore.appendUploadMetadata(contentHash, {
             tenantId,
             driveId,

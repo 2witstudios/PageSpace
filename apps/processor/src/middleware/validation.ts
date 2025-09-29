@@ -1,30 +1,12 @@
 import type { NextFunction, Request, Response } from 'express';
-import { contentStore } from '../server';
-import { requireTenantContext } from './auth';
-
-export function ensureTenantContextPresent(req: Request, res: Response, next: NextFunction): void {
-  const tokenTenant = req.serviceAuth?.tenantId;
-  const resolvedTenant = requireTenantContext(req);
-
-  if (tokenTenant && resolvedTenant === null) {
-    res.status(403).json({ error: 'Tenant mismatch for request' });
-    return;
-  }
-
-  if (!tokenTenant && !resolvedTenant) {
-    res.status(400).json({ error: 'Tenant context is required' });
-    return;
-  }
-
-  next();
-}
+import { assertFileAccess } from '../services/rbac';
 
 export async function ensureContentAccess(
   req: Request,
   res: Response,
   next: NextFunction
 ): Promise<void> {
-  const tenantId = req.serviceAuth?.tenantId;
+  const userId = req.serviceAuth?.userId;
   const contentHash =
     (typeof req.params?.contentHash === 'string' && req.params.contentHash) ||
     (typeof req.body?.contentHash === 'string' && req.body.contentHash) ||
@@ -36,16 +18,15 @@ export async function ensureContentAccess(
     return;
   }
 
-  if (!tenantId) {
-    res.status(403).json({ error: 'Tenant context required to access file' });
+  if (!userId) {
+    res.status(401).json({ error: 'Service authentication required' });
     return;
   }
 
-  const allowed = await contentStore.tenantHasAccess(contentHash, tenantId);
-  if (!allowed) {
+  try {
+    await assertFileAccess(userId, contentHash, 'view');
+    next();
+  } catch (error) {
     res.status(403).json({ error: 'Access denied for requested file' });
-    return;
   }
-
-  next();
 }

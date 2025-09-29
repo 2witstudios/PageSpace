@@ -45,7 +45,7 @@ export async function GET(
     
     // For pending/processing, check processor queue status
     const serviceToken = await createServiceToken('web', ['queue:read'], {
-      tenantId: 'system', // System-level operation for queue status
+      tenantId: pageId,
       expirationTime: '2m'
     });
 

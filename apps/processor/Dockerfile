@@ -29,6 +29,10 @@ COPY apps/processor/package.json ./apps/processor/
 # Install dependencies (allow lockfile update since processor deps changed)
 RUN pnpm install --no-frozen-lockfile --prod=false
 
+# Build shared workspaces before compiling the processor
+RUN pnpm --filter @pagespace/db build \
+  && pnpm --filter @pagespace/lib build
+
 # Copy processor source code
 COPY apps/processor ./apps/processor
 

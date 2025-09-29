@@ -1,9 +1,9 @@
-import type { ServiceTokenPayload } from '../middleware/auth';
+import type { ProcessorServiceAuth } from '../middleware/auth';
 
 declare global {
   namespace Express {
     interface Request {
-      serviceAuth?: ServiceTokenPayload;
+      serviceAuth?: ProcessorServiceAuth;
     }
   }
 }

@@ -4,9 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "start": "node dist/server.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --loader ts-node/esm tests/security-utils.test.ts"
   },
   "dependencies": {
     "@pagespace/db": "workspace:*",
@@ -31,6 +32,7 @@
     "@types/jsonwebtoken": "^9.0.6",
     "@types/node": "^22.10.6",
     "tsx": "^4.19.2",
+    "ts-node": "^10.9.2",
     "typescript": "^5.8.3"
   }
 }

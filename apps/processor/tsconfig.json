@@ -2,21 +2,29 @@
   "extends": "../../tsconfig.json",
   "compilerOptions": {
     "outDir": "./dist",
-    "rootDir": "./src",
+    "rootDir": "../../",
+    "rootDirs": ["./src", "../../packages"],
+    "baseUrl": ".",
+    "paths": {
+      "@pagespace/lib": ["../../packages/lib/dist/index"],
+      "@pagespace/lib/*": ["../../packages/lib/dist/*"],
+      "@pagespace/db": ["../../packages/db/dist/index"],
+      "@pagespace/db/*": ["../../packages/db/dist/*"]
+    },
     "composite": false,
     "declaration": true,
     "declarationMap": true,
     "moduleResolution": "node",
     "module": "commonjs",
     "target": "ES2022",
-    "lib": ["ES2022"],
+    "lib": ["ES2022", "DOM"],
     "types": ["node"],
     "resolveJsonModule": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "strict": true,
-    "noEmit": false
+    "noEmit": true
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "../../packages/**/*"],
   "exclude": ["node_modules", "dist"]
 }

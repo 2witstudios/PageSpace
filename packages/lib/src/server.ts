@@ -3,7 +3,6 @@ export * from './auth-utils';
 export * from './csrf-utils';
 export * from './encryption-utils';
 export * from './page-content-parser';
-export * from './permissions';
 export * from './permissions-cached';
 export * from './rate-limit-utils';
 export * from './tree-utils';
