@@ -12,7 +12,7 @@ export default function PrivacyPolicy() {
             ← Back to Home
           </Link>
           <h1 className="text-4xl font-bold mb-2">Privacy Policy</h1>
-          <p className="text-muted-foreground">Last updated: August 20, 2025</p>
+          <p className="text-muted-foreground">Last updated: January 21, 2025</p>
         </div>
 
         <div className="prose prose-lg max-w-none dark:prose-invert">
@@ -29,10 +29,10 @@ export default function PrivacyPolicy() {
               PageSpace is designed with privacy and security as core principles:
             </p>
             <ul className="list-disc pl-6 mb-4">
-              <li><strong>Secure Cloud Storage:</strong> Your data is encrypted and stored securely in the cloud</li>
-              <li><strong>Access Control:</strong> Robust authentication and authorization systems</li>
-              <li><strong>Data Protection:</strong> Industry-standard security measures to protect your information</li>
-              <li><strong>Transparency:</strong> Clear information about how we handle your data</li>
+              <li><strong>Secure Cloud Storage:</strong> Your data is stored securely in our cloud infrastructure with access controls and monitoring</li>
+              <li><strong>Authentication Security:</strong> Passwords are securely hashed using bcrypt, and sessions are managed with JWT tokens</li>
+              <li><strong>Data Protection:</strong> Sensitive information like API keys is encrypted using AES-256-GCM encryption</li>
+              <li><strong>Transparency:</strong> Clear information about how we handle your data and what security measures we implement</li>
             </ul>
           </section>
 
@@ -43,12 +43,13 @@ export default function PrivacyPolicy() {
               Information we collect and store includes:
             </p>
             <ul className="list-disc pl-6 mb-4">
-              <li>User account information (username, email, encrypted password)</li>
-              <li>Pages, documents, and content you create</li>
+              <li>User account information (username, email, securely hashed password)</li>
+              <li>Pages, documents, and content you create (stored as plain text in our database)</li>
               <li>File organization and workspace structure</li>
               <li>Application settings and preferences</li>
-              <li>Chat messages and AI conversation history</li>
-              <li>Usage analytics to improve the service</li>
+              <li>Chat messages and AI conversation history (stored as plain text in our database)</li>
+              <li>Usage analytics and subscription billing information (via Stripe)</li>
+              <li>Your personal API keys for AI services (encrypted using AES-256-GCM)</li>
             </ul>
 
             <h3 className="text-xl font-semibold mb-3">3.2 Technical Information</h3>
@@ -96,7 +97,17 @@ export default function PrivacyPolicy() {
 
             <h3 className="text-xl font-semibold mb-3">5.2 Database Storage</h3>
             <p className="mb-4">
-              Your data is stored in encrypted databases on our cloud infrastructure with industry-standard security measures, including access controls, encryption at rest, and regular security audits.
+              Your data is stored in our cloud database infrastructure with industry-standard security measures, including:
+            </p>
+            <ul className="list-disc pl-6 mb-4">
+              <li><strong>Access Controls:</strong> Database access is restricted and monitored</li>
+              <li><strong>Password Security:</strong> User passwords are securely hashed using bcrypt</li>
+              <li><strong>API Key Encryption:</strong> Personal AI service API keys are encrypted using AES-256-GCM</li>
+              <li><strong>Connection Security:</strong> Database connections use secure protocols</li>
+              <li><strong>Content Storage:</strong> Document content and chat messages are currently stored as plain text in our database</li>
+            </ul>
+            <p className="mb-4">
+              <strong>Note:</strong> For enhanced security needs, consider our self-hosted deployment option where you have full control over data encryption and storage.
             </p>
           </section>
 
@@ -120,13 +131,14 @@ export default function PrivacyPolicy() {
               We implement comprehensive security measures including:
             </p>
             <ul className="list-disc pl-6 mb-4">
-              <li>Encryption of data in transit and at rest</li>
-              <li>Secure password hashing using bcrypt</li>
-              <li>JWT-based session management</li>
-              <li>Database access restrictions and monitoring</li>
-              <li>Input sanitization and validation</li>
-              <li>Regular security audits and updates</li>
-              <li>Network security and firewall protection</li>
+              <li><strong>Data in Transit:</strong> Secure HTTPS connections for all web traffic</li>
+              <li><strong>Password Security:</strong> bcrypt hashing with salt rounds for user passwords</li>
+              <li><strong>Session Management:</strong> JWT tokens with proper expiration and validation</li>
+              <li><strong>API Key Protection:</strong> AES-256-GCM encryption for user-provided AI service keys</li>
+              <li><strong>Database Access:</strong> Restricted access controls and connection monitoring</li>
+              <li><strong>Input Validation:</strong> Comprehensive sanitization and validation of user inputs</li>
+              <li><strong>Rate Limiting:</strong> Protection against abuse and excessive API usage</li>
+              <li><strong>CSRF Protection:</strong> Built-in protection against cross-site request forgery</li>
             </ul>
             <p className="mb-4">
               While we implement strong security measures, no system is 100% secure. We encourage users to use strong passwords and follow good security practices.
@@ -142,7 +154,7 @@ export default function PrivacyPolicy() {
               <li><strong>Access:</strong> All your data is accessible through the application interface</li>
               <li><strong>Modification:</strong> Edit or update any content at any time</li>
               <li><strong>Deletion:</strong> Delete individual items or your entire workspace</li>
-              <li><strong>Export:</strong> Export your data in various formats</li>
+              <li><strong>Export:</strong> Data export available by request - contact us for assistance</li>
               <li><strong>Portability:</strong> Your data is stored in standard formats</li>
             </ul>
           </section>
@@ -177,9 +189,44 @@ export default function PrivacyPolicy() {
           </section>
 
           <section className="mb-8">
-            <h2 className="text-2xl font-semibold mb-4">12. Contact Us</h2>
+            <h2 className="text-2xl font-semibold mb-4">12. International Users and Data Processing</h2>
             <p className="mb-4">
-              If you have any questions about this Privacy Policy or our privacy practices, please contact us through the PageSpace community or support channels.
+              PageSpace is operated from the United States. If you are accessing our services from outside the United States, please be aware that your information may be transferred to, stored, and processed in the United States where our servers are located and our central database is operated.
+            </p>
+            <p className="mb-4">
+              By using our service, you consent to the transfer of your information to the United States and processing in accordance with this Privacy Policy.
+            </p>
+          </section>
+
+          <section className="mb-8">
+            <h2 className="text-2xl font-semibold mb-4">13. Payment and Billing Information</h2>
+            <p className="mb-4">
+              When you purchase a subscription, payment processing is handled by Stripe, Inc. We do not store your credit card information on our servers. Stripe&apos;s privacy policy governs the collection and use of payment information.
+            </p>
+            <p className="mb-4">
+              We receive and store information about your subscription status, billing history, and usage metrics necessary for providing our services and managing your account.
+            </p>
+          </section>
+
+          <section className="mb-8">
+            <h2 className="text-2xl font-semibold mb-4">14. Data Security Incidents</h2>
+            <p className="mb-4">
+              In the event of a data security incident that affects your personal information, we will notify affected users via email within 72 hours of discovering the incident, in accordance with applicable data protection laws.
+            </p>
+          </section>
+
+          <section className="mb-8">
+            <h2 className="text-2xl font-semibold mb-4">15. Contact Us</h2>
+            <p className="mb-4">
+              If you have any questions about this Privacy Policy or our privacy practices, please contact us at:
+            </p>
+            <ul className="list-disc pl-6 mb-4">
+              <li><strong>Email:</strong> 2witstudios@gmail.com</li>
+              <li><strong>Support:</strong> Available through the in-app help system</li>
+              <li><strong>Community:</strong> <a href="https://discord.gg/kve8qgzZ8x" className="text-primary hover:underline">PageSpace Discord</a></li>
+            </ul>
+            <p className="mb-4">
+              For data protection requests (access, deletion, portability), please use the subject line &quot;Data Protection Request&quot; in your email.
             </p>
           </section>
         </div>
