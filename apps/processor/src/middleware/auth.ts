@@ -5,7 +5,7 @@ import {
   hasScope,
   type ServiceScope,
   type ServiceTokenClaims,
-} from '@pagespace/lib/services/service-auth';
+} from '@pagespace/lib';
 
 export interface ProcessorServiceAuth {
   userId: string;
@@ -23,32 +23,72 @@ export interface ProcessorServiceAuth {
 
 export const AUTH_REQUIRED = process.env.PROCESSOR_AUTH_REQUIRED !== 'false';
 
+function collectCandidateUrls(req: Request): string[] {
+  const rawValues: Array<string | undefined | null> = [
+    req.baseUrl,
+    req.originalUrl,
+    req.path,
+    (req as any).url,
+  ];
+
+  const queryParamUrls: string[] = [];
+  const hasAvatarQuery = req.originalUrl?.includes('/api/avatar/upload');
+  if (hasAvatarQuery) {
+    queryParamUrls.push('/api/avatar/upload');
+    queryParamUrls.push('api/avatar/upload');
+  }
+
+  return [...rawValues, ...queryParamUrls]
+    .filter((value): value is string => typeof value === 'string' && value.length > 0)
+    .map((value) => value.toLowerCase());
+}
+
 function inferScope(req: Request): ServiceScope | null {
-  const baseUrl = req.baseUrl || '';
   const method = req.method.toUpperCase();
+  const candidateUrls = collectCandidateUrls(req);
 
-  if (baseUrl.startsWith('/api/upload')) {
-    return 'files:write';
-  }
-
-  if (baseUrl.startsWith('/api/optimize')) {
-    return method === 'GET' ? 'files:read' : 'files:optimize';
-  }
-
-  if (baseUrl.startsWith('/api/ingest')) {
-    return 'files:ingest';
-  }
-
-  if (baseUrl.startsWith('/api/avatar')) {
+  const originalUrl = req.originalUrl?.toLowerCase() ?? '';
+  if (originalUrl.includes('/api/avatar/')) {
     return 'avatars:write';
   }
 
-  if (baseUrl.startsWith('/cache')) {
-    return 'files:read';
+  const matches = (url: string, prefix: string) =>
+    url === prefix || url.startsWith(`${prefix}/`) || url.startsWith(`${prefix}?`);
+
+  for (const url of candidateUrls) {
+    if (matches(url, '/api/avatar') || matches(url, 'api/avatar') || matches(url, '/avatar')) {
+      return 'avatars:write';
+    }
   }
 
-  if (baseUrl.startsWith('/api/queue') || baseUrl.startsWith('/api/job')) {
-    return 'queue:read';
+  for (const url of candidateUrls) {
+    if (matches(url, '/api/upload') || matches(url, 'api/upload')) {
+      return 'files:write';
+    }
+  }
+
+  for (const url of candidateUrls) {
+    if (matches(url, '/api/optimize') || matches(url, 'api/optimize')) {
+      return method === 'GET' ? 'files:read' : 'files:optimize';
+    }
+  }
+
+  for (const url of candidateUrls) {
+    if (matches(url, '/api/ingest') || matches(url, 'api/ingest')) {
+      return 'files:ingest';
+    }
+  }
+
+  for (const url of candidateUrls) {
+    if (matches(url, '/cache') || matches(url, 'cache')) {
+      return 'files:read';
+    }
+  }
+
+  for (const url of candidateUrls) {
+    if (matches(url, '/api/queue') || matches(url, 'api/queue') || matches(url, '/api/job') || matches(url, 'api/job')) {
+      return 'queue:read';
+    }
   }
 
   return null;
@@ -112,6 +152,16 @@ export async function authenticateService(req: Request, res: Response, next: Nex
 
     const inferredScope = inferScope(req);
     if (inferredScope && !hasScope(claims, inferredScope)) {
+      if (process.env.NODE_ENV !== 'test') {
+        console.warn('Service scope inference failed', {
+          service: claims.service,
+          required: inferredScope,
+          provided: claims.scopes,
+          subject: claims.sub,
+          resource: claims.resource,
+          urls: collectCandidateUrls(req),
+        });
+      }
       respondForbidden(res, 'Insufficient service scopes', inferredScope);
       return;
     }
@@ -142,6 +192,16 @@ export function requireScope(scope: ServiceScope) {
       next();
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Insufficient service scopes';
+      if (process.env.NODE_ENV !== 'test') {
+        console.warn('Service scope assertion failed', {
+          service: auth.service,
+          required: scope,
+          provided: auth.scopes,
+          subject: auth.userId,
+          resource: auth.resource,
+          urls: collectCandidateUrls(req),
+        });
+      }
       respondForbidden(res, message, scope);
     }
   };
