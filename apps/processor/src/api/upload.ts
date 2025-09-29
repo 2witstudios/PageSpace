@@ -78,10 +78,17 @@ router.post('/single', upload.single('file'), async (req, res) => {
     }
 
     const resourcePageId = auth.claims.resource;
+    if (!resourcePageId) {
+      return res.status(403).json({ error: 'Service token missing page scope' });
+    }
 
     const driveId = typeof req.body?.driveId === 'string' ? req.body.driveId : undefined;
     if (!driveId) {
       return res.status(400).json({ error: 'driveId is required' });
+    }
+
+    if (!auth.driveId || auth.driveId !== driveId) {
+      return res.status(403).json({ error: 'Service token drive does not match requested drive' });
     }
 
     const pageId = typeof req.body?.pageId === 'string' ? req.body.pageId : undefined;
@@ -232,10 +239,17 @@ router.post('/multiple', upload.array('files', 10), async (req, res) => {
     }
 
     const resourcePageId = auth.claims.resource;
+    if (!resourcePageId) {
+      return res.status(403).json({ error: 'Service token missing page scope' });
+    }
 
     const driveId = typeof req.body?.driveId === 'string' ? req.body.driveId : undefined;
     if (!driveId) {
       return res.status(400).json({ error: 'driveId is required' });
+    }
+
+    if (!auth.driveId || auth.driveId !== driveId) {
+      return res.status(403).json({ error: 'Service token drive does not match requested drive' });
     }
 
     const providedUserId = typeof req.body?.userId === 'string' ? req.body.userId : undefined;

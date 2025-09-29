@@ -61,11 +61,35 @@ function getServiceConfig(): ServiceJWTConfig {
   };
 }
 
+const RESERVED_SUPPLEMENTAL_CLAIMS = new Set<keyof ServiceTokenClaims | 'scopes' | 'tokenType' | 'aud' | 'iss' | 'exp' | 'iat' | 'nbf'>([
+  'sub',
+  'service',
+  'scopes',
+  'tokenType',
+  'jti',
+  'resource',
+  'driveId',
+  'driveIds',
+  'tenantId',
+  'userId',
+]);
+
 export async function createServiceToken(options: ServiceTokenOptions): Promise<string> {
   const config = getServiceConfig();
 
   if (!options.scopes || options.scopes.length === 0) {
     throw new Error('Service token requires at least one scope');
+  }
+
+  if (!options.subject || typeof options.subject !== 'string') {
+    throw new Error('Service token requires a string subject');
+  }
+
+  const additionalClaims = options.additionalClaims ?? {};
+  for (const key of Object.keys(additionalClaims)) {
+    if (RESERVED_SUPPLEMENTAL_CLAIMS.has(key as keyof ServiceTokenClaims)) {
+      throw new Error(`additionalClaims cannot override reserved service token claim: ${key}`);
+    }
   }
 
   const payload: ServiceTokenClaims = {
@@ -76,7 +100,7 @@ export async function createServiceToken(options: ServiceTokenOptions): Promise<
     scopes: Array.from(new Set(options.scopes)),
     tokenType: 'service',
     jti: createId(),
-    ...options.additionalClaims,
+    ...additionalClaims,
   };
 
   return await new SignJWT(payload)

@@ -273,27 +273,51 @@ export async function POST(request: NextRequest) {
           updatedAt: new Date(),
         }).returning();
 
-        await tx
+        const canonicalStoragePath = storagePath ?? contentHash;
+
+        const inserted = await tx
           .insert(files)
           .values({
             id: contentHash,
             driveId,
             sizeBytes: resolvedSize,
             mimeType,
-            storagePath: storagePath ?? contentHash,
+            storagePath: canonicalStoragePath,
             createdBy: user.id,
           })
-          .onConflictDoUpdate({
-            target: files.id,
-            set: {
-              driveId,
-              sizeBytes: resolvedSize,
-              mimeType,
-              storagePath: storagePath ?? contentHash,
-              updatedAt: new Date(),
-              createdBy: user.id,
-            },
+          .onConflictDoNothing()
+          .returning();
+
+        if (inserted.length === 0) {
+          const existing = await tx.query.files.findFirst({
+            where: eq(files.id, contentHash),
           });
+
+          if (!existing) {
+            throw new Error('Failed to load existing file metadata for deduplicated upload');
+          }
+
+          if (existing.driveId !== driveId) {
+            throw new Error('File hash already associated with another drive');
+          }
+
+          const requiresUpdate =
+            existing.mimeType !== mimeType ||
+            existing.sizeBytes !== resolvedSize ||
+            existing.storagePath !== canonicalStoragePath;
+
+          if (requiresUpdate) {
+            await tx
+              .update(files)
+              .set({
+                mimeType,
+                sizeBytes: resolvedSize,
+                storagePath: canonicalStoragePath,
+                updatedAt: new Date(),
+              })
+              .where(eq(files.id, contentHash));
+          }
+        }
 
         await tx
           .insert(filePages)
