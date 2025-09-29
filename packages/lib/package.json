@@ -2,105 +2,179 @@
   "name": "@pagespace/lib",
   "version": "0.1.0",
   "license": "AGPL-3.0",
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
     "test": "tsx --test src/__tests__/*.test.ts"
   },
   "exports": {
     ".": {
-      "browser": "./src/client-safe.ts",
-      "node": "./src/index.ts",
-      "default": "./src/client-safe.ts"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js",
+      "default": "./dist/index.js",
+      "browser": "./dist/client-safe.js"
     },
-    "./server": "./src/index.ts",
-    "./client": "./src/client.ts",
-    "./client-safe": "./src/client-safe.ts",
-    "./logger": "./src/logger.ts",
+    "./server": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "import": "./dist/client.js",
+      "default": "./dist/client.js"
+    },
+    "./client-safe": {
+      "types": "./dist/client-safe.d.ts",
+      "import": "./dist/client-safe.js",
+      "default": "./dist/client-safe.js"
+    },
+    "./logger": {
+      "types": "./dist/logger.d.ts",
+      "import": "./dist/logger.js",
+      "require": "./dist/logger.js"
+    },
     "./logger-config": {
-      "node": "./src/logger-config.ts"
+      "types": "./dist/logger-config.d.ts",
+      "import": "./dist/logger-config.js",
+      "require": "./dist/logger-config.js"
     },
-    "./logger-database": "./src/logger-database.ts",
-    "./activity-tracker": "./src/activity-tracker.ts",
-    "./ai-monitoring": "./src/ai-monitoring.ts",
-    "./auth-utils": "./src/auth-utils.ts",
-    "./broadcast-auth": "./src/broadcast-auth.ts",
-    "./scribe-processor": "./src/scribe-processor.ts",
-    "./services/storage-limits": "./src/services/storage-limits.ts",
-    "./services/subscription-utils": "./src/services/subscription-utils.ts",
-    "./services/upload-semaphore": "./src/services/upload-semaphore.ts",
-    "./services/memory-monitor": "./src/services/memory-monitor.ts",
+    "./logger-database": {
+      "types": "./dist/logger-database.d.ts",
+      "import": "./dist/logger-database.js",
+      "require": "./dist/logger-database.js"
+    },
+    "./activity-tracker": {
+      "types": "./dist/activity-tracker.d.ts",
+      "import": "./dist/activity-tracker.js",
+      "require": "./dist/activity-tracker.js"
+    },
+    "./ai-monitoring": {
+      "types": "./dist/ai-monitoring.d.ts",
+      "import": "./dist/ai-monitoring.js",
+      "require": "./dist/ai-monitoring.js"
+    },
+    "./auth-utils": {
+      "types": "./dist/auth-utils.d.ts",
+      "import": "./dist/auth-utils.js",
+      "require": "./dist/auth-utils.js"
+    },
+    "./broadcast-auth": {
+      "types": "./dist/broadcast-auth.d.ts",
+      "import": "./dist/broadcast-auth.js",
+      "require": "./dist/broadcast-auth.js"
+    },
+    "./scribe-processor": {
+      "types": "./dist/scribe-processor.d.ts",
+      "import": "./dist/scribe-processor.js",
+      "require": "./dist/scribe-processor.js"
+    },
+    "./services/storage-limits": {
+      "types": "./dist/services/storage-limits.d.ts",
+      "import": "./dist/services/storage-limits.js",
+      "require": "./dist/services/storage-limits.js"
+    },
+    "./services/subscription-utils": {
+      "types": "./dist/services/subscription-utils.d.ts",
+      "import": "./dist/services/subscription-utils.js",
+      "require": "./dist/services/subscription-utils.js"
+    },
+    "./services/upload-semaphore": {
+      "types": "./dist/services/upload-semaphore.d.ts",
+      "import": "./dist/services/upload-semaphore.js",
+      "require": "./dist/services/upload-semaphore.js"
+    },
+    "./services/memory-monitor": {
+      "types": "./dist/services/memory-monitor.d.ts",
+      "import": "./dist/services/memory-monitor.js",
+      "require": "./dist/services/memory-monitor.js"
+    },
     "./services/permission-cache": {
-      "node": "./src/services/permission-cache.ts"
+      "types": "./dist/services/permission-cache.d.ts",
+      "import": "./dist/services/permission-cache.js",
+      "require": "./dist/services/permission-cache.js"
     },
     "./permissions-cached": {
-      "node": "./src/permissions-cached.ts"
+      "types": "./dist/permissions-cached.d.ts",
+      "import": "./dist/permissions-cached.js",
+      "require": "./dist/permissions-cached.js"
     },
-    "./logger-browser": "./src/logger-browser.ts",
-    "./utils/environment": "./src/utils/environment.ts"
+    "./logger-browser": {
+      "types": "./dist/logger-browser.d.ts",
+      "import": "./dist/logger-browser.js",
+      "default": "./dist/logger-browser.js"
+    },
+    "./utils/environment": {
+      "types": "./dist/utils/environment.d.ts",
+      "import": "./dist/utils/environment.js",
+      "default": "./dist/utils/environment.js"
+    }
   },
   "typesVersions": {
     "*": {
       "server": [
-        "./src/index.ts"
+        "./dist/index.d.ts"
       ],
       "client": [
-        "./src/client.ts"
+        "./dist/client.d.ts"
       ],
       "client-safe": [
-        "./src/client-safe.ts"
+        "./dist/client-safe.d.ts"
       ],
       "logger": [
-        "./src/logger.ts"
+        "./dist/logger.d.ts"
       ],
       "logger-config": [
-        "./src/logger-config.ts"
+        "./dist/logger-config.d.ts"
       ],
       "logger-database": [
-        "./src/logger-database.ts"
+        "./dist/logger-database.d.ts"
       ],
       "activity-tracker": [
-        "./src/activity-tracker.ts"
+        "./dist/activity-tracker.d.ts"
       ],
       "ai-monitoring": [
-        "./src/ai-monitoring.ts"
+        "./dist/ai-monitoring.d.ts"
       ],
       "auth-utils": [
-        "./src/auth-utils.ts"
+        "./dist/auth-utils.d.ts"
       ],
       "broadcast-auth": [
-        "./src/broadcast-auth.ts"
+        "./dist/broadcast-auth.d.ts"
       ],
       "scribe-processor": [
-        "./src/scribe-processor.ts"
+        "./dist/scribe-processor.d.ts"
       ],
       "services/storage-limits": [
-        "./src/services/storage-limits.ts"
+        "./dist/services/storage-limits.d.ts"
       ],
       "services/subscription-utils": [
-        "./src/services/subscription-utils.ts"
+        "./dist/services/subscription-utils.d.ts"
       ],
       "services/upload-semaphore": [
-        "./src/services/upload-semaphore.ts"
+        "./dist/services/upload-semaphore.d.ts"
       ],
       "services/memory-monitor": [
-        "./src/services/memory-monitor.ts"
+        "./dist/services/memory-monitor.d.ts"
       ],
       "services/permission-cache": [
-        "./src/services/permission-cache.ts"
+        "./dist/services/permission-cache.d.ts"
       ],
       "permissions-cached": [
-        "./src/permissions-cached.ts"
+        "./dist/permissions-cached.d.ts"
       ],
       "logger-browser": [
-        "./src/logger-browser.ts"
+        "./dist/logger-browser.d.ts"
       ],
       "utils/environment": [
-        "./src/utils/environment.ts"
+        "./dist/utils/environment.d.ts"
       ]
     }
   },
   "dependencies": {
+    "@pagespace/db": "workspace:*",
     "@iarna/toml": "^2.2.5",
     "@paralleldrive/cuid2": "^2.2.2",
     "ioredis": "^5.8.0",

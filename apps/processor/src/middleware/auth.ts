@@ -1,43 +1,29 @@
 import type { NextFunction, Request, Response } from 'express';
-import jwt from 'jsonwebtoken';
+import {
+  authenticateServiceToken,
+  assertScope as assertServiceScope,
+  hasScope,
+  type ServiceScope,
+  type ServiceTokenClaims,
+} from '@pagespace/lib/services/service-auth';
 
-export interface ServiceTokenPayload extends jwt.JwtPayload {
+export interface ProcessorServiceAuth {
+  userId: string;
   service: string;
-  permissions: string[];
+  scopes: ServiceScope[];
+  claims: ServiceTokenClaims;
+  resource?: string;
+  driveId?: string;
+  /**
+   * Compatibility shim for legacy code paths that still expect tenantId === userId
+   * or the resource identifier. This should be removed when RBAC integration is complete.
+   */
   tenantId?: string;
-  userId?: string;
-  driveIds?: string[];
 }
 
 export const AUTH_REQUIRED = process.env.PROCESSOR_AUTH_REQUIRED !== 'false';
 
-function requireSecret(): string {
-  const secret = process.env.SERVICE_JWT_SECRET;
-  if (!secret) {
-    throw new Error('SERVICE_JWT_SECRET is not configured for processor authentication');
-  }
-  return secret;
-}
-
-export function hasServicePermission(payload: ServiceTokenPayload, permission: string): boolean {
-  const { permissions = [] } = payload;
-  if (permissions.includes('*')) {
-    return true;
-  }
-
-  if (permissions.includes(permission)) {
-    return true;
-  }
-
-  const [scope] = permission.split(':');
-  if (permissions.includes(`${scope}:*`)) {
-    return true;
-  }
-
-  return false;
-}
-
-function inferPermission(req: Request): string | null {
+function inferScope(req: Request): ServiceScope | null {
   const baseUrl = req.baseUrl || '';
   const method = req.method.toUpperCase();
 
@@ -54,7 +40,8 @@ function inferPermission(req: Request): string | null {
   }
 
   if (baseUrl.startsWith('/api/avatar')) {
-    return 'avatars:write';
+    // Temporary scope until avatar routes are aligned with new policy
+    return 'files:write';
   }
 
   if (baseUrl.startsWith('/cache')) {
@@ -68,77 +55,113 @@ function inferPermission(req: Request): string | null {
   return null;
 }
 
-export function authenticateService(req: Request, res: Response, next: NextFunction): void {
+function buildAuthContext(claims: ServiceTokenClaims): ProcessorServiceAuth {
+  const scopes = Array.isArray(claims.scopes) ? (claims.scopes as ServiceScope[]) : [];
+  const userId = String(claims.sub);
+
+  return {
+    userId,
+    service: claims.service,
+    scopes,
+    claims,
+    resource: claims.resource,
+    driveId: claims.driveId,
+    tenantId: claims.resource ?? userId,
+  };
+}
+
+function respondUnauthorized(res: Response, message = 'Service authentication required'): void {
+  res.status(401).json({ error: message });
+}
+
+function respondForbidden(res: Response, message: string, scope?: ServiceScope): void {
+  res.status(403).json({
+    error: message,
+    ...(scope ? { requiredScope: scope } : {}),
+  });
+}
+
+export async function authenticateService(req: Request, res: Response, next: NextFunction): Promise<void> {
   if (!AUTH_REQUIRED) {
-    return next();
-  }
-
-  const header = req.headers.authorization;
-
-  if (!header || !header.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'Service authentication required' });
+    next();
     return;
   }
 
-  try {
-    const token = header.slice(7).trim();
-    const payload = jwt.verify(token, requireSecret()) as ServiceTokenPayload;
+  const header = req.headers.authorization;
+  if (!header || !header.startsWith('Bearer ')) {
+    respondUnauthorized(res);
+    return;
+  }
 
-    if (!payload.service || !Array.isArray(payload.permissions)) {
-      res.status(403).json({ error: 'Service token missing required claims' });
+  const token = header.slice(7).trim();
+
+  try {
+    const { claims } = await authenticateServiceToken(token);
+
+    if (!claims.service || typeof claims.service !== 'string') {
+      respondForbidden(res, 'Service token missing service identifier');
       return;
     }
 
-    req.serviceAuth = payload;
+    if (!claims.scopes || !Array.isArray(claims.scopes) || claims.scopes.length === 0) {
+      respondForbidden(res, 'Service token missing scopes');
+      return;
+    }
 
-    const inferredPermission = inferPermission(req);
-    if (inferredPermission && !hasServicePermission(payload, inferredPermission)) {
-      res.status(403).json({
-        error: 'Insufficient service permissions',
-        requiredPermission: inferredPermission
-      });
+    const context = buildAuthContext(claims);
+    req.serviceAuth = context;
+
+    const inferredScope = inferScope(req);
+    if (inferredScope && !hasScope(claims, inferredScope)) {
+      respondForbidden(res, 'Insufficient service scopes', inferredScope);
       return;
     }
 
     next();
   } catch (error) {
-    if (error instanceof Error) {
-      console.error('Service authentication failed:', error.message);
-    }
-    res.status(401).json({ error: 'Invalid service token' });
+    const message = error instanceof Error ? error.message : 'Invalid service token';
+    console.error('Service authentication failed:', message);
+    respondUnauthorized(res, 'Invalid service token');
   }
 }
 
-export function requirePermission(permission: string) {
+export function requireScope(scope: ServiceScope) {
   return function permissionMiddleware(req: Request, res: Response, next: NextFunction): void {
     if (!AUTH_REQUIRED) {
       next();
       return;
     }
 
-    if (!req.serviceAuth) {
-      res.status(401).json({ error: 'Service authentication required' });
+    const auth = req.serviceAuth;
+    if (!auth) {
+      respondUnauthorized(res);
       return;
     }
 
-    if (!hasServicePermission(req.serviceAuth, permission)) {
-      res.status(403).json({
-        error: 'Insufficient service permissions',
-        requiredPermission: permission
-      });
-      return;
+    try {
+      assertServiceScope(auth.claims, scope);
+      next();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Insufficient service scopes';
+      respondForbidden(res, message, scope);
     }
-
-    next();
   };
 }
 
+export function hasServiceScope(auth: ProcessorServiceAuth | undefined, scope: ServiceScope): boolean {
+  if (!auth) {
+    return false;
+  }
+  return hasScope(auth.claims, scope);
+}
+
 export function requireTenantContext(req: Request): string | null {
-  if (!req.serviceAuth) {
+  const auth = req.serviceAuth;
+  if (!auth) {
     return null;
   }
 
-  const tokenTenant = req.serviceAuth.tenantId ?? null;
+  const tokenTenant = auth.tenantId ?? null;
   const bodyTenant = typeof req.body?.tenantId === 'string' ? req.body.tenantId : null;
 
   if (!tokenTenant) {
@@ -150,8 +173,10 @@ export function requireTenantContext(req: Request): string | null {
   }
 
   if (!bodyTenant && typeof req.body === 'object' && req.body !== null) {
-    req.body.tenantId = tokenTenant;
+    (req.body as Record<string, unknown>).tenantId = tokenTenant;
   }
 
   return tokenTenant;
 }
+
+export type { ServiceScope };

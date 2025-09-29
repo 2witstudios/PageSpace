@@ -1,5 +1,11 @@
 import * as jose from 'jose';
 import { createId } from '@paralleldrive/cuid2';
+import {
+  createServiceToken as createServiceTokenV2,
+  verifyServiceToken as verifyServiceTokenV2,
+  type ServiceScope,
+  type ServiceTokenClaims,
+} from './services/service-auth';
 
 const JWT_ALGORITHM = 'HS256';
 
@@ -20,35 +26,10 @@ function getJWTConfig() {
   };
 }
 
-function getServiceJWTConfig() {
-  // Validate service JWT secret exists and is secure
-  const serviceSecret = process.env.SERVICE_JWT_SECRET;
-  if (!serviceSecret) {
-    throw new Error('SERVICE_JWT_SECRET environment variable is required');
-  }
-  if (serviceSecret.length < 32) {
-    throw new Error('SERVICE_JWT_SECRET must be at least 32 characters long');
-  }
-
-  return {
-    secret: new TextEncoder().encode(serviceSecret),
-    issuer: process.env.JWT_ISSUER || 'pagespace',
-    audience: 'pagespace-services'
-  };
-}
-
 interface UserPayload extends jose.JWTPayload {
   userId: string;
   tokenVersion: number;
   role: 'user' | 'admin';
-}
-
-interface ServiceTokenPayload extends jose.JWTPayload {
-  service: string;
-  permissions: string[];
-  tenantId?: string;
-  userId?: string;
-  driveIds?: string[];
 }
 
 export async function decodeToken(token: string): Promise<UserPayload | null> {
@@ -111,7 +92,7 @@ export function requireAdminPayload(userPayload: UserPayload | null): void {
   }
 }
 
-// Service JWT functions
+// Service JWT functions (legacy interface maintained for backwards compatibility)
 export async function createServiceToken(
   service: string,
   permissions: string[] = ['*'],
@@ -122,42 +103,31 @@ export async function createServiceToken(
     expirationTime?: string;
   }
 ): Promise<string> {
-  const config = getServiceJWTConfig();
-  const payload: ServiceTokenPayload = {
-    service,
-    permissions,
-    ...options
-  };
+  const subject = options?.userId ?? options?.tenantId ?? service;
+  const scopes = (permissions.length > 0 ? permissions : ['*']) as ServiceScope[];
 
-  return await new jose.SignJWT(payload)
-    .setProtectedHeader({ alg: JWT_ALGORITHM })
-    .setIssuer(config.issuer)
-    .setAudience(config.audience)
-    .setIssuedAt()
-    .setExpirationTime(options?.expirationTime || '1h')
-    .sign(config.secret);
+  return createServiceTokenV2({
+    service,
+    subject,
+    scopes,
+    resource: options?.tenantId,
+    driveId: options?.driveIds?.[0],
+    expiresIn: options?.expirationTime ?? '1h',
+    additionalClaims: {
+      tenantId: options?.tenantId ?? subject,
+      userId: options?.userId,
+      driveIds: options?.driveIds,
+    },
+  });
 }
 
-export async function verifyServiceToken(token: string): Promise<ServiceTokenPayload | null> {
+export async function verifyServiceToken(token: string): Promise<ServiceTokenClaims | null> {
   try {
-    const config = getServiceJWTConfig();
-    const { payload } = await jose.jwtVerify(token, config.secret, {
-      algorithms: [JWT_ALGORITHM],
-      issuer: config.issuer,
-      audience: config.audience,
-    });
-
-    // Validate required payload fields
-    if (!payload.service || typeof payload.service !== 'string') {
-      throw new Error('Invalid service token: missing or invalid service');
-    }
-    if (!Array.isArray(payload.permissions)) {
-      throw new Error('Invalid service token: missing or invalid permissions');
-    }
-
-    return payload as ServiceTokenPayload;
+    return await verifyServiceTokenV2(token);
   } catch (error) {
     console.error('Invalid service token:', error);
     return null;
   }
 }
+
+export type { ServiceScope, ServiceTokenClaims };

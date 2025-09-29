@@ -189,7 +189,7 @@ export async function getUserAccessiblePagesInDrive(
       .from(pages)
       .where(eq(pages.driveId, driveId));
 
-    return allPages.map(p => p.id);
+    return allPages.map((page: { id: string }) => page.id);
   }
 
   // Get pages with explicit permissions
@@ -202,7 +202,7 @@ export async function getUserAccessiblePagesInDrive(
       eq(pagePermissions.canView, true)
     ));
 
-  return permissions.map(p => p.pageId);
+  return permissions.map((entry: { pageId: string }) => entry.pageId);
 }
 
 /**
@@ -257,7 +257,7 @@ export async function getUserAccessiblePagesInDriveWithDetails(
       eq(pages.isTrashed, false)
     ));
 
-    return allPages.map(page => ({
+    return allPages.map((page): PageWithPermissions => ({
       ...page,
       permissions: {
         canView: true,
@@ -290,7 +290,7 @@ export async function getUserAccessiblePagesInDriveWithDetails(
     eq(pagePermissions.canView, true)
   ));
 
-  return pagesWithPermissions.map(page => ({
+  return pagesWithPermissions.map((page): PageWithPermissions => ({
     id: page.id,
     title: page.title,
     type: page.type,

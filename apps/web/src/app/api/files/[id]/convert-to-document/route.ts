@@ -89,7 +89,8 @@ export async function POST(
     // Create service JWT token for processor authentication
     const serviceToken = await createServiceToken('web', ['files:read'], {
       userId: user.id,
-      tenantId: user.id,
+      tenantId: filePage.id,
+      driveIds: filePage.drive ? [filePage.drive.id] : undefined,
       expirationTime: '5m'
     });
 

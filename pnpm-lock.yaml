@@ -474,6 +474,9 @@ importers:
       '@iarna/toml':
         specifier: ^2.2.5
         version: 2.2.5
+      '@pagespace/db':
+        specifier: workspace:*
+        version: link:../db
       '@paralleldrive/cuid2':
         specifier: ^2.2.2
         version: 2.2.2

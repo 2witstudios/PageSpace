@@ -11,6 +11,7 @@ export * from './schema/monitoring';
 export * from './schema/social';
 export * from './schema/subscriptions';
 export * from './schema/contact';
+export * from './schema/storage';
 
 import * as auth from './schema/auth';
 import * as core from './schema/core';
@@ -25,6 +26,7 @@ import * as monitoring from './schema/monitoring';
 import * as social from './schema/social';
 import * as subscriptions from './schema/subscriptions';
 import * as contact from './schema/contact';
+import * as storage from './schema/storage';
 
 export const schema = {
   ...auth,
@@ -40,4 +42,5 @@ export const schema = {
   ...social,
   ...subscriptions,
   ...contact,
+  ...storage,
 };

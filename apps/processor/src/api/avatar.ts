@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import { promises as fs } from 'fs';
 import path from 'path';
-import { hasServicePermission } from '../middleware/auth';
+import { hasServiceScope } from '../middleware/auth';
 
 const router: Router = Router();
 
@@ -46,7 +46,7 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
     if (
       auth.userId &&
       userId !== auth.userId &&
-      !hasServicePermission(auth, 'avatars:write:any')
+      !hasServiceScope(auth, 'avatars:write:any')
     ) {
       return res.status(403).json({ error: 'Cannot modify avatar for another user' });
     }
@@ -108,7 +108,7 @@ router.delete('/:userId', async (req: Request, res: Response) => {
     if (
       auth.userId &&
       userId !== auth.userId &&
-      !hasServicePermission(auth, 'avatars:write:any')
+      !hasServiceScope(auth, 'avatars:write:any')
     ) {
       return res.status(403).json({ error: 'Cannot delete avatar for another user' });
     }

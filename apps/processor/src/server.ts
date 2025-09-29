@@ -10,7 +10,7 @@ import { QueueManager } from './workers/queue-manager';
 import { ingestRouter } from './api/ingest';
 import avatarRouter from './api/avatar';
 import dotenv from 'dotenv';
-import { authenticateService, requirePermission } from './middleware/auth';
+import { authenticateService, requireScope } from './middleware/auth';
 
 // Load environment variables
 dotenv.config();
@@ -44,17 +44,17 @@ app.get('/health', (req, res) => {
 });
 
 // API Routes
-app.use('/api/upload', authenticateService, requirePermission('files:write'), uploadRouter);
-app.use('/api/optimize', authenticateService, requirePermission('files:optimize'), imageRouter);
-app.use('/api/ingest', authenticateService, requirePermission('files:ingest'), ingestRouter);
-app.use('/api/avatar', authenticateService, requirePermission('avatars:write'), avatarRouter);
-app.use('/cache', authenticateService, requirePermission('files:read'), cacheRouter);
+app.use('/api/upload', authenticateService, requireScope('files:write'), uploadRouter);
+app.use('/api/optimize', authenticateService, requireScope('files:optimize'), imageRouter);
+app.use('/api/ingest', authenticateService, requireScope('files:ingest'), ingestRouter);
+app.use('/api/avatar', authenticateService, requireScope('files:write'), avatarRouter);
+app.use('/cache', authenticateService, requireScope('files:read'), cacheRouter);
 
 // Queue status endpoint
 app.get(
   '/api/queue/status',
   authenticateService,
-  requirePermission('queue:read'),
+  requireScope('queue:read'),
   async (req, res) => {
     try {
       const status = await queueManager.getQueueStatus();
@@ -69,7 +69,7 @@ app.get(
 app.get(
   '/api/job/:jobId',
   authenticateService,
-  requirePermission('queue:read'),
+  requireScope('queue:read'),
   async (req, res) => {
     try {
       const job = await queueManager.getJob(req.params.jobId);

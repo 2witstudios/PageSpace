@@ -81,7 +81,9 @@ export async function getUserNotifications(userId: string, limit = 50) {
     .orderBy(desc(notifications.createdAt))
     .limit(limit);
 
-  return userNotifications.map(row => ({
+  type NotificationResult = (typeof userNotifications)[number];
+
+  return userNotifications.map((row: NotificationResult) => ({
     ...row.notification,
     triggeredByUser: row.triggeredByUser,
     drive: row.drive,
