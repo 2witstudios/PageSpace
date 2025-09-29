@@ -3,6 +3,14 @@ import multer from 'multer';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { hasServiceScope } from '../middleware/auth';
+import { processorLogger } from '../logger';
+import {
+  DEFAULT_IMAGE_EXTENSION,
+  normalizeIdentifier,
+  resolvePathWithin,
+  sanitizeExtension,
+  IDENTIFIER_PATTERN,
+} from '../utils/security';
 
 const router: Router = Router();
 
@@ -24,6 +32,13 @@ const upload = multer({
   },
 });
 
+const STORAGE_ROOT = path.resolve(process.env.FILE_STORAGE_PATH || '/data/files');
+const AVATAR_ROOT = resolvePathWithin(STORAGE_ROOT, 'avatars');
+
+if (!AVATAR_ROOT) {
+  throw new Error('Invalid avatar storage configuration');
+}
+
 // Avatar upload endpoint
 router.post('/upload', upload.single('file'), async (req: Request, res: Response) => {
   try {
@@ -33,14 +48,17 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
     }
 
     const file = req.file;
-    const userId = req.body.userId;
+    const userId = normalizeIdentifier(req.body.userId, IDENTIFIER_PATTERN);
 
     if (!file) {
       return res.status(400).json({ error: 'No file provided' });
     }
 
     if (!userId) {
-      return res.status(400).json({ error: 'User ID is required' });
+      processorLogger.warn('Avatar upload rejected: invalid user ID', {
+        providedUserId: req.body?.userId
+      });
+      return res.status(400).json({ error: 'Invalid user ID format' });
     }
 
     if (
@@ -51,9 +69,13 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
       return res.status(403).json({ error: 'Cannot modify avatar for another user' });
     }
 
-    // Get storage path from environment
-    const storagePath = process.env.FILE_STORAGE_PATH || '/data/files';
-    const avatarsDir = path.join(storagePath, 'avatars', userId);
+    const avatarsDir = resolvePathWithin(AVATAR_ROOT, userId);
+    if (!avatarsDir) {
+      processorLogger.warn('Avatar upload rejected: unsafe directory resolution', {
+        userId
+      });
+      return res.status(400).json({ error: 'Invalid avatar path' });
+    }
 
     // Create user's avatar directory if it doesn't exist
     await fs.mkdir(avatarsDir, { recursive: true });
@@ -63,7 +85,10 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
       const files = await fs.readdir(avatarsDir);
       for (const oldFile of files) {
         if (oldFile.startsWith('avatar.')) {
-          await fs.unlink(path.join(avatarsDir, oldFile));
+          const safeOldPath = resolvePathWithin(avatarsDir, oldFile);
+          if (safeOldPath) {
+            await fs.unlink(safeOldPath);
+          }
         }
       }
     } catch (error) {
@@ -71,9 +96,17 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
     }
 
     // Save the new avatar
-    const extension = path.extname(file.originalname) || '.jpg';
+    const extension = sanitizeExtension(file.originalname, DEFAULT_IMAGE_EXTENSION);
     const filename = `avatar${extension}`;
-    const filepath = path.join(avatarsDir, filename);
+    const filepath = resolvePathWithin(avatarsDir, filename);
+
+    if (!filepath) {
+      processorLogger.warn('Avatar upload rejected: unsafe file path resolution', {
+        userId,
+        filename
+      });
+      return res.status(400).json({ error: 'Invalid avatar path' });
+    }
 
     await fs.writeFile(filepath, file.buffer);
 
@@ -99,10 +132,13 @@ router.delete('/:userId', async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Service authentication required' });
     }
 
-    const { userId } = req.params;
+    const userId = normalizeIdentifier(req.params.userId, IDENTIFIER_PATTERN);
 
     if (!userId) {
-      return res.status(400).json({ error: 'User ID is required' });
+      processorLogger.warn('Avatar delete rejected: invalid user ID', {
+        providedUserId: req.params?.userId
+      });
+      return res.status(400).json({ error: 'Invalid user ID format' });
     }
 
     if (
@@ -113,15 +149,24 @@ router.delete('/:userId', async (req: Request, res: Response) => {
       return res.status(403).json({ error: 'Cannot delete avatar for another user' });
     }
 
-    const storagePath = process.env.FILE_STORAGE_PATH || '/data/files';
-    const avatarsDir = path.join(storagePath, 'avatars', userId);
+    const avatarsDir = resolvePathWithin(AVATAR_ROOT, userId);
+
+    if (!avatarsDir) {
+      processorLogger.warn('Avatar delete rejected: unsafe directory resolution', {
+        userId
+      });
+      return res.status(400).json({ error: 'Invalid avatar path' });
+    }
 
     // Delete all avatar files for this user
     try {
       const files = await fs.readdir(avatarsDir);
       for (const file of files) {
         if (file.startsWith('avatar.')) {
-          await fs.unlink(path.join(avatarsDir, file));
+          const filePath = resolvePathWithin(avatarsDir, file);
+          if (filePath) {
+            await fs.unlink(filePath);
+          }
         }
       }
       // Optionally remove the empty directory

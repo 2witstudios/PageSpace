@@ -8,7 +8,11 @@ export class QueueManager {
   private connectionString: string;
 
   constructor() {
-    this.connectionString = process.env.DATABASE_URL || 'postgresql://user:password@localhost:5432/pagespace';
+    const connectionString = process.env.DATABASE_URL;
+    if (!connectionString) {
+      throw new Error('DATABASE_URL environment variable is required for QueueManager');
+    }
+    this.connectionString = connectionString;
   }
 
   async initialize(): Promise<void> {

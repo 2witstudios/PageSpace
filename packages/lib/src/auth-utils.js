@@ -124,11 +124,6 @@ async function createServiceToken(service, permissions = ['*'], options) {
         resource: options?.tenantId,
         driveId: options?.driveIds?.[0],
         expiresIn: options?.expirationTime ?? '1h',
-        additionalClaims: {
-            tenantId: options?.tenantId ?? subject,
-            userId: options?.userId,
-            driveIds: options?.driveIds,
-        },
     });
 }
 async function verifyServiceToken(token) {

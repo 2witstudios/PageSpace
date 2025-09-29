@@ -47,7 +47,7 @@ app.get('/health', (req, res) => {
 app.use('/api/upload', authenticateService, requireScope('files:write'), uploadRouter);
 app.use('/api/optimize', authenticateService, requireScope('files:optimize'), imageRouter);
 app.use('/api/ingest', authenticateService, requireScope('files:ingest'), ingestRouter);
-app.use('/api/avatar', authenticateService, requireScope('files:write'), avatarRouter);
+app.use('/api/avatar', authenticateService, requireScope('avatars:write'), avatarRouter);
 app.use('/cache', authenticateService, requireScope('files:read'), cacheRouter);
 
 // Queue status endpoint

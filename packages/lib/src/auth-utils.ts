@@ -113,11 +113,6 @@ export async function createServiceToken(
     resource: options?.tenantId,
     driveId: options?.driveIds?.[0],
     expiresIn: options?.expirationTime ?? '1h',
-    additionalClaims: {
-      tenantId: options?.tenantId ?? subject,
-      userId: options?.userId,
-      driveIds: options?.driveIds,
-    },
   });
 }
 

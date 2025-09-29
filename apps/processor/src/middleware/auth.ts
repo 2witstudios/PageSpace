@@ -40,8 +40,7 @@ function inferScope(req: Request): ServiceScope | null {
   }
 
   if (baseUrl.startsWith('/api/avatar')) {
-    // Temporary scope until avatar routes are aligned with new policy
-    return 'files:write';
+    return 'avatars:write';
   }
 
   if (baseUrl.startsWith('/cache')) {
