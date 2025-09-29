@@ -1,5 +1,5 @@
-import { createMCPClient, type Tool } from 'ai';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp';
+import { experimental_createMCPClient, type Tool } from 'ai';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { loggers } from '@pagespace/lib/server';
 
 const logger = loggers.ai.child({ module: 'internet-tools' });
@@ -48,7 +48,7 @@ async function loadZaiWebSearchTools(): Promise<LoadedMCPTools | null> {
       },
     });
 
-    const client = await createMCPClient({ transport });
+    const client = await experimental_createMCPClient({ transport });
     const toolSet = await client.tools();
     const normalizedTools = toToolRecord(toolSet);
 

@@ -72,6 +72,7 @@ export async function POST(request: Request) {
   let usagePromise: Promise<LanguageModelUsage | undefined> | undefined;
   const usageLogger = loggers.ai.child({ module: 'page-ai-usage' });
   const permissionLogger = loggers.ai.child({ module: 'page-ai-permissions' });
+  let internetDispose: (() => Promise<void>) | undefined;
 
   try {
     loggers.ai.info('AI Chat API: Starting request processing');
@@ -368,7 +369,6 @@ export async function POST(request: Request) {
       loggers.ai.debug('AI Page Chat API: Using default tool filtering (PARTNER role)');
     }
 
-    let internetDispose: (() => Promise<void>) | undefined;
     if (currentProvider === 'pagespace') {
       const augmentation = await augmentToolsWithInternetAccess(
         filteredTools,
