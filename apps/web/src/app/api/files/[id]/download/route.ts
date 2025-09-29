@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
 import { db, pages, eq } from '@pagespace/db';
+import { PageType, canUserViewPage, isFilePage } from '@pagespace/lib';
 import { createServiceToken } from '@pagespace/lib/auth-utils';
 
 interface RouteParams {
