@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { db, pages, eq } from '@pagespace/db';
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
 import { verifyAuth } from '@/lib/auth';
+import { createServiceToken } from '@pagespace/lib/auth-utils';
 
 export async function POST(
   request: Request,
@@ -24,8 +25,20 @@ export async function POST(
       })
       .where(eq(pages.id, pageId));
     
+    // Create service JWT token for processor authentication
+    const serviceToken = await createServiceToken('web', ['files:ingest'], {
+      userId: user.id,
+      tenantId: user.id,
+      expirationTime: '2m'
+    });
+
     // Enqueue unified ingestion on processor
-    const resp = await fetch(`${PROCESSOR_URL}/api/ingest/by-page/${pageId}`, { method: 'POST' });
+    const resp = await fetch(`${PROCESSOR_URL}/api/ingest/by-page/${pageId}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${serviceToken}`
+      }
+    });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
       throw new Error(err.error || 'Processor enqueue failed');

@@ -7,6 +7,8 @@ import { createReadStream } from 'fs';
 import path from 'path';
 import { contentStore, queueManager } from '../server';
 import { processorLogger } from '../logger';
+import { rateLimitUpload } from '../middleware/rate-limit';
+import { hasServicePermission } from '../middleware/auth';
 
 const router = Router();
 
@@ -40,26 +42,69 @@ const upload = multer({
     files: 5 // Can handle more files with disk storage
   },
   fileFilter: (req, file, cb) => {
-    // Add basic file validation
     if (!file.originalname || file.originalname.length === 0) {
       cb(new Error('Invalid filename'));
       return;
     }
+
+    const allowedTypes = ['image/', 'application/pdf', 'text/', 'application/vnd'];
+    const isAllowed = allowedTypes.some(type => file.mimetype.startsWith(type));
+    if (!isAllowed) {
+      cb(new Error('Unsupported file type'));
+      return;
+    }
+
     cb(null, true);
   }
 });
+
+router.use((req, res, next) => {
+  if (!req.serviceAuth) {
+    return res.status(401).json({ error: 'Service authentication required' });
+  }
+  return next();
+});
+
+router.use(rateLimitUpload);
 
 // Single file upload with disk storage
 router.post('/single', upload.single('file'), async (req, res) => {
   let tempFilePath: string | undefined;
 
   try {
+    const auth = req.serviceAuth;
+    if (!auth) {
+      return res.status(401).json({ error: 'Service authentication required' });
+    }
+
+    const tenantId = auth.tenantId;
+    if (!tenantId) {
+      return res.status(400).json({ error: 'Tenant context is required' });
+    }
+
+    const driveId = typeof req.body?.driveId === 'string' ? req.body.driveId : undefined;
+    if (!driveId) {
+      return res.status(400).json({ error: 'driveId is required' });
+    }
+
+    const providedUserId = typeof req.body?.userId === 'string' ? req.body.userId : undefined;
+    if (
+      auth.userId &&
+      providedUserId &&
+      providedUserId !== auth.userId &&
+      !hasServicePermission(auth, 'files:write:any')
+    ) {
+      return res.status(403).json({ error: 'Cannot upload on behalf of another user' });
+    }
+
+    const uploaderId = auth.userId ?? providedUserId;
+
     if (!req.file) {
       return res.status(400).json({ error: 'No file provided' });
     }
 
     const { path: tempPath, originalname, mimetype, size } = req.file;
-    const { pageId, userId } = req.body;
+    const { pageId } = req.body;
     tempFilePath = tempPath;
 
     processorLogger.info('Processing uploaded file', {
@@ -74,6 +119,23 @@ router.post('/single', upload.single('file'), async (req, res) => {
     // Check if file already exists (deduplication)
     const alreadyStored = await contentStore.originalExists(contentHash);
     if (alreadyStored) {
+      const allowed = await contentStore.tenantHasAccess(contentHash, tenantId);
+      if (!allowed) {
+        processorLogger.warn('Upload attempt blocked due to cross-tenant deduplication', {
+          contentHash,
+          tenantId,
+          service: auth.service
+        });
+        return res.status(403).json({ error: 'File belongs to a different tenant' });
+      }
+
+      await contentStore.appendUploadMetadata(contentHash, {
+        tenantId,
+        driveId,
+        userId: uploaderId,
+        service: auth.service
+      });
+
       processorLogger.info('Upload deduplicated', {
         contentHash,
         originalname
@@ -102,7 +164,17 @@ router.post('/single', upload.single('file'), async (req, res) => {
     }
 
     // Save original file from disk (much more efficient than memory)
-    const { path: finalPath } = await contentStore.saveOriginalFromFile(tempPath, originalname, contentHash);
+    const { path: finalPath } = await contentStore.saveOriginalFromFile(
+      tempPath,
+      originalname,
+      contentHash,
+      {
+        tenantId,
+        driveId,
+        userId: uploaderId,
+        service: auth.service
+      }
+    );
     processorLogger.info('Saved original upload', {
       contentHash,
       finalPath,
@@ -136,7 +208,7 @@ router.post('/single', upload.single('file'), async (req, res) => {
     processorLogger.error('Upload error', error as Error, {
       tempFilePath,
       pageId: req.body?.pageId,
-      userId: req.body?.userId
+      userId: req.serviceAuth?.userId ?? req.body?.userId
     });
 
     // Clean up temporary file on error
@@ -163,11 +235,38 @@ router.post('/multiple', upload.array('files', 10), async (req, res) => {
   const tempFilePaths: string[] = [];
 
   try {
+    const auth = req.serviceAuth;
+    if (!auth) {
+      return res.status(401).json({ error: 'Service authentication required' });
+    }
+
+    const tenantId = auth.tenantId;
+    if (!tenantId) {
+      return res.status(400).json({ error: 'Tenant context is required' });
+    }
+
+    const driveId = typeof req.body?.driveId === 'string' ? req.body.driveId : undefined;
+    if (!driveId) {
+      return res.status(400).json({ error: 'driveId is required' });
+    }
+
+    const providedUserId = typeof req.body?.userId === 'string' ? req.body.userId : undefined;
+    if (
+      auth.userId &&
+      providedUserId &&
+      providedUserId !== auth.userId &&
+      !hasServicePermission(auth, 'files:write:any')
+    ) {
+      return res.status(403).json({ error: 'Cannot upload on behalf of another user' });
+    }
+
+    const uploaderId = auth.userId ?? providedUserId;
+
     if (!req.files || !Array.isArray(req.files)) {
       return res.status(400).json({ error: 'No files provided' });
     }
 
-    const { pageId, userId } = req.body;
+    const { pageId } = req.body;
     const results = [];
 
     // Track temp files for cleanup
@@ -186,7 +285,35 @@ router.post('/multiple', upload.array('files', 10), async (req, res) => {
         const alreadyStored = await contentStore.originalExists(contentHash);
 
         if (!alreadyStored) {
-          await contentStore.saveOriginalFromFile(tempPath, originalname, contentHash);
+          await contentStore.saveOriginalFromFile(tempPath, originalname, contentHash, {
+            tenantId,
+            driveId,
+            userId: uploaderId,
+            service: auth.service
+          });
+        }
+        if (alreadyStored) {
+          const allowed = await contentStore.tenantHasAccess(contentHash, tenantId);
+          if (!allowed) {
+            processorLogger.warn('Blocked cross-tenant dedupe during multi upload', {
+              contentHash,
+              tenantId,
+              service: auth.service
+            });
+            results.push({
+              originalname,
+              error: 'File belongs to a different tenant',
+              success: false
+            });
+            continue;
+          }
+
+          await contentStore.appendUploadMetadata(contentHash, {
+            tenantId,
+            driveId,
+            userId: uploaderId,
+            service: auth.service
+          });
         }
 
         // Queue processing jobs
@@ -204,7 +331,7 @@ router.post('/multiple', upload.array('files', 10), async (req, res) => {
         processorLogger.error(`Error processing file ${originalname}`, fileError as Error, {
           tempPath,
           pageId,
-          userId
+          userId: uploaderId
         });
         results.push({
           originalname,

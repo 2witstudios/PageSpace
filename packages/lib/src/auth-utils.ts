@@ -20,10 +20,35 @@ function getJWTConfig() {
   };
 }
 
+function getServiceJWTConfig() {
+  // Validate service JWT secret exists and is secure
+  const serviceSecret = process.env.SERVICE_JWT_SECRET;
+  if (!serviceSecret) {
+    throw new Error('SERVICE_JWT_SECRET environment variable is required');
+  }
+  if (serviceSecret.length < 32) {
+    throw new Error('SERVICE_JWT_SECRET must be at least 32 characters long');
+  }
+
+  return {
+    secret: new TextEncoder().encode(serviceSecret),
+    issuer: process.env.JWT_ISSUER || 'pagespace',
+    audience: 'pagespace-services'
+  };
+}
+
 interface UserPayload extends jose.JWTPayload {
   userId: string;
   tokenVersion: number;
   role: 'user' | 'admin';
+}
+
+interface ServiceTokenPayload extends jose.JWTPayload {
+  service: string;
+  permissions: string[];
+  tenantId?: string;
+  userId?: string;
+  driveIds?: string[];
 }
 
 export async function decodeToken(token: string): Promise<UserPayload | null> {
@@ -83,5 +108,56 @@ export function isAdmin(userPayload: UserPayload): boolean {
 export function requireAdminPayload(userPayload: UserPayload | null): void {
   if (!userPayload || !isAdmin(userPayload)) {
     throw new Error('Admin access required');
+  }
+}
+
+// Service JWT functions
+export async function createServiceToken(
+  service: string,
+  permissions: string[] = ['*'],
+  options?: {
+    tenantId?: string;
+    userId?: string;
+    driveIds?: string[];
+    expirationTime?: string;
+  }
+): Promise<string> {
+  const config = getServiceJWTConfig();
+  const payload: ServiceTokenPayload = {
+    service,
+    permissions,
+    ...options
+  };
+
+  return await new jose.SignJWT(payload)
+    .setProtectedHeader({ alg: JWT_ALGORITHM })
+    .setIssuer(config.issuer)
+    .setAudience(config.audience)
+    .setIssuedAt()
+    .setExpirationTime(options?.expirationTime || '1h')
+    .sign(config.secret);
+}
+
+export async function verifyServiceToken(token: string): Promise<ServiceTokenPayload | null> {
+  try {
+    const config = getServiceJWTConfig();
+    const { payload } = await jose.jwtVerify(token, config.secret, {
+      algorithms: [JWT_ALGORITHM],
+      issuer: config.issuer,
+      audience: config.audience,
+    });
+
+    // Validate required payload fields
+    if (!payload.service || typeof payload.service !== 'string') {
+      throw new Error('Invalid service token: missing or invalid service');
+    }
+    if (!Array.isArray(payload.permissions)) {
+      throw new Error('Invalid service token: missing or invalid permissions');
+    }
+
+    return payload as ServiceTokenPayload;
+  } catch (error) {
+    console.error('Invalid service token:', error);
+    return null;
   }
 }

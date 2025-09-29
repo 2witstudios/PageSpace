@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import { promises as fs } from 'fs';
 import path from 'path';
+import { hasServicePermission } from '../middleware/auth';
 
 const router: Router = Router();
 
@@ -26,6 +27,11 @@ const upload = multer({
 // Avatar upload endpoint
 router.post('/upload', upload.single('file'), async (req: Request, res: Response) => {
   try {
+    const auth = req.serviceAuth;
+    if (!auth) {
+      return res.status(401).json({ error: 'Service authentication required' });
+    }
+
     const file = req.file;
     const userId = req.body.userId;
 
@@ -35,6 +41,14 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
 
     if (!userId) {
       return res.status(400).json({ error: 'User ID is required' });
+    }
+
+    if (
+      auth.userId &&
+      userId !== auth.userId &&
+      !hasServicePermission(auth, 'avatars:write:any')
+    ) {
+      return res.status(403).json({ error: 'Cannot modify avatar for another user' });
     }
 
     // Get storage path from environment
@@ -80,10 +94,23 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
 // Avatar deletion endpoint
 router.delete('/:userId', async (req: Request, res: Response) => {
   try {
+    const auth = req.serviceAuth;
+    if (!auth) {
+      return res.status(401).json({ error: 'Service authentication required' });
+    }
+
     const { userId } = req.params;
 
     if (!userId) {
       return res.status(400).json({ error: 'User ID is required' });
+    }
+
+    if (
+      auth.userId &&
+      userId !== auth.userId &&
+      !hasServicePermission(auth, 'avatars:write:any')
+    ) {
+      return res.status(403).json({ error: 'Cannot delete avatar for another user' });
     }
 
     const storagePath = process.env.FILE_STORAGE_PATH || '/data/files';

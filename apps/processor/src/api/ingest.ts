@@ -1,13 +1,23 @@
 import { Router } from 'express';
 import type { Router as ExpressRouter } from 'express';
-import { queueManager } from '../server';
+import { queueManager, contentStore } from '../server';
 import { getPageForIngestion } from '../db';
+import { InvalidContentHashError, isValidContentHash } from '../cache/content-store';
 
 const router = Router();
 
 // Enqueue ingestion job by pageId
 router.post('/by-page/:pageId', async (req, res) => {
   try {
+    if (!req.serviceAuth) {
+      return res.status(401).json({ error: 'Service authentication required' });
+    }
+
+    const tenantId = req.serviceAuth.tenantId;
+    if (!tenantId) {
+      return res.status(400).json({ error: 'Tenant context is required' });
+    }
+
     const { pageId } = req.params;
     const page = await getPageForIngestion(pageId);
 
@@ -20,6 +30,15 @@ router.post('/by-page/:pageId', async (req, res) => {
       return res.status(400).json({ error: 'Page missing contentHash (filePath)' });
     }
 
+    if (!isValidContentHash(contentHash)) {
+      return res.status(400).json({ error: 'Page content hash is invalid' });
+    }
+
+    const allowed = await contentStore.tenantHasAccess(contentHash, tenantId);
+    if (!allowed) {
+      return res.status(403).json({ error: 'Access denied for requested file' });
+    }
+
     const jobId = await queueManager.addJob('ingest-file', {
       contentHash,
       fileId: pageId,
@@ -30,6 +49,10 @@ router.post('/by-page/:pageId', async (req, res) => {
     return res.json({ success: true, jobId });
 
   } catch (error) {
+    if (error instanceof InvalidContentHashError) {
+      return res.status(400).json({ error: 'Invalid content hash' });
+    }
+
     console.error('Failed to enqueue ingestion:', error);
     return res.status(500).json({ error: 'Failed to enqueue ingestion' });
   }
