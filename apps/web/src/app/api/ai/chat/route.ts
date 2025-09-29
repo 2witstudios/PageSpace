@@ -7,6 +7,7 @@ import {
   createUIMessageStream,
   createUIMessageStreamResponse,
   type LanguageModelUsage,
+  type Tool,
 } from 'ai';
 import { incrementUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
 import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
@@ -50,6 +51,7 @@ import { maskIdentifier } from '@/lib/logging/mask';
 import { trackFeature } from '@pagespace/lib/activity-tracker';
 import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
 import { getModelCapabilities } from '@/lib/ai/model-capabilities';
+import { augmentToolsWithInternetAccess, toToolRecord } from '@/lib/ai/mcp/internet-tools';
 
 
 // Allow streaming responses up to 5 minutes for complex AI agent interactions
@@ -339,16 +341,16 @@ export async function POST(request: Request) {
     await updateUserProviderSettings(userId, selectedProvider, selectedModel);
 
     // Filter tools based on custom enabled tools or use all tools if not configured
-    let filteredTools;
+    let filteredTools: Record<string, Tool>;
     if (enabledTools && enabledTools.length > 0) {
       // Filter tools based on the page's enabled tools configuration
       // Simple object filtering approach to avoid complex TypeScript issues
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const filtered: Record<string, any> = {};
+      const filtered: Record<string, Tool> = {};
       for (const toolName of enabledTools) {
         if (toolName in pageSpaceTools) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          filtered[toolName] = (pageSpaceTools as any)[toolName];
+          filtered[toolName] = pageSpaceTools[
+            toolName as keyof typeof pageSpaceTools
+          ] as Tool;
         }
       }
       filteredTools = filtered;
@@ -360,8 +362,26 @@ export async function POST(request: Request) {
       });
     } else {
       // No tool restrictions configured, use default role-based filtering for compatibility
-      filteredTools = ToolPermissionFilter.filterTools(pageSpaceTools, AgentRole.PARTNER);
+      filteredTools = toToolRecord(
+        ToolPermissionFilter.filterTools(pageSpaceTools, AgentRole.PARTNER)
+      );
       loggers.ai.debug('AI Page Chat API: Using default tool filtering (PARTNER role)');
+    }
+
+    let internetDispose: (() => Promise<void>) | undefined;
+    if (currentProvider === 'pagespace') {
+      const augmentation = await augmentToolsWithInternetAccess(
+        filteredTools,
+        currentProvider
+      );
+      filteredTools = augmentation.tools;
+      internetDispose = augmentation.dispose;
+
+      if (augmentation.addedToolCount > 0) {
+        loggers.ai.debug('AI Page Chat API: Internet tools enabled', {
+          addedTools: augmentation.addedToolCount,
+        });
+      }
     }
 
     // Convert UIMessages to ModelMessages for the AI model
@@ -398,7 +418,9 @@ export async function POST(request: Request) {
     // Build timestamp system prompt for temporal awareness
     const timestampSystemPrompt = buildTimestampSystemPrompt();
     
-    loggers.ai.debug('AI Chat API: Tools configured for Page AI', { toolCount: Object.keys(filteredTools).length });
+    loggers.ai.debug('AI Chat API: Tools configured for Page AI', {
+      toolCount: Object.keys(filteredTools).length,
+    });
     loggers.ai.info('AI Chat API: Starting streamText for Page AI', { model: currentModel, pageName: page.title });
     
     // Create UI message stream with visual content injection support
@@ -408,10 +430,11 @@ export async function POST(request: Request) {
       const stream = createUIMessageStream({
         originalMessages: sanitizedMessages,
         execute: async ({ writer }) => {
-          // Start the AI response
-          const aiResult = streamText({
-            model,
-            system: systemPrompt + mentionSystemPrompt + timestampSystemPrompt + `
+          try {
+            // Start the AI response
+            const aiResult = streamText({
+              model,
+              system: systemPrompt + mentionSystemPrompt + timestampSystemPrompt + `
 
 CRITICAL NESTING PRINCIPLE:
 • NO RESTRICTIONS on what can contain what - organize based on logical user needs
@@ -554,21 +577,27 @@ MENTION PROCESSING:
               userId,
               modelCapabilities: getModelCapabilities(currentModel, currentProvider)
             }, // Pass userId and model capabilities to tools
-            maxRetries: 20 // Increase from default 2 to 20 for better handling of rate limits
-          });
-
-          usagePromise = aiResult.totalUsage
-            .then((usage) => usage)
-            .catch((error) => {
-              loggers.ai.debug('AI Chat API: Failed to retrieve token usage from stream', {
-                error: error instanceof Error ? error.message : 'Unknown error',
-              });
-              return undefined;
+              maxRetries: 20 // Increase from default 2 to 20 for better handling of rate limits
             });
 
-          // Stream the AI response directly to the client
-          for await (const chunk of aiResult.toUIMessageStream()) {
-            writer.write(chunk);
+            usagePromise = aiResult.totalUsage
+              .then((usage) => usage)
+              .catch((error) => {
+                loggers.ai.debug('AI Chat API: Failed to retrieve token usage from stream', {
+                  error: error instanceof Error ? error.message : 'Unknown error',
+                });
+                return undefined;
+              });
+
+            // Stream the AI response directly to the client
+            for await (const chunk of aiResult.toUIMessageStream()) {
+              writer.write(chunk);
+            }
+          } finally {
+            if (internetDispose) {
+              await internetDispose();
+              internetDispose = undefined;
+            }
           }
         },
         onFinish: async ({ responseMessage }) => {
@@ -833,11 +862,23 @@ MENTION PROCESSING:
         cachedInputTokens: usage?.cachedInputTokens,
       }
     });
-    
+
     // Return a proper error response
-    return NextResponse.json({ 
-      error: 'Failed to process chat request. Please try again.' 
+    return NextResponse.json({
+      error: 'Failed to process chat request. Please try again.'
     }, { status: 500 });
+  } finally {
+    if (internetDispose) {
+      try {
+        await internetDispose();
+      } catch (disposeError) {
+        loggers.ai.debug('AI Chat API: Error during MCP cleanup', {
+          error: disposeError instanceof Error ? disposeError.message : String(disposeError),
+        });
+      } finally {
+        internetDispose = undefined;
+      }
+    }
   }
 }
 

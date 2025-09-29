@@ -1,6 +1,6 @@
 import { tool, stepCountIs } from 'ai';
 import { z } from 'zod';
-import { generateText, convertToModelMessages, UIMessage } from 'ai';
+import { generateText, convertToModelMessages, UIMessage, type Tool } from 'ai';
 import { db, pages, chatMessages, drives, eq, and, asc, sql } from '@pagespace/db';
 import { canUserViewPage } from '@pagespace/lib/server';
 import { convertDbMessageToUIMessage, sanitizeMessagesForModel } from '@/lib/ai/assistant-utils';
@@ -20,6 +20,7 @@ import { buildTimestampSystemPrompt } from '@/lib/ai/timestamp-utils';
 import { ToolExecutionContext } from '../types';
 import { loggers } from '@pagespace/lib/server';
 import { AI_PROVIDERS, getModelDisplayName } from '@/lib/ai/ai-providers-config';
+import { augmentToolsWithInternetAccess } from '@/lib/ai/mcp/internet-tools';
 
 // Constants
 const MAX_AGENT_DEPTH = 3;
@@ -53,13 +54,13 @@ async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: st
 /**
  * Filter tools for agent configuration
  */
-function filterToolsForAgent(enabledTools: string[] | null): Record<string, unknown> {
+function filterToolsForAgent(enabledTools: string[] | null): Record<string, Tool> {
   if (!enabledTools || enabledTools.length === 0) {
     return {}; // No tools enabled
   }
-  
+
   // Construct available tools from individual modules to avoid circular dependency
-  const availableTools = {
+  const availableTools: Record<string, Tool> = {
     ...driveTools,
     ...pageReadTools,
     ...pageWriteTools,
@@ -70,14 +71,15 @@ function filterToolsForAgent(enabledTools: string[] | null): Record<string, unkn
     // Note: Not including agentCommunicationTools to prevent infinite recursion
   };
   
-  const filteredTools: Record<string, unknown> = {};
-  
+  const filteredTools: Record<string, Tool> = {};
+
   for (const toolName of enabledTools) {
-    if (availableTools[toolName as keyof typeof availableTools]) {
-      filteredTools[toolName] = availableTools[toolName as keyof typeof availableTools];
+    const tool = availableTools[toolName];
+    if (tool) {
+      filteredTools[toolName] = tool;
     }
   }
-  
+
   return filteredTools;
 }
 
@@ -474,42 +476,64 @@ export const agentCommunicationTools = {
         
         // 9. Filter tools for agent
         const agentTools = filterToolsForAgent(targetAgent.enabledTools as string[] | null);
-        
-        // 10. Create enhanced execution context for nested calls
+
+        // 10. Augment with internet-enabled tools when available
+        const providerForTools = targetAgent.aiProvider || 'pagespace';
+        const augmentation = await augmentToolsWithInternetAccess(agentTools, providerForTools);
+        const toolsWithInternet = augmentation.tools;
+        let internetDispose = augmentation.dispose;
+
+        if (augmentation.addedToolCount > 0) {
+          loggers.ai.debug('Agent communication: Internet tools enabled', {
+            agentId,
+            addedTools: augmentation.addedToolCount,
+          });
+        }
+
+        // 11. Create enhanced execution context for nested calls
         const nestedContext = {
           ...executionContext,
           agentCallDepth: callDepth + 1,
           currentAgentId: agentId
         } as ToolExecutionContext & { agentCallDepth: number; currentAgentId: string };
-        
-        // 11. Process with target agent's configuration (ephemeral - no persistence)
-        const response = Object.keys(agentTools).length > 0
-          ? await generateText({
-              model,
-              system: systemPrompt,
-              messages: convertToModelMessages(sanitizedMessages),
-              tools: agentTools as Parameters<typeof generateText>[0]['tools'],
-              experimental_context: nestedContext,
-              stopWhen: stepCountIs(100), // Match main conversation tool depth
-              maxRetries: 3,
-              onStepFinish: ({ toolCalls }) => {
-                if (toolCalls?.length > 0) {
-                  loggers.ai.debug('Sub-agent tool execution:', {
-                    agentId,
-                    toolCalls: toolCalls.map(tc => tc.toolName),
-                  });
-                }
-              },
-            })
-          : await generateText({
-              model,
-              system: systemPrompt,
-              messages: convertToModelMessages(sanitizedMessages),
-              experimental_context: nestedContext,
-              maxRetries: 3,
-            });
 
-        // 12. Extract response text with error checking
+        // 12. Process with target agent's configuration (ephemeral - no persistence)
+        const hasTools = Object.keys(toolsWithInternet).length > 0;
+        let response;
+        try {
+          response = hasTools
+            ? await generateText({
+                model,
+                system: systemPrompt,
+                messages: convertToModelMessages(sanitizedMessages),
+                tools: toolsWithInternet as Parameters<typeof generateText>[0]['tools'],
+                experimental_context: nestedContext,
+                stopWhen: stepCountIs(100), // Match main conversation tool depth
+                maxRetries: 3,
+                onStepFinish: ({ toolCalls }) => {
+                  if (toolCalls?.length > 0) {
+                    loggers.ai.debug('Sub-agent tool execution:', {
+                      agentId,
+                      toolCalls: toolCalls.map(tc => tc.toolName),
+                    });
+                  }
+                },
+              })
+            : await generateText({
+                model,
+                system: systemPrompt,
+                messages: convertToModelMessages(sanitizedMessages),
+                experimental_context: nestedContext,
+                maxRetries: 3,
+              });
+        } finally {
+          if (internetDispose) {
+            await internetDispose();
+            internetDispose = undefined;
+          }
+        }
+
+        // 13. Extract response text with error checking
         const agentResponse = response.text;
 
         // Check for tool execution errors

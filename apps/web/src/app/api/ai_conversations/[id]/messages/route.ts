@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { streamText, convertToModelMessages, stepCountIs, UIMessage } from 'ai';
+import { streamText, convertToModelMessages, stepCountIs, UIMessage, type Tool } from 'ai';
 import { incrementUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
 import { broadcastUsageEvent } from '@/lib/socket-utils';
 import { authenticateWebRequest, isAuthError } from '@/lib/auth';
@@ -29,6 +29,7 @@ import { ToolPermissionFilter } from '@/lib/ai/tool-permissions';
 import { getModelCapabilities } from '@/lib/ai/model-capabilities';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
+import { augmentToolsWithInternetAccess, toToolRecord } from '@/lib/ai/mcp/internet-tools';
 
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
@@ -162,6 +163,7 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ id: string }> }
 ) {
+  let internetDispose: (() => Promise<void>) | undefined;
   try {
     const usageLogger = loggers.api.child({ module: 'global-assistant-usage' });
     loggers.api.debug('🚀 Global Assistant Chat API: Starting request processing', {});
@@ -462,29 +464,60 @@ MENTION PROCESSING:
 • Don't explicitly mention that you're reading @mentioned docs unless relevant to the conversation`;
 
     // Filter tools based on agent role permissions
-    const roleFilteredTools = ToolPermissionFilter.filterTools(pageSpaceTools, agentRole);
-    
+    let roleFilteredTools: Record<string, Tool> = toToolRecord(
+      ToolPermissionFilter.filterTools(pageSpaceTools, agentRole)
+    );
+
+    if (currentProvider === 'pagespace') {
+      const augmentation = await augmentToolsWithInternetAccess(
+        roleFilteredTools,
+        currentProvider
+      );
+      roleFilteredTools = augmentation.tools;
+      internetDispose = augmentation.dispose;
+
+      if (augmentation.addedToolCount > 0) {
+        loggers.api.debug('🌐 Global Assistant: Internet tools enabled', {
+          addedTools: augmentation.addedToolCount,
+        });
+      }
+    }
+
     loggers.api.debug('🔄 Global Assistant Chat API: Starting streamText', { model: currentModel, agentRole });
 
-    const result = streamText({
-      model,
-      system: systemPrompt,
-      messages: modelMessages,
-      tools: roleFilteredTools,
-      stopWhen: stepCountIs(100),
-      experimental_context: {
-        userId,
-        locationContext,
-        modelCapabilities: getModelCapabilities(currentModel, currentProvider)
-      },
-      maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
-    });
+    let result;
+    try {
+      result = streamText({
+        model,
+        system: systemPrompt,
+        messages: modelMessages,
+        tools: roleFilteredTools,
+        stopWhen: stepCountIs(100),
+        experimental_context: {
+          userId,
+          locationContext,
+          modelCapabilities: getModelCapabilities(currentModel, currentProvider)
+        },
+        maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
+      });
+    } catch (streamError) {
+      if (internetDispose) {
+        await internetDispose();
+        internetDispose = undefined;
+      }
+      throw streamError;
+    }
 
     loggers.api.debug('📡 Global Assistant Chat API: Returning stream response', {});
-    
+
     return result.toUIMessageStreamResponse({
       onFinish: async ({ responseMessage }) => {
         loggers.api.debug('🏁 Global Assistant Chat API: onFinish callback triggered for AI response', {});
+
+        if (internetDispose) {
+          await internetDispose();
+          internetDispose = undefined;
+        }
         
         if (responseMessage) {
           try {
@@ -616,9 +649,21 @@ MENTION PROCESSING:
 
   } catch (error) {
     loggers.api.error('Global Assistant Chat API Error:', error as Error);
-    
-    return NextResponse.json({ 
-      error: 'Failed to process chat request. Please try again.' 
+
+    return NextResponse.json({
+      error: 'Failed to process chat request. Please try again.'
     }, { status: 500 });
+  } finally {
+    if (internetDispose) {
+      try {
+        await internetDispose();
+      } catch (disposeError) {
+        loggers.api.debug('Global Assistant Chat API: Error during MCP cleanup', {
+          error: disposeError instanceof Error ? disposeError.message : String(disposeError),
+        });
+      } finally {
+        internetDispose = undefined;
+      }
+    }
   }
 }

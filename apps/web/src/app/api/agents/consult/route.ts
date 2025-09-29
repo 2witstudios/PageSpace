@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { convertToModelMessages, generateText, stepCountIs } from 'ai';
+import { convertToModelMessages, generateText, stepCountIs, type Tool } from 'ai';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/server';
 import {
@@ -12,6 +12,7 @@ import { pageSpaceTools } from '@/lib/ai/ai-tools';
 import { buildTimestampSystemPrompt } from '@/lib/ai/timestamp-utils';
 import { ToolExecutionContext } from '@/lib/ai/types';
 import { loggers } from '@pagespace/lib/server';
+import { augmentToolsWithInternetAccess } from '@/lib/ai/mcp/internet-tools';
 
 /**
  * Format tool execution results into human-readable text
@@ -245,13 +246,28 @@ export async function POST(request: Request) {
     };
 
     // Filter tools based on agent's enabled tools
-    const availableTools = Array.isArray(enabledTools) && enabledTools.length > 0
+    const availableTools: Record<string, Tool> = Array.isArray(enabledTools) && enabledTools.length > 0
       ? Object.fromEntries(
-          Object.entries(pageSpaceTools).filter(([toolName]) =>
-            enabledTools.includes(toolName)
-          )
+          Object.entries(pageSpaceTools)
+            .filter(([toolName]) => enabledTools.includes(toolName))
+            .map(([toolName, tool]) => [toolName, tool as Tool])
         )
       : {};
+
+    const providerForTools = agent.aiProvider || 'pagespace';
+    const augmentation = await augmentToolsWithInternetAccess(
+      availableTools,
+      providerForTools
+    );
+    const toolsWithInternet = augmentation.tools;
+    let internetDispose = augmentation.dispose;
+
+    if (augmentation.addedToolCount > 0) {
+      loggers.api.debug('Agent consultation: Internet tools enabled', {
+        agentId,
+        addedTools: augmentation.addedToolCount,
+      });
+    }
 
     // Generate response using the AI model
     let responseText = '';
@@ -260,48 +276,57 @@ export async function POST(request: Request) {
         agentId,
         agentTitle: agent.title,
         toolsEnabled: Array.isArray(enabledTools) ? enabledTools.length : 0,
-        availableToolsCount: Object.keys(availableTools).length,
+        availableToolsCount: Object.keys(toolsWithInternet).length,
         enabledToolsList: enabledTools
       });
 
-      const result = Object.keys(availableTools).length > 0
-        ? await generateText({
-            model,
-            system: `${systemPrompt}\n\n${buildTimestampSystemPrompt()}`,
-            messages: convertToModelMessages(conversationMessages.filter(m => m.role !== 'system').map(m => ({
-              role: m.role as 'user' | 'assistant' | 'system',
-              content: m.content,
-              parts: [{ type: 'text', text: m.content }]
-            }))),
-            tools: availableTools,
-            toolChoice: 'auto',
-            temperature: 0.7,
-            maxRetries: 3,
-            experimental_context: executionContext,
-            stopWhen: stepCountIs(100), // Match AI SDK version
-            onStepFinish: ({ toolCalls, toolResults, text }) => {
-              loggers.api.debug('Agent tool execution step completed', {
-                agentId,
-                toolCallsCount: toolCalls?.length || 0,
-                toolCallNames: toolCalls?.map(tc => tc.toolName) || [],
-                toolResultsCount: toolResults?.length || 0,
-                stepText: text?.substring(0, 100) || 'No text'
-              });
-            }
-          })
-        : await generateText({
-            model,
-            system: `${systemPrompt}\n\n${buildTimestampSystemPrompt()}`,
-            messages: convertToModelMessages(conversationMessages.filter(m => m.role !== 'system').map(m => ({
-              role: m.role as 'user' | 'assistant' | 'system',
-              content: m.content,
-              parts: [{ type: 'text', text: m.content }]
-            }))),
-            temperature: 0.7,
-            maxRetries: 3,
-            experimental_context: executionContext,
-            stopWhen: stepCountIs(100), // Match AI SDK version
-          });
+      const hasTools = Object.keys(toolsWithInternet).length > 0;
+      let result;
+      try {
+        result = hasTools
+          ? await generateText({
+              model,
+              system: `${systemPrompt}\n\n${buildTimestampSystemPrompt()}`,
+              messages: convertToModelMessages(conversationMessages.filter(m => m.role !== 'system').map(m => ({
+                role: m.role as 'user' | 'assistant' | 'system',
+                content: m.content,
+                parts: [{ type: 'text', text: m.content }]
+              }))),
+              tools: toolsWithInternet,
+              toolChoice: 'auto',
+              temperature: 0.7,
+              maxRetries: 3,
+              experimental_context: executionContext,
+              stopWhen: stepCountIs(100), // Match AI SDK version
+              onStepFinish: ({ toolCalls, toolResults, text }) => {
+                loggers.api.debug('Agent tool execution step completed', {
+                  agentId,
+                  toolCallsCount: toolCalls?.length || 0,
+                  toolCallNames: toolCalls?.map(tc => tc.toolName) || [],
+                  toolResultsCount: toolResults?.length || 0,
+                  stepText: text?.substring(0, 100) || 'No text'
+                });
+              }
+            })
+          : await generateText({
+              model,
+              system: `${systemPrompt}\n\n${buildTimestampSystemPrompt()}`,
+              messages: convertToModelMessages(conversationMessages.filter(m => m.role !== 'system').map(m => ({
+                role: m.role as 'user' | 'assistant' | 'system',
+                content: m.content,
+                parts: [{ type: 'text', text: m.content }]
+              }))),
+              temperature: 0.7,
+              maxRetries: 3,
+              experimental_context: executionContext,
+              stopWhen: stepCountIs(100), // Match AI SDK version
+            });
+      } finally {
+        if (internetDispose) {
+          await internetDispose();
+          internetDispose = undefined;
+        }
+      }
 
       // Enhanced debugging: Log the complete result structure
       loggers.api.debug('Agent consultation result structure', {
