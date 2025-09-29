@@ -297,10 +297,6 @@ export async function POST(request: NextRequest) {
             throw new Error('Failed to load existing file metadata for deduplicated upload');
           }
 
-          if (existing.driveId !== driveId) {
-            throw new Error('File hash already associated with another drive');
-          }
-
           const requiresUpdate =
             existing.mimeType !== mimeType ||
             existing.sizeBytes !== resolvedSize ||
