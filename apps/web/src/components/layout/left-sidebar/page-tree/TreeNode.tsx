@@ -186,7 +186,7 @@ export default function TreeNode({
         {showDropIndicator && dragState.dropPosition === "before" && (
           <div className="relative">
             <div
-              className="absolute left-0 right-0 h-0.5 bg-blue-500 -top-[1px] pointer-events-none z-10"
+              className="absolute left-0 right-0 h-0.5 bg-primary -top-[1px] pointer-events-none z-10"
               style={{ left: `${depth * 24 + 8}px` }}
             />
             {/* Subtle gap for visual feedback */}
@@ -202,7 +202,7 @@ export default function TreeNode({
             group flex items-center px-1 py-1.5 rounded-lg transition-all duration-200 cursor-grab active:cursor-grabbing
             ${
               showDropIndicator && dragState.dropPosition === "inside"
-                ? "bg-blue-100 dark:bg-blue-900/30 ring-2 ring-blue-500 ring-inset"
+                ? "bg-primary/10 dark:bg-primary/20 ring-2 ring-primary ring-inset"
                 : ""
             }
             ${
@@ -240,7 +240,7 @@ export default function TreeNode({
               type={node.type}
               className={`
               h-4 w-4 mr-1.5 flex-shrink-0
-              ${hasChildren ? "text-blue-500" : "text-gray-500"}
+              ${hasChildren ? "text-primary" : "text-gray-500"}
             `}
             />
             <span className="truncate text-sm font-medium text-gray-900 dark:text-gray-100">
@@ -322,7 +322,7 @@ export default function TreeNode({
           {/* Visual hint for drop zones */}
           {showDropIndicator && dragState.dropPosition === "inside" ? (
             <div className="absolute inset-0 pointer-events-none">
-              <div className="absolute inset-x-4 inset-y-1 border-2 border-blue-500 rounded-md opacity-50" />
+              <div className="absolute inset-x-4 inset-y-1 border-2 border-primary rounded-md opacity-50" />
             </div>
           ) : null}
         </div>
@@ -333,7 +333,7 @@ export default function TreeNode({
             {/* Subtle gap for visual feedback */}
             <div className="h-0.5 w-full" />
             <div
-              className="absolute left-0 right-0 h-0.5 bg-blue-500 -bottom-[1px] pointer-events-none z-10"
+              className="absolute left-0 right-0 h-0.5 bg-primary -bottom-[1px] pointer-events-none z-10"
               style={{ left: `${depth * 24 + 8}px` }}
             />
           </div>

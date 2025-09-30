@@ -567,7 +567,7 @@ const GlobalAssistantView: React.FC = () => {
       </div>
 
       {/* Messages Area */}
-      <div className="flex-1 min-h-0 overflow-hidden p-4">
+      <div className="flex-1 min-h-0 overflow-hidden px-4">
         <ScrollArea className="h-full" ref={scrollAreaRef}>
           <div className="max-w-4xl mx-auto w-full">
             <div className="space-y-4 pr-4">

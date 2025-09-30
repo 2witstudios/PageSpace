@@ -123,10 +123,10 @@ export function RoleSelector({
                       )}
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent side="bottom" className="max-w-xs">
+                  <TooltipContent side="bottom" className="max-w-xs !bg-gray-900 !text-white dark:!bg-gray-100 dark:!text-gray-900">
                     <div className="space-y-1">
-                      <p className="font-medium text-foreground">{metadata.label} Mode</p>
-                      <p className="text-sm text-foreground">{capability}</p>
+                      <p className="font-medium">{metadata.label} Mode</p>
+                      <p className="text-sm">{capability}</p>
                     </div>
                   </TooltipContent>
                 </Tooltip>
@@ -165,10 +165,10 @@ export function RoleSelector({
                   )}
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>
+              <TooltipContent className="!bg-gray-900 !text-white dark:!bg-gray-100 dark:!text-gray-900">
                 <div className="space-y-1">
-                  <p className="font-medium text-foreground">{metadata.label} Mode</p>
-                  <p className="text-sm text-foreground">{metadata.shortDescription}</p>
+                  <p className="font-medium">{metadata.label} Mode</p>
+                  <p className="text-sm">{metadata.shortDescription}</p>
                 </div>
               </TooltipContent>
             </Tooltip>
@@ -293,7 +293,7 @@ export function RoleTransitionNotification({
   const toMeta = ROLE_METADATA[toRole];
   
   return (
-    <div className="flex items-center justify-between p-3 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-lg">
+    <div className="flex items-center justify-between p-3 bg-primary/10 dark:bg-primary/20 border border-primary/20 dark:border-primary/30 rounded-lg">
       <div className="flex items-center space-x-2">
         <div className="flex items-center space-x-1">
           {fromMeta.icon && <span>{fromMeta.icon}</span>}

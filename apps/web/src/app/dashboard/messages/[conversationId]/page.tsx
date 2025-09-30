@@ -212,7 +212,7 @@ export default function ConversationPage() {
 
                   <div className={`p-3 rounded-lg ${
                     isOwnMessage
-                      ? 'bg-blue-50 dark:bg-blue-900/20 ml-8'
+                      ? 'bg-primary/5 dark:bg-primary/10 ml-8'
                       : 'bg-gray-50 dark:bg-gray-800/50 mr-8'
                   }`}>
                     <div className="text-gray-900 dark:text-gray-100">

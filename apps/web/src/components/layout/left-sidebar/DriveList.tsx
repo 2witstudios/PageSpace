@@ -70,7 +70,7 @@ const DriveListItem = ({
       <div
         className={cn(
           "flex items-center gap-2 p-2 rounded-md text-sm font-medium transition-all",
-          isActive ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+          isActive ? "bg-accent text-accent-foreground" : "text-foreground hover:bg-accent hover:text-accent-foreground",
           isDraggingFiles && !drive.isTrashed && "bg-primary/10 border border-dashed border-primary"
         )}
       >

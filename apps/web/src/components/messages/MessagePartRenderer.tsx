@@ -34,7 +34,7 @@ const MessagePartRenderer: React.FC<MessagePartRendererProps> = ({ part, index }
           textElements.push(<span key={`${index}-text-${textLastIndex}`}>{precedingText}</span>);
         }
         textElements.push(
-          <span key={`${index}-mention-${textMatch.index}`} className="bg-blue-100 text-blue-800 px-1 rounded">
+          <span key={`${index}-mention-${textMatch.index}`} className="bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary px-1 rounded">
             @{label}
           </span>
         );
@@ -70,7 +70,7 @@ const MessagePartRenderer: React.FC<MessagePartRendererProps> = ({ part, index }
           elements.push(<span key={`${index}-text-${lastIndex}`}>{precedingText}</span>);
         }
         elements.push(
-          <span key={`${index}-mention-${id}`} className="bg-blue-100 text-blue-800 px-1 rounded">
+          <span key={`${index}-mention-${id}`} className="bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary px-1 rounded">
             @{label}
           </span>
         );

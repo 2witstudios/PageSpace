@@ -45,7 +45,7 @@ export default function TopBar({ onToggleLeftPanel, onToggleRightPanel }: TopBar
 
           <Link
             href="/dashboard"
-            className="flex items-center text-sm text-muted-foreground"
+            className="flex items-center text-sm text-gray-900 dark:text-gray-100"
             aria-label="Back to dashboard"
           >
             <Home className="mr-2 h-4 w-4" />

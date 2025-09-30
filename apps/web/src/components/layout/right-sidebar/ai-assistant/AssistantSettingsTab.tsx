@@ -449,17 +449,17 @@ const AssistantSettingsTab: React.FC = () => {
           {/* Upgrade notification for restricted models */}
           {selectedProvider === 'pagespace' &&
            !hasModelAccess('pagespace', 'GLM-4.5') && (
-            <Card className="border-blue-200 bg-blue-50 dark:bg-blue-950/20">
+            <Card className="border-primary/20 bg-primary/5 dark:bg-primary/10">
               <CardContent className="pt-6">
                 <div className="text-center space-y-3">
-                  <div className="h-8 w-8 mx-auto rounded-full bg-blue-100 dark:bg-blue-900 flex items-center justify-center">
-                    <Zap className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                  <div className="h-8 w-8 mx-auto rounded-full bg-primary/10 dark:bg-primary/20 flex items-center justify-center">
+                    <Zap className="h-4 w-4 text-primary dark:text-primary" />
                   </div>
                   <div>
-                    <p className="text-sm font-medium text-blue-900 dark:text-blue-100">
+                    <p className="text-sm font-medium text-primary dark:text-foreground">
                       Unlock Pro AI
                     </p>
-                    <p className="text-xs text-blue-700 dark:text-blue-300 mt-1">
+                    <p className="text-xs text-primary/80 dark:text-primary mt-1">
                       Advanced AI reasoning with Pro or Business
                     </p>
                   </div>
@@ -467,7 +467,7 @@ const AssistantSettingsTab: React.FC = () => {
                     variant="outline"
                     size="sm"
                     onClick={() => router.push('/settings/billing')}
-                    className="w-full border-blue-300 text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:text-blue-300 dark:hover:bg-blue-900"
+                    className="w-full border-primary/30 text-primary hover:bg-primary/10 dark:border-primary/30 dark:text-primary dark:hover:bg-primary/20"
                   >
                     View Upgrade Options
                   </Button>

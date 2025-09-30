@@ -135,7 +135,7 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
         return error ? <AlertCircle className={`${iconClass} text-red-500`} /> : <CheckCircle className={`${iconClass} text-green-500`} />;
       case 'input-available':
       case 'streaming':
-        return <Loader2 className={`${iconClass} text-blue-500 animate-spin`} />;
+        return <Loader2 className={`${iconClass} text-primary animate-spin`} />;
       case 'output-error':
         return <AlertCircle className={`${iconClass} text-red-500`} />;
       default:

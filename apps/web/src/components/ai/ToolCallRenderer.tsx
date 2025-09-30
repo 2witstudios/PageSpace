@@ -272,7 +272,7 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
     try {
       const params = typeof input === 'string' ? JSON.parse(input) : input;
       return (
-        <div className="mt-2 p-2 bg-gray-50 dark:bg-gray-800 rounded text-xs">
+        <div className="mt-2 p-2 bg-muted rounded text-xs">
           <div className="font-medium text-gray-700 dark:text-gray-300 mb-1">Parameters:</div>
           <pre className="text-gray-600 dark:text-gray-400 overflow-x-auto">
             {JSON.stringify(params, null, 2)}
@@ -327,7 +327,7 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
               {result.lineCount} lines • {result.type?.toLowerCase()}
             </div>
             {result.content && (
-              <div className="mt-2 p-2 bg-gray-50 dark:bg-gray-800 rounded text-xs max-h-32 overflow-y-auto">
+              <div className="mt-2 p-2 bg-muted rounded text-xs max-h-32 overflow-y-auto">
                 <pre className="text-gray-600 dark:text-gray-400 whitespace-pre-wrap">
                   {result.content.slice(0, 500)}{result.content.length > 500 ? '...' : ''}
                 </pre>
@@ -361,7 +361,7 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
 
       // Generic output for other tools
       return (
-        <div className="mt-2 p-2 bg-gray-50 dark:bg-gray-800 rounded text-xs">
+        <div className="mt-2 p-2 bg-muted rounded text-xs">
           <div className="font-medium text-gray-700 dark:text-gray-300 mb-1">Result:</div>
           <pre className="text-gray-600 dark:text-gray-400 overflow-x-auto whitespace-pre-wrap">
             {JSON.stringify(result, null, 2)}
@@ -370,7 +370,7 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
       );
     } catch {
       return (
-        <div className="mt-2 p-2 bg-gray-50 dark:bg-gray-800 rounded text-xs">
+        <div className="mt-2 p-2 bg-muted rounded text-xs">
           <pre className="text-gray-600 dark:text-gray-400 overflow-x-auto whitespace-pre-wrap">
             {typeof output === 'string' ? output : JSON.stringify(output, null, 2)}
           </pre>
@@ -385,7 +385,7 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
       <div key={index} style={{ paddingLeft: `${depth * 12}px` }}>
         <TaskItem status="completed">
           {isFolderPage(item.type as PageType) ? (
-            <FolderOpen className="h-3 w-3 text-blue-600" />
+            <FolderOpen className="h-3 w-3 text-primary" />
           ) : (
             <FileText className="h-3 w-3 text-gray-600" />
           )}

@@ -51,13 +51,13 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = ({ parts, role, messag
   return (
     <div
       className={`p-2 rounded-md text-xs ${
-        role === 'user' 
-          ? 'bg-blue-50 dark:bg-blue-900/20 ml-2' 
+        role === 'user'
+          ? 'bg-primary/10 dark:bg-accent/20 ml-2'
           : 'bg-gray-50 dark:bg-gray-800/50'
       }`}
     >
       <div className={`text-xs font-medium mb-0.5 ${
-        role === 'user' ? 'text-blue-700 dark:text-blue-300' : 'text-gray-700 dark:text-gray-300'
+        role === 'user' ? 'text-primary dark:text-primary' : 'text-gray-700 dark:text-gray-300'
       }`}>
         {role === 'user' ? 'You' : 'AI'}
       </div>

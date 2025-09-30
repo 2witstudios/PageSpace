@@ -31,7 +31,7 @@ const getStatusIcon = (status: Task['status']) => {
     case 'completed':
       return <CheckCircle2 className="w-3 h-3 text-green-500" />;
     case 'in_progress':
-      return <Clock className="w-3 h-3 text-blue-500" />;
+      return <Clock className="w-3 h-3 text-primary" />;
     case 'blocked':
       return <AlertCircle className="w-3 h-3 text-red-500" />;
     case 'pending':
@@ -93,12 +93,12 @@ export const CompactTodoListMessage: React.FC<CompactTodoListMessageProps> = Rea
 
   return (
     <div className="mb-2 max-w-full overflow-hidden">
-      <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-md p-1.5 max-w-full">
+      <div className="bg-primary/10 dark:bg-primary/20 border border-primary/20 dark:border-primary/30 rounded-md p-1.5 max-w-full">
         {/* Header */}
         <div className="flex items-center justify-between mb-1.5">
           <div className="flex items-center gap-1.5 min-w-0 flex-1">
-            <div className="w-1.5 h-1.5 rounded-full bg-blue-500 flex-shrink-0"></div>
-            <h4 className="text-xs font-medium text-blue-900 dark:text-blue-100 truncate">
+            <div className="w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0"></div>
+            <h4 className="text-xs font-medium text-foreground truncate">
               {taskList.title}
             </h4>
           </div>
@@ -109,8 +109,8 @@ export const CompactTodoListMessage: React.FC<CompactTodoListMessageProps> = Rea
 
         {/* Compact Progress Bar */}
         <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1 mb-1.5">
-          <div 
-            className="bg-blue-500 h-1 rounded-full transition-all duration-300"
+          <div
+            className="bg-primary h-1 rounded-full transition-all duration-300"
             style={{ width: `${progress.percentage}%` }}
           />
         </div>
@@ -154,8 +154,8 @@ export const CompactTodoListMessage: React.FC<CompactTodoListMessageProps> = Rea
 
         {/* Footer */}
         {progress.total > 0 && (
-          <div className="mt-1.5 pt-1 border-t border-blue-200 dark:border-blue-700">
-            <div className="flex justify-between items-center text-[10px] text-blue-700 dark:text-blue-300">
+          <div className="mt-1.5 pt-1 border-t border-primary/20 dark:border-primary/30">
+            <div className="flex justify-between items-center text-[10px] text-primary">
               <span className="truncate">
                 {progress.completed}/{progress.total} done
               </span>

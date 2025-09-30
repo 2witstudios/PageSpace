@@ -144,10 +144,10 @@ export const ConversationMessageRenderer: React.FC<ConversationMessageRendererPr
     if (isLoading) {
       return (
         <div className="mb-4 mr-8">
-          <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+          <div className="bg-primary/5 dark:bg-primary/10 border border-primary/20 dark:border-primary/30 rounded-lg p-4">
             <div className="animate-pulse">
-              <div className="h-4 bg-blue-200 dark:bg-blue-700 rounded w-1/3 mb-2"></div>
-              <div className="h-2 bg-blue-100 dark:bg-blue-800 rounded w-full mb-3"></div>
+              <div className="h-4 bg-primary/20 dark:bg-primary/30 rounded w-1/3 mb-2"></div>
+              <div className="h-2 bg-primary/15 dark:bg-primary/25 rounded w-full mb-3"></div>
               <div className="space-y-2">
                 <div className="h-8 bg-white dark:bg-gray-800 rounded"></div>
                 <div className="h-8 bg-white dark:bg-gray-800 rounded"></div>

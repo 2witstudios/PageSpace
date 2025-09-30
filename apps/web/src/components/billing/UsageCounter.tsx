@@ -4,7 +4,7 @@ import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Crown, Zap, AlertCircle } from 'lucide-react';
+import { AlertCircle } from 'lucide-react';
 import useSWR from 'swr';
 import { useSocketStore } from '@/stores/socketStore';
 import type { UsageEventPayload } from '@/lib/socket-utils';
@@ -108,34 +108,32 @@ export function UsageCounter() {
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="flex flex-wrap items-center gap-3">
       {/* Usage Display */}
-      <div className="flex items-center gap-2 text-sm">
-        <div className="flex items-center gap-1">
-          {isPaid ? (
-            <Crown className="h-4 w-4 text-yellow-500" />
-          ) : (
-            <Zap className="h-4 w-4 text-blue-500" />
-          )}
+      <div className="flex items-center gap-3 text-sm">
+        {/* Standard Usage */}
+        <div className="flex items-center gap-1.5">
+          <span className="hidden lg:inline text-muted-foreground text-xs">Standard:</span>
           <Badge
             variant={isNearLimit ? "destructive" : "secondary"}
             className="text-xs font-medium"
           >
             {usage.standard.current}/{usage.standard.limit}
           </Badge>
-          <span className="hidden lg:inline text-muted-foreground">today</span>
+          <span className="hidden lg:inline text-muted-foreground text-xs">Today</span>
         </div>
 
         {/* Pro AI for Pro and Business Users */}
         {isPaid && usage.pro.limit > 0 && (
-          <div className="flex items-center gap-1 text-muted-foreground">
-            <span className="hidden md:inline">•</span>
-            <Crown className="h-3 w-3 text-yellow-500" />
-            <Badge variant="secondary" className="text-xs">
-              {usage.pro.current}/{usage.pro.limit}
-            </Badge>
-            <span className="hidden lg:inline text-xs">pro</span>
-          </div>
+          <>
+            <span className="hidden md:inline text-muted-foreground">•</span>
+            <div className="flex items-center gap-1.5">
+              <span className="hidden lg:inline text-muted-foreground text-xs">Pro AI:</span>
+              <Badge variant="secondary" className="text-xs font-medium">
+                {usage.pro.current}/{usage.pro.limit}
+              </Badge>
+            </div>
+          </>
         )}
       </div>
 
@@ -144,17 +142,15 @@ export function UsageCounter() {
         variant={isPaid ? "ghost" : "default"}
         size="sm"
         onClick={handleBillingClick}
-        className={`text-xs h-8 ${!isPaid ? 'bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700' : ''}`}
+        className={`text-xs h-8 ${!isPaid ? 'upgrade-gradient' : ''}`}
       >
         {isPaid ? (
           <>
-            <Crown className="h-3 w-3 mr-1" />
             <span className="hidden md:inline">Billing</span>
             <span className="md:hidden">{isBusiness ? 'Bus' : 'Pro'}</span>
           </>
         ) : (
           <>
-            <Crown className="h-3 w-3 mr-1" />
             <span className="hidden md:inline">Upgrade</span>
             <span className="md:hidden">+</span>
           </>

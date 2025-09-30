@@ -51,13 +51,13 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({ parts, role, messageId
   return (
     <div
       className={`p-3 rounded-lg mb-2 ${
-        role === 'user' 
-          ? 'bg-blue-50 dark:bg-blue-900/20 ml-8' 
+        role === 'user'
+          ? 'bg-primary/10 dark:bg-accent/20 ml-8'
           : 'bg-gray-50 dark:bg-gray-800/50 mr-8'
       }`}
     >
       <div className={`text-sm font-medium mb-1 ${
-        role === 'user' ? 'text-blue-700 dark:text-blue-300' : 'text-gray-700 dark:text-gray-300'
+        role === 'user' ? 'text-primary dark:text-primary' : 'text-gray-700 dark:text-gray-300'
       }`}>
         {role === 'user' ? 'You' : 'Assistant'}
       </div>
