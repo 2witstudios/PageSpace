@@ -2,10 +2,13 @@
 // Note: This is a simplified version for basic testing.
 // For full AI SDK testing, use the official @ai-sdk/provider/test package
 
+type MockGenerateInput = { prompt: string; mode?: string }
+
 export const aiHelpers = {
   createMockModel() {
     return {
-      doGenerate: async ({ prompt, mode }: any) => {
+      doGenerate: async (input: MockGenerateInput) => {
+        void input
         return {
           text: 'This is a mock AI response',
           finishReason: 'stop',
@@ -15,7 +18,8 @@ export const aiHelpers = {
           },
         }
       },
-      doStream: async function* ({ prompt, mode }: any) {
+      doStream: async function* (input: MockGenerateInput) {
+        void input
         yield { type: 'text-delta' as const, textDelta: 'This ' }
         yield { type: 'text-delta' as const, textDelta: 'is ' }
         yield { type: 'text-delta' as const, textDelta: 'streaming' }
@@ -30,7 +34,8 @@ export const aiHelpers = {
 
   createMockToolCallingModel() {
     return {
-      doGenerate: async ({ prompt, mode }: any) => {
+      doGenerate: async (input: MockGenerateInput) => {
+        void input
         return {
           text: '',
           toolCalls: [

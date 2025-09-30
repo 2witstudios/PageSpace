@@ -1,15 +1,29 @@
 import { NextRequest } from 'next/server'
+import type { RequestInit as NextRequestInit } from 'next/dist/server/web/spec-extension/request'
+
+const sanitizeOptions = (options?: RequestInit): NextRequestInit | undefined => {
+  if (!options) return undefined
+
+  const { signal, ...rest } = options
+  return {
+    ...rest,
+    signal: signal ?? undefined,
+  } as NextRequestInit
+}
 
 export const apiHelpers = {
   createRequest(url: string, options?: RequestInit): NextRequest {
-    return new NextRequest(new URL(url, 'http://localhost:3000'), options)
+    const sanitized = sanitizeOptions(options)
+    return new NextRequest(new URL(url, 'http://localhost:3000'), sanitized)
   },
 
   createAuthenticatedRequest(url: string, token: string, options?: RequestInit): NextRequest {
+    const sanitized: NextRequestInit = sanitizeOptions(options) ?? {}
+
     return new NextRequest(new URL(url, 'http://localhost:3000'), {
-      ...options,
+      ...sanitized,
       headers: {
-        ...options?.headers,
+        ...(sanitized.headers ?? {}),
         Authorization: `Bearer ${token}`,
       },
     })
