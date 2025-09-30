@@ -136,11 +136,37 @@ export async function middleware(req: NextRequest) {
     requestHeaders.set('x-user-id', decoded.userId);
     requestHeaders.set('x-user-role', decoded.role);
 
-    return NextResponse.next({
+    const response = NextResponse.next({
       request: {
         headers: requestHeaders,
       },
     });
+
+    // Add security headers
+    response.headers.set(
+      'Content-Security-Policy',
+      "default-src 'self'; " +
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval'; " + // TipTap/Monaco require unsafe-eval
+      "style-src 'self' 'unsafe-inline'; " +
+      "img-src 'self' data: blob: https:; " +
+      "connect-src 'self' ws: wss: https:; " +
+      "font-src 'self' data:; " +
+      "frame-ancestors 'none';"
+    );
+    response.headers.set('X-Frame-Options', 'DENY');
+    response.headers.set('X-Content-Type-Options', 'nosniff');
+    response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+    response.headers.set('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+
+    // Add HSTS in production
+    if (process.env.NODE_ENV === 'production') {
+      response.headers.set(
+        'Strict-Transport-Security',
+        'max-age=63072000; includeSubDomains; preload'
+      );
+    }
+
+    return response;
   });
 }
 

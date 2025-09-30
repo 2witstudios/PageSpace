@@ -68,17 +68,15 @@ export async function POST(req: Request) {
       where: eq(users.email, email),
     });
 
-    if (!user || !user.password) {
-      logAuthEvent('failed', undefined, email, clientIP, 'Invalid email');
-      trackAuthEvent(undefined, 'failed_login', { reason: 'invalid_email', email, ip: clientIP });
-      return Response.json({ error: 'Invalid email or password' }, { status: 401 });
-    }
+    // Always perform bcrypt comparison to prevent timing attacks
+    // Use a fake hash for non-existent users to maintain consistent timing
+    const passwordToCheck = user?.password || '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5GyYzpLLEm4Eu';
+    const isValid = await bcrypt.compare(password, passwordToCheck);
 
-    const isValid = await bcrypt.compare(password, user.password);
-
-    if (!isValid) {
-      logAuthEvent('failed', user.id, email, clientIP, 'Invalid password');
-      trackAuthEvent(user.id, 'failed_login', { reason: 'invalid_password', email, ip: clientIP });
+    if (!user || !user.password || !isValid) {
+      const reason = !user ? 'invalid_email' : 'invalid_password';
+      logAuthEvent('failed', user?.id, email, clientIP, reason === 'invalid_email' ? 'Invalid email' : 'Invalid password');
+      trackAuthEvent(user?.id, 'failed_login', { reason, email, ip: clientIP });
       return Response.json({ error: 'Invalid email or password' }, { status: 401 });
     }
 
