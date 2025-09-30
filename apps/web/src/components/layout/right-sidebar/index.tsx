@@ -84,7 +84,7 @@ export default function RightPanel({ className }: RightPanelProps) {
   return (
     <aside
       className={cn(
-        "flex h-full w-full flex-col text-sidebar-foreground liquid-glass-regular rounded-tl-lg border border-[var(--separator)] shadow-[var(--shadow-elevated)]",
+        "flex h-full w-full flex-col text-sidebar-foreground liquid-glass-regular rounded-tl-lg border border-[var(--separator)] shadow-[var(--shadow-elevated)] dark:shadow-none",
         className,
       )}
     >

@@ -157,7 +157,7 @@ const AssistantHistoryTab: React.FC = () => {
                   onClick={() => handleConversationClick(conversation.id)}
                   className={`group p-3 rounded-lg border cursor-pointer hover:bg-accent transition-colors ${
                     conversation.id === activeConversationId
-                      ? 'bg-accent border-accent-foreground/20'
+                      ? 'bg-accent/50 border-accent-foreground/20'
                       : 'border-border'
                   }`}
                 >

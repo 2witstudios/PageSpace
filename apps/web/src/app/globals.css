@@ -236,10 +236,10 @@
   /* Upgrade Button Gradient */
   @keyframes gradient-shift {
     0%, 100% {
-      background-position: 0% 50%;
+      background-position: 25% 50%;
     }
     50% {
-      background-position: 100% 50%;
+      background-position: 75% 50%;
     }
   }
 
@@ -252,47 +252,47 @@
     }
   }
 
-  /* Light Mode Gradient - Blue to Gold */
+  /* Light Mode Gradient - Blue to Coral/Peach */
   :root .upgrade-gradient {
     background: linear-gradient(
       135deg,
       oklch(0.55 0.20 240) 0%,
-      oklch(0.58 0.22 235) 20%,
-      oklch(0.65 0.20 200) 40%,
-      oklch(0.68 0.22 150) 60%,
-      oklch(0.70 0.24 90) 80%,
-      oklch(0.68 0.22 75) 100%
+      oklch(0.58 0.22 235) 15%,
+      oklch(0.65 0.18 200) 35%,
+      oklch(0.68 0.20 100) 55%,
+      oklch(0.70 0.22 40) 75%,
+      oklch(0.68 0.20 25) 100%
     );
-    background-size: 200% 200%;
+    background-size: 400% 400%;
     animation: gradient-shift 8s ease infinite;
     box-shadow:
-      0 2px 8px rgba(59, 130, 246, 0.3),
-      0 4px 16px rgba(234, 179, 8, 0.2),
-      inset 0 1px 0 rgba(255, 255, 255, 0.4);
-    border: 1px solid rgba(255, 255, 255, 0.25);
+      0 2px 8px rgba(59, 130, 246, 0.25),
+      0 4px 16px rgba(251, 146, 60, 0.25),
+      inset 0 1px 0 rgba(255, 255, 255, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.3);
     position: relative;
     overflow: hidden;
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
-  /* Dark Mode Gradient - Blue to Gold */
+  /* Dark Mode Gradient - Blue to Coral/Peach */
   .dark .upgrade-gradient {
     background: linear-gradient(
       135deg,
-      oklch(0.60 0.22 240) 0%,
-      oklch(0.62 0.24 235) 20%,
-      oklch(0.68 0.22 200) 40%,
-      oklch(0.72 0.24 150) 60%,
-      oklch(0.75 0.26 90) 80%,
-      oklch(0.72 0.24 75) 100%
+      oklch(0.60 0.24 240) 0%,
+      oklch(0.62 0.26 235) 15%,
+      oklch(0.68 0.22 200) 35%,
+      oklch(0.72 0.24 100) 55%,
+      oklch(0.75 0.26 40) 75%,
+      oklch(0.73 0.24 25) 100%
     );
-    background-size: 200% 200%;
+    background-size: 400% 400%;
     animation: gradient-shift 8s ease infinite;
     box-shadow:
-      0 2px 8px rgba(59, 130, 246, 0.4),
-      0 4px 16px rgba(234, 179, 8, 0.3),
-      inset 0 1px 0 rgba(255, 255, 255, 0.2);
-    border: 1px solid rgba(255, 255, 255, 0.2);
+      0 2px 8px rgba(59, 130, 246, 0.35),
+      0 4px 16px rgba(251, 146, 60, 0.35),
+      inset 0 1px 0 rgba(255, 255, 255, 0.25);
+    border: 1px solid rgba(255, 255, 255, 0.25);
   }
 
   /* Shimmer effect overlay */
