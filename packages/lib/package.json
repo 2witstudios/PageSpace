@@ -6,7 +6,7 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "test": "tsx --test src/__tests__/*.test.ts"
+    "test": "vitest run"
   },
   "exports": {
     ".": {

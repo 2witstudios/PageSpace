@@ -80,16 +80,7 @@ export async function GET(
 
 ## 3. MANDATORY DOCUMENTATION WORKFLOW
 
-Before ANY code change:
-1. Review architecture and guides in the `docs/` directory
-2. Understand existing patterns and conventions
-
-After code changes:
-1. Update relevant documentation:
-   - `docs/1.0-overview/1.5-functions-list.md`
-   - `docs/1.0-overview/1.4-api-routes-list.md` 
-   - `docs/2.0-architecture/2.2-backend/database.md`
-2. Log ALL changes in `docs/1.0-overview/changelog.md` with timestamp
+- When changes land, update the changelog and any user-visible notes.
 
 ## 4. DEVELOPMENT STANDARDS
 
@@ -130,89 +121,48 @@ const page = await db.select().from(pages);
 
 ### 5.1. MCP Tools Integration
 
-Claude Code has access to several Model Context Protocol (MCP) tools that enhance development capabilities:
+Claude Code can invoke the MCP/DevTools integration whenever browser automation or diagnostics are needed.
 
-**context7 MCP:**
-- `resolve-library-id`: Resolves package names to Context7-compatible library IDs
-- `get-library-docs`: Fetches up-to-date documentation for libraries
-- **Usage**: Always use for researching current documentation before implementation decisions
+### 5.2. PageSpace Domain Expert Agents
 
-**sequential-thinking MCP:**
-- Provides structured thinking and planning capabilities for complex problems
-- **Usage**: Use for breaking down complex tasks, analyzing trade-offs, and systematic problem-solving
+PageSpace has 17 specialized domain expert agents with deep knowledge of specific subsystems.
 
-**ide MCP:**
-- `getDiagnostics`: Get language diagnostics from VS Code
-- `executeCode`: Execute Python code in Jupyter kernel
-- **Usage**: Integrate with development environment for real-time feedback
+**Core Infrastructure (5 agents):**
+- **Authentication & Security Expert**: JWT tokens, CSRF protection, encryption, rate limiting, session management
+- **Database & Schema Expert**: Drizzle ORM, PostgreSQL, migrations, schema design, query optimization
+- **Permissions & Authorization Expert**: RBAC, drive membership, page permissions, access control logic
+- **Real-time Collaboration Expert**: Socket.IO, live sync, conflict resolution, event broadcasting
+- **Monitoring & Analytics Expert**: Logging, tracking, performance metrics, error handling, usage analytics
 
-### 5.2. Claude Code Sub-Agents
+**AI Intelligence (3 agents):**
+- **AI System Architect**: AI providers, message flow, streaming, model capabilities, provider factory
+- **AI Tools Integration Expert**: Tool calling, PageSpace tools, batch operations, search tools
+- **AI Agents Communication Expert**: Agent roles, agent-to-agent communication, custom agents
 
-Claude Code provides specialized sub-agents for different development tasks:
+**Content & Workspace (4 agents):**
+- **Pages & Content Expert**: Page types, content management, CRUD operations, tree structure
+- **Drives & Workspace Expert**: Drive management, membership, invitations, workspace organization
+- **File Processing Expert**: File uploads, processor service, image optimization, content-addressed storage
+- **Search & Discovery Expert**: Regex search, glob patterns, multi-drive search, mention system
 
-**Orchestration Agent:**
-- **point-guard**: Orchestrates multiple sub-agents for complex, multi-step tasks requiring coordination
-- **Usage**: Default choice for complex features, refactoring, or multi-component implementations
+**Frontend & UX (3 agents):**
+- **Frontend Architecture Expert**: Next.js 15, App Router, components, state management, Zustand, SWR
+- **Editor System Expert**: Tiptap, Monaco, document state, auto-save, Prettier integration
+- **Canvas Dashboard Expert**: Shadow DOM, custom HTML/CSS, navigation, security sanitization
 
-**Consultant Agents:**
-- **linus-advisor**: Provides brutally honest technical guidance in Linus Torvalds style
-- **codebase-researcher**: Deep analysis of existing codebase patterns and architecture
-- **technical-researcher**: Initial research using context7 MCP for current best practices
-- **Usage**: Consult before major architectural decisions or when understanding existing patterns
-
-**Specialized Agents:**
-- **ai-sdk-expert**: Vercel AI SDK implementation, streaming patterns, and optimization
-- **coding-standards-auditor**: Verify code compliance with established standards
-- **technical-debate-moderator**: Structure debates between multiple AI perspectives for complex decisions
-- **general-purpose**: General research and multi-step task execution
+**API & Integration (2 agents):**
+- **API Routes Expert**: Next.js routes, async params, request handling, error responses, middleware
+- **MCP Integration Expert**: MCP tokens, document operations, protocol integration, external tools
 
 ### 5.3. Development Workflow Patterns
 
-**Research-First Approach:**
-1. Use **technical-researcher** with context7 MCP for current documentation
-2. Use **codebase-researcher** to understand existing patterns
-3. Consult **linus-advisor** for architectural guidance
-4. Proceed with implementation
-
-**Complex Task Delegation:**
-1. Use **point-guard** to orchestrate multi-step tasks
-2. Let point-guard delegate to appropriate specialized agents
-3. Verify with **coding-standards-auditor** before completion
-
-**Decision-Making Process:**
-1. Use **technical-debate-moderator** for complex architectural choices
-2. Research options with **technical-researcher** and context7
-3. Get brutally honest assessment from **linus-advisor**
-4. Make informed decision with multiple perspectives
+Use the Task tool to launch domain experts; each agent advertises its own capabilities and workflow.
 
 ## 6. PROJECT STRUCTURE
 
-### 6.1. Database Schema (`packages/db/src/schema/`)
+Atypical roots worth noting: `apps/realtime`, `apps/processor`, `packages/db`, `packages/lib`, plus supporting `docs/`, `scripts/`, and `types/` directories.
 
-- `core.ts`: Main entities (users, pages, drives)
-- `auth.ts`: Authentication tables (sessions, tokens)
-- `chat.ts`: Chat messages and conversations
-- `ai.ts`: AI-related data and settings
-- `permissions.ts`: Access control and permissions
-
-### 6.2. API Routes (`apps/web/src/app/api/`)
-
-- `auth/`: Authentication endpoints
-- `ai/`: AI chat and assistant endpoints
-- `pages/`: Page CRUD operations
-- `drives/`: Drive and workspace management
-- `channels/`: Real-time messaging
-- `mentions/`: Mention system and search
-
-### 6.3. Components (`apps/web/src/components/`)
-
-- `ai/`: AI-related components (chat, settings, providers)
-- `editors/`: Rich text and code editors
-- `layout/`: Main application layout components
-- `ui/`: shadcn/ui component library
-- `dialogs/`: Modal dialogs and confirmations
-
-## 7. TESTING & BUILD COMMANDS
+## 7. COMMANDS
 
 ```bash
 # Development
@@ -232,55 +182,9 @@ pnpm --filter @pagespace/db db:studio  # Open Drizzle Studio
 pnpm --filter web lint      # Run ESLint on web app
 ```
 
-## 8. LOCAL DEPLOYMENT
+## 8. COMMON WORKFLOWS
 
-The project runs entirely locally using Docker:
-
-```yaml
-# docker-compose.yml services:
-- PostgreSQL database
-- Web application (Next.js)
-- Realtime service (Socket.IO)
-- Ollama for local AI models
-```
-
-## 9. SECURITY & COMPLIANCE
-
-- **Local-first architecture**: All data stays on your local machine
-- **JWT-based authentication**: Secure session management
-- **Permission system**: Role-based access control (RBAC)
-- **Input sanitization**: All user content is sanitized before storage/display
-- **No cloud dependencies**: Complete data sovereignty
-
-## 10. AI INTEGRATION
-
-### 10.1. Supported Providers
-
-- **Ollama**: Local models (llama3, codellama, etc.)
-- **OpenRouter**: Cloud models access
-- **Google AI**: Gemini models
-- **Anthropic**: Claude models (via OpenRouter)
-
-### 10.2. AI Features
-
-- **AI Assistant**: Persistent conversations with context
-- **AI Pages**: Interactive AI-powered documents
-- **Mention System**: @ai mentions for inline AI assistance
-- **Code Generation**: AI-powered code editing and suggestions
-
-## 11. IMPORTANT NOTES
-
-- This is a **local-first application** - no cloud services required
-- All AI processing can be done locally via Ollama
-- Database runs in Docker container for easy setup
-- Real-time collaboration via Socket.IO
-- Comprehensive permission system for multi-user scenarios
-- Rich text editing with markdown support
-- File storage is filesystem-based with PostgreSQL metadata
-
-## 12. COMMON WORKFLOWS
-
-### 12.1. Development Workflows
+### 8.1. Development Workflows
 
 1. **Adding new API routes**: Follow Next.js 15 async params pattern
 2. **Database changes**: Update schema in `packages/db`, generate migrations
@@ -288,29 +192,6 @@ The project runs entirely locally using Docker:
 4. **AI provider integration**: See `docs/3.0-guides-and-tools/adding-ai-provider.md`
 5. **Permission changes**: Update centralized logic in `@pagespace/lib/permissions`
 
-### 12.2. Claude Code Enhanced Workflows
+### 8.2. Domain Expert Agent Workflows
 
-**Complex Feature Implementation:**
-1. Use **point-guard** agent to orchestrate the implementation
-2. Let point-guard delegate research to **technical-researcher** + context7 MCP
-3. Use **codebase-researcher** to understand existing patterns
-4. Implement with appropriate specialized agents (e.g., **ai-sdk-expert** for AI features)
-5. Verify with **coding-standards-auditor** before completion
-
-**Architecture Decision Making:**
-1. Use **technical-researcher** with context7 MCP for current best practices
-2. Consult **codebase-researcher** for existing system patterns
-3. Use **technical-debate-moderator** for complex decisions requiring multiple perspectives
-4. Get final brutally honest assessment from **linus-advisor**
-5. Document decision rationale
-
-**Code Quality Assurance:**
-1. Use **coding-standards-auditor** to verify compliance with project standards
-2. Consult **linus-advisor** for performance and maintainability concerns
-3. Use **codebase-researcher** to ensure consistency with existing patterns
-
-**Research and Planning:**
-1. Use **sequential-thinking** MCP for complex problem breakdown
-2. Use **technical-researcher** + context7 MCP for up-to-date documentation
-3. Use **codebase-researcher** for understanding existing architecture
-4. Use **point-guard** for coordinating multi-step research tasks
+Lean on Section 5.2 and each agent’s self-description; selection emerges from the query context.

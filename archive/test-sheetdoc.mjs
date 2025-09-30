@@ -1,4 +1,4 @@
-import { createEmptySheet, serializeSheetContent } from './packages/lib/src/sheet';
+import { createEmptySheet, serializeSheetContent } from '../packages/lib/src/sheet';
 
 const sheet = createEmptySheet(5, 5);
 sheet.cells.A1 = 'Revenue';
