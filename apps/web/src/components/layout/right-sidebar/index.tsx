@@ -18,7 +18,7 @@ export interface RightPanelProps {
 
 const panelLogger = createClientLogger({ namespace: "ui", component: "right-sidebar" });
 
-export default function RightPanel({ className, variant = "desktop" }: RightPanelProps) {
+export default function RightPanel({ className }: RightPanelProps) {
   const pathname = usePathname();
   panelLogger.debug("Evaluating RightPanel pathname", {
     pathname,
@@ -84,12 +84,11 @@ export default function RightPanel({ className, variant = "desktop" }: RightPane
   return (
     <aside
       className={cn(
-        "flex h-full w-full flex-col border-l bg-sidebar text-sidebar-foreground",
-        variant === "overlay" && "shadow-lg",
+        "flex h-full w-full flex-col text-sidebar-foreground liquid-glass-regular rounded-lg border border-[var(--separator)] shadow-[var(--shadow-elevated)]",
         className,
       )}
     >
-      <div className="border-b bg-muted/30">
+      <div className="border-b border-[var(--separator)]">
         <div
           className={cn(
             "grid gap-1 px-1 py-1 text-xs font-medium sm:text-sm",

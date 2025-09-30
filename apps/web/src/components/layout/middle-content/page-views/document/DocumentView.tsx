@@ -194,10 +194,11 @@ const DocumentView = ({ page }: DocumentViewProps) => {
       <AnimatePresence>
         {activeView === 'rich' && !isReadOnly && (
           <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            className="flex items-center justify-center border-b bg-card overflow-hidden"
+            initial={{ y: -10, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: -10, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="sticky top-0 z-10 mx-4 mt-4 rounded-lg liquid-glass-thin border border-[var(--separator)] shadow-[var(--shadow-ambient)] overflow-hidden"
           >
             <Toolbar editor={editor} />
           </motion.div>

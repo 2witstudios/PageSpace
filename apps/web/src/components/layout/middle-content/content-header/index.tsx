@@ -66,7 +66,7 @@ export function ViewHeader({ children }: ContentHeaderProps = {}) {
   };
 
   return (
-    <div className="flex flex-col gap-2 p-4 border-b bg-card">
+    <div className="flex flex-col gap-2 p-4 border-b border-[var(--separator)]">
       <Breadcrumbs />
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">

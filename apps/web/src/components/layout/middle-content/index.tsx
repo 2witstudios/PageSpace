@@ -63,7 +63,7 @@ export default function CenterPanel() {
     const { pageId } = params;
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="h-full flex flex-col bg-transparent">
         {pageId ? (
             <>
               <ViewHeader />

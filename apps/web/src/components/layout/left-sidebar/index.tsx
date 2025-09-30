@@ -37,7 +37,7 @@ export interface SidebarProps {
   variant?: "desktop" | "overlay";
 }
 
-export default function Sidebar({ className, variant = "desktop" }: SidebarProps) {
+export default function Sidebar({ className }: SidebarProps) {
   const [isCreatePageOpen, setCreatePageOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const params = useParams();
@@ -66,8 +66,7 @@ export default function Sidebar({ className, variant = "desktop" }: SidebarProps
   return (
     <aside
       className={cn(
-        "flex h-full w-full flex-col border-r bg-sidebar text-sidebar-foreground",
-        variant === "overlay" && "shadow-lg",
+        "flex h-full w-full flex-col text-sidebar-foreground liquid-glass-regular rounded-lg border border-[var(--separator)] shadow-[var(--shadow-elevated)]",
         className,
       )}
     >

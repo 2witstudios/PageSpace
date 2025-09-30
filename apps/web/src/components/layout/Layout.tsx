@@ -181,7 +181,7 @@ function Layout({ children }: LayoutProps) {
 
   return (
     <NavigationProvider>
-      <div className="flex h-[100dvh] min-h-dvh flex-col overflow-hidden bg-background">
+      <div className="flex h-[100dvh] min-h-dvh flex-col overflow-hidden bg-gradient-to-br from-background via-background to-muted/10">
         <TopBar
           onToggleLeftPanel={handleLeftPanelToggle}
           onToggleRightPanel={handleRightPanelToggle}
@@ -189,7 +189,7 @@ function Layout({ children }: LayoutProps) {
 
         <div className="relative flex flex-1 min-h-0 overflow-hidden">
           {!shouldOverlaySidebars && leftSidebarOpen && (
-            <div className="relative hidden h-full flex-shrink-0 border-r bg-sidebar/80 backdrop-blur xl:flex xl:w-[18rem] 2xl:w-80">
+            <div className="relative hidden flex-shrink-0 xl:flex xl:w-[18rem] 2xl:w-80 pt-4">
               <MemoizedSidebar className="h-full w-full" />
             </div>
           )}
@@ -198,10 +198,15 @@ function Layout({ children }: LayoutProps) {
             {shouldOverlaySidebars && !isSheetBreakpoint && leftSidebarOpen && (
               <motion.div
                 key="left-sidebar"
-                initial={{ x: -320, opacity: 0 }}
-                animate={{ x: 0, opacity: 1 }}
-                exit={{ x: -320, opacity: 0 }}
-                transition={{ duration: 0.2, ease: "easeInOut" }}
+                initial={{ x: -320, opacity: 0, scale: 0.98 }}
+                animate={{ x: 0, opacity: 1, scale: 1 }}
+                exit={{ x: -320, opacity: 0, scale: 0.98 }}
+                transition={{
+                  type: "spring",
+                  stiffness: 300,
+                  damping: 30,
+                  mass: 0.8
+                }}
                 className="absolute inset-y-0 left-0 z-40 flex h-full max-w-full"
               >
                 <div className="h-full w-[min(22rem,90vw)] max-w-sm">
@@ -222,7 +227,7 @@ function Layout({ children }: LayoutProps) {
           </main>
 
           {!shouldOverlaySidebars && rightSidebarOpen && (
-            <div className="relative hidden h-full flex-shrink-0 border-l bg-sidebar/80 backdrop-blur xl:flex xl:w-[18rem] 2xl:w-80">
+            <div className="relative hidden flex-shrink-0 xl:flex xl:w-[18rem] 2xl:w-80 pt-4">
               <MemoizedRightPanel className="h-full w-full" />
             </div>
           )}
@@ -231,10 +236,15 @@ function Layout({ children }: LayoutProps) {
             {shouldOverlaySidebars && !isSheetBreakpoint && rightSidebarOpen && (
               <motion.div
                 key="right-sidebar"
-                initial={{ x: 320, opacity: 0 }}
-                animate={{ x: 0, opacity: 1 }}
-                exit={{ x: 320, opacity: 0 }}
-                transition={{ duration: 0.2, ease: "easeInOut" }}
+                initial={{ x: 320, opacity: 0, scale: 0.98 }}
+                animate={{ x: 0, opacity: 1, scale: 1 }}
+                exit={{ x: 320, opacity: 0, scale: 0.98 }}
+                transition={{
+                  type: "spring",
+                  stiffness: 300,
+                  damping: 30,
+                  mass: 0.8
+                }}
                 className="absolute inset-y-0 right-0 z-40 flex h-full max-w-full"
               >
                 <div className="h-full w-[min(22rem,90vw)] max-w-sm">
@@ -253,7 +263,7 @@ function Layout({ children }: LayoutProps) {
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.2 }}
-                className="absolute inset-0 z-30 bg-black/40"
+                className="absolute inset-0 z-30 bg-black/50 backdrop-blur-sm"
                 aria-label="Close side panels"
                 onClick={() => {
                   if (leftSidebarOpen) {
