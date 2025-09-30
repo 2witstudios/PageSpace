@@ -252,45 +252,47 @@
     }
   }
 
-  /* Light Mode Gradient */
+  /* Light Mode Gradient - Blue to Gold */
   :root .upgrade-gradient {
     background: linear-gradient(
       135deg,
-      oklch(0.60 0.20 270) 0%,
-      oklch(0.58 0.22 290) 25%,
-      oklch(0.62 0.24 320) 50%,
-      oklch(0.60 0.20 340) 75%,
-      oklch(0.58 0.22 270) 100%
+      oklch(0.55 0.20 240) 0%,
+      oklch(0.58 0.22 235) 20%,
+      oklch(0.65 0.20 200) 40%,
+      oklch(0.68 0.22 150) 60%,
+      oklch(0.70 0.24 90) 80%,
+      oklch(0.68 0.22 75) 100%
     );
     background-size: 200% 200%;
     animation: gradient-shift 8s ease infinite;
     box-shadow:
-      0 2px 8px rgba(139, 92, 246, 0.25),
-      0 4px 16px rgba(168, 85, 247, 0.15),
-      inset 0 1px 0 rgba(255, 255, 255, 0.3);
-    border: 1px solid rgba(255, 255, 255, 0.2);
+      0 2px 8px rgba(59, 130, 246, 0.3),
+      0 4px 16px rgba(234, 179, 8, 0.2),
+      inset 0 1px 0 rgba(255, 255, 255, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.25);
     position: relative;
     overflow: hidden;
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
-  /* Dark Mode Gradient */
+  /* Dark Mode Gradient - Blue to Gold */
   .dark .upgrade-gradient {
     background: linear-gradient(
       135deg,
-      oklch(0.65 0.24 270) 0%,
-      oklch(0.68 0.26 290) 25%,
-      oklch(0.70 0.28 320) 50%,
-      oklch(0.68 0.26 340) 75%,
-      oklch(0.65 0.24 270) 100%
+      oklch(0.60 0.22 240) 0%,
+      oklch(0.62 0.24 235) 20%,
+      oklch(0.68 0.22 200) 40%,
+      oklch(0.72 0.24 150) 60%,
+      oklch(0.75 0.26 90) 80%,
+      oklch(0.72 0.24 75) 100%
     );
     background-size: 200% 200%;
     animation: gradient-shift 8s ease infinite;
     box-shadow:
-      0 2px 8px rgba(168, 85, 247, 0.4),
-      0 4px 16px rgba(192, 132, 252, 0.25),
-      inset 0 1px 0 rgba(255, 255, 255, 0.15);
-    border: 1px solid rgba(255, 255, 255, 0.15);
+      0 2px 8px rgba(59, 130, 246, 0.4),
+      0 4px 16px rgba(234, 179, 8, 0.3),
+      inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.2);
   }
 
   /* Shimmer effect overlay */

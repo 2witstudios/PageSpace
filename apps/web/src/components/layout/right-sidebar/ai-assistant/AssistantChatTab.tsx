@@ -487,7 +487,7 @@ const AssistantChatTab: React.FC = () => {
   return (
     <div className="flex flex-col h-full">
       {/* Header with New Chat button */}
-      <div className="flex items-center justify-between p-2 border-b bg-card">
+      <div className="flex items-center justify-between p-2 border-b border-gray-200 dark:border-[var(--separator)] bg-card">
         <span className="text-sm font-medium text-muted-foreground">Chat</span>
         <Button
           variant="ghost"
@@ -501,7 +501,7 @@ const AssistantChatTab: React.FC = () => {
 
       {/* Messages Area */}
       <div className="flex-1 min-h-0 overflow-hidden">
-        <ScrollArea className="h-full px-3" ref={scrollAreaRef}>
+        <ScrollArea className="h-full p-3" ref={scrollAreaRef}>
           <div className="space-y-3">
             {/* Load More Messages Button */}
             {pagination?.hasMore && messages.length > 0 && (

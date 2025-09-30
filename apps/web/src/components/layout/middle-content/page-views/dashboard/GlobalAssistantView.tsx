@@ -557,7 +557,7 @@ const GlobalAssistantView: React.FC = () => {
       </div>
 
       {/* Role Selector Header */}
-      <div className="flex items-center p-4 border-b border-[var(--separator)]">
+      <div className="flex items-center p-4 border-b border-gray-200 dark:border-[var(--separator)]">
         <RoleSelector
           currentRole={currentAgentRole}
           onRoleChange={setCurrentAgentRole}
