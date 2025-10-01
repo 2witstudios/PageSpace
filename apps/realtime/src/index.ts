@@ -4,9 +4,7 @@ import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissio
 import { decodeToken } from '@pagespace/lib/server';
 import { verifyBroadcastSignature } from '@pagespace/lib/broadcast-auth';
 import * as dotenv from 'dotenv';
-import { db, eq, or } from '@pagespace/db';
-import { users } from '@pagespace/db/src/schema/auth';
-import { dmConversations } from '@pagespace/db/src/schema/social';
+import { db, eq, or, users, dmConversations } from '@pagespace/db';
 import { parse } from 'cookie';
 import { loggers } from '@pagespace/lib/logger-config';
 
