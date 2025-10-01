@@ -42,7 +42,7 @@ const getStatusIcon = (status: Task['status']) => {
     case 'completed':
       return <CheckCircle2 className="w-4 h-4 text-green-600" />;
     case 'in_progress':
-      return <Clock className="w-4 h-4 text-blue-600" />;
+      return <Clock className="w-4 h-4 text-primary" />;
     case 'blocked':
       return <AlertCircle className="w-4 h-4 text-red-600" />;
     case 'pending':
@@ -68,7 +68,7 @@ const getStatusColor = (status: Task['status']) => {
     case 'completed':
       return 'bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-300';
     case 'in_progress':
-      return 'bg-blue-100 text-blue-800 dark:bg-blue-900/20 dark:text-blue-300';
+      return 'bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary';
     case 'blocked':
       return 'bg-red-100 text-red-800 dark:bg-red-900/20 dark:text-red-300';
     case 'pending':
@@ -138,15 +138,15 @@ export const TodoListMessage: React.FC<TodoListMessageProps> = React.memo(({
 
   return (
     <div className="mb-4 mr-8">
-      <Card className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-950/30 dark:to-indigo-950/30 border-blue-200 dark:border-blue-800">
+      <Card className="bg-primary/10 dark:bg-primary/20 border-primary/20 dark:border-primary/30">
         <Collapsible open={isOpen} onOpenChange={setIsOpen}>
           <CollapsibleTrigger asChild>
-            <CardHeader className="cursor-pointer hover:bg-blue-100/50 dark:hover:bg-blue-900/20 transition-colors">
+            <CardHeader className="cursor-pointer hover:bg-primary/15 dark:hover:bg-primary/25 transition-colors">
               <CardTitle className="flex items-center justify-between text-lg">
                 <div className="flex items-center gap-3">
                   {isOpen ? <ChevronDown className="w-5 h-5" /> : <ChevronRight className="w-5 h-5" />}
                   <div className="flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full bg-blue-500"></div>
+                    <div className="w-2 h-2 rounded-full bg-primary"></div>
                     {taskList.title}
                   </div>
                 </div>
@@ -159,11 +159,11 @@ export const TodoListMessage: React.FC<TodoListMessageProps> = React.memo(({
                   </div>
                 </div>
               </CardTitle>
-              
+
               {/* Progress bar */}
               <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 mt-2">
-                <div 
-                  className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                <div
+                  className="bg-primary h-2 rounded-full transition-all duration-300"
                   style={{ width: `${progress.percentage}%` }}
                 />
               </div>

@@ -85,7 +85,7 @@ export default function DriveSwitcher() {
               <ChevronsUpDown className="h-4 w-4" />
             </Button>
           </DropdownMenuTrigger>
-          <Link href={currentDrive ? `/dashboard/${currentDrive.id}` : '/dashboard'} className="font-semibold truncate hover:underline flex-1">
+          <Link href={currentDrive ? `/dashboard/${currentDrive.id}` : '/dashboard'} className="font-semibold truncate hover:underline flex-1 text-foreground">
             {currentDrive ? currentDrive.name : "Select a drive"}
           </Link>
           <Button

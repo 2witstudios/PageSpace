@@ -6,29 +6,49 @@ import { pages, db, eq } from '@pagespace/db';
 type BreadcrumbPage = (typeof pages.$inferSelect) & { drive: { id: string; slug: string; name: string } | null };
 
 async function getBreadcrumbs(pageId: string): Promise<BreadcrumbPage[]> {
-  const page = await db.query.pages.findFirst({
-    where: eq(pages.id, pageId),
-    with: {
-      drive: {
-        columns: {
-          id: true,
-          slug: true,
-          name: true,
+  const breadcrumbs: BreadcrumbPage[] = [];
+  const visited = new Set<string>();
+  let currentId: string | null = pageId;
+  const MAX_DEPTH = 100;
+  let depth = 0;
+
+  while (currentId) {
+    depth++;
+
+    // Depth limit check
+    if (depth > MAX_DEPTH) {
+      console.error(`Breadcrumb computation exceeded max depth ${MAX_DEPTH} for page ${pageId}`);
+      break;
+    }
+
+    // Cycle detection
+    if (visited.has(currentId)) {
+      console.error(`Circular reference detected in breadcrumbs for page ${pageId} at page ${currentId}`);
+      break;
+    }
+    visited.add(currentId);
+
+    // Fetch page
+    const page: BreadcrumbPage | undefined = await db.query.pages.findFirst({
+      where: eq(pages.id, currentId),
+      with: {
+        drive: {
+          columns: {
+            id: true,
+            slug: true,
+            name: true,
+          },
         },
       },
-    },
-  });
+    });
 
-  if (!page) {
-    return [];
+    if (!page) break;
+
+    breadcrumbs.unshift(page as BreadcrumbPage);
+    currentId = page.parentId;
   }
 
-  if (!page.parentId) {
-    return [page as BreadcrumbPage];
-  }
-
-  const parentBreadcrumbs = await getBreadcrumbs(page.parentId);
-  return [...parentBreadcrumbs, page as BreadcrumbPage];
+  return breadcrumbs;
 }
 
 export async function GET(req: Request, { params }: { params: Promise<{ pageId: string }> }) {

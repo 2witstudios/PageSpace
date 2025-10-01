@@ -3,6 +3,7 @@ import { db, directMessages, dmConversations, eq, and, or, desc, lt } from '@pag
 import { verifyAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 import { createOrUpdateMessageNotification } from '@pagespace/lib';
+import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
 
 // GET /api/messages/[conversationId] - Get messages in a conversation
 export async function GET(
@@ -188,14 +189,16 @@ export async function POST(
     // Broadcast the new message to the DM room for realtime updates
     if (process.env.INTERNAL_REALTIME_URL) {
       try {
+        const requestBody = JSON.stringify({
+          channelId: `dm:${conversationId}`,
+          event: 'new_dm_message',
+          payload: newMessage,
+        });
+
         await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            channelId: `dm:${conversationId}`,
-            event: 'new_dm_message',
-            payload: newMessage,
-          }),
+          headers: createSignedBroadcastHeaders(requestBody),
+          body: requestBody,
         });
       } catch (error) {
         loggers.realtime?.error?.('Failed to broadcast DM message to socket server:', error as Error);

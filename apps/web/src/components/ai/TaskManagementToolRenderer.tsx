@@ -76,13 +76,13 @@ export const TaskManagementToolRenderer: React.FC<TaskManagementToolRendererProp
     case 'input-streaming':
       return (
         <div className="mb-4">
-          <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+          <div className="bg-primary/10 dark:bg-primary/20 border border-primary/20 dark:border-primary/30 rounded-lg p-4">
             <div className="animate-pulse">
               <div className="flex items-center gap-2 mb-2">
-                <div className="w-4 h-4 bg-blue-500 rounded-full animate-spin"></div>
-                <div className="h-4 bg-blue-200 dark:bg-blue-700 rounded w-1/3"></div>
+                <div className="w-4 h-4 bg-primary rounded-full animate-spin"></div>
+                <div className="h-4 bg-primary/30 dark:bg-primary/50 rounded w-1/3"></div>
               </div>
-              <div className="text-sm text-blue-600 dark:text-blue-400">
+              <div className="text-sm text-primary">
                 Preparing {getToolDisplayName(toolName)}...
               </div>
             </div>
@@ -93,15 +93,15 @@ export const TaskManagementToolRenderer: React.FC<TaskManagementToolRendererProp
     case 'input-available':
       return (
         <div className="mb-4">
-          <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+          <div className="bg-primary/10 dark:bg-primary/20 border border-primary/20 dark:border-primary/30 rounded-lg p-4">
             <div className="animate-pulse">
               <div className="flex items-center gap-2 mb-2">
-                <div className="w-4 h-4 bg-blue-500 rounded-full animate-spin"></div>
-                <div className="font-medium text-blue-800 dark:text-blue-200">
+                <div className="w-4 h-4 bg-primary rounded-full animate-spin"></div>
+                <div className="font-medium text-primary">
                   {getToolDisplayName(toolName)}
                 </div>
               </div>
-              <div className="text-sm text-blue-600 dark:text-blue-400">
+              <div className="text-sm text-primary">
                 Processing task management operation...
               </div>
             </div>

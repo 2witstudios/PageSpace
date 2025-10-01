@@ -3,6 +3,7 @@ import { verifyAuth } from '@/lib/auth';
 import { db, pages, eq } from '@pagespace/db';
 import { PageType, canUserViewPage, isFilePage } from '@pagespace/lib';
 import { createServiceToken } from '@pagespace/lib/auth-utils';
+import { sanitizeFilenameForHeader } from '@pagespace/lib/utils/file-security';
 
 interface RouteParams {
   params: Promise<{
@@ -82,11 +83,17 @@ export async function GET(
       const fileBuffer = Buffer.from(await fileResponse.arrayBuffer());
       console.log('[Download] Successfully fetched from processor, size:', fileBuffer.length);
 
+      // Sanitize filename to prevent header injection
+      const sanitizedFilename = sanitizeFilenameForHeader(page.originalFileName || page.title);
+
       // Set appropriate headers for file download
       const headers = new Headers();
       headers.set('Content-Type', page.mimeType || 'application/octet-stream');
       headers.set('Content-Length', page.fileSize?.toString() || fileBuffer.length.toString());
-      headers.set('Content-Disposition', `attachment; filename="${page.originalFileName || page.title}"`);
+      headers.set('Content-Disposition', `attachment; filename="${sanitizedFilename}"`);
+      headers.set('X-Content-Type-Options', 'nosniff'); // Prevent MIME sniffing
+      headers.set('X-Frame-Options', 'DENY'); // Prevent clickjacking
+      headers.set('Content-Security-Policy', "default-src 'none';"); // Extra protection
 
       // Return the file
       return new NextResponse(fileBuffer, {

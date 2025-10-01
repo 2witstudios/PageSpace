@@ -31,9 +31,9 @@ function processMentions(content: string): ReactNode[] {
     }
     
     elements.push(
-      <span 
-        key={`mention-${keyIndex++}`} 
-        className="inline-flex items-center px-2 py-0.5 rounded-md bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300 text-sm font-medium mx-1"
+      <span
+        key={`mention-${keyIndex++}`}
+        className="inline-flex items-center px-2 py-0.5 rounded-md bg-primary/20 text-primary dark:bg-primary/30 dark:text-primary text-sm font-medium mx-1"
       >
         @{label}
       </span>

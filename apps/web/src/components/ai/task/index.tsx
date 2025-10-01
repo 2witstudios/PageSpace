@@ -51,7 +51,7 @@ export function TaskTrigger({
       case 'completed':
         return <CheckCircle className="h-4 w-4 text-green-600" />
       case 'in_progress':
-        return <Loader2 className="h-4 w-4 text-blue-600 animate-spin" />
+        return <Loader2 className="h-4 w-4 text-primary animate-spin" />
       case 'error':
         return <XCircle className="h-4 w-4 text-red-600" />
       default:
@@ -64,7 +64,7 @@ export function TaskTrigger({
       case 'completed':
         return 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
       case 'in_progress':
-        return 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800'
+        return 'bg-primary/10 dark:bg-primary/20 border-primary/20 dark:border-primary/30'
       case 'error':
         return 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'
       default:
@@ -132,7 +132,7 @@ export function TaskItem({
       case 'completed':
         return <CheckCircle className="h-3 w-3 text-green-600" />
       case 'in_progress':
-        return <Loader2 className="h-3 w-3 text-blue-600 animate-spin" />
+        return <Loader2 className="h-3 w-3 text-primary animate-spin" />
       case 'error':
         return <XCircle className="h-3 w-3 text-red-600" />
       default:

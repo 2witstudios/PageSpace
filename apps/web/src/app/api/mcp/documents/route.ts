@@ -105,7 +105,26 @@ export async function POST(req: NextRequest) {
     if (!accessLevel) {
       return new NextResponse('Forbidden', { status: 403 });
     }
-    
+
+    // Validate write permissions for mutating operations
+    if (operation === 'replace' || operation === 'insert' || operation === 'delete') {
+      if (!accessLevel.canEdit) {
+        loggers.api.warn('MCP write operation denied - insufficient permissions', {
+          userId,
+          pageId,
+          operation,
+          permissions: accessLevel
+        });
+        return NextResponse.json(
+          {
+            error: 'Write permission required',
+            details: `The '${operation}' operation requires edit access to this document`
+          },
+          { status: 403 }
+        );
+      }
+    }
+
     // Fetch the page
     const page = await db.query.pages.findFirst({
       where: eq(pages.id, pageId),

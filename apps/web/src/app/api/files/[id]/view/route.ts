@@ -3,6 +3,7 @@ import { verifyAuth } from '@/lib/auth';
 import { db, pages, eq } from '@pagespace/db';
 import { PageType, canUserViewPage, isFilePage } from '@pagespace/lib';
 import { createServiceToken } from '@pagespace/lib/auth-utils';
+import { sanitizeFilenameForHeader, isDangerousMimeType, getCSPHeaderForFile } from '@pagespace/lib/utils/file-security';
 
 interface RouteParams {
   params: Promise<{
@@ -79,15 +80,34 @@ export async function GET(
       
       // Get the file buffer from response
       const fileBuffer = Buffer.from(await fileResponse.arrayBuffer());
-      
+
       console.log('Successfully fetched file from processor, size:', fileBuffer.length);
+
+      // Sanitize filename to prevent header injection
+      const sanitizedFilename = sanitizeFilenameForHeader(page.originalFileName || page.title);
+      const mimeType = page.mimeType || 'application/octet-stream';
 
       // Set appropriate headers for inline viewing
       const headers = new Headers();
-      headers.set('Content-Type', page.mimeType || 'application/octet-stream');
+      headers.set('Content-Type', mimeType);
       headers.set('Content-Length', page.fileSize?.toString() || fileBuffer.length.toString());
-      // Use inline disposition for viewing in browser
-      headers.set('Content-Disposition', `inline; filename="${page.originalFileName || page.title}"`);
+      headers.set('X-Content-Type-Options', 'nosniff');
+      headers.set('X-Frame-Options', 'DENY');
+
+      // Force download for dangerous MIME types + strict CSP
+      if (isDangerousMimeType(mimeType)) {
+        headers.set('Content-Disposition', `attachment; filename="${sanitizedFilename}"`);
+        headers.set('Content-Security-Policy', getCSPHeaderForFile(mimeType));
+
+        console.warn('[Security] Forcing download for dangerous MIME type:', {
+          pageId: page.id,
+          mimeType,
+          filename: sanitizedFilename,
+        });
+      } else {
+        headers.set('Content-Disposition', `inline; filename="${sanitizedFilename}"`);
+        headers.set('Content-Security-Policy', "default-src 'none';");
+      }
 
       // Return the file
       return new NextResponse(fileBuffer, {

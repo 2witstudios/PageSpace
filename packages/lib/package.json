@@ -110,6 +110,16 @@
       "types": "./dist/utils/environment.d.ts",
       "import": "./dist/utils/environment.js",
       "default": "./dist/utils/environment.js"
+    },
+    "./utils/file-security": {
+      "types": "./dist/utils/file-security.d.ts",
+      "import": "./dist/utils/file-security.js",
+      "require": "./dist/utils/file-security.js"
+    },
+    "./pages/circular-reference-guard": {
+      "types": "./dist/pages/circular-reference-guard.d.ts",
+      "import": "./dist/pages/circular-reference-guard.js",
+      "require": "./dist/pages/circular-reference-guard.js"
     }
   },
   "typesVersions": {
@@ -170,6 +180,12 @@
       ],
       "utils/environment": [
         "./dist/utils/environment.d.ts"
+      ],
+      "utils/file-security": [
+        "./dist/utils/file-security.d.ts"
+      ],
+      "pages/circular-reference-guard": [
+        "./dist/pages/circular-reference-guard.d.ts"
       ]
     }
   },

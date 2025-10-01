@@ -117,8 +117,8 @@ export const CompactTaskManagementToolRenderer: React.FC<CompactTaskManagementTo
     case 'input-streaming':
     case 'input-available':
       return (
-        <div className="text-xs p-2 bg-blue-50 dark:bg-blue-900/20 rounded-md mb-1">
-          <div className="flex items-center gap-2 text-blue-700 dark:text-blue-300">
+        <div className="text-xs p-2 bg-primary/10 dark:bg-primary/20 rounded-md mb-1">
+          <div className="flex items-center gap-2 text-primary">
             {getToolIcon(toolName)}
             <span className="font-medium">{getToolDisplayName(toolName)}</span>
             <Loader2 className="h-3 w-3 animate-spin ml-auto" />

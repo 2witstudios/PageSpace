@@ -1,0 +1,13 @@
+/* Liquid Glass AI Input - Minimal & Clean */
+.container {
+  display: flex;
+  align-items: center;
+  position: relative;
+  width: 100%;
+}
+
+.main {
+  position: relative;
+  width: 100%;
+  z-index: 1;
+}

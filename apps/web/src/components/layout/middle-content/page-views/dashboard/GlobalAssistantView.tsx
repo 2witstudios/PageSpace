@@ -2,7 +2,8 @@ import React, { useEffect, useState, useRef } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { useSearchParams, usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
-import ChatInput, { ChatInputRef } from '@/components/messages/ChatInput';
+import AiInput from '@/components/ai/AiInput';
+import { ChatInputRef } from '@/components/messages/ChatInput';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Loader2, Send, Settings, Plus, History } from 'lucide-react';
@@ -515,13 +516,13 @@ const GlobalAssistantView: React.FC = () => {
   return (
     <div className="flex flex-col h-full">
       {/* Header with Global Assistant title, conversation info and action buttons */}
-      <div className="flex items-center justify-between p-4 border-b bg-card">
+      <div className="flex items-center justify-between p-4 border-b border-[var(--separator)]">
         <div className="flex items-center space-x-2">
           <span className="text-sm font-medium">
             Global Assistant: {currentConversation?.title || 'New Conversation'}
           </span>
         </div>
-        
+
         <div className="flex items-center space-x-2">
           <Button
             variant="ghost"
@@ -532,7 +533,7 @@ const GlobalAssistantView: React.FC = () => {
           >
             <Settings className="h-4 w-4" />
           </Button>
-          
+
           <Button
             variant="ghost"
             size="icon"
@@ -542,7 +543,7 @@ const GlobalAssistantView: React.FC = () => {
           >
             <History className="h-4 w-4" />
           </Button>
-          
+
           <Button
             variant="outline"
             size="sm"
@@ -550,13 +551,13 @@ const GlobalAssistantView: React.FC = () => {
             className="flex items-center space-x-2"
           >
             <Plus className="h-4 w-4" />
-            <span>New</span>
+            <span className="hidden sm:inline">New</span>
           </Button>
         </div>
       </div>
 
       {/* Role Selector Header */}
-      <div className="flex items-center p-4 border-b bg-card">
+      <div className="flex items-center p-4 border-b border-gray-200 dark:border-[var(--separator)]">
         <RoleSelector
           currentRole={currentAgentRole}
           onRoleChange={setCurrentAgentRole}
@@ -566,7 +567,7 @@ const GlobalAssistantView: React.FC = () => {
       </div>
 
       {/* Messages Area */}
-      <div className="flex-1 min-h-0 overflow-hidden p-4">
+      <div className="flex-1 min-h-0 overflow-hidden px-4">
         <ScrollArea className="h-full" ref={scrollAreaRef}>
           <div className="max-w-4xl mx-auto w-full">
             <div className="space-y-4 pr-4">
@@ -620,7 +621,7 @@ const GlobalAssistantView: React.FC = () => {
       </div>
 
       {/* Input Area */}
-      <div className="border-t p-4">
+      <div className="border-t border-[var(--separator)] p-4">
         <div className="max-w-4xl mx-auto w-full">
           {error && showError && (
             <div className="mb-3 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg flex items-center justify-between">
@@ -646,7 +647,7 @@ const GlobalAssistantView: React.FC = () => {
           )}
           
           <div className="flex space-x-2">
-            <ChatInput
+            <AiInput
               ref={chatInputRef}
               value={input}
               onChange={setInput}
@@ -655,7 +656,7 @@ const GlobalAssistantView: React.FC = () => {
               driveId={locationContext?.currentDrive?.id}
               crossDrive={true}  // Allow searching across all drives in global assistant
             />
-            <Button 
+            <Button
               onClick={handleSendMessage}
               disabled={status === 'streaming' || !input.trim() || !providerSettings?.isAnyProviderConfigured || isLoading}
               size="icon"

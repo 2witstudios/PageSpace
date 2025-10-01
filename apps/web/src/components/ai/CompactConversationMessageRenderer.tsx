@@ -137,10 +137,10 @@ export const CompactConversationMessageRenderer: React.FC<CompactConversationMes
     if (isLoading) {
       return (
         <div className="mb-3">
-          <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-md p-2">
+          <div className="bg-primary/10 dark:bg-primary/20 border border-primary/20 dark:border-primary/30 rounded-md p-2">
             <div className="animate-pulse">
-              <div className="h-3 bg-blue-200 dark:bg-blue-700 rounded w-2/3 mb-1"></div>
-              <div className="h-1.5 bg-blue-100 dark:bg-blue-800 rounded w-full mb-2"></div>
+              <div className="h-3 bg-primary/30 dark:bg-primary/50 rounded w-2/3 mb-1"></div>
+              <div className="h-1.5 bg-primary/20 dark:bg-primary/40 rounded w-full mb-2"></div>
               <div className="space-y-1">
                 <div className="h-6 bg-white dark:bg-gray-800 rounded"></div>
                 <div className="h-6 bg-white dark:bg-gray-800 rounded"></div>

@@ -5,7 +5,8 @@ import { useParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Save } from 'lucide-react';
-import ChatInput, { ChatInputRef } from '@/components/messages/ChatInput';
+import AiInput from '@/components/ai/AiInput';
+import { ChatInputRef } from '@/components/messages/ChatInput';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -383,35 +384,35 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     <div className="flex flex-col h-full">
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col h-full">
-        <div className="p-4 border-b bg-card">
+        <div className="p-4 border-b border-[var(--separator)]">
           <div className="flex items-center justify-between">
             <TabsList className="grid grid-cols-2 max-w-md">
               <TabsTrigger value="chat" className="flex items-center space-x-2">
                 <MessageSquare className="h-4 w-4" />
-                <span>Chat</span>
+                <span className="hidden sm:inline">Chat</span>
               </TabsTrigger>
               <TabsTrigger value="settings" className="flex items-center space-x-2">
                 <Settings className="h-4 w-4" />
-                <span>Settings</span>
+                <span className="hidden sm:inline">Settings</span>
               </TabsTrigger>
             </TabsList>
-            
+
             {/* Save Settings Button - Only show when Settings tab is active */}
             {activeTab === 'settings' && (
-              <Button 
+              <Button
                 onClick={() => agentSettingsRef.current?.submitForm()}
                 disabled={agentSettingsRef.current?.isSaving || false}
-                className="min-w-[120px]"
+                className="min-w-[100px] sm:min-w-[120px]"
               >
                 {agentSettingsRef.current?.isSaving ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Saving...
+                    <span className="hidden sm:inline">Saving...</span>
                   </>
                 ) : (
                   <>
-                    <Save className="h-4 w-4 mr-2" />
-                    Save Settings
+                    <Save className="h-4 w-4 sm:mr-2" />
+                    <span className="hidden sm:inline">Save Settings</span>
                   </>
                 )}
               </Button>
@@ -478,7 +479,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       </div>
 
       {/* Input Area - Apply centering pattern */}
-      <div className="border-t p-4">
+      <div className="border-t border-[var(--separator)] p-4">
         <div className="max-w-4xl mx-auto w-full">
           {error && showError && (
             <div className="mb-3 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg flex items-center justify-between">
@@ -504,7 +505,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
           )}
           
           <div className="flex space-x-2">
-            <ChatInput
+            <AiInput
               ref={chatInputRef}
               value={input}
               onChange={setInput}
@@ -518,7 +519,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                   const currentDrive = drives.find(d => d.id === driveId);
                   // Build page path context
                   const pagePathInfo = buildPagePath(tree, page.id, driveId);
-                  
+
                   sendMessage(
                     { text: input },
                     {

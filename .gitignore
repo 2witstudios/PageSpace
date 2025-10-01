@@ -56,3 +56,4 @@ packages/db/drizzle/meta/
 *.swp
 .history/
 .roo/
+reports/

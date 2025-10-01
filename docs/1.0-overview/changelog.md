@@ -1,3 +1,148 @@
+## 2025-09-30
+
+### Critical Security Fixes - Pre-MVP Launch
+
+**All 7 Critical Security Blockers Resolved**
+
+Implemented comprehensive security fixes addressing authentication, authorization, data integrity, and XSS vulnerabilities identified in the MVP security audit.
+
+#### BLOCKER-001: Signup Rate Limiting ✅
+- **Issue**: No rate limiting on signup endpoint despite infrastructure existing
+- **Impact**: Unlimited account creation → CPU exhaustion via bcrypt(12)
+- **Fix**: Added dual rate limiting (IP + email) with 3 attempts/hour
+- **Location**: `/apps/web/src/app/api/auth/signup/route.ts`
+- **Time**: 30 minutes
+
+#### BLOCKER-002: Channel Message HMAC Signatures ✅
+- **Issue**: Channel/DM message broadcasts missing HMAC signatures
+- **Impact**: Real-time messaging broken (broadcasts rejected with 401)
+- **Fix**: Added `createSignedBroadcastHeaders()` to message endpoints
+- **Locations**:
+  - `/apps/web/src/app/api/channels/[pageId]/messages/route.ts`
+  - `/apps/web/src/app/api/messages/[conversationId]/route.ts`
+- **Time**: 10 minutes
+
+#### BLOCKER-003: CSS url() Data Exfiltration ✅
+- **Issue**: Canvas CSS allows external `url()` → tracking pixels in shared templates
+- **Impact**: Template sharing enables data exfiltration
+- **Fix**: Block external URLs, allow data: URIs for images/fonts only
+- **Location**: `/apps/web/src/lib/canvas/css-sanitizer.ts`
+- **Time**: 2 hours
+
+#### BLOCKER-004: MCP Write Permission Validation ✅
+- **Issue**: MCP operations check access but never validate `canEdit`
+- **Impact**: Read-only users can modify documents via MCP API
+- **Fix**: Added permission check for write operations (replace, insert, delete)
+- **Location**: `/apps/web/src/app/api/mcp/documents/route.ts`
+- **Time**: 5 minutes
+
+#### BLOCKER-005: Circular Page Reference Prevention ✅
+- **Issue**: No validation prevents circular parent-child relationships
+- **Impact**: Stack overflow in breadcrumb computation, infinite loops
+- **Fix**:
+  - Created circular reference guard utilities
+  - Fixed breadcrumb computation to be iterative with cycle detection
+  - Added validation to all page move endpoints
+- **Locations**:
+  - `/packages/lib/src/pages/circular-reference-guard.ts` (new)
+  - `/apps/web/src/app/api/pages/[pageId]/breadcrumbs/route.ts`
+  - `/apps/web/src/app/api/pages/[pageId]/route.ts`
+  - `/apps/web/src/app/api/pages/reorder/route.ts`
+  - `/apps/web/src/app/api/pages/bulk/move/route.ts`
+- **Time**: 5 hours
+
+#### BLOCKER-006: Admin Endpoint Authorization ✅
+- **Issue**: Monitoring endpoints only check authentication, not admin role
+- **Impact**: Any user can access system metrics, AI costs, error logs
+- **Fix**: Added `verifyAdminAuth()` check to monitoring endpoints
+- **Location**: `/apps/web/src/app/api/monitoring/[metric]/route.ts`
+- **Time**: 5 minutes
+
+#### BLOCKER-007: File Security (Header Injection + XSS) ✅
+- **Issue**: Filename CRLF injection + XSS via HTML/SVG uploads
+- **Impact**: Header injection, session hijacking, cookie theft
+- **Fix**:
+  - Created filename sanitization utilities
+  - Sanitize filenames in all file-serving endpoints
+  - Force download for dangerous MIME types (HTML, SVG, XML)
+  - Add strict CSP headers with sandbox
+- **Locations**:
+  - `/packages/lib/src/utils/file-security.ts` (new)
+  - `/apps/web/src/app/api/files/[id]/download/route.ts`
+  - `/apps/web/src/app/api/files/[id]/view/route.ts`
+  - `/apps/web/src/app/api/upload/route.ts`
+  - `/apps/processor/src/utils/security.ts`
+  - `/apps/processor/src/api/serve.ts`
+- **Time**: 5 hours
+
+**Total Implementation Time**: ~13 hours
+
+**Security Improvements**:
+- ✅ Rate limiting prevents DOS attacks and spam
+- ✅ Real-time messaging now working with proper authentication
+- ✅ Canvas templates safe from tracking pixel exfiltration
+- ✅ MCP integration properly enforces edit permissions
+- ✅ Page tree operations protected from circular references
+- ✅ Admin-only data properly protected from regular users
+- ✅ File uploads/downloads protected from header injection and XSS
+
+---
+
+## 2025-09-30
+
+### Security Audit - Drive & Workspace Management System
+
+- **Comprehensive Security Review**: Conducted thorough security audit of drives and workspace management
+  - **Scope**: Drive creation, member management, permissions, invitations, access control
+  - **Methodology**: Code-level verification of actual implementation vs theoretical vulnerabilities
+  - **Result**: System significantly more secure than initially assessed - most "critical" findings were false positives
+  - **Documents Created**:
+    - `SECURITY_AUDIT_DRIVES.md` - Original audit (superseded, preserved for reference)
+    - `SECURITY_AUDIT_DRIVES_REVISED.md` - Complete revised audit with MVP focus
+    - `SECURITY_AUDIT_SUMMARY.md` - Executive summary and quick reference
+
+- **Key Findings - Revised Assessment**:
+  - **Overall Risk**: LOW-MEDIUM for MVP (originally claimed MEDIUM-HIGH)
+  - **Critical Vulnerabilities**: 0 (originally claimed 4)
+  - **MVP Blockers**: 2 feature gaps requiring 2-3 hours to fix
+  - **False Positives**: 3 major claims debunked by code verification
+
+- **MVP Blockers Identified**:
+  1. **Owner Not in driveMembers Table**: Drive creation doesn't add owner to driveMembers, causing data model inconsistency
+     - Location: `/apps/web/src/app/api/drives/route.ts:100-110`
+     - Impact: Owner doesn't appear in member queries
+     - Fix: Add transaction to insert owner member record on creation
+     - Time: 15 minutes + migration to backfill existing drives
+
+  2. **No Member Removal Endpoint**: DELETE endpoint missing for removing drive members
+     - Location: `/apps/web/src/app/api/drives/[driveId]/members/[userId]/route.ts`
+     - Impact: Cannot remove members once added (feature gap)
+     - Fix: Implement DELETE handler with owner protection
+     - Time: 30 minutes
+
+- **False Positives Corrected**:
+  1. **"Owner Can Be Removed"**: DEBUNKED - No DELETE/PATCH endpoint exists for member roles
+  2. **"Missing Invitation Validation"**: OVERSTATED - Feature not implemented yet; auto-accept intentional for MVP
+  3. **"Drive Settings Vulnerable"**: OVERSTATED - Zod validates input before spread operator
+
+- **Security Strengths Verified**:
+  - ✅ All mutation endpoints verify ownership (`drives.ownerId === userId`)
+  - ✅ Access control correctly checks owner OR member status
+  - ✅ Soft delete pattern prevents accidental data loss
+  - ✅ Cross-drive validation prevents permission leakage
+  - ✅ Database constraints enforce data integrity
+  - ✅ Next.js 15 async params pattern throughout
+  - ✅ Type-safe Drizzle ORM usage
+
+- **High Priority (Post-MVP)**:
+  - Role validation to prevent invalid role assignments (10 min fix)
+  - Proper invitation flow with user consent (enhancement)
+  - Define and enforce ADMIN role permissions (feature expansion)
+
+- **Recommendation**: **SHIP AFTER 2-3 HOUR FIX** - System is secure; only missing basic member management features
+
+---
+
 ## 2025-09-25
 
 ### Browser Compatibility Fix - Memory Usage Error (16:56 UTC)

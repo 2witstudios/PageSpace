@@ -157,7 +157,7 @@ const AssistantHistoryTab: React.FC = () => {
                   onClick={() => handleConversationClick(conversation.id)}
                   className={`group p-3 rounded-lg border cursor-pointer hover:bg-accent transition-colors ${
                     conversation.id === activeConversationId
-                      ? 'bg-accent border-accent-foreground/20'
+                      ? 'bg-accent/50 border-accent-foreground/20'
                       : 'border-border'
                   }`}
                 >
@@ -166,7 +166,7 @@ const AssistantHistoryTab: React.FC = () => {
                       <h4 className="text-sm font-medium truncate">
                         {conversation.title || 'New Conversation'}
                       </h4>
-                      <p className="text-xs text-muted-foreground mt-1">
+                      <p className={`text-xs mt-1 ${conversation.id === activeConversationId ? 'text-foreground' : 'text-muted-foreground group-hover:text-foreground'}`}>
                         {formatDistanceToNow(new Date(conversation.lastMessageAt || conversation.createdAt), {
                           addSuffix: true,
                         })}

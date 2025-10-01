@@ -20,8 +20,8 @@ export default function TopBar({ onToggleLeftPanel, onToggleRightPanel }: TopBar
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
 
   return (
-    <header className="border-b bg-card/95 text-card-foreground backdrop-blur supports-[backdrop-filter]:bg-card/75">
-      <div className="flex flex-wrap items-center gap-2 px-3 py-2 sm:px-4">
+    <header className="sticky top-0 z-50 liquid-glass-thin border-b border-[var(--separator)] text-card-foreground shadow-[var(--shadow-ambient)] dark:shadow-none">
+      <div className="flex flex-wrap items-center gap-2 px-3 py-2.5 sm:px-4">
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <Button
             variant="ghost"
@@ -45,7 +45,7 @@ export default function TopBar({ onToggleLeftPanel, onToggleRightPanel }: TopBar
 
           <Link
             href="/dashboard"
-            className="flex items-center text-sm text-muted-foreground"
+            className="flex items-center text-sm text-gray-900 dark:text-gray-100"
             aria-label="Back to dashboard"
           >
             <Home className="mr-2 h-4 w-4" />

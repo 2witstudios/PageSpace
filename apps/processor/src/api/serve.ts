@@ -4,6 +4,7 @@ import { contentStore } from '../server';
 import { InvalidContentHashError, isValidContentHash } from '../cache/content-store';
 import { assertFileAccess, checkFileAccess } from '../services/rbac';
 import { db, files, pages, eq } from '@pagespace/db';
+import { sanitizeFilename, isDangerousMimeType } from '../utils/security';
 
 const router = Router();
 
@@ -75,15 +76,37 @@ router.get('/:contentHash/original', async (req, res) => {
       }
     }
 
+    // Sanitize filename to prevent header injection
+    const sanitizedFilename = sanitizeFilename(originalName);
+    const isDangerous = isDangerousMimeType(contentType);
+
     res.set({
       'Content-Type': contentType,
       'Content-Length': contentLength.toString(),
-      'Content-Disposition': `inline; filename="${originalName}"`,
       'Cache-Control': 'public, max-age=31536000, immutable',
       'ETag': `"${contentHash}-original"`,
       'X-Content-Hash': contentHash,
-      'X-Content-Type-Options': 'nosniff'
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'DENY'
     });
+
+    // Force download for dangerous MIME types + strict CSP
+    if (isDangerous) {
+      res.set({
+        'Content-Disposition': `attachment; filename="${sanitizedFilename}"`,
+        'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox;"
+      });
+      console.warn('[Security] Forcing download for dangerous MIME type:', {
+        contentHash,
+        contentType,
+        filename: sanitizedFilename
+      });
+    } else {
+      res.set({
+        'Content-Disposition': `inline; filename="${sanitizedFilename}"`,
+        'Content-Security-Policy': "default-src 'none';"
+      });
+    }
 
     res.send(buffer);
 

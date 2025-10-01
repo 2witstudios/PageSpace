@@ -13,6 +13,7 @@ import {
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkMemoryMiddleware } from '@pagespace/lib/services/memory-monitor';
 import { createServiceToken } from '@pagespace/lib/auth-utils';
+import { sanitizeFilenameForHeader } from '@pagespace/lib/utils/file-security';
 
 // Define allowed file types and size limits
 
@@ -132,12 +133,9 @@ export async function POST(request: NextRequest) {
 
     // Generate page ID
     const pageId = createId();
-    
-    // Sanitize filename: Replace Unicode spaces (especially U+202F from macOS screenshots) with regular spaces
-    const sanitizedFileName = file.name
-      .replace(/[\u202F\u00A0\u2000-\u200B\uFEFF]/g, ' ') // Replace various Unicode spaces with regular space
-      .replace(/\s+/g, ' ') // Normalize multiple spaces to single space
-      .trim();
+
+    // Sanitize filename to prevent header injection and security issues
+    const sanitizedFileName = sanitizeFilenameForHeader(file.name);
 
     // Increment active uploads counter
     await updateActiveUploads(user.id, 1);
