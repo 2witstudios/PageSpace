@@ -8,7 +8,6 @@ on:
 
 env:
   NODE_VERSION: '20'
-  PNPM_VERSION: '10'
 
 jobs:
   unit-tests:
@@ -34,8 +33,6 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -62,13 +59,6 @@ jobs:
           JWT_AUDIENCE: pagespace-test-users
         run: pnpm test:unit
 
-      - name: Upload coverage reports
-        uses: codecov/codecov-action@v4
-        if: always()
-        with:
-          files: ./coverage/coverage-final.json
-          flags: unit-tests
-
   lint:
     name: Lint & TypeScript Check
     runs-on: ubuntu-latest
@@ -78,8 +68,6 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
