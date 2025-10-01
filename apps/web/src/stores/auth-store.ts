@@ -270,6 +270,7 @@ export const useAuthStore = create<AuthState>()(
           id: state.user.id,
           name: state.user.name,
           email: state.user.email,
+          image: state.user.image,
         } : null,
       }),
     }
