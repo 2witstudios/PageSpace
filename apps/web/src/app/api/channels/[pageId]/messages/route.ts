@@ -3,6 +3,7 @@ import { channelMessages, db, eq, asc } from '@pagespace/db';
 import { decodeToken, canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
 import { parse } from 'cookie';
 import { loggers } from '@pagespace/lib/server';
+import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
 
 export async function GET(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
   const { pageId } = await params;
@@ -100,14 +101,16 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   // Broadcast the new message to the channel
   if (process.env.INTERNAL_REALTIME_URL) {
     try {
+      const requestBody = JSON.stringify({
+        channelId: pageId,
+        event: 'new_message',
+        payload: newMessage,
+      });
+
       await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          channelId: pageId,
-          event: 'new_message',
-          payload: newMessage,
-        }),
+        headers: createSignedBroadcastHeaders(requestBody),
+        body: requestBody,
       });
     } catch (error) {
       loggers.realtime.error('Failed to broadcast message to socket server:', error as Error);

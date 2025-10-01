@@ -1,7 +1,7 @@
 import { users, drives, userAiSettings, refreshTokens, db, eq } from '@pagespace/db';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod/v4';
-import { slugify, generateAccessToken, generateRefreshToken } from '@pagespace/lib/server';
+import { slugify, generateAccessToken, generateRefreshToken, checkRateLimit, resetRateLimit, RATE_LIMIT_CONFIGS } from '@pagespace/lib/server';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
@@ -38,6 +38,42 @@ export async function POST(req: Request) {
 
     const { name, email: validatedEmail, password } = validation.data;
     email = validatedEmail;
+
+    // Rate limiting by IP address and email (prevent spam and email enumeration)
+    const ipRateLimit = checkRateLimit(clientIP, RATE_LIMIT_CONFIGS.SIGNUP);
+    const emailRateLimit = checkRateLimit(email.toLowerCase(), RATE_LIMIT_CONFIGS.SIGNUP);
+
+    if (!ipRateLimit.allowed) {
+      logAuthEvent('failed', undefined, email, clientIP, 'IP rate limit exceeded');
+      return Response.json(
+        {
+          error: 'Too many signup attempts from this IP address. Please try again later.',
+          retryAfter: ipRateLimit.retryAfter
+        },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': ipRateLimit.retryAfter?.toString() || '3600'
+          }
+        }
+      );
+    }
+
+    if (!emailRateLimit.allowed) {
+      logAuthEvent('failed', undefined, email, clientIP, 'Email rate limit exceeded');
+      return Response.json(
+        {
+          error: 'Too many signup attempts for this email. Please try again later.',
+          retryAfter: emailRateLimit.retryAfter
+        },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': emailRateLimit.retryAfter?.toString() || '3600'
+          }
+        }
+      );
+    }
 
     const existingUser = await db.query.users.findFirst({
       where: eq(users.email, email),
@@ -82,7 +118,11 @@ export async function POST(req: Request) {
     // Log successful signup
     logAuthEvent('signup', user.id, email, clientIP);
     loggers.auth.info('New user created', { userId: user.id, email, name });
-    
+
+    // Reset rate limits on successful signup
+    resetRateLimit(clientIP);
+    resetRateLimit(email.toLowerCase());
+
     // Track signup event
     trackAuthEvent(user.id, 'signup', {
       email,

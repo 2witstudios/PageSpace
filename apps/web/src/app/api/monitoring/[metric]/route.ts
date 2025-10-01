@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateWebRequest, isAuthError } from '@/lib/auth';
+import { verifyAdminAuth } from '@/lib/auth';
 import {
   getSystemHealth,
   getApiMetrics,
@@ -14,14 +14,21 @@ import { loggers } from '@pagespace/lib/server';
 /**
  * GET /api/monitoring/[metric]
  * Returns monitoring data for the specified metric
+ * ADMIN ONLY - Contains sensitive system data
  */
 export async function GET(
   request: Request,
   context: { params: Promise<{ metric: string }> }
 ) {
   try {
-    const auth = await authenticateWebRequest(request);
-    if (isAuthError(auth)) return auth.error;
+    // CRITICAL: Verify admin authorization
+    const adminUser = await verifyAdminAuth(request);
+    if (!adminUser) {
+      return NextResponse.json(
+        { error: 'Admin access required' },
+        { status: 403 }
+      );
+    }
 
     const { metric } = await context.params;
     const { searchParams } = new URL(request.url);

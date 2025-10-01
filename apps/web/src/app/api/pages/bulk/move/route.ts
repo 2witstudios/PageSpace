@@ -6,6 +6,7 @@ import { db, pages, eq, and, sql } from '@pagespace/db';
 import { canUserEditPage, getUserDriveAccess } from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
 import { loggers } from '@pagespace/lib/server';
+import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
 
 /**
  * POST /api/pages/bulk/move
@@ -100,6 +101,12 @@ export async function POST(request: Request) {
     const movedPages: Array<{ id: string; title: string; parentId: string | null; position: number; type: string }> = [];
     await db.transaction(async (tx) => {
       for (const page of sourcePages) {
+        // Validate each move to prevent circular references
+        const validation = await validatePageMove(page.id, targetParentId);
+        if (!validation.valid) {
+          throw new Error(`Cannot move page ${page.title}: ${validation.error}`);
+        }
+
         const [moved] = await tx
           .update(pages)
           .set({

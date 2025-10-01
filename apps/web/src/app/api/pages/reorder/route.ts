@@ -4,6 +4,7 @@ import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
 
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const };
 
@@ -22,6 +23,15 @@ export async function PATCH(request: Request) {
   try {
     const body = await request.json();
     const { pageId, newParentId, newPosition } = reorderSchema.parse(body);
+
+    // Validate parent change to prevent circular references
+    const validation = await validatePageMove(pageId, newParentId);
+    if (!validation.valid) {
+      return NextResponse.json(
+        { error: validation.error },
+        { status: 400 }
+      );
+    }
 
     let driveId: string | null = null;
     let pageTitle: string | null = null;

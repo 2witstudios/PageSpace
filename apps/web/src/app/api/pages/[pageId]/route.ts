@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { pages, mentions, chatMessages, drives, db, and, eq, inArray } from '@pagespace/db';
 import { canUserViewPage, canUserEditPage, canUserDeletePage } from '@pagespace/lib/server';
+import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
 import { z } from "zod/v4";
 import * as cheerio from 'cheerio';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
@@ -184,6 +185,7 @@ const patchSchema = z.object({
   content: z.string().optional(),
   aiProvider: z.string().optional(),
   aiModel: z.string().optional(),
+  parentId: z.string().nullable().optional(),
 });
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
@@ -208,6 +210,17 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
     loggers.api.debug('Request Body:', body);
     const safeBody = patchSchema.parse(body);
     loggers.api.debug('Validated Body:', safeBody);
+
+    // Validate parent change to prevent circular references
+    if (safeBody.parentId !== undefined) {
+      const validation = await validatePageMove(pageId, safeBody.parentId);
+      if (!validation.valid) {
+        return NextResponse.json(
+          { error: validation.error },
+          { status: 400 }
+        );
+      }
+    }
 
     await db.transaction(async (tx) => {
       // Sanitize content before saving to remove empty TipTap default structures
