@@ -641,7 +641,7 @@ MENTION PROCESSING:
               const isPageSpaceProvider = currentProvider === 'pagespace';
 
               // Determine if this is pro model based on model name
-              const isProModel = currentModel === 'GLM-4.5';
+              const isProModel = currentModel === 'glm-4.6';
 
               const maskedUserId = maskIdentifier(userId);
               const maskedMessageId = maskIdentifier(messageId);

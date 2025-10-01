@@ -790,7 +790,7 @@ export default function AiSettingsPage() {
                 Z.AI Platform
               </a>
             </p>
-            <p className="mt-2">GLM Coder Plan provides access to GLM-4.5 and GLM-4.5-air models optimized for coding tasks.</p>
+            <p className="mt-2">GLM Coder Plan provides access to GLM-4.6 and GLM-4.5-air models optimized for coding tasks.</p>
             <p className="mt-1">
               <strong>Subscription required:</strong> You need an active GLM Coder Plan subscription from Z.AI to use these models.
             </p>

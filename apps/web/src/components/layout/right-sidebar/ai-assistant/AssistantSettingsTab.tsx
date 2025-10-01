@@ -97,11 +97,11 @@ const AssistantSettingsTab: React.FC = () => {
         setSelectedModel(data.currentModel);
 
         // Check if current model is accessible to user, if not, reset to default
-        if (uiProvider === 'pagespace' && data.currentModel === 'GLM-4.5') {
+        if (uiProvider === 'pagespace' && data.currentModel === 'glm-4.6') {
           const userTier = data.userSubscriptionTier;
           if (userTier !== 'pro' && userTier !== 'business') {
             // Free user has restricted model selected, reset to default
-            setSelectedModel('GLM-4.5-air');
+            setSelectedModel('glm-4.5-air');
           }
         }
 
@@ -174,7 +174,7 @@ const AssistantSettingsTab: React.FC = () => {
 
   // Check if a model requires Pro/Business subscription
   const requiresSubscription = (provider: string, model: string): boolean => {
-    return provider === 'pagespace' && model === 'GLM-4.5';
+    return provider === 'pagespace' && model === 'glm-4.6';
   };
 
   // Check if user has access to a model
@@ -448,7 +448,7 @@ const AssistantSettingsTab: React.FC = () => {
 
           {/* Upgrade notification for restricted models */}
           {selectedProvider === 'pagespace' &&
-           !hasModelAccess('pagespace', 'GLM-4.5') && (
+           !hasModelAccess('pagespace', 'glm-4.6') && (
             <Card className="border-primary/20 bg-primary/5 dark:bg-primary/10">
               <CardContent className="pt-6">
                 <div className="text-center space-y-3">

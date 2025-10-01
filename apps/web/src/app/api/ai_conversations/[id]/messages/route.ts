@@ -541,7 +541,7 @@ MENTION PROCESSING:
             if (isPageSpaceProvider) {
               try {
                 // Determine if this is pro model based on model name
-                const isProModel = currentModel === 'GLM-4.5';
+                const isProModel = currentModel === 'glm-4.6';
                 const providerType = isProModel ? 'pro' : 'standard';
 
                 usageLogger.debug('Incrementing usage for Global Assistant response', {

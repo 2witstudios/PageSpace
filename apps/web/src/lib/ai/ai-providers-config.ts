@@ -7,8 +7,8 @@ export const AI_PROVIDERS = {
   pagespace: {
     name: 'PageSpace',
     models: {
-      'GLM-4.5-air': 'Standard',
-      'GLM-4.5': 'Pro (Pro/Business)',
+      'glm-4.5-air': 'Standard',
+      'glm-4.6': 'Pro (Pro/Business)',
     },
   },
   openrouter: {
@@ -223,8 +223,8 @@ export const AI_PROVIDERS = {
   glm: {
     name: 'GLM Coder Plan',
     models: {
-      'GLM-4.5': 'GLM-4.5 (Standard)',
-      'GLM-4.5-air': 'GLM-4.5 Air (Fast)',
+      'glm-4.6': 'GLM-4.6 (Standard)',
+      'glm-4.5-air': 'GLM-4.5 Air (Fast)',
     },
   },
 } as const;
@@ -253,9 +253,9 @@ export function getBackendProvider(uiProvider: string): string {
  * Get default model for a provider
  */
 export function getDefaultModel(provider: string): string {
-  // Always return GLM-4.5-air for PageSpace provider
+  // Always return glm-4.5-air for PageSpace provider
   if (provider === 'pagespace') {
-    return 'GLM-4.5-air';
+    return 'glm-4.5-air';
   }
 
   // Always return gemini-2.5-flash for Google provider
@@ -265,7 +265,7 @@ export function getDefaultModel(provider: string): string {
 
   const providerConfig = AI_PROVIDERS[provider as keyof typeof AI_PROVIDERS];
   if (!providerConfig) {
-    return 'GLM-4.5-air'; // fallback default to GLM 4.5 Air
+    return 'glm-4.5-air'; // fallback default to GLM 4.5 Air
   }
 
   return Object.keys(providerConfig.models)[0];
