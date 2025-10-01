@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { pages, users, pagePermissions, db, eq, and } from '@pagespace/db';
-import { decodeToken } from '@pagespace/lib/server';
+import { decodeToken, getUserAccessLevel } from '@pagespace/lib/server';
 import { parse } from 'cookie';
 import { createId } from '@paralleldrive/cuid2';
 import { z } from 'zod/v4';
@@ -23,6 +23,26 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   }
 
   try {
+    // SECURITY: Check if user has permission to view the permission list
+    // Only users with canShare permission can see who has access to a page
+    const accessLevel = await getUserAccessLevel(decoded.userId, pageId);
+
+    if (!accessLevel?.canShare) {
+      loggers.api.warn('Unauthorized permission list access attempt', {
+        userId: decoded.userId,
+        pageId,
+        hasAccess: !!accessLevel,
+        canShare: accessLevel?.canShare || false
+      });
+      return NextResponse.json(
+        {
+          error: 'You need share permission to view the permission list for this page',
+          details: 'Only users who can manage permissions can view who has access'
+        },
+        { status: 403 }
+      );
+    }
+
     const pageWithDrive = await db.query.pages.findFirst({
       where: eq(pages.id, pageId),
       with: {
