@@ -796,7 +796,7 @@ function formatPrimitiveForCell(value: SheetPrimitive): string {
     return Number.isFinite(value) ? String(value) : '';
   }
   if (typeof value === 'boolean') {
-    return value ? 'TRUE' : 'FALSE';
+    return value ? 'true' : 'false';
   }
   if (typeof value === 'string') {
     return value;

@@ -30,6 +30,10 @@ jspm_packages/
 # TypeScript cache
 *.tsbuildinfo
 
+# Compiled build artifacts in source directories (should be in dist/ only)
+packages/lib/src/**/*.js
+packages/lib/src/**/*.d.ts
+
 # Environment variables
 .env
 .env.local
