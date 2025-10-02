@@ -1481,7 +1481,7 @@ function formatDisplayValue(value: SheetPrimitive): string {
     return stringValue.length > 12 ? value.toPrecision(12).replace(/0+$/g, '').replace(/\.$/, '') : stringValue;
   }
   if (typeof value === 'boolean') {
-    return value ? 'TRUE' : 'FALSE';
+    return value ? 'true' : 'false';
   }
   return value;
 }
@@ -1577,6 +1577,10 @@ function evaluateFunction(
     case 'AVERAGE':
     case 'AVG': {
       const numericValues = values.filter((value) => {
+        // Exclude empty strings - they should not be counted in average
+        if (value === '' || (typeof value === 'string' && value.trim() === '')) {
+          return false;
+        }
         try {
           coerceNumber(value);
           return true;
@@ -1666,6 +1670,10 @@ function evaluateFunction(
         return flattenValue(evaluateNode(args[2]))[0];
       }
       return '';
+    }
+    case 'CONCAT':
+    case 'CONCATENATE': {
+      return values.map((value) => String(value)).join('');
     }
     default:
       throw new Error(`Unsupported function ${upperName}`);

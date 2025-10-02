@@ -63,7 +63,20 @@ export function checkRateLimit(
       retryAfter: Math.ceil((attempt.blockedUntil - now) / 1000)
     };
   }
-  
+
+  // Block has expired - reset state
+  if (attempt.blockedUntil && now >= attempt.blockedUntil) {
+    attempt.count = 1;
+    attempt.firstAttempt = now;
+    attempt.lastAttempt = now;
+    delete attempt.blockedUntil;
+
+    return {
+      allowed: true,
+      attemptsRemaining: config.maxAttempts - 1
+    };
+  }
+
   // Check if window has expired
   if (now - attempt.firstAttempt > config.windowMs) {
     // Reset the window

@@ -1,5 +1,4 @@
-import { describe, it } from 'node:test'
-import assert from 'node:assert/strict'
+import { describe, it, expect } from 'vitest'
 import { createEmptySheet, evaluateSheet, SheetData } from '../sheet'
 
 describe('sheet - advanced scenarios', () => {
@@ -11,8 +10,8 @@ describe('sheet - advanced scenarios', () => {
 
       const evaluation = evaluateSheet(sheet)
 
-      assert.ok(evaluation.byAddress.A1.error?.includes('Circular'))
-      assert.ok(evaluation.byAddress.A2.error?.includes('Circular'))
+      expect(evaluation.byAddress.A1.error?.includes('Circular')).toBe(true)
+      expect(evaluation.byAddress.A2.error?.includes('Circular')).toBe(true)
     })
 
     it('detects complex circular reference chain', () => {
@@ -24,8 +23,8 @@ describe('sheet - advanced scenarios', () => {
 
       const evaluation = evaluateSheet(sheet)
 
-      assert.ok(evaluation.byAddress.A1.error?.includes('Circular'))
-      assert.ok(evaluation.byAddress.A4.error?.includes('Circular'))
+      expect(evaluation.byAddress.A1.error?.includes('Circular')).toBe(true)
+      expect(evaluation.byAddress.A4.error?.includes('Circular')).toBe(true)
     })
 
     it('allows self-referencing in different cells without circular dependency', () => {
@@ -36,9 +35,9 @@ describe('sheet - advanced scenarios', () => {
 
       const evaluation = evaluateSheet(sheet)
 
-      assert.equal(evaluation.byAddress.A1.display, '10')
-      assert.equal(evaluation.byAddress.A2.display, '20')
-      assert.equal(evaluation.byAddress.A3.display, '25')
+      expect(evaluation.byAddress.A1.display).toBe('10')
+      expect(evaluation.byAddress.A2.display).toBe('20')
+      expect(evaluation.byAddress.A3.display).toBe('25')
     })
   })
 
@@ -51,7 +50,7 @@ describe('sheet - advanced scenarios', () => {
 
       const evaluation = evaluateSheet(sheet)
 
-      assert.ok(evaluation.byAddress.A3.display === '#ERROR' || evaluation.byAddress.A3.error)
+      expect(evaluation.byAddress.A3.display === '#ERROR' || evaluation.byAddress.A3.error).toBeTruthy()
     })
 
     it('handles empty cell references', () => {
@@ -61,7 +60,7 @@ describe('sheet - advanced scenarios', () => {
       const evaluation = evaluateSheet(sheet)
 
       // Empty cell treated as 0
-      assert.equal(evaluation.byAddress.A1.display, '10')
+      expect(evaluation.byAddress.A1.display).toBe('10')
     })
 
     it('evaluates nested function calls', () => {
@@ -75,9 +74,9 @@ describe('sheet - advanced scenarios', () => {
 
       const evaluation = evaluateSheet(sheet)
 
-      assert.equal(evaluation.byAddress.B1.display, '60')
-      assert.equal(evaluation.byAddress.B2.display, '20')
-      assert.equal(evaluation.byAddress.C1.display, '20')
+      expect(evaluation.byAddress.B1.display).toBe('60')
+      expect(evaluation.byAddress.B2.display).toBe('20')
+      expect(evaluation.byAddress.C1.display).toBe('20')
     })
 
     it('handles text concatenation in formulas', () => {
@@ -88,7 +87,7 @@ describe('sheet - advanced scenarios', () => {
 
       const evaluation = evaluateSheet(sheet)
 
-      assert.equal(evaluation.byAddress.A3.display, 'Hello World')
+      expect(evaluation.byAddress.A3.display).toBe('Hello World')
     })
 
     it('handles boolean operations', () => {
@@ -101,9 +100,9 @@ describe('sheet - advanced scenarios', () => {
 
       const evaluation = evaluateSheet(sheet)
 
-      assert.equal(evaluation.byAddress.B1.display, 'false')
-      assert.equal(evaluation.byAddress.B2.display, 'true')
-      assert.equal(evaluation.byAddress.B3.display, 'true')
+      expect(evaluation.byAddress.B1.display).toBe('false')
+      expect(evaluation.byAddress.B2.display).toBe('true')
+      expect(evaluation.byAddress.B3.display).toBe('true')
     })
   })
 
@@ -121,7 +120,7 @@ describe('sheet - advanced scenarios', () => {
       const evaluation = evaluateSheet(sheet)
 
       // Sum of 1 to 100 = 5050
-      assert.equal(evaluation.byAddress.B1.display, '5050')
+      expect(evaluation.byAddress.B1.display).toBe('5050')
     })
 
     it('handles AVERAGE with mixed empty cells', () => {
@@ -136,7 +135,7 @@ describe('sheet - advanced scenarios', () => {
       const evaluation = evaluateSheet(sheet)
 
       // Average of 10, 20, 30 = 20
-      assert.equal(evaluation.byAddress.B1.display, '20')
+      expect(evaluation.byAddress.B1.display).toBe('20')
     })
 
     it('handles COUNT function correctly', () => {
@@ -151,7 +150,7 @@ describe('sheet - advanced scenarios', () => {
       const evaluation = evaluateSheet(sheet)
 
       // Only numeric values: 10, 20, 30
-      assert.equal(evaluation.byAddress.B1.display, '3')
+      expect(evaluation.byAddress.B1.display).toBe('3')
     })
   })
 
@@ -165,8 +164,8 @@ describe('sheet - advanced scenarios', () => {
 
       const evaluation = evaluateSheet(sheet)
 
-      assert.equal(evaluation.byAddress.A1.display, '1')
-      assert.equal(evaluation.byAddress.B1.display, '2')
+      expect(evaluation.byAddress.A1.display).toBe('1')
+      expect(evaluation.byAddress.B1.display).toBe('2')
     })
 
     it('handles deeply nested formula dependencies', () => {
@@ -180,8 +179,8 @@ describe('sheet - advanced scenarios', () => {
 
       const evaluation = evaluateSheet(sheet)
 
-      assert.equal(evaluation.byAddress.A1.display, '1')
-      assert.equal(evaluation.byAddress.A20.display, '20')
+      expect(evaluation.byAddress.A1.display).toBe('1')
+      expect(evaluation.byAddress.A20.display).toBe('20')
     })
   })
 
@@ -194,9 +193,9 @@ describe('sheet - advanced scenarios', () => {
 
       const evaluation = evaluateSheet(sheet)
 
-      assert.ok(evaluation.byAddress.A1.error)
-      assert.ok(evaluation.byAddress.A2.error)
-      assert.ok(evaluation.byAddress.A3.error)
+      expect(evaluation.byAddress.A1.error).toBeTruthy()
+      expect(evaluation.byAddress.A2.error).toBeTruthy()
+      expect(evaluation.byAddress.A3.error).toBeTruthy()
     })
 
     it('does not propagate errors to unrelated cells', () => {
@@ -207,9 +206,9 @@ describe('sheet - advanced scenarios', () => {
 
       const evaluation = evaluateSheet(sheet)
 
-      assert.ok(evaluation.byAddress.A1.error)
-      assert.ok(evaluation.byAddress.A2.error)
-      assert.equal(evaluation.byAddress.B1.display, '10')
+      expect(evaluation.byAddress.A1.error).toBeTruthy()
+      expect(evaluation.byAddress.A2.error).toBeTruthy()
+      expect(evaluation.byAddress.B1.display).toBe('10')
     })
   })
 })

@@ -59,6 +59,10 @@ describe('auth-utils', () => {
 
     it('creates unique tokens for same user', async () => {
       const token1 = await generateAccessToken(testUserId, testTokenVersion, 'user')
+
+      // Wait 1 second to ensure different iat claim (issued at timestamp)
+      await new Promise(resolve => setTimeout(resolve, 1000))
+
       const token2 = await generateAccessToken(testUserId, testTokenVersion, 'user')
 
       expect(token1).not.toBe(token2)

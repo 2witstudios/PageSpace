@@ -43,6 +43,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build packages
+        run: pnpm build
+
       - name: Generate migrations
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test

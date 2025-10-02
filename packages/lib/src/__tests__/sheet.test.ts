@@ -1,5 +1,4 @@
-import { describe, it } from 'node:test';
-import assert from 'node:assert/strict';
+import { describe, it, expect } from 'vitest';
 import {
   SHEETDOC_MAGIC,
   createEmptySheet,
@@ -33,10 +32,10 @@ describe('sheet data helpers', () => {
 
     for (const [row, column, expected] of pairs) {
       const encoded = encodeCellAddress(row, column);
-      assert.equal(encoded, expected);
+      expect(encoded).toBe(expected);
       const decoded = decodeCellAddress(encoded);
-      assert.equal(decoded.row, row);
-      assert.equal(decoded.column, column);
+      expect(decoded.row).toBe(row);
+      expect(decoded.column).toBe(column);
     }
   });
 
@@ -53,28 +52,28 @@ describe('sheet data helpers', () => {
     });
 
     const parsed = parseSheetContent(jsonString);
-    assert.equal(parsed.version, 3);
-    assert.equal(parsed.rowCount, 7);
-    assert.equal(parsed.columnCount, 4);
-    assert.equal(parsed.cells.A1, '42');
-    assert.equal(parsed.cells.B2, '3');
-    assert.equal(parsed.cells.invalid, undefined);
+    expect(parsed.version).toBe(3);
+    expect(parsed.rowCount).toBe(7);
+    expect(parsed.columnCount).toBe(4);
+    expect(parsed.cells.A1).toBe('42');
+    expect(parsed.cells.B2).toBe('3');
+    expect(parsed.cells.invalid).toBeUndefined();
 
     const sanitized = sanitizeSheetData(parsed);
     const serialized = serializeSheetContent(sanitized);
-    assert.equal(serialized.trimStart().startsWith(SHEETDOC_MAGIC), true);
+    expect(serialized.trimStart().startsWith(SHEETDOC_MAGIC)).toBe(true);
 
     const sheetDoc = parseSheetDocString(serialized);
-    assert.equal(sheetDoc.sheets.length > 0, true);
+    expect(sheetDoc.sheets.length > 0).toBe(true);
     const primarySheet = sheetDoc.sheets[0];
-    assert.equal(primarySheet.cells.A1?.value, 42);
-    assert.equal(primarySheet.cells.B2?.value, 3);
+    expect(primarySheet.cells.A1?.value).toBe(42);
+    expect(primarySheet.cells.B2?.value).toBe(3);
 
     const roundTripped = parseSheetContent(serialized);
-    assert.equal(roundTripped.version, 1);
-    assert.equal(roundTripped.rowCount, sanitized.rowCount);
-    assert.equal(roundTripped.columnCount, sanitized.columnCount);
-    assert.deepEqual(roundTripped.cells, sanitized.cells);
+    expect(roundTripped.version).toBe(1);
+    expect(roundTripped.rowCount).toBe(sanitized.rowCount);
+    expect(roundTripped.columnCount).toBe(sanitized.columnCount);
+    expect(roundTripped.cells).toEqual(sanitized.cells);
   });
 });
 
@@ -107,25 +106,25 @@ describe('sheet evaluation', () => {
   it('evaluates formulas, ranges, and functions', () => {
     const evaluation = evaluateSheet(buildSampleSheet());
 
-    assert.equal(getDisplay(evaluation, 'A3'), '15');
-    assert.equal(getDisplay(evaluation, 'B2'), 'Hello World');
-    assert.equal(getDisplay(evaluation, 'B3'), '2');
-    assert.equal(getDisplay(evaluation, 'C1'), '30');
-    assert.equal(getDisplay(evaluation, 'C2'), '7.5');
-    assert.equal(getDisplay(evaluation, 'C3'), 'small');
-    assert.equal(getDisplay(evaluation, 'C4'), '7');
-    assert.equal(getDisplay(evaluation, 'C5'), '5');
-    assert.equal(getDisplay(evaluation, 'D1'), '15');
-    assert.equal(getDisplay(evaluation, 'D2'), '5');
-    assert.equal(getDisplay(evaluation, 'D3'), '3');
-    assert.equal(getDisplay(evaluation, 'D4'), '5.68');
-    assert.equal(getDisplay(evaluation, 'D5'), '5.5');
-    assert.equal(getDisplay(evaluation, 'D6'), '5.5');
-    assert.equal(getDisplay(evaluation, 'E1'), 'exact');
-    assert.equal(getDisplay(evaluation, 'E2'), 'true');
+    expect(getDisplay(evaluation, 'A3')).toBe('15');
+    expect(getDisplay(evaluation, 'B2')).toBe('Hello World');
+    expect(getDisplay(evaluation, 'B3')).toBe('2');
+    expect(getDisplay(evaluation, 'C1')).toBe('30');
+    expect(getDisplay(evaluation, 'C2')).toBe('7.5');
+    expect(getDisplay(evaluation, 'C3')).toBe('small');
+    expect(getDisplay(evaluation, 'C4')).toBe('7');
+    expect(getDisplay(evaluation, 'C5')).toBe('5');
+    expect(getDisplay(evaluation, 'D1')).toBe('15');
+    expect(getDisplay(evaluation, 'D2')).toBe('5');
+    expect(getDisplay(evaluation, 'D3')).toBe('3');
+    expect(getDisplay(evaluation, 'D4')).toBe('5.68');
+    expect(getDisplay(evaluation, 'D5')).toBe('5.5');
+    expect(getDisplay(evaluation, 'D6')).toBe('5.5');
+    expect(getDisplay(evaluation, 'E1')).toBe('exact');
+    expect(getDisplay(evaluation, 'E2')).toBe('true');
 
-    assert.equal(getError(evaluation, 'A3'), undefined);
-    assert.equal(getError(evaluation, 'C1'), undefined);
+    expect(getError(evaluation, 'A3')).toBeUndefined();
+    expect(getError(evaluation, 'C1')).toBeUndefined();
   });
 
   it('propagates formula errors and detects circular references', () => {
@@ -137,12 +136,12 @@ describe('sheet evaluation', () => {
 
     const evaluation = evaluateSheet(sheet);
 
-    assert.equal(getDisplay(evaluation, 'A1'), '#ERROR');
-    assert.equal(getError(evaluation, 'A1'), 'Division by zero');
-    assert.equal(getDisplay(evaluation, 'B1'), '#ERROR');
-    assert.equal(getError(evaluation, 'B1'), 'Division by zero');
-    assert.equal(getDisplay(evaluation, 'B2'), '#ERROR');
-    assert.equal(getError(evaluation, 'B2'), 'Circular reference detected');
+    expect(getDisplay(evaluation, 'A1')).toBe('#ERROR');
+    expect(getError(evaluation, 'A1')).toBe('Division by zero');
+    expect(getDisplay(evaluation, 'B1')).toBe('#ERROR');
+    expect(getError(evaluation, 'B1')).toBe('Division by zero');
+    expect(getDisplay(evaluation, 'B2')).toBe('#ERROR');
+    expect(getError(evaluation, 'B2')).toBe('Circular reference detected');
   });
 
   it('exposes dependency metadata and serializes SheetDoc values', () => {
@@ -153,20 +152,20 @@ describe('sheet evaluation', () => {
 
     const evaluation = evaluateSheet(sheet);
 
-    assert.deepEqual(evaluation.byAddress.A2.dependsOn, ['A1']);
-    assert.deepEqual(evaluation.byAddress.A1.dependents, ['A2']);
-    assert.deepEqual(evaluation.dependencies.A2.dependsOn, ['A1']);
-    assert.equal(evaluation.dependencies.A1.dependents.includes('A2'), true);
+    expect(evaluation.byAddress.A2.dependsOn).toEqual(['A1']);
+    expect(evaluation.byAddress.A1.dependents).toEqual(['A2']);
+    expect(evaluation.dependencies.A2.dependsOn).toEqual(['A1']);
+    expect(evaluation.dependencies.A1.dependents.includes('A2')).toBe(true);
 
     const serialized = serializeSheetContent(sheet);
     const sheetDoc = parseSheetDocString(serialized);
     const primarySheet = sheetDoc.sheets[0];
 
-    assert.equal(primarySheet.cells.A2?.formula, '=A1*2');
-    assert.equal(primarySheet.cells.A2?.value, 10);
-    assert.equal(primarySheet.cells.B1?.value, 13);
-    assert.equal(primarySheet.dependencies.A2.dependsOn.includes('A1'), true);
-    assert.equal(primarySheet.dependencies.A1.dependents.includes('A2'), true);
+    expect(primarySheet.cells.A2?.formula).toBe('=A1*2');
+    expect(primarySheet.cells.A2?.value).toBe(10);
+    expect(primarySheet.cells.B1?.value).toBe(13);
+    expect(primarySheet.dependencies.A2.dependsOn.includes('A1')).toBe(true);
+    expect(primarySheet.dependencies.A1.dependents.includes('A2')).toBe(true);
   });
 
   it('extracts external page references from formulas', () => {
@@ -176,16 +175,16 @@ describe('sheet evaluation', () => {
 
     const references = collectExternalReferences(sheet);
 
-    assert.equal(references.length, 3);
+    expect(references.length).toBe(3);
     const rawMentions = references.map((ref) => ref.raw).sort();
-    assert.deepEqual(rawMentions, [
+    expect(rawMentions).toEqual([
       '@[Ops Summary](ops-9)',
       '@[Sales Report]',
       '@[Sales Report](sales-1)',
     ]);
     const salesWithId = references.find((ref) => ref.identifier === 'sales-1');
-    assert.ok(salesWithId);
-    assert.equal(salesWithId?.label, 'Sales Report');
+    expect(salesWithId).toBeTruthy();
+    expect(salesWithId?.label).toBe('Sales Report');
   });
 
   it('evaluates formulas with external page references', () => {
@@ -224,13 +223,13 @@ describe('sheet evaluation', () => {
       resolveExternalReference: resolver,
     });
 
-    assert.equal(getDisplay(evaluation, 'A1'), '15');
-    assert.equal(getDisplay(evaluation, 'A2'), '16');
-    assert.equal(getDisplay(evaluation, 'A3'), '42');
-    assert.equal(getDisplay(evaluation, 'A4'), 'ok');
-    assert.equal(getDisplay(evaluation, 'A5'), '#ERROR');
-    assert.equal(getError(evaluation, 'A5'), 'Referenced page "Missing" is not available');
-    assert.ok(evaluation.byAddress.A2.dependsOn.some((ref) => ref.includes('@[Sales]')));
+    expect(getDisplay(evaluation, 'A1')).toBe('15');
+    expect(getDisplay(evaluation, 'A2')).toBe('16');
+    expect(getDisplay(evaluation, 'A3')).toBe('42');
+    expect(getDisplay(evaluation, 'A4')).toBe('ok');
+    expect(getDisplay(evaluation, 'A5')).toBe('#ERROR');
+    expect(getError(evaluation, 'A5')).toBe('Referenced page "Missing" is not available');
+    expect(evaluation.byAddress.A2.dependsOn.some((ref) => ref.includes('@[Sales]'))).toBe(true);
   });
 });
 
@@ -248,8 +247,8 @@ describe('sheet sanitisation', () => {
     } as SheetData;
 
     const sanitised = sanitizeSheetData(dirtySheet);
-    assert.equal(sanitised.rowCount >= 1, true);
-    assert.equal(sanitised.columnCount >= 1, true);
-    assert.deepEqual(Object.keys(sanitised.cells), ['A1']);
+    expect(sanitised.rowCount >= 1).toBe(true);
+    expect(sanitised.columnCount >= 1).toBe(true);
+    expect(Object.keys(sanitised.cells)).toEqual(['A1']);
   });
 });
