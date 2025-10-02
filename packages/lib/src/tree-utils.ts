@@ -1,4 +1,4 @@
-export function buildTree<T extends { id: string; parentId: string | null }>(nodes: T[]): (T & { children: T[] })[] {
+export function buildTree<T extends { id: string; parentId: string | null }>(nodes: T[]): (T & { children: (T & { children: T[] })[] })[] {
     // Deduplicate nodes by ID - last occurrence wins
     const nodeMap = new Map<string, T>();
     for (const node of nodes) {
@@ -11,7 +11,7 @@ export function buildTree<T extends { id: string; parentId: string | null }>(nod
         nodeWithChildrenMap.set(node.id, { ...node, children: [] });
     }
 
-    const tree: (T & { children: T[] })[] = [];
+    const tree: (T & { children: (T & { children: T[] })[] })[] = [];
 
     for (const node of nodeMap.values()) {
         const nodeWithChildren = nodeWithChildrenMap.get(node.id)!;
