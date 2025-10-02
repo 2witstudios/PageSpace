@@ -1,4 +1,6 @@
-export function buildTree<T extends { id: string; parentId: string | null }>(nodes: T[]): (T & { children: (T & { children: T[] })[] })[] {
+type TreeNode<T> = T & { children: TreeNode<T>[] };
+
+export function buildTree<T extends { id: string; parentId: string | null }>(nodes: T[]): TreeNode<T>[] {
     // Deduplicate nodes by ID - last occurrence wins
     const nodeMap = new Map<string, T>();
     for (const node of nodes) {
@@ -6,12 +8,12 @@ export function buildTree<T extends { id: string; parentId: string | null }>(nod
     }
 
     // Build tree from unique nodes
-    const nodeWithChildrenMap = new Map<string, T & { children: (T & { children: T[] })[] }>();
+    const nodeWithChildrenMap = new Map<string, TreeNode<T>>();
     for (const node of nodeMap.values()) {
         nodeWithChildrenMap.set(node.id, { ...node, children: [] });
     }
 
-    const tree: (T & { children: (T & { children: T[] })[] })[] = [];
+    const tree: TreeNode<T>[] = [];
 
     for (const node of nodeMap.values()) {
         const nodeWithChildren = nodeWithChildrenMap.get(node.id)!;
