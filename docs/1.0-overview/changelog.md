@@ -1,3 +1,66 @@
+## 2025-10-01
+
+### Documentation Update - Architecture & API Coverage
+
+**Comprehensive Documentation Refresh**
+
+Updated all documentation to reflect the current codebase state, fixing outdated dependency versions, missing features, and incomplete API coverage.
+
+#### Core Documentation Updates ✅
+- **CLAUDE.md**: Updated with correct dependency versions, added processor service, added Turbo build system, comprehensive testing commands
+- **API Routes List**: Added 30+ missing endpoints including agents, bulk operations, storage, subscriptions, connections, and search routes
+- **Table of Contents**: Reorganized with proper links to all guides, features, and testing infrastructure
+
+#### Architecture Documentation ✅
+- **Processor Service**: Comprehensive documentation already existed at `/docs/2.0-architecture/2.2-backend/processor-service.md`
+- **Monorepo Structure**: Updated to include all 3 apps (web, realtime, processor)
+- **Testing Infrastructure**: Linked to comprehensive testing docs (90+ tests documented)
+
+#### Dependency Version Updates ✅
+- Vercel AI SDK: Updated from 4.3.17 → 5.0.12 (major version)
+- AI SDK Providers: Updated all to v2.0+ (@ai-sdk/google, anthropic, openai, xai)
+- Socket.IO: 4.7.5 → 4.8.1
+- Added @ai-sdk/xai ^2.0.8 (was missing)
+- Added Turbo build system documentation
+
+#### New API Endpoints Documented ✅
+**Agent Management** (7 new routes):
+- `/api/agents/create`, `/api/agents/[agentId]/config`
+- `/api/agents/consult`, `/api/agents/multi-drive`
+- `/api/drives/[driveId]/agents`
+
+**Bulk Operations** (5 new routes):
+- `/api/pages/bulk/create-structure`, `/api/pages/bulk/delete`
+- `/api/pages/bulk/move`, `/api/pages/bulk/rename`
+- `/api/pages/bulk/update-content`
+
+**Storage & Subscriptions** (6 new routes):
+- `/api/storage/check`, `/api/storage/info`
+- `/api/subscriptions/status`, `/api/subscriptions/usage`
+- `/api/stripe/portal`, `/api/stripe/webhook`
+
+**Search & Discovery** (4 new routes):
+- `/api/search`, `/api/search/multi-drive`
+- `/api/drives/[driveId]/search/regex`, `/api/drives/[driveId]/search/glob`
+
+**Other** (8+ routes):
+- AI tasks, connections, contact, file operations, avatars
+
+#### Project Structure ✅
+- README.md: Added processor service to architecture diagram
+- Table of Contents: Added testing section, AI tools reference, all feature docs
+- Commands: Added complete testing suite commands (unit, e2e, coverage, security)
+
+#### Impact
+- Documentation now accurately reflects codebase state
+- All 100+ API routes properly documented
+- Complete development workflow coverage
+- Testing infrastructure visible and accessible
+
+**Time**: 3 hours
+
+---
+
 ## 2025-09-30
 
 ### Critical Security Fixes - Pre-MVP Launch

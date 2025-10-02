@@ -14,10 +14,11 @@
 
 ### 1.2. Monorepo Architecture
 
-This project uses a pnpm workspace with the following structure:
+This project uses a pnpm workspace with Turbo build system with the following structure:
 
 - `apps/web`: The main Next.js 15 frontend and backend application
 - `apps/realtime`: A dedicated Socket.IO service for real-time communication
+- `apps/processor`: File processing service for uploads, image optimization, and content extraction
 - `packages/db`: The centralized Drizzle ORM package containing database schema, migrations, and query logic
 - `packages/lib`: Shared utilities, types, and functions used across the monorepo
 
@@ -37,11 +38,10 @@ This project uses a pnpm workspace with the following structure:
 - bcryptjs ^3.0.2 for password hashing
 
 **AI & Real-time:**
-- Vercel AI SDK ^4.3.17
-- Ollama AI provider ^1.2.0 for local models
-- @ai-sdk/google ^1.2.22, @ai-sdk/anthropic ^1.2.12, @ai-sdk/openai ^1.3.23
-- @openrouter/ai-sdk-provider 0.7.2 for cloud models
-- Socket.IO ^4.7.5 for real-time collaboration
+- Vercel AI SDK (ai) ^5.0.12
+- @ai-sdk/google ^2.0.6, @ai-sdk/anthropic ^2.0.4, @ai-sdk/openai ^2.0.15, @ai-sdk/xai ^2.0.8
+- @openrouter/ai-sdk-provider ^1.1.2 for cloud models
+- Socket.IO ^4.8.1 for real-time collaboration
 
 **State Management:**
 - Zustand for client state
@@ -160,17 +160,34 @@ Use the Task tool to launch domain experts; each agent advertises its own capabi
 
 ## 6. PROJECT STRUCTURE
 
-Atypical roots worth noting: `apps/realtime`, `apps/processor`, `packages/db`, `packages/lib`, plus supporting `docs/`, `scripts/`, and `types/` directories.
+```
+PageSpace/
+├── apps/
+│   ├── web/              # Next.js 15 App Router main application
+│   ├── realtime/         # Socket.IO service (port 3001)
+│   └── processor/        # File processing service (port 3003)
+├── packages/
+│   ├── db/               # Drizzle ORM schema & migrations
+│   └── lib/              # Shared utilities & types
+├── docs/                 # Architecture & guides
+│   ├── 1.0-overview/     # Getting started, concepts, API list
+│   ├── 2.0-architecture/ # Frontend, backend, features
+│   ├── 3.0-guides-and-tools/ # Developer guides
+│   └── testing/          # Testing infrastructure docs
+└── scripts/              # Utility scripts
+```
 
 ## 7. COMMANDS
 
 ```bash
 # Development
-pnpm dev                    # Start all services
+pnpm dev                    # Start all services (web, realtime, processor)
 pnpm --filter web dev       # Start web app only
+pnpm --filter realtime dev  # Start realtime service only
+pnpm --filter processor dev # Start processor service only
 
 # Build
-pnpm build                  # Build all apps
+pnpm build                  # Build all apps (uses Turbo)
 pnpm --filter web build     # Build web app only
 
 # Database
@@ -178,8 +195,17 @@ pnpm db:generate            # Generate Drizzle migrations
 pnpm db:migrate             # Run database migrations
 pnpm --filter @pagespace/db db:studio  # Open Drizzle Studio
 
-# Linting
+# Testing
+pnpm test                   # Run all tests
+pnpm test:unit              # Run unit tests (Vitest)
+pnpm test:watch             # Run tests in watch mode
+pnpm test:coverage          # Run tests with coverage report
+pnpm test:e2e               # Run E2E tests (Playwright)
+pnpm test:security          # Run security tests
+
+# Linting & Type Checking
 pnpm --filter web lint      # Run ESLint on web app
+pnpm typecheck              # Run TypeScript checks across monorepo
 ```
 
 ## 8. COMMON WORKFLOWS
@@ -189,8 +215,9 @@ pnpm --filter web lint      # Run ESLint on web app
 1. **Adding new API routes**: Follow Next.js 15 async params pattern
 2. **Database changes**: Update schema in `packages/db`, generate migrations
 3. **New components**: Follow existing patterns in `components/` directory
-4. **AI provider integration**: See `docs/3.0-guides-and-tools/adding-ai-provider.md`
-5. **Permission changes**: Update centralized logic in `@pagespace/lib/permissions`
+4. **Permission changes**: Update centralized logic in `@pagespace/lib/permissions`
+5. **Testing**: Write tests first (TDD), maintain >75% coverage
+6. **File processing**: Integration with processor service at port 3003
 
 ### 8.2. Domain Expert Agent Workflows
 

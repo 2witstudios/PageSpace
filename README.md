@@ -151,14 +151,15 @@ PageSpace is a monorepo with a modern, production-ready stack:
 ```
 apps/
 ├── web/          # Next.js 15 main application
-└── realtime/     # Socket.IO server for real-time sync
+├── realtime/     # Socket.IO server for real-time sync
+└── processor/    # File processing service
 
 packages/
 ├── db/           # Drizzle ORM + PostgreSQL schema
 └── lib/          # Shared utilities and types
 ```
 
-**Tech Stack**: Next.js 15, PostgreSQL, Socket.IO, Vercel AI SDK, TypeScript, Tailwind CSS
+**Tech Stack**: Next.js 15, PostgreSQL, Socket.IO, Vercel AI SDK, TypeScript, Tailwind CSS, Turbo
 
 ---
 
