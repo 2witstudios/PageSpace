@@ -84,7 +84,7 @@ export async function getUserNotifications(userId: string, limit = 50) {
   type NotificationResult = (typeof userNotifications)[number];
 
   return userNotifications.map((row: NotificationResult) => ({
-    ...row.notification,
+    notification: row.notification,
     triggeredByUser: row.triggeredByUser,
     drive: row.drive,
   }));
@@ -100,8 +100,13 @@ export async function getUnreadNotificationCount(userId: string) {
         eq(notifications.isRead, false)
       )
     );
-  
+
   return Number(result[0]?.count || 0);
+}
+
+// Alias for backward compatibility
+export async function getUnreadCount(userId: string) {
+  return getUnreadNotificationCount(userId);
 }
 
 export async function markNotificationAsRead(notificationId: string, userId: string) {

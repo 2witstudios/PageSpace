@@ -203,6 +203,36 @@ services:
     networks:
       - internal
 
+  # Test service for running unit tests with database access
+  test:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile.migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql://user:password@postgres:5432/pagespace_test
+      - JWT_SECRET=test-secret-key-minimum-32-characters-long-for-testing
+      - JWT_ISSUER=pagespace-test
+      - JWT_AUDIENCE=pagespace-test-users
+      - CSRF_SECRET=test-csrf-secret-minimum-32-characters-long-for-testing-purposes
+      - ENCRYPTION_KEY=test-encryption-key-32-chars-minimum-required-length
+      - ENCRYPTION_SALT=test-encryption-salt-for-backward-compatibility
+      - REALTIME_BROADCAST_SECRET=test-realtime-broadcast-secret-32-chars-minimum-length
+    command: >
+      sh -c "
+        echo 'Setting up test database schema...' &&
+        cd packages/db && pnpm drizzle-kit push --force &&
+        cd ../.. &&
+        echo 'Running tests...' &&
+        pnpm test:unit
+      "
+    networks:
+      - internal
+    profiles:
+      - test
+
   # Optional nginx service for efficient static file serving
   nginx:
     image: nginx:alpine

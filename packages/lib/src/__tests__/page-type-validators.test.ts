@@ -4,7 +4,6 @@ import {
   validatePageUpdate,
   canConvertToType,
   canParentHaveChildType,
-  pageTypeRequiresAuth,
   getValidationRules,
   validateAIChatTools
 } from '../page-type-validators'
@@ -389,34 +388,6 @@ describe('page-type-validators', () => {
     it('disallows SHEET to have children', () => {
       const canHave = canParentHaveChildType(PageType.SHEET, PageType.DOCUMENT)
       expect(canHave).toBe(false)
-    })
-  })
-
-  describe('pageTypeRequiresAuth', () => {
-    it('returns true for AI_CHAT', () => {
-      const requiresAuth = pageTypeRequiresAuth(PageType.AI_CHAT)
-      expect(requiresAuth).toBe(true)
-    })
-
-    it('returns true for DOCUMENT', () => {
-      const requiresAuth = pageTypeRequiresAuth(PageType.DOCUMENT)
-      expect(requiresAuth).toBe(true)
-    })
-
-    it('returns true for all page types', () => {
-      const types = [
-        PageType.DOCUMENT,
-        PageType.FOLDER,
-        PageType.AI_CHAT,
-        PageType.CHANNEL,
-        PageType.FILE,
-        PageType.CANVAS,
-        PageType.SHEET
-      ]
-
-      types.forEach(type => {
-        expect(pageTypeRequiresAuth(type)).toBe(true)
-      })
     })
   })
 

@@ -55,6 +55,11 @@ export function verifyBroadcastSignature(signatureHeader: string, requestBody: s
     return false;
   }
 
+  // Validate input types
+  if (typeof signatureHeader !== 'string' || typeof requestBody !== 'string') {
+    return false;
+  }
+
   try {
     // Parse header format: "t=timestamp,v1=signature"
     const parts = signatureHeader.split(',');

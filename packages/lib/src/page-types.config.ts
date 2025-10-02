@@ -5,7 +5,6 @@ export interface PageTypeCapabilities {
   canHaveChildren: boolean;
   canAcceptUploads: boolean;
   canBeConverted: boolean;
-  requiresAuth: boolean;
   supportsRealtime: boolean;
   supportsVersioning: boolean;
   supportsAI: boolean;
@@ -42,7 +41,6 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       canHaveChildren: true,
       canAcceptUploads: true,
       canBeConverted: false,
-      requiresAuth: false,
       supportsRealtime: false,
       supportsVersioning: false,
       supportsAI: false,
@@ -62,7 +60,6 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       canHaveChildren: false,
       canAcceptUploads: false,
       canBeConverted: true,
-      requiresAuth: false,
       supportsRealtime: true,
       supportsVersioning: true,
       supportsAI: false,
@@ -82,7 +79,6 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       canHaveChildren: false,
       canAcceptUploads: false,
       canBeConverted: false,
-      requiresAuth: true,
       supportsRealtime: true,
       supportsVersioning: false,
       supportsAI: false,
@@ -102,7 +98,6 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       canHaveChildren: false,
       canAcceptUploads: false,
       canBeConverted: false,
-      requiresAuth: true,
       supportsRealtime: true,
       supportsVersioning: false,
       supportsAI: true,
@@ -125,7 +120,6 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       canHaveChildren: false,
       canAcceptUploads: false,
       canBeConverted: false,
-      requiresAuth: false,
       supportsRealtime: false,
       supportsVersioning: true,
       supportsAI: false,
@@ -145,7 +139,6 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       canHaveChildren: false,
       canAcceptUploads: false,
       canBeConverted: true,
-      requiresAuth: false,
       supportsRealtime: false,
       supportsVersioning: false,
       supportsAI: false,
@@ -165,7 +158,6 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       canHaveChildren: false,
       canAcceptUploads: false,
       canBeConverted: false,
-      requiresAuth: false,
       supportsRealtime: true,
       supportsVersioning: true,
       supportsAI: true,
@@ -228,10 +220,6 @@ export function isSheetPage(type: PageType): boolean {
 
 export function supportsAI(type: PageType): boolean {
   return PAGE_TYPE_CONFIGS[type]?.capabilities.supportsAI || false;
-}
-
-export function requiresAuth(type: PageType): boolean {
-  return PAGE_TYPE_CONFIGS[type]?.capabilities.requiresAuth || false;
 }
 
 export function supportsRealtime(type: PageType): boolean {

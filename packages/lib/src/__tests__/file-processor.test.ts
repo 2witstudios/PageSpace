@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { FileProcessor } from '../file-processor'
-import { db, sql, pages } from '@pagespace/db'
+import { db, sql } from '@pagespace/db'
 import { factories } from '@pagespace/db/test/factories'
+import { createHash } from 'crypto'
 
 // Mock fetch for processor service
 global.fetch = vi.fn()
@@ -12,8 +13,9 @@ describe('file-processor', () => {
   let testDrive: Awaited<ReturnType<typeof factories.createDrive>>
 
   beforeEach(async () => {
-    // Clean up test data
-    await db.execute(sql`TRUNCATE TABLE pages, drives, users CASCADE`)
+    // Clean up test data before each test
+    // Use TRUNCATE CASCADE for atomic cleanup (safer than individual DELETEs)
+    await db.execute(sql`TRUNCATE TABLE users CASCADE`)
 
     testUser = await factories.createUser()
     testDrive = await factories.createDrive(testUser.id)
@@ -24,7 +26,7 @@ describe('file-processor', () => {
     vi.clearAllMocks()
   })
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.clearAllMocks()
   })
 
@@ -112,30 +114,36 @@ describe('file-processor', () => {
     })
 
     it('skips processing if content hash matches and status is completed', async () => {
-      const contentHash = 'abc123hash'
+      // Calculate the actual SHA256 hash of the test content
+      const testContent = 'Previously processed content'
+      const mockFileContent = Buffer.from(testContent, 'utf-8')
+      const actualHash = createHash('sha256').update(mockFileContent).digest('hex')
 
       const page = await factories.createPage(testDrive.id, {
         type: 'FILE',
-        filePath: contentHash,
+        filePath: 'test-file-path',
         mimeType: 'text/plain',
-        contentHash,
+        contentHash: actualHash, // Use actual hash so skip logic works
         processingStatus: 'completed',
-        content: 'Previously processed content'
+        content: testContent
       })
 
-      const mockFileContent = Buffer.from('Previously processed content')
+      // Create a clean ArrayBuffer from the UTF-8 bytes
+      const encoder = new TextEncoder()
+      const arrayBuffer = encoder.encode(testContent).buffer
 
       ;(global.fetch as any).mockResolvedValue({
         ok: true,
-        arrayBuffer: async () => mockFileContent.buffer
+        arrayBuffer: async () => arrayBuffer
       })
 
       const result = await processor.processFile(page.id)
 
       expect(result.success).toBe(true)
-      expect(result.content).toBe('Previously processed content')
+      expect(result.content).toBe(testContent)
       expect(result.processingStatus).toBe('completed')
-      // Should skip processing
+      expect(result.contentHash).toBe(actualHash)
+      // Should skip processing and return existing content from database
     })
 
     it('processes text/plain files', async () => {

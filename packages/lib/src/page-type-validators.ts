@@ -1,10 +1,57 @@
 import { PageType } from './enums';
 import { getPageTypeConfig } from './page-types.config';
-import { parseSheetContent } from './sheet';
+import { parseSheetContent, SHEET_DEFAULT_ROWS, SHEET_DEFAULT_COLUMNS } from './sheet';
 
 export interface ValidationResult {
   valid: boolean;
   errors: string[];
+}
+
+/**
+ * Helper to validate sheet content is actually valid, not just a fallback empty sheet
+ */
+function isValidSheetContent(content: string): boolean {
+  if (!content || typeof content !== 'string') {
+    return false;
+  }
+
+  const trimmed = content.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  // Try to parse it
+  const parsed = parseSheetContent(content);
+
+  // If the content was non-empty but resulted in an empty default sheet,
+  // it's likely invalid input that was sanitized
+  const isDefaultEmptySheet =
+    parsed.rowCount === SHEET_DEFAULT_ROWS &&
+    parsed.columnCount === SHEET_DEFAULT_COLUMNS &&
+    Object.keys(parsed.cells).length === 0;
+
+  // If content was provided but we got default empty sheet, it's invalid
+  if (trimmed !== '' && isDefaultEmptySheet) {
+    // Check if it's valid JSON or SheetDoc format
+    if (trimmed.startsWith('#%PAGESPACE_SHEETDOC')) {
+      return true; // SheetDoc format is valid
+    }
+
+    try {
+      const json = JSON.parse(trimmed);
+      // Valid JSON with sheet structure
+      if (json && typeof json === 'object') {
+        return true;
+      }
+    } catch {
+      // Not valid JSON
+      return false;
+    }
+
+    return false;
+  }
+
+  return true;
 }
 
 /**
@@ -69,9 +116,7 @@ export function validatePageCreation(
 
     case PageType.SHEET:
       if (data.content) {
-        try {
-          parseSheetContent(data.content);
-        } catch {
+        if (!isValidSheetContent(data.content)) {
           errors.push('Invalid sheet content');
         }
       }
@@ -166,9 +211,7 @@ export function validatePageUpdate(
         if (typeof data.content !== 'string') {
           errors.push('Content must be a string for sheet pages');
         } else {
-          try {
-            parseSheetContent(data.content);
-          } catch {
+          if (!isValidSheetContent(data.content)) {
             errors.push('Content must be valid sheet data');
           }
         }
@@ -190,14 +233,6 @@ export function validatePageUpdate(
     valid: errors.length === 0,
     errors,
   };
-}
-
-/**
- * Checks if a page type requires authentication
- */
-export function pageTypeRequiresAuth(type: PageType): boolean {
-  const config = getPageTypeConfig(type);
-  return config.capabilities.requiresAuth;
 }
 
 /**

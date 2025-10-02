@@ -34,7 +34,12 @@ export function validateCSRFToken(token: string, sessionId: string, maxAge: numb
   if (!token || !sessionId) {
     return false;
   }
-  
+
+  // Validate input types
+  if (typeof token !== 'string' || typeof sessionId !== 'string') {
+    return false;
+  }
+
   try {
     const parts = token.split(CSRF_SEPARATOR);
     if (parts.length !== 3) {
@@ -46,7 +51,8 @@ export function validateCSRFToken(token: string, sessionId: string, maxAge: numb
     // Check if token has expired
     const tokenTime = parseInt(timestamp, 10);
     const currentTime = Math.floor(Date.now() / 1000);
-    if (currentTime - tokenTime > maxAge) {
+    const age = currentTime - tokenTime;
+    if (age > maxAge || (maxAge === 0 && age >= 0)) {
       return false;
     }
     

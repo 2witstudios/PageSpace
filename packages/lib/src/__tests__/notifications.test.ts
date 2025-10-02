@@ -20,8 +20,9 @@ describe('notifications', () => {
   let testPage: Awaited<ReturnType<typeof factories.createPage>>
 
   beforeEach(async () => {
-    // Clean up test data
-    await db.execute(sql`TRUNCATE TABLE notifications, pages, drives, users CASCADE`)
+    // Clean up test data before each test
+    // Use TRUNCATE CASCADE for atomic cleanup (safer than individual DELETEs)
+    await db.execute(sql`TRUNCATE TABLE users CASCADE`)
 
     testUser = await factories.createUser()
     otherUser = await factories.createUser()

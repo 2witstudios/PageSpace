@@ -1,6 +1,6 @@
 import type { Page } from './types';
 import { PageType } from './enums';
-import { evaluateSheet, parseSheetContent, encodeCellAddress } from './sheet';
+import { evaluateSheet, parseSheetContent, encodeCellAddress, SHEET_DEFAULT_ROWS, SHEET_DEFAULT_COLUMNS } from './sheet';
 
 type ContentFormat = string[] | string | any;
 
@@ -37,7 +37,7 @@ export function getPageContentForAI(page: Page & { channelMessages?: any[], chil
 
     switch (page.type) {
         case PageType.DOCUMENT:
-            if (page.content) {
+            if (page.content !== null && page.content !== undefined) {
                 contentString += convertContentToPlainText(page.content);
             } else {
                 contentString += "No document content available.\n";
@@ -71,6 +71,27 @@ export function getPageContentForAI(page: Page & { channelMessages?: any[], chil
                 } else {
                     // Legacy format - parse and show as before
                     const sheetData = parseSheetContent(page.content);
+
+                    // Check if we got a valid sheet or just a fallback empty sheet
+                    const isDefaultEmptySheet =
+                        sheetData.rowCount === SHEET_DEFAULT_ROWS &&
+                        sheetData.columnCount === SHEET_DEFAULT_COLUMNS &&
+                        Object.keys(sheetData.cells).length === 0;
+
+                    const hasContent = page.content && typeof page.content === 'string' && page.content.trim() !== '';
+
+                    // If content was provided but resulted in default empty sheet, it's likely invalid
+                    if (hasContent && isDefaultEmptySheet) {
+                        // Check if it's valid JSON or just garbage
+                        try {
+                            JSON.parse(page.content);
+                            // It's valid JSON, continue normally
+                        } catch {
+                            // Not valid JSON - this is invalid sheet content
+                            throw new Error('Invalid sheet content format');
+                        }
+                    }
+
                     const evaluation = evaluateSheet(sheetData);
                     const maxRows = Math.min(sheetData.rowCount, 50);
                     const maxCols = Math.min(sheetData.columnCount, 26);
@@ -117,6 +138,13 @@ export function getPageContentForAI(page: Page & { channelMessages?: any[], chil
             }
             break;
         }
+        case PageType.CANVAS:
+            if (page.content !== null && page.content !== undefined) {
+                contentString += convertContentToPlainText(page.content);
+            } else {
+                contentString += "No canvas content available.\n";
+            }
+            break;
         default:
             contentString += `Content extraction not implemented for page type: ${page.type}.\n`;
     }

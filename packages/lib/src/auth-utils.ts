@@ -33,6 +33,11 @@ interface UserPayload extends jose.JWTPayload {
 }
 
 export async function decodeToken(token: string): Promise<UserPayload | null> {
+  // Validate input type
+  if (typeof token !== 'string') {
+    return null;
+  }
+
   try {
     const config = getJWTConfig();
     const { payload } = await jose.jwtVerify(token, config.secret, {
