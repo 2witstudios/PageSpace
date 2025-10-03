@@ -206,6 +206,7 @@ export async function POST(request: Request) {
         connectionId: newConnection.id,
         senderId: user.id,
         requestMessage: message,
+        requesterName: senderName, // For email template
       },
       triggeredByUserId: user.id,
     });

@@ -46,7 +46,7 @@ packages/lib/src/**/*.d.ts
 out/
 
 # Drizzle ORM
-packages/db/drizzle/meta/
+# Note: meta/ should be committed to track migration history
 
 # Editor/OS specific
 .DS_Store
