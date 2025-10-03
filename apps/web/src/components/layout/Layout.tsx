@@ -59,27 +59,9 @@ function Layout({ children }: LayoutProps) {
 
   // Handle authentication redirect with Next.js router for faster navigation
   useEffect(() => {
-    // Check if we just came from a signup/auth flow
-    const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
-    const isAuthSuccess = urlParams?.get('auth') === 'success';
-    
     if (hasHydrated && !isLoading && !isAuthenticated) {
-      // If we have auth=success parameter, give a brief delay for auth check to complete
-      if (isAuthSuccess) {
-        console.log('[LAYOUT] Auth success detected, delaying signin redirect to allow auth check');
-        const timer = setTimeout(() => {
-          // Re-check auth state after delay
-          if (!isAuthenticated) {
-            console.log('[LAYOUT] Auth check delay expired, redirecting to signin');
-            router.push('/auth/signin');
-          }
-        }, 1000); // 1 second delay
-        
-        return () => clearTimeout(timer);
-      } else {
-        console.log('[LAYOUT] Redirecting to signin - hasHydrated:', hasHydrated, 'isLoading:', isLoading, 'isAuthenticated:', isAuthenticated);
-        router.push('/auth/signin');
-      }
+      console.log('[LAYOUT] Redirecting to signin - hasHydrated:', hasHydrated, 'isLoading:', isLoading, 'isAuthenticated:', isAuthenticated);
+      router.push('/auth/signin');
     }
   }, [hasHydrated, isLoading, isAuthenticated, router]);
 

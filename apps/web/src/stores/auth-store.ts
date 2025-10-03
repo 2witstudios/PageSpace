@@ -204,6 +204,9 @@ export const useAuthStore = create<AuthState>()(
           return;
         }
 
+        // Set loading state to prevent premature redirects (critical for OAuth flow)
+        set({ isLoading: true });
+
         // Create new auth promise
         const authPromise = (async () => {
           try {
@@ -245,8 +248,8 @@ export const useAuthStore = create<AuthState>()(
               lastFailedAuthCheck: Date.now(),
             });
           } finally {
-            // Clear promise when done
-            set({ _authPromise: null });
+            // Clear loading state and promise when done
+            set({ isLoading: false, _authPromise: null });
           }
         })();
 
