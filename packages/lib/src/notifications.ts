@@ -93,7 +93,7 @@ export async function getUserNotifications(userId: string, limit = 50) {
   type NotificationResult = (typeof userNotifications)[number];
 
   return userNotifications.map((row: NotificationResult) => ({
-    notification: row.notification,
+    ...row.notification,
     triggeredByUser: row.triggeredByUser,
     drive: row.drive,
   }));

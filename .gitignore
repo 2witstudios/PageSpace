@@ -45,9 +45,6 @@ packages/lib/src/**/*.d.ts
 .next/
 out/
 
-# Drizzle ORM
-# Note: meta/ should be committed to track migration history
-
 # Editor/OS specific
 .DS_Store
 .vscode/
