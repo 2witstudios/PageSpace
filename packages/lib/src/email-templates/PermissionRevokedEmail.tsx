@@ -1,7 +1,6 @@
 import * as React from 'react';
 import {
   Body,
-  Button,
   Container,
   Head,
   Heading,
@@ -12,25 +11,19 @@ import {
 } from '@react-email/components';
 import { emailStyles } from './shared-styles';
 
-interface NotificationEmailProps {
+interface PermissionRevokedEmailProps {
   userName: string;
-  subject: string;
-  greeting: string;
-  message: string;
-  actionUrl?: string;
-  actionText?: string;
+  pageTitle: string;
+  driveName?: string;
   unsubscribeUrl?: string;
 }
 
-export function NotificationEmail({
+export function PermissionRevokedEmail({
   userName,
-  subject,
-  greeting,
-  message,
-  actionUrl,
-  actionText,
+  pageTitle,
+  driveName,
   unsubscribeUrl,
-}: NotificationEmailProps) {
+}: PermissionRevokedEmailProps) {
   return (
     <Html>
       <Head />
@@ -40,24 +33,25 @@ export function NotificationEmail({
             <Heading style={emailStyles.headerTitle}>PageSpace</Heading>
           </Section>
           <Section style={emailStyles.content}>
-            <Text style={emailStyles.contentHeading}>{greeting}</Text>
-            <Text style={emailStyles.paragraph}>{message}</Text>
-            {actionUrl && actionText && (
-              <Section style={emailStyles.buttonContainer}>
-                <Button style={emailStyles.button} href={actionUrl}>
-                  {actionText}
-                </Button>
-              </Section>
-            )}
+            <Text style={emailStyles.contentHeading}>Access removed</Text>
+            <Text style={emailStyles.paragraph}>
+              Hi {userName},
+            </Text>
+            <Text style={emailStyles.paragraph}>
+              Your access to <strong>&quot;{pageTitle}&quot;</strong>{driveName && ` in ${driveName}`} has been removed.
+            </Text>
+            <Text style={emailStyles.paragraph}>
+              You will no longer be able to view or edit this page.
+            </Text>
           </Section>
           <Section style={emailStyles.footer}>
             <Text style={emailStyles.footerText}>
-              You&apos;re receiving this notification because you&apos;re part of a PageSpace workspace.
+              You&apos;re receiving this email because your page permissions were changed on PageSpace.
             </Text>
             {unsubscribeUrl && (
               <Text style={emailStyles.footerText}>
                 <Link href={unsubscribeUrl} style={emailStyles.link}>
-                  Unsubscribe from this notification type
+                  Unsubscribe from permission notifications
                 </Link>
               </Text>
             )}

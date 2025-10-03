@@ -12,21 +12,23 @@ import {
 } from '@react-email/components';
 import { emailStyles } from './shared-styles';
 
-interface DirectMessageEmailProps {
+interface PermissionUpdatedEmailProps {
   userName: string;
-  senderName: string;
-  messagePreview: string;
+  pageTitle: string;
+  permissions: string[];
+  driveName?: string;
   viewUrl: string;
   unsubscribeUrl?: string;
 }
 
-export function DirectMessageEmail({
+export function PermissionUpdatedEmail({
   userName,
-  senderName,
-  messagePreview,
+  pageTitle,
+  permissions,
+  driveName,
   viewUrl,
   unsubscribeUrl,
-}: DirectMessageEmailProps) {
+}: PermissionUpdatedEmailProps) {
   return (
     <Html>
       <Head />
@@ -36,30 +38,30 @@ export function DirectMessageEmail({
             <Heading style={emailStyles.headerTitle}>PageSpace</Heading>
           </Section>
           <Section style={emailStyles.content}>
-            <Text style={emailStyles.contentHeading}>New message from {senderName}</Text>
+            <Text style={emailStyles.contentHeading}>Permissions updated</Text>
             <Text style={emailStyles.paragraph}>
               Hi {userName},
             </Text>
             <Text style={emailStyles.paragraph}>
-              <strong>{senderName}</strong> sent you a message:
+              Your permissions for <strong>&quot;{pageTitle}&quot;</strong>{driveName && ` in ${driveName}`} have been updated.
             </Text>
-            <Section style={emailStyles.messageBox}>
-              <Text style={emailStyles.messageText}>{messagePreview}</Text>
-            </Section>
+            <Text style={emailStyles.paragraph}>
+              You now have <strong>{permissions.join(', ')}</strong> access to this page.
+            </Text>
             <Section style={emailStyles.buttonContainer}>
               <Button style={emailStyles.button} href={viewUrl}>
-                View Message
+                View Page
               </Button>
             </Section>
           </Section>
           <Section style={emailStyles.footer}>
             <Text style={emailStyles.footerText}>
-              You&apos;re receiving this email because someone sent you a direct message on PageSpace.
+              You&apos;re receiving this email because your page permissions were changed on PageSpace.
             </Text>
             {unsubscribeUrl && (
               <Text style={emailStyles.footerText}>
                 <Link href={unsubscribeUrl} style={emailStyles.link}>
-                  Unsubscribe from direct message notifications
+                  Unsubscribe from permission notifications
                 </Link>
               </Text>
             )}

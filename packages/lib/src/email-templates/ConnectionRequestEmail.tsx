@@ -10,6 +10,7 @@ import {
   Section,
   Text,
 } from '@react-email/components';
+import { emailStyles } from './shared-styles';
 
 interface ConnectionRequestEmailProps {
   userName: string;
@@ -29,37 +30,37 @@ export function ConnectionRequestEmail({
   return (
     <Html>
       <Head />
-      <Body style={main}>
-        <Container style={container}>
-          <Section style={header}>
-            <Heading style={h1}>PageSpace</Heading>
+      <Body style={emailStyles.main}>
+        <Container style={emailStyles.container}>
+          <Section style={emailStyles.header}>
+            <Heading style={emailStyles.headerTitle}>PageSpace</Heading>
           </Section>
-          <Section style={content}>
-            <Text style={heading}>{requesterName} wants to connect</Text>
-            <Text style={paragraph}>
+          <Section style={emailStyles.content}>
+            <Text style={emailStyles.contentHeading}>{requesterName} wants to connect</Text>
+            <Text style={emailStyles.paragraph}>
               Hi {userName},
             </Text>
-            <Text style={paragraph}>
+            <Text style={emailStyles.paragraph}>
               <strong>{requesterName}</strong> wants to connect with you on PageSpace.
             </Text>
             {requestMessage && (
-              <Section style={messageBox}>
-                <Text style={messageText}>{requestMessage}</Text>
+              <Section style={emailStyles.messageBox}>
+                <Text style={emailStyles.messageText}>{requestMessage}</Text>
               </Section>
             )}
-            <Section style={buttonContainer}>
-              <Button style={button} href={viewUrl}>
+            <Section style={emailStyles.buttonContainer}>
+              <Button style={emailStyles.button} href={viewUrl}>
                 View Request
               </Button>
             </Section>
           </Section>
-          <Section style={footer}>
-            <Text style={footerText}>
+          <Section style={emailStyles.footer}>
+            <Text style={emailStyles.footerText}>
               You&apos;re receiving this email because someone sent you a connection request on PageSpace.
             </Text>
             {unsubscribeUrl && (
-              <Text style={footerText}>
-                <Link href={unsubscribeUrl} style={link}>
+              <Text style={emailStyles.footerText}>
+                <Link href={unsubscribeUrl} style={emailStyles.link}>
                   Unsubscribe from connection request notifications
                 </Link>
               </Text>
@@ -70,100 +71,3 @@ export function ConnectionRequestEmail({
     </Html>
   );
 }
-
-// Styles
-const main = {
-  backgroundColor: '#f6f9fc',
-  fontFamily: '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif',
-};
-
-const container = {
-  margin: '0 auto',
-  padding: '20px 0',
-  maxWidth: '600px',
-};
-
-const header = {
-  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-  borderRadius: '10px 10px 0 0',
-  padding: '30px',
-  textAlign: 'center' as const,
-};
-
-const h1 = {
-  color: '#ffffff',
-  fontSize: '28px',
-  fontWeight: '600',
-  margin: '0',
-};
-
-const content = {
-  backgroundColor: '#ffffff',
-  padding: '40px 30px',
-};
-
-const heading = {
-  fontSize: '20px',
-  fontWeight: '600',
-  color: '#333333',
-  margin: '0 0 24px 0',
-};
-
-const paragraph = {
-  fontSize: '16px',
-  lineHeight: '24px',
-  color: '#333333',
-  margin: '0 0 16px 0',
-};
-
-const messageBox = {
-  backgroundColor: '#f8f9fa',
-  borderLeft: '4px solid #667eea',
-  padding: '16px 20px',
-  margin: '24px 0',
-  borderRadius: '4px',
-};
-
-const messageText = {
-  fontSize: '15px',
-  lineHeight: '22px',
-  color: '#555555',
-  fontStyle: 'italic' as const,
-  margin: '0',
-};
-
-const buttonContainer = {
-  textAlign: 'center' as const,
-  margin: '32px 0',
-};
-
-const button = {
-  backgroundColor: '#667eea',
-  borderRadius: '6px',
-  color: '#fff',
-  fontSize: '16px',
-  fontWeight: '600',
-  textDecoration: 'none',
-  textAlign: 'center' as const,
-  display: 'inline-block',
-  padding: '14px 40px',
-};
-
-const footer = {
-  backgroundColor: '#f8f9fa',
-  borderRadius: '0 0 10px 10px',
-  padding: '30px',
-  borderTop: '1px solid #dddddd',
-};
-
-const footerText = {
-  fontSize: '14px',
-  color: '#666666',
-  margin: '8px 0',
-  textAlign: 'center' as const,
-};
-
-const link = {
-  color: '#667eea',
-  textDecoration: 'underline',
-};

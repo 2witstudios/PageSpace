@@ -12,21 +12,21 @@ import {
 } from '@react-email/components';
 import { emailStyles } from './shared-styles';
 
-interface DirectMessageEmailProps {
+interface DriveRoleChangedEmailProps {
   userName: string;
-  senderName: string;
-  messagePreview: string;
+  driveName: string;
+  newRole: string;
   viewUrl: string;
   unsubscribeUrl?: string;
 }
 
-export function DirectMessageEmail({
+export function DriveRoleChangedEmail({
   userName,
-  senderName,
-  messagePreview,
+  driveName,
+  newRole,
   viewUrl,
   unsubscribeUrl,
-}: DirectMessageEmailProps) {
+}: DriveRoleChangedEmailProps) {
   return (
     <Html>
       <Head />
@@ -36,30 +36,30 @@ export function DirectMessageEmail({
             <Heading style={emailStyles.headerTitle}>PageSpace</Heading>
           </Section>
           <Section style={emailStyles.content}>
-            <Text style={emailStyles.contentHeading}>New message from {senderName}</Text>
+            <Text style={emailStyles.contentHeading}>Your role has been updated</Text>
             <Text style={emailStyles.paragraph}>
               Hi {userName},
             </Text>
             <Text style={emailStyles.paragraph}>
-              <strong>{senderName}</strong> sent you a message:
+              Your role in <strong>{driveName}</strong> has been changed to <strong>{newRole}</strong>.
             </Text>
-            <Section style={emailStyles.messageBox}>
-              <Text style={emailStyles.messageText}>{messagePreview}</Text>
-            </Section>
+            <Text style={emailStyles.paragraph}>
+              Your permissions and access levels have been updated accordingly.
+            </Text>
             <Section style={emailStyles.buttonContainer}>
               <Button style={emailStyles.button} href={viewUrl}>
-                View Message
+                View Workspace
               </Button>
             </Section>
           </Section>
           <Section style={emailStyles.footer}>
             <Text style={emailStyles.footerText}>
-              You&apos;re receiving this email because someone sent you a direct message on PageSpace.
+              You&apos;re receiving this email because your role was changed in a workspace on PageSpace.
             </Text>
             {unsubscribeUrl && (
               <Text style={emailStyles.footerText}>
                 <Link href={unsubscribeUrl} style={emailStyles.link}>
-                  Unsubscribe from direct message notifications
+                  Unsubscribe from workspace notifications
                 </Link>
               </Text>
             )}

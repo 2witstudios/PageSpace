@@ -217,6 +217,7 @@ export async function createPermissionNotification(
     message,
     metadata: {
       permissions,
+      permissionList, // For email templates - array of strings like ['view', 'edit']
       pageName: page.title,
       pageTitle: page.title, // For email templates
       pageId, // For email templates

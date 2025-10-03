@@ -5,6 +5,12 @@ import { DirectMessageEmail } from '../email-templates/DirectMessageEmail';
 import { ConnectionRequestEmail } from '../email-templates/ConnectionRequestEmail';
 import { PageSharedEmail } from '../email-templates/PageSharedEmail';
 import { CollaboratorAddedEmail } from '../email-templates/CollaboratorAddedEmail';
+import { ConnectionAcceptedEmail } from '../email-templates/ConnectionAcceptedEmail';
+import { ConnectionRejectedEmail } from '../email-templates/ConnectionRejectedEmail';
+import { PermissionRevokedEmail } from '../email-templates/PermissionRevokedEmail';
+import { PermissionUpdatedEmail } from '../email-templates/PermissionUpdatedEmail';
+import { DriveJoinedEmail } from '../email-templates/DriveJoinedEmail';
+import { DriveRoleChangedEmail } from '../email-templates/DriveRoleChangedEmail';
 import { SignJWT } from 'jose';
 import type { ReactElement } from 'react';
 
@@ -136,7 +142,7 @@ function getEmailTemplate(data: NotificationEmailData, user: { name: string; ema
           userName: user.name,
           sharerName: (data.metadata.sharerName as string) || 'Someone',
           pageTitle: (data.metadata.pageTitle as string) || 'a page',
-          permissions: (data.metadata.permissions as string[]) || ['view'],
+          permissions: (data.metadata.permissionList as string[]) || ['view'],
           viewUrl: `${appUrl}/dashboard/${data.metadata.driveId}/${data.metadata.pageId}`,
           unsubscribeUrl,
         }),
@@ -166,6 +172,82 @@ function getEmailTemplate(data: NotificationEmailData, user: { name: string; ema
           pageTitle: (data.metadata.pageTitle as string) || 'a page',
           permissions: ['view'],
           viewUrl: `${appUrl}/dashboard/${data.metadata.driveId}/${data.metadata.pageId}`,
+          unsubscribeUrl,
+        }),
+      };
+
+    case 'CONNECTION_ACCEPTED':
+      return {
+        subject: `${data.metadata.accepterName} accepted your connection request`,
+        component: ConnectionAcceptedEmail({
+          userName: user.name,
+          accepterName: (data.metadata.accepterName as string) || 'Someone',
+          viewUrl: `${appUrl}/dashboard/connections`,
+          unsubscribeUrl,
+        }),
+      };
+
+    case 'CONNECTION_REJECTED':
+      return {
+        subject: 'Connection request declined',
+        component: ConnectionRejectedEmail({
+          userName: user.name,
+          rejecterName: (data.metadata.rejecterName as string) || 'Someone',
+          unsubscribeUrl,
+        }),
+      };
+
+    case 'PERMISSION_REVOKED':
+      return {
+        subject: `Access removed: ${data.metadata.pageTitle}`,
+        component: PermissionRevokedEmail({
+          userName: user.name,
+          pageTitle: (data.metadata.pageTitle as string) || 'a page',
+          driveName: data.metadata.driveName as string | undefined,
+          unsubscribeUrl,
+        }),
+      };
+
+    case 'PERMISSION_UPDATED':
+      const updatedPermissions = data.metadata.permissions as Record<string, boolean> | undefined;
+      const permissionList = [];
+      if (updatedPermissions?.canView) permissionList.push('view');
+      if (updatedPermissions?.canEdit) permissionList.push('edit');
+      if (updatedPermissions?.canShare) permissionList.push('share');
+      if (updatedPermissions?.canDelete) permissionList.push('delete');
+
+      return {
+        subject: `Permissions updated: ${data.metadata.pageTitle}`,
+        component: PermissionUpdatedEmail({
+          userName: user.name,
+          pageTitle: (data.metadata.pageTitle as string) || 'a page',
+          permissions: permissionList,
+          driveName: data.metadata.driveName as string | undefined,
+          viewUrl: `${appUrl}/dashboard/${data.metadata.driveId}/${data.metadata.pageId}`,
+          unsubscribeUrl,
+        }),
+      };
+
+    case 'DRIVE_JOINED':
+      return {
+        subject: `You've joined ${data.metadata.driveName}`,
+        component: DriveJoinedEmail({
+          userName: user.name,
+          driveName: (data.metadata.driveName as string) || 'a workspace',
+          role: data.metadata.role as string | undefined,
+          viewUrl: `${appUrl}/dashboard/${data.metadata.driveId}`,
+          unsubscribeUrl,
+        }),
+      };
+
+    case 'DRIVE_ROLE_CHANGED':
+      return {
+        subject: `Your role in ${data.metadata.driveName} has been updated`,
+        component: DriveRoleChangedEmail({
+          userName: user.name,
+          driveName: (data.metadata.driveName as string) || 'a workspace',
+          newRole: (data.metadata.role as string) || 'member',
+          viewUrl: `${appUrl}/dashboard/${data.metadata.driveId}`,
           unsubscribeUrl,
         }),
       };

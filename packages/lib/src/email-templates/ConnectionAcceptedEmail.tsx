@@ -12,21 +12,19 @@ import {
 } from '@react-email/components';
 import { emailStyles } from './shared-styles';
 
-interface DirectMessageEmailProps {
+interface ConnectionAcceptedEmailProps {
   userName: string;
-  senderName: string;
-  messagePreview: string;
+  accepterName: string;
   viewUrl: string;
   unsubscribeUrl?: string;
 }
 
-export function DirectMessageEmail({
+export function ConnectionAcceptedEmail({
   userName,
-  senderName,
-  messagePreview,
+  accepterName,
   viewUrl,
   unsubscribeUrl,
-}: DirectMessageEmailProps) {
+}: ConnectionAcceptedEmailProps) {
   return (
     <Html>
       <Head />
@@ -36,30 +34,30 @@ export function DirectMessageEmail({
             <Heading style={emailStyles.headerTitle}>PageSpace</Heading>
           </Section>
           <Section style={emailStyles.content}>
-            <Text style={emailStyles.contentHeading}>New message from {senderName}</Text>
+            <Text style={emailStyles.contentHeading}>{accepterName} accepted your connection request</Text>
             <Text style={emailStyles.paragraph}>
               Hi {userName},
             </Text>
             <Text style={emailStyles.paragraph}>
-              <strong>{senderName}</strong> sent you a message:
+              Great news! <strong>{accepterName}</strong> has accepted your connection request on PageSpace.
             </Text>
-            <Section style={emailStyles.messageBox}>
-              <Text style={emailStyles.messageText}>{messagePreview}</Text>
-            </Section>
+            <Text style={emailStyles.paragraph}>
+              You can now collaborate on pages, share content, and communicate directly.
+            </Text>
             <Section style={emailStyles.buttonContainer}>
               <Button style={emailStyles.button} href={viewUrl}>
-                View Message
+                View Connection
               </Button>
             </Section>
           </Section>
           <Section style={emailStyles.footer}>
             <Text style={emailStyles.footerText}>
-              You&apos;re receiving this email because someone sent you a direct message on PageSpace.
+              You&apos;re receiving this email because someone accepted your connection request on PageSpace.
             </Text>
             {unsubscribeUrl && (
               <Text style={emailStyles.footerText}>
                 <Link href={unsubscribeUrl} style={emailStyles.link}>
-                  Unsubscribe from direct message notifications
+                  Unsubscribe from connection notifications
                 </Link>
               </Text>
             )}

@@ -12,21 +12,21 @@ import {
 } from '@react-email/components';
 import { emailStyles } from './shared-styles';
 
-interface DirectMessageEmailProps {
+interface DriveJoinedEmailProps {
   userName: string;
-  senderName: string;
-  messagePreview: string;
+  driveName: string;
+  role?: string;
   viewUrl: string;
   unsubscribeUrl?: string;
 }
 
-export function DirectMessageEmail({
+export function DriveJoinedEmail({
   userName,
-  senderName,
-  messagePreview,
+  driveName,
+  role,
   viewUrl,
   unsubscribeUrl,
-}: DirectMessageEmailProps) {
+}: DriveJoinedEmailProps) {
   return (
     <Html>
       <Head />
@@ -36,30 +36,30 @@ export function DirectMessageEmail({
             <Heading style={emailStyles.headerTitle}>PageSpace</Heading>
           </Section>
           <Section style={emailStyles.content}>
-            <Text style={emailStyles.contentHeading}>New message from {senderName}</Text>
+            <Text style={emailStyles.contentHeading}>You&apos;ve joined {driveName}</Text>
             <Text style={emailStyles.paragraph}>
               Hi {userName},
             </Text>
             <Text style={emailStyles.paragraph}>
-              <strong>{senderName}</strong> sent you a message:
+              You&apos;ve been added to <strong>{driveName}</strong>{role && ` as ${role}`}.
             </Text>
-            <Section style={emailStyles.messageBox}>
-              <Text style={emailStyles.messageText}>{messagePreview}</Text>
-            </Section>
+            <Text style={emailStyles.paragraph}>
+              You can now collaborate with other members and access shared pages in this workspace.
+            </Text>
             <Section style={emailStyles.buttonContainer}>
               <Button style={emailStyles.button} href={viewUrl}>
-                View Message
+                View Workspace
               </Button>
             </Section>
           </Section>
           <Section style={emailStyles.footer}>
             <Text style={emailStyles.footerText}>
-              You&apos;re receiving this email because someone sent you a direct message on PageSpace.
+              You&apos;re receiving this email because you were added to a workspace on PageSpace.
             </Text>
             {unsubscribeUrl && (
               <Text style={emailStyles.footerText}>
                 <Link href={unsubscribeUrl} style={emailStyles.link}>
-                  Unsubscribe from direct message notifications
+                  Unsubscribe from workspace notifications
                 </Link>
               </Text>
             )}

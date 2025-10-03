@@ -6,7 +6,8 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "email:dev": "email dev --dir emails"
   },
   "exports": {
     ".": {
@@ -228,6 +229,7 @@
     "server-only": "^0.0.1"
   },
   "devDependencies": {
+    "@react-email/preview-server": "4.2.12",
     "@types/react": "^19.1.13",
     "react": "^19.1.1"
   }

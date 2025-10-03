@@ -24,7 +24,7 @@ const ScrollArea = React.forwardRef<
     <ScrollBar />
     <ScrollAreaPrimitive.Corner />
   </ScrollAreaPrimitive.Root>
-))
+)) 
 ScrollArea.displayName = ScrollAreaPrimitive.Root.displayName
 
 function ScrollBar({

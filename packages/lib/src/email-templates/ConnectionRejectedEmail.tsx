@@ -1,7 +1,6 @@
 import * as React from 'react';
 import {
   Body,
-  Button,
   Container,
   Head,
   Heading,
@@ -12,25 +11,17 @@ import {
 } from '@react-email/components';
 import { emailStyles } from './shared-styles';
 
-interface NotificationEmailProps {
+interface ConnectionRejectedEmailProps {
   userName: string;
-  subject: string;
-  greeting: string;
-  message: string;
-  actionUrl?: string;
-  actionText?: string;
+  rejecterName: string;
   unsubscribeUrl?: string;
 }
 
-export function NotificationEmail({
+export function ConnectionRejectedEmail({
   userName,
-  subject,
-  greeting,
-  message,
-  actionUrl,
-  actionText,
+  rejecterName,
   unsubscribeUrl,
-}: NotificationEmailProps) {
+}: ConnectionRejectedEmailProps) {
   return (
     <Html>
       <Head />
@@ -40,24 +31,25 @@ export function NotificationEmail({
             <Heading style={emailStyles.headerTitle}>PageSpace</Heading>
           </Section>
           <Section style={emailStyles.content}>
-            <Text style={emailStyles.contentHeading}>{greeting}</Text>
-            <Text style={emailStyles.paragraph}>{message}</Text>
-            {actionUrl && actionText && (
-              <Section style={emailStyles.buttonContainer}>
-                <Button style={emailStyles.button} href={actionUrl}>
-                  {actionText}
-                </Button>
-              </Section>
-            )}
+            <Text style={emailStyles.contentHeading}>Connection request declined</Text>
+            <Text style={emailStyles.paragraph}>
+              Hi {userName},
+            </Text>
+            <Text style={emailStyles.paragraph}>
+              <strong>{rejecterName}</strong> has declined your connection request on PageSpace.
+            </Text>
+            <Text style={emailStyles.paragraph}>
+              You can continue exploring and connecting with other members of your workspaces.
+            </Text>
           </Section>
           <Section style={emailStyles.footer}>
             <Text style={emailStyles.footerText}>
-              You&apos;re receiving this notification because you&apos;re part of a PageSpace workspace.
+              You&apos;re receiving this email because someone responded to your connection request on PageSpace.
             </Text>
             {unsubscribeUrl && (
               <Text style={emailStyles.footerText}>
                 <Link href={unsubscribeUrl} style={emailStyles.link}>
-                  Unsubscribe from this notification type
+                  Unsubscribe from connection notifications
                 </Link>
               </Text>
             )}
