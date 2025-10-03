@@ -19,6 +19,7 @@ import {
 import useSWR, { mutate } from 'swr';
 import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
+import { VerificationRequiredAlert } from '@/components/VerificationRequiredAlert';
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
@@ -58,6 +59,7 @@ export default function ConnectionsPage() {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [sendingRequest, setSendingRequest] = useState<string | null>(null);
+  const [showVerificationAlert, setShowVerificationAlert] = useState(false);
 
   // Fetch accepted connections
   const { data: acceptedData, error: acceptedError } = useSWR<{ connections: Connection[] }>(
@@ -112,6 +114,13 @@ export default function ConnectionsPage() {
 
       if (!response.ok) {
         const error = await response.json();
+
+        // Check if this is a verification required error
+        if (error.requiresEmailVerification) {
+          setShowVerificationAlert(true);
+          return;
+        }
+
         throw new Error(error.error || 'Failed to send request');
       }
 
@@ -349,6 +358,11 @@ export default function ConnectionsPage() {
               </CardDescription>
             </CardHeader>
             <CardContent>
+              {showVerificationAlert && (
+                <div className="mb-4">
+                  <VerificationRequiredAlert onDismiss={() => setShowVerificationAlert(false)} />
+                </div>
+              )}
               <div className="space-y-4">
                 <div className="flex gap-2">
                   <Input

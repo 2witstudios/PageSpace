@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { useRouter } from "next/navigation";
+import useSWR from "swr";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -10,11 +11,20 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { toast } from "sonner";
-import { User, Mail, Calendar, AlertTriangle, Loader2, ArrowLeft, Upload, X } from "lucide-react";
+import { User, Mail, Calendar, AlertTriangle, Loader2, ArrowLeft, Upload, X, CheckCircle2, AlertCircle } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+
+const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
 export default function AccountPage() {
   const { user, isLoading: authLoading, mutate } = useAuth();
   const router = useRouter();
+
+  // Fetch email verification status
+  const { data: accountData } = useSWR<{ emailVerified: Date | null }>(
+    user ? '/api/account/verification-status' : null,
+    fetcher
+  );
 
   // Profile form state
   const [name, setName] = useState("");
@@ -31,6 +41,10 @@ export default function AccountPage() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [isSavingPassword, setIsSavingPassword] = useState(false);
+
+  // Email verification state
+  const [isResendingVerification, setIsResendingVerification] = useState(false);
+  const [verificationEmailSent, setVerificationEmailSent] = useState(false);
 
   // Load user data into form
   useEffect(() => {
@@ -171,7 +185,7 @@ export default function AccountPage() {
 
   const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (newPassword !== confirmPassword) {
       toast.error("New passwords don't match");
       return;
@@ -211,6 +225,30 @@ export default function AccountPage() {
       toast.error(error instanceof Error ? error.message : "Failed to change password");
     } finally {
       setIsSavingPassword(false);
+    }
+  };
+
+  const handleResendVerification = async () => {
+    setIsResendingVerification(true);
+    try {
+      const response = await fetch("/api/auth/resend-verification", {
+        method: "POST",
+        credentials: "include",
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to send verification email");
+      }
+
+      setVerificationEmailSent(true);
+      toast.success(data.message || "Verification email sent successfully. Please check your inbox.");
+    } catch (error) {
+      console.error("Resend verification error:", error);
+      toast.error(error instanceof Error ? error.message : "Failed to send verification email");
+    } finally {
+      setIsResendingVerification(false);
     }
   };
 
@@ -355,6 +393,86 @@ export default function AccountPage() {
               )}
             </Button>
           </form>
+        </CardContent>
+      </Card>
+
+      {/* Email Verification Section */}
+      <Card className="mb-6">
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle>Email Verification</CardTitle>
+              <CardDescription>Verify your email to unlock all features</CardDescription>
+            </div>
+            {accountData?.emailVerified ? (
+              <Badge variant="default" className="bg-green-600">
+                <CheckCircle2 className="h-3 w-3 mr-1" />
+                Verified
+              </Badge>
+            ) : (
+              <Badge variant="destructive">
+                <AlertCircle className="h-3 w-3 mr-1" />
+                Unverified
+              </Badge>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent>
+          {accountData?.emailVerified ? (
+            <Alert>
+              <CheckCircle2 className="h-4 w-4 text-green-600" />
+              <AlertDescription>
+                Your email address has been verified.
+              </AlertDescription>
+            </Alert>
+          ) : (
+            <div className="space-y-4">
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>
+                  <p className="mb-2">
+                    Please verify your email address to unlock all features:
+                  </p>
+                  <ul className="list-disc list-inside text-sm space-y-1 ml-2">
+                    <li>Send drive invitations</li>
+                    <li>Send connection requests</li>
+                    <li>Send direct messages</li>
+                  </ul>
+                </AlertDescription>
+              </Alert>
+
+              {verificationEmailSent ? (
+                <Alert>
+                  <CheckCircle2 className="h-4 w-4 text-green-600" />
+                  <AlertDescription>
+                    Verification email sent! Please check your inbox at <strong>{user.email}</strong>
+                  </AlertDescription>
+                </Alert>
+              ) : (
+                <div>
+                  <p className="text-sm text-muted-foreground mb-3">
+                    Didn&apos;t receive the verification email? Click the button below to send a new one to <strong>{user.email}</strong>
+                  </p>
+                  <Button
+                    onClick={handleResendVerification}
+                    disabled={isResendingVerification}
+                  >
+                    {isResendingVerification ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Sending...
+                      </>
+                    ) : (
+                      <>
+                        <Mail className="mr-2 h-4 w-4" />
+                        Resend Verification Email
+                      </>
+                    )}
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 
