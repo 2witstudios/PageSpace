@@ -111,6 +111,9 @@ export async function PATCH(
           type: 'CONNECTION_REJECTED',
           title: 'Connection Request Declined',
           message: `${rejectUserName} declined your connection request`,
+          metadata: {
+            rejecterName: rejectUserName,
+          },
           triggeredByUserId: user.id,
         });
 
@@ -173,6 +176,10 @@ export async function PATCH(
         message: notificationType === 'CONNECTION_ACCEPTED'
           ? `${actionUserName} accepted your connection request`
           : 'Your connection status has been updated',
+        metadata: {
+          accepterName: notificationType === 'CONNECTION_ACCEPTED' ? actionUserName : undefined,
+          rejecterName: notificationType === 'CONNECTION_REJECTED' ? actionUserName : undefined,
+        },
         triggeredByUserId: user.id,
       });
     }

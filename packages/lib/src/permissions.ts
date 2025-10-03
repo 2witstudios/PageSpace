@@ -56,11 +56,35 @@ export async function getUserAccessLevel(
       };
     }
 
-    if (!silent) {
-      loggers.api.debug(`[PERMISSIONS] User is NOT drive owner - checking explicit permissions`);
+    // 3. Check if user is a drive admin (has all permissions like owner)
+    if (pageData.driveId) {
+      const adminMembership = await db.select()
+        .from(driveMembers)
+        .where(and(
+          eq(driveMembers.driveId, pageData.driveId),
+          eq(driveMembers.userId, userId),
+          eq(driveMembers.role, 'ADMIN')
+        ))
+        .limit(1);
+
+      if (adminMembership.length > 0) {
+        if (!silent) {
+          loggers.api.debug(`[PERMISSIONS] User is drive admin - granting full access`);
+        }
+        return {
+          canView: true,
+          canEdit: true,
+          canShare: true,
+          canDelete: true,
+        };
+      }
     }
 
-    // 3. Check direct page permissions
+    if (!silent) {
+      loggers.api.debug(`[PERMISSIONS] User is NOT drive owner or admin - checking explicit permissions`);
+    }
+
+    // 4. Check direct page permissions
     const permission = await db.select()
       .from(pagePermissions)
       .where(and(
@@ -142,6 +166,36 @@ export async function canUserDeletePage(
 }
 
 /**
+ * Check if user is owner or admin of a drive
+ */
+export async function isDriveOwnerOrAdmin(
+  userId: string,
+  driveId: string
+): Promise<boolean> {
+  // Check if user is drive owner
+  const drive = await db.select()
+    .from(drives)
+    .where(eq(drives.id, driveId))
+    .limit(1);
+
+  if (drive.length > 0 && drive[0].ownerId === userId) {
+    return true;
+  }
+
+  // Check if user is an admin member
+  const membership = await db.select()
+    .from(driveMembers)
+    .where(and(
+      eq(driveMembers.driveId, driveId),
+      eq(driveMembers.userId, userId),
+      eq(driveMembers.role, 'ADMIN')
+    ))
+    .limit(1);
+
+  return membership.length > 0;
+}
+
+/**
  * Check if user is a member of a drive
  */
 export async function isUserDriveMember(
@@ -183,8 +237,25 @@ export async function getUserAccessiblePagesInDrive(
     .where(eq(drives.id, driveId))
     .limit(1);
 
-  if (drive.length > 0 && drive[0].ownerId === userId) {
-    // Owner has access to all pages
+  const isOwner = drive.length > 0 && drive[0].ownerId === userId;
+
+  // Check if user is an admin
+  let isAdmin = false;
+  if (!isOwner && drive.length > 0) {
+    const adminMembership = await db.select()
+      .from(driveMembers)
+      .where(and(
+        eq(driveMembers.driveId, driveId),
+        eq(driveMembers.userId, userId),
+        eq(driveMembers.role, 'ADMIN')
+      ))
+      .limit(1);
+
+    isAdmin = adminMembership.length > 0;
+  }
+
+  if (isOwner || isAdmin) {
+    // Owner or Admin has access to all pages
     const allPages = await db.select({ id: pages.id })
       .from(pages)
       .where(eq(pages.driveId, driveId));
@@ -241,8 +312,25 @@ export async function getUserAccessiblePagesInDriveWithDetails(
     return [];
   }
 
-  if (drive[0].ownerId === userId) {
-    // Owner has access to all pages with full permissions
+  const isOwner = drive[0].ownerId === userId;
+
+  // Check if user is an admin
+  let isAdmin = false;
+  if (!isOwner) {
+    const adminMembership = await db.select()
+      .from(driveMembers)
+      .where(and(
+        eq(driveMembers.driveId, driveId),
+        eq(driveMembers.userId, userId),
+        eq(driveMembers.role, 'ADMIN')
+      ))
+      .limit(1);
+
+    isAdmin = adminMembership.length > 0;
+  }
+
+  if (isOwner || isAdmin) {
+    // Owner or Admin has access to all pages with full permissions
     const allPages = await db.select({
       id: pages.id,
       title: pages.title,

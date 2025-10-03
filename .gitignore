@@ -45,9 +45,6 @@ packages/lib/src/**/*.d.ts
 .next/
 out/
 
-# Drizzle ORM
-packages/db/drizzle/meta/
-
 # Editor/OS specific
 .DS_Store
 .vscode/

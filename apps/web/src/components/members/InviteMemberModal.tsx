@@ -7,6 +7,9 @@ import { UserSearch } from './UserSearch';
 import { PermissionsGrid } from './PermissionsGrid';
 import { useToast } from '@/hooks/use-toast';
 import { ChevronLeft } from 'lucide-react';
+import { VerificationRequiredAlert } from '@/components/VerificationRequiredAlert';
+import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 interface InviteMemberModalProps {
   driveId: string;
@@ -26,8 +29,10 @@ interface SelectedUser {
 export function InviteMemberModal({ driveId, isOpen, onClose, onComplete }: InviteMemberModalProps) {
   const [step, setStep] = useState<'search' | 'permissions'>('search');
   const [selectedUser, setSelectedUser] = useState<SelectedUser | null>(null);
+  const [selectedRole, setSelectedRole] = useState<'MEMBER' | 'ADMIN'>('MEMBER');
   const [permissions, setPermissions] = useState<Map<string, { canView: boolean; canEdit: boolean; canShare: boolean }>>(new Map());
   const [loading, setLoading] = useState(false);
+  const [showVerificationAlert, setShowVerificationAlert] = useState(false);
   const { toast } = useToast();
 
   const handleUserSelect = (user: SelectedUser) => {
@@ -40,9 +45,11 @@ export function InviteMemberModal({ driveId, isOpen, onClose, onComplete }: Invi
   };
 
   const handlePermissionsChange = (pageId: string, perms: { canView: boolean; canEdit: boolean; canShare: boolean }) => {
-    const newPermissions = new Map(permissions);
-    newPermissions.set(pageId, perms);
-    setPermissions(newPermissions);
+    setPermissions(prevPermissions => {
+      const newPermissions = new Map(prevPermissions);
+      newPermissions.set(pageId, perms);
+      return newPermissions;
+    });
   };
 
   const handleInvite = async () => {
@@ -75,21 +82,29 @@ export function InviteMemberModal({ driveId, isOpen, onClose, onComplete }: Invi
         credentials: 'include',
         body: JSON.stringify({
           userId: selectedUser.userId,
+          role: selectedRole,
           permissions: permissionArray,
         }),
       });
 
       if (!response.ok) {
         const error = await response.json();
-        throw new Error(error.error || 'Failed to invite member');
+
+        // Check if this is a verification required error
+        if (error.requiresEmailVerification) {
+          setShowVerificationAlert(true);
+          return;
+        }
+
+        throw new Error(error.error || 'Failed to add member');
       }
 
       onComplete();
     } catch (error) {
-      console.error('Error inviting member:', error);
+      console.error('Error adding member:', error);
       toast({
         title: 'Error',
-        description: error instanceof Error ? error.message : 'Failed to invite member',
+        description: error instanceof Error ? error.message : 'Failed to add member',
         variant: 'destructive',
       });
     } finally {
@@ -102,9 +117,15 @@ export function InviteMemberModal({ driveId, isOpen, onClose, onComplete }: Invi
       <DialogContent className="max-w-4xl max-h-[80vh] overflow-hidden flex flex-col">
         <DialogHeader>
           <DialogTitle>
-            {step === 'search' ? 'Invite Member' : 'Set Permissions'}
+            {step === 'search' ? 'Add Member' : 'Set Permissions'}
           </DialogTitle>
         </DialogHeader>
+
+        {showVerificationAlert && (
+          <div className="mb-4">
+            <VerificationRequiredAlert onDismiss={() => setShowVerificationAlert(false)} />
+          </div>
+        )}
 
         <div className="flex-1 overflow-hidden">
           {step === 'search' ? (
@@ -125,6 +146,25 @@ export function InviteMemberModal({ driveId, isOpen, onClose, onComplete }: Invi
                   <ChevronLeft className="w-4 h-4 mr-1" />
                   Change User
                 </Button>
+              </div>
+
+              {/* Role Selector */}
+              <div className="mb-4">
+                <Label htmlFor="role-select" className="mb-2 block">Member Role</Label>
+                <Select value={selectedRole} onValueChange={(value) => setSelectedRole(value as 'MEMBER' | 'ADMIN')}>
+                  <SelectTrigger id="role-select">
+                    <SelectValue placeholder="Select a role" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="MEMBER">Member - Requires page permissions</SelectItem>
+                    <SelectItem value="ADMIN">Admin - Full access to all pages</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-gray-500 mt-1">
+                  {selectedRole === 'ADMIN'
+                    ? 'Admins have the same permissions as drive owners and can manage members.'
+                    : 'Members only have access to pages explicitly shared with them below.'}
+                </p>
               </div>
 
               {/* Permissions Grid */}
@@ -151,7 +191,7 @@ export function InviteMemberModal({ driveId, isOpen, onClose, onComplete }: Invi
                 Cancel
               </Button>
               <Button onClick={handleInvite} disabled={loading}>
-                {loading ? 'Inviting...' : 'Send Invite'}
+                {loading ? 'Adding...' : 'Add Member'}
               </Button>
             </div>
           </div>

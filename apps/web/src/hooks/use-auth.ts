@@ -56,14 +56,9 @@ export function useAuth(): {
       return;
     }
 
-    // Use store's deduplicated loadSession method with loading state
-    setLoading(true);
-    try {
-      await authStoreHelpers.loadSession();
-    } finally {
-      setLoading(false);
-    }
-  }, [isLoading, setLoading]);
+    // Use store's deduplicated loadSession method (store handles loading state)
+    await authStoreHelpers.loadSession();
+  }, [isLoading]);
 
   // Login function
   const login = useCallback(async (email: string, password: string) => {
@@ -166,13 +161,13 @@ export function useAuth(): {
     }
   }, [hasHydrated, setHydrated]);
 
+  // Check for OAuth success parameter (from Google callback) - needs to be outside useEffect for isLoading check
+  const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+  const isOAuthSuccess = urlParams?.get('auth') === 'success';
+
   // Initial auth check - simplified with store-level deduplication
   useEffect(() => {
     if (!hasHydrated) return;
-
-    // Check for OAuth success parameter (from Google callback)
-    const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
-    const isOAuthSuccess = urlParams?.get('auth') === 'success';
 
     // Use store helper to determine if session load is needed
     const shouldLoad = authStoreHelpers.shouldLoadSession() || isOAuthSuccess;
@@ -191,7 +186,7 @@ export function useAuth(): {
         window.history.replaceState({}, '', newUrl.toString());
       }
     }
-  }, [hasHydrated]);
+  }, [hasHydrated, isOAuthSuccess]);
 
   // Initialize auth event listeners once (moved to store level for deduplication)
   useEffect(() => {
@@ -225,7 +220,7 @@ export function useAuth(): {
 
   return {
     user,
-    isLoading: isLoading || !hasHydrated,
+    isLoading: isLoading || !hasHydrated || isOAuthSuccess, // Treat OAuth callback as loading to prevent premature redirect
     isAuthenticated,
     isRefreshing,
     sessionDuration: authStoreHelpers.getSessionDuration(),

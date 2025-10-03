@@ -29,7 +29,7 @@ export async function GET(req: Request) {
     });
 
     const memberDrives = await db
-      .selectDistinct({ driveId: driveMembers.driveId })
+      .selectDistinct({ driveId: driveMembers.driveId, role: driveMembers.role })
       .from(driveMembers)
       .where(eq(driveMembers.userId, userId));
 
@@ -40,8 +40,23 @@ export async function GET(req: Request) {
       .where(and(eq(pagePermissions.userId, userId), eq(pagePermissions.canView, true)));
 
     const allSharedDriveIds = new Set<string>();
-    memberDrives.forEach((d) => d.driveId && allSharedDriveIds.add(d.driveId));
-    permissionDrives.forEach((d) => d.driveId && allSharedDriveIds.add(d.driveId));
+    const driveRoles = new Map<string, 'OWNER' | 'ADMIN' | 'MEMBER'>();
+
+    memberDrives.forEach((d) => {
+      if (d.driveId) {
+        allSharedDriveIds.add(d.driveId);
+        driveRoles.set(d.driveId, d.role as 'OWNER' | 'ADMIN' | 'MEMBER');
+      }
+    });
+    permissionDrives.forEach((d) => {
+      if (d.driveId) {
+        allSharedDriveIds.add(d.driveId);
+        // If not already a member, set as MEMBER role by default
+        if (!driveRoles.has(d.driveId)) {
+          driveRoles.set(d.driveId, 'MEMBER');
+        }
+      }
+    });
 
     const sharedDriveIds = Array.from(allSharedDriveIds);
 
@@ -58,8 +73,12 @@ export async function GET(req: Request) {
       : [];
 
     const allDrives = [
-      ...ownedDrives.map((drive) => ({ ...drive, isOwned: true })),
-      ...sharedDrives.map((drive) => ({ ...drive, isOwned: false })),
+      ...ownedDrives.map((drive) => ({ ...drive, isOwned: true, role: 'OWNER' as const })),
+      ...sharedDrives.map((drive) => ({
+        ...drive,
+        isOwned: false,
+        role: driveRoles.get(drive.id) || 'MEMBER' as 'OWNER' | 'ADMIN' | 'MEMBER'
+      })),
     ];
 
     const uniqueDrives = Array.from(new Map(allDrives.map((d) => [d.id, d])).values());
@@ -121,7 +140,7 @@ export async function POST(request: Request) {
       slug: newDrive[0].slug,
     });
 
-    return NextResponse.json({ ...newDrive[0], isOwned: true }, { status: 201 });
+    return NextResponse.json({ ...newDrive[0], isOwned: true, role: 'OWNER' as const }, { status: 201 });
   } catch (error) {
     loggers.api.error('Error creating drive:', error as Error);
     return NextResponse.json({ error: 'Failed to create drive' }, { status: 500 });

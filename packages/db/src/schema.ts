@@ -7,6 +7,7 @@ export * from './schema/ai';
 export * from './schema/dashboard';
 export * from './schema/conversations';
 export * from './schema/notifications';
+export * from './schema/email-notifications';
 export * from './schema/monitoring';
 export * from './schema/social';
 export * from './schema/subscriptions';
@@ -22,6 +23,7 @@ import * as ai from './schema/ai';
 import * as dashboard from './schema/dashboard';
 import * as conversations from './schema/conversations';
 import * as notifications from './schema/notifications';
+import * as emailNotifications from './schema/email-notifications';
 import * as monitoring from './schema/monitoring';
 import * as social from './schema/social';
 import * as subscriptions from './schema/subscriptions';
@@ -38,6 +40,7 @@ export const schema = {
   ...dashboard,
   ...conversations,
   ...notifications,
+  ...emailNotifications,
   ...monitoring,
   ...social,
   ...subscriptions,

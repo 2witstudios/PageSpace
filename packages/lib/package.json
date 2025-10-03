@@ -6,7 +6,8 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "email:dev": "email dev --dir emails"
   },
   "exports": {
     ".": {
@@ -120,6 +121,21 @@
       "types": "./dist/pages/circular-reference-guard.d.ts",
       "import": "./dist/pages/circular-reference-guard.js",
       "require": "./dist/pages/circular-reference-guard.js"
+    },
+    "./verification-utils": {
+      "types": "./dist/verification-utils.d.ts",
+      "import": "./dist/verification-utils.js",
+      "require": "./dist/verification-utils.js"
+    },
+    "./services/email-service": {
+      "types": "./dist/services/email-service.d.ts",
+      "import": "./dist/services/email-service.js",
+      "require": "./dist/services/email-service.js"
+    },
+    "./email-templates/VerificationEmail": {
+      "types": "./dist/email-templates/VerificationEmail.d.ts",
+      "import": "./dist/email-templates/VerificationEmail.js",
+      "require": "./dist/email-templates/VerificationEmail.js"
     }
   },
   "typesVersions": {
@@ -186,18 +202,35 @@
       ],
       "pages/circular-reference-guard": [
         "./dist/pages/circular-reference-guard.d.ts"
+      ],
+      "verification-utils": [
+        "./dist/verification-utils.d.ts"
+      ],
+      "services/email-service": [
+        "./dist/services/email-service.d.ts"
+      ],
+      "email-templates/VerificationEmail": [
+        "./dist/email-templates/VerificationEmail.d.ts"
       ]
     }
   },
   "dependencies": {
-    "@pagespace/db": "workspace:*",
     "@iarna/toml": "^2.2.5",
+    "@pagespace/db": "workspace:*",
     "@paralleldrive/cuid2": "^2.2.2",
+    "@react-email/components": "^0.5.5",
     "ioredis": "^5.8.0",
     "jose": "^6.0.11",
     "mammoth": "^1.10.0",
     "pdf-parse-debugging-disabled": "^1.1.1",
     "pg-boss": "^10.3.2",
+    "react-email": "^4.2.12",
+    "resend": "^6.1.2",
     "server-only": "^0.0.1"
+  },
+  "devDependencies": {
+    "@react-email/preview-server": "4.2.12",
+    "@types/react": "^19.1.13",
+    "react": "^19.1.1"
   }
 }

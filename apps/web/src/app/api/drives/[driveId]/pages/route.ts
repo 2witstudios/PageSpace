@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { buildTree } from '@pagespace/lib/server';
-import { pages, drives, pageType, pagePermissions, db, and, eq, inArray, asc, sql } from '@pagespace/db';
+import { pages, drives, pageType, pagePermissions, driveMembers, db, and, eq, inArray, asc, sql } from '@pagespace/db';
 import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
@@ -85,8 +85,26 @@ export async function GET(
 
     let pageResults;
 
-    // If user owns the drive, fetch all pages
-    if (drive.ownerId === userId) {
+    // Check if user is owner
+    const isOwner = drive.ownerId === userId;
+
+    // Check if user is admin
+    let isAdmin = false;
+    if (!isOwner) {
+      const adminMembership = await db.select()
+        .from(driveMembers)
+        .where(and(
+          eq(driveMembers.driveId, drive.id),
+          eq(driveMembers.userId, userId),
+          eq(driveMembers.role, 'ADMIN')
+        ))
+        .limit(1);
+
+      isAdmin = adminMembership.length > 0;
+    }
+
+    // If user owns the drive or is an admin, fetch all pages
+    if (isOwner || isAdmin) {
       pageResults = await db.query.pages.findMany({
         where: and(
           eq(pages.driveId, drive.id),
@@ -95,7 +113,7 @@ export async function GET(
         orderBy: [asc(pages.position)],
       });
     } else {
-      // If user does not own the drive, fetch only permitted pages and their ancestors
+      // If user does not own the drive and is not an admin, fetch only permitted pages and their ancestors
       pageResults = await getPermittedPages(drive.id, userId);
     }
 
@@ -134,11 +152,32 @@ export async function POST(
 
     const newPage = await db.transaction(async (tx) => {
       const drive = await tx.query.drives.findFirst({
-        where: and(eq(drives.ownerId, userId), eq(drives.id, driveId)),
+        where: eq(drives.id, driveId),
       });
 
       if (!drive) {
-        throw new Error('Drive not found or access denied.');
+        throw new Error('Drive not found.');
+      }
+
+      // Check if user is owner or admin
+      const isOwner = drive.ownerId === userId;
+      let isAdmin = false;
+
+      if (!isOwner) {
+        const adminMembership = await tx.select()
+          .from(driveMembers)
+          .where(and(
+            eq(driveMembers.driveId, driveId),
+            eq(driveMembers.userId, userId),
+            eq(driveMembers.role, 'ADMIN')
+          ))
+          .limit(1);
+
+        isAdmin = adminMembership.length > 0;
+      }
+
+      if (!isOwner && !isAdmin) {
+        throw new Error('Only drive owners and admins can create pages.');
       }
 
       if (parentId) {

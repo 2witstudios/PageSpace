@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { pages, users, pagePermissions, db, eq, and } from '@pagespace/db';
+import { pages, users, pagePermissions, driveMembers, db, eq, and } from '@pagespace/db';
 import { decodeToken, getUserAccessLevel } from '@pagespace/lib/server';
 import { parse } from 'cookie';
 import { createId } from '@paralleldrive/cuid2';
@@ -144,9 +144,24 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       with: { drive: true }
     });
 
-    // Check if user is owner or has share permission
+    // Check if user is owner or admin or has share permission
     const isOwner = page?.drive?.ownerId === decoded.userId;
-    const canGrantPermission = isOwner || currentUserPermission?.canShare;
+    let isAdmin = false;
+
+    if (!isOwner && page?.drive?.id) {
+      const adminMembership = await db.select()
+        .from(driveMembers)
+        .where(and(
+          eq(driveMembers.driveId, page.drive.id),
+          eq(driveMembers.userId, decoded.userId),
+          eq(driveMembers.role, 'ADMIN')
+        ))
+        .limit(1);
+
+      isAdmin = adminMembership.length > 0;
+    }
+
+    const canGrantPermission = isOwner || isAdmin || currentUserPermission?.canShare;
 
     if (!canGrantPermission) {
       return NextResponse.json({ error: 'You do not have permission to share this page' }, { status: 403 });
@@ -236,14 +251,29 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
     });
 
     const isOwner = page?.drive?.ownerId === decoded.userId;
-    if (!isOwner) {
+    let isAdmin = false;
+
+    if (!isOwner && page?.drive?.id) {
+      const adminMembership = await db.select()
+        .from(driveMembers)
+        .where(and(
+          eq(driveMembers.driveId, page.drive.id),
+          eq(driveMembers.userId, decoded.userId),
+          eq(driveMembers.role, 'ADMIN')
+        ))
+        .limit(1);
+
+      isAdmin = adminMembership.length > 0;
+    }
+
+    if (!isOwner && !isAdmin) {
       const currentUserPermission = await db.query.pagePermissions.findFirst({
         where: and(
           eq(pagePermissions.pageId, pageId),
           eq(pagePermissions.userId, decoded.userId)
         )
       });
-      
+
       if (!currentUserPermission?.canShare) {
         return NextResponse.json({ error: 'You do not have permission to manage this page' }, { status: 403 });
       }

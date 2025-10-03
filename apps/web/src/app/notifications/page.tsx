@@ -66,7 +66,7 @@ const NotificationTypeLabel = ({ type }: { type: string }) => {
       case 'PERMISSION_REVOKED':
         return { label: 'Revoked', color: 'bg-red-500/10 text-red-500' };
       case 'DRIVE_INVITED':
-        return { label: 'Invited', color: 'bg-purple-500/10 text-purple-500' };
+        return { label: 'Added', color: 'bg-purple-500/10 text-purple-500' };
       case 'CONNECTION_REQUEST':
         return { label: 'Connection', color: 'bg-purple-500/10 text-purple-500' };
       case 'CONNECTION_ACCEPTED':

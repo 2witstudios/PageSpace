@@ -10,6 +10,8 @@ import { PermissionsGrid } from '@/components/members/PermissionsGrid';
 import { ChevronLeft, Save, X, Shield } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 interface MemberDetails {
   id: string;
@@ -43,6 +45,8 @@ export default function MemberSettingsPage() {
   const userId = params.userId as string;
 
   const [member, setMember] = useState<MemberDetails | null>(null);
+  const [selectedRole, setSelectedRole] = useState<'MEMBER' | 'ADMIN'>('MEMBER');
+  const [originalRole, setOriginalRole] = useState<'MEMBER' | 'ADMIN'>('MEMBER');
   const [permissions, setPermissions] = useState<Map<string, { canView: boolean; canEdit: boolean; canShare: boolean }>>(new Map());
   const [originalPermissions, setOriginalPermissions] = useState<Map<string, { canView: boolean; canEdit: boolean; canShare: boolean }>>(new Map());
   const [loading, setLoading] = useState(true);
@@ -55,18 +59,17 @@ export default function MemberSettingsPage() {
   }, [driveId, userId]);
 
   useEffect(() => {
-    // Check if permissions have changed
-    if (originalPermissions.size > 0) {
-      const changed = Array.from(permissions.entries()).some(([pageId, perms]) => {
-        const original = originalPermissions.get(pageId);
-        if (!original) return true;
-        return original.canView !== perms.canView || 
-               original.canEdit !== perms.canEdit || 
-               original.canShare !== perms.canShare;
-      });
-      setHasChanges(changed);
-    }
-  }, [permissions, originalPermissions]);
+    // Check if permissions or role have changed
+    const roleChanged = selectedRole !== originalRole;
+    const permsChanged = originalPermissions.size > 0 && Array.from(permissions.entries()).some(([pageId, perms]) => {
+      const original = originalPermissions.get(pageId);
+      if (!original) return true;
+      return original.canView !== perms.canView ||
+             original.canEdit !== perms.canEdit ||
+             original.canShare !== perms.canShare;
+    });
+    setHasChanges(roleChanged || permsChanged);
+  }, [permissions, originalPermissions, selectedRole, originalRole]);
 
   const fetchMemberDetails = async () => {
     try {
@@ -77,7 +80,7 @@ export default function MemberSettingsPage() {
         if (response.status === 403) {
           toast({
             title: 'Access Denied',
-            description: 'Only drive owners can manage member settings',
+            description: 'Only drive owners and admins can manage member settings',
             variant: 'destructive',
           });
           router.push(`/dashboard/${driveId}/members`);
@@ -87,7 +90,12 @@ export default function MemberSettingsPage() {
       }
       const data = await response.json();
       setMember(data.member);
-      
+
+      // Initialize role state
+      const memberRole = (data.member.role || 'MEMBER') as 'MEMBER' | 'ADMIN';
+      setSelectedRole(memberRole);
+      setOriginalRole(memberRole);
+
       // Initialize permissions map
       if (data.permissions) {
         const permsMap = new Map();
@@ -133,23 +141,27 @@ export default function MemberSettingsPage() {
           'Content-Type': 'application/json',
         },
         credentials: 'include',
-        body: JSON.stringify({ permissions: permissionsArray }),
+        body: JSON.stringify({
+          role: selectedRole,
+          permissions: permissionsArray
+        }),
       });
 
-      if (!response.ok) throw new Error('Failed to save permissions');
+      if (!response.ok) throw new Error('Failed to save changes');
 
       toast({
         title: 'Success',
-        description: 'Permissions updated successfully',
+        description: 'Member settings updated successfully',
       });
-      
+
       setOriginalPermissions(new Map(permissions));
+      setOriginalRole(selectedRole);
       setHasChanges(false);
     } catch (error) {
-      console.error('Error saving permissions:', error);
+      console.error('Error saving changes:', error);
       toast({
         title: 'Error',
-        description: 'Failed to save permissions',
+        description: 'Failed to save changes',
         variant: 'destructive',
       });
     } finally {
@@ -159,6 +171,7 @@ export default function MemberSettingsPage() {
 
   const handleCancel = () => {
     setPermissions(new Map(originalPermissions));
+    setSelectedRole(originalRole);
     setHasChanges(false);
   };
 
@@ -229,12 +242,12 @@ export default function MemberSettingsPage() {
             <CardDescription>Details about this member</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="flex items-start space-x-4">
+            <div className="flex items-start space-x-4 mb-6">
               <Avatar className="w-16 h-16">
                 <AvatarImage src={member.profile?.avatarUrl} alt={displayName} />
                 <AvatarFallback>{initials}</AvatarFallback>
               </Avatar>
-              
+
               <div className="flex-1">
                 <div className="flex items-center space-x-2 mb-2">
                   <h3 className="text-lg font-semibold">{displayName}</h3>
@@ -247,11 +260,11 @@ export default function MemberSettingsPage() {
                     {member.role}
                   </Badge>
                 </div>
-                
+
                 <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">
                   {member.user.email}
                 </p>
-                
+
                 <div className="flex gap-4 text-xs text-gray-500 dark:text-gray-400">
                   <span>Invited: {new Date(member.invitedAt).toLocaleDateString()}</span>
                   {member.acceptedAt && (
@@ -260,6 +273,27 @@ export default function MemberSettingsPage() {
                 </div>
               </div>
             </div>
+
+            {/* Role Selector - Only for non-owners */}
+            {member.role !== 'OWNER' && (
+              <div>
+                <Label htmlFor="member-role-select" className="mb-2 block">Member Role</Label>
+                <Select value={selectedRole} onValueChange={(value) => setSelectedRole(value as 'MEMBER' | 'ADMIN')}>
+                  <SelectTrigger id="member-role-select" className="max-w-md">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="MEMBER">Member - Requires page permissions</SelectItem>
+                    <SelectItem value="ADMIN">Admin - Full access to all pages</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-gray-500 dark:text-gray-500 mt-2">
+                  {selectedRole === 'ADMIN'
+                    ? 'Admins have the same permissions as drive owners and can manage members.'
+                    : 'Members only have access to pages explicitly shared with them.'}
+                </p>
+              </div>
+            )}
           </CardContent>
         </Card>
 

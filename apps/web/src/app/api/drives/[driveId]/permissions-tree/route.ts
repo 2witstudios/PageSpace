@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db, eq, and } from '@pagespace/db';
-import { drives, pages, pagePermissions } from '@pagespace/db';
+import { drives, pages, pagePermissions, driveMembers } from '@pagespace/db';
 import { verifyAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 
@@ -31,7 +31,7 @@ export async function GET(
     const { searchParams } = new URL(request.url);
     const targetUserId = searchParams.get('userId');
 
-    // Check if user is drive owner
+    // Check if user is drive owner or admin
     const drive = await db.select()
       .from(drives)
       .where(eq(drives.id, driveId))
@@ -41,8 +41,24 @@ export async function GET(
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    if (drive[0].ownerId !== user.id) {
-      return NextResponse.json({ error: 'Only drive owner can view permission tree' }, { status: 403 });
+    const isOwner = drive[0].ownerId === user.id;
+    let isAdmin = false;
+
+    if (!isOwner) {
+      const adminMembership = await db.select()
+        .from(driveMembers)
+        .where(and(
+          eq(driveMembers.driveId, driveId),
+          eq(driveMembers.userId, user.id),
+          eq(driveMembers.role, 'ADMIN')
+        ))
+        .limit(1);
+
+      isAdmin = adminMembership.length > 0;
+    }
+
+    if (!isOwner && !isAdmin) {
+      return NextResponse.json({ error: 'Only drive owners and admins can view permission tree' }, { status: 403 });
     }
 
     // Get all pages in the drive

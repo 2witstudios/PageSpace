@@ -25,17 +25,25 @@ export async function GET(
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    // Check if user is owner or member
-    const membership = await db.select()
-      .from(driveMembers)
-      .where(and(
-        eq(driveMembers.driveId, driveId),
-        eq(driveMembers.userId, user.id)
-      ))
-      .limit(1);
+    // Check if user is a member of the drive (owner, admin, or regular member)
+    const isOwner = drive[0].ownerId === user.id;
 
-    if (drive[0].ownerId !== user.id && membership.length === 0) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+    let isAdmin = false;
+
+    if (!isOwner) {
+      const membership = await db.select()
+        .from(driveMembers)
+        .where(and(
+          eq(driveMembers.driveId, driveId),
+          eq(driveMembers.userId, user.id)
+        ))
+        .limit(1);
+
+      if (membership.length === 0) {
+        return NextResponse.json({ error: 'You must be a drive member to view members' }, { status: 403 });
+      }
+
+      isAdmin = membership[0].role === 'ADMIN';
     }
 
     // Get all members with their profiles and permission counts
@@ -86,7 +94,10 @@ export async function GET(
       };
     }));
 
-    return NextResponse.json({ members: memberData });
+    return NextResponse.json({
+      members: memberData,
+      currentUserRole: isOwner ? 'OWNER' : (isAdmin ? 'ADMIN' : 'MEMBER')
+    });
   } catch (error) {
     loggers.api.error('Error fetching drive members:', error as Error);
     return NextResponse.json(

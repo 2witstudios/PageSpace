@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { pages, drives, db, and, eq } from '@pagespace/db';
+import { pages, drives, driveMembers, db, and, eq } from '@pagespace/db';
 import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
 import { loggers } from '@pagespace/lib/server';
@@ -37,36 +37,58 @@ export async function PATCH(request: Request) {
     let pageTitle: string | null = null;
 
     await db.transaction(async (tx) => {
-      const [pageToMove] = await tx
+      // First, get the page and its drive
+      const [pageInfo] = await tx
         .select({
           driveId: pages.driveId,
           title: pages.title,
+          ownerId: drives.ownerId,
         })
         .from(pages)
         .leftJoin(drives, eq(pages.driveId, drives.id))
-        .where(and(eq(pages.id, pageId), eq(drives.ownerId, auth.userId)))
+        .where(eq(pages.id, pageId))
         .limit(1);
 
-      if (!pageToMove) {
-        throw new Error('Page not found or user does not have access.');
+      if (!pageInfo) {
+        throw new Error('Page not found.');
       }
 
-      driveId = pageToMove.driveId;
-      pageTitle = pageToMove.title;
+      driveId = pageInfo.driveId;
+      pageTitle = pageInfo.title;
+
+      // Check if user is owner or admin
+      const isOwner = pageInfo.ownerId === auth.userId;
+      let isAdmin = false;
+
+      if (!isOwner) {
+        const adminMembership = await tx.select()
+          .from(driveMembers)
+          .where(and(
+            eq(driveMembers.driveId, driveId),
+            eq(driveMembers.userId, auth.userId),
+            eq(driveMembers.role, 'ADMIN')
+          ))
+          .limit(1);
+
+        isAdmin = adminMembership.length > 0;
+      }
+
+      if (!isOwner && !isAdmin) {
+        throw new Error('Only drive owners and admins can reorder pages.');
+      }
 
       if (newParentId) {
         const [parentPage] = await tx
           .select({ driveId: pages.driveId })
           .from(pages)
-          .leftJoin(drives, eq(pages.driveId, drives.id))
-          .where(and(eq(pages.id, newParentId), eq(drives.ownerId, auth.userId)))
+          .where(eq(pages.id, newParentId))
           .limit(1);
 
         if (!parentPage) {
-          throw new Error('Parent page not found or user does not have access.');
+          throw new Error('Parent page not found.');
         }
 
-        if (parentPage.driveId !== pageToMove.driveId) {
+        if (parentPage.driveId !== driveId) {
           throw new Error('Cannot move pages between different drives.');
         }
       }

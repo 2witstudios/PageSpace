@@ -1,5 +1,6 @@
 import { db, notifications, users, pages, drives, eq, and, desc, count, sql } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
+import { sendNotificationEmail } from './services/notification-email-service';
 
 // Export types and guards
 export * from './notifications/types';
@@ -51,10 +52,18 @@ export async function createNotification(params: CreateNotificationParams) {
     id: createId(),
     ...params,
   }).returning();
-  
+
   // Broadcast notification to user via Socket.IO
   await broadcastNotification(params.userId, notification[0]);
-  
+
+  // Send email notification (fire-and-forget - don't block on email sending)
+  void sendNotificationEmail({
+    userId: params.userId,
+    notificationId: notification[0].id,
+    type: params.type,
+    metadata: params.metadata || {},
+  });
+
   return notification[0];
 }
 
@@ -84,7 +93,7 @@ export async function getUserNotifications(userId: string, limit = 50) {
   type NotificationResult = (typeof userNotifications)[number];
 
   return userNotifications.map((row: NotificationResult) => ({
-    notification: row.notification,
+    ...row.notification,
     triggeredByUser: row.triggeredByUser,
     drive: row.drive,
   }));
@@ -208,8 +217,14 @@ export async function createPermissionNotification(
     message,
     metadata: {
       permissions,
+      permissionList, // For email templates - array of strings like ['view', 'edit']
       pageName: page.title,
+      pageTitle: page.title, // For email templates
+      pageId, // For email templates
       driveName: page.drive?.name,
+      driveId: page.driveId, // For email templates
+      sharerName: triggeredByUser?.name || 'Someone', // For email templates
+      adderName: triggeredByUser?.name || 'Someone', // For email templates
     },
     pageId,
     driveId: page.driveId,
@@ -241,8 +256,8 @@ export async function createDriveNotification(
   switch (type) {
     case 'invited':
       notificationType = 'DRIVE_INVITED';
-      title = `Drive invitation`;
-      message = `${triggeredByUser?.name || 'Someone'} invited you to join the "${drive.name}" drive`;
+      title = `Added to workspace`;
+      message = `${triggeredByUser?.name || 'Someone'} added you to the "${drive.name}" workspace`;
       break;
     case 'joined':
       notificationType = 'DRIVE_JOINED';
@@ -263,7 +278,9 @@ export async function createDriveNotification(
     message,
     metadata: {
       driveName: drive.name,
+      driveId, // For email templates
       role,
+      inviterName: triggeredByUser?.name || 'Someone', // For email templates
     },
     driveId,
     triggeredByUserId,
@@ -274,8 +291,17 @@ export async function createOrUpdateMessageNotification(
   targetUserId: string,
   conversationId: string,
   messagePreview: string,
-  triggeredByUserId: string
+  triggeredByUserId: string,
+  senderName?: string
 ) {
+  // Get sender name if not provided
+  if (!senderName) {
+    const sender = await db.query.users.findFirst({
+      where: eq(users.id, triggeredByUserId),
+    });
+    senderName = sender?.name || 'Someone';
+  }
+
   // Check if there's an existing unread notification for this specific conversation
   const existingNotification = await db.query.notifications.findFirst({
     where: and(
@@ -300,6 +326,18 @@ export async function createOrUpdateMessageNotification(
     // Broadcast the updated notification
     await broadcastNotification(targetUserId, updatedNotification[0]);
 
+    // Send email notification for the updated message
+    void sendNotificationEmail({
+      userId: targetUserId,
+      notificationId: updatedNotification[0].id,
+      type: 'NEW_DIRECT_MESSAGE',
+      metadata: {
+        conversationId,
+        senderName,
+        messagePreview,
+      },
+    });
+
     return updatedNotification[0];
   }
 
@@ -311,6 +349,8 @@ export async function createOrUpdateMessageNotification(
     message: messagePreview,
     metadata: {
       conversationId,
+      senderName, // For email template
+      messagePreview, // For email template
     },
     triggeredByUserId,
   });

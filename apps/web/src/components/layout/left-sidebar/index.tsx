@@ -49,7 +49,7 @@ export default function Sidebar({ className }: SidebarProps) {
   const { mutate } = useSWRConfig();
 
   const drive = drives.find((d) => d.id === driveId);
-  const canCreatePages = drive?.isOwned || false;
+  const canCreatePages = drive?.isOwned || drive?.role === 'ADMIN' || false;
 
   useEffect(() => {
     if (driveId && user?.id) {
@@ -119,7 +119,7 @@ export default function Sidebar({ className }: SidebarProps) {
         </div>
 
         <div className="mt-auto space-y-1">
-          {driveId && (
+          {driveId && (drive?.isOwned || drive?.role) && (
             <Link
               href={`/dashboard/${driveId}/members`}
               className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
