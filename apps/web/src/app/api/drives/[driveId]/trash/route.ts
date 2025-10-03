@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { drives, pages, db, and, eq, asc } from '@pagespace/db';
+import { drives, pages, driveMembers, db, and, eq, asc } from '@pagespace/db';
 import { buildTree } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
@@ -19,14 +19,41 @@ export async function GET(request: Request, context: { params: Promise<DrivePara
   const { driveId } = await context.params;
 
   try {
+    // Find the drive first (don't filter by owner yet)
     const drive = await db.query.drives.findFirst({
-      where: and(eq(drives.id, driveId), eq(drives.ownerId, auth.userId)),
+      where: eq(drives.id, driveId),
     });
 
     if (!drive) {
       return NextResponse.json(
-        { error: 'Drive not found or you do not have permission to view its trash.' },
+        { error: 'Drive not found' },
         { status: 404 },
+      );
+    }
+
+    // Check if user is owner
+    const isOwner = drive.ownerId === auth.userId;
+
+    // Check if user is admin
+    let isAdmin = false;
+    if (!isOwner) {
+      const adminMembership = await db.select()
+        .from(driveMembers)
+        .where(and(
+          eq(driveMembers.driveId, driveId),
+          eq(driveMembers.userId, auth.userId),
+          eq(driveMembers.role, 'ADMIN')
+        ))
+        .limit(1);
+
+      isAdmin = adminMembership.length > 0;
+    }
+
+    // Only owners and admins can view trash
+    if (!isOwner && !isAdmin) {
+      return NextResponse.json(
+        { error: 'Only drive owners and admins can view trash' },
+        { status: 403 },
       );
     }
 

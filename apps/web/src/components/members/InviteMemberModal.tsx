@@ -8,6 +8,8 @@ import { PermissionsGrid } from './PermissionsGrid';
 import { useToast } from '@/hooks/use-toast';
 import { ChevronLeft } from 'lucide-react';
 import { VerificationRequiredAlert } from '@/components/VerificationRequiredAlert';
+import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 interface InviteMemberModalProps {
   driveId: string;
@@ -27,6 +29,7 @@ interface SelectedUser {
 export function InviteMemberModal({ driveId, isOpen, onClose, onComplete }: InviteMemberModalProps) {
   const [step, setStep] = useState<'search' | 'permissions'>('search');
   const [selectedUser, setSelectedUser] = useState<SelectedUser | null>(null);
+  const [selectedRole, setSelectedRole] = useState<'MEMBER' | 'ADMIN'>('MEMBER');
   const [permissions, setPermissions] = useState<Map<string, { canView: boolean; canEdit: boolean; canShare: boolean }>>(new Map());
   const [loading, setLoading] = useState(false);
   const [showVerificationAlert, setShowVerificationAlert] = useState(false);
@@ -79,6 +82,7 @@ export function InviteMemberModal({ driveId, isOpen, onClose, onComplete }: Invi
         credentials: 'include',
         body: JSON.stringify({
           userId: selectedUser.userId,
+          role: selectedRole,
           permissions: permissionArray,
         }),
       });
@@ -142,6 +146,25 @@ export function InviteMemberModal({ driveId, isOpen, onClose, onComplete }: Invi
                   <ChevronLeft className="w-4 h-4 mr-1" />
                   Change User
                 </Button>
+              </div>
+
+              {/* Role Selector */}
+              <div className="mb-4">
+                <Label htmlFor="role-select" className="mb-2 block">Member Role</Label>
+                <Select value={selectedRole} onValueChange={(value) => setSelectedRole(value as 'MEMBER' | 'ADMIN')}>
+                  <SelectTrigger id="role-select">
+                    <SelectValue placeholder="Select a role" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="MEMBER">Member - Requires page permissions</SelectItem>
+                    <SelectItem value="ADMIN">Admin - Full access to all pages</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-gray-500 mt-1">
+                  {selectedRole === 'ADMIN'
+                    ? 'Admins have the same permissions as drive owners and can manage members.'
+                    : 'Members only have access to pages explicitly shared with them below.'}
+                </p>
               </div>
 
               {/* Permissions Grid */}

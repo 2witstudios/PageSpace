@@ -21,19 +21,19 @@ import { RenameDialog } from "@/components/dialogs/RenameDialog";
 import { DeleteDriveDialog } from "@/components/dialogs/DeleteDriveDialog";
 import { toast } from "sonner";
 
-const DriveListItem = ({ 
-  drive, 
-  isActive, 
-  isOwned,
+const DriveListItem = ({
+  drive,
+  isActive,
+  canManage,
   onRename,
   onDelete,
   onRestore,
   onPermanentDelete,
   onFilesUploaded
-}: { 
-  drive: Drive; 
+}: {
+  drive: Drive;
   isActive: boolean;
-  isOwned: boolean;
+  canManage: boolean;
   onRename?: (drive: Drive) => void;
   onDelete?: (drive: Drive) => void;
   onRestore?: (drive: Drive) => void;
@@ -78,7 +78,7 @@ const DriveListItem = ({
           <Folder className="h-4 w-4" />
           <span className="truncate">{drive.name}</span>
         </Link>
-        {isOwned && (
+        {canManage && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -286,11 +286,11 @@ export default function DriveList() {
           <h3 className="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">My Drive</h3>
           <div className="space-y-1">
             {ownedDrives.map((drive) => (
-              <DriveListItem 
-                key={drive.id} 
-                drive={drive} 
+              <DriveListItem
+                key={drive.id}
+                drive={drive}
                 isActive={!isTrashView && drive.id === urlDriveId}
-                isOwned={true}
+                canManage={true}
                 onRename={() => setRenameDialogState({ isOpen: true, drive })}
                 onDelete={() => setDeleteDialogState({ isOpen: true, drive })}
                 onFilesUploaded={() => fetchDrives(true, true)}
@@ -304,11 +304,13 @@ export default function DriveList() {
           <h3 className="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Shared Drives</h3>
           <div className="space-y-1">
             {sharedDrives.map((drive) => (
-              <DriveListItem 
-                key={drive.id} 
-                drive={drive} 
+              <DriveListItem
+                key={drive.id}
+                drive={drive}
                 isActive={!isTrashView && drive.id === urlDriveId}
-                isOwned={false}
+                canManage={drive.role === 'ADMIN'}
+                onRename={drive.role === 'ADMIN' ? () => setRenameDialogState({ isOpen: true, drive }) : undefined}
+                onDelete={drive.role === 'ADMIN' ? () => setDeleteDialogState({ isOpen: true, drive }) : undefined}
                 onFilesUploaded={() => fetchDrives(true, true)}
               />
             ))}
@@ -323,11 +325,11 @@ export default function DriveList() {
           <h3 className="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Trash</h3>
           <div className="space-y-1">
             {trashedDrives.map((drive) => (
-              <DriveListItem 
-                key={drive.id} 
-                drive={drive} 
+              <DriveListItem
+                key={drive.id}
+                drive={drive}
                 isActive={false}
-                isOwned={true}
+                canManage={true}
                 onRestore={handleRestoreDrive}
                 onPermanentDelete={handlePermanentDelete}
               />

@@ -90,14 +90,32 @@ export async function PATCH(
 
     // Find the drive
     const drive = await db.query.drives.findFirst({
-      where: and(
-        eq(drives.id, driveId),
-        eq(drives.ownerId, userId)
-      ),
+      where: eq(drives.id, driveId),
     });
 
     if (!drive) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+    }
+
+    // Check if user is owner or admin
+    const isOwner = drive.ownerId === userId;
+    let isAdmin = false;
+
+    if (!isOwner) {
+      const adminMembership = await db.select()
+        .from(driveMembers)
+        .where(and(
+          eq(driveMembers.driveId, driveId),
+          eq(driveMembers.userId, userId),
+          eq(driveMembers.role, 'ADMIN')
+        ))
+        .limit(1);
+
+      isAdmin = adminMembership.length > 0;
+    }
+
+    if (!isOwner && !isAdmin) {
+      return NextResponse.json({ error: 'Only drive owners and admins can update drive settings' }, { status: 403 });
     }
 
     // Update the drive
@@ -150,16 +168,34 @@ export async function DELETE(
     }
     const userId = auth.userId;
 
-    // Find the drive and verify ownership
+    // Find the drive
     const drive = await db.query.drives.findFirst({
-      where: and(
-        eq(drives.id, driveId),
-        eq(drives.ownerId, userId)
-      ),
+      where: eq(drives.id, driveId),
     });
 
     if (!drive) {
-      return NextResponse.json({ error: 'Drive not found or access denied' }, { status: 404 });
+      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+    }
+
+    // Check if user is owner or admin
+    const isOwner = drive.ownerId === userId;
+    let isAdmin = false;
+
+    if (!isOwner) {
+      const adminMembership = await db.select()
+        .from(driveMembers)
+        .where(and(
+          eq(driveMembers.driveId, driveId),
+          eq(driveMembers.userId, userId),
+          eq(driveMembers.role, 'ADMIN')
+        ))
+        .limit(1);
+
+      isAdmin = adminMembership.length > 0;
+    }
+
+    if (!isOwner && !isAdmin) {
+      return NextResponse.json({ error: 'Only drive owners and admins can delete drives' }, { status: 403 });
     }
 
     // Move drive to trash

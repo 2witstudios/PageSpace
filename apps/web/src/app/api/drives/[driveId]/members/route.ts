@@ -25,7 +25,9 @@ export async function GET(
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    // Check if user is owner or member
+    // Check if user is owner or admin
+    const isOwner = drive[0].ownerId === user.id;
+
     const membership = await db.select()
       .from(driveMembers)
       .where(and(
@@ -34,8 +36,10 @@ export async function GET(
       ))
       .limit(1);
 
-    if (drive[0].ownerId !== user.id && membership.length === 0) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+    const isAdmin = membership.length > 0 && membership[0].role === 'ADMIN';
+
+    if (!isOwner && !isAdmin) {
+      return NextResponse.json({ error: 'Only drive owners and admins can view members' }, { status: 403 });
     }
 
     // Get all members with their profiles and permission counts

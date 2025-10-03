@@ -64,4 +64,5 @@ export interface Drive {
   createdAt: Date;
   updatedAt: Date;
   isOwned: boolean;
+  role?: 'OWNER' | 'ADMIN' | 'MEMBER';
 }

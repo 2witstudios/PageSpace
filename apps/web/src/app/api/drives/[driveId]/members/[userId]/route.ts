@@ -110,10 +110,14 @@ export async function PATCH(
     }
 
     const body = await request.json();
-    const { permissions } = body;
+    const { role, permissions } = body;
 
     if (!permissions || !Array.isArray(permissions)) {
       return NextResponse.json({ error: 'Invalid permissions data' }, { status: 400 });
+    }
+
+    if (role && !['MEMBER', 'ADMIN'].includes(role)) {
+      return NextResponse.json({ error: 'Invalid role' }, { status: 400 });
     }
 
     // Get drive and check ownership
@@ -142,6 +146,16 @@ export async function PATCH(
 
     if (member.length === 0) {
       return NextResponse.json({ error: 'Member not found' }, { status: 404 });
+    }
+
+    // Update role if provided
+    if (role) {
+      await db.update(driveMembers)
+        .set({ role })
+        .where(and(
+          eq(driveMembers.driveId, driveId),
+          eq(driveMembers.userId, userId)
+        ));
     }
 
     // Get all pages in the drive to validate pageIds

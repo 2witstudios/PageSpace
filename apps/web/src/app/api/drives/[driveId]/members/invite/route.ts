@@ -36,12 +36,13 @@ export async function POST(
     }
 
     const body = await request.json();
-    const { userId: invitedUserId, permissions } = body as {
+    const { userId: invitedUserId, role = 'MEMBER', permissions } = body as {
       userId: string;
+      role?: 'MEMBER' | 'ADMIN';
       permissions: PermissionEntry[];
     };
 
-    // Check if user is drive owner
+    // Check if user is drive owner or admin
     const drive = await db.select()
       .from(drives)
       .where(eq(drives.id, driveId))
@@ -51,8 +52,24 @@ export async function POST(
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    if (drive[0].ownerId !== user.id) {
-      return NextResponse.json({ error: 'Only drive owner can add members' }, { status: 403 });
+    const isOwner = drive[0].ownerId === user.id;
+    let isAdmin = false;
+
+    if (!isOwner) {
+      const adminMembership = await db.select()
+        .from(driveMembers)
+        .where(and(
+          eq(driveMembers.driveId, driveId),
+          eq(driveMembers.userId, user.id),
+          eq(driveMembers.role, 'ADMIN')
+        ))
+        .limit(1);
+
+      isAdmin = adminMembership.length > 0;
+    }
+
+    if (!isOwner && !isAdmin) {
+      return NextResponse.json({ error: 'Only drive owners and admins can add members' }, { status: 403 });
     }
 
     // Check if member already exists
@@ -67,19 +84,24 @@ export async function POST(
     let memberId: string;
     
     if (existingMember.length === 0) {
-      // Add as drive member
+      // Add as drive member with specified role
       const newMember = await db.insert(driveMembers)
         .values({
           driveId,
           userId: invitedUserId,
-          role: 'MEMBER',
+          role,
           invitedBy: user.id,
           acceptedAt: new Date(), // Auto-accept for now
         })
         .returning();
-      
+
       memberId = newMember[0].id;
     } else {
+      // Update role if member exists
+      await db.update(driveMembers)
+        .set({ role })
+        .where(eq(driveMembers.id, existingMember[0].id));
+
       memberId = existingMember[0].id;
     }
 
@@ -145,7 +167,7 @@ export async function POST(
       invitedUserId,
       driveId,
       'invited', // Always use 'invited' which now has "added" language
-      'MEMBER',
+      role,
       user.id
     );
 
