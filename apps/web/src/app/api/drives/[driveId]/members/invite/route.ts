@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { db, eq, and } from '@pagespace/db';
 import { driveMembers, drives, pagePermissions, pages } from '@pagespace/db';
 import { verifyAuth } from '@/lib/auth';
-import { createDriveNotification } from '@pagespace/lib';
+import { createDriveNotification, isEmailVerified } from '@pagespace/lib';
 import { loggers } from '@pagespace/lib/server';
 
 interface PermissionEntry {
@@ -21,6 +21,18 @@ export async function POST(
     const user = await verifyAuth(request);
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    // Check email verification
+    const emailVerified = await isEmailVerified(user.id);
+    if (!emailVerified) {
+      return NextResponse.json(
+        {
+          error: 'Email verification required. Please verify your email to perform this action.',
+          requiresEmailVerification: true
+        },
+        { status: 403 }
+      );
     }
 
     const body = await request.json();

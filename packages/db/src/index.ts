@@ -21,3 +21,17 @@ export const db = drizzle(pool, { schema });
 
 // Export schema for external use
 export * from './schema';
+
+// Explicit re-exports for commonly used tables (ensures they survive tree-shaking)
+export {
+  users,
+  usersRelations,
+  refreshTokens,
+  refreshTokensRelations,
+  mcpTokens,
+  mcpTokensRelations,
+  verificationTokens,
+  verificationTokensRelations,
+  userRole,
+  authProvider,
+} from './schema/auth';

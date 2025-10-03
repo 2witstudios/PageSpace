@@ -59,6 +59,22 @@ export const mcpTokens = pgTable('mcp_tokens', {
   };
 });
 
+export const verificationTokens = pgTable('verification_tokens', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  token: text('token').unique().notNull(),
+  type: text('type').notNull(), // 'email_verification' | 'password_reset' | 'magic_link'
+  expiresAt: timestamp('expiresAt', { mode: 'date' }).notNull(),
+  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+  usedAt: timestamp('usedAt', { mode: 'date' }),
+}, (table) => {
+  return {
+    userIdx: index('verification_tokens_user_id_idx').on(table.userId),
+    tokenIdx: index('verification_tokens_token_idx').on(table.token),
+    typeIdx: index('verification_tokens_type_idx').on(table.type),
+  };
+});
+
 import { userAiSettings } from './ai';
 import { subscriptions, aiUsageDaily } from './subscriptions';
 
@@ -67,6 +83,7 @@ export const usersRelations = relations(users, ({ many }) => ({
   chatMessages: many(chatMessages),
   aiSettings: many(userAiSettings),
   mcpTokens: many(mcpTokens),
+  verificationTokens: many(verificationTokens),
   subscriptions: many(subscriptions),
   aiUsageDaily: many(aiUsageDaily),
 }));
@@ -81,6 +98,13 @@ export const refreshTokensRelations = relations(refreshTokens, ({ one }) => ({
 export const mcpTokensRelations = relations(mcpTokens, ({ one }) => ({
   user: one(users, {
     fields: [mcpTokens.userId],
+    references: [users.id],
+  }),
+}));
+
+export const verificationTokensRelations = relations(verificationTokens, ({ one }) => ({
+  user: one(users, {
+    fields: [verificationTokens.userId],
     references: [users.id],
   }),
 }));

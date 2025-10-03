@@ -7,6 +7,7 @@ import { UserSearch } from './UserSearch';
 import { PermissionsGrid } from './PermissionsGrid';
 import { useToast } from '@/hooks/use-toast';
 import { ChevronLeft } from 'lucide-react';
+import { VerificationRequiredAlert } from '@/components/VerificationRequiredAlert';
 
 interface InviteMemberModalProps {
   driveId: string;
@@ -28,6 +29,7 @@ export function InviteMemberModal({ driveId, isOpen, onClose, onComplete }: Invi
   const [selectedUser, setSelectedUser] = useState<SelectedUser | null>(null);
   const [permissions, setPermissions] = useState<Map<string, { canView: boolean; canEdit: boolean; canShare: boolean }>>(new Map());
   const [loading, setLoading] = useState(false);
+  const [showVerificationAlert, setShowVerificationAlert] = useState(false);
   const { toast } = useToast();
 
   const handleUserSelect = (user: SelectedUser) => {
@@ -81,6 +83,13 @@ export function InviteMemberModal({ driveId, isOpen, onClose, onComplete }: Invi
 
       if (!response.ok) {
         const error = await response.json();
+
+        // Check if this is a verification required error
+        if (error.requiresEmailVerification) {
+          setShowVerificationAlert(true);
+          return;
+        }
+
         throw new Error(error.error || 'Failed to invite member');
       }
 
@@ -105,6 +114,12 @@ export function InviteMemberModal({ driveId, isOpen, onClose, onComplete }: Invi
             {step === 'search' ? 'Invite Member' : 'Set Permissions'}
           </DialogTitle>
         </DialogHeader>
+
+        {showVerificationAlert && (
+          <div className="mb-4">
+            <VerificationRequiredAlert onDismiss={() => setShowVerificationAlert(false)} />
+          </div>
+        )}
 
         <div className="flex-1 overflow-hidden">
           {step === 'search' ? (

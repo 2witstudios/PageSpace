@@ -37,6 +37,7 @@ export {
 export * from './csrf-utils';
 export * from './encryption-utils';
 export * from './rate-limit-utils';
+export * from './verification-utils';
 
 // Logging utilities (server-only)
 export * from './logger';

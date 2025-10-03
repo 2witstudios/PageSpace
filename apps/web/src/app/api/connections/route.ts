@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { db, connections, users, userProfiles, eq, and, or, desc } from '@pagespace/db';
 import { verifyAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
-import { createNotification } from '@pagespace/lib';
+import { createNotification, isEmailVerified } from '@pagespace/lib';
 
 // GET /api/connections - Get user's connections
 export async function GET(request: Request) {
@@ -99,6 +99,18 @@ export async function POST(request: Request) {
     const user = await verifyAuth(request);
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    // Check email verification
+    const emailVerified = await isEmailVerified(user.id);
+    if (!emailVerified) {
+      return NextResponse.json(
+        {
+          error: 'Email verification required. Please verify your email to perform this action.',
+          requiresEmailVerification: true
+        },
+        { status: 403 }
+      );
     }
 
     const body = await request.json();

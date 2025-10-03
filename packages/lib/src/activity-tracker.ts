@@ -133,7 +133,7 @@ export function trackFeature(
  */
 export function trackAuthEvent(
   userId: string | undefined,
-  event: 'login' | 'logout' | 'signup' | 'refresh' | 'failed_login',
+  event: 'login' | 'logout' | 'signup' | 'refresh' | 'failed_login' | 'email_verified',
   metadata?: any
 ): void {
   trackActivity(userId || 'anonymous', `auth_${event}`, {

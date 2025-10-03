@@ -6,6 +6,10 @@ import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { serialize } from 'cookie';
+import { createVerificationToken } from '@pagespace/lib/verification-utils';
+import { sendEmail } from '@pagespace/lib/services/email-service';
+import { VerificationEmail } from '@pagespace/lib/email-templates/VerificationEmail';
+import React from 'react';
 // Removed AI defaults dependency
 
 const signupSchema = z.object({
@@ -130,6 +134,28 @@ export async function POST(req: Request) {
       ip: clientIP,
       userAgent: req.headers.get('user-agent')
     });
+
+    // Send verification email (don't block signup)
+    try {
+      const verificationToken = await createVerificationToken({
+        userId: user.id,
+        type: 'email_verification',
+      });
+
+      const baseUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+      const verificationUrl = `${baseUrl}/api/auth/verify-email?token=${verificationToken}`;
+
+      await sendEmail({
+        to: email,
+        subject: 'Verify your PageSpace email',
+        react: React.createElement(VerificationEmail, { userName: name, verificationUrl }),
+      });
+
+      loggers.auth.info('Verification email sent', { userId: user.id, email });
+    } catch (error) {
+      // Don't fail signup if email fails
+      loggers.auth.error('Failed to send verification email', error as Error, { userId: user.id });
+    }
 
     // Generate JWT tokens for automatic authentication
     const accessToken = await generateAccessToken(user.id, user.tokenVersion, user.role);

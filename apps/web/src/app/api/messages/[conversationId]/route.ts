@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { db, directMessages, dmConversations, eq, and, or, desc, lt } from '@pagespace/db';
 import { verifyAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
-import { createOrUpdateMessageNotification } from '@pagespace/lib';
+import { createOrUpdateMessageNotification, isEmailVerified } from '@pagespace/lib';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
 
 // GET /api/messages/[conversationId] - Get messages in a conversation
@@ -116,6 +116,18 @@ export async function POST(
     const user = await verifyAuth(request);
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    // Check email verification
+    const emailVerified = await isEmailVerified(user.id);
+    if (!emailVerified) {
+      return NextResponse.json(
+        {
+          error: 'Email verification required. Please verify your email to perform this action.',
+          requiresEmailVerification: true
+        },
+        { status: 403 }
+      );
     }
 
     const { conversationId } = await context.params;
