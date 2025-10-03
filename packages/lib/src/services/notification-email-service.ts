@@ -209,19 +209,12 @@ function getEmailTemplate(data: NotificationEmailData, user: { name: string; ema
       };
 
     case 'PERMISSION_UPDATED':
-      const updatedPermissions = data.metadata.permissions as Record<string, boolean> | undefined;
-      const permissionList = [];
-      if (updatedPermissions?.canView) permissionList.push('view');
-      if (updatedPermissions?.canEdit) permissionList.push('edit');
-      if (updatedPermissions?.canShare) permissionList.push('share');
-      if (updatedPermissions?.canDelete) permissionList.push('delete');
-
       return {
         subject: `Permissions updated: ${data.metadata.pageTitle}`,
         component: PermissionUpdatedEmail({
           userName: user.name,
           pageTitle: (data.metadata.pageTitle as string) || 'a page',
-          permissions: permissionList,
+          permissions: (data.metadata.permissionList as string[]) || ['view'],
           driveName: data.metadata.driveName as string | undefined,
           viewUrl: `${appUrl}/dashboard/${data.metadata.driveId}/${data.metadata.pageId}`,
           unsubscribeUrl,
