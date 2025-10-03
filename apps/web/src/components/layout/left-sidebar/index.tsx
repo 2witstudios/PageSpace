@@ -119,7 +119,7 @@ export default function Sidebar({ className }: SidebarProps) {
         </div>
 
         <div className="mt-auto space-y-1">
-          {driveId && (drive?.isOwned || drive?.role === 'OWNER' || drive?.role === 'ADMIN') && (
+          {driveId && (drive?.isOwned || drive?.role) && (
             <Link
               href={`/dashboard/${driveId}/members`}
               className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"

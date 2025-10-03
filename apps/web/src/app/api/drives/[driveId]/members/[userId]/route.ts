@@ -3,6 +3,7 @@ import { db, eq, and } from '@pagespace/db';
 import { drives, driveMembers, users, userProfiles, pagePermissions, pages } from '@pagespace/db';
 import { verifyAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
+import { createDriveNotification } from '@pagespace/lib';
 
 export async function GET(
   request: Request,
@@ -181,6 +182,7 @@ export async function PATCH(
     }
 
     // Update role if provided
+    const oldRole = member[0].role;
     if (role) {
       await db.update(driveMembers)
         .set({ role })
@@ -188,6 +190,17 @@ export async function PATCH(
           eq(driveMembers.driveId, driveId),
           eq(driveMembers.userId, userId)
         ));
+
+      // Send notification if role changed
+      if (role !== oldRole) {
+        await createDriveNotification(
+          userId,
+          driveId,
+          'role_changed',
+          role,
+          user.id
+        );
+      }
     }
 
     // Get all pages in the drive to validate pageIds
