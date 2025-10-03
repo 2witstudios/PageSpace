@@ -52,7 +52,7 @@ export async function POST(
     }
 
     if (drive[0].ownerId !== user.id) {
-      return NextResponse.json({ error: 'Only drive owner can invite members' }, { status: 403 });
+      return NextResponse.json({ error: 'Only drive owner can add members' }, { status: 403 });
     }
 
     // Check if member already exists
@@ -140,11 +140,11 @@ export async function POST(
     const results = await Promise.all(permissionPromises);
     const validResults = results.filter(r => r !== null);
 
-    // Send notification to invited user
+    // Send notification to added user
     await createDriveNotification(
       invitedUserId,
       driveId,
-      existingMember.length === 0 ? 'invited' : 'joined',
+      'invited', // Always use 'invited' which now has "added" language
       'MEMBER',
       user.id
     );
@@ -152,12 +152,12 @@ export async function POST(
     return NextResponse.json({
       memberId,
       permissionsGranted: validResults.length,
-      message: `User invited with ${validResults.length} page permissions`,
+      message: `User added with ${validResults.length} page permissions`,
     });
   } catch (error) {
-    loggers.api.error('Error inviting member:', error as Error);
+    loggers.api.error('Error adding member:', error as Error);
     return NextResponse.json(
-      { error: 'Failed to invite member' },
+      { error: 'Failed to add member' },
       { status: 500 }
     );
   }

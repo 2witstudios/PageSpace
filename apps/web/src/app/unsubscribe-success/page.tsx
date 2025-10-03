@@ -10,7 +10,7 @@ const NOTIFICATION_TYPE_LABELS: Record<string, string> = {
   PERMISSION_REVOKED: 'Permission Revoked',
   PERMISSION_UPDATED: 'Permission Updated',
   PAGE_SHARED: 'Page Shared',
-  DRIVE_INVITED: 'Drive Invitations',
+  DRIVE_INVITED: 'Workspace Additions',
   DRIVE_JOINED: 'Drive Joined',
   DRIVE_ROLE_CHANGED: 'Drive Role Changed',
   CONNECTION_REQUEST: 'Connection Requests',

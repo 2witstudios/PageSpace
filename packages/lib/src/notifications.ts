@@ -256,8 +256,8 @@ export async function createDriveNotification(
   switch (type) {
     case 'invited':
       notificationType = 'DRIVE_INVITED';
-      title = `Drive invitation`;
-      message = `${triggeredByUser?.name || 'Someone'} invited you to join the "${drive.name}" drive`;
+      title = `Added to workspace`;
+      message = `${triggeredByUser?.name || 'Someone'} added you to the "${drive.name}" workspace`;
       break;
     case 'joined':
       notificationType = 'DRIVE_JOINED';

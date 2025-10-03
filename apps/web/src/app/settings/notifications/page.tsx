@@ -43,13 +43,13 @@ interface PreferenceGroup {
 
 const PREFERENCE_GROUPS: PreferenceGroup[] = [
   {
-    title: 'Workspace Invitations',
-    description: 'Get notified when you\'re invited to join a workspace',
+    title: 'Workspace Additions',
+    description: 'Get notified when you\'re added to a workspace',
     types: [
       {
         type: 'DRIVE_INVITED',
-        label: 'Drive Invitation',
-        description: 'When someone invites you to join a workspace',
+        label: 'Added to Workspace',
+        description: 'When someone adds you to a workspace',
       },
     ],
   },

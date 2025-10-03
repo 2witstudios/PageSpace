@@ -101,7 +101,7 @@ function getEmailTemplate(data: NotificationEmailData, user: { name: string; ema
   switch (data.type) {
     case 'DRIVE_INVITED':
       return {
-        subject: `You've been invited to ${data.metadata.driveName}`,
+        subject: `You've been added to ${data.metadata.driveName}`,
         component: DriveInvitationEmail({
           userName: user.name,
           inviterName: (data.metadata.inviterName as string) || 'Someone',

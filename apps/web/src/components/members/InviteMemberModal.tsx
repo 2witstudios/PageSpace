@@ -42,9 +42,11 @@ export function InviteMemberModal({ driveId, isOpen, onClose, onComplete }: Invi
   };
 
   const handlePermissionsChange = (pageId: string, perms: { canView: boolean; canEdit: boolean; canShare: boolean }) => {
-    const newPermissions = new Map(permissions);
-    newPermissions.set(pageId, perms);
-    setPermissions(newPermissions);
+    setPermissions(prevPermissions => {
+      const newPermissions = new Map(prevPermissions);
+      newPermissions.set(pageId, perms);
+      return newPermissions;
+    });
   };
 
   const handleInvite = async () => {
@@ -90,15 +92,15 @@ export function InviteMemberModal({ driveId, isOpen, onClose, onComplete }: Invi
           return;
         }
 
-        throw new Error(error.error || 'Failed to invite member');
+        throw new Error(error.error || 'Failed to add member');
       }
 
       onComplete();
     } catch (error) {
-      console.error('Error inviting member:', error);
+      console.error('Error adding member:', error);
       toast({
         title: 'Error',
-        description: error instanceof Error ? error.message : 'Failed to invite member',
+        description: error instanceof Error ? error.message : 'Failed to add member',
         variant: 'destructive',
       });
     } finally {
@@ -111,7 +113,7 @@ export function InviteMemberModal({ driveId, isOpen, onClose, onComplete }: Invi
       <DialogContent className="max-w-4xl max-h-[80vh] overflow-hidden flex flex-col">
         <DialogHeader>
           <DialogTitle>
-            {step === 'search' ? 'Invite Member' : 'Set Permissions'}
+            {step === 'search' ? 'Add Member' : 'Set Permissions'}
           </DialogTitle>
         </DialogHeader>
 
@@ -166,7 +168,7 @@ export function InviteMemberModal({ driveId, isOpen, onClose, onComplete }: Invi
                 Cancel
               </Button>
               <Button onClick={handleInvite} disabled={loading}>
-                {loading ? 'Inviting...' : 'Send Invite'}
+                {loading ? 'Adding...' : 'Add Member'}
               </Button>
             </div>
           </div>

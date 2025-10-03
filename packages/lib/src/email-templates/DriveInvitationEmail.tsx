@@ -36,19 +36,19 @@ export function DriveInvitationEmail({
             <Heading style={emailStyles.headerTitle}>PageSpace</Heading>
           </Section>
           <Section style={emailStyles.content}>
-            <Text style={emailStyles.contentHeading}>You&apos;ve been invited to a workspace</Text>
+            <Text style={emailStyles.contentHeading}>You&apos;ve been added to a workspace</Text>
             <Text style={emailStyles.paragraph}>
               Hi {userName},
             </Text>
             <Text style={emailStyles.paragraph}>
-              <strong>{inviterName}</strong> has invited you to join the <strong>&quot;{driveName}&quot;</strong> workspace on PageSpace.
+              <strong>{inviterName}</strong> has added you to the <strong>&quot;{driveName}&quot;</strong> workspace on PageSpace.
             </Text>
             <Text style={emailStyles.paragraph}>
-              Join the workspace to collaborate on pages, share documents, and work together with your team.
+              You can now collaborate on pages, share documents, and work together with your team.
             </Text>
             <Section style={emailStyles.buttonContainer}>
               <Button style={emailStyles.button} href={acceptUrl}>
-                Accept Invitation
+                View Workspace
               </Button>
             </Section>
             <Text style={emailStyles.hint}>
@@ -61,12 +61,12 @@ export function DriveInvitationEmail({
           </Section>
           <Section style={emailStyles.footer}>
             <Text style={emailStyles.footerText}>
-              You&apos;re receiving this email because someone invited you to join their PageSpace workspace.
+              You&apos;re receiving this email because you were added to a PageSpace workspace.
             </Text>
             {unsubscribeUrl && (
               <Text style={emailStyles.footerText}>
                 <Link href={unsubscribeUrl} style={emailStyles.link}>
-                  Unsubscribe from drive invitations
+                  Unsubscribe from workspace notifications
                 </Link>
               </Text>
             )}
