@@ -80,7 +80,7 @@ export default function MemberSettingsPage() {
         if (response.status === 403) {
           toast({
             title: 'Access Denied',
-            description: 'Only drive owners can manage member settings',
+            description: 'Only drive owners and admins can manage member settings',
             variant: 'destructive',
           });
           router.push(`/dashboard/${driveId}/members`);

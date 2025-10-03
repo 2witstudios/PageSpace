@@ -30,10 +30,11 @@ interface MemberRowProps {
     };
   };
   driveId: string;
+  currentUserRole: 'OWNER' | 'ADMIN' | 'MEMBER';
   onRemove: () => void;
 }
 
-export function MemberRow({ member, driveId, onRemove }: MemberRowProps) {
+export function MemberRow({ member, driveId, currentUserRole, onRemove }: MemberRowProps) {
   const displayName = member.profile?.displayName || member.user.name || 'Unknown User';
   const initials = displayName
     .split(' ')
@@ -101,16 +102,18 @@ export function MemberRow({ member, driveId, onRemove }: MemberRowProps) {
 
       {/* Actions */}
       <div className="flex items-center space-x-2">
-        <Link href={`/dashboard/${driveId}/members/${member.userId}`}>
-          <Button
-            variant="ghost"
-            size="sm"
-            title="Member Settings"
-          >
-            <User className="w-4 h-4" />
-          </Button>
-        </Link>
-        {member.role !== 'OWNER' && (
+        {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
+          <Link href={`/dashboard/${driveId}/members/${member.userId}`}>
+            <Button
+              variant="ghost"
+              size="sm"
+              title="Member Settings"
+            >
+              <User className="w-4 h-4" />
+            </Button>
+          </Link>
+        )}
+        {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && member.role !== 'OWNER' && (
           <Button
             variant="ghost"
             size="sm"

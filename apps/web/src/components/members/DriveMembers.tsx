@@ -36,6 +36,7 @@ interface DriveMembersProps {
 
 export function DriveMembers({ driveId }: DriveMembersProps) {
   const [members, setMembers] = useState<DriveMember[]>([]);
+  const [currentUserRole, setCurrentUserRole] = useState<'OWNER' | 'ADMIN' | 'MEMBER'>('MEMBER');
   const [loading, setLoading] = useState(true);
   const [inviteModalOpen, setInviteModalOpen] = useState(false);
   const { toast } = useToast();
@@ -48,6 +49,7 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
       if (!response.ok) throw new Error('Failed to fetch members');
       const data = await response.json();
       setMembers(data.members);
+      setCurrentUserRole(data.currentUserRole || 'MEMBER');
     } catch (error) {
       console.error('Error fetching members:', error);
       toast({
@@ -119,10 +121,12 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
             People with access to this drive
           </p>
         </div>
-        <Button onClick={() => setInviteModalOpen(true)}>
-          <UserPlus className="w-4 h-4 mr-2" />
-          Invite Member
-        </Button>
+        {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
+          <Button onClick={() => setInviteModalOpen(true)}>
+            <UserPlus className="w-4 h-4 mr-2" />
+            Invite Member
+          </Button>
+        )}
       </div>
 
       {/* Members List */}
@@ -137,6 +141,7 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
               key={member.id}
               member={member}
               driveId={driveId}
+              currentUserRole={currentUserRole}
               onRemove={() => handleRemoveMember(member.id)}
             />
           ))

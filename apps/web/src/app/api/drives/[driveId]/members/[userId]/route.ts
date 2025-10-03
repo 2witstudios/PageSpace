@@ -25,9 +25,25 @@ export async function GET(
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    // Only drive owner can manage member settings
-    if (drive[0].ownerId !== user.id) {
-      return NextResponse.json({ error: 'Only drive owner can manage member settings' }, { status: 403 });
+    // Check if user is owner or admin
+    const isOwner = drive[0].ownerId === user.id;
+    let isAdmin = false;
+
+    if (!isOwner) {
+      const adminMembership = await db.select()
+        .from(driveMembers)
+        .where(and(
+          eq(driveMembers.driveId, driveId),
+          eq(driveMembers.userId, user.id),
+          eq(driveMembers.role, 'ADMIN')
+        ))
+        .limit(1);
+
+      isAdmin = adminMembership.length > 0;
+    }
+
+    if (!isOwner && !isAdmin) {
+      return NextResponse.json({ error: 'Only drive owners and admins can manage member settings' }, { status: 403 });
     }
 
     // Get member details with profile
@@ -130,9 +146,25 @@ export async function PATCH(
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    // Only drive owner can manage member settings
-    if (drive[0].ownerId !== user.id) {
-      return NextResponse.json({ error: 'Only drive owner can manage member settings' }, { status: 403 });
+    // Check if user is owner or admin
+    const isOwner = drive[0].ownerId === user.id;
+    let isAdmin = false;
+
+    if (!isOwner) {
+      const adminMembership = await db.select()
+        .from(driveMembers)
+        .where(and(
+          eq(driveMembers.driveId, driveId),
+          eq(driveMembers.userId, user.id),
+          eq(driveMembers.role, 'ADMIN')
+        ))
+        .limit(1);
+
+      isAdmin = adminMembership.length > 0;
+    }
+
+    if (!isOwner && !isAdmin) {
+      return NextResponse.json({ error: 'Only drive owners and admins can manage member settings' }, { status: 403 });
     }
 
     // Verify member exists in drive
