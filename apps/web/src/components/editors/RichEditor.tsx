@@ -21,17 +21,26 @@ interface RichEditorProps {
 
 const RichEditor = ({ value, onChange, onEditorChange, readOnly = false }: RichEditorProps) => {
   const debounceTimeout = useRef<NodeJS.Timeout | null>(null);
+  const formatVersion = useRef(0);
 
   const debouncedOnChange = useCallback(
     (editor: Editor) => {
       if (debounceTimeout.current) {
         clearTimeout(debounceTimeout.current);
       }
+      // Increment version - invalidates any in-flight formatting
+      formatVersion.current++;
+
       debounceTimeout.current = setTimeout(async () => {
+        const currentVersion = formatVersion.current;
         const html = editor.getHTML();
         const formattedHtml = await formatHtml(html);
-        onChange(formattedHtml);
-      }, 500);
+
+        // Only update if no new typing happened during formatting
+        if (currentVersion === formatVersion.current) {
+          onChange(formattedHtml);
+        }
+      }, 2000);
     },
     [onChange]
   );
