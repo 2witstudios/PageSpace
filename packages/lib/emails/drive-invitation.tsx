@@ -1,3 +1,4 @@
+import React from 'react';
 import { DriveInvitationEmail } from '../src/email-templates/DriveInvitationEmail';
 
 export default function DriveInvitationPreview() {

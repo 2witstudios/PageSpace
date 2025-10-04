@@ -1,3 +1,4 @@
+import React from 'react';
 import { VerificationEmail } from '../src/email-templates/VerificationEmail';
 
 export default function VerificationEmailPreview() {

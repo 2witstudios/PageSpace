@@ -1,3 +1,4 @@
+import React from 'react';
 import { PageSharedEmail } from '../src/email-templates/PageSharedEmail';
 
 export default function PageSharedPreview() {

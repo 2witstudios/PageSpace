@@ -1,3 +1,4 @@
+import React from 'react';
 import { DirectMessageEmail } from '../src/email-templates/DirectMessageEmail';
 
 export default function DirectMessagePreview() {

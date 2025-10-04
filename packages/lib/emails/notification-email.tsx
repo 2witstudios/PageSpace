@@ -1,3 +1,4 @@
+import React from 'react';
 import { NotificationEmail } from '../src/email-templates/NotificationEmail';
 
 export default function NotificationEmailPreview() {

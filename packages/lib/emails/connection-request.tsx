@@ -1,3 +1,4 @@
+import React from 'react';
 import { ConnectionRequestEmail } from '../src/email-templates/ConnectionRequestEmail';
 
 export default function ConnectionRequestPreview() {

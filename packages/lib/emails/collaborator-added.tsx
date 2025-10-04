@@ -1,3 +1,4 @@
+import React from 'react';
 import { CollaboratorAddedEmail } from '../src/email-templates/CollaboratorAddedEmail';
 
 export default function CollaboratorAddedPreview() {
