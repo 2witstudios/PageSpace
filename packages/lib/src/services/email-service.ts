@@ -1,6 +1,6 @@
 import { Resend } from 'resend';
 import { checkRateLimit, RATE_LIMIT_CONFIGS } from '../rate-limit-utils';
-import type { ReactElement } from 'react';
+import type * as React from 'react';
 
 function getResendConfig() {
   const apiKey = process.env.RESEND_API_KEY;
@@ -26,7 +26,7 @@ function getResend(): Resend {
 export interface SendEmailOptions {
   to: string;
   subject: string;
-  react: ReactElement;
+  react: React.ReactNode;
 }
 
 export async function sendEmail(options: SendEmailOptions): Promise<void> {
@@ -48,7 +48,7 @@ export async function sendEmail(options: SendEmailOptions): Promise<void> {
     from: config.from,
     to: options.to,
     subject: options.subject,
-    react: options.react,
+    react: options.react as React.ReactNode,
   });
 
   if (error) {
