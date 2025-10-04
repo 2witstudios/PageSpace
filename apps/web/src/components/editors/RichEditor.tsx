@@ -14,7 +14,7 @@ import { PageMention } from '@/lib/editor/tiptap-mention-config';
 
 interface RichEditorProps {
   value: string;
-  onChange: (value: string) => void;
+  onChange: (value: string, shouldSave?: boolean) => void;
   onEditorChange: (editor: Editor | null) => void;
   readOnly?: boolean;
 }
@@ -38,7 +38,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false }: RichE
 
         // Only update if no new typing happened during formatting
         if (currentVersion === formatVersion.current) {
-          onChange(formattedHtml);
+          onChange(formattedHtml, true); // shouldSave=true after formatting
         }
       }, 2000);
     },
@@ -70,6 +70,11 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false }: RichE
     autofocus: readOnly ? false : undefined,
     onUpdate: ({ editor }) => {
       if (!readOnly) {
+        // Immediate update to set isDirty flag (no save)
+        const html = editor.getHTML();
+        onChange(html, false);
+
+        // Debounced formatting and save
         debouncedOnChange(editor);
       }
     },

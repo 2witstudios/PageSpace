@@ -106,18 +106,20 @@ const DocumentView = ({ page }: DocumentViewProps) => {
 
 
   // Handle content changes
-  const handleContentChange = useCallback((newContent: string | undefined) => {
+  const handleContentChange = useCallback((newContent: string | undefined, shouldSave = true) => {
     if (isReadOnly) {
       toast.error('You do not have permission to edit this document');
       return;
     }
-    
+
     const content = newContent || '';
-    // Update document state immediately (optimistic update)
+    // Always update document state (sets isDirty flag)
     updateContent(content);
-    
-    // Trigger debounced save
-    saveWithDebounce(content);
+
+    // Only trigger save if requested (after formatting completes)
+    if (shouldSave) {
+      saveWithDebounce(content);
+    }
   }, [updateContent, saveWithDebounce, isReadOnly]);
 
 
