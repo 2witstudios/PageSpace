@@ -33,6 +33,9 @@ jspm_packages/
 # Compiled build artifacts in source directories (should be in dist/ only)
 packages/lib/src/**/*.js
 packages/lib/src/**/*.d.ts
+packages/db/src/**/*.js
+packages/db/src/**/*.d.ts
+packages/db/src/**/*.map
 
 # Environment variables
 .env
