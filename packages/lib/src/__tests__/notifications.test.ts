@@ -183,8 +183,8 @@ describe('notifications', () => {
       const result = await getUserNotifications(testUser.id)
 
       expect(result).toHaveLength(2)
-      expect(result[0].notification.title).toBe('Notification 2') // Most recent first
-      expect(result[1].notification.title).toBe('Notification 1')
+      expect(result[0].title).toBe('Notification 2') // Most recent first
+      expect(result[1].title).toBe('Notification 1')
     })
 
     it('returns notifications with triggered by user info', async () => {
@@ -238,7 +238,7 @@ describe('notifications', () => {
       const result = await getUserNotifications(testUser.id)
 
       expect(result).toHaveLength(1)
-      expect(result[0].notification.title).toBe('For testUser')
+      expect(result[0].title).toBe('For testUser')
     })
 
     it('respects limit parameter', async () => {
@@ -290,9 +290,9 @@ describe('notifications', () => {
 
       const result = await getUserNotifications(testUser.id)
 
-      expect(result[0].notification.title).toBe('Third')
-      expect(result[1].notification.title).toBe('Second')
-      expect(result[2].notification.title).toBe('First')
+      expect(result[0].title).toBe('Third')
+      expect(result[1].title).toBe('Second')
+      expect(result[2].title).toBe('First')
     })
   })
 
@@ -308,7 +308,7 @@ describe('notifications', () => {
       await markNotificationAsRead(notification.id, testUser.id)
 
       const result = await getUserNotifications(testUser.id)
-      expect(result[0].notification.isRead).toBe(true)
+      expect(result[0].isRead).toBe(true)
     })
 
     it('sets readAt timestamp', async () => {
@@ -324,7 +324,7 @@ describe('notifications', () => {
       const afterTime = new Date()
 
       const result = await getUserNotifications(testUser.id)
-      const readAt = result[0].notification.readAt
+      const readAt = result[0].readAt
 
       expect(readAt).toBeInstanceOf(Date)
       expect(readAt!.getTime()).toBeGreaterThanOrEqual(beforeTime.getTime())
@@ -342,7 +342,7 @@ describe('notifications', () => {
       await markNotificationAsRead(notification.id, otherUser.id)
 
       const result = await getUserNotifications(testUser.id)
-      expect(result[0].notification.isRead).toBe(false)
+      expect(result[0].isRead).toBe(false)
     })
 
     it('handles non-existent notification gracefully', async () => {
@@ -379,7 +379,7 @@ describe('notifications', () => {
 
       const result = await getUserNotifications(testUser.id)
 
-      expect(result.every(r => r.notification.isRead)).toBe(true)
+      expect(result.every(r => r.isRead)).toBe(true)
     })
 
     it('does not affect other users notifications', async () => {
@@ -402,8 +402,8 @@ describe('notifications', () => {
       const testUserNotifs = await getUserNotifications(testUser.id)
       const otherUserNotifs = await getUserNotifications(otherUser.id)
 
-      expect(testUserNotifs[0].notification.isRead).toBe(true)
-      expect(otherUserNotifs[0].notification.isRead).toBe(false)
+      expect(testUserNotifs[0].isRead).toBe(true)
+      expect(otherUserNotifs[0].isRead).toBe(false)
     })
 
     it('handles user with no notifications', async () => {
