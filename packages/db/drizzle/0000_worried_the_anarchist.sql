@@ -11,7 +11,7 @@ EXCEPTION
 END $$;
 --> statement-breakpoint
 DO $$ BEGIN
- CREATE TYPE "public"."PageType" AS ENUM('FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'FILE');
+ CREATE TYPE "public"."PageType" AS ENUM('FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'FILE', 'SHEET');
 EXCEPTION
  WHEN duplicate_object THEN null;
 END $$;
@@ -41,7 +41,7 @@ EXCEPTION
 END $$;
 --> statement-breakpoint
 DO $$ BEGIN
- CREATE TYPE "public"."NotificationType" AS ENUM('PERMISSION_GRANTED', 'PERMISSION_REVOKED', 'PERMISSION_UPDATED', 'PAGE_SHARED', 'DRIVE_INVITED', 'DRIVE_JOINED', 'DRIVE_ROLE_CHANGED', 'CONNECTION_REQUEST', 'CONNECTION_ACCEPTED', 'CONNECTION_REJECTED', 'NEW_DIRECT_MESSAGE');
+ CREATE TYPE "public"."NotificationType" AS ENUM('PERMISSION_GRANTED', 'PERMISSION_REVOKED', 'PERMISSION_UPDATED', 'PAGE_SHARED', 'DRIVE_INVITED', 'DRIVE_JOINED', 'DRIVE_ROLE_CHANGED', 'CONNECTION_REQUEST', 'CONNECTION_ACCEPTED', 'CONNECTION_REJECTED', 'NEW_DIRECT_MESSAGE', 'EMAIL_VERIFICATION_REQUIRED');
 EXCEPTION
  WHEN duplicate_object THEN null;
 END $$;
@@ -109,6 +109,17 @@ CREATE TABLE IF NOT EXISTS "users" (
 	CONSTRAINT "users_email_unique" UNIQUE("email"),
 	CONSTRAINT "users_googleId_unique" UNIQUE("googleId"),
 	CONSTRAINT "users_stripeCustomerId_unique" UNIQUE("stripeCustomerId")
+);
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS "verification_tokens" (
+	"id" text PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"token" text NOT NULL,
+	"type" text NOT NULL,
+	"expiresAt" timestamp NOT NULL,
+	"createdAt" timestamp DEFAULT now() NOT NULL,
+	"usedAt" timestamp,
+	CONSTRAINT "verification_tokens_token_unique" UNIQUE("token")
 );
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "chat_messages" (
@@ -351,6 +362,25 @@ CREATE TABLE IF NOT EXISTS "notifications" (
 	"pageId" text,
 	"driveId" text,
 	"triggeredByUserId" text
+);
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS "email_notification_log" (
+	"id" text PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"notificationId" text,
+	"notificationType" "NotificationType" NOT NULL,
+	"recipientEmail" text NOT NULL,
+	"success" boolean NOT NULL,
+	"errorMessage" text,
+	"sentAt" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS "email_notification_preferences" (
+	"id" text PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"notificationType" "NotificationType" NOT NULL,
+	"emailEnabled" boolean DEFAULT true NOT NULL,
+	"updatedAt" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "ai_usage_logs" (
@@ -597,6 +627,29 @@ CREATE TABLE IF NOT EXISTS "contact_submissions" (
 	"createdAt" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE IF NOT EXISTS "file_pages" (
+	"fileId" text NOT NULL,
+	"pageId" text NOT NULL,
+	"linkedBy" text,
+	"linkedAt" timestamp DEFAULT now() NOT NULL,
+	"linkSource" text,
+	CONSTRAINT "file_pages_fileId_pageId_pk" PRIMARY KEY("fileId","pageId"),
+	CONSTRAINT "file_pages_page_id_key" UNIQUE("pageId")
+);
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS "files" (
+	"id" text PRIMARY KEY NOT NULL,
+	"driveId" text NOT NULL,
+	"sizeBytes" bigint NOT NULL,
+	"mimeType" text,
+	"storagePath" text,
+	"checksumVersion" integer DEFAULT 1 NOT NULL,
+	"createdAt" timestamp DEFAULT now() NOT NULL,
+	"updatedAt" timestamp DEFAULT now() NOT NULL,
+	"createdBy" text,
+	"lastAccessedAt" timestamp
+);
+--> statement-breakpoint
 DO $$ BEGIN
  ALTER TABLE "mcp_tokens" ADD CONSTRAINT "mcp_tokens_userId_users_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
 EXCEPTION
@@ -605,6 +658,12 @@ END $$;
 --> statement-breakpoint
 DO $$ BEGIN
  ALTER TABLE "refresh_tokens" ADD CONSTRAINT "refresh_tokens_userId_users_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+DO $$ BEGIN
+ ALTER TABLE "verification_tokens" ADD CONSTRAINT "verification_tokens_userId_users_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
 EXCEPTION
  WHEN duplicate_object THEN null;
 END $$;
@@ -820,6 +879,18 @@ EXCEPTION
 END $$;
 --> statement-breakpoint
 DO $$ BEGIN
+ ALTER TABLE "email_notification_log" ADD CONSTRAINT "email_notification_log_userId_users_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+DO $$ BEGIN
+ ALTER TABLE "email_notification_preferences" ADD CONSTRAINT "email_notification_preferences_userId_users_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+DO $$ BEGIN
  ALTER TABLE "connections" ADD CONSTRAINT "connections_user1Id_users_id_fk" FOREIGN KEY ("user1Id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
 EXCEPTION
  WHEN duplicate_object THEN null;
@@ -879,9 +950,42 @@ EXCEPTION
  WHEN duplicate_object THEN null;
 END $$;
 --> statement-breakpoint
+DO $$ BEGIN
+ ALTER TABLE "file_pages" ADD CONSTRAINT "file_pages_fileId_files_id_fk" FOREIGN KEY ("fileId") REFERENCES "public"."files"("id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+DO $$ BEGIN
+ ALTER TABLE "file_pages" ADD CONSTRAINT "file_pages_pageId_pages_id_fk" FOREIGN KEY ("pageId") REFERENCES "public"."pages"("id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+DO $$ BEGIN
+ ALTER TABLE "file_pages" ADD CONSTRAINT "file_pages_linkedBy_users_id_fk" FOREIGN KEY ("linkedBy") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+DO $$ BEGIN
+ ALTER TABLE "files" ADD CONSTRAINT "files_driveId_drives_id_fk" FOREIGN KEY ("driveId") REFERENCES "public"."drives"("id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+DO $$ BEGIN
+ ALTER TABLE "files" ADD CONSTRAINT "files_createdBy_users_id_fk" FOREIGN KEY ("createdBy") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "mcp_tokens_user_id_idx" ON "mcp_tokens" USING btree ("userId");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "mcp_tokens_token_idx" ON "mcp_tokens" USING btree ("token");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "refresh_tokens_user_id_idx" ON "refresh_tokens" USING btree ("userId");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "verification_tokens_user_id_idx" ON "verification_tokens" USING btree ("userId");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "verification_tokens_token_idx" ON "verification_tokens" USING btree ("token");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "verification_tokens_type_idx" ON "verification_tokens" USING btree ("type");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "chat_messages_page_id_idx" ON "chat_messages" USING btree ("pageId");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "chat_messages_user_id_idx" ON "chat_messages" USING btree ("userId");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "chat_messages_page_id_is_active_created_at_idx" ON "chat_messages" USING btree ("pageId","isActive","createdAt");--> statement-breakpoint
@@ -922,6 +1026,10 @@ CREATE INDEX IF NOT EXISTS "notifications_user_id_idx" ON "notifications" USING 
 CREATE INDEX IF NOT EXISTS "notifications_user_id_is_read_idx" ON "notifications" USING btree ("userId","isRead");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "notifications_created_at_idx" ON "notifications" USING btree ("createdAt");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "notifications_type_idx" ON "notifications" USING btree ("type");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "email_notification_log_user_idx" ON "email_notification_log" USING btree ("userId");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "email_notification_log_sent_at_idx" ON "email_notification_log" USING btree ("sentAt");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "email_notification_log_notification_id_idx" ON "email_notification_log" USING btree ("notificationId");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "email_notification_preferences_user_type_idx" ON "email_notification_preferences" USING btree ("userId","notificationType");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_ai_usage_timestamp" ON "ai_usage_logs" USING btree ("timestamp");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_ai_usage_user_id" ON "ai_usage_logs" USING btree ("user_id","timestamp");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_ai_usage_provider" ON "ai_usage_logs" USING btree ("provider","model","timestamp");--> statement-breakpoint
@@ -980,4 +1088,7 @@ CREATE INDEX IF NOT EXISTS "stripe_events_processed_at_idx" ON "stripe_events" U
 CREATE INDEX IF NOT EXISTS "subscriptions_user_id_idx" ON "subscriptions" USING btree ("userId");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "subscriptions_stripe_subscription_id_idx" ON "subscriptions" USING btree ("stripeSubscriptionId");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "contact_submissions_email_idx" ON "contact_submissions" USING btree ("email");--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "contact_submissions_created_at_idx" ON "contact_submissions" USING btree ("createdAt");
+CREATE INDEX IF NOT EXISTS "contact_submissions_created_at_idx" ON "contact_submissions" USING btree ("createdAt");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "file_pages_file_id_idx" ON "file_pages" USING btree ("fileId");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "file_pages_page_id_idx" ON "file_pages" USING btree ("pageId");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "files_drive_id_idx" ON "files" USING btree ("driveId");
