@@ -1,7 +1,7 @@
 import { users, drives, userAiSettings, refreshTokens, db, eq } from '@pagespace/db';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod/v4';
-import { slugify, generateAccessToken, generateRefreshToken, checkRateLimit, resetRateLimit, RATE_LIMIT_CONFIGS } from '@pagespace/lib/server';
+import { slugify, generateAccessToken, generateRefreshToken, checkRateLimit, resetRateLimit, RATE_LIMIT_CONFIGS, createNotification } from '@pagespace/lib/server';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
@@ -152,6 +152,18 @@ export async function POST(req: Request) {
       });
 
       loggers.auth.info('Verification email sent', { userId: user.id, email });
+
+      // Create notification to verify email
+      await createNotification({
+        userId: user.id,
+        type: 'EMAIL_VERIFICATION_REQUIRED',
+        title: 'Please verify your email',
+        message: 'Check your inbox for a verification link. You can resend it from your account settings.',
+        metadata: {
+          email,
+          settingsUrl: '/settings/account',
+        },
+      });
     } catch (error) {
       // Don't fail signup if email fails
       loggers.auth.error('Failed to send verification email', error as Error, { userId: user.id });

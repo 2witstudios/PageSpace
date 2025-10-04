@@ -16,7 +16,8 @@ import {
   ChevronRight,
   CheckCheck,
   Bell,
-  MessageCircle
+  MessageCircle,
+  Mail
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -44,6 +45,8 @@ const NotificationIcon = ({ type }: { type: string }) => {
       return <X className="h-4 w-4" />;
     case 'NEW_DIRECT_MESSAGE':
       return <MessageCircle className="h-4 w-4" />;
+    case 'EMAIL_VERIFICATION_REQUIRED':
+      return <Mail className="h-4 w-4" />;
     case 'DRIVE_JOINED':
     case 'DRIVE_ROLE_CHANGED':
       return <Users className="h-4 w-4" />;
@@ -176,7 +179,11 @@ export default function NotificationDropdown() {
                       }
 
                       // Navigate based on notification type
-                      if (notification.type === 'NEW_DIRECT_MESSAGE' &&
+                      if (notification.type === 'EMAIL_VERIFICATION_REQUIRED') {
+                        // Navigate to account settings
+                        setIsDropdownOpen(false);
+                        router.push('/settings/account');
+                      } else if (notification.type === 'NEW_DIRECT_MESSAGE' &&
                           notification.metadata &&
                           typeof notification.metadata === 'object' &&
                           'conversationId' in notification.metadata) {

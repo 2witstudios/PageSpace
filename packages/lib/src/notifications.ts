@@ -23,9 +23,9 @@ async function broadcastNotification(userId: string, notification: unknown) {
   }
 }
 
-export type NotificationType = 
+export type NotificationType =
   | 'PERMISSION_GRANTED'
-  | 'PERMISSION_REVOKED' 
+  | 'PERMISSION_REVOKED'
   | 'PERMISSION_UPDATED'
   | 'PAGE_SHARED'
   | 'DRIVE_INVITED'
@@ -34,7 +34,8 @@ export type NotificationType =
   | 'CONNECTION_REQUEST'
   | 'CONNECTION_ACCEPTED'
   | 'CONNECTION_REJECTED'
-  | 'NEW_DIRECT_MESSAGE';
+  | 'NEW_DIRECT_MESSAGE'
+  | 'EMAIL_VERIFICATION_REQUIRED';
 
 interface CreateNotificationParams {
   userId: string;

@@ -8,6 +8,7 @@ interface User {
   name: string | null;
   email: string | null;
   image?: string | null;
+  emailVerified?: Date | null;
 }
 
 interface AuthState {
@@ -274,6 +275,7 @@ export const useAuthStore = create<AuthState>()(
           name: state.user.name,
           email: state.user.email,
           image: state.user.image,
+          emailVerified: state.user.emailVerified,
         } : null,
       }),
     }

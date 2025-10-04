@@ -15,6 +15,7 @@ export async function GET(req: Request) {
       role: true,
       provider: true,
       googleId: true,
+      emailVerified: true,
     },
   });
 
@@ -34,5 +35,6 @@ export async function GET(req: Request) {
     email: user.email,
     image: user.image,
     role: user.role,
+    emailVerified: user.emailVerified,
   });
 }

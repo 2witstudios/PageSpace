@@ -6,6 +6,7 @@ import { Crown, Home, PanelLeft, PanelRight, Search } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import NotificationBell from "@/components/notifications/NotificationBell";
+import VerifyEmailButton from "@/components/notifications/VerifyEmailButton";
 import InlineSearch from "@/components/search/InlineSearch";
 import GlobalSearch from "@/components/search/GlobalSearch";
 import UserDropdown from "@/components/shared/UserDropdown";
@@ -77,6 +78,8 @@ export default function TopBar({ onToggleLeftPanel, onToggleRightPanel }: TopBar
               <Crown className="h-5 w-5" />
             </Link>
           </Button>
+
+          <VerifyEmailButton />
 
           <NotificationBell />
 
