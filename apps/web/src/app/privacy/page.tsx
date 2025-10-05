@@ -221,7 +221,7 @@ export default function PrivacyPolicy() {
               If you have any questions about this Privacy Policy or our privacy practices, please contact us at:
             </p>
             <ul className="list-disc pl-6 mb-4">
-              <li><strong>Email:</strong> 2witstudios@gmail.com</li>
+              <li><strong>Email:</strong> hello@pagespace.ai</li>
               <li><strong>Support:</strong> Available through the in-app help system</li>
               <li><strong>Community:</strong> <a href="https://discord.gg/kve8qgzZ8x" className="text-primary hover:underline">PageSpace Discord</a></li>
             </ul>

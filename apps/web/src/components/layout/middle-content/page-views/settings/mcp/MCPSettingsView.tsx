@@ -144,7 +144,7 @@ export default function MCPSettingsView() {
           command: "npx",
           args: ["-y", "pagespace-mcp@latest"],
           env: {
-            PAGESPACE_API_URL: "https://beta.pagespace.ai",
+            PAGESPACE_API_URL: "https://www.pagespace.ai",
             PAGESPACE_AUTH_TOKEN: token
           }
         }

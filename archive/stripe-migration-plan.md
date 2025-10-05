@@ -135,8 +135,8 @@ NEXT_PUBLIC_APP_URL=https://...                 # Set in Payment Link dashboard
 3. **Create New Payment Link**:
    - Product: PageSpace Pro Subscription
    - Price: $15/month recurring
-   - Success URL: `https://beta.pagespace.ai/settings/billing?success=true`
-   - Cancel URL: `https://beta.pagespace.ai/settings/billing?canceled=true`
+   - Success URL: `https://www.pagespace.ai/settings/billing?success=true`
+   - Cancel URL: `https://www.pagespace.ai/settings/billing?canceled=true`
    - Collect customer information: Email
    - Allow promotion codes: Yes (optional)
 

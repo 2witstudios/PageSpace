@@ -77,7 +77,7 @@ export async function GET() {
 
   } catch (error) {
     loggers.auth.error('Google OAuth signin GET error', error as Error);
-    const baseUrl = process.env.WEB_APP_URL || process.env.NEXTAUTH_URL || 'https://beta.pagespace.ai';
+    const baseUrl = process.env.WEB_APP_URL || process.env.NEXTAUTH_URL || 'http://localhost:3000';
     return Response.redirect(new URL('/auth/signin?error=oauth_error', baseUrl).toString());
   }
 }

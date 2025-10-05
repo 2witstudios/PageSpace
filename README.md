@@ -1,6 +1,6 @@
 # PageSpace: Where AI Can Actually Work
 
-**Try it free at [beta.pagespace.ai](https://beta.pagespace.ai)** • Self-host with Docker • [Discord](https://discord.gg/yxDQkTHXT5)
+**Try it free at [www.pagespace.ai](https://www.pagespace.ai)** • Self-host with Docker • [Discord](https://discord.gg/yxDQkTHXT5)
 
 > 🚀 **Open Beta** — PageSpace turns your projects into intelligent workspaces where AI agents collaborate alongside your team with real tools to create, edit, and organize content.
 
@@ -44,7 +44,7 @@ npm install -g pagespace-mcp@latest
 
 # In Claude Desktop
 Claude: "Update all meeting notes in my PageSpace"
-*Claude directly edits documents at beta.pagespace.ai*
+*Claude directly edits documents at www.pagespace.ai*
 ```
 
 ---
@@ -52,7 +52,7 @@ Claude: "Update all meeting notes in my PageSpace"
 ## Quick Start
 
 ### Option 1: Cloud (Instant Access)
-1. Visit **[beta.pagespace.ai](https://beta.pagespace.ai)**
+1. Visit **[www.pagespace.ai](https://www.pagespace.ai)**
 2. Sign up for free
 3. Start building with AI immediately
 
@@ -78,7 +78,7 @@ pnpm db:migrate
 # Start development server
 pnpm dev
 
-# Visit https://beta.pagespace.ai
+# Visit https://www.pagespace.ai
 ```
 
 ---
@@ -93,7 +93,7 @@ PageSpace includes an MCP server that lets Claude Desktop and other AI tools dir
    npm install -g pagespace-mcp@latest
    ```
 
-2. **Get your token** from [beta.pagespace.ai/dashboard/settings/mcp](https://beta.pagespace.ai/dashboard/settings/mcp)
+2. **Get your token** from [www.pagespace.ai/dashboard/settings/mcp](https://www.pagespace.ai/dashboard/settings/mcp)
 
 3. **Configure Claude Desktop** (add to MCP settings):
    ```json
@@ -103,7 +103,7 @@ PageSpace includes an MCP server that lets Claude Desktop and other AI tools dir
          "command": "npx",
          "args": ["-y", "pagespace-mcp@latest"],
          "env": {
-           "PAGESPACE_API_URL": "https://beta.pagespace.ai",
+           "PAGESPACE_API_URL": "https://www.pagespace.ai",
            "PAGESPACE_AUTH_TOKEN": "your-mcp-token"
          }
        }
@@ -138,7 +138,7 @@ PageSpace includes an MCP server that lets Claude Desktop and other AI tools dir
 - **100+ models** from free tier to cutting edge
 
 ### 🔒 Privacy & Control
-- **Cloud option** at beta.pagespace.ai for instant access
+- **Cloud option** at www.pagespace.ai for instant access
 - **Self-host option** for complete data sovereignty
 - **Export anytime**: Your data is always yours
 
@@ -198,4 +198,4 @@ This means you can use, modify, and share PageSpace for non-commercial purposes.
 
 **Built by people who believe AI should work with you, not just talk to you.**
 
-[Try PageSpace at beta.pagespace.ai →](https://beta.pagespace.ai)
+[Try PageSpace at www.pagespace.ai →](https://www.pagespace.ai)
