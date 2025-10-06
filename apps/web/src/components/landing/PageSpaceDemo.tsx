@@ -186,7 +186,7 @@ export default function PageSpaceDemo() {
                 </text>
               </g>
 
-              {/* Nested: Welcome to PageSpace (Document - ACTIVE) */}
+              {/* Nested: Welcome to PageSpace (Document - Initially ACTIVE) */}
               <g transform="translate(20, 32)" className="tree-item">
                 {/* Lucide FileText icon */}
                 <path
@@ -208,7 +208,7 @@ export default function PageSpaceDemo() {
                 >
                   Welcome to PageSpace
                 </text>
-                {/* Active indicator */}
+                {/* Active indicator - fades out */}
                 <rect
                   x="-8"
                   y="2"
@@ -216,11 +216,13 @@ export default function PageSpaceDemo() {
                   height="20"
                   rx="1.5"
                   fill="oklch(0.50 0.16 235)"
-                />
+                >
+                  <animate attributeName="opacity" values="1;1;0;0" keyTimes="0;0.27;0.33;1" dur="18s" repeatCount="indefinite" />
+                </rect>
               </g>
 
-              {/* Nested: Getting Started (Document) */}
-              <g transform="translate(20, 64)" className="tree-item">
+              {/* Nested: Getting Started (Document - appears and becomes active) */}
+              <g transform="translate(20, 64)" className="tree-item" opacity="0">
                 {/* Lucide FileText icon */}
                 <path
                   d="M 18 6 L 18 20 L 28 20 L 28 10 L 24 6 Z M 24 6 L 24 10 L 28 10"
@@ -241,10 +243,24 @@ export default function PageSpaceDemo() {
                 >
                   Getting Started
                 </text>
+                {/* Active indicator - appears */}
+                <rect
+                  x="-8"
+                  y="2"
+                  width="3"
+                  height="20"
+                  rx="1.5"
+                  fill="oklch(0.50 0.16 235)"
+                  opacity="0"
+                >
+                  <animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.27;0.33;0.94;1" dur="18s" repeatCount="indefinite" />
+                </rect>
+                {/* Entire item appears */}
+                <animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.16;0.22;0.94;1" dur="18s" repeatCount="indefinite" />
               </g>
 
               {/* Folder: Development (collapsed) */}
-              <g transform="translate(0, 104)" className="tree-item">
+              <g transform="translate(0, 72)" className="tree-item">
                 {/* Lucide ChevronRight */}
                 <path
                   d="M 6 8 L 10 12 L 6 16"
@@ -279,10 +295,18 @@ export default function PageSpaceDemo() {
                 >
                   Development
                 </text>
+                <animateTransform
+                  attributeName="transform"
+                  type="translate"
+                  values="0 72; 0 72; 0 104; 0 104; 0 72"
+                  keyTimes="0; 0.16; 0.22; 0.94; 1"
+                  dur="18s"
+                  repeatCount="indefinite"
+                />
               </g>
 
               {/* Feature Roadmap (Document) */}
-              <g transform="translate(0, 136)" className="tree-item">
+              <g transform="translate(0, 104)" className="tree-item">
                 {/* Lucide FileText icon */}
                 <path
                   d="M 18 6 L 18 20 L 28 20 L 28 10 L 24 6 Z M 24 6 L 24 10 L 28 10"
@@ -303,10 +327,18 @@ export default function PageSpaceDemo() {
                 >
                   Feature Roadmap
                 </text>
+                <animateTransform
+                  attributeName="transform"
+                  type="translate"
+                  values="0 104; 0 104; 0 136; 0 136; 0 104"
+                  keyTimes="0; 0.16; 0.22; 0.94; 1"
+                  dur="18s"
+                  repeatCount="indefinite"
+                />
               </g>
 
               {/* Team Discussion (Channel) */}
-              <g transform="translate(0, 168)" className="tree-item">
+              <g transform="translate(0, 136)" className="tree-item">
                 {/* Lucide MessageSquare icon */}
                 <path
                   d="M 17 8 L 29 8 L 29 18 L 25 18 L 21 22 L 21 18 L 17 18 Z"
@@ -325,10 +357,18 @@ export default function PageSpaceDemo() {
                 >
                   Team Discussion
                 </text>
+                <animateTransform
+                  attributeName="transform"
+                  type="translate"
+                  values="0 136; 0 136; 0 168; 0 168; 0 136"
+                  keyTimes="0; 0.16; 0.22; 0.94; 1"
+                  dur="18s"
+                  repeatCount="indefinite"
+                />
               </g>
 
               {/* AI Assistant (AI Chat) */}
-              <g transform="translate(0, 200)" className="tree-item">
+              <g transform="translate(0, 168)" className="tree-item">
                 {/* Lucide Sparkles icon */}
                 <path
                   d="M 23 4 L 23.5 8 L 27.5 8.5 L 23.5 9 L 23 13 L 22.5 9 L 18.5 8.5 L 22.5 8 Z"
@@ -349,10 +389,18 @@ export default function PageSpaceDemo() {
                 >
                   AI Assistant
                 </text>
+                <animateTransform
+                  attributeName="transform"
+                  type="translate"
+                  values="0 168; 0 168; 0 200; 0 200; 0 168"
+                  keyTimes="0; 0.16; 0.22; 0.94; 1"
+                  dur="18s"
+                  repeatCount="indefinite"
+                />
               </g>
 
               {/* Resources Folder (collapsed) */}
-              <g transform="translate(0, 232)" className="tree-item">
+              <g transform="translate(0, 200)" className="tree-item">
                 {/* Lucide ChevronRight */}
                 <path
                   d="M 6 8 L 10 12 L 6 16"
@@ -387,6 +435,14 @@ export default function PageSpaceDemo() {
                 >
                   Resources
                 </text>
+                <animateTransform
+                  attributeName="transform"
+                  type="translate"
+                  values="0 200; 0 200; 0 232; 0 232; 0 200"
+                  keyTimes="0; 0.16; 0.22; 0.94; 1"
+                  dur="18s"
+                  repeatCount="indefinite"
+                />
               </g>
             </g>
 
@@ -450,8 +506,8 @@ export default function PageSpaceDemo() {
 
             {/* Header */}
             <g transform="translate(24, 20)">
-              {/* Breadcrumbs */}
-              <g>
+              {/* Breadcrumbs - initial */}
+              <g opacity="1">
                 <text
                   x="0"
                   y="16"
@@ -462,15 +518,32 @@ export default function PageSpaceDemo() {
                   <tspan>Documentation / </tspan>
                   <tspan fontWeight="500" fill="oklch(0.15 0.01 220)">Welcome to PageSpace</tspan>
                 </text>
+                <animate attributeName="opacity" values="1;1;0;0" keyTimes="0;0.27;0.33;1" dur="18s" repeatCount="indefinite" />
+              </g>
+              {/* Breadcrumbs - updated */}
+              <g opacity="0">
+                <text
+                  x="0"
+                  y="16"
+                  fontFamily="system-ui, -apple-system, sans-serif"
+                  fontSize="13"
+                  fill="oklch(0.48 0.015 220)"
+                >
+                  <tspan>Documentation / </tspan>
+                  <tspan fontWeight="500" fill="oklch(0.15 0.01 220)">Getting Started</tspan>
+                </text>
+                <animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.33;0.39;0.94;1" dur="18s" repeatCount="indefinite" />
               </g>
 
               {/* Save indicator */}
               <g transform="translate(650, 0)">
-                <circle cx="8" cy="12" r="3" fill="oklch(0.6 0.25 90)" opacity="0.3">
+                {/* Saving state (active during update) */}
+                <circle cx="8" cy="12" r="3" fill="oklch(0.55 0.20 35)" opacity="0">
                   <animate
                     attributeName="opacity"
-                    values="0.3;0.8;0.3"
-                    dur="2s"
+                    values="0;0;0.8;0.3;0.8;0"
+                    keyTimes="0;0.33;0.39;0.44;0.50;0.55"
+                    dur="18s"
                     repeatCount="indefinite"
                   />
                 </circle>
@@ -480,8 +553,43 @@ export default function PageSpaceDemo() {
                   fontFamily="system-ui, -apple-system, sans-serif"
                   fontSize="12"
                   fill="oklch(0.48 0.015 220)"
+                  opacity="0"
+                >
+                  Saving...
+                  <animate
+                    attributeName="opacity"
+                    values="0;0;1;1;0"
+                    keyTimes="0;0.33;0.39;0.50;0.55"
+                    dur="18s"
+                    repeatCount="indefinite"
+                  />
+                </text>
+                {/* Saved state */}
+                <circle cx="8" cy="12" r="3" fill="oklch(0.6 0.25 90)" opacity="0.3">
+                  <animate
+                    attributeName="opacity"
+                    values="0.3;0.3;0;0;0.8;0.3"
+                    keyTimes="0;0.33;0.39;0.50;0.55;1"
+                    dur="18s"
+                    repeatCount="indefinite"
+                  />
+                </circle>
+                <text
+                  x="18"
+                  y="16"
+                  fontFamily="system-ui, -apple-system, sans-serif"
+                  fontSize="12"
+                  fill="oklch(0.48 0.015 220)"
+                  opacity="1"
                 >
                   Saved
+                  <animate
+                    attributeName="opacity"
+                    values="1;1;0;0;1"
+                    keyTimes="0;0.33;0.39;0.50;1"
+                    dur="18s"
+                    repeatCount="indefinite"
+                  />
                 </text>
               </g>
 
@@ -496,12 +604,13 @@ export default function PageSpaceDemo() {
                   fill="oklch(0.50 0.16 235)"
                 />
                 <text
-                  x="12"
+                  x="28"
                   y="18"
                   fontFamily="system-ui, -apple-system, sans-serif"
                   fontSize="12"
                   fontWeight="500"
                   fill="oklch(0.98 0.005 235)"
+                  textAnchor="middle"
                 >
                   Rich
                 </text>
@@ -572,7 +681,7 @@ export default function PageSpaceDemo() {
 
             {/* Editor Content */}
             <g transform="translate(100, 190)">
-              {/* Title */}
+              {/* Initial Title - fades out */}
               <text
                 x="0"
                 y="32"
@@ -582,50 +691,110 @@ export default function PageSpaceDemo() {
                 fill="oklch(0.15 0.01 220)"
               >
                 Welcome to PageSpace
+                <animate attributeName="opacity" values="1;1;0;0" keyTimes="0;0.27;0.33;1" dur="18s" repeatCount="indefinite" />
               </text>
 
-              {/* Content paragraphs */}
+              {/* New Title - fades in */}
               <text
                 x="0"
-                y="80"
+                y="32"
                 fontFamily="system-ui, -apple-system, sans-serif"
-                fontSize="15"
+                fontSize="32"
+                fontWeight="700"
                 fill="oklch(0.15 0.01 220)"
+                opacity="0"
               >
-                <tspan x="0" dy="0">Welcome to PageSpace! This is your all-in-one workspace for organizing</tspan>
-                <tspan x="0" dy="24">knowledge, collaborating with your team, and building with AI.</tspan>
+                Getting Started
+                <animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.33;0.39;0.94;1" dur="18s" repeatCount="indefinite" />
               </text>
 
-              <text
-                x="0"
-                y="144"
-                fontFamily="system-ui, -apple-system, sans-serif"
-                fontSize="20"
-                fontWeight="600"
-                fill="oklch(0.15 0.01 220)"
-              >
-                Key Features
-              </text>
-
-              {/* Bullet list */}
-              <g transform="translate(0, 168)">
-                <circle cx="8" cy="8" r="3" fill="oklch(0.50 0.16 235)" />
-                <text x="24" y="13" fontFamily="system-ui" fontSize="15" fill="oklch(0.15 0.01 220)">
-                  Hierarchical organization - everything is a page
+              {/* Initial Content - fades out */}
+              <g opacity="1">
+                <text
+                  x="0"
+                  y="80"
+                  fontFamily="system-ui, -apple-system, sans-serif"
+                  fontSize="15"
+                  fill="oklch(0.15 0.01 220)"
+                >
+                  <tspan x="0" dy="0">Welcome to PageSpace! This is your all-in-one workspace for organizing</tspan>
+                  <tspan x="0" dy="24">knowledge, collaborating with your team, and building with AI.</tspan>
                 </text>
 
-                <circle cx="8" cy="40" r="3" fill="oklch(0.50 0.16 235)" />
-                <text x="24" y="45" fontFamily="system-ui" fontSize="15" fill="oklch(0.15 0.01 220)">
-                  Real-time collaboration with your team
+                <text
+                  x="0"
+                  y="144"
+                  fontFamily="system-ui, -apple-system, sans-serif"
+                  fontSize="20"
+                  fontWeight="600"
+                  fill="oklch(0.15 0.01 220)"
+                >
+                  Key Features
                 </text>
 
-                <circle cx="8" cy="72" r="3" fill="oklch(0.50 0.16 235)" />
-                <text x="24" y="77" fontFamily="system-ui" fontSize="15" fill="oklch(0.15 0.01 220)">
-                  AI-powered assistance built right in
-                </text>
+                <g transform="translate(0, 168)">
+                  <circle cx="8" cy="8" r="3" fill="oklch(0.50 0.16 235)" />
+                  <text x="24" y="13" fontFamily="system-ui" fontSize="15" fill="oklch(0.15 0.01 220)">
+                    Hierarchical organization - everything is a page
+                  </text>
+
+                  <circle cx="8" cy="40" r="3" fill="oklch(0.50 0.16 235)" />
+                  <text x="24" y="45" fontFamily="system-ui" fontSize="15" fill="oklch(0.15 0.01 220)">
+                    Real-time collaboration with your team
+                  </text>
+
+                  <circle cx="8" cy="72" r="3" fill="oklch(0.50 0.16 235)" />
+                  <text x="24" y="77" fontFamily="system-ui" fontSize="15" fill="oklch(0.15 0.01 220)">
+                    AI-powered assistance built right in
+                  </text>
+                </g>
+                <animate attributeName="opacity" values="1;1;0;0" keyTimes="0;0.27;0.33;1" dur="18s" repeatCount="indefinite" />
               </g>
 
-              {/* Blinking cursor */}
+              {/* New Content - fades in with typing effect */}
+              <g opacity="0">
+                <text
+                  x="0"
+                  y="80"
+                  fontFamily="system-ui, -apple-system, sans-serif"
+                  fontSize="15"
+                  fill="oklch(0.15 0.01 220)"
+                >
+                  <tspan x="0" dy="0">Welcome! This guide will help you get started with PageSpace and</tspan>
+                  <tspan x="0" dy="24">learn the essential features for organizing your workspace.</tspan>
+                </text>
+
+                <text
+                  x="0"
+                  y="144"
+                  fontFamily="system-ui, -apple-system, sans-serif"
+                  fontSize="20"
+                  fontWeight="600"
+                  fill="oklch(0.15 0.01 220)"
+                >
+                  Quick Start
+                </text>
+
+                <g transform="translate(0, 168)">
+                  <circle cx="8" cy="8" r="3" fill="oklch(0.50 0.16 235)" />
+                  <text x="24" y="13" fontFamily="system-ui" fontSize="15" fill="oklch(0.15 0.01 220)">
+                    Create your first page or folder
+                  </text>
+
+                  <circle cx="8" cy="40" r="3" fill="oklch(0.50 0.16 235)" />
+                  <text x="24" y="45" fontFamily="system-ui" fontSize="15" fill="oklch(0.15 0.01 220)">
+                    Organize content with drag and drop
+                  </text>
+
+                  <circle cx="8" cy="72" r="3" fill="oklch(0.50 0.16 235)" />
+                  <text x="24" y="77" fontFamily="system-ui" fontSize="15" fill="oklch(0.15 0.01 220)">
+                    Collaborate with AI assistant
+                  </text>
+                </g>
+                <animate attributeName="opacity" values="0;0;0;1;1;0" keyTimes="0;0.33;0.44;0.50;0.94;1" dur="18s" repeatCount="indefinite" />
+              </g>
+
+              {/* Blinking cursor - moves with content */}
               <rect
                 x="0"
                 y="344"
@@ -637,6 +806,13 @@ export default function PageSpaceDemo() {
                   attributeName="opacity"
                   values="1;0;1"
                   dur="1s"
+                  repeatCount="indefinite"
+                />
+                <animate
+                  attributeName="y"
+                  values="344;344;280;280;344"
+                  keyTimes="0;0.33;0.50;0.94;1"
+                  dur="18s"
                   repeatCount="indefinite"
                 />
               </rect>
@@ -697,23 +873,56 @@ export default function PageSpaceDemo() {
 
             {/* Chat messages */}
             <g transform="translate(12, 68)">
-              {/* User message */}
-              <rect x="20" y="0" width="216" height="52" rx="8" fill="oklch(0.50 0.16 235)" opacity="0.1" />
-              <text x="28" y="20" fontFamily="system-ui" fontSize="13" fill="oklch(0.15 0.01 220)">
-                <tspan x="28" dy="0">Help me understand how</tspan>
-                <tspan x="28" dy="18">to organize my workspace</tspan>
-              </text>
+              {/* Message 1: User question */}
+              <g opacity="0">
+                <rect x="20" y="0" width="216" height="52" rx="8" fill="oklch(0.50 0.16 235)" opacity="0.1" />
+                <text x="28" y="20" fontFamily="system-ui" fontSize="13" fill="oklch(0.15 0.01 220)">
+                  <tspan x="28" dy="0">Create a getting started</tspan>
+                  <tspan x="28" dy="18">guide for new users</tspan>
+                </text>
+                <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.03;0.94;1" dur="18s" repeatCount="indefinite" />
+              </g>
 
-              {/* AI response */}
-              <rect x="0" y="64" width="236" height="148" rx="8" fill="oklch(0.985 0.003 230)" />
-              <text x="12" y="84" fontFamily="system-ui" fontSize="13" fill="oklch(0.15 0.01 220)" opacity="0.9">
-                <tspan x="12" dy="0">I&apos;ll help you structure your</tspan>
-                <tspan x="12" dy="18">PageSpace workspace. Start</tspan>
-                <tspan x="12" dy="18">by creating drives for different</tspan>
-                <tspan x="12" dy="18">projects, then use folders and</tspan>
-                <tspan x="12" dy="18">pages to organize content</tspan>
-                <tspan x="12" dy="18">hierarchically. You can also...</tspan>
-              </text>
+              {/* Message 2: AI response with tool call */}
+              <g opacity="0">
+                <rect x="0" y="64" width="236" height="110" rx="8" fill="oklch(0.985 0.003 230)" />
+                <text x="12" y="84" fontFamily="system-ui" fontSize="13" fill="oklch(0.15 0.01 220)" opacity="0.9">
+                  <tspan x="12" dy="0">I&apos;ll create that for you.</tspan>
+                  <tspan x="12" dy="18">Creating a new document</tspan>
+                  <tspan x="12" dy="18">page...</tspan>
+                </text>
+                {/* Tool call badge */}
+                <rect x="12" y="140" width="100" height="24" rx="4" fill="oklch(0.50 0.16 235)" opacity="0.15" />
+                <path d="M 20 150 L 22 152 L 20 154 M 24 148 L 26 152 L 24 156" stroke="oklch(0.50 0.16 235)" strokeWidth="1.5" fill="none" strokeLinecap="round" />
+                <text x="30" y="157" fontFamily="system-ui" fontSize="11" fontWeight="500" fill="oklch(0.50 0.16 235)">create_page</text>
+                <animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.11;0.14;0.94;1" dur="18s" repeatCount="indefinite" />
+              </g>
+
+              {/* Message 3: AI confirmation */}
+              <g opacity="0">
+                <rect x="0" y="186" width="236" height="80" rx="8" fill="oklch(0.985 0.003 230)" />
+                <text x="12" y="206" fontFamily="system-ui" fontSize="13" fill="oklch(0.15 0.01 220)" opacity="0.9">
+                  <tspan x="12" dy="0">Page created! Now I&apos;ll</tspan>
+                  <tspan x="12" dy="18">add content to the guide...</tspan>
+                </text>
+                {/* Tool call badge */}
+                <rect x="12" y="240" width="110" height="24" rx="4" fill="oklch(0.50 0.16 235)" opacity="0.15" />
+                <path d="M 20 252 L 22 254 L 20 256 M 24 250 L 26 254 L 24 258" stroke="oklch(0.50 0.16 235)" strokeWidth="1.5" fill="none" strokeLinecap="round" />
+                <text x="30" y="257" fontFamily="system-ui" fontSize="11" fontWeight="500" fill="oklch(0.50 0.16 235)">update_page</text>
+                <animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.27;0.30;0.94;1" dur="18s" repeatCount="indefinite" />
+              </g>
+
+              {/* Message 4: AI completion */}
+              <g opacity="0">
+                <rect x="0" y="278" width="236" height="95" rx="8" fill="oklch(0.985 0.003 230)" />
+                <text x="12" y="298" fontFamily="system-ui" fontSize="13" fill="oklch(0.15 0.01 220)" opacity="0.9">
+                  <tspan x="12" dy="0">Done! I&apos;ve created a</tspan>
+                  <tspan x="12" dy="18">&quot;Getting Started&quot; guide</tspan>
+                  <tspan x="12" dy="18">with welcome content,</tspan>
+                  <tspan x="12" dy="18">key features, and next steps.</tspan>
+                </text>
+                <animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.44;0.47;0.94;1" dur="18s" repeatCount="indefinite" />
+              </g>
             </g>
 
             {/* Input Area at bottom */}
