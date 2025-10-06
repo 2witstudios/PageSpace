@@ -227,7 +227,8 @@
     "pg-boss": "^10.3.2",
     "react-email": "^4.2.12",
     "resend": "^6.1.2",
-    "server-only": "^0.0.1"
+    "server-only": "^0.0.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@react-email/preview-server": "4.2.12",

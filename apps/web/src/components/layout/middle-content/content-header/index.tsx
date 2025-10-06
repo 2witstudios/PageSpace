@@ -78,8 +78,8 @@ export function ViewHeader({ children }: ContentHeaderProps = {}) {
         </div>
         <div className="flex items-center gap-2">
           {pageIsDocument && <EditorToggles />}
-          {pageIsDocument && page && (
-            <ExportDropdown pageId={page.id} pageTitle={page.title} />
+          {(pageIsDocument || pageIsSheet) && page && (
+            <ExportDropdown pageId={page.id} pageTitle={page.title} pageType={page.type} />
           )}
           {pageIsFile && (
             <Button

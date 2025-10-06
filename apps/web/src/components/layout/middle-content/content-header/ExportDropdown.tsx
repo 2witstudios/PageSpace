@@ -8,18 +8,22 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { FileDown, FileText, Printer } from 'lucide-react';
+import { FileDown, FileText, FileSpreadsheet, Sheet, Printer } from 'lucide-react';
 import { toast } from 'sonner';
+import { PageType } from '@pagespace/lib/client-safe';
+
+type ExportFormat = 'docx' | 'csv' | 'xlsx';
 
 interface ExportDropdownProps {
   pageId: string;
   pageTitle: string;
+  pageType: PageType;
 }
 
-export function ExportDropdown({ pageId, pageTitle }: ExportDropdownProps) {
+export function ExportDropdown({ pageId, pageTitle, pageType }: ExportDropdownProps) {
   const [isExporting, setIsExporting] = useState(false);
 
-  const handleExport = async (format: 'docx') => {
+  const handleExport = async (format: ExportFormat) => {
     setIsExporting(true);
     try {
       const response = await fetch(`/api/pages/${pageId}/export/${format}`);
@@ -61,6 +65,9 @@ export function ExportDropdown({ pageId, pageTitle }: ExportDropdownProps) {
     window.print();
   };
 
+  const isDocument = pageType === 'DOCUMENT';
+  const isSheet = pageType === 'SHEET';
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -74,13 +81,33 @@ export function ExportDropdown({ pageId, pageTitle }: ExportDropdownProps) {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuItem
-          onClick={() => handleExport('docx')}
-          disabled={isExporting}
-        >
-          <FileText className="mr-2 h-4 w-4" />
-          Export as DOCX
-        </DropdownMenuItem>
+        {isDocument && (
+          <DropdownMenuItem
+            onClick={() => handleExport('docx')}
+            disabled={isExporting}
+          >
+            <FileText className="mr-2 h-4 w-4" />
+            Export as DOCX
+          </DropdownMenuItem>
+        )}
+        {isSheet && (
+          <>
+            <DropdownMenuItem
+              onClick={() => handleExport('csv')}
+              disabled={isExporting}
+            >
+              <FileSpreadsheet className="mr-2 h-4 w-4" />
+              Export as CSV
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => handleExport('xlsx')}
+              disabled={isExporting}
+            >
+              <Sheet className="mr-2 h-4 w-4" />
+              Export as Excel
+            </DropdownMenuItem>
+          </>
+        )}
         <DropdownMenuItem onClick={handlePrint}>
           <Printer className="mr-2 h-4 w-4" />
           Print
