@@ -9,6 +9,12 @@ export default defineConfig({
     setupFiles: ['./src/__tests__/setup.ts'],
     // Run test files sequentially to avoid database race conditions with TRUNCATE
     fileParallelism: false,
+    // Force single worker thread to prevent TRUNCATE CASCADE deadlocks
+    poolOptions: {
+      threads: {
+        singleThread: true,
+      },
+    },
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
