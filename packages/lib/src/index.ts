@@ -51,6 +51,9 @@ export * from './activity-tracker';
 // File processing utilities (server-only)
 export * from './file-processor';
 
+// Export utilities (server-only)
+export * from './export-utils';
+
 // Real-time and broadcasting utilities (server-only)
 export * from './broadcast-auth';
 

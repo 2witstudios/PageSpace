@@ -556,3 +556,157 @@
     @apply bg-muted text-muted-foreground rounded-md px-2 py-1;
   }
 }
+
+/* Print Styles - Clean document output */
+@media print {
+  /* Hide ALL UI chrome - comprehensive selectors */
+  header,
+  nav,
+  aside,
+  footer,
+  form,
+  .toolbar,
+  button,
+  svg,
+  img,
+  video,
+  iframe,
+  [role="navigation"],
+  [role="banner"],
+  [role="contentinfo"],
+  [role="complementary"],
+  [role="dialog"],
+  .sticky,
+  /* Sidebar selectors */
+  [class*="sidebar"],
+  [class*="Sidebar"],
+  [class*="panel"],
+  [class*="Panel"],
+  /* Header selectors */
+  [class*="header"],
+  [class*="Header"],
+  [class*="breadcrumb"],
+  [class*="Breadcrumb"],
+  /* UI components */
+  [class*="toggle"],
+  [class*="Toggle"],
+  [class*="dropdown"],
+  [class*="Dropdown"],
+  [class*="dialog"],
+  [class*="Dialog"],
+  [class*="menu"],
+  [class*="Menu"],
+  /* Radix UI portals */
+  [data-radix-portal],
+  [data-radix-popper-content-wrapper],
+  [data-state],
+  /* Motion/animation wrappers */
+  [class*="motion"],
+  /* Indicators and status */
+  [class*="indicator"],
+  [class*="Indicator"],
+  [class*="status"],
+  [class*="Status"] {
+    display: none !important;
+    visibility: hidden !important;
+  }
+
+  /* Hide ViewHeader container specifically */
+  .flex.flex-col.gap-2.p-4.border-b,
+  .border-b.border-\[var\(--separator\)\] {
+    display: none !important;
+  }
+
+  /* Hide character count display */
+  .flex.justify-end.p-2.text-sm.text-muted-foreground {
+    display: none !important;
+    visibility: hidden !important;
+  }
+
+  /* Override all gradients and set clean white background */
+  [class*="gradient"],
+  [class*="bg-gradient"],
+  .bg-gradient-to-br,
+  html,
+  body,
+  #__next,
+  [id*="root"] {
+    background: white !important;
+    background-color: white !important;
+    background-image: none !important;
+  }
+
+  /* Clean body layout */
+  body {
+    margin: 0 !important;
+    padding: 0 !important;
+    background: white !important;
+    color: black !important;
+  }
+
+  /* Clean main container */
+  main,
+  [role="main"] {
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    max-width: none !important;
+    height: auto !important;
+  }
+
+  /* Show ONLY the document content */
+  .ProseMirror,
+  .tiptap,
+  .tiptap-editor,
+  [class*="RichEditor"],
+  [contenteditable="true"],
+  [contenteditable="false"] {
+    display: block !important;
+    visibility: visible !important;
+    max-width: none !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 20mm !important;
+    box-shadow: none !important;
+    border: none !important;
+    background: white !important;
+    color: black !important;
+  }
+
+  /* Ensure text content is visible */
+  .ProseMirror * {
+    color: black !important;
+    background: white !important;
+  }
+
+  /* Page setup - NO MARGIN to disable browser headers/footers */
+  @page {
+    margin: 0;
+    size: A4 portrait;
+  }
+
+  /* Prevent page breaks in headings */
+  h1, h2, h3, h4, h5, h6 {
+    page-break-after: avoid;
+    break-after: avoid;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* Remove link URLs in print (cleaner output) */
+  a[href]::after {
+    content: none !important;
+  }
+
+  /* Prevent orphans and widows */
+  p {
+    orphans: 3;
+    widows: 3;
+  }
+
+  /* Print-specific text rendering */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}

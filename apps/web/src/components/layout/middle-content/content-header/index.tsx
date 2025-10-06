@@ -14,6 +14,7 @@ import { usePageStore } from '@/hooks/usePage';
 import { Button } from '@/components/ui/button';
 import { Download } from 'lucide-react';
 import { isDocumentPage, isFilePage, isSheetPage } from '@pagespace/lib/client-safe';
+import { ExportDropdown } from './ExportDropdown';
 
 interface ContentHeaderProps {
   children?: React.ReactNode;
@@ -77,6 +78,9 @@ export function ViewHeader({ children }: ContentHeaderProps = {}) {
         </div>
         <div className="flex items-center gap-2">
           {pageIsDocument && <EditorToggles />}
+          {pageIsDocument && page && (
+            <ExportDropdown pageId={page.id} pageTitle={page.title} />
+          )}
           {pageIsFile && (
             <Button
               onClick={handleDownload}
