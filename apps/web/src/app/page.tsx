@@ -5,6 +5,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter }
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import ContactForm from "@/components/shared/ContactForm";
+import PageSpaceDemo from "@/components/landing/PageSpaceDemo";
 
 export default function Home() {
   return (
@@ -40,6 +41,21 @@ export default function Home() {
                   Join open beta!
                 </Link>
               </div>
+            </div>
+          </div>
+        </section>
+        <section className="w-full py-16 md:py-24 lg:py-32 bg-background">
+          <div className="container mx-auto px-4 md:px-6">
+            <div className="flex flex-col items-center space-y-12">
+              <div className="space-y-4 text-center">
+                <h2 className="text-3xl font-bold tracking-tighter sm:text-4xl md:text-5xl">
+                  See PageSpace in Action
+                </h2>
+                <p className="mx-auto max-w-[800px] text-lg text-muted-foreground md:text-xl">
+                  A unified workspace with hierarchical organization, rich content editing, and AI assistance built in.
+                </p>
+              </div>
+              <PageSpaceDemo />
             </div>
           </div>
         </section>
