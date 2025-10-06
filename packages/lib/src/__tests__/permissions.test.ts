@@ -9,7 +9,7 @@ import {
   revokePagePermissions
 } from '../permissions'
 import { factories } from '@pagespace/db/test/factories'
-import { db, sql } from '@pagespace/db'
+import { db, sql, users } from '@pagespace/db'
 
 describe('permissions system', () => {
   let testUser: Awaited<ReturnType<typeof factories.createUser>>
@@ -19,8 +19,8 @@ describe('permissions system', () => {
 
   beforeEach(async () => {
     // Clean up test data before each test
-    // Use TRUNCATE CASCADE for atomic cleanup (safer than individual DELETEs)
-    await db.execute(sql`TRUNCATE TABLE users CASCADE`)
+    // Use DELETE to avoid TRUNCATE CASCADE deadlocks with connection pool
+    await db.delete(users)
 
     testUser = await factories.createUser()
     otherUser = await factories.createUser()

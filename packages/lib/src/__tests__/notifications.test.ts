@@ -7,7 +7,7 @@ import {
   deleteNotification,
   getUnreadCount
 } from '../notifications'
-import { db, sql, notifications } from '@pagespace/db'
+import { db, sql, notifications, users } from '@pagespace/db'
 import { factories } from '@pagespace/db/test/factories'
 
 // Mock fetch for broadcast testing
@@ -21,8 +21,8 @@ describe('notifications', () => {
 
   beforeEach(async () => {
     // Clean up test data before each test
-    // Use TRUNCATE CASCADE for atomic cleanup (safer than individual DELETEs)
-    await db.execute(sql`TRUNCATE TABLE users CASCADE`)
+    // Use DELETE to avoid TRUNCATE CASCADE deadlocks with connection pool
+    await db.delete(users)
 
     testUser = await factories.createUser()
     otherUser = await factories.createUser()

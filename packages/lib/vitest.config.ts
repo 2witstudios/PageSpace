@@ -7,14 +7,8 @@ export default defineConfig({
     environment: 'node',
     include: ['src/**/*.{test,spec}.{js,ts}'],
     setupFiles: ['./src/__tests__/setup.ts'],
-    // Run test files sequentially to avoid database race conditions with TRUNCATE
+    // Run test files sequentially to avoid database race conditions
     fileParallelism: false,
-    // Force single worker thread to prevent TRUNCATE CASCADE deadlocks
-    poolOptions: {
-      threads: {
-        singleThread: true,
-      },
-    },
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
