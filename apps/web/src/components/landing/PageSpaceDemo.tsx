@@ -778,17 +778,17 @@ export default function PageSpaceDemo() {
                 <g transform="translate(0, 168)">
                   <circle cx="8" cy="8" r="3" fill="oklch(0.50 0.16 235)" />
                   <text x="24" y="13" fontFamily="system-ui" fontSize="15" fill="oklch(0.15 0.01 220)">
-                    Create your first page or folder
+                    Ask your AI assistant about the project you&apos;re working on
                   </text>
 
                   <circle cx="8" cy="40" r="3" fill="oklch(0.50 0.16 235)" />
                   <text x="24" y="45" fontFamily="system-ui" fontSize="15" fill="oklch(0.15 0.01 220)">
-                    Organize content with drag and drop
+                    Have it create the workspace structure that best fits your project
                   </text>
 
                   <circle cx="8" cy="72" r="3" fill="oklch(0.50 0.16 235)" />
                   <text x="24" y="77" fontFamily="system-ui" fontSize="15" fill="oklch(0.15 0.01 220)">
-                    Collaborate with AI assistant
+                    Collaborate with your AI assistant and other people!
                   </text>
                 </g>
                 <animate attributeName="opacity" values="0;0;0;1;1;0" keyTimes="0;0.33;0.44;0.50;0.94;1" dur="18s" repeatCount="indefinite" />

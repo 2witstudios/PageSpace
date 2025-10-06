@@ -55,7 +55,7 @@ export default function Home() {
             <div className="flex flex-col items-center space-y-12">
               <div className="space-y-4 text-center">
                 <h2 className="text-3xl font-bold tracking-tighter sm:text-4xl md:text-5xl">
-                  See PageSpace in Action
+                  A Unified Workspace for Big Ideas
                 </h2>
                 <p className="mx-auto max-w-[800px] text-lg text-muted-foreground md:text-xl">
                   A unified workspace with hierarchical organization, rich content editing, and AI assistance built in.
