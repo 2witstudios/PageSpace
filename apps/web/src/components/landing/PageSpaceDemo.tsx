@@ -663,35 +663,35 @@ export default function PageSpaceDemo() {
               <line x1="0" y1="52" x2="260" y2="52" stroke="oklch(0.90 0.005 230 / 0.08)" strokeWidth="1" />
 
               {/* Tabs */}
-              <g transform="translate(4, 4)">
+              <g transform="translate(8, 4)">
                 {/* Chat tab (active) */}
-                <rect x="0" y="0" width="80" height="40" rx="6" fill="oklch(0.995 0.002 240)" />
-                <rect x="20" y="38" width="40" height="2" rx="1" fill="oklch(0.50 0.16 235)" />
+                <rect x="0" y="0" width="76" height="40" rx="6" fill="oklch(0.995 0.002 240)" />
+                <rect x="18" y="38" width="40" height="2" rx="1" fill="oklch(0.50 0.16 235)" />
                 {/* MessageSquare icon */}
                 <path
-                  d="M 22 14 L 30 14 L 30 22 L 27 22 L 24 25 L 24 22 L 22 22 Z"
+                  d="M 20 14 L 28 14 L 28 22 L 25 22 L 22 25 L 22 22 L 20 22 Z"
                   fill="none"
                   stroke="oklch(0.15 0.01 220)"
                   strokeWidth="1.5"
                   strokeLinecap="round"
                   strokeLinejoin="round"
                 />
-                <text x="36" y="23" fontFamily="system-ui" fontSize="11" fontWeight="500" fill="oklch(0.15 0.01 220)">Chat</text>
+                <text x="34" y="23" fontFamily="system-ui" fontSize="11" fontWeight="500" fill="oklch(0.15 0.01 220)">Chat</text>
 
                 {/* History tab */}
-                <rect x="84" y="0" width="80" height="40" rx="6" fill="transparent" />
+                <rect x="78" y="0" width="76" height="40" rx="6" fill="transparent" />
                 {/* History icon */}
-                <circle cx="124" cy="20" r="6" fill="none" stroke="oklch(0.48 0.015 220)" strokeWidth="1.5" />
-                <path d="M 124 16 L 124 20 L 127 20" stroke="oklch(0.48 0.015 220)" strokeWidth="1.5" strokeLinecap="round" />
-                <path d="M 121 15 L 119 13 L 121 11" stroke="oklch(0.48 0.015 220)" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-                <text x="132" y="23" fontFamily="system-ui" fontSize="11" fill="oklch(0.48 0.015 220)">History</text>
+                <circle cx="116" cy="20" r="6" fill="none" stroke="oklch(0.48 0.015 220)" strokeWidth="1.5" />
+                <path d="M 116 16 L 116 20 L 119 20" stroke="oklch(0.48 0.015 220)" strokeWidth="1.5" strokeLinecap="round" />
+                <path d="M 113 15 L 111 13 L 113 11" stroke="oklch(0.48 0.015 220)" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                <text x="124" y="23" fontFamily="system-ui" fontSize="11" fill="oklch(0.48 0.015 220)">History</text>
 
                 {/* Settings tab */}
-                <rect x="168" y="0" width="80" height="40" rx="6" fill="transparent" />
+                <rect x="156" y="0" width="76" height="40" rx="6" fill="transparent" />
                 {/* Settings icon */}
-                <circle cx="208" cy="20" r="4" fill="none" stroke="oklch(0.48 0.015 220)" strokeWidth="1.5" />
-                <path d="M 208 16 L 208 24 M 204 20 L 212 20" stroke="oklch(0.48 0.015 220)" strokeWidth="1.5" strokeLinecap="round" />
-                <text x="216" y="23" fontFamily="system-ui" fontSize="11" fill="oklch(0.48 0.015 220)">Settings</text>
+                <circle cx="194" cy="20" r="4" fill="none" stroke="oklch(0.48 0.015 220)" strokeWidth="1.5" />
+                <path d="M 194 16 L 194 24 M 190 20 L 198 20" stroke="oklch(0.48 0.015 220)" strokeWidth="1.5" strokeLinecap="round" />
+                <text x="202" y="23" fontFamily="system-ui" fontSize="11" fill="oklch(0.48 0.015 220)">Settings</text>
               </g>
             </g>
 
