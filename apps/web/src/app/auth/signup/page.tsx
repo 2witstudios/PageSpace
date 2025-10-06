@@ -31,7 +31,7 @@ export default function SignUp() {
 
     setError(null);
 
-    // Client-side validation: Check if passwords match
+    // Client-side password match validation
     if (password !== confirmPassword) {
       setError("Passwords do not match");
       toast.error("Passwords do not match");
@@ -128,6 +128,8 @@ export default function SignUp() {
                 <Label htmlFor="name">Name</Label>
                 <Input
                   id="name"
+                  name="name"
+                  autoComplete="name"
                   placeholder="John Doe"
                   required
                   value={name}
@@ -138,7 +140,9 @@ export default function SignUp() {
                 <Label htmlFor="email">Email</Label>
                 <Input
                   id="email"
+                  name="email"
                   type="email"
+                  autoComplete="email"
                   placeholder="m@example.com"
                   required
                   value={email}
@@ -149,7 +153,9 @@ export default function SignUp() {
                 <Label htmlFor="password">Password</Label>
                 <Input
                   id="password"
+                  name="password"
                   type="password"
+                  autoComplete="new-password"
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -159,7 +165,9 @@ export default function SignUp() {
                 <Label htmlFor="confirmPassword">Confirm Password</Label>
                 <Input
                   id="confirmPassword"
+                  name="confirm-password"
                   type="password"
+                  autoComplete="new-password"
                   required
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
