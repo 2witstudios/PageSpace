@@ -20,6 +20,7 @@ export default function SignUp() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState("Creating account...");
@@ -28,11 +29,19 @@ export default function SignUp() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     // Prevent double submission
     if (isLoading) return;
-    
+
     setError(null);
+
+    // Client-side password match validation
+    if (password !== confirmPassword) {
+      setError("Passwords do not match");
+      toast.error("Passwords do not match");
+      return;
+    }
+
     setIsLoading(true);
     setLoadingMessage("Creating account...");
 
@@ -46,6 +55,7 @@ export default function SignUp() {
           name,
           email,
           password,
+          confirmPassword,
         }),
       });
 
@@ -60,6 +70,7 @@ export default function SignUp() {
           if (fieldErrors.name) errorMessages.push(...fieldErrors.name);
           if (fieldErrors.email) errorMessages.push(...fieldErrors.email);
           if (fieldErrors.password) errorMessages.push(...fieldErrors.password);
+          if (fieldErrors.confirmPassword) errorMessages.push(...fieldErrors.confirmPassword);
           errorMessage = errorMessages.join(', ');
         } else if (signupData.error) {
           errorMessage = signupData.error;
@@ -122,6 +133,8 @@ export default function SignUp() {
                 <Label htmlFor="name">Name</Label>
                 <Input
                   id="name"
+                  name="name"
+                  autoComplete="name"
                   placeholder="John Doe"
                   required
                   value={name}
@@ -132,7 +145,9 @@ export default function SignUp() {
                 <Label htmlFor="email">Email</Label>
                 <Input
                   id="email"
+                  name="email"
                   type="email"
+                  autoComplete="email"
                   placeholder="m@example.com"
                   required
                   value={email}
@@ -143,10 +158,24 @@ export default function SignUp() {
                 <Label htmlFor="password">Password</Label>
                 <Input
                   id="password"
+                  name="password"
                   type="password"
+                  autoComplete="new-password"
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="confirmPassword">Confirm Password</Label>
+                <Input
+                  id="confirmPassword"
+                  name="confirm-password"
+                  type="password"
+                  autoComplete="new-password"
+                  required
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
                 />
               </div>
               {error && <p className="text-red-500 text-sm">{error}</p>}
