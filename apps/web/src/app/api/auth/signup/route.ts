@@ -10,6 +10,7 @@ import { createVerificationToken } from '@pagespace/lib/verification-utils';
 import { sendEmail } from '@pagespace/lib/services/email-service';
 import { VerificationEmail } from '@pagespace/lib/email-templates/VerificationEmail';
 import React from 'react';
+import { NextResponse } from 'next/server';
 // Removed AI defaults dependency
 
 const signupSchema = z.object({
@@ -23,6 +24,15 @@ const signupSchema = z.object({
     .regex(/[a-z]/, { message: "Password must contain at least one lowercase letter" })
     .regex(/[0-9]/, { message: "Password must contain at least one number" })
     .regex(/[^A-Za-z0-9]/, { message: "Password must contain at least one special character" }),
+  confirmPassword: z.string()
+    .min(12, { message: "Password must be at least 12 characters long" })
+    .regex(/[A-Z]/, { message: "Password must contain at least one uppercase letter" })
+    .regex(/[a-z]/, { message: "Password must contain at least one lowercase letter" })
+    .regex(/[0-9]/, { message: "Password must contain at least one number" })
+    .regex(/[^A-Za-z0-9]/, { message: "Password must contain at least one special character" }),
+}).refine((data) => data.password === data.confirmPassword, {
+  message: "Passwords do not match",
+  path: ["confirmPassword"],
 });
 
 export async function POST(req: Request) {
@@ -103,12 +113,12 @@ export async function POST(req: Request) {
     // Create a personal drive for the new user
     const driveName = `${user.name}'s Drive`;
     const driveSlug = slugify(driveName);
-    const [newDrive] = await db.insert(drives).values({
+    await db.insert(drives).values({
       name: driveName,
       slug: driveSlug,
       ownerId: user.id,
       updatedAt: new Date(),
-    }).returning();
+    });
 
     // Add default 'ollama' provider for the new user with Docker-compatible URL
     // This enables local AI models via Ollama for users with local deployments
@@ -183,7 +193,14 @@ export async function POST(req: Request) {
     });
 
     const isProduction = process.env.NODE_ENV === 'production';
-    
+
+    // Set cookies and redirect to dashboard (matching Google OAuth pattern)
+    const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
+    const redirectUrl = new URL('/dashboard', baseUrl);
+
+    // Add auth success parameter to trigger auth state refresh
+    redirectUrl.searchParams.set('auth', 'success');
+
     const accessTokenCookie = serialize('accessToken', accessToken, {
       httpOnly: true,
       secure: isProduction,
@@ -206,13 +223,10 @@ export async function POST(req: Request) {
     headers.append('Set-Cookie', accessTokenCookie);
     headers.append('Set-Cookie', refreshTokenCookie);
 
-    return Response.json({ 
-      message: 'User created successfully',
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      driveId: newDrive.id
-    }, { status: 201, headers });
+    return NextResponse.redirect(redirectUrl, {
+      status: 303, // See Other - forces GET method on redirect
+      headers
+    });
   } catch (error) {
     loggers.auth.error('Signup error', error as Error, { email, clientIP });
     return Response.json({ error: 'An unexpected error occurred.' }, { status: 500 });

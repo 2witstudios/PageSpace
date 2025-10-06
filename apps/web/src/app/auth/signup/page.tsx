@@ -1,8 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { useAuth } from "@/hooks/use-auth";
 import Link from "next/link";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -20,19 +18,26 @@ export default function SignUp() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState("Creating account...");
-  const router = useRouter();
-  const { actions } = useAuth();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     // Prevent double submission
     if (isLoading) return;
-    
+
     setError(null);
+
+    // Client-side validation: Check if passwords match
+    if (password !== confirmPassword) {
+      setError("Passwords do not match");
+      toast.error("Passwords do not match");
+      return;
+    }
+
     setIsLoading(true);
     setLoadingMessage("Creating account...");
 
@@ -46,56 +51,57 @@ export default function SignUp() {
           name,
           email,
           password,
+          confirmPassword,
         }),
+        credentials: 'include',
+        redirect: 'manual', // Don't auto-follow redirects, we'll handle them
       });
 
-      if (!signupResponse.ok) {
-        const signupData = await signupResponse.json();
-        let errorMessage = 'An unexpected error occurred during signup.';
-        
-        if (signupData.errors) {
-          // Handle validation errors
-          const fieldErrors = signupData.errors;
-          const errorMessages = [];
-          if (fieldErrors.name) errorMessages.push(...fieldErrors.name);
-          if (fieldErrors.email) errorMessages.push(...fieldErrors.email);
-          if (fieldErrors.password) errorMessages.push(...fieldErrors.password);
-          errorMessage = errorMessages.join(', ');
-        } else if (signupData.error) {
-          errorMessage = signupData.error;
-        }
-        
-        setError(errorMessage);
-        toast.error(errorMessage);
+      // Handle successful signup (303 redirect)
+      if (signupResponse.status === 303 || signupResponse.type === 'opaqueredirect') {
+        // Success! Server sent redirect
+        toast.success(`Welcome to PageSpace, ${name}! Let's get started.`);
+        setLoadingMessage("Taking you to your dashboard...");
+
+        // Navigate to dashboard (or follow the Location header)
+        const location = signupResponse.headers.get('Location') || '/dashboard?auth=success';
+        window.location.href = location;
         return;
       }
 
-      // Show success message
-      toast.success(`Welcome to PageSpace, ${name}! Let's get started.`);
-      
-      // Update loading message for auth verification
-      setLoadingMessage("Verifying your account...");
-      
-      // Validate authentication state before redirecting
-      try {
-        await actions.checkAuth();
-        
-        // Update loading message for redirect
-        setLoadingMessage("Welcome! Taking you to your dashboard...");
-        
-        // Brief delay for better UX
-        await new Promise(resolve => setTimeout(resolve, 200));
-        
-        // Redirect to dashboard with auth success parameter (consistent with Google OAuth)
-        router.replace('/dashboard?auth=success');
-      } catch (authError) {
-        console.error('Auth validation failed after signup:', authError);
-        // If auth validation fails, still redirect but without the auth parameter
-        // The dashboard will handle the authentication check
-        setLoadingMessage("Taking you to your dashboard...");
-        router.replace('/dashboard');
+      // Handle error responses (server returns JSON for errors)
+      if (!signupResponse.ok) {
+        try {
+          const signupData = await signupResponse.json();
+          let errorMessage = 'An unexpected error occurred during signup.';
+
+          if (signupData.errors) {
+            // Handle validation errors
+            const fieldErrors = signupData.errors;
+            const errorMessages = [];
+            if (fieldErrors.name) errorMessages.push(...fieldErrors.name);
+            if (fieldErrors.email) errorMessages.push(...fieldErrors.email);
+            if (fieldErrors.password) errorMessages.push(...fieldErrors.password);
+            if (fieldErrors.confirmPassword) errorMessages.push(...fieldErrors.confirmPassword);
+            errorMessage = errorMessages.join(', ');
+          } else if (signupData.error) {
+            errorMessage = signupData.error;
+          }
+
+          setError(errorMessage);
+          toast.error(errorMessage);
+        } catch {
+          // Failed to parse error response
+          setError('An unexpected error occurred during signup.');
+          toast.error('An unexpected error occurred during signup.');
+        }
+        return;
       }
-      
+
+      // If we reach here, something unexpected happened
+      setError('Unexpected response from server');
+      toast.error('Unexpected response from server');
+
     } catch (error) {
       console.error('Sign up error:', error);
       const networkError = 'Network error. Please check your connection and try again.';
@@ -147,6 +153,16 @@ export default function SignUp() {
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="confirmPassword">Confirm Password</Label>
+                <Input
+                  id="confirmPassword"
+                  type="password"
+                  required
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
                 />
               </div>
               {error && <p className="text-red-500 text-sm">{error}</p>}

@@ -28,9 +28,11 @@ export async function GET(request: NextRequest) {
     loggers.auth.info('Email verified', { userId });
     trackAuthEvent(userId, 'email_verified', {});
 
-    // Redirect to success page
+    // Redirect to dashboard - triggers auth refresh via ?auth=success
     const baseUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-    return NextResponse.redirect(new URL('/auth/email-verified', baseUrl));
+    return NextResponse.redirect(new URL('/dashboard?auth=success', baseUrl), {
+      status: 303, // See Other - forces GET on redirect
+    });
   } catch (error) {
     loggers.auth.error('Email verification error', error as Error);
     return NextResponse.json({ error: 'Email verification failed' }, { status: 500 });
