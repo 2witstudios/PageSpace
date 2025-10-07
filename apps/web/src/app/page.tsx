@@ -26,11 +26,10 @@ export default function Home() {
             <div className="flex flex-col items-center space-y-6 text-center">
               <div className="space-y-4">
                 <h1 className="text-4xl font-bold tracking-tighter sm:text-5xl md:text-6xl lg:text-7xl/none">
-                  Your entire world, organized.
+                  A Unified Workspace for Every Idea
                 </h1>
                 <p className="mx-auto max-w-[700px] text-lg text-muted-foreground md:text-xl">
-                  A new kind of workspace where everything is a flexible page,
-                  anything can be nested, and anything can be mentioned.
+                  Documents, collaborative channels, and AI agents—all in one place. Built for creators, teams, and businesses.
                 </p>
               </div>
               <div className="flex gap-4">
@@ -47,22 +46,12 @@ export default function Home() {
                   View Pricing
                 </Link>
               </div>
-            </div>
-          </div>
-        </section>
-        <section className="w-full py-16 md:py-24 lg:py-32 bg-background">
           <div className="container mx-auto px-4 md:px-6">
             <div className="flex flex-col items-center space-y-12">
-              <div className="space-y-4 text-center">
-                <h2 className="text-3xl font-bold tracking-tighter sm:text-4xl md:text-5xl">
-                  A Unified Workspace for Big Ideas
-                </h2>
-                <p className="mx-auto max-w-[800px] text-lg text-muted-foreground md:text-xl">
-                  A unified workspace with hierarchical organization, rich content editing, and AI assistance built in.
-                </p>
-              </div>
               <PageSpaceDemo />
             </div>
+          </div>
+          </div>
           </div>
         </section>
         <section className="w-full py-16 md:py-24 lg:py-32 bg-muted">
