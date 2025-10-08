@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Trash2, Copy, Plus, Eye, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
-import { post, del } from '@/lib/auth-fetch';
+import { post, del, fetchWithAuth } from '@/lib/auth-fetch';
 
 interface MCPToken {
   id: string;
@@ -41,7 +41,7 @@ export function MCPTokenManager() {
 
   const loadTokens = async () => {
     try {
-      const response = await fetch('/api/auth/mcp-tokens');
+      const response = await fetchWithAuth('/api/auth/mcp-tokens');
       if (response.ok) {
         const tokenList = await response.json();
         setTokens(tokenList);

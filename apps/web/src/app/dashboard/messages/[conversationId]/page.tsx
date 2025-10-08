@@ -10,9 +10,15 @@ import { renderMessageParts, convertToMessageParts } from '@/components/messages
 import useSWR from 'swr';
 import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
-import { post, patch } from '@/lib/auth-fetch';
+import { post, patch, fetchWithAuth } from '@/lib/auth-fetch';
 
-const fetcher = (url: string) => fetch(url).then((res) => res.json());
+const fetcher = async (url: string) => {
+  const response = await fetchWithAuth(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch: ${response.status}`);
+  }
+  return response.json();
+};
 
 interface Message {
   id: string;

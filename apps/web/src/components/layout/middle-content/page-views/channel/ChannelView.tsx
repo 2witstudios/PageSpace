@@ -13,7 +13,7 @@ import { renderMessageParts, convertToMessageParts } from '@/components/messages
 import ChatInput, { ChatInputRef } from '@/components/messages/ChatInput';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Lock } from 'lucide-react';
-import { post } from '@/lib/auth-fetch';
+import { post, fetchWithAuth } from '@/lib/auth-fetch';
 
 interface ChannelViewProps {
   page: TreePage;
@@ -33,7 +33,7 @@ export default function ChannelView({ page }: ChannelViewProps) {
 
   useEffect(() => {
     const fetchMessages = async () => {
-      const res = await fetch(`/api/channels/${page.id}/messages`);
+      const res = await fetchWithAuth(`/api/channels/${page.id}/messages`);
       const data = await res.json();
       setMessages(data);
     };

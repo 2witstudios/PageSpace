@@ -12,8 +12,15 @@ import useSWR from 'swr';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import type { SidebarProps } from './index';
+import { fetchWithAuth } from '@/lib/auth-fetch';
 
-const fetcher = (url: string) => fetch(url).then((res) => res.json());
+const fetcher = async (url: string) => {
+  const response = await fetchWithAuth(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch: ${response.status}`);
+  }
+  return response.json();
+};
 
 interface Conversation {
   id: string;
@@ -68,7 +75,7 @@ export default function MessagesLeftSidebar({ className, variant = 'desktop' }: 
 
     setIsLoadingMore(true);
     try {
-      const response = await fetch(`/api/messages/conversations?limit=20&cursor=${pagination.nextCursor}`);
+      const response = await fetchWithAuth(`/api/messages/conversations?limit=20&cursor=${pagination.nextCursor}`);
       const moreData: ConversationsResponse = await response.json();
 
       setAllConversations(prev => [...prev, ...moreData.conversations]);

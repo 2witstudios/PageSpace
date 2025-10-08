@@ -11,9 +11,15 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Search, ArrowLeft, UserPlus } from 'lucide-react';
 import useSWR from 'swr';
 import { toast } from 'sonner';
-import { post } from '@/lib/auth-fetch';
+import { post, fetchWithAuth } from '@/lib/auth-fetch';
 
-const fetcher = (url: string) => fetch(url).then((res) => res.json());
+const fetcher = async (url: string) => {
+  const response = await fetchWithAuth(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch: ${response.status}`);
+  }
+  return response.json();
+};
 
 interface Connection {
   id: string;

@@ -14,6 +14,7 @@ import { RoleSelector } from '@/components/ai/RoleSelector';
 import { conversationState } from '@/lib/ai/conversation-state';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore } from '@/hooks/useDrive';
+import { authFetch, fetchWithAuth } from '@/lib/auth-fetch';
 
 
 interface ProviderSettings {
@@ -162,7 +163,7 @@ const GlobalAssistantView: React.FC = () => {
         } else {
           // Try to get the most recent global conversation
           try {
-            const response = await fetch('/api/ai_conversations/global');
+            const response = await fetchWithAuth('/api/ai_conversations/global');
             if (response.ok) {
               const conversation = await response.json();
               if (conversation && conversation.id) {
@@ -193,10 +194,10 @@ const GlobalAssistantView: React.FC = () => {
       messages: initialMessages,
       transport: new DefaultChatTransport({
         api: `/api/ai_conversations/${currentConversationId}/messages`,
-        fetch: (url, options) => fetch(url, { 
-          ...options, 
-          credentials: 'include'
-        }),
+        fetch: (url, options) => {
+          const urlString = url instanceof Request ? url.url : url.toString();
+          return authFetch.fetch(urlString, options);
+        },
       }),
       experimental_throttle: 50,
       onError: (error: Error) => {
@@ -252,7 +253,7 @@ const GlobalAssistantView: React.FC = () => {
     const initializeChat = async () => {
       try {
         // Always check multi-provider configuration first
-        const configResponse = await fetch('/api/ai/chat');
+        const configResponse = await fetchWithAuth('/api/ai/chat');
         const configData: ProviderSettings = await configResponse.json();
         setProviderSettings(configData);
         
@@ -264,8 +265,8 @@ const GlobalAssistantView: React.FC = () => {
         if (currentConversationId) {
           try {
             const [conversationResponse, messagesResponse] = await Promise.all([
-              fetch(`/api/ai_conversations/${currentConversationId}`),
-              fetch(`/api/ai_conversations/${currentConversationId}/messages?limit=50`)
+              fetchWithAuth(`/api/ai_conversations/${currentConversationId}`),
+              fetchWithAuth(`/api/ai_conversations/${currentConversationId}/messages?limit=50`)
             ]);
 
             if (conversationResponse.ok && messagesResponse.ok) {
@@ -292,7 +293,7 @@ const GlobalAssistantView: React.FC = () => {
               
               // Try to load most recent conversation instead
               try {
-                const response = await fetch('/api/ai_conversations/global');
+                const response = await fetchWithAuth('/api/ai_conversations/global');
                 if (response.ok) {
                   const conversation = await response.json();
                   if (conversation && conversation.id) {
@@ -317,7 +318,7 @@ const GlobalAssistantView: React.FC = () => {
           // No current conversation ID - check if we need to create one
           try {
             // First try to get any existing global conversation
-            const response = await fetch('/api/ai_conversations/global');
+            const response = await fetchWithAuth('/api/ai_conversations/global');
             if (response.ok) {
               const conversation = await response.json();
               if (conversation && conversation.id) {

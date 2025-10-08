@@ -10,6 +10,7 @@ import { useSocketStore } from '@/stores/socketStore';
 import type { UsageEventPayload } from '@/lib/socket-utils';
 import { createClientLogger } from '@/lib/logging/client-logger';
 import { maskIdentifier } from '@/lib/logging/mask';
+import { fetchWithAuth } from '@/lib/auth-fetch';
 
 const usageLogger = createClientLogger({ namespace: 'usage', component: 'usage-counter' });
 
@@ -27,7 +28,13 @@ interface UsageData {
   };
 }
 
-const fetcher = (url: string) => fetch(url).then(res => res.json());
+const fetcher = async (url: string) => {
+  const response = await fetchWithAuth(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch: ${response.status}`);
+  }
+  return response.json();
+};
 
 export function UsageCounter() {
   const router = useRouter();

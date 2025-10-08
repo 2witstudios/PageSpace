@@ -20,6 +20,7 @@ import { AI_PROVIDERS, getBackendProvider } from '@/lib/ai/ai-providers-config';
 import { useAuth } from '@/hooks/use-auth';
 import { toast } from 'sonner';
 import AgentSettingsTab, { AgentSettingsTabRef } from '@/components/ai/AgentSettingsTab';
+import { fetchWithAuth } from '@/lib/auth-fetch';
 
 interface AiChatViewProps {
     page: TreePage;
@@ -88,10 +89,10 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     messages: initialMessages, // AI SDK v5 pattern for loading existing messages
     transport: new DefaultChatTransport({
       api: '/api/ai/chat',
-      fetch: (url, options) => fetch(url, { 
-        ...options, 
-        credentials: 'include' // Ensures authentication cookies are sent
-      }),
+      fetch: (url, options) => {
+        const urlString = url instanceof Request ? url.url : url.toString();
+        return fetchWithAuth(urlString, options);
+      },
     }),
     experimental_throttle: 50, // Throttle updates for better performance during streaming
     onError: (error: Error) => {
@@ -146,9 +147,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   useEffect(() => {
     const checkPermissions = async () => {
       if (!user?.id) return;
-      
+
       try {
-        const response = await fetch(`/api/pages/${page.id}/permissions/check`);
+        const response = await fetchWithAuth(`/api/pages/${page.id}/permissions/check`);
         if (response.ok) {
           const permissions = await response.json();
           setIsReadOnly(!permissions.canEdit);
@@ -157,7 +158,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
         console.error('Failed to check permissions:', error);
       }
     };
-    
+
     checkPermissions();
   }, [user?.id, page.id]);
 
@@ -167,9 +168,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       try {
         // Parallelize API calls for faster loading
         const [configResponse, messagesResponse, agentConfigResponse] = await Promise.all([
-          fetch(`/api/ai/chat?pageId=${page.id}`),
-          fetch(`/api/ai/chat/messages?pageId=${page.id}`),
-          fetch(`/api/pages/${page.id}/agent-config`)
+          fetchWithAuth(`/api/ai/chat?pageId=${page.id}`),
+          fetchWithAuth(`/api/ai/chat/messages?pageId=${page.id}`),
+          fetchWithAuth(`/api/pages/${page.id}/agent-config`)
         ]);
         
         // Process config data

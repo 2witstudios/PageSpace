@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { Drive } from '@pagespace/lib/client';
+import { fetchWithAuth } from '@/lib/auth-fetch';
 export type { Drive };
 
 interface DriveState {
@@ -34,9 +35,7 @@ export const useDriveStore = create<DriveState>()(
         set({ isLoading: true });
         try {
           const url = includeTrash ? '/api/drives?includeTrash=true' : '/api/drives';
-          const response = await fetch(url, {
-            credentials: 'include',
-          });
+          const response = await fetchWithAuth(url);
           if (!response.ok) {
             throw new Error('Failed to fetch drives');
           }

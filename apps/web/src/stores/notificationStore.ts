@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { useSocketStore } from './socketStore';
 import type { LegacyNotification } from '@pagespace/lib/client-safe';
-import { patch, del } from '@/lib/auth-fetch';
+import { patch, del, fetchWithAuth } from '@/lib/auth-fetch';
 
 // Use LegacyNotification type for backward compatibility
 type Notification = LegacyNotification & {
@@ -115,12 +115,10 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
   fetchNotifications: async () => {
     const { setIsLoading, setNotifications, setUnreadCount } = get();
     setIsLoading(true);
-    
+
     try {
-      const response = await fetch('/api/notifications', {
-        credentials: 'include',
-      });
-      
+      const response = await fetchWithAuth('/api/notifications');
+
       if (response.ok) {
         const data = await response.json();
         setNotifications(data.notifications || []);

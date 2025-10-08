@@ -4,6 +4,7 @@ import { useDriveStore } from '@/hooks/useDrive';
 import { MentionSuggestion, PageMentionData } from '@/types/mentions';
 import tippy, { Instance } from 'tippy.js';
 import React, { forwardRef, useEffect, useImperativeHandle, useState } from 'react';
+import { fetchWithAuth } from '@/lib/auth-fetch';
 
 interface SuggestionListRef {
   onKeyDown: (props: { event: KeyboardEvent }) => boolean;
@@ -218,7 +219,7 @@ export const PageMention = PageMentionNode.configure({
       const url = `/api/mentions/search?q=${query}&driveId=${currentDriveId}&types=${types}`;
       console.log('[TipTap] Fetching suggestions from:', url);
       
-      const response = await fetch(url);
+      const response = await fetchWithAuth(url);
       const suggestions: MentionSuggestion[] = await response.json();
       console.log('[TipTap] Got suggestions:', suggestions);
       

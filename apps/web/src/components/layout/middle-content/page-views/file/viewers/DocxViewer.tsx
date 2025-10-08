@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { useRouter } from 'next/navigation';
 import { useParams } from 'next/navigation';
+import { fetchWithAuth } from '@/lib/auth-fetch';
 import {
   Dialog,
   DialogContent,
@@ -40,7 +41,7 @@ export default function DocxViewer({ page }: DocxViewerProps) {
     setIsLoading(true);
     setError(null);
     
-    fetch(`/api/files/${page.id}/view`)
+    fetchWithAuth(`/api/files/${page.id}/view`)
       .then(response => {
         if (!response.ok) {
           throw new Error(`Failed to load document: ${response.status}`);

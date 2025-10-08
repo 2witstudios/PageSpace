@@ -13,6 +13,7 @@ import {
   AlertDescription,
 } from '@/components/ui/alert';
 import { post } from '@/lib/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth-fetch';
 
 interface ProviderSettings {
   currentProvider: string;
@@ -57,7 +58,7 @@ export default function AiSettingsPage() {
   useEffect(() => {
     const loadSettings = async () => {
       try {
-        const response = await fetch('/api/ai/settings');
+        const response = await fetchWithAuth('/api/ai/settings');
         if (response.ok) {
           const data: ProviderSettings = await response.json();
           setProviderSettings(data);

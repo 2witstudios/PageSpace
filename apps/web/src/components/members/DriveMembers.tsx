@@ -6,7 +6,7 @@ import { UserPlus } from 'lucide-react';
 import { InviteMemberModal } from './InviteMemberModal';
 import { MemberRow } from './MemberRow';
 import { useToast } from '@/hooks/use-toast';
-import { del } from '@/lib/auth-fetch';
+import { del, fetchWithAuth } from '@/lib/auth-fetch';
 
 interface DriveMember {
   id: string;
@@ -44,9 +44,7 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
 
   const fetchMembers = async () => {
     try {
-      const response = await fetch(`/api/drives/${driveId}/members`, {
-        credentials: 'include',
-      });
+      const response = await fetchWithAuth(`/api/drives/${driveId}/members`);
       if (!response.ok) throw new Error('Failed to fetch members');
       const data = await response.json();
       setMembers(data.members);

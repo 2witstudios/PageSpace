@@ -35,6 +35,7 @@ import {
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { toast } from "sonner";
+import { fetchWithAuth } from "@/lib/auth-fetch";
 
 interface StorageInfo {
   quota: {
@@ -115,7 +116,7 @@ export default function StorageDashboard() {
   const fetchStorageInfo = async (reconcile = false) => {
     try {
       const url = reconcile ? '/api/storage/info?reconcile=true' : '/api/storage/info';
-      const response = await fetch(url);
+      const response = await fetchWithAuth(url);
       if (!response.ok) throw new Error('Failed to fetch storage info');
       const data = await response.json();
       setStorageInfo(data);

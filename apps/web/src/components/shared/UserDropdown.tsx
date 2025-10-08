@@ -3,7 +3,7 @@
 import { useAuth } from "@/hooks/use-auth";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { post } from '@/lib/auth-fetch';
+import { post, fetchWithAuth } from '@/lib/auth-fetch';
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -23,7 +23,13 @@ import { useTheme } from "next-themes";
 import useSWR from 'swr';
 import { Progress } from "@/components/ui/progress";
 
-const fetcher = (url: string) => fetch(url).then(res => res.json());
+const fetcher = async (url: string) => {
+  const response = await fetchWithAuth(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch: ${response.status}`);
+  }
+  return response.json();
+};
 
 export default function UserDropdown() {
   const { isAuthenticated, user, isLoading } = useAuth();

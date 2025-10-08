@@ -34,7 +34,7 @@ import { Label } from '@/components/ui/label';
 import { PermissionsList } from './PermissionsList';
 import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { post } from '@/lib/auth-fetch';
+import { post, fetchWithAuth } from '@/lib/auth-fetch';
 
 export function ShareDialog() {
   const pageId = usePageStore((state) => state.pageId);
@@ -89,7 +89,7 @@ export function ShareDialog() {
     setIsSubmitting(true);
     try {
       // 1. Find the user by email
-      const userResponse = await fetch(`/api/users/find?email=${encodeURIComponent(email)}`);
+      const userResponse = await fetchWithAuth(`/api/users/find?email=${encodeURIComponent(email)}`);
       if (!userResponse.ok) {
         const { error } = await userResponse.json();
         throw new Error(error || 'User not found.');

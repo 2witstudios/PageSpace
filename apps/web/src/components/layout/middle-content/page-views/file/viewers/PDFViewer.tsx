@@ -6,6 +6,7 @@ import { useState, useEffect } from 'react';
 import { TreePage } from '@/hooks/usePageTree';
 import { Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { fetchWithAuth } from '@/lib/auth-fetch';
 
 // Dynamically import react-pdf to avoid SSR issues
 let Document: any;
@@ -49,7 +50,7 @@ export default function PDFViewer({ page }: PDFViewerProps) {
     const loadPdf = async () => {
       try {
         setIsLoading(true);
-        const response = await fetch(`/api/files/${page.id}/view`);
+        const response = await fetchWithAuth(`/api/files/${page.id}/view`);
         if (!response.ok) {
           throw new Error(`Failed to load PDF: ${response.status}`);
         }

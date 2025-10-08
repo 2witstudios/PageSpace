@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
-import { patch } from '@/lib/auth-fetch';
+import { patch, fetchWithAuth } from '@/lib/auth-fetch';
 import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import { ShadowCanvas } from '@/components/canvas/ShadowCanvas';
@@ -62,7 +62,7 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
       const [, , pageId] = dashboardMatch;
       if (user && pageId) {
         try {
-          const response = await fetch(`/api/pages/${pageId}/permissions/check`);
+          const response = await fetchWithAuth(`/api/pages/${pageId}/permissions/check`);
           if (response.ok) {
             const permissions = await response.json();
             if (!permissions.canView) {

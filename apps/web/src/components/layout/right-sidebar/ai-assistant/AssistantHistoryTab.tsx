@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Trash2, Search, MessageSquare } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { conversationState } from '@/lib/ai/conversation-state';
-import { del } from '@/lib/auth-fetch';
+import { del, fetchWithAuth } from '@/lib/auth-fetch';
 
 interface Conversation {
   id: string;
@@ -28,7 +28,7 @@ const AssistantHistoryTab: React.FC = () => {
   useEffect(() => {
     const loadConversations = async () => {
       try {
-        const response = await fetch('/api/ai_conversations');
+        const response = await fetchWithAuth('/api/ai_conversations');
         if (response.ok) {
           const data = await response.json();
           setConversations(data);

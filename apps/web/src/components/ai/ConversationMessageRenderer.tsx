@@ -4,7 +4,7 @@ import { MessageRenderer } from './MessageRenderer';
 import { TodoListMessage } from './TodoListMessage';
 import { useSocket } from '@/hooks/useSocket';
 import { ErrorBoundary } from './ErrorBoundary';
-import { patch } from '@/lib/auth-fetch';
+import { patch, fetchWithAuth } from '@/lib/auth-fetch';
 
 // Extended message interface that includes database fields
 interface ConversationMessage extends UIMessage {
@@ -96,7 +96,7 @@ export const ConversationMessageRenderer: React.FC<ConversationMessageRendererPr
     setIsLoading(true);
     try {
       // Fetch tasks associated with this message
-      const response = await fetch(`/api/ai/tasks/by-message/${messageId}`);
+      const response = await fetchWithAuth(`/api/ai/tasks/by-message/${messageId}`);
       if (response.ok) {
         const data = await response.json();
         setTasks(data.tasks || []);

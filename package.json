@@ -17,7 +17,8 @@
     "test:coverage": "pnpm --filter @pagespace/lib test -- --coverage",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "test:security": "vitest run --dir apps/web/src/test/security"
+    "test:security": "vitest run --dir apps/web/src/test/security",
+    "check:fetch": "node scripts/check-fetch-auth.js"
   },
   "devDependencies": {
     "@faker-js/faker": "^9.3.0",
@@ -28,6 +29,7 @@
     "@turbo/gen": "^2.5.5",
     "@types/jest": "^30.0.0",
     "@types/node": "^24.0.13",
+    "@typescript-eslint/typescript-estree": "^8.46.0",
     "@vitejs/plugin-react": "^4.3.4",
     "@vitest/coverage-v8": "^2.1.0",
     "@vitest/ui": "^2.1.0",

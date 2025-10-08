@@ -23,7 +23,7 @@ import { Trash2, Copy, Plus, Eye, EyeOff, Key, Terminal, Check, Download, AlertT
 import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
 import { useRouter } from 'next/navigation';
-import { post, del } from '@/lib/auth-fetch';
+import { post, del, fetchWithAuth } from '@/lib/auth-fetch';
 
 interface MCPToken {
   id: string;
@@ -55,7 +55,7 @@ export default function MCPSettingsView() {
 
   const loadTokens = async () => {
     try {
-      const response = await fetch('/api/auth/mcp-tokens');
+      const response = await fetchWithAuth('/api/auth/mcp-tokens');
       if (response.ok) {
         const tokenList = await response.json();
         setTokens(tokenList);

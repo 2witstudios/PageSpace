@@ -20,9 +20,15 @@ import useSWR, { mutate } from 'swr';
 import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
 import { VerificationRequiredAlert } from '@/components/VerificationRequiredAlert';
-import { post, patch, del } from '@/lib/auth-fetch';
+import { post, patch, del, fetchWithAuth } from '@/lib/auth-fetch';
 
-const fetcher = (url: string) => fetch(url).then((res) => res.json());
+const fetcher = async (url: string) => {
+  const response = await fetchWithAuth(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch: ${response.status}`);
+  }
+  return response.json();
+};
 
 interface Connection {
   id: string;
@@ -84,7 +90,7 @@ export default function ConnectionsPage() {
     setSearchResults([]);
 
     try {
-      const response = await fetch(`/api/connections/search?email=${encodeURIComponent(searchQuery)}`);
+      const response = await fetchWithAuth(`/api/connections/search?email=${encodeURIComponent(searchQuery)}`);
       if (!response.ok) throw new Error('Search failed');
 
       const data = await response.json();

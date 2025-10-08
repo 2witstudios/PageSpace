@@ -12,7 +12,7 @@ import { useSocket } from '@/hooks/useSocket';
 import { PageEventPayload } from '@/lib/socket-utils';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/use-auth';
-import { patch } from '@/lib/auth-fetch';
+import { patch, fetchWithAuth } from '@/lib/auth-fetch';
 
 interface DocumentViewProps {
   page: TreePage;
@@ -50,9 +50,9 @@ const DocumentView = ({ page }: DocumentViewProps) => {
   useEffect(() => {
     const checkPermissions = async () => {
       if (!user?.id) return;
-      
+
       try {
-        const response = await fetch(`/api/pages/${page.id}/permissions/check?userId=${user.id}`);
+        const response = await fetchWithAuth(`/api/pages/${page.id}/permissions/check?userId=${user.id}`);
         if (response.ok) {
           const permissions = await response.json();
           setIsReadOnly(!permissions.canEdit);
@@ -67,7 +67,7 @@ const DocumentView = ({ page }: DocumentViewProps) => {
         console.error('Failed to check permissions:', error);
       }
     };
-    
+
     checkPermissions();
   }, [user?.id, page.id]);
 
@@ -82,10 +82,10 @@ const DocumentView = ({ page }: DocumentViewProps) => {
         
         try {
           // Fetch the latest content from the server
-          const response = await fetch(`/api/pages/${page.id}`);
+          const response = await fetchWithAuth(`/api/pages/${page.id}`);
           if (response.ok) {
             const updatedPage = await response.json();
-            
+
             // Only update if content actually changed and we're not currently editing
             if (updatedPage.content !== documentState?.content && !documentState?.isDirty) {
               updateContentFromServer(updatedPage.content);

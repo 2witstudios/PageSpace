@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Settings, CheckCircle, XCircle, Key, ExternalLink, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import { AI_PROVIDERS, getBackendProvider } from '@/lib/ai/ai-providers-config';
-import { patch } from '@/lib/auth-fetch';
+import { patch, fetchWithAuth } from '@/lib/auth-fetch';
 
 // Using centralized AI providers configuration from ai-providers-config.ts
 
@@ -57,7 +57,7 @@ const AssistantSettingsTab: React.FC = () => {
     setOllamaModelsError(null);
 
     try {
-      const response = await fetch('/api/ai/ollama/models');
+      const response = await fetchWithAuth('/api/ai/ollama/models');
       const data = await response.json();
 
       if (data.success && data.models) {
@@ -85,7 +85,7 @@ const AssistantSettingsTab: React.FC = () => {
   // Load current settings
   const loadSettings = useCallback(async () => {
     try {
-      const response = await fetch('/api/ai/settings');
+      const response = await fetchWithAuth('/api/ai/settings');
       if (response.ok) {
         const data: ProviderSettings = await response.json();
         setProviderSettings(data);

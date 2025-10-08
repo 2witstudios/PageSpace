@@ -12,7 +12,7 @@ import { useToast } from '@/hooks/use-toast';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { patch } from '@/lib/auth-fetch';
+import { patch, fetchWithAuth } from '@/lib/auth-fetch';
 
 interface MemberDetails {
   id: string;
@@ -74,9 +74,7 @@ export default function MemberSettingsPage() {
 
   const fetchMemberDetails = async () => {
     try {
-      const response = await fetch(`/api/drives/${driveId}/members/${userId}`, {
-        credentials: 'include',
-      });
+      const response = await fetchWithAuth(`/api/drives/${driveId}/members/${userId}`);
       if (!response.ok) {
         if (response.status === 403) {
           toast({

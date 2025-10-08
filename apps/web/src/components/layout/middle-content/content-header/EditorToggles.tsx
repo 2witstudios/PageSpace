@@ -5,8 +5,15 @@ import { useDocumentStore } from '@/stores/useDocumentStore';
 import { useParams } from 'next/navigation';
 import useSWR from 'swr';
 import { PageType, isDocumentPage, isCanvasPage } from '@pagespace/lib/client-safe';
+import { fetchWithAuth } from '@/lib/auth-fetch';
 
-const fetcher = (url: string) => fetch(url).then(res => res.json());
+const fetcher = async (url: string) => {
+  const response = await fetchWithAuth(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch: ${response.status}`);
+  }
+  return response.json();
+};
 
 export function EditorToggles() {
   const { activeView, setActiveView } = useDocumentStore();

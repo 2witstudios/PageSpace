@@ -11,6 +11,7 @@ import {
 import { FileDown, FileText, FileSpreadsheet, Sheet, Printer } from 'lucide-react';
 import { toast } from 'sonner';
 import { PageType } from '@pagespace/lib/client-safe';
+import { fetchWithAuth } from '@/lib/auth-fetch';
 
 type ExportFormat = 'docx' | 'csv' | 'xlsx';
 
@@ -26,7 +27,7 @@ export function ExportDropdown({ pageId, pageTitle, pageType }: ExportDropdownPr
   const handleExport = async (format: ExportFormat) => {
     setIsExporting(true);
     try {
-      const response = await fetch(`/api/pages/${pageId}/export/${format}`);
+      const response = await fetchWithAuth(`/api/pages/${pageId}/export/${format}`);
 
       if (!response.ok) {
         const error = await response.json();

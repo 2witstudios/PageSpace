@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Trash2, Shield } from 'lucide-react';
 import { toast } from 'sonner';
-import { post, del } from '@/lib/auth-fetch';
+import { post, del, fetchWithAuth } from '@/lib/auth-fetch';
 
 type User = {
   id: string;
@@ -46,7 +46,7 @@ export function PermissionsList() {
     const fetchPermissions = async () => {
       setIsLoading(true);
       try {
-        const response = await fetch(`/api/pages/${pageId}/permissions`);
+        const response = await fetchWithAuth(`/api/pages/${pageId}/permissions`);
         if (!response.ok) {
           throw new Error('Failed to fetch permissions');
         }

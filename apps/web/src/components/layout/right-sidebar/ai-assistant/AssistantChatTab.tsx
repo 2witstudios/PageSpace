@@ -11,7 +11,7 @@ import { AgentRole, AgentRoleUtils } from '@/lib/ai/agent-roles';
 import { AgentRoleDropdownCompact } from '@/components/ai/AgentRoleDropdown';
 import { conversationState } from '@/lib/ai/conversation-state';
 import { useDriveStore } from '@/hooks/useDrive';
-import { post } from '@/lib/auth-fetch';
+import { post, authFetch, fetchWithAuth } from '@/lib/auth-fetch';
 
 
 interface ProviderSettings {
@@ -106,13 +106,13 @@ const AssistantChatTab: React.FC = () => {
             
             try {
               // Fetch page data
-              const pageResponse = await fetch(`/api/pages/${pageId}`);
+              const pageResponse = await fetchWithAuth(`/api/pages/${pageId}`);
               if (pageResponse.ok) {
                 const pageData = await pageResponse.json();
                 
                 // Fetch breadcrumbs to build the full path with parent folders
                 try {
-                  const breadcrumbsResponse = await fetch(`/api/pages/${pageId}/breadcrumbs`);
+                  const breadcrumbsResponse = await fetchWithAuth(`/api/pages/${pageId}/breadcrumbs`);
                   if (breadcrumbsResponse.ok) {
                     const breadcrumbsData = await breadcrumbsResponse.json();
                     
@@ -207,10 +207,10 @@ const AssistantChatTab: React.FC = () => {
       messages: initialMessages,
       transport: new DefaultChatTransport({
         api: `/api/ai_conversations/${currentConversationId}/messages`,
-        fetch: (url, options) => fetch(url, { 
-          ...options, 
-          credentials: 'include'
-        }),
+        fetch: (url, options) => {
+          const urlString = url instanceof Request ? url.url : url.toString();
+          return authFetch.fetch(urlString, options);
+        },
       }),
       experimental_throttle: 50,
       onError: (error: Error) => {
@@ -285,9 +285,7 @@ const AssistantChatTab: React.FC = () => {
       if (!currentConversationId) {
         // Try to get most recent conversation if no ID
         try {
-          const globalConvResponse = await fetch('/api/ai_conversations/global', {
-            credentials: 'include',
-          });
+          const globalConvResponse = await fetchWithAuth('/api/ai_conversations/global');
           
           if (globalConvResponse.ok) {
             const globalConversation = await globalConvResponse.json();
@@ -299,7 +297,7 @@ const AssistantChatTab: React.FC = () => {
           }
           
           // No existing conversations - create first one
-          const allConvResponse = await fetch('/api/ai_conversations');
+          const allConvResponse = await fetchWithAuth('/api/ai_conversations');
           if (allConvResponse.ok) {
             const convList = await allConvResponse.json();
             const globalConvs = convList.filter((c: { type: string }) => c.type === 'global');
@@ -323,15 +321,13 @@ const AssistantChatTab: React.FC = () => {
       
       try {
         // Check multi-provider configuration
-        const configResponse = await fetch('/api/ai/settings');
+        const configResponse = await fetchWithAuth('/api/ai/settings');
         const configData: ProviderSettings = await configResponse.json();
         setProviderSettings(configData);
         
         // Load messages for current conversation (with pagination)
         try {
-          const messagesResponse = await fetch(`/api/ai_conversations/${currentConversationId}/messages?limit=50`, {
-            credentials: 'include',
-          });
+          const messagesResponse = await fetchWithAuth(`/api/ai_conversations/${currentConversationId}/messages?limit=50`);
           if (messagesResponse.ok) {
             const messageData = await messagesResponse.json();
             // Handle both old format (array) and new format (object with messages and pagination)
@@ -368,7 +364,7 @@ const AssistantChatTab: React.FC = () => {
   useEffect(() => {
     const handleSettingsUpdate = async () => {
       try {
-        const configResponse = await fetch('/api/ai/settings');
+        const configResponse = await fetchWithAuth('/api/ai/settings');
         const configData: ProviderSettings = await configResponse.json();
         setProviderSettings(configData);
       } catch (error) {
@@ -389,9 +385,8 @@ const AssistantChatTab: React.FC = () => {
 
     setIsLoadingMore(true);
     try {
-      const response = await fetch(
-        `/api/ai_conversations/${currentConversationId}/messages?limit=25&cursor=${pagination.nextCursor}&direction=before`,
-        { credentials: 'include' }
+      const response = await fetchWithAuth(
+        `/api/ai_conversations/${currentConversationId}/messages?limit=25&cursor=${pagination.nextCursor}&direction=before`
       );
 
       if (response.ok) {
