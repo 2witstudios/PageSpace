@@ -27,6 +27,7 @@ import { cn } from '@/lib/utils';
 import { useNotificationStore } from '@/stores/notificationStore';
 import { useSocketStore } from '@/stores/socketStore';
 import { isConnectionRequest } from '@pagespace/lib/client-safe';
+import { patch } from '@/lib/auth-fetch';
 
 const NotificationIcon = ({ type, size = 'default' }: { type: string; size?: 'default' | 'large' }) => {
   const sizeClass = size === 'large' ? 'h-5 w-5' : 'h-4 w-4';
@@ -180,15 +181,7 @@ export default function NotificationsPage() {
 
   const handleConnectionAction = async (connectionId: string, action: 'accept' | 'reject', notificationId: string) => {
     try {
-      const response = await fetch(`/api/connections/${connectionId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to ${action} connection`);
-      }
+      await patch(`/api/connections/${connectionId}`, { action });
 
       // Mark notification as read
       handleNotificationRead(notificationId);

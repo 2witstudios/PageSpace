@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Mail, MessageSquare, User } from "lucide-react";
+import { post } from '@/lib/auth-fetch';
 
 interface FormData {
   name: string;
@@ -86,18 +87,7 @@ export default function ContactForm() {
     setSubmitError(null);
 
     try {
-      const response = await fetch('/api/contact', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(formData),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to submit form');
-      }
+      await post('/api/contact', formData);
 
       setIsSubmitted(true);
       setFormData({ name: "", email: "", subject: "", message: "" });

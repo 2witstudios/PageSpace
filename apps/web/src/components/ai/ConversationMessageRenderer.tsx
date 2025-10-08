@@ -4,6 +4,7 @@ import { MessageRenderer } from './MessageRenderer';
 import { TodoListMessage } from './TodoListMessage';
 import { useSocket } from '@/hooks/useSocket';
 import { ErrorBoundary } from './ErrorBoundary';
+import { patch } from '@/lib/auth-fetch';
 
 // Extended message interface that includes database fields
 interface ConversationMessage extends UIMessage {
@@ -113,27 +114,17 @@ export const ConversationMessageRenderer: React.FC<ConversationMessageRendererPr
   const handleTaskUpdate = async (taskId: string, newStatus: 'pending' | 'in_progress' | 'completed' | 'blocked') => {
     try {
       // Update task status via API
-      const response = await fetch(`/api/ai/tasks/${taskId}/status`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ status: newStatus }),
-      });
+      await patch(`/api/ai/tasks/${taskId}/status`, { status: newStatus });
 
-      if (response.ok) {
-        // Update local state
-        setTasks(prevTasks => 
-          prevTasks.map(task => 
-            task.id === taskId ? { ...task, status: newStatus, updatedAt: new Date() } : task
-          )
-        );
-        
-        // Call parent handler if provided
-        onTaskUpdate?.(taskId, newStatus);
-      } else {
-        console.error('Failed to update task status');
-      }
+      // Update local state
+      setTasks(prevTasks =>
+        prevTasks.map(task =>
+          task.id === taskId ? { ...task, status: newStatus, updatedAt: new Date() } : task
+        )
+      );
+
+      // Call parent handler if provided
+      onTaskUpdate?.(taskId, newStatus);
     } catch (error) {
       console.error('Error updating task:', error);
     }

@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
 import { Bell, Mail, Loader2 } from 'lucide-react';
+import { patch } from '@/lib/auth-fetch';
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
@@ -148,20 +149,10 @@ export default function NotificationsSettingsPage() {
     });
 
     try {
-      const response = await fetch('/api/settings/notification-preferences', {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          notificationType,
-          emailEnabled: newValue,
-        }),
+      await patch('/api/settings/notification-preferences', {
+        notificationType,
+        emailEnabled: newValue,
       });
-
-      if (!response.ok) {
-        throw new Error('Failed to update preference');
-      }
 
       toast.success(newValue ? 'Email notifications enabled' : 'Email notifications disabled');
 

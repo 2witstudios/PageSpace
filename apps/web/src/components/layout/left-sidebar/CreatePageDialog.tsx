@@ -17,6 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { PageType, Page, getDefaultContent } from '@pagespace/lib/client-safe';
 import { toast } from 'sonner';
 import { Upload } from 'lucide-react';
+import { post, fetchWithAuth } from '@/lib/auth-fetch';
 
 interface CreatePageDialogProps {
   parentId: string | null;
@@ -60,7 +61,7 @@ export default function CreatePageDialog({ parentId, isOpen, setIsOpen, onPageCr
           formData.append('title', title);
         }
 
-        const response = await fetch('/api/upload', {
+        const response = await fetchWithAuth('/api/upload', {
           method: 'POST',
           body: formData,
         });
@@ -91,30 +92,21 @@ export default function CreatePageDialog({ parentId, isOpen, setIsOpen, onPageCr
       // Use centralized default content
       const content = getDefaultContent(type);
 
-      const response = await fetch('/api/pages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title,
-          type,
-          parentId: parentId,
-          driveId: driveId,
-          content
-        }),
+      const newPage = await post<Page>('/api/pages', {
+        title,
+        type,
+        parentId: parentId,
+        driveId: driveId,
+        content
       });
 
-      if (!response.ok) {
-        throw new Error('Failed to create page');
-      }
-
-      const newPage = await response.json();
       toast.success('Page created successfully');
       onPageCreated(newPage);
       setIsOpen(false);
       setTitle('');
       router.push(`/dashboard/${driveId}/${newPage.id}`);
     } catch (error) {
-      toast.error((error as Error).message);
+      toast.error((error as Error).message || 'Failed to create page');
     } finally {
       setIsSubmitting(false);
     }

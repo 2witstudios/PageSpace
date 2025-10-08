@@ -6,6 +6,7 @@ import { UserPlus } from 'lucide-react';
 import { InviteMemberModal } from './InviteMemberModal';
 import { MemberRow } from './MemberRow';
 import { useToast } from '@/hooks/use-toast';
+import { del } from '@/lib/auth-fetch';
 
 interface DriveMember {
   id: string;
@@ -80,18 +81,13 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
     if (!confirm('Are you sure you want to remove this member?')) return;
 
     try {
-      const response = await fetch(`/api/drives/${driveId}/members/${memberId}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
-      
-      if (!response.ok) throw new Error('Failed to remove member');
-      
+      await del(`/api/drives/${driveId}/members/${memberId}`);
+
       toast({
         title: 'Success',
         description: 'Member removed successfully',
       });
-      
+
       fetchMembers();
     } catch (error) {
       console.error('Error removing member:', error);

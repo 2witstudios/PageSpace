@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Trash2, Shield } from 'lucide-react';
 import { toast } from 'sonner';
+import { post, del } from '@/lib/auth-fetch';
 
 type User = {
   id: string;
@@ -102,21 +103,13 @@ export function PermissionsList() {
     setUpdatingPermissions(prev => new Set(prev).add(userId));
 
     try {
-      const response = await fetch(`/api/pages/${pageId}/permissions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId,
-          canView: updatedPerm.canView,
-          canEdit: updatedPerm.canEdit,
-          canShare: updatedPerm.canShare,
-          canDelete: updatedPerm.canDelete,
-        }),
+      await post(`/api/pages/${pageId}/permissions`, {
+        userId,
+        canView: updatedPerm.canView,
+        canEdit: updatedPerm.canEdit,
+        canShare: updatedPerm.canShare,
+        canDelete: updatedPerm.canDelete,
       });
-
-      if (!response.ok) {
-        throw new Error('Failed to update permission');
-      }
     } catch (error) {
       console.error(error);
       toast.error('Failed to update permission.');
@@ -148,16 +141,8 @@ export function PermissionsList() {
     });
 
     try {
-      const response = await fetch(`/api/pages/${pageId}/permissions`, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId }),
-      });
+      await del(`/api/pages/${pageId}/permissions`, { userId });
 
-      if (!response.ok) {
-        throw new Error('Failed to remove permission');
-      }
-      
       toast.success('Permission removed.');
     } catch (error) {
       console.error(error);

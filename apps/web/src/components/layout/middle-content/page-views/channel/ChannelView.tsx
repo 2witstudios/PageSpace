@@ -13,6 +13,7 @@ import { renderMessageParts, convertToMessageParts } from '@/components/messages
 import ChatInput, { ChatInputRef } from '@/components/messages/ChatInput';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Lock } from 'lucide-react';
+import { post } from '@/lib/auth-fetch';
 
 interface ChannelViewProps {
   page: TreePage;
@@ -108,22 +109,12 @@ export default function ChannelView({ page }: ChannelViewProps) {
     setMessages((prev) => [...prev, optimisticMessage]);
 
     try {
-      const res = await fetch(`/api/channels/${page.id}/messages`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ content: messageContent }),
-      });
+      await post(`/api/channels/${page.id}/messages`, { content: messageContent });
 
-      if (!res.ok) {
-        // If the API call fails, remove the optimistic message
-        setMessages((prev) => prev.filter((m) => m.id !== tempId));
-        console.error('Failed to send message');
-      }
       // The new message will be received via the socket connection,
       // which will replace the optimistic one.
     } catch (error) {
+      // If the API call fails, remove the optimistic message
       setMessages((prev) => prev.filter((m) => m.id !== tempId));
       console.error('Error sending message:', error);
     }

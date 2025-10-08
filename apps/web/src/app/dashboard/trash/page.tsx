@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useDriveStore } from "@/hooks/useDrive";
 import { useAuth } from "@/hooks/use-auth";
 import { toast } from "sonner";
+import { post, del } from '@/lib/auth-fetch';
 import { 
   Card, 
   CardHeader, 
@@ -36,10 +37,7 @@ export default function GlobalTrashPage() {
   const handleRestoreDrive = async (drive: Drive) => {
     const toastId = toast.loading("Restoring drive...");
     try {
-      const response = await fetch(`/api/drives/${drive.id}/restore`, {
-        method: "POST",
-      });
-      if (!response.ok) throw new Error("Failed to restore drive.");
+      await post(`/api/drives/${drive.id}/restore`);
       await fetchDrives();
       toast.success("Drive restored.", { id: toastId });
     } catch {
@@ -51,10 +49,7 @@ export default function GlobalTrashPage() {
     if (!deleteDialogState.drive) return;
     const toastId = toast.loading("Permanently deleting drive...");
     try {
-      const response = await fetch(`/api/trash/drives/${deleteDialogState.drive.id}`, {
-        method: "DELETE",
-      });
-      if (!response.ok) throw new Error("Failed to permanently delete drive.");
+      await del(`/api/trash/drives/${deleteDialogState.drive.id}`);
       await fetchDrives();
       toast.success("Drive permanently deleted.", { id: toastId });
     } catch {

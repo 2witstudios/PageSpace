@@ -12,6 +12,7 @@ import { useToast } from '@/hooks/use-toast';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { patch } from '@/lib/auth-fetch';
 
 interface MemberDetails {
   id: string;
@@ -135,19 +136,10 @@ export default function MemberSettingsPage() {
         ...perms
       }));
 
-      const response = await fetch(`/api/drives/${driveId}/members/${userId}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify({
-          role: selectedRole,
-          permissions: permissionsArray
-        }),
+      await patch(`/api/drives/${driveId}/members/${userId}`, {
+        role: selectedRole,
+        permissions: permissionsArray
       });
-
-      if (!response.ok) throw new Error('Failed to save changes');
 
       toast({
         title: 'Success',

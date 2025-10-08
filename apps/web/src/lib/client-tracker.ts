@@ -3,6 +3,8 @@
  * Lightweight, zero-dependency tracking for browser events
  */
 
+import { post } from './auth-fetch';
+
 interface TrackingEvent {
   event: string;
   userId?: string;
@@ -166,15 +168,7 @@ class ClientTracker {
     }
 
     try {
-      await fetch('/api/track', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(event),
-        // Don't wait for response
-        keepalive: true
-      });
+      await post('/api/track', event);
     } catch {
       // Silent fail - add to queue for retry
       this.queue.push(event);

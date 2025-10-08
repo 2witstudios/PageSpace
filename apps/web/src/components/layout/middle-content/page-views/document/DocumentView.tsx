@@ -12,6 +12,7 @@ import { useSocket } from '@/hooks/useSocket';
 import { PageEventPayload } from '@/lib/socket-utils';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/use-auth';
+import { patch } from '@/lib/auth-fetch';
 
 interface DocumentViewProps {
   page: TreePage;
@@ -130,11 +131,7 @@ const DocumentView = ({ page }: DocumentViewProps) => {
       if (documentState?.isDirty) {
         console.log('🚨 Component unmounting with unsaved changes, force saving...');
         // Fire-and-forget save since we can't await in cleanup
-        fetch(`/api/pages/${page.id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: documentState.content }),
-        }).catch(error => {
+        patch(`/api/pages/${page.id}`, { content: documentState.content }).catch(error => {
           console.error('Failed to save on unmount:', error);
         });
       }

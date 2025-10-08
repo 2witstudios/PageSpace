@@ -1,11 +1,11 @@
 import React from 'react';
 import { PageType, isFolderPage } from '@pagespace/lib/client-safe';
-import { 
-  FileText, 
-  FolderOpen, 
-  Plus, 
-  Edit, 
-  Trash, 
+import {
+  FileText,
+  FolderOpen,
+  Plus,
+  Edit,
+  Trash,
   Database,
   Eye,
   Search,
@@ -19,6 +19,7 @@ import {
 import { Task, TaskTrigger, TaskContent, TaskItem, TaskItemFile, TaskStatus } from '@/components/ai/task';
 import { TaskManagementToolRenderer } from './TaskManagementToolRenderer';
 import { AgentConversationRenderer } from './AgentConversationRenderer';
+import { patch } from '@/lib/auth-fetch';
 
 interface DriveInfo {
   slug: string;
@@ -71,18 +72,12 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
 
   if (taskManagementTools.includes(toolName)) {
     return (
-      <TaskManagementToolRenderer 
-        part={part} 
+      <TaskManagementToolRenderer
+        part={part}
         onTaskUpdate={async (taskId: string, newStatus) => {
           // Update task status via API
           try {
-            await fetch(`/api/ai/tasks/${taskId}/status`, {
-              method: 'PATCH',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({ status: newStatus }),
-            });
+            await patch(`/api/ai/tasks/${taskId}/status`, { status: newStatus });
           } catch (error) {
             console.error('Error updating task:', error);
           }

@@ -11,7 +11,9 @@ import {
 import { incrementUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
 import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 import { broadcastUsageEvent } from '@/lib/socket-utils';
-import { authenticateHybridRequest, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+
+const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
 import {
   createAIProvider,
@@ -73,9 +75,9 @@ export async function POST(request: Request) {
 
   try {
     loggers.ai.info('AI Chat API: Starting request processing');
-    
+
     // Authenticate the request
-    const authResult = await authenticateHybridRequest(request);
+    const authResult = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(authResult)) {
       loggers.ai.warn('AI Chat API: Authentication failed');
       return authResult.error;
@@ -846,9 +848,9 @@ MENTION PROCESSING:
  */
 export async function GET(request: Request) {
   try {
-    const auth = await authenticateHybridRequest(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
-    const { userId } = auth;
+    const userId = auth.userId;
 
     // Get pageId from query params
     const url = new URL(request.url);
@@ -1008,7 +1010,7 @@ async function validateProviderModel(
  */
 export async function PATCH(request: Request) {
   try {
-    const auth = await authenticateHybridRequest(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
 
     const body = await request.json();

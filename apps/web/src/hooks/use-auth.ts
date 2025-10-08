@@ -4,6 +4,7 @@ import { useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore, authStoreHelpers } from '@/stores/auth-store';
 import { useTokenRefresh } from './use-token-refresh';
+import { post } from '@/lib/auth-fetch';
 
 interface User {
   id: string;
@@ -97,10 +98,7 @@ export function useAuth(): {
   // Logout function
   const logout = useCallback(async () => {
     try {
-      await fetch('/api/auth/logout', {
-        method: 'POST',
-        credentials: 'include',
-      });
+      await post('/api/auth/logout');
     } catch (error) {
       console.error('Logout error:', error);
     } finally {

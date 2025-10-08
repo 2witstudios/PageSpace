@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { useSocketStore } from './socketStore';
 import type { LegacyNotification } from '@pagespace/lib/client-safe';
+import { patch, del } from '@/lib/auth-fetch';
 
 // Use LegacyNotification type for backward compatibility
 type Notification = LegacyNotification & {
@@ -134,16 +135,10 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
   
   handleNotificationRead: async (notificationId) => {
     const { markAsRead } = get();
-    
+
     try {
-      const response = await fetch(`/api/notifications/${notificationId}/read`, {
-        method: 'PATCH',
-        credentials: 'include',
-      });
-      
-      if (response.ok) {
-        markAsRead(notificationId);
-      }
+      await patch(`/api/notifications/${notificationId}/read`);
+      markAsRead(notificationId);
     } catch (error) {
       console.error('Failed to mark notification as read:', error);
     }
@@ -151,16 +146,10 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
   
   handleMarkAllAsRead: async () => {
     const { markAllAsRead } = get();
-    
+
     try {
-      const response = await fetch('/api/notifications/read-all', {
-        method: 'PATCH',
-        credentials: 'include',
-      });
-      
-      if (response.ok) {
-        markAllAsRead();
-      }
+      await patch('/api/notifications/read-all');
+      markAllAsRead();
     } catch (error) {
       console.error('Failed to mark all notifications as read:', error);
     }
@@ -168,16 +157,10 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
   
   handleDeleteNotification: async (notificationId) => {
     const { removeNotification } = get();
-    
+
     try {
-      const response = await fetch(`/api/notifications/${notificationId}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
-      
-      if (response.ok) {
-        removeNotification(notificationId);
-      }
+      await del(`/api/notifications/${notificationId}`);
+      removeNotification(notificationId);
     } catch (error) {
       console.error('Failed to delete notification:', error);
     }

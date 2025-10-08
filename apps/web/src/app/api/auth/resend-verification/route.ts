@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { verifyAuth } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createVerificationToken } from '@pagespace/lib';
 import { sendEmail } from '@pagespace/lib/services/email-service';
 import { VerificationEmail } from '@pagespace/lib/email-templates/VerificationEmail';
@@ -7,18 +7,20 @@ import { loggers } from '@pagespace/lib/server';
 import { db, users, eq } from '@pagespace/db';
 import React from 'react';
 
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+
 export async function POST(request: Request) {
   try {
-    const authUser = await verifyAuth(request);
-    if (!authUser) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (isAuthError(auth)) {
+      return auth.error;
     }
 
     // Fetch user details from database
     const [user] = await db
       .select({ id: users.id, email: users.email, name: users.name, emailVerified: users.emailVerified })
       .from(users)
-      .where(eq(users.id, authUser.id))
+      .where(eq(users.id, auth.userId))
       .limit(1);
 
     if (!user) {

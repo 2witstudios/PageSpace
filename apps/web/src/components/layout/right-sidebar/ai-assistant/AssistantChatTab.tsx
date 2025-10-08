@@ -11,6 +11,7 @@ import { AgentRole, AgentRoleUtils } from '@/lib/ai/agent-roles';
 import { AgentRoleDropdownCompact } from '@/components/ai/AgentRoleDropdown';
 import { conversationState } from '@/lib/ai/conversation-state';
 import { useDriveStore } from '@/hooks/useDrive';
+import { post } from '@/lib/auth-fetch';
 
 
 interface ProviderSettings {
@@ -303,17 +304,12 @@ const AssistantChatTab: React.FC = () => {
             const convList = await allConvResponse.json();
             const globalConvs = convList.filter((c: { type: string }) => c.type === 'global');
             if (globalConvs.length === 0) {
-              const createResponse = await fetch('/api/ai_conversations', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ type: 'global' }),
-                credentials: 'include',
-              });
-              
-              if (createResponse.ok) {
-                const newConversation = await createResponse.json();
+              try {
+                const newConversation = await post<{ id: string }>('/api/ai_conversations', { type: 'global' });
                 setCurrentConversationId(newConversation.id);
                 conversationState.setActiveConversationId(newConversation.id);
+              } catch (error) {
+                console.error('Failed to create conversation:', error);
               }
             }
           }
@@ -419,24 +415,14 @@ const AssistantChatTab: React.FC = () => {
 
   const handleNewConversation = async () => {
     try {
-      const createResponse = await fetch('/api/ai_conversations', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          type: 'global',
-        }),
-        credentials: 'include',
-      });
-      
-      if (createResponse.ok) {
-        const newConversation = await createResponse.json();
+      const newConversation = await post<{ id: string }>('/api/ai_conversations', { type: 'global' });
+
+      if (newConversation) {
         setCurrentConversationId(newConversation.id);
         conversationState.setActiveConversationId(newConversation.id);
         setInitialMessages([]);
         setMessages([]); // Clear messages in the chat view
-        
+
         // Update URL to reflect new conversation
         const url = new URL(window.location.href);
         url.searchParams.set('c', newConversation.id);

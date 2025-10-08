@@ -1,25 +1,19 @@
 import { users, db, eq } from '@pagespace/db';
-import { decodeToken } from '@pagespace/lib/server';
-import { parse } from 'cookie';
 import { loggers } from '@pagespace/lib/server';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
 export async function GET(req: Request) {
-  const cookieHeader = req.headers.get('cookie');
-  const cookies = parse(cookieHeader || '');
-  const accessTokenValue = cookies.accessToken;
-
-  if (!accessTokenValue) {
-    return Response.json({ error: 'Not authenticated' }, { status: 401 });
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  if (isAuthError(auth)) {
+    return auth.error;
   }
-
-  const decoded = await decodeToken(accessTokenValue);
-
-  if (!decoded) {
-    return Response.json({ error: 'Invalid token' }, { status: 401 });
-  }
+  const userId = auth.userId;
+  const tokenVersion = auth.tokenVersion;
 
   const user = await db.query.users.findFirst({
-    where: eq(users.id, decoded.userId),
+    where: eq(users.id, userId),
     columns: {
       id: true,
       name: true,
@@ -29,7 +23,7 @@ export async function GET(req: Request) {
     },
   });
 
-  if (!user || user.tokenVersion !== decoded.tokenVersion) {
+  if (!user || user.tokenVersion !== tokenVersion) {
     return Response.json({ error: 'Invalid token version' }, { status: 401 });
   }
 
@@ -42,19 +36,11 @@ export async function GET(req: Request) {
 }
 
 export async function PATCH(req: Request) {
-  const cookieHeader = req.headers.get('cookie');
-  const cookies = parse(cookieHeader || '');
-  const accessTokenValue = cookies.accessToken;
-
-  if (!accessTokenValue) {
-    return Response.json({ error: 'Not authenticated' }, { status: 401 });
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  if (isAuthError(auth)) {
+    return auth.error;
   }
-
-  const decoded = await decodeToken(accessTokenValue);
-
-  if (!decoded) {
-    return Response.json({ error: 'Invalid token' }, { status: 401 });
-  }
+  const userId = auth.userId;
 
   try {
     const body = await req.json();
@@ -77,7 +63,7 @@ export async function PATCH(req: Request) {
         where: eq(users.email, email),
       });
 
-      if (existingUser && existingUser.id !== decoded.userId) {
+      if (existingUser && existingUser.id !== userId) {
         return Response.json({ error: 'Email is already in use' }, { status: 400 });
       }
     }
@@ -89,7 +75,7 @@ export async function PATCH(req: Request) {
         name: name.trim(),
         email: email.trim().toLowerCase(),
       })
-      .where(eq(users.id, decoded.userId))
+      .where(eq(users.id, userId))
       .returning({
         id: users.id,
         name: users.name,

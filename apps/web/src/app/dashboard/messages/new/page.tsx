@@ -11,6 +11,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Search, ArrowLeft, UserPlus } from 'lucide-react';
 import useSWR from 'swr';
 import { toast } from 'sonner';
+import { post } from '@/lib/auth-fetch';
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
@@ -61,22 +62,9 @@ export default function NewConversationPage() {
 
     try {
       // Create or get existing conversation
-      const response = await fetch('/api/messages/conversations', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          recipientId: selectedUserId,
-        }),
+      const { conversation } = await post<{ conversation: { id: string } }>('/api/messages/conversations', {
+        recipientId: selectedUserId,
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to create conversation');
-      }
-
-      const { conversation } = await response.json();
 
       // Navigate to the conversation
       router.push(`/dashboard/messages/${conversation.id}`);

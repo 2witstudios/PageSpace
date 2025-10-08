@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { post } from '@/lib/auth-fetch';
 import { UIMessage as Message } from '@ai-sdk/react';
 
 export interface AssistantConversation {
@@ -36,20 +37,12 @@ export const useAssistantStore = create<AssistantState>((set) => ({
   createConversation: async (driveId: string, model: string) => {
     set({ isCreatingConversation: true, model });
     try {
-      const response = await fetch('/api/ai_conversations', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ driveId, model }),
-      });
-      if (!response.ok) {
-        throw new Error('Failed to create conversation');
-      }
-      const newConversation = await response.json();
-      set({ 
-        activeConversationId: newConversation.id, 
-        messages: [], 
+      const newConversation = await post<{ id: string }>('/api/ai_conversations', { driveId, model });
+      set({
+        activeConversationId: newConversation.id,
+        messages: [],
         isLoading: false,
-        isCreatingConversation: false 
+        isCreatingConversation: false
       });
       return newConversation.id;
     } catch (error) {

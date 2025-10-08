@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Settings, CheckCircle, XCircle, Key, ExternalLink, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import { AI_PROVIDERS, getBackendProvider } from '@/lib/ai/ai-providers-config';
+import { patch } from '@/lib/auth-fetch';
 
 // Using centralized AI providers configuration from ai-providers-config.ts
 
@@ -25,6 +26,11 @@ interface ProviderSettings {
   };
   isAnyProviderConfigured: boolean;
   userSubscriptionTier?: string;
+}
+
+interface SaveSettingsResult {
+  message: string;
+  success?: boolean;
 }
 
 const AssistantSettingsTab: React.FC = () => {
@@ -229,37 +235,12 @@ const AssistantSettingsTab: React.FC = () => {
     try {
       // Don't convert provider - save the UI selection directly
       // PageSpace and OpenRouter are separate providers from the user's perspective
-      
+
       // Save model selection to backend
-      const response = await fetch('/api/ai/settings', {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          provider: selectedProvider, // Send UI provider directly
-          model: selectedModel,
-        }),
+      const result = await patch<SaveSettingsResult>('/api/ai/settings', {
+        provider: selectedProvider, // Send UI provider directly
+        model: selectedModel,
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-
-        // Handle subscription-specific errors with upgrade option
-        if (response.status === 403 && error.upgradeUrl) {
-          toast.error(error.message || 'Subscription required', {
-            action: {
-              label: 'Upgrade',
-              onClick: () => router.push(error.upgradeUrl)
-            }
-          });
-          return;
-        }
-
-        throw new Error(error.error || 'Failed to save settings');
-      }
-
-      const result = await response.json();
       
       // Update local state to reflect the saved settings
       if (providerSettings) {

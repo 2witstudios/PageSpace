@@ -1,16 +1,17 @@
 import { NextResponse } from 'next/server';
 import { db, dmConversations, connections, eq, and, or, sql } from '@pagespace/db';
-import { verifyAuth } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 import { isEmailVerified } from '@pagespace/lib';
+
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
 // GET /api/messages/conversations - Get user's DM conversations with pagination
 export async function GET(request: Request) {
   try {
-    const user = await verifyAuth(request);
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (isAuthError(auth)) return auth.error;
+    const userId = auth.userId;
 
     const { searchParams } = new URL(request.url);
     const limit = Math.min(parseInt(searchParams.get('limit') || '20'), 100);
@@ -30,15 +31,15 @@ export async function GET(request: Request) {
           c."participant2LastRead",
           c."createdAt",
           CASE
-            WHEN c."participant1Id" = ${user.id} THEN c."participant2Id"
+            WHEN c."participant1Id" = ${userId} THEN c."participant2Id"
             ELSE c."participant1Id"
           END as other_user_id,
           CASE
-            WHEN c."participant1Id" = ${user.id} THEN c."participant1LastRead"
+            WHEN c."participant1Id" = ${userId} THEN c."participant1LastRead"
             ELSE c."participant2LastRead"
           END as last_read
         FROM dm_conversations c
-        WHERE c."participant1Id" = ${user.id} OR c."participant2Id" = ${user.id}
+        WHERE c."participant1Id" = ${userId} OR c."participant2Id" = ${userId}
         ${cursor ? (direction === 'before'
           ? sql`AND c."lastMessageAt" > ${cursor}`
           : sql`AND c."lastMessageAt" < ${cursor}`)
@@ -153,13 +154,12 @@ export async function GET(request: Request) {
 // POST /api/messages/conversations - Create a new conversation
 export async function POST(request: Request) {
   try {
-    const user = await verifyAuth(request);
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (isAuthError(auth)) return auth.error;
+    const userId = auth.userId;
 
     // Check email verification
-    const emailVerified = await isEmailVerified(user.id);
+    const emailVerified = await isEmailVerified(userId);
     if (!emailVerified) {
       return NextResponse.json(
         {
@@ -180,7 +180,7 @@ export async function POST(request: Request) {
       );
     }
 
-    if (recipientId === user.id) {
+    if (recipientId === userId) {
       return NextResponse.json(
         { error: 'Cannot start conversation with yourself' },
         { status: 400 }
@@ -195,12 +195,12 @@ export async function POST(request: Request) {
         and(
           or(
             and(
-              eq(connections.user1Id, user.id),
+              eq(connections.user1Id, userId),
               eq(connections.user2Id, recipientId)
             ),
             and(
               eq(connections.user1Id, recipientId),
-              eq(connections.user2Id, user.id)
+              eq(connections.user2Id, userId)
             )
           ),
           eq(connections.status, 'ACCEPTED')
@@ -216,7 +216,7 @@ export async function POST(request: Request) {
     }
 
     // Ensure participant1Id < participant2Id for consistency
-    const [participant1Id, participant2Id] = [user.id, recipientId].sort();
+    const [participant1Id, participant2Id] = [userId, recipientId].sort();
 
     // Check if conversation already exists
     const [existingConversation] = await db

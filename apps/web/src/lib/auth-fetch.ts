@@ -19,6 +19,8 @@ class AuthFetch {
   private refreshQueue: QueuedRequest[] = [];
   private refreshPromise: Promise<boolean> | null = null;
   private logger = createClientLogger({ namespace: 'auth', component: 'auth-fetch' });
+  private csrfToken: string | null = null;
+  private csrfTokenPromise: Promise<string | null> | null = null;
 
   async fetch(url: string, options?: FetchOptions): Promise<Response> {
     const { skipAuth = false, maxRetries = 1, ...fetchOptions } = options || {};
@@ -28,9 +30,25 @@ class AuthFetch {
       return fetch(url, fetchOptions);
     }
 
+    // Check if this request needs CSRF protection
+    const needsCSRF = this.requiresCSRFToken(url, fetchOptions.method);
+
+    // Get CSRF token if needed
+    let headers = { ...fetchOptions.headers };
+    if (needsCSRF) {
+      const token = await this.getCSRFToken();
+      if (token) {
+        headers = {
+          ...headers,
+          'X-CSRF-Token': token,
+        };
+      }
+    }
+
     // Make the initial request
     let response = await fetch(url, {
       ...fetchOptions,
+      headers,
       credentials: 'include', // Always include cookies
     });
 
@@ -55,13 +73,51 @@ class AuthFetch {
 
       if (refreshSuccess) {
         this.logger.info('Token refresh successful, retrying original request', { url });
+
+        // Get fresh CSRF token if needed
+        if (needsCSRF) {
+          const token = await this.getCSRFToken(true);
+          if (token) {
+            headers = {
+              ...headers,
+              'X-CSRF-Token': token,
+            };
+          }
+        }
+
         // Retry the original request
         response = await fetch(url, {
           ...fetchOptions,
+          headers,
           credentials: 'include',
         });
       } else {
         this.logger.error('Token refresh failed, returning 401 response', { url });
+      }
+    }
+
+    // Handle CSRF token errors (403) - refresh CSRF token and retry once
+    if (response.status === 403 && needsCSRF && maxRetries > 0) {
+      const errorBody = await response.clone().json().catch(() => ({}));
+
+      if (errorBody.code === 'CSRF_TOKEN_INVALID' || errorBody.code === 'CSRF_TOKEN_MISSING') {
+        this.logger.warn('CSRF token invalid, refreshing and retrying', { url });
+
+        // Refresh CSRF token
+        const newToken = await this.getCSRFToken(true);
+        if (newToken) {
+          headers = {
+            ...headers,
+            'X-CSRF-Token': newToken,
+          };
+
+          // Retry with new CSRF token
+          response = await fetch(url, {
+            ...fetchOptions,
+            headers,
+            credentials: 'include',
+          });
+        }
       }
     }
 
@@ -161,6 +217,95 @@ class AuthFetch {
     }
   }
 
+  /**
+   * Gets CSRF token, fetching it from the server if not cached
+   * @param refresh - Force refresh the token even if cached
+   */
+  private async getCSRFToken(refresh = false): Promise<string | null> {
+    // Return cached token if available and not forcing refresh
+    if (this.csrfToken && !refresh) {
+      return this.csrfToken;
+    }
+
+    // If a fetch is already in progress, wait for it
+    if (this.csrfTokenPromise) {
+      return this.csrfTokenPromise;
+    }
+
+    // Fetch CSRF token from server
+    this.csrfTokenPromise = this.fetchCSRFToken();
+
+    try {
+      const token = await this.csrfTokenPromise;
+      this.csrfToken = token;
+      return token;
+    } finally {
+      this.csrfTokenPromise = null;
+    }
+  }
+
+  /**
+   * Fetches a new CSRF token from the server
+   */
+  private async fetchCSRFToken(): Promise<string | null> {
+    try {
+      const response = await fetch('/api/auth/csrf', {
+        credentials: 'include',
+      });
+
+      if (!response.ok) {
+        this.logger.error('Failed to fetch CSRF token', {
+          status: response.status,
+        });
+        return null;
+      }
+
+      const data = await response.json();
+      this.logger.debug('CSRF token fetched successfully');
+      return data.csrfToken;
+    } catch (error) {
+      this.logger.error('Error fetching CSRF token', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Checks if a request requires CSRF token
+   * CSRF is required for:
+   * - Mutation methods (POST, PUT, PATCH, DELETE)
+   * - API routes (not auth endpoints like login/signup)
+   */
+  private requiresCSRFToken(url: string, method: string = 'GET'): boolean {
+    const mutationMethods = ['POST', 'PUT', 'PATCH', 'DELETE'];
+    if (!mutationMethods.includes(method.toUpperCase())) {
+      return false;
+    }
+
+    // Exempt certain auth endpoints that establish sessions
+    const csrfExemptPaths = [
+      '/api/auth/login',
+      '/api/auth/signup',
+      '/api/auth/refresh',
+      '/api/auth/google',
+      '/api/auth/resend-verification',
+      '/api/stripe/webhook',
+      '/api/internal/',
+    ];
+
+    return !csrfExemptPaths.some((path) => url.includes(path));
+  }
+
+  /**
+   * Clears the cached CSRF token
+   * Useful when logging out or when token needs to be refreshed
+   */
+  clearCSRFToken(): void {
+    this.csrfToken = null;
+    this.csrfTokenPromise = null;
+  }
+
   // Helper method for JSON requests
   async fetchJSON<T = unknown>(url: string, options?: FetchOptions): Promise<T> {
     const response = await this.fetch(url, {
@@ -198,10 +343,11 @@ class AuthFetch {
   }
 
   // Helper method for DELETE requests
-  async delete<T = unknown>(url: string, options?: FetchOptions): Promise<T> {
+  async delete<T = unknown>(url: string, body?: unknown, options?: FetchOptions): Promise<T> {
     return this.fetchJSON<T>(url, {
       ...options,
       method: 'DELETE',
+      body: body ? JSON.stringify(body) : undefined,
     });
   }
 
@@ -228,3 +374,4 @@ export const post = authFetch.post.bind(authFetch);
 export const put = authFetch.put.bind(authFetch);
 export const del = authFetch.delete.bind(authFetch);
 export const patch = authFetch.patch.bind(authFetch);
+export const clearCSRFToken = authFetch.clearCSRFToken.bind(authFetch);

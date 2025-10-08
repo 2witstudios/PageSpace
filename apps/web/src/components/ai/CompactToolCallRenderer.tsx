@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { 
-  FolderOpen, 
-  Plus, 
-  Edit, 
-  Trash, 
+import {
+  FolderOpen,
+  Plus,
+  Edit,
+  Trash,
   Database,
   Eye,
   Search,
@@ -21,6 +21,7 @@ import {
   Bot
 } from 'lucide-react';
 import { CompactTaskManagementToolRenderer } from './CompactTaskManagementToolRenderer';
+import { patch } from '@/lib/auth-fetch';
 
 
 interface TreeItem {
@@ -68,18 +69,12 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
 
   if (taskManagementTools.includes(toolName)) {
     return (
-      <CompactTaskManagementToolRenderer 
-        part={part} 
+      <CompactTaskManagementToolRenderer
+        part={part}
         onTaskUpdate={async (taskId: string, newStatus) => {
           // Update task status via API
           try {
-            await fetch(`/api/ai/tasks/${taskId}/status`, {
-              method: 'PATCH',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({ status: newStatus }),
-            });
+            await patch(`/api/ai/tasks/${taskId}/status`, { status: newStatus });
           } catch (error) {
             console.error('Error updating task:', error);
           }

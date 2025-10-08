@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { post } from '@/lib/auth-fetch';
 
 interface DocxViewerProps {
   page: TreePage;
@@ -102,26 +103,13 @@ export default function DocxViewer({ page }: DocxViewerProps) {
 
     setIsConverting(true);
     try {
-      const response = await fetch(`/api/files/${page.id}/convert-to-document`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          title: newDocumentTitle,
-        }),
+      const { pageId } = await post<{ pageId: string }>(`/api/files/${page.id}/convert-to-document`, {
+        title: newDocumentTitle,
       });
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to convert document');
-      }
-
-      const { pageId } = await response.json();
-      
       toast.success('Document converted successfully!');
       setShowConvertDialog(false);
-      
+
       // Navigate to the new document
       router.push(`/dashboard/${driveId}/${pageId}`);
     } catch (error) {

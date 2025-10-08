@@ -20,6 +20,7 @@ import useSWR, { mutate } from 'swr';
 import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
 import { VerificationRequiredAlert } from '@/components/VerificationRequiredAlert';
+import { post, patch, del } from '@/lib/auth-fetch';
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
@@ -106,29 +107,20 @@ export default function ConnectionsPage() {
   const handleSendRequest = async (targetUserId: string) => {
     setSendingRequest(targetUserId);
     try {
-      const response = await fetch('/api/connections', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ targetUserId }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-
-        // Check if this is a verification required error
-        if (error.requiresEmailVerification) {
-          setShowVerificationAlert(true);
-          return;
-        }
-
-        throw new Error(error.error || 'Failed to send request');
-      }
+      await post('/api/connections', { targetUserId });
 
       toast.success('Connection request sent');
       setSearchResults(prev => prev.filter(u => u.id !== targetUserId));
       mutate('/api/connections?status=PENDING');
     } catch (error) {
-      toast.error((error as Error).message || 'Failed to send connection request');
+      // Check if this is a verification required error
+      const errorMessage = (error as Error).message;
+      if (errorMessage.includes('requiresEmailVerification') || errorMessage.includes('verification')) {
+        setShowVerificationAlert(true);
+        return;
+      }
+
+      toast.error(errorMessage || 'Failed to send connection request');
     } finally {
       setSendingRequest(null);
     }
@@ -137,18 +129,10 @@ export default function ConnectionsPage() {
   const handleConnectionAction = async (connectionId: string, action: 'accept' | 'reject' | 'remove') => {
     try {
       if (action === 'remove') {
-        const response = await fetch(`/api/connections/${connectionId}`, {
-          method: 'DELETE',
-        });
-        if (!response.ok) throw new Error('Failed to remove connection');
+        await del(`/api/connections/${connectionId}`);
         toast.success('Connection removed');
       } else {
-        const response = await fetch(`/api/connections/${connectionId}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action }),
-        });
-        if (!response.ok) throw new Error(`Failed to ${action} connection`);
+        await patch(`/api/connections/${connectionId}`, { action });
         toast.success(`Connection ${action}ed`);
       }
 
@@ -161,20 +145,13 @@ export default function ConnectionsPage() {
     }
   };
 
-  const handleStartConversation = (userId: string) => {
-    // Create or navigate to conversation
-    fetch('/api/messages/conversations', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ recipientId: userId }),
-    })
-      .then(res => res.json())
-      .then(data => {
-        router.push(`/dashboard/messages/${data.conversation.id}`);
-      })
-      .catch(() => {
-        toast.error('Failed to start conversation');
-      });
+  const handleStartConversation = async (userId: string) => {
+    try {
+      const data = await post<{ conversation: { id: string } }>('/api/messages/conversations', { recipientId: userId });
+      router.push(`/dashboard/messages/${data.conversation.id}`);
+    } catch {
+      toast.error('Failed to start conversation');
+    }
   };
 
   return (

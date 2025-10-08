@@ -10,6 +10,7 @@ import { renderMessageParts, convertToMessageParts } from '@/components/messages
 import useSWR from 'swr';
 import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
+import { post, patch } from '@/lib/auth-fetch';
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
@@ -90,7 +91,7 @@ export default function ConversationPage() {
         });
 
         if (message.senderId !== user.id) {
-          fetch(`/api/messages/${conversationId}`, { method: 'PATCH' });
+          patch(`/api/messages/${conversationId}`);
         }
       }
     };
@@ -117,17 +118,7 @@ export default function ConversationPage() {
     setInputValue(''); // Clear input immediately
 
     try {
-      const response = await fetch(`/api/messages/${conversationId}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ content }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to send message');
-      }
+      await post(`/api/messages/${conversationId}`, { content });
 
       // Message will be added via socket broadcast from server
       // No need for optimistic update as it causes duplicates

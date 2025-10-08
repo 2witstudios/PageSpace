@@ -23,6 +23,9 @@ interface AuthState {
   isRefreshing: boolean;
   refreshTimeoutId: NodeJS.Timeout | null;
 
+  // CSRF protection state
+  csrfToken: string | null;
+
   // Session state
   sessionStartTime: number | null;
   lastActivity: number | null;
@@ -41,6 +44,7 @@ interface AuthState {
   setLoading: (loading: boolean) => void;
   setRefreshing: (refreshing: boolean) => void;
   setRefreshTimeout: (timeoutId: NodeJS.Timeout | null) => void;
+  setCsrfToken: (token: string | null) => void;
   setHydrated: (hydrated: boolean) => void;
   updateActivity: () => void;
   startSession: () => void;
@@ -69,6 +73,7 @@ export const useAuthStore = create<AuthState>()(
       hasHydrated: false,
       isRefreshing: false,
       refreshTimeoutId: null,
+      csrfToken: null,
       sessionStartTime: null,
       lastActivity: null,
       lastActivityUpdate: null,
@@ -98,6 +103,8 @@ export const useAuthStore = create<AuthState>()(
 
       setRefreshTimeout: (refreshTimeoutId) => set({ refreshTimeoutId }),
 
+      setCsrfToken: (csrfToken) => set({ csrfToken }),
+
       setHydrated: (hasHydrated) => set({ hasHydrated }),
 
       updateActivity: () => {
@@ -123,12 +130,19 @@ export const useAuthStore = create<AuthState>()(
 
       endSession: () => {
         const state = get();
-        
+
         // Clear any pending refresh timeout
         if (state.refreshTimeoutId) {
           clearTimeout(state.refreshTimeoutId);
         }
-        
+
+        // Clear CSRF token from authFetch
+        if (typeof window !== 'undefined') {
+          import('@/lib/auth-fetch').then(({ clearCSRFToken }) => {
+            clearCSRFToken();
+          });
+        }
+
         set({
           user: null,
           isAuthenticated: false,
@@ -136,6 +150,7 @@ export const useAuthStore = create<AuthState>()(
           lastActivity: null,
           refreshTimeoutId: null,
           isRefreshing: false,
+          csrfToken: null,
         });
       },
 

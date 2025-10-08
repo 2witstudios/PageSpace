@@ -1,9 +1,11 @@
 import { NextResponse } from 'next/server';
 import { db, eq, and } from '@pagespace/db';
 import { driveMembers, drives, pagePermissions, pages } from '@pagespace/db';
-import { verifyAuth } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createDriveNotification, isEmailVerified } from '@pagespace/lib';
 import { loggers } from '@pagespace/lib/server';
+
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
 interface PermissionEntry {
   pageId: string;
@@ -17,14 +19,14 @@ export async function POST(
   context: { params: Promise<{ driveId: string }> }
 ) {
   try {
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (isAuthError(auth)) return auth.error;
+    const userId = auth.userId;
+
     const { driveId } = await context.params;
-    const user = await verifyAuth(request);
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
 
     // Check email verification
-    const emailVerified = await isEmailVerified(user.id);
+    const emailVerified = await isEmailVerified(userId);
     if (!emailVerified) {
       return NextResponse.json(
         {
@@ -52,7 +54,7 @@ export async function POST(
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    const isOwner = drive[0].ownerId === user.id;
+    const isOwner = drive[0].ownerId === userId;
     let isAdmin = false;
 
     if (!isOwner) {
@@ -60,7 +62,7 @@ export async function POST(
         .from(driveMembers)
         .where(and(
           eq(driveMembers.driveId, driveId),
-          eq(driveMembers.userId, user.id),
+          eq(driveMembers.userId, userId),
           eq(driveMembers.role, 'ADMIN')
         ))
         .limit(1);
@@ -90,7 +92,7 @@ export async function POST(
           driveId,
           userId: invitedUserId,
           role,
-          invitedBy: user.id,
+          invitedBy: userId,
           acceptedAt: new Date(), // Auto-accept for now
         })
         .returning();
@@ -138,7 +140,7 @@ export async function POST(
             canView: perm.canView,
             canEdit: perm.canEdit,
             canShare: perm.canShare,
-            grantedBy: user.id,
+            grantedBy: userId,
             grantedAt: new Date(),
           })
           .where(eq(pagePermissions.id, existing[0].id))
@@ -153,7 +155,7 @@ export async function POST(
             canEdit: perm.canEdit,
             canShare: perm.canShare,
             canDelete: false, // Never grant delete via invite
-            grantedBy: user.id,
+            grantedBy: userId,
           })
           .returning();
       }
@@ -168,7 +170,7 @@ export async function POST(
       driveId,
       'invited', // Always use 'invited' which now has "added" language
       role,
-      user.id
+      userId
     );
 
     return NextResponse.json({

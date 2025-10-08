@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { convertToModelMessages, generateText, stepCountIs } from 'ai';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/server';
+
+const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 import {
   createAIProvider,
   isProviderError,
@@ -136,9 +138,9 @@ async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: st
  */
 export async function POST(request: Request) {
   try {
-    const auth = await authenticateRequestWithOptions(request, { allow: ['jwt', 'mcp'] as const });
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
-    const { userId } = auth;
+    const userId = auth.userId;
 
     const body = await request.json();
     const { agentId, question, context } = body;

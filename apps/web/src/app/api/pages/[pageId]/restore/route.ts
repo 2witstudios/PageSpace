@@ -5,7 +5,7 @@ import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
-const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const };
+const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 
 async function recursivelyRestore(pageId: string, tx: typeof db) {
   await tx.update(pages).set({ isTrashed: false, trashedAt: null }).where(eq(pages.id, pageId));

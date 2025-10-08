@@ -1,16 +1,17 @@
 import { NextResponse } from 'next/server';
 import { db, connections, users, userProfiles, eq, and, or, desc } from '@pagespace/db';
-import { verifyAuth } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 import { createNotification, isEmailVerified } from '@pagespace/lib';
+
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
 // GET /api/connections - Get user's connections
 export async function GET(request: Request) {
   try {
-    const user = await verifyAuth(request);
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (isAuthError(auth)) return auth.error;
+    const userId = auth.userId;
 
     const { searchParams } = new URL(request.url);
     const status = searchParams.get('status') || 'ACCEPTED';
@@ -31,8 +32,8 @@ export async function GET(request: Request) {
       .where(
         and(
           or(
-            eq(connections.user1Id, user.id),
-            eq(connections.user2Id, user.id)
+            eq(connections.user1Id, userId),
+            eq(connections.user2Id, userId)
           ),
           eq(connections.status, status as 'PENDING' | 'ACCEPTED' | 'BLOCKED')
         )
@@ -48,7 +49,7 @@ export async function GET(request: Request) {
           return null;
         }
 
-        const otherUserId = conn.user1Id === user.id ? conn.user2Id : conn.user1Id;
+        const otherUserId = conn.user1Id === userId ? conn.user2Id : conn.user1Id;
 
         const [otherUser] = await db
           .select({
@@ -75,7 +76,7 @@ export async function GET(request: Request) {
         return {
           ...conn,
           user: otherUser,
-          isRequester: conn.requestedBy === user.id,
+          isRequester: conn.requestedBy === userId,
         };
       })
     );
@@ -96,13 +97,12 @@ export async function GET(request: Request) {
 // POST /api/connections - Send a connection request
 export async function POST(request: Request) {
   try {
-    const user = await verifyAuth(request);
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (isAuthError(auth)) return auth.error;
+    const userId = auth.userId;
 
     // Check email verification
-    const emailVerified = await isEmailVerified(user.id);
+    const emailVerified = await isEmailVerified(userId);
     if (!emailVerified) {
       return NextResponse.json(
         {
@@ -123,7 +123,7 @@ export async function POST(request: Request) {
       );
     }
 
-    if (targetUserId === user.id) {
+    if (targetUserId === userId) {
       return NextResponse.json(
         { error: 'Cannot connect with yourself' },
         { status: 400 }
@@ -137,12 +137,12 @@ export async function POST(request: Request) {
       .where(
         or(
           and(
-            eq(connections.user1Id, user.id),
+            eq(connections.user1Id, userId),
             eq(connections.user2Id, targetUserId)
           ),
           and(
             eq(connections.user1Id, targetUserId),
-            eq(connections.user2Id, user.id)
+            eq(connections.user2Id, userId)
           )
         )
       )
@@ -169,7 +169,7 @@ export async function POST(request: Request) {
     }
 
     // Ensure user1Id < user2Id for consistency
-    const [user1Id, user2Id] = [user.id, targetUserId].sort();
+    const [user1Id, user2Id] = [userId, targetUserId].sort();
 
     // Create new connection request
     const [newConnection] = await db
@@ -178,7 +178,7 @@ export async function POST(request: Request) {
         user1Id,
         user2Id,
         status: 'PENDING',
-        requestedBy: user.id,
+        requestedBy: userId,
         requestMessage: message,
       })
       .returning();
@@ -191,7 +191,7 @@ export async function POST(request: Request) {
       })
       .from(users)
       .leftJoin(userProfiles, eq(users.id, userProfiles.userId))
-      .where(eq(users.id, user.id))
+      .where(eq(users.id, userId))
       .limit(1);
 
     const senderName = sender?.displayName || sender?.name || 'Someone';
@@ -204,11 +204,11 @@ export async function POST(request: Request) {
       message: `${senderName} wants to connect with you`,
       metadata: {
         connectionId: newConnection.id,
-        senderId: user.id,
+        senderId: userId,
         requestMessage: message,
         requesterName: senderName, // For email template
       },
-      triggeredByUserId: user.id,
+      triggeredByUserId: userId,
     });
 
     return NextResponse.json({ connection: newConnection });

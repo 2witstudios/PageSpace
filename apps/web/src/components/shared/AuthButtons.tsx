@@ -4,13 +4,14 @@ import { useAuth } from "@/hooks/use-auth";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { post } from '@/lib/auth-fetch';
 
 export default function AuthButtons() {
   const { isAuthenticated, user } = useAuth();
   const router = useRouter();
 
   const handleSignOut = async () => {
-    await fetch('/api/auth/logout', { method: 'POST' });
+    await post('/api/auth/logout');
     router.push('/auth/signin');
   };
 

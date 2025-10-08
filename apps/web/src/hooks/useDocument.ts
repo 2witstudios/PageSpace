@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from 'react';
 import { useDocumentManagerStore, DocumentState } from '@/stores/useDocumentManagerStore';
 import { toast } from 'sonner';
+import { patch } from '@/lib/auth-fetch';
 
 // Document state selectors
 export const useDocumentState = (pageId: string) => {
@@ -62,19 +63,11 @@ export const useDocumentSaving = (pageId: string) => {
     async (content: string) => {
       try {
         markAsSaving(pageId);
-        
-        const response = await fetch(`/api/pages/${pageId}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content }),
-        });
-        
-        if (!response.ok) {
-          throw new Error(`Failed to save: ${response.status}`);
-        }
-        
+
+        await patch(`/api/pages/${pageId}`, { content });
+
         markAsSaved(pageId);
-        
+
         return true;
       } catch (error) {
         console.error('Save failed:', error);

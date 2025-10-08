@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyAuth } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, pages, drives, filePages, files, eq, isNull } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { PageType, canUserEditPage, getUserDriveAccess } from '@pagespace/lib/server';
@@ -29,6 +29,8 @@ interface FileMetadata {
 // Processor service URL
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
 
+const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
+
 export async function POST(request: NextRequest) {
   // Declare variables at function scope for proper cleanup
   let uploadSlotReleased = false;
@@ -38,11 +40,11 @@ export async function POST(request: NextRequest) {
 
   try {
     // Verify authentication
-    const user = await verifyAuth(request);
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (isAuthError(auth)) {
+      return auth.error;
     }
-    userId = user.id;
+    userId = auth.userId;
 
     // Parse form data
     const formData = await request.formData();
@@ -71,7 +73,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    const hasDriveAccess = await getUserDriveAccess(user.id, driveId);
+    const hasDriveAccess = await getUserDriveAccess(userId, driveId);
     if (!hasDriveAccess) {
       return NextResponse.json({ error: 'You do not have permission to upload to this drive' }, { status: 403 });
     }
@@ -85,7 +87,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Invalid parent page' }, { status: 400 });
       }
 
-      const canEditParent = await canUserEditPage(user.id, parentId);
+      const canEditParent = await canUserEditPage(userId, parentId);
       if (!canEditParent) {
         return NextResponse.json({ error: 'You do not have permission to upload to this folder' }, { status: 403 });
       }
@@ -101,7 +103,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Check storage quota
-    const quotaCheck = await checkStorageQuota(user.id, file.size);
+    const quotaCheck = await checkStorageQuota(userId, file.size);
     if (!quotaCheck.allowed) {
       return NextResponse.json({
         error: quotaCheck.reason,
@@ -110,14 +112,14 @@ export async function POST(request: NextRequest) {
     }
 
     // Get user's storage tier for upload slot
-    const userQuota = await getUserStorageQuota(user.id);
+    const userQuota = await getUserStorageQuota(userId);
     if (!userQuota) {
       return NextResponse.json({ error: 'Could not retrieve storage quota' }, { status: 500 });
     }
 
     // Try to acquire upload slot
     uploadSlot = await uploadSemaphore.acquireUploadSlot(
-      user.id,
+      userId,
       userQuota.tier,
       file.size
     );
@@ -138,19 +140,19 @@ export async function POST(request: NextRequest) {
     const sanitizedFileName = sanitizeFilenameForHeader(file.name);
 
     // Increment active uploads counter
-    await updateActiveUploads(user.id, 1);
+    await updateActiveUploads(userId, 1);
 
     // Forward file to processor service for streaming upload and processing
     const processorFormData = new FormData();
     processorFormData.append('file', file);
     processorFormData.append('pageId', pageId);
-    processorFormData.append('userId', user.id);
+    processorFormData.append('userId', userId);
     processorFormData.append('driveId', driveId);
 
     try {
       // Create service JWT token for processor authentication
       const serviceToken = await createServiceToken('web', ['files:write'], {
-        userId: user.id,
+        userId,
         tenantId: pageId,
         driveIds: [driveId],
         expirationTime: '10m'
@@ -245,7 +247,7 @@ export async function POST(request: NextRequest) {
       // Create file metadata with content hash
       const fileMetadata: FileMetadata = {
         uploadedAt: new Date().toISOString(),
-        uploadedBy: user.id,
+        uploadedBy: userId,
         originalName: file.name, // Store original name with Unicode characters
         contentHash, // Store content hash for deduplication
       };
@@ -281,7 +283,7 @@ export async function POST(request: NextRequest) {
             sizeBytes: resolvedSize,
             mimeType,
             storagePath: canonicalStoragePath,
-            createdBy: user.id,
+            createdBy: userId,
           })
           .onConflictDoNothing()
           .returning();
@@ -318,14 +320,14 @@ export async function POST(request: NextRequest) {
           .values({
             fileId: contentHash,
             pageId,
-            linkedBy: user.id,
+            linkedBy: userId,
             linkSource: 'web-upload',
           })
           .onConflictDoUpdate({
             target: filePages.pageId,
             set: {
               fileId: contentHash,
-              linkedBy: user.id,
+              linkedBy: userId,
               linkedAt: new Date(),
               linkSource: 'web-upload',
             },
@@ -336,7 +338,7 @@ export async function POST(request: NextRequest) {
       pageCreated = true;
 
       // Update user storage usage (has its own transaction internally)
-      await updateStorageUsage(user.id, file.size, {
+      await updateStorageUsage(userId, file.size, {
         pageId: newPage.id,
         driveId,
         eventType: 'upload'
@@ -345,21 +347,21 @@ export async function POST(request: NextRequest) {
       // Release upload slot and decrement counter
       uploadSemaphore.releaseUploadSlot(uploadSlot);
       uploadSlotReleased = true;
-      await updateActiveUploads(user.id, -1);
+      await updateActiveUploads(userId, -1);
 
       // If file needs any processing (ingest, text extraction, OCR, or image optimization)
       if (jobs && (jobs.ingest || jobs.textExtraction || jobs.ocr || jobs.imageOptimization)) {
         try {
           let message = 'File uploaded successfully. Processing in background.';
-          
+
           if (jobs.ingest) {
             // Processor service already enqueued unified ingestion; do not enqueue web worker job
             console.log(`Processor handling ingestion for page ${pageId}, contentHash ${contentHash}`);
             message = 'File uploaded successfully. Processor is ingesting in background.';
           }
-          
+
           // Get updated storage quota
-          const updatedQuota = await getUserStorageQuota(user.id);
+          const updatedQuota = await getUserStorageQuota(userId);
 
           // Return 202 Accepted to indicate async processing
           return NextResponse.json(
@@ -389,7 +391,7 @@ export async function POST(request: NextRequest) {
       }
 
       // Get updated storage quota
-      const updatedQuota = await getUserStorageQuota(user.id);
+      const updatedQuota = await getUserStorageQuota(userId);
 
       // File uploaded and optimized successfully
       return NextResponse.json({
@@ -420,7 +422,7 @@ export async function POST(request: NextRequest) {
         uploadSlotReleased = true;
         await updateActiveUploads(userId, -1);
       }
-      
+
       if (pageCreated) {
         throw processorError;
       }
@@ -428,7 +430,7 @@ export async function POST(request: NextRequest) {
       // Fallback: Still create the page entry but mark as failed
       const fileMetadata: FileMetadata = {
         uploadedAt: new Date().toISOString(),
-        uploadedBy: user.id,
+        uploadedBy: userId,
         originalName: file.name,
       };
 

@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ChevronDown, ChevronRight, Search, Shield, MessageCircle, Database, Settings, Crown, CreditCard, CheckCircle } from "lucide-react";
+import { put } from "@/lib/auth-fetch";
 
 interface UserStats {
   drives: number;
@@ -111,20 +112,8 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
       } else {
         newTier = 'free';
       }
-      const response = await fetch(`/api/admin/users/${userId}/subscription`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ subscriptionTier: newTier }),
-      });
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || `HTTP ${response.status}: Failed to update subscription`);
-      }
-
-      const result = await response.json();
+      const result = await put(`/api/admin/users/${userId}/subscription`, { subscriptionTier: newTier });
 
       // Update the user in the parent component's state instead of reloading
       if (onUserUpdate) {

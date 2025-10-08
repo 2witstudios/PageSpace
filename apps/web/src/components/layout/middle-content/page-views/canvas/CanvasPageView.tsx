@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
+import { patch } from '@/lib/auth-fetch';
 import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import { ShadowCanvas } from '@/components/canvas/ShadowCanvas';
@@ -27,15 +28,8 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
     console.log(`--- Saving Page ${pageId} ---`);
     console.log('Content:', newValue);
     try {
-      const response = await fetch(`/api/pages/${pageId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: newValue }),
-      });
-      console.log('Save Response:', response);
-      if (!response.ok) {
-        throw new Error(`Failed to save page content. Status: ${response.status}`);
-      }
+      await patch(`/api/pages/${pageId}`, { content: newValue });
+      console.log('Save successful');
       toast.success('Page saved successfully!');
     } catch (error) {
       console.error('Failed to save page content:', error);

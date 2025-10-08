@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { mutate } from 'swr';
 import { useRouter } from 'next/navigation';
+import { post } from '@/lib/auth-fetch';
 
 interface TokenRefreshOptions {
   refreshBeforeExpiryMs?: number; // How long before expiry to refresh (default: 2 minutes)
@@ -34,7 +35,7 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
 
   const logout = async () => {
     try {
-      await fetch('/api/auth/logout', { method: 'POST' });
+      await post('/api/auth/logout');
       await mutate('/api/auth/me', null, false);
       router.push('/auth/signin');
     } catch (error) {

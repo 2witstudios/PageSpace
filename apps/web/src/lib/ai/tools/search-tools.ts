@@ -1,7 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db, pages, drives, eq, and, sql, inArray } from '@pagespace/db';
-import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/server';
+import { getUserDriveAccess, getUserAccessiblePagesInDriveWithDetails } from '@pagespace/lib/server';
 import { ToolExecutionContext } from '../types';
 
 export const searchTools = {
@@ -74,36 +74,32 @@ export const searchTools = {
 
         const matchingPages = await query.limit(maxResults);
 
+        // Get all accessible pages upfront to avoid N+1 queries
+        const accessiblePages = await getUserAccessiblePagesInDriveWithDetails(userId, driveId);
+        const accessiblePageIds = new Set(accessiblePages.map(p => p.id));
+        const pageMap = new Map(accessiblePages.map(p => [p.id, p]));
+
         // Filter by permissions and build results
         const results = [];
         for (const page of matchingPages) {
-          const accessLevel = await getUserAccessLevel(userId, page.id);
-          if (accessLevel?.canView) {
-            // Build semantic path
+          // O(1) permission check using Set
+          if (accessiblePageIds.has(page.id)) {
+            // Build semantic path using in-memory page map
             const pathParts = [drive.slug || driveId];
-            let currentPage = page;
             const parentChain = [];
-            
-            // Build parent chain
-            while (currentPage.parentId) {
-              const [parent] = await db
-                .select({ 
-                  id: pages.id, 
-                  title: pages.title, 
-                  parentId: pages.parentId,
-                  type: pages.type,
-                  content: pages.content
-                })
-                .from(pages)
-                .where(eq(pages.id, currentPage.parentId));
-              if (parent) {
-                parentChain.unshift(parent.title);
-                currentPage = parent;
+
+            // Build parent chain using in-memory map (no DB queries)
+            let currentPageId = page.parentId;
+            while (currentPageId) {
+              const parentPage = pageMap.get(currentPageId);
+              if (parentPage) {
+                parentChain.unshift(parentPage.title);
+                currentPageId = parentPage.parentId;
               } else {
                 break;
               }
             }
-            
+
             const semanticPath = `/${[...pathParts, ...parentChain, page.title].join('/')}`;
 
             // Extract matching lines if searching content
@@ -217,6 +213,10 @@ export const searchTools = {
 
         const allPages = await query;
 
+        // Get all accessible pages upfront to avoid N+1 queries
+        const accessiblePages = await getUserAccessiblePagesInDriveWithDetails(userId, driveId);
+        const accessiblePageIds = new Set(accessiblePages.map(p => p.id));
+
         // Build page hierarchy with paths
         const pageMap = new Map();
         const results = [];
@@ -239,9 +239,8 @@ export const searchTools = {
 
         // Second pass: build paths and check pattern
         for (const page of allPages) {
-          // Check permissions
-          const accessLevel = await getUserAccessLevel(userId, page.id);
-          if (!accessLevel?.canView) continue;
+          // O(1) permission check using Set
+          if (!accessiblePageIds.has(page.id)) continue;
 
           // Build full path
           const pathParts = [];
@@ -374,11 +373,14 @@ export const searchTools = {
 
           const drivePages = await driveQuery.limit(maxResultsPerDrive);
 
-          // Filter by permissions
+          // Get all accessible pages upfront to avoid N+1 queries
+          const accessiblePages = await getUserAccessiblePagesInDriveWithDetails(userId, drive.id);
+          const accessiblePageIds = new Set(accessiblePages.map(p => p.id));
+
+          // Filter by permissions using O(1) Set lookup
           const driveResults = [];
           for (const page of drivePages) {
-            const accessLevel = await getUserAccessLevel(userId, page.id);
-            if (accessLevel?.canView) {
+            if (accessiblePageIds.has(page.id)) {
               driveResults.push({
                 pageId: page.id,
                 title: page.title,

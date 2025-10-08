@@ -1,0 +1,49 @@
+CSRF Protection - Updated Files List
+=====================================
+
+18 files were successfully updated to include CSRF protection (requireCSRF: true):
+
+1. apps/web/src/app/api/account/avatar/route.ts
+2. apps/web/src/app/api/account/password/route.ts
+3. apps/web/src/app/api/account/route.ts
+4. apps/web/src/app/api/agents/[agentId]/config/route.ts
+5. apps/web/src/app/api/agents/create/route.ts
+6. apps/web/src/app/api/drives/[driveId]/pages/route.ts
+7. apps/web/src/app/api/drives/[driveId]/restore/route.ts
+8. apps/web/src/app/api/drives/[driveId]/route.ts
+9. apps/web/src/app/api/drives/route.ts
+10. apps/web/src/app/api/pages/[pageId]/restore/route.ts
+11. apps/web/src/app/api/pages/[pageId]/route.ts
+12. apps/web/src/app/api/pages/bulk/create-structure/route.ts
+13. apps/web/src/app/api/pages/bulk/delete/route.ts
+14. apps/web/src/app/api/pages/bulk/move/route.ts
+15. apps/web/src/app/api/pages/bulk/rename/route.ts
+16. apps/web/src/app/api/pages/bulk/update-content/route.ts
+17. apps/web/src/app/api/pages/reorder/route.ts
+18. apps/web/src/app/api/pages/route.ts
+
+Documentation files created:
+============================
+
+1. CSRF_IMPLEMENTATION_STATUS.md - Main status document
+2. scripts/complete-csrf-implementation.sh - Helper script for remaining routes
+3. /tmp/csrf_implementation_summary.md - Detailed summary
+4. /tmp/csrf_verification_report.md - Verification guide
+5. UPDATED_FILES.txt - This file
+
+Changes made:
+=============
+
+Category 1: Simple Addition (15 files)
+- Added requireCSRF: true to existing AUTH_OPTIONS
+
+Category 2: Refactored (3 files)
+- Replaced verifyAuth/decodeToken with authenticateRequestWithOptions
+- Added AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true }
+- Updated all user.id/decoded.userId references to userId
+
+All updated routes now:
+- Use authenticateRequestWithOptions for authentication
+- Have AUTH_OPTIONS with requireCSRF: true
+- Follow consistent authentication pattern
+- Are protected against CSRF attacks

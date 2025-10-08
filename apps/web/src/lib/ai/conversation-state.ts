@@ -3,6 +3,8 @@
  * Simple and works everywhere - dashboard, sidebar, across navigation
  */
 
+import { post } from '@/lib/auth-fetch';
+
 const ACTIVE_CONVERSATION_COOKIE = 'activeConversationId';
 const COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
 
@@ -54,23 +56,18 @@ export const conversationState = {
     contextId?: string;
   } = {}) {
     try {
-      const response = await fetch('/api/ai_conversations', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          title: options.title,
-          type: options.type || 'global',
-          contextId: options.contextId,
-        }),
+      const conversation = await post<{
+        id: string;
+        title: string;
+        type: string;
+        lastMessageAt: string;
+        createdAt: string;
+      }>('/api/ai_conversations', {
+        title: options.title,
+        type: options.type || 'global',
+        contextId: options.contextId,
       });
 
-      if (!response.ok) {
-        throw new Error('Failed to create conversation');
-      }
-
-      const conversation = await response.json();
       this.setActiveConversationId(conversation.id);
       return conversation;
     } catch (error) {

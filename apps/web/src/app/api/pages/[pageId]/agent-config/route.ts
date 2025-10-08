@@ -1,9 +1,11 @@
 import { NextResponse } from 'next/server';
-import { authenticateWebRequest, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/server';
 import { db, pages, eq } from '@pagespace/db';
 import { pageSpaceTools } from '@/lib/ai/ai-tools';
 import { loggers } from '@pagespace/lib/server';
+
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
 /**
  * GET - Get Page AI agent configuration
@@ -13,9 +15,9 @@ export async function GET(
   context: { params: Promise<{ pageId: string }> }
 ) {
   try {
-    const auth = await authenticateWebRequest(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
-    const { userId } = auth;
+    const userId = auth.userId;
 
     const { pageId } = await context.params;
 
@@ -70,9 +72,9 @@ export async function PATCH(
   context: { params: Promise<{ pageId: string }> }
 ) {
   try {
-    const auth = await authenticateWebRequest(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
-    const { userId } = auth;
+    const userId = auth.userId;
 
     const { pageId } = await context.params;
     const body = await request.json();

@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { RenameDialog } from "@/components/dialogs/RenameDialog";
 import { DeleteDriveDialog } from "@/components/dialogs/DeleteDriveDialog";
 import { toast } from "sonner";
+import { patch, del, post } from '@/lib/auth-fetch';
 
 const DriveListItem = ({
   drive,
@@ -190,12 +191,7 @@ export default function DriveList() {
     if (!renameDialogState.drive) return;
     const toastId = toast.loading("Renaming drive...");
     try {
-      const response = await fetch(`/api/drives/${renameDialogState.drive.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newName }),
-      });
-      if (!response.ok) throw new Error("Failed to rename drive.");
+      await patch(`/api/drives/${renameDialogState.drive.id}`, { name: newName });
       await fetchDrives(true, true); // Force refresh
       toast.success("Drive renamed.", { id: toastId });
     } catch {
@@ -209,10 +205,7 @@ export default function DriveList() {
     if (!deleteDialogState.drive) return;
     const toastId = toast.loading("Moving drive to trash...");
     try {
-      const response = await fetch(`/api/drives/${deleteDialogState.drive.id}`, {
-        method: "DELETE",
-      });
-      if (!response.ok) throw new Error("Failed to move drive to trash.");
+      await del(`/api/drives/${deleteDialogState.drive.id}`);
       await fetchDrives(true, true); // Force refresh
       if (currentDriveId === deleteDialogState.drive.id) {
         router.push('/dashboard');
@@ -228,10 +221,7 @@ export default function DriveList() {
   const handleRestoreDrive = async (drive: Drive) => {
     const toastId = toast.loading("Restoring drive...");
     try {
-      const response = await fetch(`/api/drives/${drive.id}/restore`, {
-        method: "POST",
-      });
-      if (!response.ok) throw new Error("Failed to restore drive.");
+      await post(`/api/drives/${drive.id}/restore`);
       await fetchDrives(true, true); // Force refresh
       toast.success("Drive restored.", { id: toastId });
     } catch {
@@ -242,10 +232,7 @@ export default function DriveList() {
   const handlePermanentDelete = async (drive: Drive) => {
     const toastId = toast.loading("Permanently deleting drive...");
     try {
-      const response = await fetch(`/api/trash/drives/${drive.id}`, {
-        method: "DELETE",
-      });
-      if (!response.ok) throw new Error("Failed to permanently delete drive.");
+      await del(`/api/trash/drives/${drive.id}`);
       await fetchDrives(true, true); // Force refresh
       toast.success("Drive permanently deleted.", { id: toastId });
     } catch {

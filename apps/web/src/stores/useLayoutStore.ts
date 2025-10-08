@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { patch } from '@/lib/auth-fetch';
 import { persist } from 'zustand/middleware';
 import { getLayoutViewType, PageType } from '@pagespace/lib/client-safe';
 import { toast } from 'sonner';
@@ -425,18 +426,10 @@ export const useLayoutStore = create<LayoutState>()(
 // Helper function to save document to server
 async function saveDocumentToServer(document: DocumentState): Promise<void> {
   try {
-    const response = await fetch(`/api/pages/${document.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        content: document.content,
-        version: document.version
-      })
+    await patch(`/api/pages/${document.id}`, {
+      content: document.content,
+      version: document.version
     });
-    
-    if (!response.ok) {
-      throw new Error(`Save failed: ${response.status}`);
-    }
     
     // Update document state
     useLayoutStore.getState().updateDocument(document.id, {

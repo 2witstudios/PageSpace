@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, aiTasks, eq, and, sql } from '@pagespace/db';
-import { decodeToken } from '@pagespace/lib/auth-utils';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { broadcastTaskEvent } from '@/lib/socket-utils';
+
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
 export async function PATCH(
   request: NextRequest,
@@ -10,6 +12,11 @@ export async function PATCH(
   try {
     const { taskId } = await context.params;
     const { status, note } = await request.json();
+
+    // Authenticate
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (isAuthError(auth)) return auth.error;
+    const userId = auth.userId;
 
     // Validate status
     const validStatuses = ['pending', 'in_progress', 'completed', 'blocked'];
@@ -20,36 +27,13 @@ export async function PATCH(
       );
     }
 
-    // Get user from token
-    const authHeader = request.headers.get('authorization');
-    const cookieHeader = request.headers.get('cookie');
-    
-    let token: string | null = null;
-    if (authHeader?.startsWith('Bearer ')) {
-      token = authHeader.substring(7);
-    } else if (cookieHeader) {
-      const accessTokenMatch = cookieHeader.match(/accessToken=([^;]+)/);
-      if (accessTokenMatch) {
-        token = accessTokenMatch[1];
-      }
-    }
-
-    if (!token) {
-      return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
-    }
-
-    const payload = await decodeToken(token);
-    if (!payload) {
-      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
-    }
-
     // Get the task
     const [task] = await db
       .select()
       .from(aiTasks)
       .where(and(
         eq(aiTasks.id, taskId),
-        eq(aiTasks.userId, payload.userId)
+        eq(aiTasks.userId, userId)
       ));
 
     if (!task) {
@@ -106,7 +90,7 @@ export async function PATCH(
     await broadcastTaskEvent({
       type: 'task_updated',
       taskId: updatedTask.id,
-      userId: payload.userId,
+      userId,
       data: {
         title: updatedTask.title,
         oldStatus: task.status,

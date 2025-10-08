@@ -3,6 +3,7 @@
 import { useAuth } from "@/hooks/use-auth";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { post } from '@/lib/auth-fetch';
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -44,7 +45,7 @@ export default function UserDropdown() {
   );
 
   const handleSignOut = async () => {
-    await fetch('/api/auth/logout', { method: 'POST' });
+    await post('/api/auth/logout');
     router.push('/auth/signin');
     router.refresh();
   };

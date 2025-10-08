@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { streamText, convertToModelMessages, stepCountIs, UIMessage } from 'ai';
 import { incrementUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
 import { broadcastUsageEvent } from '@/lib/socket-utils';
-import { authenticateWebRequest, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import {
   createAIProvider,
   updateUserProviderSettings,
@@ -33,6 +33,8 @@ import { maskIdentifier } from '@/lib/logging/mask';
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
 
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+
 /**
  * GET - Get all messages for a conversation
  */
@@ -41,9 +43,9 @@ export async function GET(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await authenticateWebRequest(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
-    const { userId } = auth;
+    const userId = auth.userId;
 
     const { id } = await context.params;
 
@@ -165,13 +167,13 @@ export async function POST(
   try {
     const usageLogger = loggers.api.child({ module: 'global-assistant-usage' });
     loggers.api.debug('🚀 Global Assistant Chat API: Starting request processing', {});
-    
-    const auth = await authenticateWebRequest(request);
+
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) {
       loggers.api.debug('❌ Global Assistant Chat API: Authentication failed', {});
       return auth.error;
     }
-    const { userId } = auth;
+    const userId = auth.userId;
 
     const { id: conversationId } = await context.params;
     loggers.api.debug('✅ Global Assistant Chat API: Authentication successful, userId:', { userId });

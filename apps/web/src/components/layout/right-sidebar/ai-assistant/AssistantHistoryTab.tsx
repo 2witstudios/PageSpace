@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Trash2, Search, MessageSquare } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { conversationState } from '@/lib/ai/conversation-state';
+import { del } from '@/lib/auth-fetch';
 
 interface Conversation {
   id: string;
@@ -79,30 +80,26 @@ const AssistantHistoryTab: React.FC = () => {
     }
 
     try {
-      const response = await fetch(`/api/ai_conversations/${conversationId}`, {
-        method: 'DELETE',
-      });
+      await del(`/api/ai_conversations/${conversationId}`);
 
-      if (response.ok) {
-        // Remove from local state
-        const updatedConversations = conversations.filter(conv => conv.id !== conversationId);
-        setConversations(updatedConversations);
-        setFilteredConversations(updatedConversations.filter(conv =>
-          conv.title?.toLowerCase().includes(searchQuery.toLowerCase()) || searchQuery.trim() === ''
-        ));
+      // Remove from local state
+      const updatedConversations = conversations.filter(conv => conv.id !== conversationId);
+      setConversations(updatedConversations);
+      setFilteredConversations(updatedConversations.filter(conv =>
+        conv.title?.toLowerCase().includes(searchQuery.toLowerCase()) || searchQuery.trim() === ''
+      ));
 
-        // If deleted conversation was active, create a new one
-        if (conversationId === activeConversationId) {
-          const newConversation = await conversationState.startNewConversation();
-          setActiveConversationId(newConversation.id);
-          
-          // Use client-side navigation for both dashboard and drive routes
-          if (pathname === '/dashboard') {
-            router.push(`/dashboard?c=${newConversation.id}`);
-          } else if (pathname.startsWith('/dashboard/')) {
-            // For drive routes, preserve the path and add conversation parameter
-            router.push(`${pathname}?c=${newConversation.id}`);
-          }
+      // If deleted conversation was active, create a new one
+      if (conversationId === activeConversationId) {
+        const newConversation = await conversationState.startNewConversation();
+        setActiveConversationId(newConversation.id);
+
+        // Use client-side navigation for both dashboard and drive routes
+        if (pathname === '/dashboard') {
+          router.push(`/dashboard?c=${newConversation.id}`);
+        } else if (pathname.startsWith('/dashboard/')) {
+          // For drive routes, preserve the path and add conversation parameter
+          router.push(`${pathname}?c=${newConversation.id}`);
         }
       }
     } catch (error) {
