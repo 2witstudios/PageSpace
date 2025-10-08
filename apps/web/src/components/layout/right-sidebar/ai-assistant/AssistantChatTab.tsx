@@ -11,7 +11,7 @@ import { AgentRole, AgentRoleUtils } from '@/lib/ai/agent-roles';
 import { AgentRoleDropdownCompact } from '@/components/ai/AgentRoleDropdown';
 import { conversationState } from '@/lib/ai/conversation-state';
 import { useDriveStore } from '@/hooks/useDrive';
-import { post, authFetch, fetchWithAuth } from '@/lib/auth-fetch';
+import { post, fetchWithAuth } from '@/lib/auth-fetch';
 
 
 interface ProviderSettings {
@@ -209,7 +209,7 @@ const AssistantChatTab: React.FC = () => {
         api: `/api/ai_conversations/${currentConversationId}/messages`,
         fetch: (url, options) => {
           const urlString = url instanceof Request ? url.url : url.toString();
-          return authFetch.fetch(urlString, options);
+          return fetchWithAuth(urlString, options);
         },
       }),
       experimental_throttle: 50,

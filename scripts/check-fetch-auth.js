@@ -136,19 +136,6 @@ function isAuthenticatedCall(node) {
 }
 
 /**
- * Check if this is an authFetch.fetch call (AI SDK transport)
- */
-function isAuthFetchWrapper(node) {
-  return (
-    node.type === 'CallExpression' &&
-    node.callee.type === 'MemberExpression' &&
-    node.callee.object.type === 'Identifier' &&
-    node.callee.object.name === 'authFetch' &&
-    node.callee.property.name === 'fetch'
-  );
-}
-
-/**
  * Extract the URL from a fetch call if it's a string literal
  */
 function extractUrl(node) {
@@ -211,14 +198,6 @@ function traverseNode(node, filePath, line = 1) {
       file: filePath,
       line: node.loc?.start.line || line,
       wrapper: node.callee.name,
-    });
-  }
-
-  if (isAuthFetchWrapper(node)) {
-    results.wrapperUsage.push({
-      file: filePath,
-      line: node.loc?.start.line || line,
-      wrapper: 'authFetch.fetch',
     });
   }
 

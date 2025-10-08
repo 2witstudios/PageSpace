@@ -14,7 +14,7 @@ import { RoleSelector } from '@/components/ai/RoleSelector';
 import { conversationState } from '@/lib/ai/conversation-state';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore } from '@/hooks/useDrive';
-import { authFetch, fetchWithAuth } from '@/lib/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth-fetch';
 
 
 interface ProviderSettings {
@@ -196,7 +196,7 @@ const GlobalAssistantView: React.FC = () => {
         api: `/api/ai_conversations/${currentConversationId}/messages`,
         fetch: (url, options) => {
           const urlString = url instanceof Request ? url.url : url.toString();
-          return authFetch.fetch(urlString, options);
+          return fetchWithAuth(urlString, options);
         },
       }),
       experimental_throttle: 50,

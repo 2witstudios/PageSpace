@@ -361,13 +361,13 @@ class AuthFetch {
   }
 }
 
-// Create a singleton instance
+// Create a singleton instance (internal use only for binding)
 const authFetch = new AuthFetch();
 
-// Export both the instance and the class for flexibility
-export { authFetch, AuthFetch };
+// Export the class for extensibility if needed
+export { AuthFetch };
 
-// Export convenience methods
+// Export convenience functions (preferred API)
 export const fetchWithAuth = authFetch.fetch.bind(authFetch);
 export const fetchJSON = authFetch.fetchJSON.bind(authFetch);
 export const post = authFetch.post.bind(authFetch);
