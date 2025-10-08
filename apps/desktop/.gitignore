@@ -1,0 +1,27 @@
+# Build outputs
+dist/
+dist-electron/
+
+# Dependencies
+node_modules/
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Electron builder
+*.dmg
+*.zip
+*.exe
+*.deb
+*.rpm
+*.AppImage
+*.snap

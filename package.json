@@ -17,7 +17,10 @@
     "test:coverage": "pnpm --filter @pagespace/lib test -- --coverage",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "test:security": "vitest run --dir apps/web/src/test/security"
+    "test:security": "vitest run --dir apps/web/src/test/security",
+    "dev:desktop": "pnpm --filter desktop dev",
+    "build:desktop": "pnpm --filter desktop build",
+    "package:desktop": "pnpm --filter desktop package"
   },
   "devDependencies": {
     "@faker-js/faker": "^9.3.0",
