@@ -6,6 +6,7 @@
 import { writeUserActivity, writeApiMetrics } from './logger-database';
 import { loggers } from './logger-config';
 import { AIMonitoring } from './ai-monitoring';
+import { decodeToken } from './auth-utils';
 
 /**
  * Track user activity - fire and forget, never blocks
@@ -239,10 +240,9 @@ export async function getUserIdFromRequest(request: Request): Promise<string | u
     
     const token = cookies.accessToken;
     if (!token) return undefined;
-    
-    // TODO: Decode JWT to get user ID
-    // For now, return undefined - integrate with your auth system
-    return undefined;
+
+    const payload = await decodeToken(token);
+    return payload?.userId;
   } catch {
     return undefined;
   }
