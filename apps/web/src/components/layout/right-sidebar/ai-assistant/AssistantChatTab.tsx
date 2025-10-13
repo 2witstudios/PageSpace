@@ -1,17 +1,17 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useChat } from '@ai-sdk/react';
-import { usePathname, useSearchParams } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import ChatInput, { ChatInputRef } from '@/components/messages/ChatInput';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Loader2, Send, Plus } from 'lucide-react';
-import { UIMessage, DefaultChatTransport } from 'ai';
 import { CompactConversationMessageRenderer } from '@/components/ai/CompactConversationMessageRenderer';
 import { AgentRole, AgentRoleUtils } from '@/lib/ai/agent-roles';
 import { AgentRoleDropdownCompact } from '@/components/ai/AgentRoleDropdown';
-import { conversationState } from '@/lib/ai/conversation-state';
 import { useDriveStore } from '@/hooks/useDrive';
-import { post, fetchWithAuth } from '@/lib/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth-fetch';
+import { useEditingStore } from '@/stores/useEditingStore';
+import { useGlobalChat } from '@/contexts/GlobalChatContext';
 
 
 interface ProviderSettings {
@@ -43,17 +43,16 @@ interface LocationContext {
 
 const AssistantChatTab: React.FC = () => {
   const pathname = usePathname();
-  const searchParams = useSearchParams();
+
+  // Use shared global chat context - this is the key change!
+  const { chat, currentConversationId, isInitialized, createNewConversation } = useGlobalChat();
+
+  // Local state for component-specific concerns
   const [providerSettings, setProviderSettings] = useState<ProviderSettings | null>(null);
-  const [isInitialized, setIsInitialized] = useState<boolean>(false);
-  const [initialMessages, setInitialMessages] = useState<UIMessage[]>([]);
   const [input, setInput] = useState<string>('');
   const [currentAgentRole, setCurrentAgentRole] = useState<AgentRole>(AgentRoleUtils.getDefaultRole());
-  const [pagination, setPagination] = useState<{ hasMore: boolean; nextCursor: string | null } | null>(null);
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
-  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   
   // Refs for auto-scrolling and chat input
   const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -196,169 +195,61 @@ const AssistantChatTab: React.FC = () => {
     extractLocationContext();
   }, [pathname, drives]);
 
-  // Initialize conversation will be handled in the main initialization effect
-
-  // AI SDK v5 useChat hook with conversation-specific endpoint
-  const chatConfig = React.useMemo(() => {
-    if (!currentConversationId) return null;
-    
-    return {
-      id: currentConversationId,
-      messages: initialMessages,
-      transport: new DefaultChatTransport({
-        api: `/api/ai_conversations/${currentConversationId}/messages`,
-        fetch: (url, options) => {
-          const urlString = url instanceof Request ? url.url : url.toString();
-          return fetchWithAuth(urlString, options);
-        },
-      }),
-      experimental_throttle: 50,
-      onError: (error: Error) => {
-        // Log full error details to console for debugging
-        console.error('❌ Global Assistant: Chat error occurred:', error);
-        console.error('Error details:', {
-          message: error.message,
-          stack: error.stack,
-          name: error.name
-        });
-        
-        if (error.message?.includes('Unauthorized') || error.message?.includes('401')) {
-          console.error('🔒 Global Assistant: Authentication failed - user may need to log in again');
-        }
-        
-        // Don't show technical details to users - error display is handled in UI
-      },
-    };
-  }, [currentConversationId, initialMessages]);
-
-  const { 
-    messages, 
+  // Use the shared Chat instance from context - this is what enables state sharing!
+  // Both AssistantChatTab and GlobalAssistantView will use the same Chat instance
+  const {
+    messages,
     sendMessage,
-    setMessages,
     status,
     error,
-  } = useChat(chatConfig || {});
+  } = useChat({ chat });
 
-  // Sync loaded messages with useChat hook after initialization
-  React.useEffect(() => {
-    if (isInitialized && initialMessages.length > 0 && messages.length === 0) {
-      setMessages(initialMessages);
+  // ✅ Removed setMessages sync effect - AI SDK v5 manages messages internally
+
+  // Register streaming state with editing store (state-based protection)
+  // Note: In AI SDK v5, status can be 'submitted' (streaming), 'ready', or 'error'
+  useEffect(() => {
+    const componentId = `assistant-sidebar-${currentConversationId || 'init'}`;
+
+    if (status === 'submitted') {
+      useEditingStore.getState().startStreaming(componentId, {
+        conversationId: currentConversationId || undefined,
+        componentName: 'AssistantChatTab',
+      });
+    } else {
+      useEditingStore.getState().endStreaming(componentId);
     }
-  }, [isInitialized, initialMessages, messages.length, setMessages]);
 
-  // Auto-scroll when messages change
+    // Cleanup on unmount
+    return () => {
+      useEditingStore.getState().endStreaming(componentId);
+    };
+  }, [status, currentConversationId]);
+
+  // ✅ Combined scroll effects - use messages.length instead of messages array
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
-
-  // Auto-scroll when AI status changes (thinking/responding)
-  useEffect(() => {
-    scrollToBottom();
-  }, [status]);
+  }, [messages.length, status]);
 
   // Reset error visibility when new error occurs
   useEffect(() => {
     if (error) setShowError(true);
   }, [error]);
 
-  // Watch for URL changes and sync with conversation
+  // Load provider settings on mount
   useEffect(() => {
-    const urlConversationId = searchParams.get('c');
-    
-    if (urlConversationId && urlConversationId !== currentConversationId) {
-      // URL has a different conversation - load it
-      setCurrentConversationId(urlConversationId);
-      conversationState.setActiveConversationId(urlConversationId);
-      setIsInitialized(false); // Force re-initialization
-    } else if (!urlConversationId && !currentConversationId) {
-      // No URL param and no current conversation - get from cookie or most recent
-      const cookieConversationId = conversationState.getActiveConversationId();
-      if (cookieConversationId) {
-        setCurrentConversationId(cookieConversationId);
-      }
-    }
-  }, [searchParams, currentConversationId]);
-
-  // Load conversation when ID changes
-  useEffect(() => {
-    const initializeChat = async () => {
-      if (!currentConversationId) {
-        // Try to get most recent conversation if no ID
-        try {
-          const globalConvResponse = await fetchWithAuth('/api/ai_conversations/global');
-          
-          if (globalConvResponse.ok) {
-            const globalConversation = await globalConvResponse.json();
-            if (globalConversation && globalConversation.id) {
-              setCurrentConversationId(globalConversation.id);
-              conversationState.setActiveConversationId(globalConversation.id);
-              return; // Will trigger this effect again
-            }
-          }
-          
-          // No existing conversations - create first one
-          const allConvResponse = await fetchWithAuth('/api/ai_conversations');
-          if (allConvResponse.ok) {
-            const convList = await allConvResponse.json();
-            const globalConvs = convList.filter((c: { type: string }) => c.type === 'global');
-            if (globalConvs.length === 0) {
-              try {
-                const newConversation = await post<{ id: string }>('/api/ai_conversations', { type: 'global' });
-                setCurrentConversationId(newConversation.id);
-                conversationState.setActiveConversationId(newConversation.id);
-              } catch (error) {
-                console.error('Failed to create conversation:', error);
-              }
-            }
-          }
-        } catch (error) {
-          console.error('Failed to initialize conversation:', error);
-        }
-        
-        setIsInitialized(true);
-        return;
-      }
-      
+    const loadProviderSettings = async () => {
       try {
-        // Check multi-provider configuration
         const configResponse = await fetchWithAuth('/api/ai/settings');
         const configData: ProviderSettings = await configResponse.json();
         setProviderSettings(configData);
-        
-        // Load messages for current conversation (with pagination)
-        try {
-          const messagesResponse = await fetchWithAuth(`/api/ai_conversations/${currentConversationId}/messages?limit=50`);
-          if (messagesResponse.ok) {
-            const messageData = await messagesResponse.json();
-            // Handle both old format (array) and new format (object with messages and pagination)
-            if (Array.isArray(messageData)) {
-              setInitialMessages(messageData);
-              setPagination(null);
-            } else {
-              setInitialMessages(messageData.messages || []);
-              setPagination(messageData.pagination || null);
-            }
-          } else {
-            setInitialMessages([]);
-            setPagination(null);
-          }
-        } catch (error) {
-          console.error('Failed to load conversation messages:', error);
-          setInitialMessages([]);
-        }
-        
-        setIsInitialized(true);
       } catch (error) {
-        console.error('Failed to initialize:', error);
-        setInitialMessages([]);
-        setIsInitialized(true);
+        console.error('Failed to load provider settings:', error);
       }
     };
 
-    setIsInitialized(false);
-    setInitialMessages([]);
-    initializeChat();
-  }, [currentConversationId]);
+    loadProviderSettings();
+  }, []);
   
   // Listen for settings updates and reload provider settings
   useEffect(() => {
@@ -378,53 +269,10 @@ const AssistantChatTab: React.FC = () => {
     };
   }, []);
 
-  const loadMoreMessages = async () => {
-    if (!currentConversationId || !pagination?.hasMore || !pagination?.nextCursor || isLoadingMore) {
-      return;
-    }
-
-    setIsLoadingMore(true);
-    try {
-      const response = await fetchWithAuth(
-        `/api/ai_conversations/${currentConversationId}/messages?limit=25&cursor=${pagination.nextCursor}&direction=before`
-      );
-
-      if (response.ok) {
-        const messageData = await response.json();
-        const olderMessages = Array.isArray(messageData) ? messageData : messageData.messages || [];
-
-        // Prepend older messages to the existing ones
-        setInitialMessages(prev => [...olderMessages, ...prev]);
-
-        // Update pagination info
-        if (!Array.isArray(messageData) && messageData.pagination) {
-          setPagination(messageData.pagination);
-        }
-      }
-    } catch (error) {
-      console.error('Failed to load more messages:', error);
-    } finally {
-      setIsLoadingMore(false);
-    }
-  };
-
+  // Use the context method to create new conversation
   const handleNewConversation = async () => {
     try {
-      const newConversation = await post<{ id: string }>('/api/ai_conversations', { type: 'global' });
-
-      if (newConversation) {
-        setCurrentConversationId(newConversation.id);
-        conversationState.setActiveConversationId(newConversation.id);
-        setInitialMessages([]);
-        setMessages([]); // Clear messages in the chat view
-
-        // Update URL to reflect new conversation
-        const url = new URL(window.location.href);
-        url.searchParams.set('c', newConversation.id);
-        window.history.pushState({}, '', url.toString());
-      } else {
-        throw new Error('Failed to create conversation');
-      }
+      await createNewConversation();
     } catch (error) {
       console.error('Failed to create new conversation:', error);
     }
@@ -484,28 +332,6 @@ const AssistantChatTab: React.FC = () => {
       <div className="flex-1 min-h-0 overflow-hidden">
         <ScrollArea className="h-full p-3" ref={scrollAreaRef}>
           <div className="space-y-3">
-            {/* Load More Messages Button */}
-            {pagination?.hasMore && messages.length > 0 && (
-              <div className="flex justify-center py-2">
-                <Button
-                  onClick={loadMoreMessages}
-                  disabled={isLoadingMore}
-                  variant="outline"
-                  size="sm"
-                  className="text-xs"
-                >
-                  {isLoadingMore ? (
-                    <>
-                      <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-                      Loading...
-                    </>
-                  ) : (
-                    'Load older messages'
-                  )}
-                </Button>
-              </div>
-            )}
-
             {messages.length === 0 ? (
               <div className="flex items-center justify-center h-20 text-muted-foreground text-xs text-center">
                 <div>

@@ -392,9 +392,33 @@ export const authStoreHelpers = {
     if (typeof window === 'undefined') return;
 
     const handleAuthRefreshed = () => {
-      console.log('[AUTH_STORE] Token refreshed - updating session');
-      // Token was refreshed successfully, update auth state silently
-      authStoreHelpers.loadSession();
+      // Import editing store dynamically to avoid circular dependencies
+      import('@/stores/useEditingStore').then(({ useEditingStore, getEditingDebugInfo }) => {
+        const editingState = useEditingStore.getState();
+
+        // Check if any editing or streaming is active
+        if (editingState.isAnyActive()) {
+          const debugInfo = getEditingDebugInfo();
+          console.log('[AUTH_STORE] Deferring session reload - active editing/streaming detected', {
+            sessionCount: debugInfo.sessionCount,
+            isEditing: debugInfo.isAnyEditing,
+            isStreaming: debugInfo.isAnyStreaming,
+            sessions: debugInfo.sessions.map(s => ({
+              type: s.type,
+              id: s.id,
+              duration: `${Math.round(s.duration / 1000)}s`,
+            })),
+          });
+
+          // Queue refresh for when editing/streaming completes
+          // The next auth check will pick it up naturally
+          return;
+        }
+
+        console.log('[AUTH_STORE] Token refreshed - updating session');
+        // Token was refreshed successfully, update auth state silently
+        authStoreHelpers.loadSession();
+      });
     };
 
     const handleAuthExpired = async () => {

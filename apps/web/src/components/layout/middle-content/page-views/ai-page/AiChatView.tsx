@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Loader2, Send, Settings, MessageSquare } from 'lucide-react';
 import { UIMessage, DefaultChatTransport } from 'ai';
+import { useEditingStore } from '@/stores/useEditingStore';
 import { ConversationMessageRenderer } from '@/components/ai/ConversationMessageRenderer';
 import { buildPagePath } from '@/lib/tree/tree-utils';
 import { useDriveStore } from '@/hooks/useDrive';
@@ -86,7 +87,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // Use conditional rendering to only initialize when messages are loaded
   const chatConfig = React.useMemo(() => ({
     id: page.id, // Use pageId as chatId for AI SDK v5 persistence
-    messages: initialMessages, // AI SDK v5 pattern for loading existing messages
+    messages: initialMessages, // AI SDK v5 pattern - passed once, managed internally
     transport: new DefaultChatTransport({
       api: '/api/ai/chat',
       fetch: (url, options) => {
@@ -103,40 +104,50 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
         stack: error.stack,
         name: error.name
       });
-      
+
       // Handle authentication errors specifically
       if (error.message?.includes('Unauthorized') || error.message?.includes('401')) {
         console.error('🔒 AiChatView: Authentication failed - user may need to log in again');
       }
-      
+
       // Don't show technical details to users - error display is handled in UI
     },
-  }), [page.id, initialMessages]);
+  }), [page.id]); // ✅ Fixed: Removed initialMessages dependency
 
-  const { 
-    messages, 
+  const {
+    messages,
     sendMessage,
-    setMessages,
     status,
     error,
   } = useChat(chatConfig);
 
-  // Sync loaded messages with useChat hook after initialization
-  React.useEffect(() => {
-    if (isInitialized && initialMessages.length > 0 && messages.length === 0) {
-      setMessages(initialMessages);
+  // ✅ Removed setMessages sync effect - AI SDK v5 manages messages internally
+  // No need to manually sync after initialization
+
+  // Register streaming state with editing store (state-based protection)
+  // Note: In AI SDK v5, status can be 'submitted' (streaming), 'ready', or 'error'
+  useEffect(() => {
+    const componentId = `ai-chat-${page.id}`;
+
+    if (status === 'submitted') {
+      useEditingStore.getState().startStreaming(componentId, {
+        pageId: page.id,
+        componentName: 'AiChatView',
+      });
+    } else {
+      useEditingStore.getState().endStreaming(componentId);
     }
-  }, [isInitialized, initialMessages, messages.length, setMessages]);
 
-  // Auto-scroll when messages change
+    // Cleanup on unmount
+    return () => {
+      useEditingStore.getState().endStreaming(componentId);
+    };
+  }, [status, page.id]);
+
+  // ✅ Combined scroll effects - use messages.length instead of messages array
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
-
-  // Auto-scroll when AI status changes (thinking/responding)
-  useEffect(() => {
-    scrollToBottom();
-  }, [status]);
+  }, [messages.length, status]);
 
   // Reset error visibility when new error occurs
   useEffect(() => {

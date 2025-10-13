@@ -19,11 +19,15 @@ export function EditorToggles() {
   const { activeView, setActiveView } = useDocumentStore();
   const params = useParams();
   const pageId = params.pageId as string;
-  
+
   // Fetch page data to determine type
   const { data: pageData } = useSWR(
     pageId ? `/api/pages/${pageId}` : null,
-    fetcher
+    fetcher,
+    {
+      revalidateOnFocus: false, // Don't revalidate on tab focus (prevents interruptions)
+      refreshInterval: 300000, // 5 minutes (prevents unnecessary polling)
+    }
   );
   
   // Only show editor toggles for document and canvas pages

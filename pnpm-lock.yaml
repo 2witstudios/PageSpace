@@ -569,9 +569,15 @@ importers:
       '@react-email/preview-server':
         specifier: 4.2.12
         version: 4.2.12(@opentelemetry/api@1.9.0)(@playwright/test@1.55.1)(postcss@8.5.6)(ts-node@10.9.2(@types/node@24.5.2)(typescript@5.9.2))
+      '@types/html-to-docx':
+        specifier: ^1.8.0
+        version: 1.8.0
       '@types/react':
         specifier: ^19.1.13
         version: 19.1.13
+      '@types/xlsx':
+        specifier: ^0.0.36
+        version: 0.0.36
       react:
         specifier: ^19.1.1
         version: 19.1.1
@@ -3839,6 +3845,9 @@ packages:
   '@types/hast@3.0.4':
     resolution: {integrity: sha512-WPs+bbQw5aCj+x6laNGWLH3wviHtoCv/P3+otBhbOhJgG8qtpdAMlTCxLtsTWA7LH1Oh/bFCHsBn0TPS5m30EQ==}
 
+  '@types/html-to-docx@1.8.0':
+    resolution: {integrity: sha512-z1sP0XmOGfxChBP5s4bzhaAjaOqlQ3hRKol8diGQG3vYvJF231t/xYT43Mo3q/MzKYzhfCEkN8l40dn4qHdjYg==}
+
   '@types/http-errors@2.0.5':
     resolution: {integrity: sha512-r8Tayk8HJnX0FztbZN7oVqGccWgw98T/0neJphO91KkmOzug1KkofZURD4UaD5uH8AqcFLfdPErnBod0u71/qg==}
 
@@ -3967,6 +3976,10 @@ packages:
 
   '@types/webpack@5.28.5':
     resolution: {integrity: sha512-wR87cgvxj3p6D0Crt1r5avwqffqPXUkNlnQ1mjU93G7gCuFjufZR4I6j8cz5g1F1tTYpfOOFvly+cmIQwL9wvw==}
+
+  '@types/xlsx@0.0.36':
+    resolution: {integrity: sha512-mvfrKiKKMErQzLMF8ElYEH21qxWCZtN59pHhWGmWCWFJStYdMWjkDSAy6mGowFxHXaXZWe5/TW7pBUiWclIVOw==}
+    deprecated: This is a stub types definition for xlsx (https://github.com/sheetjs/js-xlsx). xlsx provides its own type definitions, so you don't need @types/xlsx installed!
 
   '@types/yargs-parser@21.0.3':
     resolution: {integrity: sha512-I4q9QU9MQv4oEOz4tAHJtNz1cwuLxn2F3xcc2iV5WdqLPpUnj30aUuxt1mAxYTG+oe8CZMV/+6rU4S4gRDzqtQ==}
@@ -11804,7 +11817,7 @@ snapshots:
   '@types/body-parser@1.19.6':
     dependencies:
       '@types/connect': 3.4.38
-      '@types/node': 22.18.6
+      '@types/node': 24.5.2
 
   '@types/connect@3.4.38':
     dependencies:
@@ -11866,7 +11879,7 @@ snapshots:
 
   '@types/express-serve-static-core@5.0.7':
     dependencies:
-      '@types/node': 22.18.6
+      '@types/node': 24.5.2
       '@types/qs': 6.14.0
       '@types/range-parser': 1.2.7
       '@types/send': 0.17.5
@@ -11885,6 +11898,10 @@ snapshots:
   '@types/hast@3.0.4':
     dependencies:
       '@types/unist': 3.0.3
+
+  '@types/html-to-docx@1.8.0':
+    dependencies:
+      '@types/node': 24.5.2
 
   '@types/http-errors@2.0.5': {}
 
@@ -11997,7 +12014,7 @@ snapshots:
   '@types/serve-static@1.15.8':
     dependencies:
       '@types/http-errors': 2.0.5
-      '@types/node': 22.18.6
+      '@types/node': 24.5.2
       '@types/send': 0.17.5
 
   '@types/stack-utils@2.0.3': {}
@@ -12023,12 +12040,16 @@ snapshots:
     dependencies:
       '@types/node': 24.5.2
       tapable: 2.2.3
-      webpack: 5.101.3(esbuild@0.25.0)
+      webpack: 5.101.3(esbuild@0.19.12)
     transitivePeerDependencies:
       - '@swc/core'
       - esbuild
       - uglify-js
       - webpack-cli
+
+  '@types/xlsx@0.0.36':
+    dependencies:
+      xlsx: 0.18.5
 
   '@types/yargs-parser@21.0.3': {}
 
@@ -15408,7 +15429,7 @@ snapshots:
     dependencies:
       loader-utils: 2.0.4
       monaco-editor: 0.52.2
-      webpack: 5.101.3(esbuild@0.25.0)
+      webpack: 5.101.3(esbuild@0.19.12)
 
   monaco-editor@0.52.2: {}
 
@@ -17143,16 +17164,16 @@ snapshots:
       minizlib: 3.1.0
       yallist: 5.0.0
 
-  terser-webpack-plugin@5.3.14(esbuild@0.25.0)(webpack@5.101.3(esbuild@0.19.12)):
+  terser-webpack-plugin@5.3.14(esbuild@0.19.12)(webpack@5.101.3(esbuild@0.25.0)):
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
       jest-worker: 27.5.1
       schema-utils: 4.3.2
       serialize-javascript: 6.0.2
       terser: 5.44.0
-      webpack: 5.101.3(esbuild@0.25.0)
+      webpack: 5.101.3(esbuild@0.19.12)
     optionalDependencies:
-      esbuild: 0.25.0
+      esbuild: 0.19.12
 
   terser@5.44.0:
     dependencies:
@@ -17723,7 +17744,7 @@ snapshots:
 
   webpack-sources@3.3.3: {}
 
-  webpack@5.101.3(esbuild@0.25.0):
+  webpack@5.101.3(esbuild@0.19.12):
     dependencies:
       '@types/eslint-scope': 3.7.7
       '@types/estree': 1.0.8
@@ -17747,7 +17768,7 @@ snapshots:
       neo-async: 2.6.2
       schema-utils: 4.3.2
       tapable: 2.2.3
-      terser-webpack-plugin: 5.3.14(esbuild@0.25.0)(webpack@5.101.3(esbuild@0.19.12))
+      terser-webpack-plugin: 5.3.14(esbuild@0.19.12)(webpack@5.101.3(esbuild@0.25.0))
       watchpack: 2.4.4
       webpack-sources: 3.3.3
     transitivePeerDependencies:
