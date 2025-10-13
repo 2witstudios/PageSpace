@@ -69,7 +69,7 @@ export async function GET(request: Request) {
 
     return NextResponse.json({
       currentProvider: user?.currentAiProvider || 'pagespace',
-      currentModel: user?.currentAiModel || 'GLM-4.5-air',
+      currentModel: user?.currentAiModel || 'glm-4.5-air',
       userSubscriptionTier: user?.subscriptionTier || 'free',
       providers: {
         pagespace: {

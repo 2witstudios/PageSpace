@@ -279,7 +279,7 @@ export async function POST(request: Request) {
     // Get user's current AI provider settings
     const [user] = await db.select().from(users).where(eq(users.id, userId));
     const currentProvider = selectedProvider || user?.currentAiProvider || 'pagespace';
-    const currentModel = selectedModel || user?.currentAiModel || 'GLM-4.5-air';
+    const currentModel = selectedModel || user?.currentAiModel || 'glm-4.5-air';
 
     // Pro subscription check for special providers
     const { requiresProSubscription, createSubscriptionRequiredResponse } = await import('@/lib/subscription/rate-limit-middleware');
@@ -861,7 +861,7 @@ export async function GET(request: Request) {
     
     // Get page-specific settings if pageId provided
     let currentProvider = user?.currentAiProvider || 'pagespace';
-    let currentModel = user?.currentAiModel || 'qwen/qwen3-coder:free';
+    let currentModel = user?.currentAiModel || 'glm-4.5-air';
     
     if (pageId) {
       const [page] = await db.select().from(pages).where(eq(pages.id, pageId));

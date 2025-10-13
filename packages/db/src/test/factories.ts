@@ -16,7 +16,7 @@ export const factories = {
       tokenVersion: 0,
       role: 'user' as const,
       currentAiProvider: 'pagespace',
-      currentAiModel: 'GLM-4.5-air',
+      currentAiModel: 'glm-4.5-air',
       storageUsedBytes: 0,
       activeUploads: 0,
       subscriptionTier: 'free',

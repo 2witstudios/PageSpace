@@ -37,7 +37,7 @@ const AssistantSettingsTab: React.FC = () => {
   const router = useRouter();
   const [providerSettings, setProviderSettings] = useState<ProviderSettings | null>(null);
   const [selectedProvider, setSelectedProvider] = useState<string>('pagespace');
-  const [selectedModel, setSelectedModel] = useState<string>('GLM-4.5-air');
+  const [selectedModel, setSelectedModel] = useState<string>('glm-4.5-air');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 

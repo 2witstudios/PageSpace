@@ -112,7 +112,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
       // Don't show technical details to users - error display is handled in UI
     },
-  }), [page.id]); // ✅ Fixed: Removed initialMessages dependency
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [page.id]); // initialMessages intentionally excluded - passed once for AI SDK v5 pattern
 
   const {
     messages,
