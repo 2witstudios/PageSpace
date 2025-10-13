@@ -1,17 +1,27 @@
 # UI Refresh Protection System
 
+**Status:** ✅ **IMPLEMENTED AND ACTIVE**
+**Created:** 2025-01-13
+**Last Updated:** 2025-10-13
+
 ## Overview
 
-PageSpace implements a state-based protection system to prevent UI refreshes from disrupting user interactions during active editing and AI streaming. This system uses Zustand for global state management and integrates with SWR, auth refresh cycles, and AI SDK patterns.
+PageSpace implements a state-based protection system to prevent UI refreshes from disrupting user interactions during active editing and AI streaming. This system uses Zustand for global state management and integrates with SWR, auth refresh cycles, and AI SDK v5 Shared Chat Context patterns.
 
-## Problem Statement
+**Key Components:**
+- `useEditingStore` - Global state tracking active editing/streaming sessions
+- `GlobalChatContext` - Shared Chat instance for persistent AI state
+- SWR `isPaused()` integration - Conditional polling based on activity
+- Auth refresh deferral - Session reload deferred during active work
 
-Periodic UI refreshes were causing several UX issues:
+## Problem Statement (SOLVED)
 
-1. **AI Streaming Interruptions**: "Thinking..." indicators disappearing mid-stream, stale streaming state
-2. **Document Editing Disruptions**: Cursor jumping during typing, content loss during auto-save
-3. **Polling Storm**: Multiple components polling SWR every 10-60 seconds
-4. **Auth Refresh Conflicts**: Token refresh cycles (every 12 minutes) reloading session state during active work
+✅ **RESOLVED:** Periodic UI refreshes are no longer causing UX issues:
+
+1. ✅ **AI Streaming Interruptions**: Streaming persists across navigation via Shared Chat Context
+2. ✅ **Document Editing Disruptions**: Cursor position stable, no content loss
+3. ✅ **Polling Storm**: 90% reduction in scheduled refreshes (30s → 5min + Socket.IO)
+4. ✅ **Auth Refresh Conflicts**: Deferred during active editing/streaming
 
 ## Architecture
 
@@ -137,16 +147,48 @@ useEffect(() => {
 
 ## AI SDK v5 Pattern Fixes
 
-### Problem: Incorrect `useChat` Usage
+### Solution: Shared Chat Context Pattern
 
-**Anti-patterns fixed:**
+**Primary Solution:** Global Assistant uses AI SDK v5's official Shared Chat Context pattern to persist streaming state across navigation.
 
-1. ❌ Using `setMessages` to sync external state
-2. ❌ Including `initialMessages` in `useMemo` dependencies
-3. ❌ Using `messages` array as `useEffect` dependency
-4. ❌ Separate scroll effects for messages and status
+**Implementation:** `apps/web/src/contexts/GlobalChatContext.tsx`
 
-### Solution: Correct AI SDK v5 Patterns
+```typescript
+// Create shared Chat instance at Layout level
+function createChatInstance(conversationId: string | null): Chat<UIMessage> {
+  return new Chat<UIMessage>({
+    id: conversationId || undefined,
+    transport: new DefaultChatTransport({
+      api: conversationId ? `/api/ai_conversations/${conversationId}/messages` : '/api/ai/chat',
+      fetch: (url, options) => fetchWithAuth(url, options),
+    }),
+    onError: (error: Error) => console.error('❌ Global Chat Error:', error),
+  });
+}
+
+export function GlobalChatProvider({ children }: { children: ReactNode }) {
+  // Chat instance persists across ALL navigation
+  const [chat, setChat] = useState<Chat<UIMessage>>(() => createChatInstance(null));
+
+  return (
+    <GlobalChatContext.Provider value={{ chat, ... }}>
+      {children}
+    </GlobalChatContext.Provider>
+  );
+}
+
+// Components consume the shared instance
+function AssistantComponent() {
+  const { chat } = useGlobalChat();
+  const { messages, sendMessage, status } = useChat({ chat });
+
+  // Streaming persists even when component unmounts/remounts ✅
+}
+```
+
+### Additional Pattern Fixes
+
+**For page-level AI chats (AiChatView.tsx):**
 
 ```typescript
 // ✅ CORRECT: chatConfig with single dependency
@@ -159,7 +201,8 @@ const chatConfig = React.useMemo(() => ({
   }),
   experimental_throttle: 50,
   onError: (error) => { /* ... */ },
-}), [page.id]); // ✅ Only page.id dependency
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}), [page.id]); // ✅ Only page.id dependency - initialMessages intentionally excluded
 
 const { messages, sendMessage, status, error } = useChat(chatConfig);
 
@@ -173,10 +216,13 @@ useEffect(() => {
 ```
 
 **Why this works:**
-- AI SDK v5 treats `initialMessages` as one-time initialization
+- **Global Assistant:** Shared Chat instance persists at Layout level via React Context
+- **Page-level chats:** AI SDK v5 treats `initialMessages` as one-time initialization
 - Internal state management handles all message updates
 - `messages.length` changes without array reference changing
 - No unnecessary re-renders from array reference changes
+
+**See Also:** [global-assistant-architecture.md](./global-assistant-architecture.md) for complete Shared Chat Context implementation
 
 ## useEffect Dependency Optimization
 

@@ -29,9 +29,13 @@ const GlobalChatContext = createContext<GlobalChatContextValue | undefined>(unde
  * This follows the AI SDK v5 pattern from:
  * https://github.com/vercel/ai/blob/main/content/cookbook/01-next/74-use-shared-chat-context.mdx
  */
-function createChatInstance(conversationId: string | null): Chat<UIMessage> {
+function createChatInstance(
+  conversationId: string | null,
+  initialMessages: UIMessage[] = []
+): Chat<UIMessage> {
   return new Chat<UIMessage>({
     id: conversationId || undefined,
+    messages: initialMessages,
     transport: new DefaultChatTransport({
       api: conversationId
         ? `/api/ai_conversations/${conversationId}/messages`
@@ -52,7 +56,7 @@ function createChatInstance(conversationId: string | null): Chat<UIMessage> {
 
 export function GlobalChatProvider({ children }: { children: ReactNode }) {
   // State for the shared Chat instance - this persists across navigation!
-  const [chat, setChat] = useState<Chat<UIMessage>>(() => createChatInstance(null));
+  const [chat, setChat] = useState<Chat<UIMessage>>(() => createChatInstance(null, []));
 
   // Conversation management state
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
@@ -81,9 +85,9 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
         setCurrentConversationId(conversationId);
         conversationState.setActiveConversationId(conversationId);
 
-        // Create new Chat instance with updated conversation ID
-        // This ensures the transport uses the correct API endpoint
-        setChat(createChatInstance(conversationId));
+        // Create new Chat instance with updated conversation ID and messages
+        // This ensures the transport uses the correct API endpoint and initializes with history
+        setChat(createChatInstance(conversationId, messages));
 
         setIsInitialized(true);
       } else {
@@ -111,8 +115,8 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
         setInitialMessages([]);
         conversationState.setActiveConversationId(newConversation.id);
 
-        // Create new Chat instance for the new conversation
-        setChat(createChatInstance(newConversation.id));
+        // Create new Chat instance for the new conversation with empty messages
+        setChat(createChatInstance(newConversation.id, []));
 
         // Update URL to reflect new conversation
         const url = new URL(window.location.href);

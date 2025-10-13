@@ -4,8 +4,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Trash2, Search, MessageSquare } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
-import { conversationState } from '@/lib/ai/conversation-state';
 import { del, fetchWithAuth } from '@/lib/auth-fetch';
+import { useGlobalChat } from '@/contexts/GlobalChatContext';
 
 interface Conversation {
   id: string;
@@ -18,6 +18,14 @@ interface Conversation {
 const AssistantHistoryTab: React.FC = () => {
   const router = useRouter();
   const pathname = usePathname();
+
+  // Use GlobalChatContext for conversation management
+  const {
+    loadConversation,
+    createNewConversation: createNewGlobalConversation,
+    currentConversationId: globalConversationId
+  } = useGlobalChat();
+
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [filteredConversations, setFilteredConversations] = useState<Conversation[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -41,11 +49,18 @@ const AssistantHistoryTab: React.FC = () => {
       }
     };
 
-    const currentActiveId = conversationState.getActiveConversationId();
-    setActiveConversationId(currentActiveId);
-    
+    // Sync with global conversation ID from context
+    setActiveConversationId(globalConversationId);
+
     loadConversations();
-  }, []);
+  }, [globalConversationId]);
+
+  // Sync local active conversation ID with global context
+  useEffect(() => {
+    if (globalConversationId !== activeConversationId) {
+      setActiveConversationId(globalConversationId);
+    }
+  }, [globalConversationId, activeConversationId]);
 
   // Filter conversations based on search query
   useEffect(() => {
@@ -59,11 +74,13 @@ const AssistantHistoryTab: React.FC = () => {
     }
   }, [searchQuery, conversations]);
 
-  const handleConversationClick = (conversationId: string) => {
-    conversationState.setActiveConversationId(conversationId);
+  const handleConversationClick = async (conversationId: string) => {
+    // Load conversation using GlobalChatContext - this updates the shared Chat instance
+    await loadConversation(conversationId);
+
     setActiveConversationId(conversationId);
-    
-    // Use client-side navigation for both dashboard and drive routes
+
+    // Update URL for browser history
     if (pathname === '/dashboard') {
       router.push(`/dashboard?c=${conversationId}`);
     } else if (pathname.startsWith('/dashboard/')) {
@@ -91,16 +108,12 @@ const AssistantHistoryTab: React.FC = () => {
 
       // If deleted conversation was active, create a new one
       if (conversationId === activeConversationId) {
-        const newConversation = await conversationState.startNewConversation();
-        setActiveConversationId(newConversation.id);
+        // Use GlobalChatContext method to create new conversation
+        // This will update the URL and state automatically
+        await createNewGlobalConversation();
 
-        // Use client-side navigation for both dashboard and drive routes
-        if (pathname === '/dashboard') {
-          router.push(`/dashboard?c=${newConversation.id}`);
-        } else if (pathname.startsWith('/dashboard/')) {
-          // For drive routes, preserve the path and add conversation parameter
-          router.push(`${pathname}?c=${newConversation.id}`);
-        }
+        // setActiveConversationId will be updated via the sync useEffect
+        // No need to manually update URL - createNewGlobalConversation handles it
       }
     } catch (error) {
       console.error('Failed to delete conversation:', error);
