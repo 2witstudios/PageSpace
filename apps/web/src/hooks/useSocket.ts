@@ -4,9 +4,12 @@ import { useSocketStore } from '@/stores/socketStore';
 
 export function useSocket() {
   const { isAuthenticated, user } = useAuth();
-  const { connect, disconnect, getSocket } = useSocketStore();
+  const getSocket = useSocketStore(state => state.getSocket);
 
   useEffect(() => {
+    // Get stable methods directly without subscribing (they don't change)
+    const { connect, disconnect } = useSocketStore.getState();
+
     if (isAuthenticated && user) {
       console.log('🔌 Initializing Socket.IO connection for user:', user.id);
       connect();
@@ -21,7 +24,8 @@ export function useSocket() {
       console.log('🔌 User not authenticated, disconnecting socket');
       disconnect();
     }
-  }, [isAuthenticated, user, connect, disconnect]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated, user?.id]); // user intentionally omitted - only depends on ID for stability
 
   return getSocket();
 }

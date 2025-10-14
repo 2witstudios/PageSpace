@@ -88,7 +88,8 @@ export function usePageTreeSocket(driveId?: string, trashView?: boolean) {
         revalidationTimeoutRef.current = undefined;
       }
     };
-  }, [socket, driveId, handlePageEvent]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [socket?.id, driveId, handlePageEvent]); // socket intentionally omitted - only depends on ID for stability
 
   // Clean up timeout on unmount
   useEffect(() => {

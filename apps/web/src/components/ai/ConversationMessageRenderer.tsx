@@ -45,6 +45,8 @@ export const ConversationMessageRenderer: React.FC<ConversationMessageRendererPr
     updatedAt?: Date;
   } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  // Socket connection (managed by useSocket hook with singleton pattern)
+  // Only used for TODO messages to receive real-time task updates
   const socket = useSocket();
 
   // Load tasks for todo_list messages

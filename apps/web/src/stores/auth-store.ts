@@ -57,7 +57,7 @@ interface AuthState {
 }
 
 const ACTIVITY_TIMEOUT = 60 * 60 * 1000; // 60 minutes (more forgiving)
-const AUTH_CHECK_INTERVAL = 5 * 60 * 1000; // 5 minutes (less frequent)
+const AUTH_CHECK_INTERVAL = 15 * 60 * 1000; // 15 minutes (token refresh handles validation every 12 min)
 const ACTIVITY_UPDATE_THROTTLE = 5 * 1000; // Only update activity every 5 seconds
 const MAX_FAILED_AUTH_ATTEMPTS = 3; // Max failed attempts before circuit breaker
 const FAILED_AUTH_TIMEOUT = 30 * 1000; // 30 seconds timeout for failed attempts
@@ -232,13 +232,34 @@ export const useAuthStore = create<AuthState>()(
 
             if (response.ok) {
               const userData = await response.json();
-              set({
-                user: userData,
-                isAuthenticated: true,
-                lastAuthCheck: Date.now(),
-                failedAuthAttempts: 0,
-                lastFailedAuthCheck: null,
-              });
+              const currentUser = get().user;
+
+              // Check if user data actually changed (prevent unnecessary re-renders)
+              const hasChanged = !currentUser ||
+                currentUser.id !== userData.id ||
+                currentUser.name !== userData.name ||
+                currentUser.email !== userData.email ||
+                currentUser.image !== userData.image ||
+                currentUser.emailVerified !== userData.emailVerified;
+
+              if (hasChanged) {
+                // Data changed - update everything
+                set({
+                  user: userData,
+                  isAuthenticated: true,
+                  lastAuthCheck: Date.now(),
+                  failedAuthAttempts: 0,
+                  lastFailedAuthCheck: null,
+                });
+              } else {
+                // Data identical - only update timestamp
+                set({
+                  lastAuthCheck: Date.now(),
+                  failedAuthAttempts: 0,
+                  lastFailedAuthCheck: null,
+                });
+              }
+
               // Update activity for new session
               get().updateActivity();
             } else if (response.status === 401) {
@@ -399,7 +420,7 @@ export const authStoreHelpers = {
         // Check if any editing or streaming is active
         if (editingState.isAnyActive()) {
           const debugInfo = getEditingDebugInfo();
-          console.log('[AUTH_STORE] Deferring session reload - active editing/streaming detected', {
+          console.log('[AUTH_STORE] Token refreshed during active editing/streaming', {
             sessionCount: debugInfo.sessionCount,
             isEditing: debugInfo.isAnyEditing,
             isStreaming: debugInfo.isAnyStreaming,
@@ -410,14 +431,14 @@ export const authStoreHelpers = {
             })),
           });
 
-          // Queue refresh for when editing/streaming completes
-          // The next auth check will pick it up naturally
+          // Store was already updated by use-token-refresh hook
+          // No need to reload session - editing protection is working
           return;
         }
 
-        console.log('[AUTH_STORE] Token refreshed - updating session');
-        // Token was refreshed successfully, update auth state silently
-        authStoreHelpers.loadSession();
+        console.log('[AUTH_STORE] Token refreshed successfully');
+        // Store was already updated directly by use-token-refresh hook
+        // No additional session reload needed
       });
     };
 
