@@ -32,15 +32,16 @@ import {
   getUserOllamaSettings,
   getUserGLMSettings,
 } from '@/lib/ai/ai-utils';
-import { db, users, chatMessages, pages, eq } from '@pagespace/db';
+import { db, users, chatMessages, pages, eq, and } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { pageSpaceTools } from '@/lib/ai/ai-tools';
-import { 
-  extractMessageContent, 
-  extractToolCalls, 
+import {
+  extractMessageContent,
+  extractToolCalls,
   extractToolResults,
   saveMessageToDatabase,
-  sanitizeMessagesForModel
+  sanitizeMessagesForModel,
+  convertDbMessageToUIMessage
 } from '@/lib/ai/assistant-utils';
 import { processMentionsInMessage, buildMentionSystemPrompt } from '@/lib/ai/mention-processor';
 import { buildTimestampSystemPrompt } from '@/lib/ai/timestamp-utils';
@@ -97,7 +98,7 @@ export async function POST(request: Request) {
     });
     
     const {
-      messages,
+      messages, // Used ONLY to extract new user message, NOT for conversation history
       chatId: requestChatId, // chat ID (page ID) - standard AI SDK pattern
       selectedProvider: requestSelectedProvider,
       selectedModel: requestSelectedModel,
@@ -366,9 +367,51 @@ export async function POST(request: Request) {
       loggers.ai.debug('AI Page Chat API: Using default tool filtering (PARTNER role)');
     }
 
+    // DATABASE-FIRST ARCHITECTURE:
+    // PageSpace uses database as the single source of truth for all messages.
+    // We MUST read conversation history from database, not from client's request.
+    // This ensures edited messages, multi-user changes, and any database updates
+    // are reflected in the AI's context immediately.
+    loggers.ai.debug('AI Chat API: Loading conversation history from database', {
+      pageId: chatId
+    });
+
+    // Read ALL active messages from database (source of truth)
+    const dbMessages = await db
+      .select()
+      .from(chatMessages)
+      .where(and(
+        eq(chatMessages.pageId, chatId),
+        eq(chatMessages.isActive, true)
+      ))
+      .orderBy(chatMessages.createdAt);
+
+    // Convert database messages to UI format using proper conversion function
+    // This handles structured content, tool calls, and tool results
+    const conversationHistory = dbMessages.map(msg =>
+      convertDbMessageToUIMessage({
+        id: msg.id,
+        pageId: msg.pageId,
+        userId: msg.userId,
+        role: msg.role,
+        content: msg.content,
+        toolCalls: msg.toolCalls,
+        toolResults: msg.toolResults,
+        createdAt: msg.createdAt,
+        isActive: msg.isActive,
+        editedAt: msg.editedAt,
+      })
+    );
+
+    loggers.ai.debug('AI Chat API: Loaded conversation history from database', {
+      messageCount: conversationHistory.length,
+      pageId: chatId
+    });
+
     // Convert UIMessages to ModelMessages for the AI model
     // First sanitize messages to remove tool parts without results (prevents "input-available" state errors)
-    const sanitizedMessages = sanitizeMessagesForModel(messages);
+    // NOTE: We use database-loaded messages, NOT messages from client
+    const sanitizedMessages = sanitizeMessagesForModel(conversationHistory);
     const modelMessages = convertToModelMessages(sanitizedMessages, {
       tools: filteredTools  // Use original tools - no wrapping needed
     });

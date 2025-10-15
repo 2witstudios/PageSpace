@@ -205,7 +205,7 @@ export async function POST(
     });
     
     const {
-      messages: requestMessages,
+      messages: requestMessages, // Used ONLY to extract new user message, NOT for conversation history
       selectedProvider,
       selectedModel,
       openRouterApiKey,
@@ -324,8 +324,50 @@ export async function POST(
     const agentRole = AgentRoleUtils.getRoleFromString(roleString);
     loggers.api.debug('🤖 Global Assistant Chat API: Using agent role', { agentRole });
 
+    // DATABASE-FIRST ARCHITECTURE:
+    // PageSpace uses database as the single source of truth for all messages.
+    // We MUST read conversation history from database, not from client's request.
+    // This ensures edited messages, multi-user changes, and any database updates
+    // are reflected in the AI's context immediately.
+    loggers.api.debug('📚 Global Assistant Chat API: Loading conversation history from database', {
+      conversationId
+    });
+
+    // Read ALL active messages from database (source of truth)
+    const dbMessages = await db
+      .select()
+      .from(messages)
+      .where(and(
+        eq(messages.conversationId, conversationId),
+        eq(messages.isActive, true)
+      ))
+      .orderBy(messages.createdAt);
+
+    // Convert database messages to UI format
+    const conversationHistory = dbMessages.map(msg =>
+      convertGlobalAssistantMessageToUIMessage({
+        id: msg.id,
+        conversationId: msg.conversationId,
+        userId: msg.userId,
+        role: msg.role,
+        content: msg.content,
+        toolCalls: msg.toolCalls,
+        toolResults: msg.toolResults,
+        createdAt: msg.createdAt,
+        isActive: msg.isActive,
+        agentRole: msg.agentRole,
+        editedAt: msg.editedAt,
+      })
+    );
+
+    loggers.api.debug('✅ Global Assistant Chat API: Loaded conversation history from database', {
+      messageCount: conversationHistory.length,
+      conversationId
+    });
+
     // Convert UIMessages to ModelMessages for the AI model
-    const sanitizedMessages = sanitizeMessagesForModel(requestMessages);
+    // NOTE: We use database-loaded messages, NOT requestMessages from client
+    const sanitizedMessages = sanitizeMessagesForModel(conversationHistory);
     
     // Process messages to inject visual content from previous tool calls
     // Limit history to prevent memory issues with large conversations
