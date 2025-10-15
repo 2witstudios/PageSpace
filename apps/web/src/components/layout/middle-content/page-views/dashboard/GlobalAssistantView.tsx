@@ -6,7 +6,7 @@ import AiInput from '@/components/ai/AiInput';
 import { ChatInputRef } from '@/components/messages/ChatInput';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Loader2, Send, Settings, Plus, History } from 'lucide-react';
+import { Loader2, Send, Settings, Plus, History, StopCircle } from 'lucide-react';
 import { MessageRenderer } from '@/components/ai/MessageRenderer';
 import { AgentRole, AgentRoleUtils } from '@/lib/ai/agent-roles';
 import { RoleSelector } from '@/components/ai/RoleSelector';
@@ -138,6 +138,7 @@ const GlobalAssistantView: React.FC = () => {
     error,
     regenerate,
     setMessages,
+    stop,
   } = useChat({ chat });
 
   // ✅ Removed setMessages sync effect - AI SDK v5 manages messages internally
@@ -505,17 +506,24 @@ const GlobalAssistantView: React.FC = () => {
               driveId={locationContext?.currentDrive?.id}
               crossDrive={true}  // Allow searching across all drives in global assistant
             />
-            <Button
-              onClick={handleSendMessage}
-              disabled={status === 'streaming' || !input.trim() || !providerSettings?.isAnyProviderConfigured || isLoading}
-              size="icon"
-            >
-              {status === 'streaming' ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
+            {status === 'streaming' || status === 'submitted' ? (
+              <Button
+                onClick={() => stop()}
+                variant="destructive"
+                size="icon"
+                title="Stop generating"
+              >
+                <StopCircle className="h-4 w-4" />
+              </Button>
+            ) : (
+              <Button
+                onClick={handleSendMessage}
+                disabled={!input.trim() || !providerSettings?.isAnyProviderConfigured || isLoading}
+                size="icon"
+              >
                 <Send className="h-4 w-4" />
-              )}
-            </Button>
+              </Button>
+            )}
           </div>
         </div>
       </div>

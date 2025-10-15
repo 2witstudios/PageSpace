@@ -11,7 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Loader2, Send, Settings, MessageSquare } from 'lucide-react';
+import { Loader2, Send, Settings, MessageSquare, StopCircle } from 'lucide-react';
 import { UIMessage, DefaultChatTransport } from 'ai';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { ConversationMessageRenderer } from '@/components/ai/ConversationMessageRenderer';
@@ -123,6 +123,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     error,
     regenerate,
     setMessages,
+    stop,
   } = useChat(chatConfig);
 
   // ✅ Removed setMessages sync effect - AI SDK v5 manages messages internally
@@ -647,56 +648,63 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
               placeholder={isReadOnly ? "View only - cannot send messages" : (isLoading ? "Loading..." : "Message AI...")}
               driveId={driveId}
             />
-            <Button 
-              onClick={() => {
-                if (isReadOnly) {
-                  toast.error('You do not have permission to send messages in this AI chat');
-                  return;
-                }
-                if (input.trim()) {
-                  // Get current drive information
-                  const currentDrive = drives.find(d => d.id === driveId);
-                  // Build page path context
-                  const pagePathInfo = buildPagePath(tree, page.id, driveId);
-                  
-                  sendMessage(
-                    { text: input },
-                    {
-                      body: {
-                        chatId: page.id,
-                        selectedProvider: selectedProvider,
-                        selectedModel,
-                        openRouterApiKey: openRouterApiKey || undefined,
-                        googleApiKey: googleApiKey || undefined,
-                        pageContext: {
-                          pageId: page.id,
-                          pageTitle: page.title,
-                          pageType: page.type,
-                          pagePath: pagePathInfo?.path || `/${driveId}/${page.title}`,
-                          parentPath: pagePathInfo?.parentPath || `/${driveId}`,
-                          breadcrumbs: pagePathInfo?.breadcrumbs || [driveId, page.title],
-                          driveId: currentDrive?.id,
-                          driveName: currentDrive?.name || driveId,
-                          driveSlug: currentDrive?.slug,
-                        },
+            {status === 'streaming' || status === 'submitted' ? (
+              <Button
+                onClick={() => stop()}
+                variant="destructive"
+                size="icon"
+                title="Stop generating"
+              >
+                <StopCircle className="h-4 w-4" />
+              </Button>
+            ) : (
+              <Button
+                onClick={() => {
+                  if (isReadOnly) {
+                    toast.error('You do not have permission to send messages in this AI chat');
+                    return;
+                  }
+                  if (input.trim()) {
+                    // Get current drive information
+                    const currentDrive = drives.find(d => d.id === driveId);
+                    // Build page path context
+                    const pagePathInfo = buildPagePath(tree, page.id, driveId);
+
+                    sendMessage(
+                      { text: input },
+                      {
+                        body: {
+                          chatId: page.id,
+                          selectedProvider: selectedProvider,
+                          selectedModel,
+                          openRouterApiKey: openRouterApiKey || undefined,
+                          googleApiKey: googleApiKey || undefined,
+                          pageContext: {
+                            pageId: page.id,
+                            pageTitle: page.title,
+                            pageType: page.type,
+                            pagePath: pagePathInfo?.path || `/${driveId}/${page.title}`,
+                            parentPath: pagePathInfo?.parentPath || `/${driveId}`,
+                            breadcrumbs: pagePathInfo?.breadcrumbs || [driveId, page.title],
+                            driveId: currentDrive?.id,
+                            driveName: currentDrive?.name || driveId,
+                            driveSlug: currentDrive?.slug,
+                          },
+                        }
                       }
-                    }
-                  );
-                  setInput('');
-                  chatInputRef.current?.clear();
-                  // Scroll to bottom after sending message
-                  setTimeout(scrollToBottom, 100);
-                }
-              }}
-              disabled={status === 'streaming' || !input.trim() || !providerSettings?.isAnyProviderConfigured || isLoading || isReadOnly}
-              size="icon"
-            >
-              {status === 'streaming' ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
+                    );
+                    setInput('');
+                    chatInputRef.current?.clear();
+                    // Scroll to bottom after sending message
+                    setTimeout(scrollToBottom, 100);
+                  }
+                }}
+                disabled={!input.trim() || !providerSettings?.isAnyProviderConfigured || isLoading || isReadOnly}
+                size="icon"
+              >
                 <Send className="h-4 w-4" />
-              )}
-            </Button>
+              </Button>
+            )}
           </div>
         </div>
       </div>

@@ -633,11 +633,20 @@ MENTION PROCESSING:
             messages: modelMessages,
             tools: filteredTools,  // Use original tools directly
             stopWhen: stepCountIs(100), // Allow up to 100 tool calls per conversation turn
+            abortSignal: request.signal, // Enable stop/abort functionality from client
             experimental_context: {
               userId,
               modelCapabilities: getModelCapabilities(currentModel, currentProvider)
             }, // Pass userId and model capabilities to tools
-            maxRetries: 20 // Increase from default 2 to 20 for better handling of rate limits
+            maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
+            onAbort: () => {
+              loggers.ai.info('🛑 AI Chat API: Stream aborted by user', {
+                userId: maskIdentifier(userId!),
+                pageId: chatId,
+                model: currentModel,
+                provider: currentProvider
+              });
+            },
           });
 
           usagePromise = aiResult.totalUsage

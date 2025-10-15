@@ -4,7 +4,7 @@ import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import ChatInput, { ChatInputRef } from '@/components/messages/ChatInput';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Loader2, Send, Plus } from 'lucide-react';
+import { Loader2, Send, Plus, StopCircle } from 'lucide-react';
 import { CompactConversationMessageRenderer } from '@/components/ai/CompactConversationMessageRenderer';
 import { AgentRole, AgentRoleUtils } from '@/lib/ai/agent-roles';
 import { AgentRoleDropdownCompact } from '@/components/ai/AgentRoleDropdown';
@@ -208,6 +208,7 @@ const AssistantChatTab: React.FC = () => {
     error,
     regenerate,
     setMessages,
+    stop,
   } = useChat({ chat });
 
   // ✅ Removed setMessages sync effect - AI SDK v5 manages messages internally
@@ -502,18 +503,26 @@ const AssistantChatTab: React.FC = () => {
             driveId={locationContext?.currentDrive?.id}
             crossDrive={true}  // Allow searching across all drives in global assistant
           />
-          <Button 
-            onClick={handleSendMessage}
-            disabled={status === 'streaming' || !input.trim() || !providerSettings?.isAnyProviderConfigured}
-            size="sm"
-            className="h-8 px-3"
-          >
-            {status === 'streaming' ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : (
+          {status === 'streaming' || status === 'submitted' ? (
+            <Button
+              onClick={() => stop()}
+              variant="destructive"
+              size="sm"
+              className="h-8 px-3"
+              title="Stop generating"
+            >
+              <StopCircle className="h-3 w-3" />
+            </Button>
+          ) : (
+            <Button
+              onClick={handleSendMessage}
+              disabled={!input.trim() || !providerSettings?.isAnyProviderConfigured}
+              size="sm"
+              className="h-8 px-3"
+            >
               <Send className="h-3 w-3" />
-            )}
-          </Button>
+            </Button>
+          )}
         </div>
       </div>
     </div>

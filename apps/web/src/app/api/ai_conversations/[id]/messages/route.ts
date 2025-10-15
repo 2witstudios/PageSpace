@@ -555,12 +555,21 @@ MENTION PROCESSING:
       messages: modelMessages,
       tools: roleFilteredTools,
       stopWhen: stepCountIs(100),
+      abortSignal: request.signal, // Enable stop/abort functionality from client
       experimental_context: {
         userId,
         locationContext,
         modelCapabilities: getModelCapabilities(currentModel, currentProvider)
       },
       maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
+      onAbort: () => {
+        loggers.api.info('🛑 Global Assistant Chat API: Stream aborted by user', {
+          userId: maskIdentifier(userId),
+          conversationId,
+          model: currentModel,
+          provider: currentProvider
+        });
+      },
     });
 
     loggers.api.debug('📡 Global Assistant Chat API: Returning stream response', {});
