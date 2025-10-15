@@ -19,14 +19,22 @@ interface ConversationMessage extends UIMessage {
 interface ConversationMessageRendererProps {
   message: ConversationMessage;
   onTaskUpdate?: (taskId: string, newStatus: 'pending' | 'in_progress' | 'completed' | 'blocked') => void;
+  onEdit?: (messageId: string, newContent: string) => Promise<void>;
+  onDelete?: (messageId: string) => Promise<void>;
+  onRetry?: (messageId: string) => void;
+  isLastAssistantMessage?: boolean;
 }
 
 /**
  * Renders different types of conversation messages including todo lists
  */
-export const ConversationMessageRenderer: React.FC<ConversationMessageRendererProps> = React.memo(({ 
-  message, 
-  onTaskUpdate 
+export const ConversationMessageRenderer: React.FC<ConversationMessageRendererProps> = React.memo(({
+  message,
+  onTaskUpdate,
+  onEdit,
+  onDelete,
+  onRetry,
+  isLastAssistantMessage = false
 }) => {
   const [tasks, setTasks] = useState<Array<{
     id: string;
@@ -187,7 +195,15 @@ export const ConversationMessageRenderer: React.FC<ConversationMessageRendererPr
   }
 
   // Default to standard message rendering
-  return <MessageRenderer message={message} />;
+  return (
+    <MessageRenderer
+      message={message}
+      onEdit={onEdit}
+      onDelete={onDelete}
+      onRetry={onRetry}
+      isLastAssistantMessage={isLastAssistantMessage}
+    />
+  );
 });
 
 ConversationMessageRenderer.displayName = 'ConversationMessageRenderer';

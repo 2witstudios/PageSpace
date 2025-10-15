@@ -9,9 +9,11 @@ import { CompactConversationMessageRenderer } from '@/components/ai/CompactConve
 import { AgentRole, AgentRoleUtils } from '@/lib/ai/agent-roles';
 import { AgentRoleDropdownCompact } from '@/components/ai/AgentRoleDropdown';
 import { useDriveStore } from '@/hooks/useDrive';
-import { fetchWithAuth } from '@/lib/auth-fetch';
+import { fetchWithAuth, patch, del } from '@/lib/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
+import { toast } from 'sonner';
+import { UIMessage } from 'ai';
 
 
 interface ProviderSettings {
@@ -205,6 +207,8 @@ const AssistantChatTab: React.FC = () => {
     sendMessage,
     status,
     error,
+    regenerate,
+    setMessages,
   } = useChat({ chat });
 
   // ✅ Removed setMessages sync effect - AI SDK v5 manages messages internally
@@ -301,6 +305,84 @@ const AssistantChatTab: React.FC = () => {
     setTimeout(scrollToBottom, 100);
   };
 
+  // Edit message handler
+  const handleEdit = async (messageId: string, newContent: string) => {
+    if (!currentConversationId) return;
+
+    try {
+      await patch(`/api/ai_conversations/${currentConversationId}/messages/${messageId}`, {
+        content: newContent,
+      });
+
+      // Refetch messages to get updated editedAt timestamp
+      const messagesResponse = await fetchWithAuth(`/api/ai_conversations/${currentConversationId}/messages`);
+      if (messagesResponse.ok) {
+        const updatedMessages: UIMessage[] = await messagesResponse.json();
+        setMessages(updatedMessages);
+      }
+
+      toast.success('Message updated successfully');
+    } catch (error) {
+      console.error('Failed to edit message:', error);
+      toast.error('Failed to update message');
+    }
+  };
+
+  // Delete message handler
+  const handleDelete = async (messageId: string) => {
+    if (!currentConversationId) return;
+
+    try {
+      await del(`/api/ai_conversations/${currentConversationId}/messages/${messageId}`);
+
+      // Optimistically remove from UI
+      setMessages(messages.filter(m => m.id !== messageId));
+
+      toast.success('Message deleted');
+    } catch (error) {
+      console.error('Failed to delete message:', error);
+      toast.error('Failed to delete message');
+    }
+  };
+
+  // Retry handler - regenerate the last assistant message
+  const handleRetry = async () => {
+    if (!currentConversationId) return;
+
+    // Before regenerating, clean up old assistant responses after the last user message
+    const lastUserMsgIndex = messages.map(m => m.role).lastIndexOf('user');
+
+    if (lastUserMsgIndex !== -1) {
+      // Get all assistant messages after the last user message
+      const assistantMessagesToDelete = messages
+        .slice(lastUserMsgIndex + 1)
+        .filter(m => m.role === 'assistant');
+
+      // Delete them from the database
+      for (const msg of assistantMessagesToDelete) {
+        try {
+          await del(`/api/ai_conversations/${currentConversationId}/messages/${msg.id}`);
+        } catch (error) {
+          console.error('Failed to delete old assistant message:', error);
+        }
+      }
+
+      // Remove them from local state
+      const filteredMessages = messages.filter(
+        m => !assistantMessagesToDelete.some(toDelete => toDelete.id === m.id)
+      );
+      setMessages(filteredMessages);
+    }
+
+    // Now regenerate with a clean slate
+    regenerate();
+  };
+
+  // Calculate the last assistant message ID for the retry button
+  const lastAssistantMessageId = messages
+    .filter(m => m.role === 'assistant')
+    .slice(-1)[0]?.id;
+
   // Show loading state until chat is properly initialized
   if (!isInitialized) {
     return (
@@ -349,7 +431,14 @@ const AssistantChatTab: React.FC = () => {
               </div>
             ) : (
               messages.map(message => (
-                <CompactConversationMessageRenderer key={message.id} message={message} />
+                <CompactConversationMessageRenderer
+                  key={message.id}
+                  message={message}
+                  onEdit={handleEdit}
+                  onDelete={handleDelete}
+                  onRetry={handleRetry}
+                  isLastAssistantMessage={message.id === lastAssistantMessageId}
+                />
               ))
             )}
             

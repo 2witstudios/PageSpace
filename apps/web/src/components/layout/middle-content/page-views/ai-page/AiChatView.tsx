@@ -21,7 +21,7 @@ import { AI_PROVIDERS, getBackendProvider } from '@/lib/ai/ai-providers-config';
 import { useAuth } from '@/hooks/use-auth';
 import { toast } from 'sonner';
 import AgentSettingsTab, { AgentSettingsTabRef } from '@/components/ai/AgentSettingsTab';
-import { fetchWithAuth } from '@/lib/auth-fetch';
+import { fetchWithAuth, patch, del } from '@/lib/auth-fetch';
 
 interface AiChatViewProps {
     page: TreePage;
@@ -120,10 +120,82 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     sendMessage,
     status,
     error,
+    regenerate,
+    setMessages,
   } = useChat(chatConfig);
 
   // ✅ Removed setMessages sync effect - AI SDK v5 manages messages internally
   // No need to manually sync after initialization
+
+  // Message action handlers (defined after useChat so we have access to messages, setMessages, regenerate)
+  const handleEdit = async (messageId: string, newContent: string) => {
+    try {
+      await patch(`/api/ai/chat/messages/${messageId}`, { content: newContent });
+
+      // Refetch messages to get updated content with editedAt timestamp
+      const messagesResponse = await fetchWithAuth(`/api/ai/chat/messages?pageId=${page.id}`);
+      if (messagesResponse.ok) {
+        const updatedMessages: UIMessage[] = await messagesResponse.json();
+        setMessages(updatedMessages);
+      }
+
+      toast.success('Message updated successfully');
+    } catch (error) {
+      console.error('Failed to edit message:', error);
+      toast.error('Failed to edit message');
+      throw error;
+    }
+  };
+
+  const handleDelete = async (messageId: string) => {
+    try {
+      await del(`/api/ai/chat/messages/${messageId}`);
+
+      // Remove from UI immediately (optimistic update)
+      setMessages(messages.filter(m => m.id !== messageId));
+
+      toast.success('Message deleted');
+    } catch (error) {
+      console.error('Failed to delete message:', error);
+      toast.error('Failed to delete message');
+      throw error;
+    }
+  };
+
+  const handleRetry = async () => {
+    // Before regenerating, clean up old assistant responses after the last user message
+    const lastUserMsgIndex = messages.map(m => m.role).lastIndexOf('user');
+
+    if (lastUserMsgIndex !== -1) {
+      // Get all assistant messages after the last user message
+      const assistantMessagesToDelete = messages
+        .slice(lastUserMsgIndex + 1)
+        .filter(m => m.role === 'assistant');
+
+      // Delete them from the database
+      for (const msg of assistantMessagesToDelete) {
+        try {
+          await del(`/api/ai/chat/messages/${msg.id}`);
+        } catch (error) {
+          console.error('Failed to delete old assistant message:', error);
+        }
+      }
+
+      // Remove them from local state
+      const filteredMessages = messages.filter(
+        m => !assistantMessagesToDelete.some(toDelete => toDelete.id === m.id)
+      );
+      setMessages(filteredMessages);
+    }
+
+    // Now regenerate with a clean slate
+    regenerate();
+  };
+
+  // Determine last assistant message for retry button visibility
+  const lastAssistantMessageId = messages
+    .filter(m => m.role === 'assistant')
+    .slice(-1)[0]?.id;
 
   // Register streaming state with editing store (state-based protection)
   // Note: In AI SDK v5, status can be 'ready', 'submitted', 'streaming', or 'error'
@@ -468,7 +540,14 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                 </div>
               ) : (
                 messages.map(message => (
-                  <ConversationMessageRenderer key={message.id} message={message} />
+                  <ConversationMessageRenderer
+                    key={message.id}
+                    message={message}
+                    onEdit={!isReadOnly ? handleEdit : undefined}
+                    onDelete={!isReadOnly ? handleDelete : undefined}
+                    onRetry={!isReadOnly ? handleRetry : undefined}
+                    isLastAssistantMessage={message.id === lastAssistantMessageId}
+                  />
                 ))
               )}
               

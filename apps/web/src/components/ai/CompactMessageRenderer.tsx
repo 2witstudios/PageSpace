@@ -1,7 +1,10 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { UIMessage } from 'ai';
 import { CompactToolCallRenderer } from './CompactToolCallRenderer';
 import { MemoizedMarkdown } from './MemoizedMarkdown';
+import { MessageActionButtons } from './MessageActionButtons';
+import { MessageEditor } from './MessageEditor';
+import { DeleteMessageDialog } from './DeleteMessageDialog';
 
 interface TextPart {
   type: 'text';
@@ -38,38 +41,89 @@ interface CompactTextBlockProps {
   role: 'user' | 'assistant' | 'system';
   messageId: string;
   createdAt?: Date;
+  editedAt?: Date | null;
+  onEdit?: () => void;
+  onDelete?: () => void;
+  onRetry?: () => void;
+  isEditing?: boolean;
+  onSaveEdit?: (newContent: string) => Promise<void>;
+  onCancelEdit?: () => void;
 }
 
 /**
  * Compact text block for sidebar - minimal margins and padding
  */
-const CompactTextBlock: React.FC<CompactTextBlockProps> = ({ parts, role, messageId, createdAt }) => {
+const CompactTextBlock: React.FC<CompactTextBlockProps> = ({
+  parts,
+  role,
+  messageId,
+  createdAt,
+  editedAt,
+  onEdit,
+  onDelete,
+  onRetry,
+  isEditing,
+  onSaveEdit,
+  onCancelEdit
+}) => {
   const content = parts.map(part => part.text).join('');
-  
-  if (!content.trim()) return null;
-  
+
+  if (!content.trim() && !isEditing) return null;
+
   return (
     <div
-      className={`p-2 rounded-md text-xs ${
+      className={`group relative p-2 rounded-md text-xs ${
         role === 'user'
           ? 'bg-primary/10 dark:bg-accent/20 ml-2'
           : 'bg-gray-50 dark:bg-gray-800/50'
       }`}
     >
-      <div className={`text-xs font-medium mb-0.5 ${
-        role === 'user' ? 'text-primary dark:text-primary' : 'text-gray-700 dark:text-gray-300'
-      }`}>
-        {role === 'user' ? 'You' : 'AI'}
-      </div>
-      <div className="text-gray-900 dark:text-gray-100 prose prose-xs dark:prose-invert max-w-full overflow-hidden">
-        <div className="break-words overflow-wrap-anywhere">
-          <MemoizedMarkdown content={content} id={`${messageId}-text`} />
+      <div className="flex items-center justify-between mb-0.5">
+        <div className={`text-xs font-medium ${
+          role === 'user' ? 'text-primary dark:text-primary' : 'text-gray-700 dark:text-gray-300'
+        }`}>
+          {role === 'user' ? 'You' : 'AI'}
+          {editedAt && !isEditing && (
+            <span className="ml-1 text-[10px] text-muted-foreground">(edited)</span>
+          )}
         </div>
+        {onEdit && onDelete && !isEditing && (
+          <MessageActionButtons
+            onEdit={onEdit}
+            onDelete={onDelete}
+            onRetry={onRetry}
+            compact
+          />
+        )}
       </div>
-      {createdAt && (
-        <div className="text-[10px] text-gray-500 mt-1">
-          {new Date(createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+
+      {isEditing && onSaveEdit && onCancelEdit ? (
+        <div className="text-xs">
+          <MessageEditor
+            initialContent={content}
+            onSave={onSaveEdit}
+            onCancel={onCancelEdit}
+            placeholder="Edit message..."
+          />
         </div>
+      ) : (
+        <>
+          <div className="text-gray-900 dark:text-gray-100 prose prose-xs dark:prose-invert max-w-full overflow-hidden">
+            <div className="break-words overflow-wrap-anywhere">
+              <MemoizedMarkdown content={content} id={`${messageId}-text`} />
+            </div>
+          </div>
+          {createdAt && (
+            <div className="text-[10px] text-gray-500 mt-1">
+              {new Date(createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              {editedAt && (
+                <span className="ml-1">
+                  (edited)
+                </span>
+              )}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -77,12 +131,25 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = ({ parts, role, messag
 
 interface CompactMessageRendererProps {
   message: UIMessage;
+  onEdit?: (messageId: string, newContent: string) => Promise<void>;
+  onDelete?: (messageId: string) => Promise<void>;
+  onRetry?: (messageId: string) => void;
+  isLastAssistantMessage?: boolean;
 }
 
 /**
  * Compact message renderer for sidebar - optimized for narrow width
  */
-export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = ({ message }) => {
+export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = ({
+  message,
+  onEdit,
+  onDelete,
+  onRetry,
+  isLastAssistantMessage = false
+}) => {
+  const [isEditing, setIsEditing] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const groupedParts = useMemo(() => {
     if (!message.parts || message.parts.length === 0) {
       return [];
@@ -141,42 +208,90 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = ({ 
   }, [message.parts]);
 
   const createdAt = (message as { createdAt?: Date }).createdAt;
+  const editedAt = (message as { editedAt?: Date }).editedAt;
+
+  const handleSaveEdit = async (newContent: string) => {
+    if (onEdit) {
+      await onEdit(message.id, newContent);
+      setIsEditing(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (onDelete) {
+      setIsDeleting(true);
+      try {
+        await onDelete(message.id);
+        setShowDeleteDialog(false);
+      } catch (error) {
+        console.error('Failed to delete message:', error);
+      } finally {
+        setIsDeleting(false);
+      }
+    }
+  };
+
+  const handleRetry = () => {
+    if (onRetry) {
+      onRetry(message.id);
+    }
+  };
 
   return (
-    <div key={message.id} className="mb-2">
-      {groupedParts.map((group, index) => {
-        if (group.type === 'text-group') {
-          // Type narrowing: we know this is a TextGroupPart
-          const textGroup = group as TextGroupPart;
-          return (
-            <CompactTextBlock
-              key={`${message.id}-text-${index}`}
-              parts={textGroup.parts}
-              role={message.role as 'user' | 'assistant' | 'system'}
-              messageId={message.id}
-              createdAt={index === groupedParts.length - 1 ? createdAt : undefined} // Only show timestamp on last part
-            />
-          );
-        } else if (group.type.startsWith('tool-')) {
-          // Type narrowing: we know this is a ToolGroupPart
-          const toolGroup = group as ToolGroupPart;
-          return (
-            <div key={`${message.id}-tool-${index}`} className="mt-1">
-              <CompactToolCallRenderer 
-                part={{
-                  type: toolGroup.type,
-                  toolName: toolGroup.toolName,
-                  toolCallId: toolGroup.toolCallId,
-                  input: toolGroup.input,
-                  output: toolGroup.output,
-                  state: toolGroup.state,
-                }}
+    <>
+      <div key={message.id} className="mb-2">
+        {groupedParts.map((group, index) => {
+          if (group.type === 'text-group') {
+            // Type narrowing: we know this is a TextGroupPart
+            const textGroup = group as TextGroupPart;
+            const isLastTextBlock = index === groupedParts.length - 1;
+
+            return (
+              <CompactTextBlock
+                key={`${message.id}-text-${index}`}
+                parts={textGroup.parts}
+                role={message.role as 'user' | 'assistant' | 'system'}
+                messageId={message.id}
+                createdAt={isLastTextBlock ? createdAt : undefined} // Only show timestamp on last part
+                editedAt={isLastTextBlock ? editedAt : undefined}
+                onEdit={onEdit ? () => setIsEditing(true) : undefined}
+                onDelete={onDelete ? () => setShowDeleteDialog(true) : undefined}
+                onRetry={onRetry && isLastAssistantMessage ? handleRetry : undefined}
+                isEditing={isEditing}
+                onSaveEdit={handleSaveEdit}
+                onCancelEdit={() => setIsEditing(false)}
               />
-            </div>
-          );
-        }
-        return null;
-      })}
-    </div>
+            );
+          } else if (group.type.startsWith('tool-')) {
+            // Type narrowing: we know this is a ToolGroupPart
+            const toolGroup = group as ToolGroupPart;
+            return (
+              <div key={`${message.id}-tool-${index}`} className="mt-1">
+                <CompactToolCallRenderer
+                  part={{
+                    type: toolGroup.type,
+                    toolName: toolGroup.toolName,
+                    toolCallId: toolGroup.toolCallId,
+                    input: toolGroup.input,
+                    output: toolGroup.output,
+                    state: toolGroup.state,
+                  }}
+                />
+              </div>
+            );
+          }
+          return null;
+        })}
+      </div>
+
+      {onDelete && (
+        <DeleteMessageDialog
+          open={showDeleteDialog}
+          onOpenChange={setShowDeleteDialog}
+          onConfirm={handleDelete}
+          isDeleting={isDeleting}
+        />
+      )}
+    </>
   );
 };

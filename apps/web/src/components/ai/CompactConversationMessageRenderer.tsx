@@ -19,14 +19,22 @@ interface ConversationMessage extends UIMessage {
 interface CompactConversationMessageRendererProps {
   message: ConversationMessage;
   onTaskUpdate?: (taskId: string, newStatus: 'pending' | 'in_progress' | 'completed' | 'blocked') => void;
+  onEdit?: (messageId: string, newContent: string) => Promise<void>;
+  onDelete?: (messageId: string) => Promise<void>;
+  onRetry?: (messageId: string) => void;
+  isLastAssistantMessage?: boolean;
 }
 
 /**
  * Compact version for sidebar - renders different types of conversation messages including todo lists
  */
-export const CompactConversationMessageRenderer: React.FC<CompactConversationMessageRendererProps> = React.memo(({ 
-  message, 
-  onTaskUpdate 
+export const CompactConversationMessageRenderer: React.FC<CompactConversationMessageRendererProps> = React.memo(({
+  message,
+  onTaskUpdate,
+  onEdit,
+  onDelete,
+  onRetry,
+  isLastAssistantMessage = false
 }) => {
   const [tasks, setTasks] = useState<Array<{
     id: string;
@@ -179,7 +187,15 @@ export const CompactConversationMessageRenderer: React.FC<CompactConversationMes
   }
 
   // Default to compact message rendering
-  return <CompactMessageRenderer message={message} />;
+  return (
+    <CompactMessageRenderer
+      message={message}
+      onEdit={onEdit}
+      onDelete={onDelete}
+      onRetry={onRetry}
+      isLastAssistantMessage={isLastAssistantMessage}
+    />
+  );
 });
 
 CompactConversationMessageRenderer.displayName = 'CompactConversationMessageRenderer';
