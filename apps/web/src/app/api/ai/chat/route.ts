@@ -8,8 +8,8 @@ import {
   createUIMessageStreamResponse,
   type LanguageModelUsage,
 } from 'ai';
-import { incrementUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
-import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
+import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
+import { requiresProSubscription, createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
 import { broadcastUsageEvent } from '@/lib/socket-utils';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
@@ -340,6 +340,44 @@ export async function POST(request: Request) {
 
     // Update user's current provider/model if changed
     await updateUserProviderSettings(userId, selectedProvider, selectedModel);
+
+    // RATE LIMIT CHECK: Verify user has remaining quota BEFORE streaming
+    // This prevents users from exceeding their daily AI call limits
+    if (currentProvider === 'pagespace') {
+      const isProModel = currentModel === 'glm-4.6';
+      const providerType = isProModel ? 'pro' : 'standard';
+
+      loggers.ai.debug('🚦 AI Chat API: Checking rate limit before streaming', {
+        userId: maskIdentifier(userId),
+        provider: currentProvider,
+        model: currentModel,
+        providerType,
+        pageId: chatId
+      });
+
+      const currentUsage = await getCurrentUsage(userId, providerType);
+
+      if (!currentUsage.success || currentUsage.remainingCalls <= 0) {
+        loggers.ai.warn('🚫 AI Chat API: Rate limit exceeded', {
+          userId: maskIdentifier(userId),
+          providerType,
+          currentCount: currentUsage.currentCount,
+          limit: currentUsage.limit,
+          remaining: currentUsage.remainingCalls,
+          pageId: chatId
+        });
+
+        return createRateLimitResponse(providerType, currentUsage.limit);
+      }
+
+      loggers.ai.debug('✅ AI Chat API: Rate limit check passed', {
+        userId: maskIdentifier(userId),
+        providerType,
+        remaining: currentUsage.remainingCalls,
+        limit: currentUsage.limit,
+        pageId: chatId
+      });
+    }
 
     // Filter tools based on custom enabled tools or use all tools if not configured
     let filteredTools;

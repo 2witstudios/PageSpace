@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { streamText, convertToModelMessages, stepCountIs, UIMessage } from 'ai';
-import { incrementUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
+import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
+import { createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
 import { broadcastUsageEvent } from '@/lib/socket-utils';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import {
@@ -319,6 +320,44 @@ export async function POST(
 
     // Update user's current provider/model if changed
     await updateUserProviderSettings(userId, selectedProvider, selectedModel);
+
+    // RATE LIMIT CHECK: Verify user has remaining quota BEFORE streaming
+    // This prevents users from exceeding their daily AI call limits
+    if (currentProvider === 'pagespace') {
+      const isProModel = currentModel === 'glm-4.6';
+      const providerType = isProModel ? 'pro' : 'standard';
+
+      loggers.api.debug('🚦 Global Assistant Chat API: Checking rate limit before streaming', {
+        userId: maskIdentifier(userId),
+        provider: currentProvider,
+        model: currentModel,
+        providerType,
+        conversationId
+      });
+
+      const currentUsage = await getCurrentUsage(userId, providerType);
+
+      if (!currentUsage.success || currentUsage.remainingCalls <= 0) {
+        loggers.api.warn('🚫 Global Assistant Chat API: Rate limit exceeded', {
+          userId: maskIdentifier(userId),
+          providerType,
+          currentCount: currentUsage.currentCount,
+          limit: currentUsage.limit,
+          remaining: currentUsage.remainingCalls,
+          conversationId
+        });
+
+        return createRateLimitResponse(providerType, currentUsage.limit);
+      }
+
+      loggers.api.debug('✅ Global Assistant Chat API: Rate limit check passed', {
+        userId: maskIdentifier(userId),
+        providerType,
+        remaining: currentUsage.remainingCalls,
+        limit: currentUsage.limit,
+        conversationId
+      });
+    }
 
     // Get agent role with fallback to default
     const agentRole = AgentRoleUtils.getRoleFromString(roleString);
