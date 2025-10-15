@@ -23,6 +23,7 @@ export interface PageEventPayload {
   operation: PageOperation;
   title?: string;
   type?: string;
+  socketId?: string; // Socket ID of the user who triggered this event (to prevent self-refetch)
 }
 
 export interface DriveEventPayload {
@@ -159,6 +160,7 @@ export function createPageEventPayload(
     parentId?: string | null;
     title?: string;
     type?: string;
+    socketId?: string;
   } = {}
 ): PageEventPayload {
   return {

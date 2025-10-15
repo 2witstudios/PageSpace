@@ -12,7 +12,7 @@ import { useSocket } from '@/hooks/useSocket';
 import { PageEventPayload } from '@/lib/socket-utils';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/use-auth';
-import { patch, fetchWithAuth } from '@/lib/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 
 interface DocumentViewProps {
@@ -95,6 +95,12 @@ const DocumentView = ({ page }: DocumentViewProps) => {
     if (!socket) return;
 
     const handleContentUpdate = async (eventData: PageEventPayload) => {
+      // Filter out self-triggered events to prevent refetch loop
+      if (eventData.socketId && eventData.socketId === socket.id) {
+        console.log('📌 Ignoring self-triggered content-updated event');
+        return;
+      }
+
       // Only update if it's for the current page
       if (eventData.pageId === page.id) {
         console.log('📝 Document content updated via socket, fetching latest...');
@@ -147,16 +153,16 @@ const DocumentView = ({ page }: DocumentViewProps) => {
   // Cleanup on unmount - auto-save any unsaved changes
   useEffect(() => {
     return () => {
-      // Force save if dirty before unmounting
+      // Force save if dirty before unmounting using the existing save mechanism
       if (documentState?.isDirty) {
         console.log('🚨 Component unmounting with unsaved changes, force saving...');
-        // Fire-and-forget save since we can't await in cleanup
-        patch(`/api/pages/${page.id}`, { content: documentState.content }).catch(error => {
+        // Use forceSave which properly handles the save flow
+        forceSave().catch(error => {
           console.error('Failed to save on unmount:', error);
         });
       }
     };
-  }, [documentState, page.id]);
+  }, [documentState?.isDirty, page.id, forceSave]);
 
   // Handle keyboard shortcuts
   useEffect(() => {
