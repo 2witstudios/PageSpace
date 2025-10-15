@@ -16,7 +16,6 @@ import { fetchWithAuth, patch, del } from '@/lib/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
 import { toast } from 'sonner';
-import { UIMessage } from 'ai';
 
 
 interface ProviderSettings {
@@ -54,7 +53,7 @@ const GlobalAssistantView: React.FC = () => {
   const { rightSidebarOpen, toggleRightSidebar } = useLayoutStore();
 
   // Use shared global chat context - same Chat instance as AssistantChatTab!
-  const { chat, currentConversationId, isInitialized, createNewConversation } = useGlobalChat();
+  const { chat, currentConversationId, isInitialized, createNewConversation, refreshConversation } = useGlobalChat();
 
   // Local state for component-specific concerns
   const [providerSettings, setProviderSettings] = useState<ProviderSettings | null>(null);
@@ -148,17 +147,13 @@ const GlobalAssistantView: React.FC = () => {
     if (!currentConversationId) return;
 
     try {
+      // Persist to backend (already handles structured content correctly)
       await patch(`/api/ai_conversations/${currentConversationId}/messages/${messageId}`, {
         content: newContent
       });
 
-      // Refetch messages to get updated content with editedAt timestamp
-      const messagesResponse = await fetchWithAuth(`/api/ai_conversations/${currentConversationId}/messages`);
-      if (messagesResponse.ok) {
-        const data = await messagesResponse.json();
-        const updatedMessages: UIMessage[] = data.messages || [];
-        setMessages(updatedMessages);
-      }
+      // Refresh conversation (recreates Chat with fresh messages from DB)
+      await refreshConversation();
 
       toast.success('Message updated successfully');
     } catch (error) {

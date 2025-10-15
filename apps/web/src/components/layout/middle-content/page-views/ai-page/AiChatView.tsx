@@ -68,6 +68,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   } | null>(null);
   const [showError, setShowError] = useState(true);
   const [isReadOnly, setIsReadOnly] = useState<boolean>(false);
+  const [editVersion, setEditVersion] = useState(0); // Track edit version for forcing re-renders
   const { user } = useAuth();
   
   // Refs for auto-scrolling and chat input
@@ -130,13 +131,15 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // Message action handlers (defined after useChat so we have access to messages, setMessages, regenerate)
   const handleEdit = async (messageId: string, newContent: string) => {
     try {
+      // Persist to backend (already handles structured content correctly)
       await patch(`/api/ai/chat/messages/${messageId}`, { content: newContent });
 
-      // Refetch messages to get updated content with editedAt timestamp
+      // Refetch messages and force remount
       const messagesResponse = await fetchWithAuth(`/api/ai/chat/messages?pageId=${page.id}`);
       if (messagesResponse.ok) {
-        const updatedMessages: UIMessage[] = await messagesResponse.json();
-        setMessages(updatedMessages);
+        const freshMessages: UIMessage[] = await messagesResponse.json();
+        setMessages(freshMessages);
+        setEditVersion(v => v + 1); // Force re-render with new key
       }
 
       toast.success('Message updated successfully');
@@ -541,7 +544,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
               ) : (
                 messages.map(message => (
                   <ConversationMessageRenderer
-                    key={message.id}
+                    key={`${message.id}-${editVersion}`}
                     message={message}
                     onEdit={!isReadOnly ? handleEdit : undefined}
                     onDelete={!isReadOnly ? handleDelete : undefined}
