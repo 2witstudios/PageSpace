@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useCallback, useRef, useMemo } from 'react';
+import { useEffect, useCallback, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore, authStoreHelpers } from '@/stores/auth-store';
 import { useTokenRefresh } from './use-token-refresh';
@@ -157,11 +157,11 @@ export function useAuth(): {
     }
   }, [hasHydrated, setHydrated]);
 
-  // Check for OAuth success parameter (from Google callback) - memoized to prevent effect re-runs
-  const isOAuthSuccess = useMemo(() => {
+  // Check for OAuth success parameter (from Google callback)
+  const [isOAuthSuccess, setIsOAuthSuccess] = useState(() => {
     if (typeof window === 'undefined') return false;
     return new URLSearchParams(window.location.search).get('auth') === 'success';
-  }, []); // Only compute once on mount
+  });
 
   // Initial auth check - simplified with store-level deduplication
   useEffect(() => {
@@ -182,6 +182,7 @@ export function useAuth(): {
         const newUrl = new URL(window.location.href);
         newUrl.searchParams.delete('auth');
         window.history.replaceState({}, '', newUrl.toString());
+        setIsOAuthSuccess(false); // Clear the flag to exit loading state
       }
     }
   }, [hasHydrated, isOAuthSuccess]);
