@@ -12,9 +12,10 @@ import { AgentRole, AgentRoleUtils } from '@/lib/ai/agent-roles';
 import { RoleSelector } from '@/components/ai/RoleSelector';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore } from '@/hooks/useDrive';
-import { fetchWithAuth } from '@/lib/auth-fetch';
+import { fetchWithAuth, patch, del } from '@/lib/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
+import { toast } from 'sonner';
 
 
 interface ProviderSettings {
@@ -52,7 +53,7 @@ const GlobalAssistantView: React.FC = () => {
   const { rightSidebarOpen, toggleRightSidebar } = useLayoutStore();
 
   // Use shared global chat context - same Chat instance as AssistantChatTab!
-  const { chat, currentConversationId, isInitialized, createNewConversation } = useGlobalChat();
+  const { chat, currentConversationId, isInitialized, createNewConversation, refreshConversation } = useGlobalChat();
 
   // Local state for component-specific concerns
   const [providerSettings, setProviderSettings] = useState<ProviderSettings | null>(null);
@@ -135,9 +136,86 @@ const GlobalAssistantView: React.FC = () => {
     sendMessage,
     status,
     error,
+    regenerate,
+    setMessages,
   } = useChat({ chat });
 
   // ✅ Removed setMessages sync effect - AI SDK v5 manages messages internally
+
+  // Message action handlers (defined after useChat so we have access to messages, setMessages, regenerate)
+  const handleEdit = async (messageId: string, newContent: string) => {
+    if (!currentConversationId) return;
+
+    try {
+      // Persist to backend (already handles structured content correctly)
+      await patch(`/api/ai_conversations/${currentConversationId}/messages/${messageId}`, {
+        content: newContent
+      });
+
+      // Refresh conversation (recreates Chat with fresh messages from DB)
+      await refreshConversation();
+
+      toast.success('Message updated successfully');
+    } catch (error) {
+      console.error('Failed to edit message:', error);
+      toast.error('Failed to edit message');
+      throw error;
+    }
+  };
+
+  const handleDelete = async (messageId: string) => {
+    if (!currentConversationId) return;
+
+    try {
+      await del(`/api/ai_conversations/${currentConversationId}/messages/${messageId}`);
+
+      // Remove from UI immediately (optimistic update)
+      setMessages(messages.filter(m => m.id !== messageId));
+
+      toast.success('Message deleted');
+    } catch (error) {
+      console.error('Failed to delete message:', error);
+      toast.error('Failed to delete message');
+      throw error;
+    }
+  };
+
+  const handleRetry = async () => {
+    if (!currentConversationId) return;
+
+    // Before regenerating, clean up old assistant responses after the last user message
+    const lastUserMsgIndex = messages.map(m => m.role).lastIndexOf('user');
+
+    if (lastUserMsgIndex !== -1) {
+      // Get all assistant messages after the last user message
+      const assistantMessagesToDelete = messages
+        .slice(lastUserMsgIndex + 1)
+        .filter(m => m.role === 'assistant');
+
+      // Delete them from the database
+      for (const msg of assistantMessagesToDelete) {
+        try {
+          await del(`/api/ai_conversations/${currentConversationId}/messages/${msg.id}`);
+        } catch (error) {
+          console.error('Failed to delete old assistant message:', error);
+        }
+      }
+
+      // Remove them from local state
+      const filteredMessages = messages.filter(
+        m => !assistantMessagesToDelete.some(toDelete => toDelete.id === m.id)
+      );
+      setMessages(filteredMessages);
+    }
+
+    // Now regenerate with a clean slate
+    regenerate();
+  };
+
+  // Determine last assistant message for retry button visibility
+  const lastAssistantMessageId = messages
+    .filter(m => m.role === 'assistant')
+    .slice(-1)[0]?.id;
 
   // Register streaming state with editing store (state-based protection)
   // Note: In AI SDK v5, status can be 'ready', 'submitted', 'streaming', or 'error'
@@ -362,7 +440,14 @@ const GlobalAssistantView: React.FC = () => {
                 </div>
               ) : (
                 messages.map(message => (
-                  <MessageRenderer key={message.id} message={message} />
+                  <MessageRenderer
+                    key={message.id}
+                    message={message}
+                    onEdit={handleEdit}
+                    onDelete={handleDelete}
+                    onRetry={handleRetry}
+                    isLastAssistantMessage={message.id === lastAssistantMessageId}
+                  />
                 ))
               )}
               
