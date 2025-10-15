@@ -23,7 +23,12 @@ interface CreateDriveDialogProps {
 
 export default function CreateDriveDialog({ isOpen, setIsOpen }: CreateDriveDialogProps) {
   const [driveName, setDriveName] = useState("");
-  const { addDrive, setCurrentDrive, fetchDrives } = useDriveStore();
+
+  // Use selective Zustand subscriptions to prevent unnecessary re-renders
+  const addDrive = useDriveStore(state => state.addDrive);
+  const setCurrentDrive = useDriveStore(state => state.setCurrentDrive);
+  const fetchDrives = useDriveStore(state => state.fetchDrives);
+
   const router = useRouter();
 
   const handleCreateDrive = async () => {

@@ -32,14 +32,16 @@ function Layout({ children }: LayoutProps) {
   const { isLoading, isAuthenticated } = useAuth();
   const router = useRouter();
   const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
-  const {
-    leftSidebarOpen,
-    rightSidebarOpen,
-    toggleLeftSidebar,
-    toggleRightSidebar,
-    setLeftSidebarOpen,
-    setRightSidebarOpen,
-  } = useLayoutStore();
+
+  // Use selective Zustand subscriptions to prevent re-renders when unrelated store values change
+  // This ensures Layout only re-renders when these specific sidebar values actually change
+  const leftSidebarOpen = useLayoutStore(state => state.leftSidebarOpen);
+  const rightSidebarOpen = useLayoutStore(state => state.rightSidebarOpen);
+  const toggleLeftSidebar = useLayoutStore(state => state.toggleLeftSidebar);
+  const toggleRightSidebar = useLayoutStore(state => state.toggleRightSidebar);
+  const setLeftSidebarOpen = useLayoutStore(state => state.setLeftSidebarOpen);
+  const setRightSidebarOpen = useLayoutStore(state => state.setRightSidebarOpen);
+
   const hasHydrated = useHasHydrated();
   const shouldOverlaySidebars = useBreakpoint("(max-width: 1279px)");
   const [leftSheetOpen, setLeftSheetOpen] = useState(false);

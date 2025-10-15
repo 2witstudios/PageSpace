@@ -140,11 +140,11 @@ const GlobalAssistantView: React.FC = () => {
   // ✅ Removed setMessages sync effect - AI SDK v5 manages messages internally
 
   // Register streaming state with editing store (state-based protection)
-  // Note: In AI SDK v5, status can be 'submitted' (streaming), 'ready', or 'error'
+  // Note: In AI SDK v5, status can be 'ready', 'submitted', 'streaming', or 'error'
   useEffect(() => {
     const componentId = `global-assistant-${currentConversationId || 'init'}`;
 
-    if (status === 'submitted') {
+    if (status === 'submitted' || status === 'streaming') {
       useEditingStore.getState().startStreaming(componentId, {
         conversationId: currentConversationId || undefined,
         componentName: 'GlobalAssistantView',

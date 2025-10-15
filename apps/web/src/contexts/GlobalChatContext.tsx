@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, ReactNode, useState, useCallback, useEffect } from 'react';
+import React, { createContext, useContext, ReactNode, useState, useCallback, useEffect, useMemo } from 'react';
 import { Chat } from '@ai-sdk/react';
 import { DefaultChatTransport, UIMessage } from 'ai';
 import { fetchWithAuth } from '@/lib/auth-fetch';
@@ -189,16 +189,30 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Run once on mount - functions are stable via useCallback
 
-  const contextValue: GlobalChatContextValue = {
-    chat,
-    currentConversationId,
-    initialMessages,
-    isInitialized,
-    setCurrentConversationId,
-    loadConversation,
-    createNewConversation,
-    refreshConversation,
-  };
+  // Memoize context value to prevent unnecessary re-renders throughout the app
+  // Functions are already stable via useCallback, so we only need to track state changes
+  const contextValue: GlobalChatContextValue = useMemo(
+    () => ({
+      chat,
+      currentConversationId,
+      initialMessages,
+      isInitialized,
+      setCurrentConversationId,
+      loadConversation,
+      createNewConversation,
+      refreshConversation,
+    }),
+    [
+      chat,
+      currentConversationId,
+      initialMessages,
+      isInitialized,
+      setCurrentConversationId,
+      loadConversation,
+      createNewConversation,
+      refreshConversation,
+    ]
+  );
 
   return (
     <GlobalChatContext.Provider value={contextValue}>

@@ -31,33 +31,20 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
     // Only create new socket if we don't have one or forcing reconnect
     if (!socket || forceReconnect) {
       set({ connectionStatus: 'connecting' });
-      
+
       const socketUrl = process.env.NEXT_PUBLIC_REALTIME_URL;
-      
+
       // Extract access token from cookies for authentication
       let accessToken: string | undefined;
       if (typeof document !== 'undefined') {
-        console.log('[SOCKET_DEBUG] Available cookies:', document.cookie);
-        console.log('[SOCKET_DEBUG] Socket URL:', socketUrl);
-        
         accessToken = document.cookie
           .split('; ')
           .find(row => row.startsWith('accessToken='))
           ?.split('=')[1];
-        
-        console.log('[SOCKET_DEBUG] Extracted accessToken:', accessToken ? 'Found' : 'Not found');
-        console.log('[SOCKET_DEBUG] Token length:', accessToken?.length || 0);
-        
-        if (accessToken) {
-          // Log first and last few characters for debugging (never log full token)
-          const tokenPreview = accessToken.length > 10 
-            ? `${accessToken.substring(0, 5)}...${accessToken.substring(accessToken.length - 5)}`
-            : 'short-token';
-          console.log('[SOCKET_DEBUG] Token preview:', tokenPreview);
-        }
       }
-      
-      console.log('[SOCKET_DEBUG] Creating socket with auth token:', accessToken ? 'present' : 'missing');
+
+      // Only log when actually creating a new connection
+      console.log('🔌 Creating new Socket.IO connection for realtime features');
       
       const newSocket = io(socketUrl, {
         auth: {

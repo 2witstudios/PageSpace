@@ -157,13 +157,14 @@ export default function DriveList() {
   const params = useParams();
   const pathname = usePathname();
   const router = useRouter();
-  const {
-    drives,
-    fetchDrives,
-    isLoading,
-    setCurrentDrive,
-    currentDriveId
-  } = useDriveStore();
+
+  // Use selective Zustand subscriptions to prevent unnecessary re-renders
+  const drives = useDriveStore(state => state.drives);
+  const fetchDrives = useDriveStore(state => state.fetchDrives);
+  const isLoading = useDriveStore(state => state.isLoading);
+  const setCurrentDrive = useDriveStore(state => state.setCurrentDrive);
+  const currentDriveId = useDriveStore(state => state.currentDriveId);
+
   const [renameDialogState, setRenameDialogState] = useState<{ isOpen: boolean; drive: Drive | null }>({ isOpen: false, drive: null });
   const [deleteDialogState, setDeleteDialogState] = useState<{ isOpen: boolean; drive: Drive | null }>({ isOpen: false, drive: null });
   

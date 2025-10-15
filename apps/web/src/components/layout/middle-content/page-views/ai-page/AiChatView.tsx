@@ -126,11 +126,11 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // No need to manually sync after initialization
 
   // Register streaming state with editing store (state-based protection)
-  // Note: In AI SDK v5, status can be 'submitted' (streaming), 'ready', or 'error'
+  // Note: In AI SDK v5, status can be 'ready', 'submitted', 'streaming', or 'error'
   useEffect(() => {
     const componentId = `ai-chat-${page.id}`;
 
-    if (status === 'submitted') {
+    if (status === 'submitted' || status === 'streaming') {
       useEditingStore.getState().startStreaming(componentId, {
         pageId: page.id,
         componentName: 'AiChatView',

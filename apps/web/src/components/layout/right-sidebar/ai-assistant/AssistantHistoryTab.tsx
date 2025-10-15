@@ -32,7 +32,7 @@ const AssistantHistoryTab: React.FC = () => {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Load conversations and current active conversation
+  // Load conversations once on mount
   useEffect(() => {
     const loadConversations = async () => {
       try {
@@ -49,18 +49,13 @@ const AssistantHistoryTab: React.FC = () => {
       }
     };
 
-    // Sync with global conversation ID from context
-    setActiveConversationId(globalConversationId);
-
     loadConversations();
-  }, [globalConversationId]);
+  }, []); // Only load once on mount
 
   // Sync local active conversation ID with global context
   useEffect(() => {
-    if (globalConversationId !== activeConversationId) {
-      setActiveConversationId(globalConversationId);
-    }
-  }, [globalConversationId, activeConversationId]);
+    setActiveConversationId(globalConversationId);
+  }, [globalConversationId]);
 
   // Filter conversations based on search query
   useEffect(() => {

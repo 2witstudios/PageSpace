@@ -66,29 +66,32 @@ const AssistantChatTab: React.FC = () => {
     }
   };
 
-  // Get drives from store
-  const { drives, fetchDrives } = useDriveStore();
-  
-  // Ensure drives are loaded
+  // Get fetchDrives from store to ensure drives are loaded
+  // Note: We don't subscribe to drives array to avoid re-renders
+  const { fetchDrives } = useDriveStore();
+
+  // Ensure drives are loaded on mount
   useEffect(() => {
     fetchDrives();
   }, [fetchDrives]);
   
   // Extract location context from pathname
+  // Note: Only depends on pathname, not drives array, to prevent re-fetching on drive refreshes
   useEffect(() => {
     const extractLocationContext = async () => {
       const pathParts = pathname.split('/').filter(Boolean);
-      
+
       if (pathParts.length >= 2 && pathParts[0] === 'dashboard') {
         const driveId = pathParts[1];
-        
+
         try {
           let currentPage = null;
           let currentDrive = null;
-          
-          // Get drive information from store
+
+          // Get drive information from store (using current drives snapshot)
           if (driveId) {
-            const driveData = drives.find(d => d.id === driveId);
+            const currentDrives = useDriveStore.getState().drives;
+            const driveData = currentDrives.find(d => d.id === driveId);
             if (driveData) {
               currentDrive = {
                 id: driveData.id,
@@ -193,7 +196,7 @@ const AssistantChatTab: React.FC = () => {
     };
 
     extractLocationContext();
-  }, [pathname, drives]);
+  }, [pathname]); // Only re-run when pathname changes, not on every drives refresh
 
   // Use the shared Chat instance from context - this is what enables state sharing!
   // Both AssistantChatTab and GlobalAssistantView will use the same Chat instance
@@ -207,11 +210,11 @@ const AssistantChatTab: React.FC = () => {
   // ✅ Removed setMessages sync effect - AI SDK v5 manages messages internally
 
   // Register streaming state with editing store (state-based protection)
-  // Note: In AI SDK v5, status can be 'submitted' (streaming), 'ready', or 'error'
+  // Note: In AI SDK v5, status can be 'ready', 'submitted', 'streaming', or 'error'
   useEffect(() => {
     const componentId = `assistant-sidebar-${currentConversationId || 'init'}`;
 
-    if (status === 'submitted') {
+    if (status === 'submitted' || status === 'streaming') {
       useEditingStore.getState().startStreaming(componentId, {
         conversationId: currentConversationId || undefined,
         componentName: 'AssistantChatTab',

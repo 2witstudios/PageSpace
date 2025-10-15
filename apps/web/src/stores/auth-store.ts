@@ -436,9 +436,24 @@ export const authStoreHelpers = {
           return;
         }
 
-        console.log('[AUTH_STORE] Token refreshed successfully');
+        console.log('[AUTH_STORE] Token refreshed successfully - triggering SWR cache revalidation');
+
         // Store was already updated directly by use-token-refresh hook
-        // No additional session reload needed
+        // Now trigger SWR cache revalidation for endpoints that may have failed with 401
+        import('swr').then(({ mutate }) => {
+          // Revalidate all API endpoints that might have failed during token expiration
+          // This ensures the UI displays fresh data after token refresh
+          mutate((key) => {
+            // Revalidate all API keys (string keys starting with /api/)
+            if (typeof key === 'string' && key.startsWith('/api/')) {
+              console.log('[AUTH_STORE] Revalidating SWR cache for:', key);
+              return true;
+            }
+            return false;
+          }).catch((error) => {
+            console.error('[AUTH_STORE] SWR cache revalidation error:', error);
+          });
+        });
       });
     };
 

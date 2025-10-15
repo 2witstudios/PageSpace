@@ -147,20 +147,37 @@ class AuthFetch {
       this.refreshQueue = [];
 
       if (success) {
-        // Retry all queued requests
+        // Retry all queued requests using this.fetch to preserve auth logic
+        this.logger.info('Token refresh successful, retrying queued requests', {
+          queuedRequests: queue.length,
+        });
+
         queue.forEach(async ({ resolve, reject, url, options }) => {
           try {
-            const response = await fetch(url, {
-              ...options,
-              credentials: 'include',
+            this.logger.debug('Retrying queued request after token refresh', { url });
+            // Use this.fetch instead of plain fetch to preserve:
+            // - CSRF token injection
+            // - Proper headers
+            // - Retry logic
+            const response = await this.fetch(url, options);
+            this.logger.debug('Queued request retry successful', {
+              url,
+              status: response.status,
             });
             resolve(response);
           } catch (error) {
+            this.logger.error('Queued request retry failed', {
+              url,
+              error: error instanceof Error ? error.message : String(error),
+            });
             reject(error as Error);
           }
         });
       } else {
         // Reject all queued requests
+        this.logger.warn('Token refresh failed, rejecting queued requests', {
+          queuedRequests: queue.length,
+        });
         queue.forEach(({ reject }) => {
           reject(new Error('Authentication failed'));
         });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, memo } from "react";
 import { usePathname } from "next/navigation";
 import { History, MessageSquare, Settings } from "lucide-react";
 
@@ -10,6 +10,15 @@ import { createClientLogger } from "@/lib/logging/client-logger";
 import AssistantChatTab from "./ai-assistant/AssistantChatTab";
 import AssistantHistoryTab from "./ai-assistant/AssistantHistoryTab";
 import AssistantSettingsTab from "./ai-assistant/AssistantSettingsTab";
+
+// Memoize tab components to prevent unnecessary re-renders
+const MemoizedChatTab = memo(AssistantChatTab);
+const MemoizedHistoryTab = memo(AssistantHistoryTab);
+const MemoizedSettingsTab = memo(AssistantSettingsTab);
+
+MemoizedChatTab.displayName = 'MemoizedChatTab';
+MemoizedHistoryTab.displayName = 'MemoizedHistoryTab';
+MemoizedSettingsTab.displayName = 'MemoizedSettingsTab';
 
 export interface RightPanelProps {
   className?: string;
@@ -151,9 +160,16 @@ export default function RightPanel({ className }: RightPanelProps) {
       </div>
 
       <div className="min-h-0 flex-1 overflow-hidden">
-        {activeTab === "chat" && <AssistantChatTab />}
-        {activeTab === "history" && <AssistantHistoryTab />}
-        {activeTab === "settings" && <AssistantSettingsTab />}
+        {/* Keep all tabs mounted to preserve state, toggle visibility with CSS */}
+        <div style={{ display: activeTab === "chat" ? "flex" : "none", flexDirection: "column", height: "100%" }}>
+          <MemoizedChatTab />
+        </div>
+        <div style={{ display: activeTab === "history" ? "flex" : "none", flexDirection: "column", height: "100%" }}>
+          <MemoizedHistoryTab />
+        </div>
+        <div style={{ display: activeTab === "settings" ? "flex" : "none", flexDirection: "column", height: "100%" }}>
+          <MemoizedSettingsTab />
+        </div>
       </div>
     </aside>
   );
