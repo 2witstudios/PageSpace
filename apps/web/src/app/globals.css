@@ -508,6 +508,73 @@
   .scrollbar-thin::-webkit-scrollbar-thumb:hover {
     background-color: hsl(var(--accent));
   }
+
+  /* SVG Color Utilities - for dark mode support in SVG elements */
+  .svg-bg {
+    fill: var(--background);
+  }
+
+  .svg-fg {
+    fill: var(--foreground);
+  }
+
+  .svg-card {
+    fill: var(--card);
+  }
+
+  .svg-primary {
+    fill: var(--primary);
+  }
+
+  .svg-primary-fg {
+    fill: var(--primary-foreground);
+  }
+
+  .svg-muted-fg {
+    fill: var(--muted-foreground);
+  }
+
+  .svg-border {
+    fill: var(--border);
+  }
+
+  .svg-separator {
+    fill: var(--separator);
+  }
+
+  .svg-material-thin {
+    fill: var(--material-thin);
+  }
+
+  /* SVG stroke variants */
+  .svg-stroke-fg {
+    stroke: var(--foreground);
+  }
+
+  .svg-stroke-muted-fg {
+    stroke: var(--muted-foreground);
+  }
+
+  .svg-stroke-primary {
+    stroke: var(--primary);
+  }
+
+  .svg-stroke-border {
+    stroke: var(--border);
+  }
+
+  .svg-stroke-separator {
+    stroke: var(--separator);
+  }
+
+  /* SVG status indicator colors */
+  .svg-status-saving {
+    fill: var(--chart-1); /* Amber/orange for "saving" state */
+  }
+
+  .svg-status-saved {
+    fill: var(--chart-2); /* Green for "saved" state */
+  }
 }
 
 
