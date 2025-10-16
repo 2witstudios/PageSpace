@@ -35,12 +35,13 @@ function getAppUrl(): string {
   if (customUrl) return customUrl;
 
   // Default URLs based on environment
+  // Desktop app loads directly to dashboard, skipping landing page
   if (process.env.NODE_ENV === 'development') {
-    return process.env.PAGESPACE_URL || 'http://localhost:3000';
+    return (process.env.PAGESPACE_URL || 'http://localhost:3000') + '/dashboard';
   }
 
   // Production URL - PageSpace cloud instance
-  return process.env.PAGESPACE_URL || 'https://pagespace.ai';
+  return (process.env.PAGESPACE_URL || 'https://pagespace.ai') + '/dashboard';
 }
 
 // Inject desktop-specific styles for titlebar and window dragging
