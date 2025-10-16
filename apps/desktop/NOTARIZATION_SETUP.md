@@ -72,7 +72,7 @@ After adding the secrets:
   - `hardenedRuntime: true`
   - `gatekeeperAssess: false`
   - Entitlements file paths
-  - Team ID for notarization
+  - `notarize: true` to enable notarization (team ID comes from environment variable)
 
 - `.github/workflows/build-desktop.yml` - Added environment variables:
   - `APPLE_ID`
@@ -80,6 +80,11 @@ After adding the secrets:
   - `APPLE_TEAM_ID`
 
 ## Troubleshooting
+
+### "configuration.mac.notarize should be a boolean" error
+- This error occurs if `notarize` is configured as an object instead of a boolean
+- The fix: Change `"notarize": { "teamId": "..." }` to `"notarize": true`
+- The team ID should come from the `APPLE_TEAM_ID` environment variable, not the package.json
 
 ### "invalid credentials" error
 - Double-check your Apple ID email is correct
