@@ -20,7 +20,7 @@
     "test:security": "vitest run --dir apps/web/src/test/security",
     "dev:desktop": "pnpm --filter desktop dev",
     "build:desktop": "pnpm --filter desktop build",
-    "package:desktop": "pnpm --filter desktop package"
+    "package:desktop": "pnpm --filter desktop package",
     "check:fetch": "node scripts/check-fetch-auth.js"
   },
   "devDependencies": {
