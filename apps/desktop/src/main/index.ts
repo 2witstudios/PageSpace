@@ -43,6 +43,41 @@ function getAppUrl(): string {
   return process.env.PAGESPACE_URL || 'https://pagespace.ai';
 }
 
+// Inject desktop-specific styles for titlebar and window dragging
+function injectDesktopStyles(): void {
+  if (!mainWindow) return;
+
+  const css = `
+    /* Make the top navbar/header draggable for window movement */
+    header, nav, [role="banner"], .navbar, .header {
+      -webkit-app-region: drag;
+      padding-left: 80px !important; /* Space for traffic light buttons */
+    }
+
+    /* Make interactive elements non-draggable so they remain clickable */
+    header a, header button, header input, header select, header textarea,
+    nav a, nav button, nav input, nav select, nav textarea,
+    [role="banner"] a, [role="banner"] button, [role="banner"] input,
+    .navbar a, .navbar button, .navbar input, .navbar select,
+    .header a, .header button, .header input, .header select {
+      -webkit-app-region: no-drag;
+    }
+
+    /* Ensure dropdown menus and interactive UI elements are clickable */
+    [role="menu"], [role="dialog"], [role="listbox"],
+    .dropdown, .menu, .popover, .modal {
+      -webkit-app-region: no-drag;
+    }
+
+    /* Make sure all buttons and links remain interactive */
+    button, a, input, select, textarea, [role="button"] {
+      -webkit-app-region: no-drag;
+    }
+  `;
+
+  mainWindow.webContents.insertCSS(css);
+}
+
 function createWindow(): void {
   // Get saved window bounds
   const windowBounds = store.get('windowBounds') || { width: 1400, height: 900 };
@@ -69,6 +104,11 @@ function createWindow(): void {
   // Load the app URL
   const appUrl = getAppUrl();
   mainWindow.loadURL(appUrl);
+
+  // Inject desktop-specific CSS when page loads
+  mainWindow.webContents.on('did-finish-load', () => {
+    injectDesktopStyles();
+  });
 
   // Show window when ready
   mainWindow.once('ready-to-show', () => {
