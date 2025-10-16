@@ -86,10 +86,33 @@ After adding the secrets:
 - The fix: Change `"notarize": { "teamId": "..." }` to `"notarize": true`
 - The team ID should come from the `APPLE_TEAM_ID` environment variable, not the package.json
 
-### "invalid credentials" error
-- Double-check your Apple ID email is correct
-- Verify the app-specific password was copied correctly (no extra spaces)
-- Make sure you're using an app-specific password, not your main Apple ID password
+### "invalid credentials" or "HTTP status code: 401" error
+This is the most common issue. Here's how to fix it:
+
+1. **Verify Apple ID email** in GitHub Secrets:
+   - Go to Settings → Secrets and variables → Actions
+   - Edit the `APPLE_ID` secret
+   - Make sure it matches EXACTLY the email for your Apple Developer account
+   - No extra spaces before or after
+
+2. **Regenerate app-specific password**:
+   - Go to https://appleid.apple.com/account/manage
+   - Navigate to "Sign-In and Security" → "App-Specific Passwords"
+   - Delete the old PageSpace password
+   - Generate a NEW one (e.g., `xxxx-xxxx-xxxx-xxxx`)
+   - **Critical**: Copy it WITHOUT the dashes: `xxxxxxxxxxxxxxxx`
+   - Update the `APPLE_APP_SPECIFIC_PASSWORD` secret in GitHub with the new password
+   - **Common mistake**: Don't use your regular Apple ID password - must be app-specific!
+
+3. **Check the debug output** in GitHub Actions logs:
+   - Look for the "Debug notarization credentials" step
+   - Verify all three show as "✓ is set"
+   - If any show "ERROR", that secret isn't configured correctly
+   - Check the app-specific password length - should be 16 characters (without dashes)
+
+4. **Verify Team ID**:
+   - Make sure `APPLE_TEAM_ID` is set to `M96WTV3CKX`
+   - Check the debug output shows this exact value
 
 ### "Could not find team" error
 - Verify `APPLE_TEAM_ID` is set to `M96WTV3CKX`

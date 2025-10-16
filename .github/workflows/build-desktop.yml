@@ -47,6 +47,31 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions build.keychain
           rm certificate.p12
 
+      - name: Debug notarization credentials
+        run: |
+          echo "Checking notarization environment variables..."
+          if [ -z "$APPLE_ID" ]; then
+            echo "ERROR: APPLE_ID is not set or empty"
+          else
+            echo "✓ APPLE_ID is set (length: ${#APPLE_ID})"
+          fi
+
+          if [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ]; then
+            echo "ERROR: APPLE_APP_SPECIFIC_PASSWORD is not set or empty"
+          else
+            echo "✓ APPLE_APP_SPECIFIC_PASSWORD is set (length: ${#APPLE_APP_SPECIFIC_PASSWORD})"
+          fi
+
+          if [ -z "$APPLE_TEAM_ID" ]; then
+            echo "ERROR: APPLE_TEAM_ID is not set or empty"
+          else
+            echo "✓ APPLE_TEAM_ID is set: $APPLE_TEAM_ID"
+          fi
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
       - name: Package macOS app (signed and notarized)
         run: pnpm --filter desktop package:mac
         env:
