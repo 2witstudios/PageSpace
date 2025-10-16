@@ -87,7 +87,7 @@ export default function TopBar({ onToggleLeftPanel, onToggleRightPanel }: TopBar
             variant="ghost"
             size="icon"
             onClick={onToggleRightPanel}
-            className="xl:hidden"
+            className="lg:hidden"
             aria-label="Toggle assistant panel"
           >
             <PanelRight className="h-5 w-5" />
@@ -97,7 +97,7 @@ export default function TopBar({ onToggleLeftPanel, onToggleRightPanel }: TopBar
             variant="ghost"
             size="icon"
             onClick={onToggleRightPanel}
-            className="hidden xl:flex"
+            className="hidden lg:flex"
             aria-label="Collapse assistant panel"
           >
             <PanelRight className="h-5 w-5" />
