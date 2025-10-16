@@ -54,7 +54,7 @@
         }
       ],
       "icon": "assets/icon.icns",
-      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "artifactName": "${productName}.${ext}",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
@@ -73,7 +73,7 @@
         }
       ],
       "icon": "assets/icon.ico",
-      "artifactName": "${productName}-${version}-${arch}.${ext}"
+      "artifactName": "${productName}.${ext}"
     },
     "linux": {
       "target": [
@@ -83,7 +83,7 @@
       ],
       "category": "Office",
       "icon": "assets/icon.png",
-      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "artifactName": "${productName}.${ext}",
       "maintainer": "support@pagespace.ai"
     },
     "nsis": {
