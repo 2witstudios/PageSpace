@@ -269,13 +269,13 @@ function createMenu(): void {
         {
           label: 'Learn More',
           click: async () => {
-            await shell.openExternal('https://pagespace.com');
+            await shell.openExternal('https://pagespace.ai');
           },
         },
         {
           label: 'Documentation',
           click: async () => {
-            await shell.openExternal('https://docs.pagespace.com');
+            await shell.openExternal('https://pagespace.ai');
           },
         },
       ],
