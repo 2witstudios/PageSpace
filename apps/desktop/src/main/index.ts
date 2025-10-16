@@ -1,7 +1,14 @@
 import { app, BrowserWindow, Menu, shell, ipcMain, Tray, nativeImage } from 'electron';
-import { autoUpdater } from 'electron-updater';
+import electronUpdaterPkg from 'electron-updater';
+const { autoUpdater } = electronUpdaterPkg;
 import * as path from 'path';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
 import Store from 'electron-store';
+
+// ESM equivalent of __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // Configuration store for user preferences
 interface StoreSchema {

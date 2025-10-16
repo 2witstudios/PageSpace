@@ -4,6 +4,7 @@
   "description": "PageSpace Desktop - Native desktop app for PageSpace",
   "license": "CC-BY-NC-SA-4.0",
   "author": "PageSpace",
+  "type": "module",
   "main": "dist/main/index.js",
   "scripts": {
     "dev": "cross-env NODE_ENV=development electron .",
