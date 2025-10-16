@@ -1,21 +1,22 @@
 #!/bin/bash
-# Generate multi-resolution macOS .icns from 1024px PNG
+# Generate multi-resolution macOS .icns from padded 1024px PNG
+# Note: Use the "Icon Exports Padded" folder which already has proper 85% padding
 
 set -e
 
-SOURCE_PNG="../web/public/Icon-iOS-Default-1024x1024@1x.png"
+SOURCE_PNG="../web/public/Icon Exports Padded/Icon-iOS-Default-1024x1024@1x.png"
 ICONSET_DIR="PageSpace.iconset"
 OUTPUT_ICNS="assets/icon.icns"
 
-echo "🎨 Generating macOS icon from $SOURCE_PNG..."
+echo "🎨 Generating macOS icon from padded source..."
+echo "📁 Source: $SOURCE_PNG"
 
 # Create iconset directory
 rm -rf "$ICONSET_DIR"
 mkdir "$ICONSET_DIR"
 
-# Generate all required sizes
-# Format: icon_SIZExSIZE[@2x].png
-echo "📐 Generating icon sizes..."
+# Generate all required macOS icon sizes
+echo "📐 Generating all macOS icon sizes..."
 
 sips -z 16 16 "$SOURCE_PNG" --out "$ICONSET_DIR/icon_16x16.png" > /dev/null
 sips -z 32 32 "$SOURCE_PNG" --out "$ICONSET_DIR/icon_16x16@2x.png" > /dev/null
@@ -33,6 +34,10 @@ echo "✅ Generated all icon sizes"
 # Convert to .icns
 echo "🔨 Creating .icns file..."
 iconutil -c icns "$ICONSET_DIR" -o "$OUTPUT_ICNS"
+
+# Update icon.png with the padded version for consistency
+cp "$SOURCE_PNG" "assets/icon.png"
+echo "✅ Updated assets/icon.png"
 
 # Clean up
 rm -rf "$ICONSET_DIR"
