@@ -34,24 +34,10 @@ jobs:
       - name: Build desktop app TypeScript
         run: pnpm --filter desktop build
 
-      - name: Import code signing certificate (if available)
-        if: secrets.MACOS_CERTIFICATE != ''
-        env:
-          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
-          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
-        run: |
-          echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
-          security create-keychain -p actions build.keychain
-          security default-keychain -s build.keychain
-          security unlock-keychain -p actions build.keychain
-          security import certificate.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions build.keychain
-          rm certificate.p12
-
-      - name: Package macOS app
+      - name: Package macOS app (unsigned - add secrets for signing)
         run: pnpm --filter desktop package:mac
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.MACOS_CERTIFICATE != '' && 'true' || 'false' }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
