@@ -32,8 +32,8 @@ function getAppUrl(): string {
     return process.env.PAGESPACE_URL || 'http://localhost:3000';
   }
 
-  // Production URL - replace with your VPS URL
-  return process.env.PAGESPACE_URL || 'https://your-vps-url.com';
+  // Production URL - PageSpace cloud instance
+  return process.env.PAGESPACE_URL || 'https://pagespace.ai';
 }
 
 function createWindow(): void {
