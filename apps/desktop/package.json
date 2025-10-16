@@ -2,8 +2,12 @@
   "name": "desktop",
   "version": "1.0.0",
   "description": "PageSpace Desktop - Native desktop app for PageSpace",
+  "homepage": "https://pagespace.ai",
   "license": "CC-BY-NC-SA-4.0",
-  "author": "PageSpace",
+  "author": {
+    "name": "PageSpace",
+    "email": "support@pagespace.ai"
+  },
   "type": "module",
   "main": "dist/main/index.js",
   "scripts": {
@@ -74,7 +78,8 @@
       ],
       "category": "Office",
       "icon": "assets/icon.png",
-      "artifactName": "${productName}-${version}-${arch}.${ext}"
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "maintainer": "support@pagespace.ai"
     },
     "nsis": {
       "oneClick": false,
