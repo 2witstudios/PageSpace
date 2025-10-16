@@ -22,6 +22,8 @@ pids
 # Directory for compiled output
 dist/
 build/
+# Allow desktop app build config (entitlements, etc)
+!apps/desktop/build/*.plist
 .turbo/
 
 # Dependency directories
