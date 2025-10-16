@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateWebRequest, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, conversations, eq, and, desc } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers } from '@pagespace/lib/server';
@@ -7,14 +7,16 @@ import { loggers } from '@pagespace/lib/server';
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
 
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+
 /**
  * GET - List all conversations for the authenticated user
  */
 export async function GET(request: Request) {
   try {
-    const auth = await authenticateWebRequest(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
-    const { userId } = auth;
+    const userId = auth.userId;
 
     const userConversations = await db
       .select({
@@ -46,9 +48,9 @@ export async function GET(request: Request) {
  */
 export async function POST(request: Request) {
   try {
-    const auth = await authenticateWebRequest(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
-    const { userId } = auth;
+    const userId = auth.userId;
 
     const body = await request.json();
     const { title, type = 'global', contextId } = body;

@@ -8,6 +8,7 @@ import { SubscriptionCard } from '@/components/billing/SubscriptionCard';
 import { PlanComparisonTable } from '@/components/billing/PlanComparisonTable';
 import { CheckCircle, XCircle, AlertCircle, ArrowLeft } from 'lucide-react';
 import { getNextPlan, type SubscriptionTier } from '@/lib/subscription/plans';
+import { post, fetchWithAuth } from '@/lib/auth-fetch';
 
 // Stripe Payment Links for subscription upgrades
 const STRIPE_PRO_PAYMENT_LINK = 'https://buy.stripe.com/8x2fZjdczc7ffz0eF0eEo01';
@@ -64,8 +65,8 @@ export default function BillingPage() {
       setError(null);
 
       const [subscriptionRes, usageRes] = await Promise.all([
-        fetch('/api/subscriptions/status'),
-        fetch('/api/subscriptions/usage')
+        fetchWithAuth('/api/subscriptions/status'),
+        fetchWithAuth('/api/subscriptions/usage')
       ]);
 
       if (!subscriptionRes.ok || !usageRes.ok) {
@@ -124,19 +125,7 @@ export default function BillingPage() {
 
   const handleManageBilling = async () => {
     try {
-      const response = await fetch('/api/stripe/portal', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to open billing portal');
-      }
-
-      const { url } = await response.json();
+      const { url } = await post<{ url: string }>('/api/stripe/portal');
       window.open(url, '_blank');
 
     } catch (err) {

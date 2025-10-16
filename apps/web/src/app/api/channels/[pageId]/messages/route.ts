@@ -1,26 +1,18 @@
 import { NextResponse } from 'next/server';
 import { channelMessages, db, eq, asc } from '@pagespace/db';
-import { decodeToken, canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
-import { parse } from 'cookie';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
 
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+
 export async function GET(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
   const { pageId } = await params;
-  const cookieHeader = req.headers.get('cookie');
-  const cookies = parse(cookieHeader || '');
-  const accessToken = cookies.accessToken;
 
-  if (!accessToken) {
-    return new NextResponse("Unauthorized", { status: 401 });
-  }
-
-  const decoded = await decodeToken(accessToken);
-  if (!decoded) {
-    return new NextResponse("Unauthorized", { status: 401 });
-  }
-
-  const userId = decoded.userId;
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  if (isAuthError(auth)) return auth.error;
+  const userId = auth.userId;
 
   // Check if user has view permission for this channel
   const canView = await canUserViewPage(userId, pageId);
@@ -48,19 +40,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 
 export async function POST(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
   const { pageId } = await params;
-  const cookieHeader = req.headers.get('cookie');
-  const cookies = parse(cookieHeader || '');
-  const accessToken = cookies.accessToken;
 
-  if (!accessToken) {
-    return new NextResponse("Unauthorized", { status: 401 });
-  }
-
-  const decoded = await decodeToken(accessToken);
-  if (!decoded) {
-    return new NextResponse("Unauthorized", { status: 401 });
-  }
-  const userId = decoded.userId;
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  if (isAuthError(auth)) return auth.error;
+  const userId = auth.userId;
 
   // Check if user has edit permission to post messages in this channel
   const canEdit = await canUserEditPage(userId, pageId);

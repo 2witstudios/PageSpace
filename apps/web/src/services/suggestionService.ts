@@ -1,4 +1,5 @@
 import { MentionSuggestion, MentionType } from '@/types/mentions';
+import { fetchWithAuth } from '@/lib/auth-fetch';
 
 export interface SuggestionApiError {
   message: string;
@@ -31,7 +32,7 @@ export const suggestionApi = {
         };
       }
       
-      const response = await fetch(`/api/mentions/search?${params}`);
+      const response = await fetchWithAuth(`/api/mentions/search?${params}`);
       if (!response.ok) {
         return {
           suggestions: [],

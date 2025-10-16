@@ -4,13 +4,20 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
 import dynamic from 'next/dynamic';
 import useSWR from 'swr';
+import { patch, fetchWithAuth } from '@/lib/auth-fetch';
 import Sandbox from '@/components/sandbox/Sandbox';
 import PreviewErrorBoundary from '@/components/sandbox/PreviewErrorBoundary';
 import { useDocumentStore } from '@/stores/useDocumentStore';
 
 const MonacoEditor = dynamic(() => import('@/components/editors/MonacoEditor'), { ssr: false });
 
-const fetcher = (url: string) => fetch(url).then(res => res.json());
+const fetcher = async (url: string) => {
+  const response = await fetchWithAuth(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch: ${response.status}`);
+  }
+  return response.json();
+};
 
 const UserDashboardView = () => {
   const { data: dashboard, error, mutate } = useSWR('/api/user/dashboard', fetcher);
@@ -20,14 +27,7 @@ const UserDashboardView = () => {
 
   const saveContent = useCallback(async (userId: string, newValue: string) => {
     try {
-      const response = await fetch(`/api/user/dashboard`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: newValue }),
-      });
-      if (!response.ok) {
-        throw new Error(`Failed to save dashboard content. Status: ${response.status}`);
-      }
+      await patch('/api/user/dashboard', { content: newValue });
       toast.success('Dashboard saved successfully!');
       mutate(); // Re-fetch the data to update the view
     } catch (error) {

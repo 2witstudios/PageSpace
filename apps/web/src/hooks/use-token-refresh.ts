@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { mutate } from 'swr';
 import { useRouter } from 'next/navigation';
+import { post } from '@/lib/auth-fetch';
 
 interface TokenRefreshOptions {
   refreshBeforeExpiryMs?: number; // How long before expiry to refresh (default: 2 minutes)
@@ -12,6 +13,10 @@ interface TokenRefreshOptions {
 
 // Global refresh promise to prevent concurrent refresh attempts across all instances
 let globalRefreshPromise: Promise<boolean> | null = null;
+
+// Global timeout for scheduled refresh - singleton pattern to prevent multiple schedules
+let globalRefreshTimeout: NodeJS.Timeout | null = null;
+let isRefreshScheduled = false;
 
 export function useTokenRefresh(options: TokenRefreshOptions = {}) {
   const {
@@ -34,7 +39,7 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
 
   const logout = async () => {
     try {
-      await fetch('/api/auth/logout', { method: 'POST' });
+      await post('/api/auth/logout');
       await mutate('/api/auth/me', null, false);
       router.push('/auth/signin');
     } catch (error) {
@@ -63,15 +68,32 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
         });
 
         if (response.ok) {
-          // Token refreshed successfully, update auth cache
-          await mutate('/api/auth/me');
+          // Token refreshed successfully, fetch fresh user data
+          try {
+            const userResponse = await fetch('/api/auth/me', {
+              credentials: 'include',
+            });
+
+            if (userResponse.ok) {
+              const userData = await userResponse.json();
+
+              // Update Zustand store directly (avoid orphaned SWR mutate)
+              const { useAuthStore } = await import('@/stores/auth-store');
+              const authStore = useAuthStore.getState();
+              authStore.setUser(userData);
+              authStore.clearFailedAttempts();
+            }
+          } catch (error) {
+            console.error('Failed to update user data after token refresh:', error);
+          }
+
           retryCountRef.current = 0;
-          
-          // Dispatch custom event for other components
+
+          // Dispatch custom event for editing protection check
           if (typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('auth:refreshed'));
           }
-          
+
           return true;
         } else if (response.status === 401) {
           // Refresh token is invalid or expired
@@ -108,17 +130,29 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
   };
 
   const scheduleTokenRefresh = () => {
+    // Clear local timeout ref
     clearRefreshTimeout();
 
-    // Access tokens expire in 15 minutes, so refresh before that  
+    // Singleton pattern: Only allow one global schedule
+    if (isRefreshScheduled) {
+      console.log('⏰ Token refresh already scheduled globally, skipping duplicate');
+      return;
+    }
+
+    isRefreshScheduled = true;
+
+    // Access tokens expire in 15 minutes, so refresh before that
     const refreshInMs = (15 * 60 * 1000) - refreshBeforeExpiryMs; // Now 12 minutes
-    
+
     console.log(`⏰ Scheduling token refresh in ${Math.round(refreshInMs / 1000 / 60)} minutes`);
-    
-    timeoutRef.current = setTimeout(async () => {
+
+    // Use global timeout instead of local ref
+    globalRefreshTimeout = setTimeout(async () => {
       console.log('🔄 Executing scheduled token refresh');
+      isRefreshScheduled = false; // Allow next schedule
+
       const success = await refreshToken();
-      
+
       if (success) {
         // Schedule the next refresh
         console.log('✅ Token refresh successful, scheduling next refresh');
@@ -128,7 +162,7 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
         if (retryCountRef.current < retryAttempts) {
           retryCountRef.current++;
           console.log(`❌ Token refresh failed, retrying in ${retryDelayMs}ms (attempt ${retryCountRef.current}/${retryAttempts})`);
-          
+
           setTimeout(() => {
             scheduleTokenRefresh();
           }, retryDelayMs);
@@ -138,6 +172,9 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
         }
       }
     }, refreshInMs);
+
+    // Also store in local ref for component cleanup
+    timeoutRef.current = globalRefreshTimeout;
   };
 
   const startTokenRefresh = () => {
@@ -146,7 +183,13 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
   };
 
   const stopTokenRefresh = () => {
+    // Clear both local and global timeouts
     clearRefreshTimeout();
+    if (globalRefreshTimeout) {
+      clearTimeout(globalRefreshTimeout);
+      globalRefreshTimeout = null;
+      isRefreshScheduled = false;
+    }
     retryCountRef.current = 0;
   };
 

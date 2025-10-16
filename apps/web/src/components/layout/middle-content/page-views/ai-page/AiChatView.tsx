@@ -11,8 +11,9 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Loader2, Send, Settings, MessageSquare } from 'lucide-react';
+import { Loader2, Send, Settings, MessageSquare, StopCircle } from 'lucide-react';
 import { UIMessage, DefaultChatTransport } from 'ai';
+import { useEditingStore } from '@/stores/useEditingStore';
 import { ConversationMessageRenderer } from '@/components/ai/ConversationMessageRenderer';
 import { buildPagePath } from '@/lib/tree/tree-utils';
 import { useDriveStore } from '@/hooks/useDrive';
@@ -20,6 +21,7 @@ import { AI_PROVIDERS, getBackendProvider } from '@/lib/ai/ai-providers-config';
 import { useAuth } from '@/hooks/use-auth';
 import { toast } from 'sonner';
 import AgentSettingsTab, { AgentSettingsTabRef } from '@/components/ai/AgentSettingsTab';
+import { fetchWithAuth, patch, del } from '@/lib/auth-fetch';
 
 interface AiChatViewProps {
     page: TreePage;
@@ -66,6 +68,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   } | null>(null);
   const [showError, setShowError] = useState(true);
   const [isReadOnly, setIsReadOnly] = useState<boolean>(false);
+  const [editVersion, setEditVersion] = useState(0); // Track edit version for forcing re-renders
   const { user } = useAuth();
   
   // Refs for auto-scrolling and chat input
@@ -85,13 +88,13 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // Use conditional rendering to only initialize when messages are loaded
   const chatConfig = React.useMemo(() => ({
     id: page.id, // Use pageId as chatId for AI SDK v5 persistence
-    messages: initialMessages, // AI SDK v5 pattern for loading existing messages
+    messages: initialMessages, // AI SDK v5 pattern - passed once, managed internally
     transport: new DefaultChatTransport({
       api: '/api/ai/chat',
-      fetch: (url, options) => fetch(url, { 
-        ...options, 
-        credentials: 'include' // Ensures authentication cookies are sent
-      }),
+      fetch: (url, options) => {
+        const urlString = url instanceof Request ? url.url : url.toString();
+        return fetchWithAuth(urlString, options);
+      },
     }),
     experimental_throttle: 50, // Throttle updates for better performance during streaming
     onError: (error: Error) => {
@@ -102,40 +105,126 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
         stack: error.stack,
         name: error.name
       });
-      
+
       // Handle authentication errors specifically
       if (error.message?.includes('Unauthorized') || error.message?.includes('401')) {
         console.error('🔒 AiChatView: Authentication failed - user may need to log in again');
       }
-      
+
       // Don't show technical details to users - error display is handled in UI
     },
-  }), [page.id, initialMessages]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [page.id]); // initialMessages intentionally excluded - passed once for AI SDK v5 pattern
 
-  const { 
-    messages, 
+  const {
+    messages,
     sendMessage,
-    setMessages,
     status,
     error,
+    regenerate,
+    setMessages,
+    stop,
   } = useChat(chatConfig);
 
-  // Sync loaded messages with useChat hook after initialization
-  React.useEffect(() => {
-    if (isInitialized && initialMessages.length > 0 && messages.length === 0) {
-      setMessages(initialMessages);
+  // ✅ Removed setMessages sync effect - AI SDK v5 manages messages internally
+  // No need to manually sync after initialization
+
+  // Message action handlers (defined after useChat so we have access to messages, setMessages, regenerate)
+  const handleEdit = async (messageId: string, newContent: string) => {
+    try {
+      // Persist to backend (already handles structured content correctly)
+      await patch(`/api/ai/chat/messages/${messageId}`, { content: newContent });
+
+      // Refetch messages and force remount
+      const messagesResponse = await fetchWithAuth(`/api/ai/chat/messages?pageId=${page.id}`);
+      if (messagesResponse.ok) {
+        const freshMessages: UIMessage[] = await messagesResponse.json();
+        setMessages(freshMessages);
+        setEditVersion(v => v + 1); // Force re-render with new key
+      }
+
+      toast.success('Message updated successfully');
+    } catch (error) {
+      console.error('Failed to edit message:', error);
+      toast.error('Failed to edit message');
+      throw error;
     }
-  }, [isInitialized, initialMessages, messages.length, setMessages]);
+  };
 
-  // Auto-scroll when messages change
+  const handleDelete = async (messageId: string) => {
+    try {
+      await del(`/api/ai/chat/messages/${messageId}`);
+
+      // Remove from UI immediately (optimistic update)
+      setMessages(messages.filter(m => m.id !== messageId));
+
+      toast.success('Message deleted');
+    } catch (error) {
+      console.error('Failed to delete message:', error);
+      toast.error('Failed to delete message');
+      throw error;
+    }
+  };
+
+  const handleRetry = async () => {
+    // Before regenerating, clean up old assistant responses after the last user message
+    const lastUserMsgIndex = messages.map(m => m.role).lastIndexOf('user');
+
+    if (lastUserMsgIndex !== -1) {
+      // Get all assistant messages after the last user message
+      const assistantMessagesToDelete = messages
+        .slice(lastUserMsgIndex + 1)
+        .filter(m => m.role === 'assistant');
+
+      // Delete them from the database
+      for (const msg of assistantMessagesToDelete) {
+        try {
+          await del(`/api/ai/chat/messages/${msg.id}`);
+        } catch (error) {
+          console.error('Failed to delete old assistant message:', error);
+        }
+      }
+
+      // Remove them from local state
+      const filteredMessages = messages.filter(
+        m => !assistantMessagesToDelete.some(toDelete => toDelete.id === m.id)
+      );
+      setMessages(filteredMessages);
+    }
+
+    // Now regenerate with a clean slate
+    regenerate();
+  };
+
+  // Determine last assistant message for retry button visibility
+  const lastAssistantMessageId = messages
+    .filter(m => m.role === 'assistant')
+    .slice(-1)[0]?.id;
+
+  // Register streaming state with editing store (state-based protection)
+  // Note: In AI SDK v5, status can be 'ready', 'submitted', 'streaming', or 'error'
+  useEffect(() => {
+    const componentId = `ai-chat-${page.id}`;
+
+    if (status === 'submitted' || status === 'streaming') {
+      useEditingStore.getState().startStreaming(componentId, {
+        pageId: page.id,
+        componentName: 'AiChatView',
+      });
+    } else {
+      useEditingStore.getState().endStreaming(componentId);
+    }
+
+    // Cleanup on unmount
+    return () => {
+      useEditingStore.getState().endStreaming(componentId);
+    };
+  }, [status, page.id]);
+
+  // ✅ Combined scroll effects - use messages.length instead of messages array
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
-
-  // Auto-scroll when AI status changes (thinking/responding)
-  useEffect(() => {
-    scrollToBottom();
-  }, [status]);
+  }, [messages.length, status]);
 
   // Reset error visibility when new error occurs
   useEffect(() => {
@@ -146,9 +235,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   useEffect(() => {
     const checkPermissions = async () => {
       if (!user?.id) return;
-      
+
       try {
-        const response = await fetch(`/api/pages/${page.id}/permissions/check`);
+        const response = await fetchWithAuth(`/api/pages/${page.id}/permissions/check`);
         if (response.ok) {
           const permissions = await response.json();
           setIsReadOnly(!permissions.canEdit);
@@ -157,7 +246,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
         console.error('Failed to check permissions:', error);
       }
     };
-    
+
     checkPermissions();
   }, [user?.id, page.id]);
 
@@ -167,9 +256,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       try {
         // Parallelize API calls for faster loading
         const [configResponse, messagesResponse, agentConfigResponse] = await Promise.all([
-          fetch(`/api/ai/chat?pageId=${page.id}`),
-          fetch(`/api/ai/chat/messages?pageId=${page.id}`),
-          fetch(`/api/pages/${page.id}/agent-config`)
+          fetchWithAuth(`/api/ai/chat?pageId=${page.id}`),
+          fetchWithAuth(`/api/ai/chat/messages?pageId=${page.id}`),
+          fetchWithAuth(`/api/pages/${page.id}/agent-config`)
         ]);
         
         // Process config data
@@ -455,7 +544,14 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                 </div>
               ) : (
                 messages.map(message => (
-                  <ConversationMessageRenderer key={message.id} message={message} />
+                  <ConversationMessageRenderer
+                    key={`${message.id}-${editVersion}`}
+                    message={message}
+                    onEdit={!isReadOnly ? handleEdit : undefined}
+                    onDelete={!isReadOnly ? handleDelete : undefined}
+                    onRetry={!isReadOnly ? handleRetry : undefined}
+                    isLastAssistantMessage={message.id === lastAssistantMessageId}
+                  />
                 ))
               )}
               
@@ -552,56 +648,63 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
               placeholder={isReadOnly ? "View only - cannot send messages" : (isLoading ? "Loading..." : "Message AI...")}
               driveId={driveId}
             />
-            <Button 
-              onClick={() => {
-                if (isReadOnly) {
-                  toast.error('You do not have permission to send messages in this AI chat');
-                  return;
-                }
-                if (input.trim()) {
-                  // Get current drive information
-                  const currentDrive = drives.find(d => d.id === driveId);
-                  // Build page path context
-                  const pagePathInfo = buildPagePath(tree, page.id, driveId);
-                  
-                  sendMessage(
-                    { text: input },
-                    {
-                      body: {
-                        chatId: page.id,
-                        selectedProvider: selectedProvider,
-                        selectedModel,
-                        openRouterApiKey: openRouterApiKey || undefined,
-                        googleApiKey: googleApiKey || undefined,
-                        pageContext: {
-                          pageId: page.id,
-                          pageTitle: page.title,
-                          pageType: page.type,
-                          pagePath: pagePathInfo?.path || `/${driveId}/${page.title}`,
-                          parentPath: pagePathInfo?.parentPath || `/${driveId}`,
-                          breadcrumbs: pagePathInfo?.breadcrumbs || [driveId, page.title],
-                          driveId: currentDrive?.id,
-                          driveName: currentDrive?.name || driveId,
-                          driveSlug: currentDrive?.slug,
-                        },
+            {status === 'streaming' || status === 'submitted' ? (
+              <Button
+                onClick={() => stop()}
+                variant="destructive"
+                size="icon"
+                title="Stop generating"
+              >
+                <StopCircle className="h-4 w-4" />
+              </Button>
+            ) : (
+              <Button
+                onClick={() => {
+                  if (isReadOnly) {
+                    toast.error('You do not have permission to send messages in this AI chat');
+                    return;
+                  }
+                  if (input.trim()) {
+                    // Get current drive information
+                    const currentDrive = drives.find(d => d.id === driveId);
+                    // Build page path context
+                    const pagePathInfo = buildPagePath(tree, page.id, driveId);
+
+                    sendMessage(
+                      { text: input },
+                      {
+                        body: {
+                          chatId: page.id,
+                          selectedProvider: selectedProvider,
+                          selectedModel,
+                          openRouterApiKey: openRouterApiKey || undefined,
+                          googleApiKey: googleApiKey || undefined,
+                          pageContext: {
+                            pageId: page.id,
+                            pageTitle: page.title,
+                            pageType: page.type,
+                            pagePath: pagePathInfo?.path || `/${driveId}/${page.title}`,
+                            parentPath: pagePathInfo?.parentPath || `/${driveId}`,
+                            breadcrumbs: pagePathInfo?.breadcrumbs || [driveId, page.title],
+                            driveId: currentDrive?.id,
+                            driveName: currentDrive?.name || driveId,
+                            driveSlug: currentDrive?.slug,
+                          },
+                        }
                       }
-                    }
-                  );
-                  setInput('');
-                  chatInputRef.current?.clear();
-                  // Scroll to bottom after sending message
-                  setTimeout(scrollToBottom, 100);
-                }
-              }}
-              disabled={status === 'streaming' || !input.trim() || !providerSettings?.isAnyProviderConfigured || isLoading || isReadOnly}
-              size="icon"
-            >
-              {status === 'streaming' ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
+                    );
+                    setInput('');
+                    chatInputRef.current?.clear();
+                    // Scroll to bottom after sending message
+                    setTimeout(scrollToBottom, 100);
+                  }
+                }}
+                disabled={!input.trim() || !providerSettings?.isAnyProviderConfigured || isLoading || isReadOnly}
+                size="icon"
+              >
                 <Send className="h-4 w-4" />
-              )}
-            </Button>
+              </Button>
+            )}
           </div>
         </div>
       </div>

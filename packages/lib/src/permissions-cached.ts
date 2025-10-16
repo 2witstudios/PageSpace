@@ -89,31 +89,59 @@ export async function getUserAccessLevel(
         loggers.api.debug(`[PERMISSIONS] User is drive owner - granting full access`);
       }
     } else {
-      // Check direct page permissions
-      const permission = await db.select()
-        .from(pagePermissions)
-        .where(and(
-          eq(pagePermissions.pageId, pageId),
-          eq(pagePermissions.userId, userId)
-        ))
-        .limit(1);
+      // Check if user is drive admin (has all permissions like owner)
+      let isAdmin = false;
+      if (pageData.driveId) {
+        const adminMembership = await db.select()
+          .from(driveMembers)
+          .where(and(
+            eq(driveMembers.driveId, pageData.driveId),
+            eq(driveMembers.userId, userId),
+            eq(driveMembers.role, 'ADMIN')
+          ))
+          .limit(1);
 
-      if (permission.length === 0) {
-        if (!silent) {
-          loggers.api.debug(`[PERMISSIONS] No explicit permissions found - denying access`);
-        }
-        return null;
+        isAdmin = adminMembership.length > 0;
       }
 
-      permissions = {
-        canView: permission[0].canView,
-        canEdit: permission[0].canEdit,
-        canShare: permission[0].canShare,
-        canDelete: permission[0].canDelete,
-      };
+      if (isAdmin) {
+        permissions = {
+          canView: true,
+          canEdit: true,
+          canShare: true,
+          canDelete: true,
+        };
 
-      if (!silent) {
-        loggers.api.debug(`[PERMISSIONS] Found explicit permissions - canView: ${permissions.canView}, canEdit: ${permissions.canEdit}`);
+        if (!silent) {
+          loggers.api.debug(`[PERMISSIONS] User is drive admin - granting full access`);
+        }
+      } else {
+        // Check direct page permissions
+        const permission = await db.select()
+          .from(pagePermissions)
+          .where(and(
+            eq(pagePermissions.pageId, pageId),
+            eq(pagePermissions.userId, userId)
+          ))
+          .limit(1);
+
+        if (permission.length === 0) {
+          if (!silent) {
+            loggers.api.debug(`[PERMISSIONS] No explicit permissions found - denying access`);
+          }
+          return null;
+        }
+
+        permissions = {
+          canView: permission[0].canView,
+          canEdit: permission[0].canEdit,
+          canShare: permission[0].canShare,
+          canDelete: permission[0].canDelete,
+        };
+
+        if (!silent) {
+          loggers.api.debug(`[PERMISSIONS] Found explicit permissions - canView: ${permissions.canView}, canEdit: ${permissions.canEdit}`);
+        }
       }
     }
 

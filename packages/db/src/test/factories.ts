@@ -1,6 +1,6 @@
 import { faker } from '@faker-js/faker'
 import { createId } from '@paralleldrive/cuid2'
-import { users, drives, pages, chatMessages, pagePermissions } from '../schema'
+import { users, drives, pages, chatMessages, pagePermissions, driveMembers } from '../schema'
 import { db } from '../index'
 import bcrypt from 'bcryptjs'
 
@@ -16,7 +16,7 @@ export const factories = {
       tokenVersion: 0,
       role: 'user' as const,
       currentAiProvider: 'pagespace',
-      currentAiModel: 'GLM-4.5-air',
+      currentAiModel: 'glm-4.5-air',
       storageUsedBytes: 0,
       activeUploads: 0,
       subscriptionTier: 'free',
@@ -100,6 +100,25 @@ export const factories = {
     }
 
     const [created] = await db.insert(pagePermissions).values(permission).returning()
+    return created
+  },
+
+  async createDriveMember(
+    driveId: string,
+    userId: string,
+    overrides?: Partial<typeof driveMembers.$inferInsert>
+  ) {
+    const member = {
+      id: createId(),
+      driveId,
+      userId,
+      role: 'MEMBER' as const,
+      invitedAt: new Date(),
+      acceptedAt: new Date(),
+      ...overrides,
+    }
+
+    const [created] = await db.insert(driveMembers).values(member).returning()
     return created
   },
 }

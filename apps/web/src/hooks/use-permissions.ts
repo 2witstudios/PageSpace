@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import useSWR from 'swr';
 import { useAuth } from './use-auth';
+import { fetchWithAuth } from '@/lib/auth-fetch';
 
 export interface PagePermissions {
   canView: boolean;
@@ -43,7 +44,7 @@ export function usePermissions(pageId?: string | null, driveOwnerId?: string): U
   const { data, error, isLoading } = useSWR<PagePermissions>(
     pageId && user?.id ? `/api/pages/${pageId}/permissions/check` : null,
     async (url) => {
-      const response = await fetch(url);
+      const response = await fetchWithAuth(url);
       if (!response.ok) {
         if (response.status === 401 || response.status === 403) {
           return defaultPermissions;

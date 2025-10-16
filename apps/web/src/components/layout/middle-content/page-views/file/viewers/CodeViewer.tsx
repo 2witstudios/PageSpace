@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { TreePage } from '@/hooks/usePageTree';
 import { Loader2 } from 'lucide-react';
 import dynamic from 'next/dynamic';
+import { fetchWithAuth } from '@/lib/auth-fetch';
 
 // Dynamically import Monaco to avoid SSR issues
 const MonacoEditor = dynamic(
@@ -81,11 +82,11 @@ export default function CodeViewer({ page }: CodeViewerProps) {
     const loadCode = async () => {
       try {
         setIsLoading(true);
-        const response = await fetch(`/api/files/${page.id}/download`);
+        const response = await fetchWithAuth(`/api/files/${page.id}/download`);
         if (!response.ok) {
           throw new Error('Failed to load file');
         }
-        
+
         const text = await response.text();
         setCode(text);
       } catch (err) {

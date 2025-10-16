@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
 import { pages, favorites, pageTags, pagePermissions, chatMessages, channelMessages, db, eq } from '@pagespace/db';
-import { decodeToken, canUserDeletePage } from '@pagespace/lib/server';
-import { parse } from 'cookie';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { canUserDeletePage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
+
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
 async function recursivelyDelete(pageId: string, tx: typeof db) {
     const children = await tx.select({ id: pages.id }).from(pages).where(eq(pages.parentId, pageId));
@@ -16,26 +18,18 @@ async function recursivelyDelete(pageId: string, tx: typeof db) {
     await tx.delete(pageTags).where(eq(pageTags.pageId, pageId));
     await tx.delete(chatMessages).where(eq(chatMessages.pageId, pageId));
     await tx.delete(channelMessages).where(eq(channelMessages.pageId, pageId));
-    
+
     await tx.delete(pages).where(eq(pages.id, pageId));
 }
 
 export async function DELETE(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
   const { pageId } = await params;
-  const cookieHeader = req.headers.get('cookie');
-  const cookies = parse(cookieHeader || '');
-  const accessToken = cookies.accessToken;
 
-  if (!accessToken) {
-    return new NextResponse("Unauthorized", { status: 401 });
-  }
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  if (isAuthError(auth)) return auth.error;
+  const userId = auth.userId;
 
-  const decoded = await decodeToken(accessToken);
-  if (!decoded?.userId) {
-    return new NextResponse("Unauthorized", { status: 401 });
-  }
-
-  const canDelete = await canUserDeletePage(decoded.userId, pageId);
+  const canDelete = await canUserDeletePage(userId, pageId);
   if (!canDelete) {
     return new NextResponse("Forbidden", { status: 403 });
   }

@@ -21,6 +21,7 @@
     "dev:desktop": "pnpm --filter desktop dev",
     "build:desktop": "pnpm --filter desktop build",
     "package:desktop": "pnpm --filter desktop package"
+    "check:fetch": "node scripts/check-fetch-auth.js"
   },
   "devDependencies": {
     "@faker-js/faker": "^9.3.0",
@@ -31,6 +32,7 @@
     "@turbo/gen": "^2.5.5",
     "@types/jest": "^30.0.0",
     "@types/node": "^24.0.13",
+    "@typescript-eslint/typescript-estree": "^8.46.0",
     "@vitejs/plugin-react": "^4.3.4",
     "@vitest/coverage-v8": "^2.1.0",
     "@vitest/ui": "^2.1.0",

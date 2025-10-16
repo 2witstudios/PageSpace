@@ -34,6 +34,7 @@ import { Label } from '@/components/ui/label';
 import { PermissionsList } from './PermissionsList';
 import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { post, fetchWithAuth } from '@/lib/auth-fetch';
 
 export function ShareDialog() {
   const pageId = usePageStore((state) => state.pageId);
@@ -88,7 +89,7 @@ export function ShareDialog() {
     setIsSubmitting(true);
     try {
       // 1. Find the user by email
-      const userResponse = await fetch(`/api/users/find?email=${encodeURIComponent(email)}`);
+      const userResponse = await fetchWithAuth(`/api/users/find?email=${encodeURIComponent(email)}`);
       if (!userResponse.ok) {
         const { error } = await userResponse.json();
         throw new Error(error || 'User not found.');
@@ -96,19 +97,10 @@ export function ShareDialog() {
       const user = await userResponse.json();
 
       // 2. Create the permission with checkbox values
-      const permissionResponse = await fetch(`/api/pages/${page.id}/permissions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: user.id,
-          ...permissions,
-        }),
+      await post(`/api/pages/${page.id}/permissions`, {
+        userId: user.id,
+        ...permissions,
       });
-
-      if (!permissionResponse.ok) {
-        const { error } = await permissionResponse.json();
-        throw new Error(error || 'Failed to grant permission.');
-      }
 
       toast.success(`Permission granted to ${email}`);
       setEmail('');

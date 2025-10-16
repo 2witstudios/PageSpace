@@ -25,6 +25,7 @@ import { FloatingCellEditor } from './FloatingCellEditor';
 import { useSuggestion } from '@/hooks/useSuggestion';
 import { SuggestionProvider, useSuggestionContext } from '@/components/providers/SuggestionProvider';
 import SuggestionPopup from '@/components/mentions/SuggestionPopup';
+import { fetchWithAuth } from '@/lib/auth-fetch';
 
 interface SheetViewProps {
   page: TreePage;
@@ -407,7 +408,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         },
       }));
 
-      fetch(`/api/pages/${target.pageId}`)
+      fetchWithAuth(`/api/pages/${target.pageId}`)
         .then(async (response) => {
           if (!response.ok) {
             if (response.status === 403) {
@@ -1332,7 +1333,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     const checkPermissions = async () => {
       if (!user?.id) return;
       try {
-        const response = await fetch(`/api/pages/${page.id}/permissions/check?userId=${user.id}`);
+        const response = await fetchWithAuth(`/api/pages/${page.id}/permissions/check?userId=${user.id}`);
         if (response.ok) {
           const permissions = await response.json();
           setIsReadOnly(!permissions.canEdit);
@@ -1358,7 +1359,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     const handleContentUpdate = async (eventData: PageEventPayload) => {
       if (eventData.pageId !== page.id) return;
       try {
-        const response = await fetch(`/api/pages/${page.id}`);
+        const response = await fetchWithAuth(`/api/pages/${page.id}`);
         if (!response.ok) return;
         const updatedPage = await response.json();
         if (updatedPage.content !== documentState?.content && !documentState?.isDirty) {

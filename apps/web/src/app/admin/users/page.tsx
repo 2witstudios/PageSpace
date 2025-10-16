@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Users, AlertCircle, Shield, MessageCircle, Database } from "lucide-react";
+import { fetchWithAuth } from "@/lib/auth-fetch";
 
 interface UserData {
   id: string;
@@ -57,7 +58,7 @@ export default function AdminUsersPage() {
   useEffect(() => {
     async function fetchUsers() {
       try {
-        const response = await fetch('/api/admin/users');
+        const response = await fetchWithAuth('/api/admin/users');
         if (!response.ok) {
           throw new Error('Failed to fetch users data');
         }

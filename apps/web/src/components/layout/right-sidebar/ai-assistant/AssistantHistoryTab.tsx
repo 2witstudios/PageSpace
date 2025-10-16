@@ -4,7 +4,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Trash2, Search, MessageSquare } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
-import { conversationState } from '@/lib/ai/conversation-state';
+import { del, fetchWithAuth } from '@/lib/auth-fetch';
+import { useGlobalChat } from '@/contexts/GlobalChatContext';
 
 interface Conversation {
   id: string;
@@ -17,17 +18,25 @@ interface Conversation {
 const AssistantHistoryTab: React.FC = () => {
   const router = useRouter();
   const pathname = usePathname();
+
+  // Use GlobalChatContext for conversation management
+  const {
+    loadConversation,
+    createNewConversation: createNewGlobalConversation,
+    currentConversationId: globalConversationId
+  } = useGlobalChat();
+
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [filteredConversations, setFilteredConversations] = useState<Conversation[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Load conversations and current active conversation
+  // Load conversations once on mount
   useEffect(() => {
     const loadConversations = async () => {
       try {
-        const response = await fetch('/api/ai_conversations');
+        const response = await fetchWithAuth('/api/ai_conversations');
         if (response.ok) {
           const data = await response.json();
           setConversations(data);
@@ -40,11 +49,13 @@ const AssistantHistoryTab: React.FC = () => {
       }
     };
 
-    const currentActiveId = conversationState.getActiveConversationId();
-    setActiveConversationId(currentActiveId);
-    
     loadConversations();
-  }, []);
+  }, []); // Only load once on mount
+
+  // Sync local active conversation ID with global context
+  useEffect(() => {
+    setActiveConversationId(globalConversationId);
+  }, [globalConversationId]);
 
   // Filter conversations based on search query
   useEffect(() => {
@@ -58,11 +69,13 @@ const AssistantHistoryTab: React.FC = () => {
     }
   }, [searchQuery, conversations]);
 
-  const handleConversationClick = (conversationId: string) => {
-    conversationState.setActiveConversationId(conversationId);
+  const handleConversationClick = async (conversationId: string) => {
+    // Load conversation using GlobalChatContext - this updates the shared Chat instance
+    await loadConversation(conversationId);
+
     setActiveConversationId(conversationId);
-    
-    // Use client-side navigation for both dashboard and drive routes
+
+    // Update URL for browser history
     if (pathname === '/dashboard') {
       router.push(`/dashboard?c=${conversationId}`);
     } else if (pathname.startsWith('/dashboard/')) {
@@ -79,31 +92,23 @@ const AssistantHistoryTab: React.FC = () => {
     }
 
     try {
-      const response = await fetch(`/api/ai_conversations/${conversationId}`, {
-        method: 'DELETE',
-      });
+      await del(`/api/ai_conversations/${conversationId}`);
 
-      if (response.ok) {
-        // Remove from local state
-        const updatedConversations = conversations.filter(conv => conv.id !== conversationId);
-        setConversations(updatedConversations);
-        setFilteredConversations(updatedConversations.filter(conv =>
-          conv.title?.toLowerCase().includes(searchQuery.toLowerCase()) || searchQuery.trim() === ''
-        ));
+      // Remove from local state
+      const updatedConversations = conversations.filter(conv => conv.id !== conversationId);
+      setConversations(updatedConversations);
+      setFilteredConversations(updatedConversations.filter(conv =>
+        conv.title?.toLowerCase().includes(searchQuery.toLowerCase()) || searchQuery.trim() === ''
+      ));
 
-        // If deleted conversation was active, create a new one
-        if (conversationId === activeConversationId) {
-          const newConversation = await conversationState.startNewConversation();
-          setActiveConversationId(newConversation.id);
-          
-          // Use client-side navigation for both dashboard and drive routes
-          if (pathname === '/dashboard') {
-            router.push(`/dashboard?c=${newConversation.id}`);
-          } else if (pathname.startsWith('/dashboard/')) {
-            // For drive routes, preserve the path and add conversation parameter
-            router.push(`${pathname}?c=${newConversation.id}`);
-          }
-        }
+      // If deleted conversation was active, create a new one
+      if (conversationId === activeConversationId) {
+        // Use GlobalChatContext method to create new conversation
+        // This will update the URL and state automatically
+        await createNewGlobalConversation();
+
+        // setActiveConversationId will be updated via the sync useEffect
+        // No need to manually update URL - createNewGlobalConversation handles it
       }
     } catch (error) {
       console.error('Failed to delete conversation:', error);

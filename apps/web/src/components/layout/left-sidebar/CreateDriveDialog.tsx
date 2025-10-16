@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { post } from '@/lib/auth-fetch';
+import { Drive } from '@pagespace/lib/client';
 import {
   Dialog,
   DialogContent,
@@ -21,26 +23,18 @@ interface CreateDriveDialogProps {
 
 export default function CreateDriveDialog({ isOpen, setIsOpen }: CreateDriveDialogProps) {
   const [driveName, setDriveName] = useState("");
-  const { addDrive, setCurrentDrive, fetchDrives } = useDriveStore();
+
+  // Use selective Zustand subscriptions to prevent unnecessary re-renders
+  const addDrive = useDriveStore(state => state.addDrive);
+  const setCurrentDrive = useDriveStore(state => state.setCurrentDrive);
+  const fetchDrives = useDriveStore(state => state.fetchDrives);
+
   const router = useRouter();
 
   const handleCreateDrive = async () => {
     if (!driveName.trim()) return;
     try {
-      const response = await fetch("/api/drives", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        credentials: 'include',
-        body: JSON.stringify({ name: driveName }),
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to create drive");
-      }
-
-      const newDrive = await response.json();
+      const newDrive = await post<Drive>("/api/drives", { name: driveName });
       // Add the drive with correct ownership flag
       addDrive(newDrive);
       setCurrentDrive(newDrive.id);

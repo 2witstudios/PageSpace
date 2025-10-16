@@ -23,6 +23,7 @@ import { Trash2, Copy, Plus, Eye, EyeOff, Key, Terminal, Check, Download, AlertT
 import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
 import { useRouter } from 'next/navigation';
+import { post, del, fetchWithAuth } from '@/lib/auth-fetch';
 
 interface MCPToken {
   id: string;
@@ -54,7 +55,7 @@ export default function MCPSettingsView() {
 
   const loadTokens = async () => {
     try {
-      const response = await fetch('/api/auth/mcp-tokens');
+      const response = await fetchWithAuth('/api/auth/mcp-tokens');
       if (response.ok) {
         const tokenList = await response.json();
         setTokens(tokenList);
@@ -77,31 +78,19 @@ export default function MCPSettingsView() {
 
     setCreating(true);
     try {
-      const response = await fetch('/api/auth/mcp-tokens', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ name: newTokenName.trim() }),
-      });
+      const token = await post<NewToken>('/api/auth/mcp-tokens', { name: newTokenName.trim() });
 
-      if (response.ok) {
-        const token = await response.json();
-        setNewToken(token);
-        setTokens(prev => [token, ...prev]);
-        // Store the actual token value for the newly created token
-        if (token.token) {
-          setTokenMap(prev => new Map(prev).set(token.id, token.token));
-          setSelectedToken(token.token);
-        }
-        setNewTokenName('');
-        setCreateDialogOpen(false);
-        setShowNewToken(true);
-        toast.success('MCP token created successfully');
-      } else {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to create token');
+      setNewToken(token);
+      setTokens(prev => [token, ...prev]);
+      // Store the actual token value for the newly created token
+      if (token.token) {
+        setTokenMap(prev => new Map(prev).set(token.id, token.token));
+        setSelectedToken(token.token);
       }
+      setNewTokenName('');
+      setCreateDialogOpen(false);
+      setShowNewToken(true);
+      toast.success('MCP token created successfully');
     } catch (error) {
       console.error('Error creating MCP token:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to create MCP token');
@@ -112,17 +101,10 @@ export default function MCPSettingsView() {
 
   const deleteToken = async (tokenId: string) => {
     try {
-      const response = await fetch(`/api/auth/mcp-tokens/${tokenId}`, {
-        method: 'DELETE',
-      });
+      await del(`/api/auth/mcp-tokens/${tokenId}`);
 
-      if (response.ok) {
-        setTokens(prev => prev.filter(token => token.id !== tokenId));
-        toast.success('Token deleted successfully');
-      } else {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to delete token');
-      }
+      setTokens(prev => prev.filter(token => token.id !== tokenId));
+      toast.success('Token deleted successfully');
     } catch (error) {
       console.error('Error deleting MCP token:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to delete token');

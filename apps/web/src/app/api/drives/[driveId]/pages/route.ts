@@ -5,7 +5,7 @@ import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
-const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const };
+const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 
 async function getPermittedPages(driveId: string, userId: string) {
   // Check if user is a drive member - currently unused but will be needed for member-level permissions

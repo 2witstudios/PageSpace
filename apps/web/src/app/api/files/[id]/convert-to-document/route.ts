@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyAuth } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, pages, eq } from '@pagespace/db';
 import { PageType, canConvertToType, canUserEditPage, canUserViewPage } from '@pagespace/lib';
 import mammoth from 'mammoth';
 import { createId } from '@paralleldrive/cuid2';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
 import { createServiceToken } from '@pagespace/lib/auth-utils';
+
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
 interface RouteParams {
   params: Promise<{
@@ -22,10 +24,9 @@ export async function POST(
     const { id } = await context.params;
 
     // Verify authentication
-    const user = await verifyAuth(request);
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (isAuthError(auth)) return auth.error;
+    const userId = auth.userId;
 
     // Get request body
     const body = await request.json();
@@ -62,12 +63,12 @@ export async function POST(
       return NextResponse.json({ error: 'File is not a Word document' }, { status: 400 });
     }
 
-    const canView = await canUserViewPage(user.id, filePage.id);
+    const canView = await canUserViewPage(userId, filePage.id);
     if (!canView) {
       return NextResponse.json({ error: 'You do not have access to this file' }, { status: 403 });
     }
 
-    const canEdit = await canUserEditPage(user.id, filePage.id);
+    const canEdit = await canUserEditPage(userId, filePage.id);
     if (!canEdit) {
       return NextResponse.json({ error: 'You do not have permission to convert this file' }, { status: 403 });
     }
@@ -88,7 +89,7 @@ export async function POST(
 
     // Create service JWT token for processor authentication
     const serviceToken = await createServiceToken('web', ['files:read'], {
-      userId: user.id,
+      userId,
       tenantId: filePage.id,
       driveIds: filePage.drive ? [filePage.drive.id] : undefined,
       expirationTime: '5m'

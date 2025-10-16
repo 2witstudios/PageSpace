@@ -1,52 +1,119 @@
 import { NextResponse } from 'next/server';
 import { decodeToken, canUserViewPage } from '@pagespace/lib/server';
 import { parse } from 'cookie';
-import { pages, db, eq } from '@pagespace/db';
+import { pages, db, drives, sql } from '@pagespace/db';
 
 type BreadcrumbPage = (typeof pages.$inferSelect) & { drive: { id: string; slug: string; name: string } | null };
 
+type QueryResultRow = {
+  id: string;
+  title: string;
+  type: 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'FILE' | 'SHEET';
+  content: string;
+  position: number;
+  isTrashed: boolean;
+  aiProvider: string | null;
+  aiModel: string | null;
+  systemPrompt: string | null;
+  enabledTools: unknown;
+  fileSize: number | null;
+  mimeType: string | null;
+  originalFileName: string | null;
+  filePath: string | null;
+  fileMetadata: unknown;
+  processingStatus: string | null;
+  processingError: string | null;
+  processedAt: Date | null;
+  extractionMethod: string | null;
+  extractionMetadata: unknown;
+  contentHash: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  trashedAt: Date | null;
+  driveId: string;
+  parentId: string | null;
+  originalParentId: string | null;
+  drive_id: string | null;
+  drive_slug: string | null;
+  drive_name: string | null;
+  depth: number;
+  path: string[];
+};
+
 async function getBreadcrumbs(pageId: string): Promise<BreadcrumbPage[]> {
-  const breadcrumbs: BreadcrumbPage[] = [];
-  const visited = new Set<string>();
-  let currentId: string | null = pageId;
   const MAX_DEPTH = 100;
-  let depth = 0;
 
-  while (currentId) {
-    depth++;
+  // Use recursive CTE to fetch all ancestors in a single query
+  const result = await db.execute<QueryResultRow>(sql`
+    WITH RECURSIVE page_ancestors AS (
+      -- Base case: start with the requested page
+      SELECT
+        p.*,
+        d.id as drive_id,
+        d.slug as drive_slug,
+        d.name as drive_name,
+        1 as depth,
+        ARRAY[p.id] as path
+      FROM ${pages} p
+      LEFT JOIN ${drives} d ON p."driveId" = d.id
+      WHERE p.id = ${pageId}
 
-    // Depth limit check
-    if (depth > MAX_DEPTH) {
-      console.error(`Breadcrumb computation exceeded max depth ${MAX_DEPTH} for page ${pageId}`);
-      break;
-    }
+      UNION ALL
 
-    // Cycle detection
-    if (visited.has(currentId)) {
-      console.error(`Circular reference detected in breadcrumbs for page ${pageId} at page ${currentId}`);
-      break;
-    }
-    visited.add(currentId);
+      -- Recursive case: get parent pages
+      SELECT
+        p.*,
+        d.id as drive_id,
+        d.slug as drive_slug,
+        d.name as drive_name,
+        pa.depth + 1,
+        pa.path || p.id
+      FROM ${pages} p
+      LEFT JOIN ${drives} d ON p."driveId" = d.id
+      INNER JOIN page_ancestors pa ON p.id = pa."parentId"
+      WHERE
+        pa.depth < ${MAX_DEPTH}
+        AND NOT (p.id = ANY(pa.path))  -- Cycle detection
+    )
+    SELECT * FROM page_ancestors
+    ORDER BY depth DESC
+  `);
 
-    // Fetch page
-    const page: BreadcrumbPage | undefined = await db.query.pages.findFirst({
-      where: eq(pages.id, currentId),
-      with: {
-        drive: {
-          columns: {
-            id: true,
-            slug: true,
-            name: true,
-          },
-        },
-      },
-    });
-
-    if (!page) break;
-
-    breadcrumbs.unshift(page as BreadcrumbPage);
-    currentId = page.parentId;
-  }
+  // Transform the result to match BreadcrumbPage type
+  const breadcrumbs: BreadcrumbPage[] = result.rows.map((row: QueryResultRow): BreadcrumbPage => ({
+    id: row.id,
+    title: row.title,
+    type: row.type as typeof pages.$inferSelect.type,
+    content: row.content,
+    position: row.position,
+    isTrashed: row.isTrashed,
+    aiProvider: row.aiProvider,
+    aiModel: row.aiModel,
+    systemPrompt: row.systemPrompt,
+    enabledTools: row.enabledTools as typeof pages.$inferSelect.enabledTools,
+    fileSize: row.fileSize,
+    mimeType: row.mimeType,
+    originalFileName: row.originalFileName,
+    filePath: row.filePath,
+    fileMetadata: row.fileMetadata as typeof pages.$inferSelect.fileMetadata,
+    processingStatus: row.processingStatus,
+    processingError: row.processingError,
+    processedAt: row.processedAt,
+    extractionMethod: row.extractionMethod,
+    extractionMetadata: row.extractionMetadata as typeof pages.$inferSelect.extractionMetadata,
+    contentHash: row.contentHash,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    trashedAt: row.trashedAt,
+    driveId: row.driveId,
+    parentId: row.parentId,
+    originalParentId: row.originalParentId,
+    drive: row.drive_id && row.drive_slug && row.drive_name ? {
+      id: row.drive_id,
+      slug: row.drive_slug,
+      name: row.drive_name,
+    } : null,
+  }));
 
   return breadcrumbs;
 }

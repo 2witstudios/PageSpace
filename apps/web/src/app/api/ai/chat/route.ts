@@ -8,10 +8,12 @@ import {
   createUIMessageStreamResponse,
   type LanguageModelUsage,
 } from 'ai';
-import { incrementUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
-import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
+import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
+import { requiresProSubscription, createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
 import { broadcastUsageEvent } from '@/lib/socket-utils';
-import { authenticateHybridRequest, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+
+const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
 import {
   createAIProvider,
@@ -30,15 +32,16 @@ import {
   getUserOllamaSettings,
   getUserGLMSettings,
 } from '@/lib/ai/ai-utils';
-import { db, users, chatMessages, pages, eq } from '@pagespace/db';
+import { db, users, chatMessages, pages, eq, and } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { pageSpaceTools } from '@/lib/ai/ai-tools';
-import { 
-  extractMessageContent, 
-  extractToolCalls, 
+import {
+  extractMessageContent,
+  extractToolCalls,
   extractToolResults,
   saveMessageToDatabase,
-  sanitizeMessagesForModel
+  sanitizeMessagesForModel,
+  convertDbMessageToUIMessage
 } from '@/lib/ai/assistant-utils';
 import { processMentionsInMessage, buildMentionSystemPrompt } from '@/lib/ai/mention-processor';
 import { buildTimestampSystemPrompt } from '@/lib/ai/timestamp-utils';
@@ -73,9 +76,9 @@ export async function POST(request: Request) {
 
   try {
     loggers.ai.info('AI Chat API: Starting request processing');
-    
+
     // Authenticate the request
-    const authResult = await authenticateHybridRequest(request);
+    const authResult = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(authResult)) {
       loggers.ai.warn('AI Chat API: Authentication failed');
       return authResult.error;
@@ -95,7 +98,7 @@ export async function POST(request: Request) {
     });
     
     const {
-      messages,
+      messages, // Used ONLY to extract new user message, NOT for conversation history
       chatId: requestChatId, // chat ID (page ID) - standard AI SDK pattern
       selectedProvider: requestSelectedProvider,
       selectedModel: requestSelectedModel,
@@ -277,7 +280,7 @@ export async function POST(request: Request) {
     // Get user's current AI provider settings
     const [user] = await db.select().from(users).where(eq(users.id, userId));
     const currentProvider = selectedProvider || user?.currentAiProvider || 'pagespace';
-    const currentModel = selectedModel || user?.currentAiModel || 'GLM-4.5-air';
+    const currentModel = selectedModel || user?.currentAiModel || 'glm-4.5-air';
 
     // Pro subscription check for special providers
     const { requiresProSubscription, createSubscriptionRequiredResponse } = await import('@/lib/subscription/rate-limit-middleware');
@@ -338,6 +341,44 @@ export async function POST(request: Request) {
     // Update user's current provider/model if changed
     await updateUserProviderSettings(userId, selectedProvider, selectedModel);
 
+    // RATE LIMIT CHECK: Verify user has remaining quota BEFORE streaming
+    // This prevents users from exceeding their daily AI call limits
+    if (currentProvider === 'pagespace') {
+      const isProModel = currentModel === 'glm-4.6';
+      const providerType = isProModel ? 'pro' : 'standard';
+
+      loggers.ai.debug('🚦 AI Chat API: Checking rate limit before streaming', {
+        userId: maskIdentifier(userId),
+        provider: currentProvider,
+        model: currentModel,
+        providerType,
+        pageId: chatId
+      });
+
+      const currentUsage = await getCurrentUsage(userId, providerType);
+
+      if (!currentUsage.success || currentUsage.remainingCalls <= 0) {
+        loggers.ai.warn('🚫 AI Chat API: Rate limit exceeded', {
+          userId: maskIdentifier(userId),
+          providerType,
+          currentCount: currentUsage.currentCount,
+          limit: currentUsage.limit,
+          remaining: currentUsage.remainingCalls,
+          pageId: chatId
+        });
+
+        return createRateLimitResponse(providerType, currentUsage.limit);
+      }
+
+      loggers.ai.debug('✅ AI Chat API: Rate limit check passed', {
+        userId: maskIdentifier(userId),
+        providerType,
+        remaining: currentUsage.remainingCalls,
+        limit: currentUsage.limit,
+        pageId: chatId
+      });
+    }
+
     // Filter tools based on custom enabled tools or use all tools if not configured
     let filteredTools;
     if (enabledTools && enabledTools.length > 0) {
@@ -364,9 +405,51 @@ export async function POST(request: Request) {
       loggers.ai.debug('AI Page Chat API: Using default tool filtering (PARTNER role)');
     }
 
+    // DATABASE-FIRST ARCHITECTURE:
+    // PageSpace uses database as the single source of truth for all messages.
+    // We MUST read conversation history from database, not from client's request.
+    // This ensures edited messages, multi-user changes, and any database updates
+    // are reflected in the AI's context immediately.
+    loggers.ai.debug('AI Chat API: Loading conversation history from database', {
+      pageId: chatId
+    });
+
+    // Read ALL active messages from database (source of truth)
+    const dbMessages = await db
+      .select()
+      .from(chatMessages)
+      .where(and(
+        eq(chatMessages.pageId, chatId),
+        eq(chatMessages.isActive, true)
+      ))
+      .orderBy(chatMessages.createdAt);
+
+    // Convert database messages to UI format using proper conversion function
+    // This handles structured content, tool calls, and tool results
+    const conversationHistory = dbMessages.map(msg =>
+      convertDbMessageToUIMessage({
+        id: msg.id,
+        pageId: msg.pageId,
+        userId: msg.userId,
+        role: msg.role,
+        content: msg.content,
+        toolCalls: msg.toolCalls,
+        toolResults: msg.toolResults,
+        createdAt: msg.createdAt,
+        isActive: msg.isActive,
+        editedAt: msg.editedAt,
+      })
+    );
+
+    loggers.ai.debug('AI Chat API: Loaded conversation history from database', {
+      messageCount: conversationHistory.length,
+      pageId: chatId
+    });
+
     // Convert UIMessages to ModelMessages for the AI model
     // First sanitize messages to remove tool parts without results (prevents "input-available" state errors)
-    const sanitizedMessages = sanitizeMessagesForModel(messages);
+    // NOTE: We use database-loaded messages, NOT messages from client
+    const sanitizedMessages = sanitizeMessagesForModel(conversationHistory);
     const modelMessages = convertToModelMessages(sanitizedMessages, {
       tools: filteredTools  // Use original tools - no wrapping needed
     });
@@ -550,11 +633,20 @@ MENTION PROCESSING:
             messages: modelMessages,
             tools: filteredTools,  // Use original tools directly
             stopWhen: stepCountIs(100), // Allow up to 100 tool calls per conversation turn
+            abortSignal: request.signal, // Enable stop/abort functionality from client
             experimental_context: {
               userId,
               modelCapabilities: getModelCapabilities(currentModel, currentProvider)
             }, // Pass userId and model capabilities to tools
-            maxRetries: 20 // Increase from default 2 to 20 for better handling of rate limits
+            maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
+            onAbort: () => {
+              loggers.ai.info('🛑 AI Chat API: Stream aborted by user', {
+                userId: maskIdentifier(userId!),
+                pageId: chatId,
+                model: currentModel,
+                provider: currentProvider
+              });
+            },
           });
 
           usagePromise = aiResult.totalUsage
@@ -846,9 +938,9 @@ MENTION PROCESSING:
  */
 export async function GET(request: Request) {
   try {
-    const auth = await authenticateHybridRequest(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
-    const { userId } = auth;
+    const userId = auth.userId;
 
     // Get pageId from query params
     const url = new URL(request.url);
@@ -859,7 +951,7 @@ export async function GET(request: Request) {
     
     // Get page-specific settings if pageId provided
     let currentProvider = user?.currentAiProvider || 'pagespace';
-    let currentModel = user?.currentAiModel || 'qwen/qwen3-coder:free';
+    let currentModel = user?.currentAiModel || 'glm-4.5-air';
     
     if (pageId) {
       const [page] = await db.select().from(pages).where(eq(pages.id, pageId));
@@ -1008,7 +1100,7 @@ async function validateProviderModel(
  */
 export async function PATCH(request: Request) {
   try {
-    const auth = await authenticateHybridRequest(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
 
     const body = await request.json();

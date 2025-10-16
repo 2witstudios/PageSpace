@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
 import { streamText, convertToModelMessages, stepCountIs, UIMessage } from 'ai';
-import { incrementUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
+import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
+import { createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
 import { broadcastUsageEvent } from '@/lib/socket-utils';
-import { authenticateWebRequest, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import {
   createAIProvider,
   updateUserProviderSettings,
@@ -33,6 +34,8 @@ import { maskIdentifier } from '@/lib/logging/mask';
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
 
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+
 /**
  * GET - Get all messages for a conversation
  */
@@ -41,9 +44,9 @@ export async function GET(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await authenticateWebRequest(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
-    const { userId } = auth;
+    const userId = auth.userId;
 
     const { id } = await context.params;
 
@@ -165,13 +168,13 @@ export async function POST(
   try {
     const usageLogger = loggers.api.child({ module: 'global-assistant-usage' });
     loggers.api.debug('🚀 Global Assistant Chat API: Starting request processing', {});
-    
-    const auth = await authenticateWebRequest(request);
+
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) {
       loggers.api.debug('❌ Global Assistant Chat API: Authentication failed', {});
       return auth.error;
     }
-    const { userId } = auth;
+    const userId = auth.userId;
 
     const { id: conversationId } = await context.params;
     loggers.api.debug('✅ Global Assistant Chat API: Authentication successful, userId:', { userId });
@@ -203,7 +206,7 @@ export async function POST(
     });
     
     const {
-      messages: requestMessages,
+      messages: requestMessages, // Used ONLY to extract new user message, NOT for conversation history
       selectedProvider,
       selectedModel,
       openRouterApiKey,
@@ -318,12 +321,92 @@ export async function POST(
     // Update user's current provider/model if changed
     await updateUserProviderSettings(userId, selectedProvider, selectedModel);
 
+    // RATE LIMIT CHECK: Verify user has remaining quota BEFORE streaming
+    // This prevents users from exceeding their daily AI call limits
+    if (currentProvider === 'pagespace') {
+      const isProModel = currentModel === 'glm-4.6';
+      const providerType = isProModel ? 'pro' : 'standard';
+
+      loggers.api.debug('🚦 Global Assistant Chat API: Checking rate limit before streaming', {
+        userId: maskIdentifier(userId),
+        provider: currentProvider,
+        model: currentModel,
+        providerType,
+        conversationId
+      });
+
+      const currentUsage = await getCurrentUsage(userId, providerType);
+
+      if (!currentUsage.success || currentUsage.remainingCalls <= 0) {
+        loggers.api.warn('🚫 Global Assistant Chat API: Rate limit exceeded', {
+          userId: maskIdentifier(userId),
+          providerType,
+          currentCount: currentUsage.currentCount,
+          limit: currentUsage.limit,
+          remaining: currentUsage.remainingCalls,
+          conversationId
+        });
+
+        return createRateLimitResponse(providerType, currentUsage.limit);
+      }
+
+      loggers.api.debug('✅ Global Assistant Chat API: Rate limit check passed', {
+        userId: maskIdentifier(userId),
+        providerType,
+        remaining: currentUsage.remainingCalls,
+        limit: currentUsage.limit,
+        conversationId
+      });
+    }
+
     // Get agent role with fallback to default
     const agentRole = AgentRoleUtils.getRoleFromString(roleString);
     loggers.api.debug('🤖 Global Assistant Chat API: Using agent role', { agentRole });
 
+    // DATABASE-FIRST ARCHITECTURE:
+    // PageSpace uses database as the single source of truth for all messages.
+    // We MUST read conversation history from database, not from client's request.
+    // This ensures edited messages, multi-user changes, and any database updates
+    // are reflected in the AI's context immediately.
+    loggers.api.debug('📚 Global Assistant Chat API: Loading conversation history from database', {
+      conversationId
+    });
+
+    // Read ALL active messages from database (source of truth)
+    const dbMessages = await db
+      .select()
+      .from(messages)
+      .where(and(
+        eq(messages.conversationId, conversationId),
+        eq(messages.isActive, true)
+      ))
+      .orderBy(messages.createdAt);
+
+    // Convert database messages to UI format
+    const conversationHistory = dbMessages.map(msg =>
+      convertGlobalAssistantMessageToUIMessage({
+        id: msg.id,
+        conversationId: msg.conversationId,
+        userId: msg.userId,
+        role: msg.role,
+        content: msg.content,
+        toolCalls: msg.toolCalls,
+        toolResults: msg.toolResults,
+        createdAt: msg.createdAt,
+        isActive: msg.isActive,
+        agentRole: msg.agentRole,
+        editedAt: msg.editedAt,
+      })
+    );
+
+    loggers.api.debug('✅ Global Assistant Chat API: Loaded conversation history from database', {
+      messageCount: conversationHistory.length,
+      conversationId
+    });
+
     // Convert UIMessages to ModelMessages for the AI model
-    const sanitizedMessages = sanitizeMessagesForModel(requestMessages);
+    // NOTE: We use database-loaded messages, NOT requestMessages from client
+    const sanitizedMessages = sanitizeMessagesForModel(conversationHistory);
     
     // Process messages to inject visual content from previous tool calls
     // Limit history to prevent memory issues with large conversations
@@ -472,12 +555,21 @@ MENTION PROCESSING:
       messages: modelMessages,
       tools: roleFilteredTools,
       stopWhen: stepCountIs(100),
+      abortSignal: request.signal, // Enable stop/abort functionality from client
       experimental_context: {
         userId,
         locationContext,
         modelCapabilities: getModelCapabilities(currentModel, currentProvider)
       },
       maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
+      onAbort: () => {
+        loggers.api.info('🛑 Global Assistant Chat API: Stream aborted by user', {
+          userId: maskIdentifier(userId),
+          conversationId,
+          model: currentModel,
+          provider: currentProvider
+        });
+      },
     });
 
     loggers.api.debug('📡 Global Assistant Chat API: Returning stream response', {});

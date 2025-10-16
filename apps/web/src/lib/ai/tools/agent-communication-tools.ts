@@ -34,7 +34,7 @@ async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: st
 
   // Use default provider/model if agent doesn't have specific configuration
   const selectedProvider = aiProvider || 'pagespace';
-  const selectedModel = aiModel || (selectedProvider === 'pagespace' ? 'GLM-4.5-air' : undefined);
+  const selectedModel = aiModel || (selectedProvider === 'pagespace' ? 'glm-4.5-air' : undefined);
 
   const providerRequest: ProviderRequest = {
     selectedProvider,

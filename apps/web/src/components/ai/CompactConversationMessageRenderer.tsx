@@ -4,6 +4,7 @@ import { CompactMessageRenderer } from './CompactMessageRenderer';
 import { CompactTodoListMessage } from './CompactTodoListMessage';
 import { useSocket } from '@/hooks/useSocket';
 import { ErrorBoundary } from './ErrorBoundary';
+import { patch, fetchWithAuth } from '@/lib/auth-fetch';
 
 // Extended message interface that includes database fields
 interface ConversationMessage extends UIMessage {
@@ -18,14 +19,22 @@ interface ConversationMessage extends UIMessage {
 interface CompactConversationMessageRendererProps {
   message: ConversationMessage;
   onTaskUpdate?: (taskId: string, newStatus: 'pending' | 'in_progress' | 'completed' | 'blocked') => void;
+  onEdit?: (messageId: string, newContent: string) => Promise<void>;
+  onDelete?: (messageId: string) => Promise<void>;
+  onRetry?: (messageId: string) => void;
+  isLastAssistantMessage?: boolean;
 }
 
 /**
  * Compact version for sidebar - renders different types of conversation messages including todo lists
  */
-export const CompactConversationMessageRenderer: React.FC<CompactConversationMessageRendererProps> = React.memo(({ 
-  message, 
-  onTaskUpdate 
+export const CompactConversationMessageRenderer: React.FC<CompactConversationMessageRendererProps> = React.memo(({
+  message,
+  onTaskUpdate,
+  onEdit,
+  onDelete,
+  onRetry,
+  isLastAssistantMessage = false
 }) => {
   const [tasks, setTasks] = useState<Array<{
     id: string;
@@ -44,6 +53,8 @@ export const CompactConversationMessageRenderer: React.FC<CompactConversationMes
     updatedAt?: Date;
   } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  // Socket connection (managed by useSocket hook with singleton pattern)
+  // Only used for TODO messages to receive real-time task updates
   const socket = useSocket();
 
   // Load tasks for todo_list messages
@@ -91,7 +102,7 @@ export const CompactConversationMessageRenderer: React.FC<CompactConversationMes
   const loadTasksForMessage = async (messageId: string) => {
     setIsLoading(true);
     try {
-      const response = await fetch(`/api/ai/tasks/by-message/${messageId}`);
+      const response = await fetchWithAuth(`/api/ai/tasks/by-message/${messageId}`);
       if (response.ok) {
         const data = await response.json();
         setTasks(data.tasks || []);
@@ -108,25 +119,15 @@ export const CompactConversationMessageRenderer: React.FC<CompactConversationMes
 
   const handleTaskUpdate = async (taskId: string, newStatus: 'pending' | 'in_progress' | 'completed' | 'blocked') => {
     try {
-      const response = await fetch(`/api/ai/tasks/${taskId}/status`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ status: newStatus }),
-      });
+      await patch(`/api/ai/tasks/${taskId}/status`, { status: newStatus });
 
-      if (response.ok) {
-        setTasks(prevTasks => 
-          prevTasks.map(task => 
-            task.id === taskId ? { ...task, status: newStatus, updatedAt: new Date() } : task
-          )
-        );
-        
-        onTaskUpdate?.(taskId, newStatus);
-      } else {
-        console.error('Failed to update task status');
-      }
+      setTasks(prevTasks =>
+        prevTasks.map(task =>
+          task.id === taskId ? { ...task, status: newStatus, updatedAt: new Date() } : task
+        )
+      );
+
+      onTaskUpdate?.(taskId, newStatus);
     } catch (error) {
       console.error('Error updating task:', error);
     }
@@ -186,7 +187,15 @@ export const CompactConversationMessageRenderer: React.FC<CompactConversationMes
   }
 
   // Default to compact message rendering
-  return <CompactMessageRenderer message={message} />;
+  return (
+    <CompactMessageRenderer
+      message={message}
+      onEdit={onEdit}
+      onDelete={onDelete}
+      onRetry={onRetry}
+      isLastAssistantMessage={isLastAssistantMessage}
+    />
+  );
 });
 
 CompactConversationMessageRenderer.displayName = 'CompactConversationMessageRenderer';

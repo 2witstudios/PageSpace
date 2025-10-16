@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { fetchWithAuth } from '@/lib/auth-fetch';
 
 interface SandboxProps {
   html: string;
@@ -13,7 +14,7 @@ const Sandbox = ({ html, css = '' }: SandboxProps) => {
     // Fetch the compiled Tailwind CSS dynamically
     const fetchCompiledCSS = async () => {
       try {
-        const response = await fetch('/api/compiled-css');
+        const response = await fetchWithAuth('/api/compiled-css');
         if (response.ok) {
           const cssContent = await response.text();
           setCompiledCSS(cssContent);

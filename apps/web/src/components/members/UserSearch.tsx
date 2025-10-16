@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Search, User } from 'lucide-react';
 import { useDebounce } from '@/hooks/use-debounce';
+import { fetchWithAuth } from '@/lib/auth-fetch';
 
 interface SearchResult {
   userId: string;
@@ -34,9 +35,7 @@ export function UserSearch({ onSelect }: UserSearchProps) {
     const searchUsers = async () => {
       setLoading(true);
       try {
-        const response = await fetch(`/api/users/search?q=${encodeURIComponent(debouncedQuery)}`, {
-          credentials: 'include',
-        });
+        const response = await fetchWithAuth(`/api/users/search?q=${encodeURIComponent(debouncedQuery)}`);
         if (!response.ok) throw new Error('Search failed');
         const data = await response.json();
         setResults(data.users || []);

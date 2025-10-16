@@ -87,6 +87,52 @@ describe('permissions system', () => {
         canDelete: true,
       })
     })
+
+    it('grants full access to drive admin', async () => {
+      // Add otherUser as admin to the drive
+      await factories.createDriveMember(testDrive.id, otherUser.id, { role: 'ADMIN' })
+
+      const access = await getUserAccessLevel(otherUser.id, testPage.id)
+
+      expect(access).toEqual({
+        canView: true,
+        canEdit: true,
+        canShare: true,
+        canDelete: true,
+      })
+    })
+
+    it('grants full access to drive admin even with explicit lower permissions', async () => {
+      // Add otherUser as admin to the drive
+      await factories.createDriveMember(testDrive.id, otherUser.id, { role: 'ADMIN' })
+
+      // Create explicit permission with limited access
+      await grantPagePermissions(
+        testPage.id,
+        otherUser.id,
+        { canView: true, canEdit: false, canShare: false, canDelete: false },
+        testUser.id
+      )
+
+      // Drive admin should still have full access (admin overrides explicit permissions)
+      const access = await getUserAccessLevel(otherUser.id, testPage.id)
+
+      expect(access).toEqual({
+        canView: true,
+        canEdit: true,
+        canShare: true,
+        canDelete: true,
+      })
+    })
+
+    it('does not grant admin permissions to regular drive members', async () => {
+      // Add otherUser as regular member (not admin) to the drive
+      await factories.createDriveMember(testDrive.id, otherUser.id, { role: 'MEMBER' })
+
+      // Regular member without explicit permissions should not have access
+      const access = await getUserAccessLevel(otherUser.id, testPage.id)
+      expect(access).toBeNull()
+    })
   })
 
   describe('canUserViewPage', () => {

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyAuth } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import {
   checkStorageQuota,
   getUserStorageQuota,
@@ -8,13 +8,14 @@ import {
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkMemoryMiddleware } from '@pagespace/lib/services/memory-monitor';
 
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+
 export async function POST(request: NextRequest) {
   try {
     // Verify authentication
-    const user = await verifyAuth(request);
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (isAuthError(auth)) return auth.error;
+    const userId = auth.userId;
 
     // Parse request body
     const { fileSize } = await request.json();
@@ -35,7 +36,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Check storage quota
-    const quotaCheck = await checkStorageQuota(user.id, fileSize);
+    const quotaCheck = await checkStorageQuota(userId, fileSize);
     if (!quotaCheck.allowed) {
       return NextResponse.json({
         allowed: false,
@@ -46,13 +47,13 @@ export async function POST(request: NextRequest) {
     }
 
     // Get user's storage tier
-    const quota = await getUserStorageQuota(user.id);
+    const quota = await getUserStorageQuota(userId);
     if (!quota) {
       return NextResponse.json({ error: 'Could not retrieve storage quota' }, { status: 500 });
     }
 
     // Check if user can acquire an upload slot
-    const canUpload = await uploadSemaphore.canAcquireSlot(user.id, quota.tier);
+    const canUpload = await uploadSemaphore.canAcquireSlot(userId, quota.tier);
     if (!canUpload) {
       return NextResponse.json({
         allowed: false,
@@ -82,20 +83,19 @@ export async function POST(request: NextRequest) {
 export async function GET(request: NextRequest) {
   try {
     // Verify authentication
-    const user = await verifyAuth(request);
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (isAuthError(auth)) return auth.error;
+    const userId = auth.userId;
 
     // Get user's storage quota
-    const quota = await getUserStorageQuota(user.id);
+    const quota = await getUserStorageQuota(userId);
     if (!quota) {
       return NextResponse.json({ error: 'Could not retrieve storage quota' }, { status: 500 });
     }
 
     // Get semaphore status
     const semaphoreStatus = uploadSemaphore.getStatus();
-    const userActiveUploads = semaphoreStatus.userUploads.get(user.id) || 0;
+    const userActiveUploads = semaphoreStatus.userUploads.get(userId) || 0;
 
     return NextResponse.json({
       quota,

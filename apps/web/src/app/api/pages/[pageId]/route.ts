@@ -9,7 +9,7 @@ import { loggers } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
-const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const };
+const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 
 // Content sanitization utility
 function sanitizeEmptyContent(content: string): string {
@@ -267,22 +267,27 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
     // Broadcast page update events
     const driveId = await getDriveIdFromPageId(pageId);
     if (driveId) {
+      // Extract socket ID from request headers to prevent self-refetch loop
+      const socketId = req.headers.get('X-Socket-ID') || undefined;
+
       // Broadcast title update (affects tree structure)
       if (safeBody.title) {
         await broadcastPageEvent(
           createPageEventPayload(driveId, pageId, 'updated', {
             title: safeBody.title,
-            parentId: updatedPage?.parentId
+            parentId: updatedPage?.parentId,
+            socketId
           })
         );
       }
-      
+
       // Broadcast content update (for document synchronization)
       if (safeBody.content) {
         await broadcastPageEvent(
           createPageEventPayload(driveId, pageId, 'content-updated', {
             title: updatedPage?.title,
-            parentId: updatedPage?.parentId
+            parentId: updatedPage?.parentId,
+            socketId
           })
         );
       }

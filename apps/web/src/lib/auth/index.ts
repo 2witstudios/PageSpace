@@ -39,6 +39,7 @@ export type AllowedTokenType = TokenType;
 
 export interface AuthenticateOptions {
   allow: ReadonlyArray<AllowedTokenType>;
+  requireCSRF?: boolean;
 }
 
 function unauthorized(message: string, status = 401): NextResponse {
@@ -216,7 +217,7 @@ export async function authenticateRequestWithOptions(
   request: Request,
   options: AuthenticateOptions,
 ): Promise<AuthenticationResult> {
-  const { allow } = options;
+  const { allow, requireCSRF = false } = options;
 
   if (!allow.length) {
     return {
@@ -239,15 +240,32 @@ export async function authenticateRequestWithOptions(
     return authenticateMCPRequest(request);
   }
 
+  let authResult: AuthenticationResult;
+
   if (allowJWT) {
-    return authenticateWebRequest(request);
+    authResult = await authenticateWebRequest(request);
+  } else if (allowMCP) {
+    authResult = await authenticateMCPRequest(request);
+  } else {
+    return {
+      error: unauthorized('No authentication methods permitted for this endpoint', 500),
+    };
   }
 
-  if (allowMCP) {
-    return authenticateMCPRequest(request);
+  // If authentication failed, return the error
+  if (isAuthError(authResult)) {
+    return authResult;
   }
 
-  return {
-    error: unauthorized('No authentication methods permitted for this endpoint', 500),
-  };
+  // Apply CSRF validation only for JWT-authenticated requests
+  // MCP tokens are exempt from CSRF protection (they use Bearer auth, not cookies)
+  if (requireCSRF && authResult.tokenType === 'jwt') {
+    const { validateCSRF } = await import('./csrf-validation');
+    const csrfError = await validateCSRF(request);
+    if (csrfError) {
+      return { error: csrfError };
+    }
+  }
+
+  return authResult;
 }

@@ -2,6 +2,9 @@ import { contactSubmissions, db } from '@pagespace/db';
 import { z } from 'zod/v4';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers } from '@pagespace/lib/server';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
 const contactSchema = z.object({
   name: z.string().min(1, 'Name is required').max(100, 'Name must be less than 100 characters'),
@@ -16,6 +19,13 @@ export async function POST(request: Request) {
                    'unknown';
 
   try {
+    // Authenticate request (optional - allows unauthenticated contact forms)
+    let userId: string | undefined;
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (!isAuthError(auth)) {
+      userId = auth.userId;
+    }
+
     const body = await request.json();
     const validation = contactSchema.safeParse(body);
 
@@ -42,6 +52,7 @@ export async function POST(request: Request) {
       name,
       email,
       subject,
+      userId, // Track if submitted by authenticated user
       ip: clientIP,
       userAgent: request.headers.get('user-agent')
     });

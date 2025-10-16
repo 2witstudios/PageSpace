@@ -2,6 +2,7 @@ import useSWR, { useSWRConfig } from 'swr';
 import { useState, useCallback } from 'react';
 import { mergeChildren } from '@/lib/tree/tree-utils';
 import { Page } from '@pagespace/lib/client';
+import { fetchWithAuth } from '@/lib/auth-fetch';
 
 type User = {
   id: string;
@@ -36,7 +37,13 @@ export type TreePage = Page & {
   messages: MessageWithUser[];
 };
 
-const fetcher = (url: string) => fetch(url).then(res => res.json());
+const fetcher = async (url: string) => {
+  const response = await fetchWithAuth(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch: ${response.status}`);
+  }
+  return response.json();
+};
 
 export function usePageTree(driveId?: string, trashView?: boolean) {
   const swrKey = driveId ? (trashView ? `/api/drives/${encodeURIComponent(driveId)}/trash` : `/api/drives/${encodeURIComponent(driveId)}/pages`) : null;

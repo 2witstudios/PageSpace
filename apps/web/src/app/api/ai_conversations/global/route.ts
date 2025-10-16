@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
-import { authenticateWebRequest, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, conversations, eq, and, desc } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
+
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
 /**
  * GET - Get any active global conversation for the authenticated user
@@ -9,9 +11,9 @@ import { loggers } from '@pagespace/lib/server';
  */
 export async function GET(request: Request) {
   try {
-    const auth = await authenticateWebRequest(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
-    const { userId } = auth;
+    const userId = auth.userId;
 
     // Just get ANY global conversation for this user (most recent by creation time)
     const globalConversation = await db

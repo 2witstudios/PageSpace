@@ -12,6 +12,7 @@ import {
   CommandList,
 } from '@/components/ui/command';
 import { useDebouncedCallback } from 'use-debounce';
+import { fetchWithAuth } from '@/lib/auth-fetch';
 
 interface SearchResult {
   id: string;
@@ -62,7 +63,7 @@ export default function GlobalSearch({ open, onOpenChange }: GlobalSearchProps) 
 
     setLoading(true);
     try {
-      const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+      const response = await fetchWithAuth(`/api/search?q=${encodeURIComponent(query)}`);
       if (response.ok) {
         const data = await response.json();
         setResults(data.results || []);

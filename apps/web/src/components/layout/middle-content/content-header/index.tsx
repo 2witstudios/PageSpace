@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button';
 import { Download } from 'lucide-react';
 import { isDocumentPage, isFilePage, isSheetPage } from '@pagespace/lib/client-safe';
 import { ExportDropdown } from './ExportDropdown';
+import { fetchWithAuth } from '@/lib/auth-fetch';
 
 interface ContentHeaderProps {
   children?: React.ReactNode;
@@ -42,14 +43,14 @@ export function ViewHeader({ children }: ContentHeaderProps = {}) {
   // Handle file download
   const handleDownload = async () => {
     if (!page || !pageIsFile) return;
-    
+
     setIsDownloading(true);
     try {
-      const response = await fetch(`/api/files/${page.id}/download`);
+      const response = await fetchWithAuth(`/api/files/${page.id}/download`);
       if (!response.ok) {
         throw new Error('Failed to download file');
       }
-      
+
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = window.document.createElement('a');

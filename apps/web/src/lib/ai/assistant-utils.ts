@@ -184,7 +184,7 @@ export function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): UIMessa
           textPartsCount: parsed.textParts.length,
           totalPartsCount: parsed.partsOrder.length
         });
-        
+
         return reconstructMessageFromStructuredContent(dbMessage, parsed);
       }
     } catch {
@@ -192,7 +192,7 @@ export function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): UIMessa
       debugLogAI('Using plain text content for message', { messageId: dbMessage.id });
     }
   }
-  
+
   // Simple text message
   return {
     id: dbMessage.id,
@@ -200,6 +200,7 @@ export function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): UIMessa
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     parts: [{ type: 'text', text: dbMessage.content || '' }] as any,
     createdAt: dbMessage.createdAt,
+    editedAt: dbMessage.editedAt,
     messageType: dbMessage.messageType || 'standard',
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any;
@@ -279,6 +280,7 @@ function reconstructMessageFromStructuredContent(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     parts: parts.length > 0 ? (parts as any) : [{ type: 'text', text: structuredData.originalContent || '' }],
     createdAt: dbMessage.createdAt,
+    editedAt: dbMessage.editedAt,
     messageType: dbMessage.messageType || 'standard',
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any;
@@ -338,18 +340,28 @@ export async function saveMessageToDatabase({
       });
     }
 
-    await db.insert(chatMessages).values({
-      id: messageId,
-      pageId,
-      userId,
-      role,
-      content: structuredContent,
-      toolCalls: toolCalls ? JSON.stringify(toolCalls) : null,
-      toolResults: toolResults ? JSON.stringify(toolResults) : null,
-      createdAt: new Date(),
-      isActive: true,
-      agentRole: agentRole || 'PARTNER', // Default to PARTNER if not specified
-    });
+    await db.insert(chatMessages)
+      .values({
+        id: messageId,
+        pageId,
+        userId,
+        role,
+        content: structuredContent,
+        toolCalls: toolCalls ? JSON.stringify(toolCalls) : null,
+        toolResults: toolResults ? JSON.stringify(toolResults) : null,
+        createdAt: new Date(),
+        isActive: true,
+        agentRole: agentRole || 'PARTNER', // Default to PARTNER if not specified
+      })
+      .onConflictDoUpdate({
+        target: chatMessages.id,
+        set: {
+          content: structuredContent,
+          toolCalls: toolCalls ? JSON.stringify(toolCalls) : null,
+          toolResults: toolResults ? JSON.stringify(toolResults) : null,
+          agentRole: agentRole || 'PARTNER',
+        }
+      });
   } catch (error) {
     console.error('Error saving message to database:', error);
     throw error;
@@ -369,7 +381,7 @@ export function convertGlobalAssistantMessageToUIMessage(dbMessage: GlobalAssist
           textPartsCount: parsed.textParts.length,
           totalPartsCount: parsed.partsOrder.length
         });
-        
+
         return reconstructGlobalAssistantMessageFromStructuredContent(dbMessage, parsed);
       }
     } catch {
@@ -377,7 +389,7 @@ export function convertGlobalAssistantMessageToUIMessage(dbMessage: GlobalAssist
       debugLogAI('Global Assistant: Using plain text content for message', { messageId: dbMessage.id });
     }
   }
-  
+
   // Simple text message
   return {
     id: dbMessage.id,
@@ -385,6 +397,7 @@ export function convertGlobalAssistantMessageToUIMessage(dbMessage: GlobalAssist
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     parts: [{ type: 'text', text: dbMessage.content || '' }] as any,
     createdAt: dbMessage.createdAt,
+    editedAt: dbMessage.editedAt,
     messageType: dbMessage.messageType || 'standard',
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any;
@@ -464,6 +477,7 @@ function reconstructGlobalAssistantMessageFromStructuredContent(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     parts: parts.length > 0 ? (parts as any) : [{ type: 'text', text: structuredData.originalContent || '' }],
     createdAt: dbMessage.createdAt,
+    editedAt: dbMessage.editedAt,
     messageType: dbMessage.messageType || 'standard',
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any;
@@ -524,19 +538,29 @@ export async function saveGlobalAssistantMessageToDatabase({
       });
     }
 
-    await db.insert(messages).values({
-      id: messageId,
-      conversationId,
-      userId,
-      role,
-      content: structuredContent,
-      toolCalls: toolCalls ? JSON.stringify(toolCalls) : null,
-      toolResults: toolResults ? JSON.stringify(toolResults) : null,
-      createdAt: new Date(),
-      isActive: true,
-      agentRole: agentRole || 'PARTNER', // Default to PARTNER if not specified
-    });
-    
+    await db.insert(messages)
+      .values({
+        id: messageId,
+        conversationId,
+        userId,
+        role,
+        content: structuredContent,
+        toolCalls: toolCalls ? JSON.stringify(toolCalls) : null,
+        toolResults: toolResults ? JSON.stringify(toolResults) : null,
+        createdAt: new Date(),
+        isActive: true,
+        agentRole: agentRole || 'PARTNER', // Default to PARTNER if not specified
+      })
+      .onConflictDoUpdate({
+        target: messages.id,
+        set: {
+          content: structuredContent,
+          toolCalls: toolCalls ? JSON.stringify(toolCalls) : null,
+          toolResults: toolResults ? JSON.stringify(toolResults) : null,
+          agentRole: agentRole || 'PARTNER',
+        }
+      });
+
     debugLogAI('Global Assistant: Message saved to database with tools');
   } catch (error) {
     console.error('Error saving global assistant message to database:', error);

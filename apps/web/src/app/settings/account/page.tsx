@@ -13,8 +13,15 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { toast } from "sonner";
 import { User, Mail, Calendar, AlertTriangle, Loader2, ArrowLeft, Upload, X, CheckCircle2, AlertCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { patch, post, del, fetchWithAuth } from '@/lib/auth-fetch';
 
-const fetcher = (url: string) => fetch(url).then((res) => res.json());
+const fetcher = async (url: string) => {
+  const response = await fetchWithAuth(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch: ${response.status}`);
+  }
+  return response.json();
+};
 
 export default function AccountPage() {
   const { user, isLoading: authLoading, mutate } = useAuth();
@@ -69,18 +76,7 @@ export default function AccountPage() {
     setIsSavingProfile(true);
 
     try {
-      const response = await fetch("/api/account", {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ name, email }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "Failed to update profile");
-      }
+      await patch("/api/account", { name, email });
 
       if (mutate) {
         await mutate(); // Refresh user data
@@ -128,17 +124,8 @@ export default function AccountPage() {
     formData.append('file', avatarFile);
 
     try {
-      const response = await fetch('/api/account/avatar', {
-        method: 'POST',
-        body: formData,
-      });
+      await post('/api/account/avatar', formData);
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to upload avatar');
-      }
-
-      await response.json();
       toast.success('Avatar uploaded successfully');
       setAvatarFile(null);
 
@@ -158,14 +145,7 @@ export default function AccountPage() {
     setIsUploadingAvatar(true);
 
     try {
-      const response = await fetch('/api/account/avatar', {
-        method: 'DELETE',
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to delete avatar');
-      }
+      await del('/api/account/avatar');
 
       toast.success('Avatar deleted successfully');
       setAvatarPreview(null);
@@ -199,21 +179,10 @@ export default function AccountPage() {
     setIsSavingPassword(true);
 
     try {
-      const response = await fetch("/api/account/password", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          currentPassword,
-          newPassword,
-        }),
+      await post("/api/account/password", {
+        currentPassword,
+        newPassword,
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "Failed to change password");
-      }
 
       toast.success("Password changed successfully");
       // Clear password fields
@@ -231,16 +200,7 @@ export default function AccountPage() {
   const handleResendVerification = async () => {
     setIsResendingVerification(true);
     try {
-      const response = await fetch("/api/auth/resend-verification", {
-        method: "POST",
-        credentials: "include",
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to send verification email");
-      }
+      const data = await post<{ message: string }>("/api/auth/resend-verification");
 
       setVerificationEmailSent(true);
       toast.success(data.message || "Verification email sent successfully. Please check your inbox.");

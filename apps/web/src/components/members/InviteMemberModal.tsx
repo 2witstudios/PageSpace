@@ -10,6 +10,7 @@ import { ChevronLeft } from 'lucide-react';
 import { VerificationRequiredAlert } from '@/components/VerificationRequiredAlert';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { post } from '@/lib/auth-fetch';
 
 interface InviteMemberModalProps {
   driveId: string;
@@ -76,31 +77,19 @@ export function InviteMemberModal({ driveId, isOpen, onClose, onComplete }: Invi
 
     setLoading(true);
     try {
-      const response = await fetch(`/api/drives/${driveId}/members/invite`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          userId: selectedUser.userId,
-          role: selectedRole,
-          permissions: permissionArray,
-        }),
+      await post(`/api/drives/${driveId}/members/invite`, {
+        userId: selectedUser.userId,
+        role: selectedRole,
+        permissions: permissionArray,
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-
-        // Check if this is a verification required error
-        if (error.requiresEmailVerification) {
-          setShowVerificationAlert(true);
-          return;
-        }
-
-        throw new Error(error.error || 'Failed to add member');
-      }
 
       onComplete();
     } catch (error) {
+      // Check if this is a verification required error
+      if (error instanceof Error && 'requiresEmailVerification' in error) {
+        setShowVerificationAlert(true);
+        return;
+      }
       console.error('Error adding member:', error);
       toast({
         title: 'Error',

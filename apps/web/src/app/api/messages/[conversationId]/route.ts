@@ -1,9 +1,11 @@
 import { NextResponse } from 'next/server';
 import { db, directMessages, dmConversations, eq, and, or, desc, lt } from '@pagespace/db';
-import { verifyAuth } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 import { createOrUpdateMessageNotification, isEmailVerified } from '@pagespace/lib';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
+
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
 // GET /api/messages/[conversationId] - Get messages in a conversation
 export async function GET(
@@ -11,10 +13,9 @@ export async function GET(
   context: { params: Promise<{ conversationId: string }> }
 ) {
   try {
-    const user = await verifyAuth(request);
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (isAuthError(auth)) return auth.error;
+    const userId = auth.userId;
 
     const { conversationId } = await context.params;
     const { searchParams } = new URL(request.url);
@@ -29,8 +30,8 @@ export async function GET(
         and(
           eq(dmConversations.id, conversationId),
           or(
-            eq(dmConversations.participant1Id, user.id),
-            eq(dmConversations.participant2Id, user.id)
+            eq(dmConversations.participant1Id, userId),
+            eq(dmConversations.participant2Id, userId)
           )
         )
       )
@@ -66,7 +67,7 @@ export async function GET(
     const messages = await messagesQuery;
 
     // Mark messages as read
-    const otherUserId = conversation.participant1Id === user.id
+    const otherUserId = conversation.participant1Id === userId
       ? conversation.participant2Id
       : conversation.participant1Id;
 
@@ -85,7 +86,7 @@ export async function GET(
       );
 
     // Update last read timestamp for conversation
-    const updateField = conversation.participant1Id === user.id
+    const updateField = conversation.participant1Id === userId
       ? { participant1LastRead: new Date() }
       : { participant2LastRead: new Date() };
 
@@ -113,13 +114,12 @@ export async function POST(
   context: { params: Promise<{ conversationId: string }> }
 ) {
   try {
-    const user = await verifyAuth(request);
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (isAuthError(auth)) return auth.error;
+    const userId = auth.userId;
 
     // Check email verification
-    const emailVerified = await isEmailVerified(user.id);
+    const emailVerified = await isEmailVerified(userId);
     if (!emailVerified) {
       return NextResponse.json(
         {
@@ -149,8 +149,8 @@ export async function POST(
         and(
           eq(dmConversations.id, conversationId),
           or(
-            eq(dmConversations.participant1Id, user.id),
-            eq(dmConversations.participant2Id, user.id)
+            eq(dmConversations.participant1Id, userId),
+            eq(dmConversations.participant2Id, userId)
           )
         )
       )
@@ -168,7 +168,7 @@ export async function POST(
       .insert(directMessages)
       .values({
         conversationId,
-        senderId: user.id,
+        senderId: userId,
         content,
       })
       .returning();
@@ -187,7 +187,7 @@ export async function POST(
       .where(eq(dmConversations.id, conversationId));
 
     // Send notification to recipient
-    const recipientId = conversation.participant1Id === user.id
+    const recipientId = conversation.participant1Id === userId
       ? conversation.participant2Id
       : conversation.participant1Id;
 
@@ -195,7 +195,7 @@ export async function POST(
       recipientId,
       conversationId,
       messagePreview,
-      user.id
+      userId
     );
 
     // Broadcast the new message to the DM room for realtime updates
@@ -233,10 +233,9 @@ export async function PATCH(
   context: { params: Promise<{ conversationId: string }> }
 ) {
   try {
-    const user = await verifyAuth(request);
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (isAuthError(auth)) return auth.error;
+    const userId = auth.userId;
 
     const { conversationId } = await context.params;
 
@@ -248,8 +247,8 @@ export async function PATCH(
         and(
           eq(dmConversations.id, conversationId),
           or(
-            eq(dmConversations.participant1Id, user.id),
-            eq(dmConversations.participant2Id, user.id)
+            eq(dmConversations.participant1Id, userId),
+            eq(dmConversations.participant2Id, userId)
           )
         )
       )
@@ -262,7 +261,7 @@ export async function PATCH(
       );
     }
 
-    const otherUserId = conversation.participant1Id === user.id
+    const otherUserId = conversation.participant1Id === userId
       ? conversation.participant2Id
       : conversation.participant1Id;
 
@@ -282,7 +281,7 @@ export async function PATCH(
       );
 
     // Update last read timestamp for conversation
-    const updateField = conversation.participant1Id === user.id
+    const updateField = conversation.participant1Id === userId
       ? { participant1LastRead: new Date() }
       : { participant2LastRead: new Date() };
 

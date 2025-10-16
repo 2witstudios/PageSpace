@@ -9,14 +9,23 @@ import * as XLSX from 'xlsx';
  */
 export async function generateDOCX(html: string, title: string): Promise<Buffer> {
   try {
-    const docxBuffer = await HTMLtoDOCX(html, null, {
+    const docxData = await HTMLtoDOCX(html, null, {
       table: { row: { cantSplit: true } },
       footer: true,
       pageNumber: true,
       title: title,
     });
 
-    return docxBuffer;
+    // Convert ArrayBuffer or Blob to Buffer
+    if (docxData instanceof ArrayBuffer) {
+      return Buffer.from(docxData);
+    } else if (docxData instanceof Blob) {
+      const arrayBuffer = await docxData.arrayBuffer();
+      return Buffer.from(arrayBuffer);
+    }
+
+    // If it's already a Buffer (shouldn't happen but handle it)
+    return docxData as Buffer;
   } catch (error) {
     console.error('Error generating DOCX:', error);
     throw new Error('Failed to generate DOCX');

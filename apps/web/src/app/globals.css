@@ -508,6 +508,73 @@
   .scrollbar-thin::-webkit-scrollbar-thumb:hover {
     background-color: hsl(var(--accent));
   }
+
+  /* SVG Color Utilities - for dark mode support in SVG elements */
+  .svg-bg {
+    fill: var(--background);
+  }
+
+  .svg-fg {
+    fill: var(--foreground);
+  }
+
+  .svg-card {
+    fill: var(--card);
+  }
+
+  .svg-primary {
+    fill: var(--primary);
+  }
+
+  .svg-primary-fg {
+    fill: var(--primary-foreground);
+  }
+
+  .svg-muted-fg {
+    fill: var(--muted-foreground);
+  }
+
+  .svg-border {
+    fill: var(--border);
+  }
+
+  .svg-separator {
+    fill: var(--separator);
+  }
+
+  .svg-material-thin {
+    fill: var(--material-thin);
+  }
+
+  /* SVG stroke variants */
+  .svg-stroke-fg {
+    stroke: var(--foreground);
+  }
+
+  .svg-stroke-muted-fg {
+    stroke: var(--muted-foreground);
+  }
+
+  .svg-stroke-primary {
+    stroke: var(--primary);
+  }
+
+  .svg-stroke-border {
+    stroke: var(--border);
+  }
+
+  .svg-stroke-separator {
+    stroke: var(--separator);
+  }
+
+  /* SVG status indicator colors */
+  .svg-status-saving {
+    fill: var(--chart-1); /* Amber/orange for "saving" state */
+  }
+
+  .svg-status-saved {
+    fill: var(--chart-2); /* Green for "saved" state */
+  }
 }
 
 
@@ -654,6 +721,50 @@
     height: auto !important;
   }
 
+  /* FIX: Remove all height/flex constraints that prevent pagination */
+  /* Target DocumentView motion.div wrapper */
+  [class*="motion"],
+  .h-full,
+  [class*="h-full"] {
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+  }
+
+  /* Remove flex constraints that limit content flow */
+  .flex,
+  .flex-col,
+  .flex-1,
+  [class*="flex"] {
+    display: block !important;
+    flex: none !important;
+  }
+
+  /* CRITICAL: Remove overflow constraints - this is the main culprit */
+  /* Overflow containers trap content and prevent pagination */
+  .overflow-auto,
+  .overflow-y-auto,
+  .overflow-x-auto,
+  .overflow-hidden,
+  [class*="overflow"] {
+    overflow: visible !important;
+  }
+
+  /* Remove max-width constraints for better page usage */
+  .max-w-4xl,
+  .max-w-3xl,
+  .max-w-2xl,
+  .max-w-xl,
+  [class*="max-w"] {
+    max-width: none !important;
+  }
+
+  /* Ensure all wrapper divs don't constrain content */
+  div {
+    height: auto !important;
+    overflow: visible !important;
+  }
+
   /* Show ONLY the document content */
   .ProseMirror,
   .tiptap,
@@ -671,6 +782,28 @@
     border: none !important;
     background: white !important;
     color: black !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  /* Monaco editor container */
+  .monaco-editor,
+  [class*="monaco"],
+  [class*="MonacoEditor"] {
+    display: block !important;
+    visibility: visible !important;
+    width: 100% !important;
+    height: auto !important;
+    overflow: visible !important;
+    padding: 20mm !important;
+    background: white !important;
+  }
+
+  /* Monaco editor content wrapper */
+  .monaco-editor .view-lines,
+  .monaco-editor .monaco-scrollable-element {
+    height: auto !important;
+    overflow: visible !important;
   }
 
   /* Ensure text content is visible */
@@ -685,23 +818,59 @@
     size: A4 portrait;
   }
 
-  /* Prevent page breaks in headings */
+  /* Enhanced page break handling - like Google Drive */
+
+  /* Keep headings with following content */
   h1, h2, h3, h4, h5, h6 {
     page-break-after: avoid;
-    break-after: avoid;
+    break-after: avoid-page;
     page-break-inside: avoid;
     break-inside: avoid;
+    margin-top: 1.5em;
+    margin-bottom: 0.5em;
+  }
+
+  /* Keep list items together when possible */
+  li {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* Keep blockquotes together */
+  blockquote {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* Keep tables together if possible */
+  table {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* Keep code blocks together */
+  pre, code {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* Better paragraph handling */
+  p {
+    orphans: 3;
+    widows: 3;
+    page-break-inside: avoid;
+    break-inside: avoid-page;
+  }
+
+  /* Allow page breaks between paragraphs */
+  p + p {
+    page-break-before: auto;
+    break-before: auto;
   }
 
   /* Remove link URLs in print (cleaner output) */
   a[href]::after {
     content: none !important;
-  }
-
-  /* Prevent orphans and widows */
-  p {
-    orphans: 3;
-    widows: 3;
   }
 
   /* Print-specific text rendering */

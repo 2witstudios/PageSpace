@@ -86,33 +86,124 @@ export async function POST(request: Request) {
 }
 ```
 
-## 4. Authentication
+## 4. Authentication and CSRF Protection
 
-Most routes require authentication. A helper function `decodeToken` from `@pagespace/lib` is used to verify the `accessToken` cookie.
+Most routes require authentication. PageSpace uses a unified authentication system with built-in CSRF protection for mutation operations.
+
+### Standard Authentication Pattern
+
+Use `authenticateRequestWithOptions` from `@/lib/auth` for all authenticated routes:
 
 ```typescript
 import { NextResponse } from 'next/server';
-import { decodeToken } from '@pagespace/lib';
-import { parse } from 'cookie';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
-export async function GET(req: Request) {
-  const cookieHeader = req.headers.get('cookie');
-  const cookies = parse(cookieHeader || '');
-  const accessToken = cookies.accessToken;
+// Define authentication options at the top of the file
+const AUTH_OPTIONS = {
+  allow: ['jwt', 'mcp'] as const,  // Allow JWT (web) and MCP (API) tokens
+  requireCSRF: true                 // Enable CSRF protection for mutations
+};
 
-  if (!accessToken) {
-    return new NextResponse("Unauthorized", { status: 401 });
+export async function POST(request: Request) {
+  // Authenticate the request
+  const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+  if (isAuthError(auth)) {
+    return auth.error;
   }
 
-  const decoded = await decodeToken(accessToken);
-  if (!decoded) {
-    return new NextResponse("Unauthorized", { status: 401 });
-  }
+  const userId = auth.userId;
+  const role = auth.role;
 
-  const { userId } = decoded;
   // Proceed with authenticated logic
   return NextResponse.json({ userId });
 }
+```
+
+### CSRF Protection
+
+**CSRF protection is REQUIRED for all mutation endpoints** (POST, PUT, PATCH, DELETE) to prevent Cross-Site Request Forgery attacks.
+
+**When to use `requireCSRF: true`:**
+- ✅ All POST/PUT/PATCH/DELETE endpoints that modify data
+- ✅ Routes that accept JWT authentication (cookie-based)
+- ❌ GET/HEAD/OPTIONS endpoints (safe methods)
+- ❌ Routes that ONLY accept MCP tokens (Bearer auth, not cookies)
+- ❌ Auth establishment endpoints: `/api/auth/login`, `/api/auth/signup`
+- ❌ OAuth callback endpoints: `/api/auth/google/**`
+- ❌ Webhook endpoints with alternative verification (e.g., Stripe signatures)
+
+**Example: Mutation endpoint with CSRF protection**
+
+```typescript
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { NextResponse } from 'next/server';
+import { db, pages, eq } from '@pagespace/db';
+
+const AUTH_OPTIONS = {
+  allow: ['jwt', 'mcp'] as const,
+  requireCSRF: true  // CSRF protection for mutations
+};
+
+export async function PATCH(
+  request: Request,
+  context: { params: Promise<{ pageId: string }> }
+) {
+  // Authenticate and validate CSRF token
+  const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+  if (isAuthError(auth)) {
+    return auth.error;  // Returns 401 for auth failure or 403 for CSRF failure
+  }
+
+  const { pageId } = await context.params;
+  const userId = auth.userId;
+
+  // Your update logic here
+  const body = await request.json();
+  await db.update(pages).set(body).where(eq(pages.id, pageId));
+
+  return NextResponse.json({ success: true });
+}
+```
+
+**Example: Read-only endpoint without CSRF**
+
+```typescript
+const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const };  // No requireCSRF
+
+export async function GET(request: Request) {
+  const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+  if (isAuthError(auth)) {
+    return auth.error;
+  }
+
+  // Read-only logic
+  return NextResponse.json({ data: [] });
+}
+```
+
+### Authentication Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `allow` | `['jwt'] \| ['mcp'] \| ['jwt', 'mcp']` | Which token types to accept |
+| `requireCSRF` | `boolean` | Enable CSRF validation (only applies to JWT tokens) |
+
+### Token Types
+
+- **JWT tokens**: Cookie-based authentication for web users
+- **MCP tokens**: Bearer token authentication for Model Context Protocol integrations
+
+### Legacy Pattern (Deprecated)
+
+The old pattern using `decodeToken` directly is deprecated. Always use `authenticateRequestWithOptions`:
+
+```typescript
+// ❌ OLD - Don't use
+const decoded = await decodeToken(accessToken);
+
+// ✅ NEW - Use this
+const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+if (isAuthError(auth)) return auth.error;
 ```
 
 ## 5. Data Access and Error Handling
@@ -141,4 +232,4 @@ export async function GET(request: Request) {
 ## 6. Updating API Documentation
 
 After adding or modifying an API route, you **MUST** update the central API documentation. Refer to the format specified in `api_routes.md` and add or update the relevant file in `docs/2.0-architecture/2.4-api/`.
-**Last Updated:** 2025-08-13
+**Last Updated:** 2025-10-07 (Added CSRF protection requirements)

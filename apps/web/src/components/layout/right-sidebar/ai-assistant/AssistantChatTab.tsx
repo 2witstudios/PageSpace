@@ -1,16 +1,18 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useChat } from '@ai-sdk/react';
-import { usePathname, useSearchParams } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import ChatInput, { ChatInputRef } from '@/components/messages/ChatInput';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Loader2, Send, Plus } from 'lucide-react';
-import { UIMessage, DefaultChatTransport } from 'ai';
+import { Loader2, Send, Plus, StopCircle } from 'lucide-react';
 import { CompactConversationMessageRenderer } from '@/components/ai/CompactConversationMessageRenderer';
 import { AgentRole, AgentRoleUtils } from '@/lib/ai/agent-roles';
 import { AgentRoleDropdownCompact } from '@/components/ai/AgentRoleDropdown';
-import { conversationState } from '@/lib/ai/conversation-state';
 import { useDriveStore } from '@/hooks/useDrive';
+import { fetchWithAuth, patch, del } from '@/lib/auth-fetch';
+import { useEditingStore } from '@/stores/useEditingStore';
+import { useGlobalChat } from '@/contexts/GlobalChatContext';
+import { toast } from 'sonner';
 
 
 interface ProviderSettings {
@@ -42,17 +44,16 @@ interface LocationContext {
 
 const AssistantChatTab: React.FC = () => {
   const pathname = usePathname();
-  const searchParams = useSearchParams();
+
+  // Use shared global chat context - this is the key change!
+  const { chat, currentConversationId, isInitialized, createNewConversation, refreshConversation } = useGlobalChat();
+
+  // Local state for component-specific concerns
   const [providerSettings, setProviderSettings] = useState<ProviderSettings | null>(null);
-  const [isInitialized, setIsInitialized] = useState<boolean>(false);
-  const [initialMessages, setInitialMessages] = useState<UIMessage[]>([]);
   const [input, setInput] = useState<string>('');
   const [currentAgentRole, setCurrentAgentRole] = useState<AgentRole>(AgentRoleUtils.getDefaultRole());
-  const [pagination, setPagination] = useState<{ hasMore: boolean; nextCursor: string | null } | null>(null);
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
-  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   
   // Refs for auto-scrolling and chat input
   const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -66,29 +67,32 @@ const AssistantChatTab: React.FC = () => {
     }
   };
 
-  // Get drives from store
-  const { drives, fetchDrives } = useDriveStore();
-  
-  // Ensure drives are loaded
+  // Get fetchDrives from store to ensure drives are loaded
+  // Note: We don't subscribe to drives array to avoid re-renders
+  const { fetchDrives } = useDriveStore();
+
+  // Ensure drives are loaded on mount
   useEffect(() => {
     fetchDrives();
   }, [fetchDrives]);
   
   // Extract location context from pathname
+  // Note: Only depends on pathname, not drives array, to prevent re-fetching on drive refreshes
   useEffect(() => {
     const extractLocationContext = async () => {
       const pathParts = pathname.split('/').filter(Boolean);
-      
+
       if (pathParts.length >= 2 && pathParts[0] === 'dashboard') {
         const driveId = pathParts[1];
-        
+
         try {
           let currentPage = null;
           let currentDrive = null;
-          
-          // Get drive information from store
+
+          // Get drive information from store (using current drives snapshot)
           if (driveId) {
-            const driveData = drives.find(d => d.id === driveId);
+            const currentDrives = useDriveStore.getState().drives;
+            const driveData = currentDrives.find(d => d.id === driveId);
             if (driveData) {
               currentDrive = {
                 id: driveData.id,
@@ -105,13 +109,13 @@ const AssistantChatTab: React.FC = () => {
             
             try {
               // Fetch page data
-              const pageResponse = await fetch(`/api/pages/${pageId}`);
+              const pageResponse = await fetchWithAuth(`/api/pages/${pageId}`);
               if (pageResponse.ok) {
                 const pageData = await pageResponse.json();
                 
                 // Fetch breadcrumbs to build the full path with parent folders
                 try {
-                  const breadcrumbsResponse = await fetch(`/api/pages/${pageId}/breadcrumbs`);
+                  const breadcrumbsResponse = await fetchWithAuth(`/api/pages/${pageId}/breadcrumbs`);
                   if (breadcrumbsResponse.ok) {
                     const breadcrumbsData = await breadcrumbsResponse.json();
                     
@@ -193,186 +197,72 @@ const AssistantChatTab: React.FC = () => {
     };
 
     extractLocationContext();
-  }, [pathname, drives]);
+  }, [pathname]); // Only re-run when pathname changes, not on every drives refresh
 
-  // Initialize conversation will be handled in the main initialization effect
-
-  // AI SDK v5 useChat hook with conversation-specific endpoint
-  const chatConfig = React.useMemo(() => {
-    if (!currentConversationId) return null;
-    
-    return {
-      id: currentConversationId,
-      messages: initialMessages,
-      transport: new DefaultChatTransport({
-        api: `/api/ai_conversations/${currentConversationId}/messages`,
-        fetch: (url, options) => fetch(url, { 
-          ...options, 
-          credentials: 'include'
-        }),
-      }),
-      experimental_throttle: 50,
-      onError: (error: Error) => {
-        // Log full error details to console for debugging
-        console.error('❌ Global Assistant: Chat error occurred:', error);
-        console.error('Error details:', {
-          message: error.message,
-          stack: error.stack,
-          name: error.name
-        });
-        
-        if (error.message?.includes('Unauthorized') || error.message?.includes('401')) {
-          console.error('🔒 Global Assistant: Authentication failed - user may need to log in again');
-        }
-        
-        // Don't show technical details to users - error display is handled in UI
-      },
-    };
-  }, [currentConversationId, initialMessages]);
-
-  const { 
-    messages, 
+  // Use the shared Chat instance from context - this is what enables state sharing!
+  // Both AssistantChatTab and GlobalAssistantView will use the same Chat instance
+  const {
+    messages,
     sendMessage,
-    setMessages,
     status,
     error,
-  } = useChat(chatConfig || {});
+    regenerate,
+    setMessages,
+    stop,
+  } = useChat({ chat });
 
-  // Sync loaded messages with useChat hook after initialization
-  React.useEffect(() => {
-    if (isInitialized && initialMessages.length > 0 && messages.length === 0) {
-      setMessages(initialMessages);
+  // ✅ Removed setMessages sync effect - AI SDK v5 manages messages internally
+
+  // Register streaming state with editing store (state-based protection)
+  // Note: In AI SDK v5, status can be 'ready', 'submitted', 'streaming', or 'error'
+  useEffect(() => {
+    const componentId = `assistant-sidebar-${currentConversationId || 'init'}`;
+
+    if (status === 'submitted' || status === 'streaming') {
+      useEditingStore.getState().startStreaming(componentId, {
+        conversationId: currentConversationId || undefined,
+        componentName: 'AssistantChatTab',
+      });
+    } else {
+      useEditingStore.getState().endStreaming(componentId);
     }
-  }, [isInitialized, initialMessages, messages.length, setMessages]);
 
-  // Auto-scroll when messages change
+    // Cleanup on unmount
+    return () => {
+      useEditingStore.getState().endStreaming(componentId);
+    };
+  }, [status, currentConversationId]);
+
+  // ✅ Combined scroll effects - use messages.length instead of messages array
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
-
-  // Auto-scroll when AI status changes (thinking/responding)
-  useEffect(() => {
-    scrollToBottom();
-  }, [status]);
+  }, [messages.length, status]);
 
   // Reset error visibility when new error occurs
   useEffect(() => {
     if (error) setShowError(true);
   }, [error]);
 
-  // Watch for URL changes and sync with conversation
+  // Load provider settings on mount
   useEffect(() => {
-    const urlConversationId = searchParams.get('c');
-    
-    if (urlConversationId && urlConversationId !== currentConversationId) {
-      // URL has a different conversation - load it
-      setCurrentConversationId(urlConversationId);
-      conversationState.setActiveConversationId(urlConversationId);
-      setIsInitialized(false); // Force re-initialization
-    } else if (!urlConversationId && !currentConversationId) {
-      // No URL param and no current conversation - get from cookie or most recent
-      const cookieConversationId = conversationState.getActiveConversationId();
-      if (cookieConversationId) {
-        setCurrentConversationId(cookieConversationId);
-      }
-    }
-  }, [searchParams, currentConversationId]);
-
-  // Load conversation when ID changes
-  useEffect(() => {
-    const initializeChat = async () => {
-      if (!currentConversationId) {
-        // Try to get most recent conversation if no ID
-        try {
-          const globalConvResponse = await fetch('/api/ai_conversations/global', {
-            credentials: 'include',
-          });
-          
-          if (globalConvResponse.ok) {
-            const globalConversation = await globalConvResponse.json();
-            if (globalConversation && globalConversation.id) {
-              setCurrentConversationId(globalConversation.id);
-              conversationState.setActiveConversationId(globalConversation.id);
-              return; // Will trigger this effect again
-            }
-          }
-          
-          // No existing conversations - create first one
-          const allConvResponse = await fetch('/api/ai_conversations');
-          if (allConvResponse.ok) {
-            const convList = await allConvResponse.json();
-            const globalConvs = convList.filter((c: { type: string }) => c.type === 'global');
-            if (globalConvs.length === 0) {
-              const createResponse = await fetch('/api/ai_conversations', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ type: 'global' }),
-                credentials: 'include',
-              });
-              
-              if (createResponse.ok) {
-                const newConversation = await createResponse.json();
-                setCurrentConversationId(newConversation.id);
-                conversationState.setActiveConversationId(newConversation.id);
-              }
-            }
-          }
-        } catch (error) {
-          console.error('Failed to initialize conversation:', error);
-        }
-        
-        setIsInitialized(true);
-        return;
-      }
-      
+    const loadProviderSettings = async () => {
       try {
-        // Check multi-provider configuration
-        const configResponse = await fetch('/api/ai/settings');
+        const configResponse = await fetchWithAuth('/api/ai/settings');
         const configData: ProviderSettings = await configResponse.json();
         setProviderSettings(configData);
-        
-        // Load messages for current conversation (with pagination)
-        try {
-          const messagesResponse = await fetch(`/api/ai_conversations/${currentConversationId}/messages?limit=50`, {
-            credentials: 'include',
-          });
-          if (messagesResponse.ok) {
-            const messageData = await messagesResponse.json();
-            // Handle both old format (array) and new format (object with messages and pagination)
-            if (Array.isArray(messageData)) {
-              setInitialMessages(messageData);
-              setPagination(null);
-            } else {
-              setInitialMessages(messageData.messages || []);
-              setPagination(messageData.pagination || null);
-            }
-          } else {
-            setInitialMessages([]);
-            setPagination(null);
-          }
-        } catch (error) {
-          console.error('Failed to load conversation messages:', error);
-          setInitialMessages([]);
-        }
-        
-        setIsInitialized(true);
       } catch (error) {
-        console.error('Failed to initialize:', error);
-        setInitialMessages([]);
-        setIsInitialized(true);
+        console.error('Failed to load provider settings:', error);
       }
     };
 
-    setIsInitialized(false);
-    setInitialMessages([]);
-    initializeChat();
-  }, [currentConversationId]);
+    loadProviderSettings();
+  }, []);
   
   // Listen for settings updates and reload provider settings
   useEffect(() => {
     const handleSettingsUpdate = async () => {
       try {
-        const configResponse = await fetch('/api/ai/settings');
+        const configResponse = await fetchWithAuth('/api/ai/settings');
         const configData: ProviderSettings = await configResponse.json();
         setProviderSettings(configData);
       } catch (error) {
@@ -386,64 +276,10 @@ const AssistantChatTab: React.FC = () => {
     };
   }, []);
 
-  const loadMoreMessages = async () => {
-    if (!currentConversationId || !pagination?.hasMore || !pagination?.nextCursor || isLoadingMore) {
-      return;
-    }
-
-    setIsLoadingMore(true);
-    try {
-      const response = await fetch(
-        `/api/ai_conversations/${currentConversationId}/messages?limit=25&cursor=${pagination.nextCursor}&direction=before`,
-        { credentials: 'include' }
-      );
-
-      if (response.ok) {
-        const messageData = await response.json();
-        const olderMessages = Array.isArray(messageData) ? messageData : messageData.messages || [];
-
-        // Prepend older messages to the existing ones
-        setInitialMessages(prev => [...olderMessages, ...prev]);
-
-        // Update pagination info
-        if (!Array.isArray(messageData) && messageData.pagination) {
-          setPagination(messageData.pagination);
-        }
-      }
-    } catch (error) {
-      console.error('Failed to load more messages:', error);
-    } finally {
-      setIsLoadingMore(false);
-    }
-  };
-
+  // Use the context method to create new conversation
   const handleNewConversation = async () => {
     try {
-      const createResponse = await fetch('/api/ai_conversations', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          type: 'global',
-        }),
-        credentials: 'include',
-      });
-      
-      if (createResponse.ok) {
-        const newConversation = await createResponse.json();
-        setCurrentConversationId(newConversation.id);
-        conversationState.setActiveConversationId(newConversation.id);
-        setInitialMessages([]);
-        setMessages([]); // Clear messages in the chat view
-        
-        // Update URL to reflect new conversation
-        const url = new URL(window.location.href);
-        url.searchParams.set('c', newConversation.id);
-        window.history.pushState({}, '', url.toString());
-      } else {
-        throw new Error('Failed to create conversation');
-      }
+      await createNewConversation();
     } catch (error) {
       console.error('Failed to create new conversation:', error);
     }
@@ -468,6 +304,81 @@ const AssistantChatTab: React.FC = () => {
     chatInputRef.current?.clear();
     setTimeout(scrollToBottom, 100);
   };
+
+  // Edit message handler
+  const handleEdit = async (messageId: string, newContent: string) => {
+    if (!currentConversationId) return;
+
+    try {
+      // Persist to backend (already handles structured content correctly)
+      await patch(`/api/ai_conversations/${currentConversationId}/messages/${messageId}`, {
+        content: newContent,
+      });
+
+      // Refresh conversation (recreates Chat with fresh messages from DB)
+      await refreshConversation();
+
+      toast.success('Message updated successfully');
+    } catch (error) {
+      console.error('Failed to edit message:', error);
+      toast.error('Failed to update message');
+    }
+  };
+
+  // Delete message handler
+  const handleDelete = async (messageId: string) => {
+    if (!currentConversationId) return;
+
+    try {
+      await del(`/api/ai_conversations/${currentConversationId}/messages/${messageId}`);
+
+      // Optimistically remove from UI
+      setMessages(messages.filter(m => m.id !== messageId));
+
+      toast.success('Message deleted');
+    } catch (error) {
+      console.error('Failed to delete message:', error);
+      toast.error('Failed to delete message');
+    }
+  };
+
+  // Retry handler - regenerate the last assistant message
+  const handleRetry = async () => {
+    if (!currentConversationId) return;
+
+    // Before regenerating, clean up old assistant responses after the last user message
+    const lastUserMsgIndex = messages.map(m => m.role).lastIndexOf('user');
+
+    if (lastUserMsgIndex !== -1) {
+      // Get all assistant messages after the last user message
+      const assistantMessagesToDelete = messages
+        .slice(lastUserMsgIndex + 1)
+        .filter(m => m.role === 'assistant');
+
+      // Delete them from the database
+      for (const msg of assistantMessagesToDelete) {
+        try {
+          await del(`/api/ai_conversations/${currentConversationId}/messages/${msg.id}`);
+        } catch (error) {
+          console.error('Failed to delete old assistant message:', error);
+        }
+      }
+
+      // Remove them from local state
+      const filteredMessages = messages.filter(
+        m => !assistantMessagesToDelete.some(toDelete => toDelete.id === m.id)
+      );
+      setMessages(filteredMessages);
+    }
+
+    // Now regenerate with a clean slate
+    regenerate();
+  };
+
+  // Calculate the last assistant message ID for the retry button
+  const lastAssistantMessageId = messages
+    .filter(m => m.role === 'assistant')
+    .slice(-1)[0]?.id;
 
   // Show loading state until chat is properly initialized
   if (!isInitialized) {
@@ -503,28 +414,6 @@ const AssistantChatTab: React.FC = () => {
       <div className="flex-1 min-h-0 overflow-hidden">
         <ScrollArea className="h-full p-3" ref={scrollAreaRef}>
           <div className="space-y-3">
-            {/* Load More Messages Button */}
-            {pagination?.hasMore && messages.length > 0 && (
-              <div className="flex justify-center py-2">
-                <Button
-                  onClick={loadMoreMessages}
-                  disabled={isLoadingMore}
-                  variant="outline"
-                  size="sm"
-                  className="text-xs"
-                >
-                  {isLoadingMore ? (
-                    <>
-                      <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-                      Loading...
-                    </>
-                  ) : (
-                    'Load older messages'
-                  )}
-                </Button>
-              </div>
-            )}
-
             {messages.length === 0 ? (
               <div className="flex items-center justify-center h-20 text-muted-foreground text-xs text-center">
                 <div>
@@ -539,7 +428,14 @@ const AssistantChatTab: React.FC = () => {
               </div>
             ) : (
               messages.map(message => (
-                <CompactConversationMessageRenderer key={message.id} message={message} />
+                <CompactConversationMessageRenderer
+                  key={message.id}
+                  message={message}
+                  onEdit={handleEdit}
+                  onDelete={handleDelete}
+                  onRetry={handleRetry}
+                  isLastAssistantMessage={message.id === lastAssistantMessageId}
+                />
               ))
             )}
             
@@ -607,18 +503,26 @@ const AssistantChatTab: React.FC = () => {
             driveId={locationContext?.currentDrive?.id}
             crossDrive={true}  // Allow searching across all drives in global assistant
           />
-          <Button 
-            onClick={handleSendMessage}
-            disabled={status === 'streaming' || !input.trim() || !providerSettings?.isAnyProviderConfigured}
-            size="sm"
-            className="h-8 px-3"
-          >
-            {status === 'streaming' ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : (
+          {status === 'streaming' || status === 'submitted' ? (
+            <Button
+              onClick={() => stop()}
+              variant="destructive"
+              size="sm"
+              className="h-8 px-3"
+              title="Stop generating"
+            >
+              <StopCircle className="h-3 w-3" />
+            </Button>
+          ) : (
+            <Button
+              onClick={handleSendMessage}
+              disabled={!input.trim() || !providerSettings?.isAnyProviderConfigured}
+              size="sm"
+              className="h-8 px-3"
+            >
               <Send className="h-3 w-3" />
-            )}
-          </Button>
+            </Button>
+          )}
         </div>
       </div>
     </div>

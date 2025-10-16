@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Settings, CheckCircle, XCircle, Key, ExternalLink, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import { AI_PROVIDERS, getBackendProvider } from '@/lib/ai/ai-providers-config';
+import { patch, fetchWithAuth } from '@/lib/auth-fetch';
 
 // Using centralized AI providers configuration from ai-providers-config.ts
 
@@ -27,11 +28,16 @@ interface ProviderSettings {
   userSubscriptionTier?: string;
 }
 
+interface SaveSettingsResult {
+  message: string;
+  success?: boolean;
+}
+
 const AssistantSettingsTab: React.FC = () => {
   const router = useRouter();
   const [providerSettings, setProviderSettings] = useState<ProviderSettings | null>(null);
   const [selectedProvider, setSelectedProvider] = useState<string>('pagespace');
-  const [selectedModel, setSelectedModel] = useState<string>('GLM-4.5-air');
+  const [selectedModel, setSelectedModel] = useState<string>('glm-4.5-air');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -51,7 +57,7 @@ const AssistantSettingsTab: React.FC = () => {
     setOllamaModelsError(null);
 
     try {
-      const response = await fetch('/api/ai/ollama/models');
+      const response = await fetchWithAuth('/api/ai/ollama/models');
       const data = await response.json();
 
       if (data.success && data.models) {
@@ -79,7 +85,7 @@ const AssistantSettingsTab: React.FC = () => {
   // Load current settings
   const loadSettings = useCallback(async () => {
     try {
-      const response = await fetch('/api/ai/settings');
+      const response = await fetchWithAuth('/api/ai/settings');
       if (response.ok) {
         const data: ProviderSettings = await response.json();
         setProviderSettings(data);
@@ -229,37 +235,12 @@ const AssistantSettingsTab: React.FC = () => {
     try {
       // Don't convert provider - save the UI selection directly
       // PageSpace and OpenRouter are separate providers from the user's perspective
-      
+
       // Save model selection to backend
-      const response = await fetch('/api/ai/settings', {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          provider: selectedProvider, // Send UI provider directly
-          model: selectedModel,
-        }),
+      const result = await patch<SaveSettingsResult>('/api/ai/settings', {
+        provider: selectedProvider, // Send UI provider directly
+        model: selectedModel,
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-
-        // Handle subscription-specific errors with upgrade option
-        if (response.status === 403 && error.upgradeUrl) {
-          toast.error(error.message || 'Subscription required', {
-            action: {
-              label: 'Upgrade',
-              onClick: () => router.push(error.upgradeUrl)
-            }
-          });
-          return;
-        }
-
-        throw new Error(error.error || 'Failed to save settings');
-      }
-
-      const result = await response.json();
       
       // Update local state to reflect the saved settings
       if (providerSettings) {

@@ -1,35 +1,29 @@
 import { NextResponse } from 'next/server';
 import { pages, users, pagePermissions, driveMembers, db, eq, and } from '@pagespace/db';
-import { decodeToken, getUserAccessLevel } from '@pagespace/lib/server';
-import { parse } from 'cookie';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { getUserAccessLevel } from '@pagespace/lib/server';
 import { createId } from '@paralleldrive/cuid2';
 import { z } from 'zod/v4';
 import { createPermissionNotification } from '@pagespace/lib';
 import { loggers } from '@pagespace/lib/server';
 
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+
 export async function GET(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  if (isAuthError(auth)) return auth.error;
+  const userId = auth.userId;
+
   const { pageId } = await params;
-  const cookieHeader = req.headers.get('cookie');
-  const cookies = parse(cookieHeader || '');
-  const accessToken = cookies.accessToken;
-
-  if (!accessToken) {
-    return new NextResponse("Unauthorized", { status: 401 });
-  }
-
-  const decoded = await decodeToken(accessToken);
-  if (!decoded || !decoded.userId) {
-    return new NextResponse("Unauthorized", { status: 401 });
-  }
 
   try {
     // SECURITY: Check if user has permission to view the permission list
     // Only users with canShare permission can see who has access to a page
-    const accessLevel = await getUserAccessLevel(decoded.userId, pageId);
+    const accessLevel = await getUserAccessLevel(userId, pageId);
 
     if (!accessLevel?.canShare) {
       loggers.api.warn('Unauthorized permission list access attempt', {
-        userId: decoded.userId,
+        userId,
         pageId,
         hasAccess: !!accessLevel,
         canShare: accessLevel?.canShare || false
@@ -113,19 +107,11 @@ const postSchema = z.object({
 });
 
 export async function POST(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  if (isAuthError(auth)) return auth.error;
+  const currentUserId = auth.userId;
+
   const { pageId } = await params;
-  const cookieHeader = req.headers.get('cookie');
-  const cookies = parse(cookieHeader || '');
-  const accessToken = cookies.accessToken;
-
-  if (!accessToken) {
-    return new NextResponse("Unauthorized", { status: 401 });
-  }
-
-  const decoded = await decodeToken(accessToken);
-  if (!decoded || !decoded.userId) {
-    return new NextResponse("Unauthorized", { status: 401 });
-  }
 
   try {
     const body = await req.json();
@@ -135,7 +121,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     const currentUserPermission = await db.query.pagePermissions.findFirst({
       where: and(
         eq(pagePermissions.pageId, pageId),
-        eq(pagePermissions.userId, decoded.userId)
+        eq(pagePermissions.userId, currentUserId)
       )
     });
 
@@ -145,7 +131,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     });
 
     // Check if user is owner or admin or has share permission
-    const isOwner = page?.drive?.ownerId === decoded.userId;
+    const isOwner = page?.drive?.ownerId === currentUserId;
     let isAdmin = false;
 
     if (!isOwner && page?.drive?.id) {
@@ -153,7 +139,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         .from(driveMembers)
         .where(and(
           eq(driveMembers.driveId, page.drive.id),
-          eq(driveMembers.userId, decoded.userId),
+          eq(driveMembers.userId, currentUserId),
           eq(driveMembers.role, 'ADMIN')
         ))
         .limit(1);
@@ -188,7 +174,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         pageId,
         'updated',
         { canView, canEdit, canShare, canDelete },
-        decoded.userId
+        currentUserId
       );
       
       return NextResponse.json(updated[0]);
@@ -203,7 +189,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       canEdit,
       canShare,
       canDelete,
-      grantedBy: decoded.userId,
+      grantedBy: currentUserId,
       grantedAt: new Date(),
     }).returning();
 
@@ -213,7 +199,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       pageId,
       'granted',
       { canView, canEdit, canShare, canDelete },
-      decoded.userId
+      currentUserId
     );
 
     return NextResponse.json(newPermission[0], { status: 201 });
@@ -227,19 +213,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 }
 
 export async function DELETE(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  if (isAuthError(auth)) return auth.error;
+  const currentUserId = auth.userId;
+
   const { pageId } = await params;
-  const cookieHeader = req.headers.get('cookie');
-  const cookies = parse(cookieHeader || '');
-  const accessToken = cookies.accessToken;
-
-  if (!accessToken) {
-    return new NextResponse("Unauthorized", { status: 401 });
-  }
-
-  const decoded = await decodeToken(accessToken);
-  if (!decoded || !decoded.userId) {
-    return new NextResponse("Unauthorized", { status: 401 });
-  }
 
   try {
     const { userId } = await req.json();
@@ -250,7 +228,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
       with: { drive: true }
     });
 
-    const isOwner = page?.drive?.ownerId === decoded.userId;
+    const isOwner = page?.drive?.ownerId === currentUserId;
     let isAdmin = false;
 
     if (!isOwner && page?.drive?.id) {
@@ -258,7 +236,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
         .from(driveMembers)
         .where(and(
           eq(driveMembers.driveId, page.drive.id),
-          eq(driveMembers.userId, decoded.userId),
+          eq(driveMembers.userId, currentUserId),
           eq(driveMembers.role, 'ADMIN')
         ))
         .limit(1);
@@ -270,7 +248,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
       const currentUserPermission = await db.query.pagePermissions.findFirst({
         where: and(
           eq(pagePermissions.pageId, pageId),
-          eq(pagePermissions.userId, decoded.userId)
+          eq(pagePermissions.userId, currentUserId)
         )
       });
 
@@ -292,7 +270,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
       pageId,
       'revoked',
       {},
-      decoded.userId
+      currentUserId
     );
 
     return NextResponse.json({ success: true });

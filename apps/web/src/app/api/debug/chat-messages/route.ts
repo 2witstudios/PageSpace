@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
-import { authenticateWebRequest, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, chatMessages, eq, and, desc } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
+
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
 /**
  * Debug endpoint to test chat message persistence
@@ -12,8 +14,8 @@ import { loggers } from '@pagespace/lib/server';
 export async function GET(request: Request) {
   try {
     loggers.api.debug('🔍 Debug: GET /api/debug/chat-messages', {});
-    
-    const auth = await authenticateWebRequest(request);
+
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
 
     const { searchParams } = new URL(request.url);
@@ -112,8 +114,8 @@ interface TestMessage {
 export async function POST(request: Request) {
   try {
     loggers.api.debug('🧪 Debug: POST /api/debug/chat-messages - Manual save test', {});
-    
-    const auth = await authenticateWebRequest(request);
+
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
 
     const { pageId, testMessages }: { pageId: string; testMessages?: TestMessage[] } = await request.json();

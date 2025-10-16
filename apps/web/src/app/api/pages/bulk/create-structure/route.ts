@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
-const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const };
+const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 import { db, pages } from '@pagespace/db';
 import { canUserEditPage, getUserDriveAccess } from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';

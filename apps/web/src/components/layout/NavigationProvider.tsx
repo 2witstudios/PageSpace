@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, ReactNode } from 'react';
 import Link from 'next/link';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { LayoutErrorBoundary } from './LayoutErrorBoundary';
@@ -94,7 +94,9 @@ export function NavigationProvider({
     };
   }, []); // No dependencies to prevent loops
 
-  const contextValue: NavigationContextType = {};
+  // Memoize context value to prevent unnecessary re-renders
+  // This empty object is stable and doesn't need to change
+  const contextValue: NavigationContextType = useMemo(() => ({}), []);
 
   const content = (
     <NavigationContext.Provider value={contextValue}>

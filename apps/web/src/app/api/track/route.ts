@@ -5,13 +5,15 @@
 
 import { NextResponse } from 'next/server';
 import { trackActivity, trackFeature, trackError } from '@pagespace/lib/activity-tracker';
-import { authenticateWebRequest, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: false };
 
 export async function POST(request: Request) {
   try {
     // Try to get user ID but don't block if auth fails
     let userId: string | undefined;
-    const auth = await authenticateWebRequest(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (!isAuthError(auth)) {
       userId = auth.userId;
     }

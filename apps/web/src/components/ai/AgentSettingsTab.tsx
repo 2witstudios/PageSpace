@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrig
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useForm, Controller } from 'react-hook-form';
+import { patch } from '@/lib/auth-fetch';
 
 interface AgentConfig {
   systemPrompt: string;
@@ -84,26 +85,17 @@ const AgentSettingsTab = forwardRef<AgentSettingsTabRef, AgentSettingsTabProps>(
         aiProvider: selectedProvider,
         aiModel: selectedModel,
       };
-      
-      const response = await fetch(`/api/pages/${pageId}/agent-config`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestData),
-      });
 
-      if (response.ok) {
-        const updatedConfig = { 
-          ...config, 
-          ...data,
-          aiProvider: selectedProvider,
-          aiModel: selectedModel,
-        } as AgentConfig;
-        onConfigUpdate(updatedConfig);
-        toast.success('Agent configuration saved successfully');
-      } else {
-        const error = await response.json();
-        toast.error(error.error || 'Failed to save configuration');
-      }
+      await patch(`/api/pages/${pageId}/agent-config`, requestData);
+
+      const updatedConfig = {
+        ...config,
+        ...data,
+        aiProvider: selectedProvider,
+        aiModel: selectedModel,
+      } as AgentConfig;
+      onConfigUpdate(updatedConfig);
+      toast.success('Agent configuration saved successfully');
     } catch (error) {
       console.error('Error saving agent configuration:', error);
       toast.error('Failed to save configuration');

@@ -5,6 +5,7 @@ import { ContactSubmissionsTable } from "@/components/admin/ContactSubmissionsTa
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { MessageSquare, AlertCircle, Mail, Calendar, TrendingUp, Users } from "lucide-react";
+import { fetchWithAuth } from "@/lib/auth-fetch";
 
 interface ContactSubmission {
   id: string;
@@ -63,7 +64,7 @@ export default function AdminSupportPage() {
         pageSize: pagination.pageSize.toString()
       });
 
-      const response = await fetch(`/api/admin/contact?${params}`);
+      const response = await fetchWithAuth(`/api/admin/contact?${params}`);
 
       if (!response.ok) {
         throw new Error('Failed to fetch contact submissions');

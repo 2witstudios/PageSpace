@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { TreePage } from '@/hooks/usePageTree';
 import { Loader2 } from 'lucide-react';
+import { fetchWithAuth } from '@/lib/auth-fetch';
 
 interface ImageViewerProps {
   page: TreePage;
@@ -18,11 +19,11 @@ export default function ImageViewer({ page }: ImageViewerProps) {
       try {
         setIsLoading(true);
         // Use /view route for inline display
-        const response = await fetch(`/api/files/${page.id}/view`);
+        const response = await fetchWithAuth(`/api/files/${page.id}/view`);
         if (!response.ok) {
           throw new Error('Failed to load image');
         }
-        
+
         const blob = await response.blob();
         const url = window.URL.createObjectURL(blob);
         setImageUrl(url);

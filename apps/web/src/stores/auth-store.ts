@@ -23,6 +23,9 @@ interface AuthState {
   isRefreshing: boolean;
   refreshTimeoutId: NodeJS.Timeout | null;
 
+  // CSRF protection state
+  csrfToken: string | null;
+
   // Session state
   sessionStartTime: number | null;
   lastActivity: number | null;
@@ -41,6 +44,7 @@ interface AuthState {
   setLoading: (loading: boolean) => void;
   setRefreshing: (refreshing: boolean) => void;
   setRefreshTimeout: (timeoutId: NodeJS.Timeout | null) => void;
+  setCsrfToken: (token: string | null) => void;
   setHydrated: (hydrated: boolean) => void;
   updateActivity: () => void;
   startSession: () => void;
@@ -53,7 +57,7 @@ interface AuthState {
 }
 
 const ACTIVITY_TIMEOUT = 60 * 60 * 1000; // 60 minutes (more forgiving)
-const AUTH_CHECK_INTERVAL = 5 * 60 * 1000; // 5 minutes (less frequent)
+const AUTH_CHECK_INTERVAL = 15 * 60 * 1000; // 15 minutes (token refresh handles validation every 12 min)
 const ACTIVITY_UPDATE_THROTTLE = 5 * 1000; // Only update activity every 5 seconds
 const MAX_FAILED_AUTH_ATTEMPTS = 3; // Max failed attempts before circuit breaker
 const FAILED_AUTH_TIMEOUT = 30 * 1000; // 30 seconds timeout for failed attempts
@@ -69,6 +73,7 @@ export const useAuthStore = create<AuthState>()(
       hasHydrated: false,
       isRefreshing: false,
       refreshTimeoutId: null,
+      csrfToken: null,
       sessionStartTime: null,
       lastActivity: null,
       lastActivityUpdate: null,
@@ -98,6 +103,8 @@ export const useAuthStore = create<AuthState>()(
 
       setRefreshTimeout: (refreshTimeoutId) => set({ refreshTimeoutId }),
 
+      setCsrfToken: (csrfToken) => set({ csrfToken }),
+
       setHydrated: (hasHydrated) => set({ hasHydrated }),
 
       updateActivity: () => {
@@ -123,12 +130,19 @@ export const useAuthStore = create<AuthState>()(
 
       endSession: () => {
         const state = get();
-        
+
         // Clear any pending refresh timeout
         if (state.refreshTimeoutId) {
           clearTimeout(state.refreshTimeoutId);
         }
-        
+
+        // Clear CSRF token from authFetch
+        if (typeof window !== 'undefined') {
+          import('@/lib/auth-fetch').then(({ clearCSRFToken }) => {
+            clearCSRFToken();
+          });
+        }
+
         set({
           user: null,
           isAuthenticated: false,
@@ -136,6 +150,7 @@ export const useAuthStore = create<AuthState>()(
           lastActivity: null,
           refreshTimeoutId: null,
           isRefreshing: false,
+          csrfToken: null,
         });
       },
 
@@ -217,13 +232,34 @@ export const useAuthStore = create<AuthState>()(
 
             if (response.ok) {
               const userData = await response.json();
-              set({
-                user: userData,
-                isAuthenticated: true,
-                lastAuthCheck: Date.now(),
-                failedAuthAttempts: 0,
-                lastFailedAuthCheck: null,
-              });
+              const currentUser = get().user;
+
+              // Check if user data actually changed (prevent unnecessary re-renders)
+              const hasChanged = !currentUser ||
+                currentUser.id !== userData.id ||
+                currentUser.name !== userData.name ||
+                currentUser.email !== userData.email ||
+                currentUser.image !== userData.image ||
+                currentUser.emailVerified !== userData.emailVerified;
+
+              if (hasChanged) {
+                // Data changed - update everything
+                set({
+                  user: userData,
+                  isAuthenticated: true,
+                  lastAuthCheck: Date.now(),
+                  failedAuthAttempts: 0,
+                  lastFailedAuthCheck: null,
+                });
+              } else {
+                // Data identical - only update timestamp
+                set({
+                  lastAuthCheck: Date.now(),
+                  failedAuthAttempts: 0,
+                  lastFailedAuthCheck: null,
+                });
+              }
+
               // Update activity for new session
               get().updateActivity();
             } else if (response.status === 401) {
@@ -377,9 +413,48 @@ export const authStoreHelpers = {
     if (typeof window === 'undefined') return;
 
     const handleAuthRefreshed = () => {
-      console.log('[AUTH_STORE] Token refreshed - updating session');
-      // Token was refreshed successfully, update auth state silently
-      authStoreHelpers.loadSession();
+      // Import editing store dynamically to avoid circular dependencies
+      import('@/stores/useEditingStore').then(({ useEditingStore, getEditingDebugInfo }) => {
+        const editingState = useEditingStore.getState();
+
+        // Check if any editing or streaming is active
+        if (editingState.isAnyActive()) {
+          const debugInfo = getEditingDebugInfo();
+          console.log('[AUTH_STORE] Token refreshed during active editing/streaming', {
+            sessionCount: debugInfo.sessionCount,
+            isEditing: debugInfo.isAnyEditing,
+            isStreaming: debugInfo.isAnyStreaming,
+            sessions: debugInfo.sessions.map(s => ({
+              type: s.type,
+              id: s.id,
+              duration: `${Math.round(s.duration / 1000)}s`,
+            })),
+          });
+
+          // Store was already updated by use-token-refresh hook
+          // No need to reload session - editing protection is working
+          return;
+        }
+
+        console.log('[AUTH_STORE] Token refreshed successfully - triggering SWR cache revalidation');
+
+        // Store was already updated directly by use-token-refresh hook
+        // Now trigger SWR cache revalidation for endpoints that may have failed with 401
+        import('swr').then(({ mutate }) => {
+          // Revalidate all API endpoints that might have failed during token expiration
+          // This ensures the UI displays fresh data after token refresh
+          mutate((key) => {
+            // Revalidate all API keys (string keys starting with /api/)
+            if (typeof key === 'string' && key.startsWith('/api/')) {
+              console.log('[AUTH_STORE] Revalidating SWR cache for:', key);
+              return true;
+            }
+            return false;
+          }).catch((error) => {
+            console.error('[AUTH_STORE] SWR cache revalidation error:', error);
+          });
+        });
+      });
     };
 
     const handleAuthExpired = async () => {

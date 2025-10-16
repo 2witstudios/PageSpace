@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Trash2, Copy, Plus, Eye, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
+import { post, del, fetchWithAuth } from '@/lib/auth-fetch';
 
 interface MCPToken {
   id: string;
@@ -40,7 +41,7 @@ export function MCPTokenManager() {
 
   const loadTokens = async () => {
     try {
-      const response = await fetch('/api/auth/mcp-tokens');
+      const response = await fetchWithAuth('/api/auth/mcp-tokens');
       if (response.ok) {
         const tokenList = await response.json();
         setTokens(tokenList);
@@ -63,25 +64,12 @@ export function MCPTokenManager() {
 
     setCreating(true);
     try {
-      const response = await fetch('/api/auth/mcp-tokens', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ name: newTokenName.trim() }),
-      });
-
-      if (response.ok) {
-        const token = await response.json();
-        setNewToken(token);
-        setNewTokenName('');
-        setShowNewToken(true);
-        await loadTokens(); // Refresh the list
-        toast.success('MCP token created successfully');
-      } else {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to create token');
-      }
+      const token = await post<NewToken>('/api/auth/mcp-tokens', { name: newTokenName.trim() });
+      setNewToken(token);
+      setNewTokenName('');
+      setShowNewToken(true);
+      await loadTokens(); // Refresh the list
+      toast.success('MCP token created successfully');
     } catch (error) {
       console.error('Error creating MCP token:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to create MCP token');
@@ -92,17 +80,9 @@ export function MCPTokenManager() {
 
   const deleteToken = async (tokenId: string) => {
     try {
-      const response = await fetch(`/api/auth/mcp-tokens/${tokenId}`, {
-        method: 'DELETE',
-      });
-
-      if (response.ok) {
-        await loadTokens(); // Refresh the list
-        toast.success('Token revoked successfully');
-      } else {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to revoke token');
-      }
+      await del(`/api/auth/mcp-tokens/${tokenId}`);
+      await loadTokens(); // Refresh the list
+      toast.success('Token revoked successfully');
     } catch (error) {
       console.error('Error revoking MCP token:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to revoke token');

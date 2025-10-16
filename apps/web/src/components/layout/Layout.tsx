@@ -6,6 +6,7 @@ import MemoizedSidebar from "@/components/layout/left-sidebar/MemoizedSidebar";
 import CenterPanel from "@/components/layout/middle-content/CenterPanel";
 import MemoizedRightPanel from "@/components/layout/right-sidebar/MemoizedRightPanel";
 import { NavigationProvider } from "@/components/layout/NavigationProvider";
+import { GlobalChatProvider } from "@/contexts/GlobalChatContext";
 import { useBreakpoint } from "@/hooks/use-breakpoint";
 import { useResponsivePanels } from "@/hooks/use-responsive-panels";
 import { motion, AnimatePresence } from "motion/react";
@@ -31,14 +32,16 @@ function Layout({ children }: LayoutProps) {
   const { isLoading, isAuthenticated } = useAuth();
   const router = useRouter();
   const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
-  const {
-    leftSidebarOpen,
-    rightSidebarOpen,
-    toggleLeftSidebar,
-    toggleRightSidebar,
-    setLeftSidebarOpen,
-    setRightSidebarOpen,
-  } = useLayoutStore();
+
+  // Use selective Zustand subscriptions to prevent re-renders when unrelated store values change
+  // This ensures Layout only re-renders when these specific sidebar values actually change
+  const leftSidebarOpen = useLayoutStore(state => state.leftSidebarOpen);
+  const rightSidebarOpen = useLayoutStore(state => state.rightSidebarOpen);
+  const toggleLeftSidebar = useLayoutStore(state => state.toggleLeftSidebar);
+  const toggleRightSidebar = useLayoutStore(state => state.toggleRightSidebar);
+  const setLeftSidebarOpen = useLayoutStore(state => state.setLeftSidebarOpen);
+  const setRightSidebarOpen = useLayoutStore(state => state.setRightSidebarOpen);
+
   const hasHydrated = useHasHydrated();
   const shouldOverlaySidebars = useBreakpoint("(max-width: 1279px)");
   const [leftSheetOpen, setLeftSheetOpen] = useState(false);
@@ -163,11 +166,12 @@ function Layout({ children }: LayoutProps) {
 
   return (
     <NavigationProvider>
-      <div className="flex h-[100dvh] min-h-dvh flex-col overflow-hidden bg-gradient-to-br from-background via-background to-muted/10">
-        <TopBar
-          onToggleLeftPanel={handleLeftPanelToggle}
-          onToggleRightPanel={handleRightPanelToggle}
-        />
+      <GlobalChatProvider>
+        <div className="flex h-[100dvh] min-h-dvh flex-col overflow-hidden bg-gradient-to-br from-background via-background to-muted/10">
+          <TopBar
+            onToggleLeftPanel={handleLeftPanelToggle}
+            onToggleRightPanel={handleRightPanelToggle}
+          />
 
         <div className="relative flex flex-1 min-h-0 overflow-hidden">
           {!shouldOverlaySidebars && leftSidebarOpen && (
@@ -260,10 +264,10 @@ function Layout({ children }: LayoutProps) {
           </AnimatePresence>
         </div>
 
-        <DebugPanel />
-      </div>
+          <DebugPanel />
+        </div>
 
-      {isSheetBreakpoint && (
+        {isSheetBreakpoint && (
         <>
           <Sheet
             open={leftSheetOpen}
@@ -301,7 +305,8 @@ function Layout({ children }: LayoutProps) {
             </SheetContent>
           </Sheet>
         </>
-      )}
+        )}
+      </GlobalChatProvider>
     </NavigationProvider>
   );
 }

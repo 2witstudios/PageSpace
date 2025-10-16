@@ -1,30 +1,10 @@
 import { NextResponse } from 'next/server';
-import { decodeToken } from '@pagespace/lib/server';
-import { parse } from 'cookie';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { drives, db, eq, and } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/socket-utils';
 
-// Get user ID from cookie
-async function getUserId(req: Request): Promise<string | null> {
-  const cookieHeader = req.headers.get('cookie');
-  if (!cookieHeader) {
-    return null;
-  }
-
-  const cookies = parse(cookieHeader);
-  const authToken = cookies['accessToken'];
-  if (!authToken) {
-    return null;
-  }
-
-  const decoded = await decodeToken(authToken);
-  if (!decoded || !decoded.userId) {
-    return null;
-  }
-
-  return decoded.userId;
-}
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
 /**
  * DELETE /api/trash/drives/[driveId]
@@ -36,11 +16,10 @@ export async function DELETE(
 ) {
   try {
     const { driveId } = await context.params;
-    const userId = await getUserId(request);
-    
-    if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (isAuthError(auth)) return auth.error;
+    const userId = auth.userId;
 
     // Find the drive and verify ownership
     const drive = await db.query.drives.findFirst({

@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyAuth } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getBatchPagePermissions } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
+
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
 /**
  * Batch Permission Check API
@@ -36,10 +38,9 @@ import { loggers } from '@pagespace/lib/server';
 export async function POST(request: NextRequest) {
   try {
     // Verify authentication
-    const user = await verifyAuth(request);
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (isAuthError(auth)) return auth.error;
+    const userId = auth.userId;
 
     const body = await request.json();
     const { pageIds } = body;
@@ -77,7 +78,7 @@ export async function POST(request: NextRequest) {
     const startTime = Date.now();
 
     // Get batch permissions using optimized function
-    const permissionsMap = await getBatchPagePermissions(user.id, pageIds);
+    const permissionsMap = await getBatchPagePermissions(userId, pageIds);
 
     const endTime = Date.now();
     const duration = endTime - startTime;
@@ -103,7 +104,7 @@ export async function POST(request: NextRequest) {
 
     // Log performance metrics
     loggers.api.debug('Batch permission check completed', {
-      userId: user.id,
+      userId,
       requestedPages: pageIds.length,
       accessiblePages: permissionsMap.size,
       processingTimeMs: duration,
@@ -113,7 +114,7 @@ export async function POST(request: NextRequest) {
     // Log warning if request is slow
     if (duration > 500) {
       loggers.api.warn('Slow batch permission check', {
-        userId: user.id,
+        userId,
         pageCount: pageIds.length,
         duration,
         stats
@@ -147,10 +148,8 @@ export async function POST(request: NextRequest) {
 export async function GET(request: NextRequest) {
   try {
     // Verify authentication
-    const user = await verifyAuth(request);
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (isAuthError(auth)) return auth.error;
 
     // Import cache stats function dynamically to avoid circular dependencies
     const { getPermissionCacheStats } = await import('@pagespace/lib/server');

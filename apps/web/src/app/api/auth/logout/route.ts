@@ -3,28 +3,21 @@ import { db, eq } from '@pagespace/db';
 import { parse, serialize } from 'cookie';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
-import { decodeToken } from '@pagespace/lib/server';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
 export async function POST(req: Request) {
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  if (isAuthError(auth)) return auth.error;
+  const userId = auth.userId;
   const cookieHeader = req.headers.get('cookie');
   const cookies = parse(cookieHeader || '');
   const refreshTokenValue = cookies.refreshToken;
-  const accessTokenValue = cookies.accessToken;
-  
-  const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] || 
-                   req.headers.get('x-real-ip') || 
+
+  const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] ||
+                   req.headers.get('x-real-ip') ||
                    'unknown';
-  
-  // Try to get user ID from access token for logging
-  let userId: string | undefined;
-  if (accessTokenValue) {
-    try {
-      const decoded = await decodeToken(accessTokenValue);
-      userId = decoded?.userId;
-    } catch {
-      // Token might be expired or invalid, that's ok
-    }
-  }
 
   if (refreshTokenValue) {
     try {

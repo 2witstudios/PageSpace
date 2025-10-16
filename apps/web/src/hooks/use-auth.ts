@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useCallback, useRef } from 'react';
+import { useEffect, useCallback, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore, authStoreHelpers } from '@/stores/auth-store';
 import { useTokenRefresh } from './use-token-refresh';
+import { post } from '@/lib/auth-fetch';
 
 interface User {
   id: string;
@@ -30,19 +31,16 @@ export function useAuth(): {
   isError?: Error | undefined;
   mutate?: () => void;
 } {
-  const {
-    user,
-    isLoading,
-    isAuthenticated,
-    isRefreshing,
-    hasHydrated,
-    setUser,
-    setLoading,
-    setHydrated,
-    startSession,
-    endSession,
-    updateActivity,
-  } = useAuthStore();
+  // Use individual selectors to prevent unnecessary re-renders
+  // Each component only subscribes to the specific state properties it uses
+  const user = useAuthStore(state => state.user);
+  const isLoading = useAuthStore(state => state.isLoading);
+  const isAuthenticated = useAuthStore(state => state.isAuthenticated);
+  const isRefreshing = useAuthStore(state => state.isRefreshing);
+  const hasHydrated = useAuthStore(state => state.hasHydrated);
+
+  // Access stable methods without subscribing (they don't change)
+  const { setUser, setLoading, setHydrated, startSession, endSession, updateActivity } = useAuthStore.getState();
 
   const { refreshToken, startTokenRefresh, stopTokenRefresh } = useTokenRefresh();
   const router = useRouter();
@@ -97,10 +95,7 @@ export function useAuth(): {
   // Logout function
   const logout = useCallback(async () => {
     try {
-      await fetch('/api/auth/logout', {
-        method: 'POST',
-        credentials: 'include',
-      });
+      await post('/api/auth/logout');
     } catch (error) {
       console.error('Logout error:', error);
     } finally {
@@ -134,7 +129,7 @@ export function useAuth(): {
         tokenRefreshActiveRef.current = true;
         startTokenRefresh();
       }
-      
+
       // Check for session expiry every 5 minutes (more forgiving)
       activityCheckInterval = setInterval(() => {
         if (authStoreHelpers.isSessionExpired()) {
@@ -152,7 +147,8 @@ export function useAuth(): {
     return () => {
       if (activityCheckInterval) clearInterval(activityCheckInterval);
     };
-  }, [isAuthenticated, user, hasHydrated, logout, startTokenRefresh, stopTokenRefresh]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated, user?.id, hasHydrated, logout, startTokenRefresh, stopTokenRefresh]); // user intentionally omitted - only depends on ID for stability
 
   // Set hydrated state when component mounts
   useEffect(() => {
@@ -161,9 +157,11 @@ export function useAuth(): {
     }
   }, [hasHydrated, setHydrated]);
 
-  // Check for OAuth success parameter (from Google callback) - needs to be outside useEffect for isLoading check
-  const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
-  const isOAuthSuccess = urlParams?.get('auth') === 'success';
+  // Check for OAuth success parameter (from Google callback)
+  const [isOAuthSuccess, setIsOAuthSuccess] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return new URLSearchParams(window.location.search).get('auth') === 'success';
+  });
 
   // Initial auth check - simplified with store-level deduplication
   useEffect(() => {
@@ -184,6 +182,7 @@ export function useAuth(): {
         const newUrl = new URL(window.location.href);
         newUrl.searchParams.delete('auth');
         window.history.replaceState({}, '', newUrl.toString());
+        setIsOAuthSuccess(false); // Clear the flag to exit loading state
       }
     }
   }, [hasHydrated, isOAuthSuccess]);

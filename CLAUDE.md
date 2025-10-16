@@ -117,6 +117,42 @@ import { db, pages } from '@pagespace/db';
 const page = await db.select().from(pages);
 ```
 
+**UI Refresh Protection:**
+```typescript
+// ✅ CORRECT - Register editing/streaming state to prevent UI refreshes
+import { useEditingStore } from '@/stores/useEditingStore';
+
+// For document editing:
+useEffect(() => {
+  if (isDirty) {
+    useEditingStore.getState().startEditing(id, 'document', metadata);
+  } else {
+    useEditingStore.getState().endEditing(id);
+  }
+  return () => useEditingStore.getState().endEditing(id);
+}, [isDirty, id]);
+
+// For AI streaming:
+useEffect(() => {
+  if (status === 'streaming' || status === 'loading') {
+    useEditingStore.getState().startStreaming(id, metadata);
+  } else {
+    useEditingStore.getState().endStreaming(id);
+  }
+  return () => useEditingStore.getState().endStreaming(id);
+}, [status, id]);
+
+// For SWR protection:
+const isAnyActive = useEditingStore(state => state.isAnyActive());
+useSWR(key, fetcher, {
+  isPaused: () => isAnyActive,
+  refreshInterval: 300000, // 5 minutes
+  revalidateOnFocus: false,
+});
+```
+
+See [docs/3.0-guides-and-tools/ui-refresh-protection.md](docs/3.0-guides-and-tools/ui-refresh-protection.md) for complete documentation.
+
 ## 5. CLAUDE CODE INTEGRATION & MCP TOOLS
 
 ### 5.1. MCP Tools Integration

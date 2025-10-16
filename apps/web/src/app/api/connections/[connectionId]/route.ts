@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
 import { db, connections, users, userProfiles, eq } from '@pagespace/db';
-import { verifyAuth } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 import { createNotification } from '@pagespace/lib';
+
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
 // PATCH /api/connections/[connectionId] - Accept, reject, or block a connection
 export async function PATCH(
@@ -10,10 +12,9 @@ export async function PATCH(
   context: { params: Promise<{ connectionId: string }> }
 ) {
   try {
-    const user = await verifyAuth(request);
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (isAuthError(auth)) return auth.error;
+    const userId = auth.userId;
 
     const { connectionId } = await context.params;
     const body = await request.json();
@@ -41,7 +42,7 @@ export async function PATCH(
     }
 
     // Check if user is part of this connection
-    if (connection.user1Id !== user.id && connection.user2Id !== user.id) {
+    if (connection.user1Id !== userId && connection.user2Id !== userId) {
       return NextResponse.json(
         { error: 'Unauthorized to modify this connection' },
         { status: 403 }
@@ -55,7 +56,7 @@ export async function PATCH(
     switch (action) {
       case 'accept':
         // Only the recipient can accept
-        if (connection.requestedBy === user.id) {
+        if (connection.requestedBy === userId) {
           return NextResponse.json(
             { error: 'Cannot accept your own request' },
             { status: 400 }
@@ -77,7 +78,7 @@ export async function PATCH(
 
       case 'reject':
         // Only the recipient can reject
-        if (connection.requestedBy === user.id) {
+        if (connection.requestedBy === userId) {
           return NextResponse.json(
             { error: 'Cannot reject your own request' },
             { status: 400 }
@@ -100,7 +101,7 @@ export async function PATCH(
           })
           .from(users)
           .leftJoin(userProfiles, eq(users.id, userProfiles.userId))
-          .where(eq(users.id, user.id))
+          .where(eq(users.id, userId))
           .limit(1);
 
         const rejectUserName = rejectUser?.displayName || rejectUser?.name || 'Someone';
@@ -114,7 +115,7 @@ export async function PATCH(
           metadata: {
             rejecterName: rejectUserName,
           },
-          triggeredByUserId: user.id,
+          triggeredByUserId: userId,
         });
 
         return NextResponse.json({ success: true });
@@ -122,7 +123,7 @@ export async function PATCH(
       case 'block':
         updateData = {
           status: 'BLOCKED',
-          blockedBy: user.id,
+          blockedBy: userId,
           blockedAt: new Date(),
         };
         break;
@@ -134,7 +135,7 @@ export async function PATCH(
             { status: 400 }
           );
         }
-        if (connection.blockedBy !== user.id) {
+        if (connection.blockedBy !== userId) {
           return NextResponse.json(
             { error: 'Only the blocker can unblock' },
             { status: 400 }
@@ -162,7 +163,7 @@ export async function PATCH(
         })
         .from(users)
         .leftJoin(userProfiles, eq(users.id, userProfiles.userId))
-        .where(eq(users.id, user.id))
+        .where(eq(users.id, userId))
         .limit(1);
 
       const actionUserName = actionUser?.displayName || actionUser?.name || 'Someone';
@@ -180,7 +181,7 @@ export async function PATCH(
           accepterName: notificationType === 'CONNECTION_ACCEPTED' ? actionUserName : undefined,
           rejecterName: notificationType === 'CONNECTION_REJECTED' ? actionUserName : undefined,
         },
-        triggeredByUserId: user.id,
+        triggeredByUserId: userId,
       });
     }
 
@@ -200,10 +201,9 @@ export async function DELETE(
   context: { params: Promise<{ connectionId: string }> }
 ) {
   try {
-    const user = await verifyAuth(request);
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (isAuthError(auth)) return auth.error;
+    const userId = auth.userId;
 
     const { connectionId } = await context.params;
 
@@ -222,7 +222,7 @@ export async function DELETE(
     }
 
     // Check if user is part of this connection
-    if (connection.user1Id !== user.id && connection.user2Id !== user.id) {
+    if (connection.user1Id !== userId && connection.user2Id !== userId) {
       return NextResponse.json(
         { error: 'Unauthorized to delete this connection' },
         { status: 403 }

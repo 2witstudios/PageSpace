@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateWebRequest, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 import {
   getUserOpenRouterSettings,
@@ -28,15 +28,17 @@ import {
 import { db, users, eq } from '@pagespace/db';
 import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+
 /**
  * GET /api/ai/settings
  * Returns current AI provider settings and configuration status
  */
 export async function GET(request: Request) {
   try {
-    const auth = await authenticateWebRequest(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
-    const { userId } = auth;
+    const userId = auth.userId;
 
     // Get user's current provider settings
     const [user] = await db.select().from(users).where(eq(users.id, userId));
@@ -67,7 +69,7 @@ export async function GET(request: Request) {
 
     return NextResponse.json({
       currentProvider: user?.currentAiProvider || 'pagespace',
-      currentModel: user?.currentAiModel || 'GLM-4.5-air',
+      currentModel: user?.currentAiModel || 'glm-4.5-air',
       userSubscriptionTier: user?.subscriptionTier || 'free',
       providers: {
         pagespace: {
@@ -120,9 +122,9 @@ export async function GET(request: Request) {
  */
 export async function POST(request: Request) {
   try {
-    const auth = await authenticateWebRequest(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
-    const { userId } = auth;
+    const userId = auth.userId;
 
     const body = await request.json();
     const { provider, apiKey, baseUrl } = body;
@@ -215,9 +217,9 @@ export async function POST(request: Request) {
  */
 export async function PATCH(request: Request) {
   try {
-    const auth = await authenticateWebRequest(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
-    const { userId } = auth;
+    const userId = auth.userId;
 
     const body = await request.json();
     const { provider, model } = body;
@@ -299,9 +301,9 @@ export async function PATCH(request: Request) {
  */
 export async function DELETE(request: Request) {
   try {
-    const auth = await authenticateWebRequest(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
-    const { userId } = auth;
+    const userId = auth.userId;
 
     const body = await request.json();
     const { provider } = body;

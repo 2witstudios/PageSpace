@@ -1,20 +1,22 @@
 import { NextResponse } from 'next/server';
 import { db, eq, and } from '@pagespace/db';
 import { drives, driveMembers, users, userProfiles, pagePermissions, pages } from '@pagespace/db';
-import { verifyAuth } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 import { createDriveNotification } from '@pagespace/lib';
+
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
 export async function GET(
   request: Request,
   context: { params: Promise<{ driveId: string; userId: string }> }
 ) {
   try {
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (isAuthError(auth)) return auth.error;
+    const currentUserId = auth.userId;
+
     const { driveId, userId } = await context.params;
-    const user = await verifyAuth(request);
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
 
     // Get drive and check ownership
     const drive = await db.select()
@@ -27,7 +29,7 @@ export async function GET(
     }
 
     // Check if user is owner or admin
-    const isOwner = drive[0].ownerId === user.id;
+    const isOwner = drive[0].ownerId === currentUserId;
     let isAdmin = false;
 
     if (!isOwner) {
@@ -35,7 +37,7 @@ export async function GET(
         .from(driveMembers)
         .where(and(
           eq(driveMembers.driveId, driveId),
-          eq(driveMembers.userId, user.id),
+          eq(driveMembers.userId, currentUserId),
           eq(driveMembers.role, 'ADMIN')
         ))
         .limit(1);
@@ -120,11 +122,11 @@ export async function PATCH(
   context: { params: Promise<{ driveId: string; userId: string }> }
 ) {
   try {
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (isAuthError(auth)) return auth.error;
+    const currentUserId = auth.userId;
+
     const { driveId, userId } = await context.params;
-    const user = await verifyAuth(request);
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
 
     const body = await request.json();
     const { role, permissions } = body;
@@ -148,7 +150,7 @@ export async function PATCH(
     }
 
     // Check if user is owner or admin
-    const isOwner = drive[0].ownerId === user.id;
+    const isOwner = drive[0].ownerId === currentUserId;
     let isAdmin = false;
 
     if (!isOwner) {
@@ -156,7 +158,7 @@ export async function PATCH(
         .from(driveMembers)
         .where(and(
           eq(driveMembers.driveId, driveId),
-          eq(driveMembers.userId, user.id),
+          eq(driveMembers.userId, currentUserId),
           eq(driveMembers.role, 'ADMIN')
         ))
         .limit(1);
@@ -198,7 +200,7 @@ export async function PATCH(
           driveId,
           'role_changed',
           role,
-          user.id
+          currentUserId
         );
       }
     }
@@ -248,7 +250,7 @@ export async function PATCH(
         canView: p.canView || false,
         canEdit: p.canEdit || false,
         canShare: p.canShare || false,
-        grantedBy: user.id,
+        grantedBy: currentUserId,
         grantedAt: new Date(),
       }));
 

@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
 import { db, emailNotificationPreferences, eq, and } from '@pagespace/db';
-import { verifyAuth } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
+
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
 // All available notification types
 const NOTIFICATION_TYPES = [
@@ -21,16 +23,15 @@ const NOTIFICATION_TYPES = [
 // GET /api/settings/notification-preferences - Get user's email notification preferences
 export async function GET(request: Request) {
   try {
-    const user = await verifyAuth(request);
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (isAuthError(auth)) return auth.error;
+    const userId = auth.userId;
 
     // Get all preferences for this user
     const preferences = await db
       .select()
       .from(emailNotificationPreferences)
-      .where(eq(emailNotificationPreferences.userId, user.id));
+      .where(eq(emailNotificationPreferences.userId, userId));
 
     // Create a map of existing preferences
     const preferenceMap = new Map(
@@ -56,10 +57,9 @@ export async function GET(request: Request) {
 // PATCH /api/settings/notification-preferences - Update email notification preferences
 export async function PATCH(request: Request) {
   try {
-    const user = await verifyAuth(request);
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (isAuthError(auth)) return auth.error;
+    const userId = auth.userId;
 
     const body = await request.json();
     const { notificationType: type, emailEnabled } = body;
@@ -82,7 +82,7 @@ export async function PATCH(request: Request) {
     // Check if preference exists
     const existingPreference = await db.query.emailNotificationPreferences.findFirst({
       where: and(
-        eq(emailNotificationPreferences.userId, user.id),
+        eq(emailNotificationPreferences.userId, userId),
         eq(emailNotificationPreferences.notificationType, type)
       ),
     });
@@ -96,7 +96,7 @@ export async function PATCH(request: Request) {
           updatedAt: new Date(),
         })
         .where(and(
-          eq(emailNotificationPreferences.userId, user.id),
+          eq(emailNotificationPreferences.userId, userId),
           eq(emailNotificationPreferences.notificationType, type)
         ))
         .returning();
@@ -107,7 +107,7 @@ export async function PATCH(request: Request) {
       const [created] = await db
         .insert(emailNotificationPreferences)
         .values({
-          userId: user.id,
+          userId,
           notificationType: type,
           emailEnabled,
         })

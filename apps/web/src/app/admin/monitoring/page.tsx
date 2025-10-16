@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Button } from '@/components/ui/button';
 import { RefreshCw, Download, DollarSign, Users, AlertTriangle } from 'lucide-react';
 import { format } from 'date-fns';
+import { fetchWithAuth } from '@/lib/auth-fetch';
 import type {
   SystemHealthData,
   UserActivityData,
@@ -37,10 +38,10 @@ export default function MonitoringDashboard() {
     setIsLoading(true);
     try {
       const [health, users, ai, errors] = await Promise.all([
-        fetch(`/api/monitoring/system-health?range=${dateRange}`).then(r => r.json()),
-        fetch(`/api/monitoring/user-activity?range=${dateRange}`).then(r => r.json()),
-        fetch(`/api/monitoring/ai-usage?range=${dateRange}`).then(r => r.json()),
-        fetch(`/api/monitoring/error-logs?range=${dateRange}`).then(r => r.json()),
+        fetchWithAuth(`/api/monitoring/system-health?range=${dateRange}`).then(r => r.json()),
+        fetchWithAuth(`/api/monitoring/user-activity?range=${dateRange}`).then(r => r.json()),
+        fetchWithAuth(`/api/monitoring/ai-usage?range=${dateRange}`).then(r => r.json()),
+        fetchWithAuth(`/api/monitoring/error-logs?range=${dateRange}`).then(r => r.json()),
       ]);
 
       setSystemHealth(health.data);

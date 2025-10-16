@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
-import { authenticateWebRequest, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, conversations, eq, and } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
+
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
 /**
  * GET - Get a specific conversation with its messages
@@ -11,9 +13,9 @@ export async function GET(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await authenticateWebRequest(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
-    const { userId } = auth;
+    const userId = auth.userId;
 
     const { id } = await context.params;
 
@@ -50,9 +52,9 @@ export async function PATCH(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await authenticateWebRequest(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
-    const { userId } = auth;
+    const userId = auth.userId;
 
     const { id } = await context.params;
     const body = await request.json();
@@ -93,9 +95,9 @@ export async function DELETE(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await authenticateWebRequest(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
-    const { userId } = auth;
+    const userId = auth.userId;
 
     const { id } = await context.params;
 

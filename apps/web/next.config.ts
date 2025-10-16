@@ -3,7 +3,6 @@ import MonacoWebpackPlugin from "monaco-editor-webpack-plugin";
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  hostname: '0.0.0.0',
   transpilePackages: ["@pagespace/db", "@pagespace/lib"],
   webpack: (config, { isServer }) => {
     if (!isServer) {

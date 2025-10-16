@@ -1,19 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
 import { db, eq, users } from '@pagespace/db';
-import { requireAuth, isAuthError } from '@/lib/auth-helpers';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
 export async function POST(request: NextRequest) {
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
     apiVersion: '2025-08-27.basil',
   });
   try {
-    const authResult = await requireAuth(request);
-    if (isAuthError(authResult)) {
-      return authResult;
-    }
-
-    const { userId } = authResult;
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (isAuthError(auth)) return auth.error;
+    const userId = auth.userId;
 
     // Get user data
     const [user] = await db.select().from(users).where(eq(users.id, userId));

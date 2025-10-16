@@ -25,6 +25,7 @@ import { Separator } from '@/components/ui/separator';
 import { useNotificationStore } from '@/stores/notificationStore';
 import { cn } from '@/lib/utils';
 import { isConnectionRequest } from '@pagespace/lib/client-safe';
+import { patch } from '@/lib/auth-fetch';
 
 const NotificationIcon = ({ type }: { type: string }) => {
   switch (type) {
@@ -68,15 +69,7 @@ export default function NotificationDropdown() {
 
   const handleConnectionAction = async (connectionId: string, action: 'accept' | 'reject', notificationId: string) => {
     try {
-      const response = await fetch(`/api/connections/${connectionId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to ${action} connection`);
-      }
+      await patch(`/api/connections/${connectionId}`, { action });
 
       // Remove the notification immediately for visual feedback
       handleDeleteNotification(notificationId);

@@ -12,6 +12,8 @@ import {
   Alert,
   AlertDescription,
 } from '@/components/ui/alert';
+import { post } from '@/lib/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth-fetch';
 
 interface ProviderSettings {
   currentProvider: string;
@@ -26,6 +28,11 @@ interface ProviderSettings {
     glm: { isConfigured: boolean; hasApiKey: boolean };
   };
   isAnyProviderConfigured: boolean;
+}
+
+interface SaveSettingsResult {
+  message: string;
+  success?: boolean;
 }
 
 export default function AiSettingsPage() {
@@ -51,7 +58,7 @@ export default function AiSettingsPage() {
   useEffect(() => {
     const loadSettings = async () => {
       try {
-        const response = await fetch('/api/ai/settings');
+        const response = await fetchWithAuth('/api/ai/settings');
         if (response.ok) {
           const data: ProviderSettings = await response.json();
           setProviderSettings(data);
@@ -105,23 +112,10 @@ export default function AiSettingsPage() {
       }
 
       // Save API key to backend
-      const response = await fetch('/api/ai/settings', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          provider,
-          apiKey: apiKey.trim(),
-        }),
+      const result = await post<SaveSettingsResult>('/api/ai/settings', {
+        provider,
+        apiKey: apiKey.trim(),
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to save API key');
-      }
-
-      const result = await response.json();
 
       // Update provider settings locally
       if (providerSettings) {
@@ -191,23 +185,10 @@ export default function AiSettingsPage() {
       formattedUrl = formattedUrl.replace(/\/$/, '');
 
       // Save Ollama base URL to backend
-      const response = await fetch('/api/ai/settings', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          provider: 'ollama',
-          baseUrl: formattedUrl,
-        }),
+      const result = await post<SaveSettingsResult>('/api/ai/settings', {
+        provider: 'ollama',
+        baseUrl: formattedUrl,
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to save Ollama base URL');
-      }
-
-      const result = await response.json();
 
       // Update provider settings locally
       if (providerSettings) {

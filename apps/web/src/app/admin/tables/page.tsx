@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Database, AlertCircle } from "lucide-react";
+import { fetchWithAuth } from "@/lib/auth-fetch";
 
 interface ColumnData {
   name: string;
@@ -49,7 +50,7 @@ export default function AdminTablesPage() {
   useEffect(() => {
     async function fetchSchema() {
       try {
-        const response = await fetch('/api/admin/schema');
+        const response = await fetchWithAuth('/api/admin/schema');
         if (!response.ok) {
           throw new Error('Failed to fetch schema data');
         }

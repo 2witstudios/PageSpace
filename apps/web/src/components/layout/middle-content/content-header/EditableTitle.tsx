@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
 import { usePageTree } from '@/hooks/usePageTree';
 import { useParams } from 'next/navigation';
+import { patch } from '@/lib/auth-fetch';
 
 export function EditableTitle() {
   const pageId = usePageStore((state) => state.pageId);
@@ -51,17 +52,7 @@ export function EditableTitle() {
     }
 
     try {
-      const response = await fetch(`/api/pages/${page.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to update title');
-      }
-
-      const updatedPage = await response.json();
+      const updatedPage = await patch<{ id: string; title: string }>(`/api/pages/${page.id}`, { title });
       updateNode(updatedPage.id, { title: updatedPage.title });
       mutate(`/api/pages/${page.id}/breadcrumbs`);
       toast.success('Title updated successfully');

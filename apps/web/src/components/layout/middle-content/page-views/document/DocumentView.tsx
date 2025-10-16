@@ -12,6 +12,8 @@ import { useSocket } from '@/hooks/useSocket';
 import { PageEventPayload } from '@/lib/socket-utils';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/use-auth';
+import { fetchWithAuth } from '@/lib/auth-fetch';
+import { useEditingStore } from '@/stores/useEditingStore';
 
 interface DocumentViewProps {
   page: TreePage;
@@ -45,13 +47,31 @@ const DocumentView = ({ page }: DocumentViewProps) => {
     initializeAndActivate();
   }, [initializeAndActivate]);
 
+  // Register editing state when document is dirty
+  useEffect(() => {
+    const componentId = `document-${page.id}`;
+
+    if (documentState?.isDirty && !isReadOnly) {
+      useEditingStore.getState().startEditing(componentId, 'document', {
+        pageId: page.id,
+        componentName: 'DocumentView',
+      });
+    } else {
+      useEditingStore.getState().endEditing(componentId);
+    }
+
+    return () => {
+      useEditingStore.getState().endEditing(componentId);
+    };
+  }, [documentState?.isDirty, page.id, isReadOnly]);
+
   // Check user permissions
   useEffect(() => {
     const checkPermissions = async () => {
       if (!user?.id) return;
-      
+
       try {
-        const response = await fetch(`/api/pages/${page.id}/permissions/check?userId=${user.id}`);
+        const response = await fetchWithAuth(`/api/pages/${page.id}/permissions/check?userId=${user.id}`);
         if (response.ok) {
           const permissions = await response.json();
           setIsReadOnly(!permissions.canEdit);
@@ -66,7 +86,7 @@ const DocumentView = ({ page }: DocumentViewProps) => {
         console.error('Failed to check permissions:', error);
       }
     };
-    
+
     checkPermissions();
   }, [user?.id, page.id]);
 
@@ -75,17 +95,24 @@ const DocumentView = ({ page }: DocumentViewProps) => {
     if (!socket) return;
 
     const handleContentUpdate = async (eventData: PageEventPayload) => {
+      // Filter out self-triggered events to prevent refetch loop
+      if (eventData.socketId && eventData.socketId === socket.id) {
+        console.log('📌 Ignoring self-triggered content-updated event');
+        return;
+      }
+
       // Only update if it's for the current page
       if (eventData.pageId === page.id) {
         console.log('📝 Document content updated via socket, fetching latest...');
-        
+
         try {
           // Fetch the latest content from the server
-          const response = await fetch(`/api/pages/${page.id}`);
+          const response = await fetchWithAuth(`/api/pages/${page.id}`);
           if (response.ok) {
             const updatedPage = await response.json();
-            
+
             // Only update if content actually changed and we're not currently editing
+            // Note: This uses closure over documentState, which is acceptable here
             if (updatedPage.content !== documentState?.content && !documentState?.isDirty) {
               updateContentFromServer(updatedPage.content);
             }
@@ -126,20 +153,16 @@ const DocumentView = ({ page }: DocumentViewProps) => {
   // Cleanup on unmount - auto-save any unsaved changes
   useEffect(() => {
     return () => {
-      // Force save if dirty before unmounting
+      // Force save if dirty before unmounting using the existing save mechanism
       if (documentState?.isDirty) {
         console.log('🚨 Component unmounting with unsaved changes, force saving...');
-        // Fire-and-forget save since we can't await in cleanup
-        fetch(`/api/pages/${page.id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: documentState.content }),
-        }).catch(error => {
+        // Use forceSave which properly handles the save flow
+        forceSave().catch(error => {
           console.error('Failed to save on unmount:', error);
         });
       }
     };
-  }, [documentState, page.id]);
+  }, [documentState?.isDirty, page.id, forceSave]);
 
   // Handle keyboard shortcuts
   useEffect(() => {
@@ -160,7 +183,7 @@ const DocumentView = ({ page }: DocumentViewProps) => {
         document.removeEventListener('keydown', handleKeyDown);
       }
     };
-  }, [forceSave, documentState]);
+  }, [forceSave]); // ✅ Removed documentState dependency
 
   // Auto-save on window blur
   useEffect(() => {
@@ -168,6 +191,7 @@ const DocumentView = ({ page }: DocumentViewProps) => {
     if (typeof window === 'undefined' || !window.addEventListener) return;
 
     const handleBlur = () => {
+      // Get fresh state at blur time
       if (documentState?.isDirty) {
         console.log('🔄 Window blur detected, auto-saving...');
         forceSave().catch(console.error);
@@ -180,7 +204,7 @@ const DocumentView = ({ page }: DocumentViewProps) => {
         window.removeEventListener('blur', handleBlur);
       }
     };
-  }, [documentState, forceSave]);
+  }, [documentState?.isDirty, forceSave]); // ✅ Only depend on isDirty flag
 
   return (
     <motion.div 

@@ -43,7 +43,10 @@ export default function Sidebar({ className }: SidebarProps) {
   const params = useParams();
   const { driveId: driveIdParams } = params;
   const { user } = useAuth();
-  const { drives, fetchDrives } = useDriveStore();
+
+  // Use selective Zustand subscriptions to prevent unnecessary re-renders
+  const drives = useDriveStore(state => state.drives);
+  const fetchDrives = useDriveStore(state => state.fetchDrives);
 
   const driveId = Array.isArray(driveIdParams) ? driveIdParams[0] : driveIdParams;
   const { mutate } = useSWRConfig();

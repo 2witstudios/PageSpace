@@ -10,6 +10,8 @@ import { useSocketStore } from '@/stores/socketStore';
 import type { UsageEventPayload } from '@/lib/socket-utils';
 import { createClientLogger } from '@/lib/logging/client-logger';
 import { maskIdentifier } from '@/lib/logging/mask';
+import { fetchWithAuth } from '@/lib/auth-fetch';
+import { useEditingStore } from '@/stores/useEditingStore';
 
 const usageLogger = createClientLogger({ namespace: 'usage', component: 'usage-counter' });
 
@@ -27,14 +29,25 @@ interface UsageData {
   };
 }
 
-const fetcher = (url: string) => fetch(url).then(res => res.json());
+const fetcher = async (url: string) => {
+  const response = await fetchWithAuth(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch: ${response.status}`);
+  }
+  return response.json();
+};
 
 export function UsageCounter() {
   const router = useRouter();
   const { connect, getSocket } = useSocketStore();
+
+  // Check if any editing or streaming is active (state-based)
+  const isAnyActive = useEditingStore(state => state.isAnyActive());
+
   const { data: usage, error, mutate } = useSWR<UsageData>('/api/subscriptions/usage', fetcher, {
-    refreshInterval: 30000, // Refresh every 30 seconds
-    revalidateOnFocus: true,
+    refreshInterval: 0, // Disabled - rely on Socket.IO for real-time updates
+    revalidateOnFocus: false, // Don't revalidate on tab focus (prevents interruptions)
+    isPaused: () => isAnyActive, // Pause revalidation during editing/streaming
   });
 
   const isPro = usage?.subscriptionTier === 'pro';

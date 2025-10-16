@@ -6,7 +6,7 @@ import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
 
-const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const };
+const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 
 const reorderSchema = z.object({
   pageId: z.string(),

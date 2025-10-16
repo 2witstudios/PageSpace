@@ -3,6 +3,7 @@
 import { useState, useCallback, DragEvent } from 'react';
 import { toast } from 'sonner';
 import { formatBytes } from '@pagespace/lib/services/storage-limits';
+import { post, fetchWithAuth } from '@/lib/auth-fetch';
 
 interface FileDropState {
   isDraggingFiles: boolean;
@@ -104,26 +105,18 @@ export function useFileDrop({
     // Check storage quota before uploading
     const totalSize = files.reduce((sum, f) => sum + f.size, 0);
     try {
-      const quotaResponse = await fetch('/api/storage/check', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fileSize: totalSize })
-      });
-
-      if (!quotaResponse.ok) {
-        const quotaData = await quotaResponse.json();
-        if (quotaResponse.status === 429) {
-          toast.error('Too many uploads in progress. Please wait a moment.');
-        } else if (quotaResponse.status === 503) {
-          toast.error('Server is busy. Please try again later.');
-        } else {
-          toast.error(quotaData.reason || 'Upload not allowed');
-        }
-        return;
-      }
+      await post('/api/storage/check', { fileSize: totalSize });
     } catch (error) {
       console.error('Storage check failed:', error);
-      // Continue with upload if check fails (graceful degradation)
+      const errorMessage = (error as Error).message;
+      if (errorMessage.includes('429')) {
+        toast.error('Too many uploads in progress. Please wait a moment.');
+      } else if (errorMessage.includes('503')) {
+        toast.error('Server is busy. Please try again later.');
+      } else {
+        toast.error('Upload not allowed');
+      }
+      return;
     }
 
     setState(prev => ({ ...prev, isUploading: true, uploadProgress: 0 }));
@@ -167,7 +160,7 @@ export function useFileDrop({
         }
 
         try {
-          const response = await fetch('/api/upload', {
+          const response = await fetchWithAuth('/api/upload', {
             method: 'POST',
             body: formData,
           });

@@ -242,6 +242,18 @@ export const TOOL_METADATA: Record<string, ToolMetadata> = {
     operation: ToolOperation.CREATE,
     description: 'Create a folder hierarchy'
   },
+  bulk_delete_pages: {
+    name: 'bulk_delete_pages',
+    operation: ToolOperation.DELETE,
+    description: 'Delete multiple pages at once',
+    requiresConfirmation: true,
+    destructive: true
+  },
+  bulk_update_content: {
+    name: 'bulk_update_content',
+    operation: ToolOperation.WRITE,
+    description: 'Update content in multiple pages'
+  },
 
   // Page read tools
   read_current_page: {

@@ -1,23 +1,17 @@
 import { users, db, eq } from '@pagespace/db';
-import { decodeToken } from '@pagespace/lib/server';
-import { parse } from 'cookie';
 import bcrypt from 'bcryptjs';
 import { loggers } from '@pagespace/lib/server';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
 export async function POST(req: Request) {
-  const cookieHeader = req.headers.get('cookie');
-  const cookies = parse(cookieHeader || '');
-  const accessTokenValue = cookies.accessToken;
-
-  if (!accessTokenValue) {
-    return Response.json({ error: 'Not authenticated' }, { status: 401 });
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  if (isAuthError(auth)) {
+    return auth.error;
   }
-
-  const decoded = await decodeToken(accessTokenValue);
-
-  if (!decoded) {
-    return Response.json({ error: 'Invalid token' }, { status: 401 });
-  }
+  const userId = auth.userId;
+  const tokenVersion = auth.tokenVersion;
 
   try {
     const body = await req.json();
@@ -35,7 +29,7 @@ export async function POST(req: Request) {
 
     // Get user with password
     const user = await db.query.users.findFirst({
-      where: eq(users.id, decoded.userId),
+      where: eq(users.id, userId),
       columns: {
         id: true,
         password: true,
@@ -43,7 +37,7 @@ export async function POST(req: Request) {
       },
     });
 
-    if (!user || user.tokenVersion !== decoded.tokenVersion) {
+    if (!user || user.tokenVersion !== tokenVersion) {
       return Response.json({ error: 'Invalid token version' }, { status: 401 });
     }
 
@@ -67,7 +61,7 @@ export async function POST(req: Request) {
         password: hashedPassword,
         tokenVersion: user.tokenVersion + 1, // This will log out all sessions
       })
-      .where(eq(users.id, decoded.userId));
+      .where(eq(users.id, userId));
 
     return Response.json({ 
       message: 'Password changed successfully. Please log in again with your new password.' 

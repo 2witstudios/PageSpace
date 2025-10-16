@@ -6,8 +6,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createId } from '@paralleldrive/cuid2';
 import { logger, loggers, extractRequestContext, logResponse } from '@pagespace/lib/server';
+import { db, apiMetrics } from '@pagespace/db';
 
-// In-memory storage for analytics (will be replaced with database)
+// In-memory buffer for metrics (flushed to database every 30s or when buffer is full)
 interface RequestMetrics {
   endpoint: string;
   method: string;
@@ -79,10 +80,36 @@ class MetricsCollector {
     const metricsToFlush = [...this.metrics];
     this.metrics = [];
 
-    // TODO: Write to database when schema is ready
-    // For now, just log summary
-    const summary = this.summarizeMetrics(metricsToFlush);
-    loggers.performance.info('Metrics flush', summary);
+    try {
+      // Write metrics to database
+      await db.insert(apiMetrics).values(
+        metricsToFlush.map(metric => ({
+          endpoint: metric.endpoint,
+          method: metric.method as 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'HEAD' | 'OPTIONS',
+          statusCode: metric.statusCode,
+          duration: metric.duration,
+          timestamp: metric.timestamp,
+          userId: metric.userId,
+          ip: metric.ip,
+          userAgent: metric.userAgent,
+          requestSize: metric.requestSize,
+          responseSize: metric.responseSize,
+          error: metric.error,
+        }))
+      );
+
+      // Also log summary for real-time monitoring
+      const summary = this.summarizeMetrics(metricsToFlush);
+      loggers.performance.info('Metrics flushed to database', {
+        ...summary,
+        flushedCount: metricsToFlush.length
+      });
+    } catch (error) {
+      // If database write fails, fall back to logging only
+      loggers.performance.error('Failed to write metrics to database', error as Error);
+      const summary = this.summarizeMetrics(metricsToFlush);
+      loggers.performance.info('Metrics flush (fallback to logs only)', summary);
+    }
   }
 
   private summarizeMetrics(metrics: RequestMetrics[]): MetricsSummary {

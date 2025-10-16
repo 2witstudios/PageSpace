@@ -3,6 +3,7 @@
 import { useAuth } from "@/hooks/use-auth";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { post, fetchWithAuth } from '@/lib/auth-fetch';
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -21,30 +22,48 @@ import { LogOut, MessageSquare, Settings, LayoutDashboard, Sun, Moon, Monitor, H
 import { useTheme } from "next-themes";
 import useSWR from 'swr';
 import { Progress } from "@/components/ui/progress";
+import { useEditingStore } from '@/stores/useEditingStore';
 
-const fetcher = (url: string) => fetch(url).then(res => res.json());
+const fetcher = async (url: string) => {
+  const response = await fetchWithAuth(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch: ${response.status}`);
+  }
+  return response.json();
+};
 
 export default function UserDropdown() {
   const { isAuthenticated, user, isLoading } = useAuth();
   const router = useRouter();
   const { setTheme } = useTheme();
 
+  // Check if any editing or streaming is active (state-based)
+  const isAnyActive = useEditingStore(state => state.isAnyActive());
+
   // Fetch storage info
   const { data: storageInfo } = useSWR(
     isAuthenticated ? '/api/storage/info' : null,
     fetcher,
-    { refreshInterval: 30000 } // Refresh every 30 seconds
+    {
+      refreshInterval: 300000, // 5 minutes (reduced from 30 seconds)
+      revalidateOnFocus: false, // Don't revalidate on tab focus (prevents interruptions)
+      isPaused: () => isAnyActive, // Pause revalidation during editing/streaming
+    }
   );
 
   // Fetch subscription status
   const { data: subscriptionInfo } = useSWR(
     isAuthenticated ? '/api/subscriptions/status' : null,
     fetcher,
-    { refreshInterval: 60000 } // Refresh every minute
+    {
+      refreshInterval: 300000, // 5 minutes (reduced from 60 seconds)
+      revalidateOnFocus: false, // Don't revalidate on tab focus (prevents interruptions)
+      isPaused: () => isAnyActive, // Pause revalidation during editing/streaming
+    }
   );
 
   const handleSignOut = async () => {
-    await fetch('/api/auth/logout', { method: 'POST' });
+    await post('/api/auth/logout');
     router.push('/auth/signin');
     router.refresh();
   };

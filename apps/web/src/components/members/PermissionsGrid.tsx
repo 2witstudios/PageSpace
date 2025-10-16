@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { ChevronRight, ChevronDown } from 'lucide-react';
 import { PageTypeIcon } from '@/components/common/PageTypeIcon';
 import { PageType } from '@pagespace/lib/client-safe';
+import { fetchWithAuth } from '@/lib/auth-fetch';
 
 interface PageNode {
   id: string;
@@ -38,15 +39,13 @@ export function PermissionsGrid({ driveId, userId, permissions, onChange }: Perm
 
   const fetchPermissionTree = async () => {
     try {
-      const url = userId 
+      const url = userId
         ? `/api/drives/${driveId}/permissions-tree?userId=${userId}`
         : `/api/drives/${driveId}/permissions-tree`;
-      
-      const response = await fetch(url, {
-        credentials: 'include',
-      });
+
+      const response = await fetchWithAuth(url);
       if (!response.ok) throw new Error('Failed to fetch permission tree');
-      
+
       const data = await response.json();
       setPages(data.pages);
       

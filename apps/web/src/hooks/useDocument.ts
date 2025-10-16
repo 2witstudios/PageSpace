@@ -1,6 +1,8 @@
 import { useCallback, useMemo } from 'react';
 import { useDocumentManagerStore, DocumentState } from '@/stores/useDocumentManagerStore';
 import { toast } from 'sonner';
+import { patch } from '@/lib/auth-fetch';
+import { useSocket } from './useSocket';
 
 // Document state selectors
 export const useDocumentState = (pageId: string) => {
@@ -54,27 +56,26 @@ export const useDocumentSaving = (pageId: string) => {
   const isSaving = useDocumentManagerStore(
     useCallback((state) => state.savingDocuments.has(pageId), [pageId])
   );
-  
+
   const markAsSaving = useDocumentManagerStore((state) => state.markAsSaving);
   const markAsSaved = useDocumentManagerStore((state) => state.markAsSaved);
-  
+  const socket = useSocket();
+
   const saveDocument = useCallback(
     async (content: string) => {
       try {
         markAsSaving(pageId);
-        
-        const response = await fetch(`/api/pages/${pageId}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content }),
-        });
-        
-        if (!response.ok) {
-          throw new Error(`Failed to save: ${response.status}`);
+
+        // Include socket ID in request headers to prevent self-refetch loop
+        const headers: Record<string, string> = {};
+        if (socket?.id) {
+          headers['X-Socket-ID'] = socket.id;
         }
-        
+
+        await patch(`/api/pages/${pageId}`, { content }, { headers });
+
         markAsSaved(pageId);
-        
+
         return true;
       } catch (error) {
         console.error('Save failed:', error);
@@ -83,9 +84,9 @@ export const useDocumentSaving = (pageId: string) => {
         throw error;
       }
     },
-    [pageId, markAsSaving, markAsSaved]
+    [pageId, markAsSaving, markAsSaved, socket]
   );
-  
+
   return {
     isSaving,
     saveDocument,

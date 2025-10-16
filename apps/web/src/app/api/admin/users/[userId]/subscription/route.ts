@@ -1,24 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, eq, users } from '@pagespace/db';
-import { verifyAdminAuth } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
+
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
 export async function PUT(
   request: NextRequest,
   context: { params: Promise<{ userId: string }> }
 ) {
   try {
-    const { userId } = await context.params;
+    const { userId: targetUserId } = await context.params;
 
     // Verify user is authenticated and is an admin
-    const adminUser = await verifyAdminAuth(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (isAuthError(auth)) return auth.error;
 
-    if (!adminUser) {
+    if (auth.role !== 'admin') {
       return NextResponse.json(
-        { error: 'Unauthorized: Admin access required' },
+        { error: 'Forbidden: Admin access required' },
         { status: 403 }
       );
     }
+
+    const currentUserId = auth.userId;
 
     // Parse request body
     const body = await request.json();
@@ -36,7 +41,7 @@ export async function PUT(
     const [existingUser] = await db
       .select({ id: users.id, name: users.name, subscriptionTier: users.subscriptionTier })
       .from(users)
-      .where(eq(users.id, userId));
+      .where(eq(users.id, targetUserId));
 
     if (!existingUser) {
       return NextResponse.json(
@@ -52,12 +57,12 @@ export async function PUT(
         subscriptionTier: subscriptionTier as 'free' | 'pro' | 'business',
         updatedAt: new Date(),
       })
-      .where(eq(users.id, userId));
+      .where(eq(users.id, targetUserId));
 
     // Log the admin action
     loggers.api.info('Admin subscription update', {
-      adminId: adminUser.id,
-      targetUserId: userId,
+      adminId: currentUserId,
+      targetUserId: targetUserId,
       targetUserName: existingUser.name,
       oldTier: existingUser.subscriptionTier,
       newTier: subscriptionTier,
@@ -67,7 +72,7 @@ export async function PUT(
       success: true,
       message: `User subscription updated from ${existingUser.subscriptionTier} to ${subscriptionTier}`,
       data: {
-        userId,
+        userId: targetUserId,
         oldTier: existingUser.subscriptionTier,
         newTier: subscriptionTier,
       },

@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyAuth } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, users, eq } from '@pagespace/db';
+
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 import {
   createServiceToken,
   verifyServiceToken,
@@ -50,10 +52,11 @@ async function createAvatarServiceToken(userId: string, expirationTime: string):
 export async function POST(request: NextRequest) {
   try {
     // Verify authentication
-    const user = await verifyAuth(request);
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (isAuthError(auth)) {
+      return auth.error;
     }
+    const userId = auth.userId;
 
     // Parse form data
     const formData = await request.formData();
@@ -80,15 +83,15 @@ export async function POST(request: NextRequest) {
     }
 
     // Delete old avatar if it exists and is a local file
-    const oldUser = await db.select().from(users).where(eq(users.id, user.id)).limit(1);
+    const oldUser = await db.select().from(users).where(eq(users.id, userId)).limit(1);
     if (oldUser[0]?.image) {
       // Check if it's a local file (not an external URL)
       if (!oldUser[0].image.startsWith('http://') && !oldUser[0].image.startsWith('https://')) {
         // Send delete request to processor
         try {
-          const { token: serviceToken } = await createAvatarServiceToken(user.id, '2m');
+          const { token: serviceToken } = await createAvatarServiceToken(userId, '2m');
 
-          await fetch(`${PROCESSOR_URL}/api/avatar/${user.id}`, {
+          await fetch(`${PROCESSOR_URL}/api/avatar/${userId}`, {
             method: 'DELETE',
             headers: {
               'Authorization': `Bearer ${serviceToken}`
@@ -103,15 +106,15 @@ export async function POST(request: NextRequest) {
     // Forward the file to processor service
     const processorFormData = new FormData();
     processorFormData.append('file', file);
-    processorFormData.append('userId', user.id);
+    processorFormData.append('userId', userId);
 
     // Create service JWT token for processor authentication
-    const { token: serviceToken, claims: serviceTokenClaims } = await createAvatarServiceToken(user.id, '5m');
+    const { token: serviceToken, claims: serviceTokenClaims } = await createAvatarServiceToken(userId, '5m');
 
     const uploadUrl = `${PROCESSOR_URL}/api/avatar/upload`;
     console.log('Uploading avatar to processor', {
       url: uploadUrl,
-      userId: user.id,
+      userId: userId,
     });
 
     const processorResponse = await fetch(uploadUrl, {
@@ -129,7 +132,7 @@ export async function POST(request: NextRequest) {
         error: errorData.error,
         requiredScope: errorData.requiredScope,
         tokenScopes: serviceTokenClaims.scopes,
-        userId: user.id,
+        userId: userId,
       });
       throw new Error(errorData.error || 'Failed to upload avatar to processor');
     }
@@ -138,10 +141,10 @@ export async function POST(request: NextRequest) {
     const { filename } = processorResult;
 
     // Update user record with API URL for the avatar
-    const avatarUrl = `/api/avatar/${user.id}/${filename}?t=${Date.now()}`; // Add timestamp for cache busting
+    const avatarUrl = `/api/avatar/${userId}/${filename}?t=${Date.now()}`; // Add timestamp for cache busting
     await db.update(users)
       .set({ image: avatarUrl })
-      .where(eq(users.id, user.id));
+      .where(eq(users.id, userId));
 
     return NextResponse.json({
       success: true,
@@ -160,13 +163,14 @@ export async function POST(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   try {
     // Verify authentication
-    const user = await verifyAuth(request);
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (isAuthError(auth)) {
+      return auth.error;
     }
+    const userId = auth.userId;
 
     // Get current user avatar
-    const currentUser = await db.select().from(users).where(eq(users.id, user.id)).limit(1);
+    const currentUser = await db.select().from(users).where(eq(users.id, userId)).limit(1);
     if (!currentUser[0]?.image) {
       return NextResponse.json({ message: 'No avatar to delete' });
     }
@@ -175,9 +179,9 @@ export async function DELETE(request: NextRequest) {
     if (!currentUser[0].image.startsWith('http://') && !currentUser[0].image.startsWith('https://')) {
       // Send delete request to processor
       try {
-        const { token: serviceToken } = await createAvatarServiceToken(user.id, '2m');
+        const { token: serviceToken } = await createAvatarServiceToken(userId, '2m');
 
-        await fetch(`${PROCESSOR_URL}/api/avatar/${user.id}`, {
+        await fetch(`${PROCESSOR_URL}/api/avatar/${userId}`, {
           method: 'DELETE',
           headers: {
             'Authorization': `Bearer ${serviceToken}`
@@ -191,7 +195,7 @@ export async function DELETE(request: NextRequest) {
     // Clear avatar from database
     await db.update(users)
       .set({ image: null })
-      .where(eq(users.id, user.id));
+      .where(eq(users.id, userId));
 
     return NextResponse.json({
       success: true,

@@ -28,6 +28,7 @@ import { useFavorites } from "@/hooks/useFavorites";
 import { toast } from "sonner";
 import { DeletePageDialog } from "@/components/dialogs/DeletePageDialog";
 import { RenameDialog } from "@/components/dialogs/RenameDialog";
+import { patch, del, post } from '@/lib/auth-fetch';
 
 interface TreeNodeProps {
   node: TreePage;
@@ -91,14 +92,8 @@ export default function TreeNode({
   const handleRename = async (newName: string) => {
     const toastId = toast.loading("Renaming page...");
     try {
-      const response = await fetch(`/api/pages/${node.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: newName }),
-      });
-      if (!response.ok) throw new Error("Failed to rename page.");
-    await response.json();
-    await mutate();
+      await patch(`/api/pages/${node.id}`, { title: newName });
+      await mutate();
       // The title in the main content area will update automatically
       // because it also reads from the SWR cache via usePageTree.
       toast.success("Page renamed.", { id: toastId });
@@ -112,12 +107,7 @@ export default function TreeNode({
   const handleDelete = async (trashChildren: boolean) => {
     const toastId = toast.loading("Moving page to trash...");
     try {
-      const response = await fetch(`/api/pages/${node.id}`, {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ trash_children: trashChildren }),
-      });
-      if (!response.ok) throw new Error("Failed to move page to trash.");
+      await del(`/api/pages/${node.id}`, { trash_children: trashChildren });
       await mutate();
       toast.success("Page moved to trash.", { id: toastId });
     } catch {
@@ -130,10 +120,7 @@ export default function TreeNode({
   const handleRestore = async () => {
     const toastId = toast.loading("Restoring page...");
     try {
-      const response = await fetch(`/api/pages/${node.id}/restore`, {
-        method: "POST",
-      });
-      if (!response.ok) throw new Error("Failed to restore page.");
+      await post(`/api/pages/${node.id}/restore`);
       await mutate();
       toast.success("Page restored.", { id: toastId });
     } catch {
@@ -144,10 +131,7 @@ export default function TreeNode({
   const handlePermanentDelete = async () => {
     const toastId = toast.loading("Permanently deleting page...");
     try {
-      const response = await fetch(`/api/trash/${node.id}`, {
-        method: "DELETE",
-      });
-      if (!response.ok) throw new Error("Failed to permanently delete page.");
+      await del(`/api/trash/${node.id}`);
       await mutate();
       toast.success("Page permanently deleted.", { id: toastId });
     } catch {

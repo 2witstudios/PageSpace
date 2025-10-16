@@ -4,24 +4,27 @@ import { useSocketStore } from '@/stores/socketStore';
 
 export function useSocket() {
   const { isAuthenticated, user } = useAuth();
-  const { connect, disconnect, getSocket } = useSocketStore();
+  const getSocket = useSocketStore(state => state.getSocket);
 
   useEffect(() => {
+    // Get stable methods directly without subscribing (they don't change)
+    const { connect, disconnect } = useSocketStore.getState();
+
     if (isAuthenticated && user) {
-      console.log('🔌 Initializing Socket.IO connection for user:', user.id);
+      // Connect without logging here - socketStore will log only when actually connecting
       connect();
 
+      // Silent cleanup - no need to log on every component unmount
       return () => {
         // Don't disconnect on component unmount, let the socket persist
         // Only disconnect when user logs out (handled below)
-        console.log('🔌 useSocket cleanup (keeping connection alive)');
       };
     } else {
       // Only disconnect when user is not authenticated
-      console.log('🔌 User not authenticated, disconnecting socket');
       disconnect();
     }
-  }, [isAuthenticated, user, connect, disconnect]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated, user?.id]); // user intentionally omitted - only depends on ID for stability
 
   return getSocket();
 }

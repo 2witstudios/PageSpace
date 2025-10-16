@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { FileIcon } from "lucide-react";
+import { patch } from '@/lib/auth-fetch';
 import {
   DndContext,
   DragEndEvent,
@@ -272,14 +273,10 @@ export default function PageTree({ driveId, initialTree, mutate: externalMutate,
     const newPosition = ((prev?.position || 0) + (next?.position || (prev?.position || 0) + 2)) / 2;
 
     try {
-      await fetch('/api/pages/reorder', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pageId: active.id,
-          newParentId: treeParentId,
-          newPosition: newPosition,
-        }),
+      await patch('/api/pages/reorder', {
+        pageId: active.id,
+        newParentId: treeParentId,
+        newPosition: newPosition,
       });
       await mutate();
     } catch (error) {
