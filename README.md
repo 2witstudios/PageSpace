@@ -56,7 +56,31 @@ Claude: "Update all meeting notes in my PageSpace"
 2. Sign up for free
 3. Start building with AI immediately
 
-### Option 2: Self-Host (Full Control)
+### Option 2: Desktop App (Native Experience)
+Download the native desktop app that connects to your cloud instance:
+
+- **macOS**: [Download DMG](#) (Intel & Apple Silicon)
+- **Windows**: [Download Installer](#) or [Portable](#)
+- **Linux**: [Download AppImage](#) | [DEB](#) | [RPM](#)
+
+**Features:**
+- Native desktop integration with system tray
+- Minimize to tray, deep linking support
+- Automatic updates
+- Works with your cloud PageSpace instance
+
+**Build from source:**
+```bash
+git clone https://github.com/2witstudios/PageSpace.git
+cd PageSpace
+pnpm install
+pnpm build:desktop
+pnpm package:desktop
+```
+
+See [apps/desktop/README.md](apps/desktop/README.md) for detailed instructions.
+
+### Option 3: Self-Host (Full Control)
 ```bash
 # Clone and setup
 git clone https://github.com/2witstudios/PageSpace.git

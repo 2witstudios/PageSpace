@@ -1,0 +1,86 @@
+{
+  "name": "desktop",
+  "version": "1.0.0",
+  "description": "PageSpace Desktop - Native desktop app for PageSpace",
+  "license": "CC-BY-NC-SA-4.0",
+  "author": "PageSpace",
+  "type": "module",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "dev": "cross-env NODE_ENV=development electron .",
+    "build": "tsc",
+    "package": "pnpm build && electron-builder",
+    "package:mac": "pnpm build && electron-builder --mac",
+    "package:win": "pnpm build && electron-builder --win",
+    "package:linux": "pnpm build && electron-builder --linux"
+  },
+  "dependencies": {
+    "electron-store": "^10.0.0",
+    "electron-updater": "^6.6.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.12",
+    "cross-env": "^7.0.3",
+    "electron": "^33.3.1",
+    "electron-builder": "^26.0.8",
+    "typescript": "^5.8.3"
+  },
+  "build": {
+    "appId": "com.pagespace.app",
+    "productName": "PageSpace",
+    "directories": {
+      "output": "dist-electron",
+      "buildResources": "assets"
+    },
+    "files": [
+      "dist/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["universal"]
+        },
+        {
+          "target": "zip",
+          "arch": ["universal"]
+        }
+      ],
+      "icon": "assets/icon.icns",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "assets/icon.ico",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb",
+        "rpm"
+      ],
+      "category": "Office",
+      "icon": "assets/icon.png",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}

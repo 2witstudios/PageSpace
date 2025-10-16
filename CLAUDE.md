@@ -201,7 +201,8 @@ PageSpace/
 ├── apps/
 │   ├── web/              # Next.js 15 App Router main application
 │   ├── realtime/         # Socket.IO service (port 3001)
-│   └── processor/        # File processing service (port 3003)
+│   ├── processor/        # File processing service (port 3003)
+│   └── desktop/          # Electron desktop app wrapper
 ├── packages/
 │   ├── db/               # Drizzle ORM schema & migrations
 │   └── lib/              # Shared utilities & types
@@ -221,10 +222,13 @@ pnpm dev                    # Start all services (web, realtime, processor)
 pnpm --filter web dev       # Start web app only
 pnpm --filter realtime dev  # Start realtime service only
 pnpm --filter processor dev # Start processor service only
+pnpm dev:desktop            # Start Electron desktop app (dev mode)
 
 # Build
 pnpm build                  # Build all apps (uses Turbo)
 pnpm --filter web build     # Build web app only
+pnpm build:desktop          # Build desktop app TypeScript
+pnpm package:desktop        # Package desktop app for distribution
 
 # Database
 pnpm db:generate            # Generate Drizzle migrations

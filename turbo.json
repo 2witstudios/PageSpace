@@ -33,6 +33,11 @@
     "typecheck": {
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", "tsconfig*.json"]
+    },
+    "package": {
+      "cache": false,
+      "dependsOn": ["build"],
+      "outputs": ["dist-electron/**"]
     }
   },
   "globalDependencies": [
@@ -58,6 +63,7 @@
     "GOOGLE_AI_API_KEY",
     "OPENROUTER_API_KEY",
     "OPENROUTER_DEFAULT_API_KEY",
+    "PAGESPACE_URL",
     "NEXT_PUBLIC_*"
   ]
 }
