@@ -15,13 +15,15 @@ import { PageMention } from '@/lib/editor/tiptap-mention-config';
 interface RichEditorProps {
   value: string;
   onChange: (value: string) => void;
+  onFormatChange?: (value: string) => void;
   onEditorChange: (editor: Editor | null) => void;
   readOnly?: boolean;
 }
 
-const RichEditor = ({ value, onChange, onEditorChange, readOnly = false }: RichEditorProps) => {
-  // Formatting timer - OPTIONAL cosmetic improvement (2500ms)
-  // Does NOT block saves - user edits are saved after 1000ms regardless
+const RichEditor = ({ value, onChange, onFormatChange, onEditorChange, readOnly = false }: RichEditorProps) => {
+  // Formatting timer - CRITICAL for AI editability (2500ms)
+  // Prettier formats HTML so AI can reliably edit structured content
+  // Uses silent update via onFormatChange to avoid marking as dirty
   const formatTimeout = useRef<NodeJS.Timeout | null>(null);
   const formatVersion = useRef(0);
 
@@ -40,11 +42,16 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false }: RichE
 
         // Only update editor if no new typing and formatting actually changed content
         if (currentVersion === formatVersion.current && formattedHtml !== html) {
-          onChange(formattedHtml); // Just update content, save handled by DocumentView
+          // Use silent update to avoid marking as dirty and triggering save
+          if (onFormatChange) {
+            onFormatChange(formattedHtml);
+          } else {
+            onChange(formattedHtml); // Fallback for backward compatibility
+          }
         }
       }, 2500); // Give Prettier time to format without disrupting typing
     },
-    [onChange]
+    [onChange, onFormatChange]
   );
 
   const editor = useEditor({

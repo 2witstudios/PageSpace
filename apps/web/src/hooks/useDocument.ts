@@ -199,7 +199,20 @@ export const useDocument = (pageId: string, initialContent?: string) => {
     },
     [pageId]
   );
-  
+
+  // Silent content update for formatting (doesn't mark dirty or trigger save)
+  const updateContentSilently = useCallback(
+    (newContent: string) => {
+      const updateDocument = useDocumentManagerStore.getState().updateDocument;
+      updateDocument(pageId, {
+        content: newContent,
+        // Don't update lastUpdateTime - keeps save validation working
+        // Don't set isDirty - keeps "Saved" indicator showing
+      });
+    },
+    [pageId]
+  );
+
   // Auto-save with debouncing
   const saveWithDebounce = useCallback(
     (content: string, delay = 1000) => {
@@ -238,6 +251,7 @@ export const useDocument = (pageId: string, initialContent?: string) => {
     initializeAndActivate,
     updateContent,
     updateContentFromServer,
+    updateContentSilently,
     saveWithDebounce,
     forceSave,
     clearDocument: documentState.clearDocument,
