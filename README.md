@@ -59,9 +59,9 @@ Claude: "Update all meeting notes in my PageSpace"
 ### Option 2: Desktop App (Native Experience)
 Download the native desktop app that connects to your cloud instance:
 
-- **macOS**: [Download DMG](#) (Intel & Apple Silicon)
-- **Windows**: [Download Installer](#) or [Portable](#)
-- **Linux**: [Download AppImage](#) | [DEB](#) | [RPM](#)
+- **macOS**: [Download DMG](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.dmg) (Intel & Apple Silicon)
+- **Windows**: [Download Installer](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.exe)
+- **Linux**: [AppImage](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.AppImage) | [DEB](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.deb) | [RPM](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.rpm)
 
 **Features:**
 - Native desktop integration with system tray
@@ -102,7 +102,7 @@ pnpm db:migrate
 # Start development server
 pnpm dev
 
-# Visit https://www.pagespace.ai
+# Visit http://localhost:3000
 ```
 
 ---
@@ -147,7 +147,7 @@ PageSpace includes an MCP server that lets Claude Desktop and other AI tools dir
 ## Core Features
 
 ### 🤖 AI Agent Infrastructure
-- **13+ workspace tools** for AI to manipulate content directly
+- **33 workspace tools** for AI to manipulate content directly
 - **Three AI personalities**: Partner (collaborative), Planner (strategic), Writer (execution-focused)
 - **Tool permissions**: Control what each AI can do in your workspace
 
