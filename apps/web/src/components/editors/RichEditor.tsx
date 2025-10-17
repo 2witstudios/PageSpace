@@ -40,7 +40,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false }: RichE
         if (currentVersion === formatVersion.current) {
           onChange(formattedHtml, true); // shouldSave=true after formatting
         }
-      }, 1000); // Reduced from 2000ms to 1000ms to save faster
+      }, 2500); // Give Prettier time to format without disrupting typing
     },
     [onChange]
   );
