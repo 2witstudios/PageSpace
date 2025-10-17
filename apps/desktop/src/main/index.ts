@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, shell, ipcMain, Tray, nativeImage } from 'electron';
+import { app, BrowserWindow, Menu, shell, ipcMain, Tray, nativeImage, dialog } from 'electron';
 import electronUpdaterPkg from 'electron-updater';
 const { autoUpdater } = electronUpdaterPkg;
 import * as path from 'path';
@@ -283,6 +283,13 @@ function createMenu(): void {
             await shell.openExternal('https://pagespace.ai');
           },
         },
+        { type: 'separator' },
+        {
+          label: 'Check for Updates...',
+          click: () => {
+            checkForUpdates();
+          },
+        },
       ],
     },
   ];
@@ -292,17 +299,107 @@ function createMenu(): void {
 }
 
 function setupAutoUpdater(): void {
-  // Configure auto-updater
+  // Configure auto-updater for GitHub releases
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  // Check for updates on launch
   autoUpdater.checkForUpdatesAndNotify();
 
-  autoUpdater.on('update-available', () => {
-    console.log('Update available');
+  // Check for updates every 4 hours (best practice - not too aggressive)
+  const CHECK_INTERVAL = 4 * 60 * 60 * 1000; // 4 hours in milliseconds
+  setInterval(() => {
+    autoUpdater.checkForUpdates();
+  }, CHECK_INTERVAL);
+
+  // Event: Update is available
+  autoUpdater.on('update-available', (info) => {
+    console.log('Update available:', info.version);
+    dialog.showMessageBox({
+      type: 'info',
+      title: 'Update Available',
+      message: `A new version (${info.version}) is available and is being downloaded.`,
+      detail: 'You will be notified when the download is complete.',
+      buttons: ['OK'],
+    });
   });
 
-  autoUpdater.on('update-downloaded', () => {
-    console.log('Update downloaded');
-    // You can show a notification here
+  // Event: Update downloaded and ready to install
+  autoUpdater.on('update-downloaded', (info) => {
+    console.log('Update downloaded:', info.version);
+    dialog
+      .showMessageBox({
+        type: 'info',
+        title: 'Update Ready',
+        message: `Version ${info.version} has been downloaded and is ready to install.`,
+        detail: 'The update will be installed the next time you restart PageSpace.',
+        buttons: ['Restart Now', 'Later'],
+        defaultId: 1,
+        cancelId: 1,
+      })
+      .then((result) => {
+        if (result.response === 0) {
+          // User clicked "Restart Now"
+          autoUpdater.quitAndInstall();
+        }
+      });
   });
+
+  // Event: Error occurred during update
+  autoUpdater.on('error', (error) => {
+    console.error('Auto-updater error:', error);
+    // Only show error dialog if user manually triggered check
+    // Background checks fail silently to avoid annoying users
+  });
+
+  // Event: Checking for updates
+  autoUpdater.on('checking-for-update', () => {
+    console.log('Checking for updates...');
+  });
+
+  // Event: No updates available
+  autoUpdater.on('update-not-available', () => {
+    console.log('No updates available');
+  });
+}
+
+// Manual update check (triggered from menu)
+function checkForUpdates(): void {
+  autoUpdater
+    .checkForUpdates()
+    .then((result) => {
+      if (!result || !result.updateInfo) {
+        dialog.showMessageBox({
+          type: 'info',
+          title: 'No Updates',
+          message: 'You are running the latest version of PageSpace.',
+          buttons: ['OK'],
+        });
+        return;
+      }
+
+      const currentVersion = app.getVersion();
+      const latestVersion = result.updateInfo.version;
+
+      if (currentVersion === latestVersion) {
+        dialog.showMessageBox({
+          type: 'info',
+          title: 'No Updates',
+          message: 'You are running the latest version of PageSpace.',
+          buttons: ['OK'],
+        });
+      }
+    })
+    .catch((error) => {
+      console.error('Update check failed:', error);
+      dialog.showMessageBox({
+        type: 'error',
+        title: 'Update Check Failed',
+        message: 'Unable to check for updates. Please try again later.',
+        detail: error.message || 'Unknown error occurred',
+        buttons: ['OK'],
+      });
+    });
 }
 
 // IPC handlers

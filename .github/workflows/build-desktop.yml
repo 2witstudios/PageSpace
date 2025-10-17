@@ -1,5 +1,9 @@
 name: Build Desktop App
 
+# This workflow builds, signs, and publishes the desktop app
+# electron-builder automatically creates draft releases on GitHub when GH_TOKEN is provided
+# After the workflow completes, review and publish the draft release on GitHub
+
 on:
   push:
     tags:
@@ -78,6 +82,7 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
@@ -158,27 +163,3 @@ jobs:
             apps/desktop/dist-electron/*.deb
             apps/desktop/dist-electron/*.rpm
           retention-days: 30
-
-  create-release:
-    needs: [build-macos, build-windows, build-linux]
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    permissions:
-      contents: write
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: ./artifacts
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            ./artifacts/macos-packages/*
-            ./artifacts/windows-packages/*
-            ./artifacts/linux-packages/*
-          draft: true
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

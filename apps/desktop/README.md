@@ -92,32 +92,64 @@ For production releases, you'll need to configure code signing:
 
 ### Auto-Updates
 
-The app uses `electron-updater` for automatic updates. Configure your update server in `package.json`:
+The app uses `electron-updater` with GitHub Releases for automatic updates. **Auto-updates are only enabled for macOS** builds that are properly signed and notarized.
 
-```json
-{
-  "build": {
-    "publish": {
-      "provider": "github",
-      "owner": "your-username",
-      "repo": "pagespace"
-    }
-  }
-}
-```
+**How it works:**
+- App checks for updates on launch and every 4 hours
+- When an update is found, it downloads in the background
+- User is notified when download is complete with a dialog
+- User can choose to install immediately or on next restart
+- Update installs automatically when app quits
 
-Or use a custom update server:
+**Manual Check:**
+Users can manually check for updates via **Help → Check for Updates...**
 
-```json
-{
-  "build": {
-    "publish": {
-      "provider": "generic",
-      "url": "https://your-update-server.com/downloads"
-    }
-  }
-}
-```
+### Creating a Release
+
+PageSpace Desktop uses electron-builder to automatically publish releases to GitHub.
+
+**Release Process:**
+
+1. **Update Version Number**
+   ```bash
+   cd apps/desktop
+   # Edit package.json and bump the version
+   # Example: "version": "1.0.1" -> "version": "1.0.2"
+   ```
+
+2. **Commit and Push Changes**
+   ```bash
+   git add apps/desktop/package.json
+   git commit -m "chore(desktop): bump version to 1.0.2"
+   git push origin master
+   ```
+
+3. **Trigger GitHub Actions Workflow**
+   - Go to https://github.com/2witstudios/PageSpace/actions
+   - Select "Build Desktop App" workflow
+   - Click "Run workflow"
+   - Select the branch (usually `master`)
+   - Click "Run workflow" button
+
+4. **Review Draft Release**
+   - The workflow will build, sign, and notarize the macOS app
+   - When complete, go to https://github.com/2witstudios/PageSpace/releases
+   - Find the draft release created by electron-builder
+   - Review the release notes and attached binaries
+
+5. **Publish Release**
+   - Edit the draft release if needed
+   - Click "Publish release"
+   - Users with the desktop app will automatically be notified of the update
+
+**Required GitHub Secrets for macOS:**
+- `MACOS_CERTIFICATE`: Base64-encoded .p12 certificate
+- `MACOS_CERTIFICATE_PWD`: Password for the certificate
+- `APPLE_ID`: Apple ID for notarization
+- `APPLE_APP_SPECIFIC_PASSWORD`: App-specific password for notarization
+- `APPLE_TEAM_ID`: Apple Developer Team ID
+
+The GitHub Actions workflow handles signing and notarization automatically.
 
 ## Platform-Specific Notes
 

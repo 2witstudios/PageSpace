@@ -32,6 +32,11 @@
   "build": {
     "appId": "com.pagespace.app",
     "productName": "PageSpace",
+    "publish": {
+      "provider": "github",
+      "owner": "2witstudios",
+      "repo": "PageSpace"
+    },
     "directories": {
       "output": "dist-electron",
       "buildResources": "assets"
