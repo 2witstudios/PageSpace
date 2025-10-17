@@ -60,14 +60,14 @@ Claude: "Update all meeting notes in my PageSpace"
 Download the native desktop app that connects to your cloud instance:
 
 - **macOS**: [Download DMG](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.dmg) (Intel & Apple Silicon)
-- **Windows**: [Download Installer](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.exe)
-- **Linux**: [AppImage](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.AppImage) | [DEB](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.deb) | [RPM](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.rpm)
 
 **Features:**
 - Native desktop integration with system tray
 - Minimize to tray, deep linking support
-- Automatic updates
+- Automatic updates (macOS only)
 - Works with your cloud PageSpace instance
+
+**Note:** Currently only available for macOS. Windows and Linux versions can be built from source.
 
 **Build from source:**
 ```bash
