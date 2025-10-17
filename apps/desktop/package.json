@@ -67,7 +67,6 @@
       "notarize": true
     },
     "win": {
-      "publish": null,
       "target": [
         {
           "target": "nsis",
