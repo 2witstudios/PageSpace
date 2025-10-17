@@ -18,7 +18,7 @@ In most tools, you chat with AI *about* your work. In PageSpace, AI works *direc
 
 ## Preview
 
-<img width="1022" height="500" alt="PageSpace Interface" src="https://github.com/user-attachments/assets/74d74b52-eec2-44c8-b9fa-6e03ebb1e802" />
+![PageSpace Demo](https://github.com/user-attachments/assets/ae068cf3-06fa-4d37-b5f4-b25121598a6f)
 
 ---
 
