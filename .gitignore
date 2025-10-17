@@ -64,3 +64,17 @@ out/
 .roo/
 reports/
 archive/
+
+# Security - Additional protections
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+
+# Mac code signing certificates
+certificate.p12
+
+# Production environment files
+.env.production
