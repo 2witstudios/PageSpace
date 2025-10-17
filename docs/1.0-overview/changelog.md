@@ -1,3 +1,79 @@
+## 2025-01-17
+
+### Documentation Update - Editor Architecture & State Management Decoupling
+
+**Comprehensive Documentation of Document State Architecture**
+
+Completed comprehensive documentation of the editor architecture and state management system, solidifying the document state decoupling pattern that resolved systemic re-render issues.
+
+#### Editor Architecture Documentation ✅
+- **Updated**: `/docs/2.0-architecture/2.6-features/editor-architecture.md` - Complete editor system documentation (1000+ lines)
+  - **Critical Role of Prettier**: Documented how Prettier formatting enables AI line-by-line editing (not cosmetic!)
+  - **HTML as Source of Truth**: Complete documentation of dual-editor (Tiptap + Monaco) architecture
+  - **Three Content Update Types**: `updateContent()`, `updateContentFromServer()`, `updateContentSilently()`
+  - **State Management Deep Dive**: Complete `useDocumentManagerStore` and `useDocument` hook documentation
+  - **Flow Diagrams**: User edit, Prettier formatting, AI edit, and complete timeline sequences
+  - **Auto-Save Strategy**: Debounced saves (1000ms), force save triggers, conflict prevention
+  - **Implementation Guide**: Step-by-step guide for creating new document-editing page views
+  - **Common Patterns**: Save state indicators, navigation prevention, dirty state checking
+
+#### State Management Documentation ✅
+- **Updated**: `/docs/2.0-architecture/2.1-frontend/state-management.md` - Complete refactor (680+ lines)
+  - **Four Types of State**: Server State (SWR), Application State (pointers), Document State (isolated), UI State (persisted)
+  - **Document State Decoupling**: Comprehensive explanation of why and how document state is separated from layout
+  - **Historical Context**: Links to SYSTEMIC-RE-RENDER-ISSUE.md explaining the problem this architecture solved
+  - **Complete Store Documentation**: Layout store, Document Manager store, Drive store, UI store
+  - **The `useDocument` Hook**: Full API documentation with three content update types explained
+  - **Data Flow Diagrams**: Complete sequence diagrams showing navigation, editing, and save flows
+  - **Best Practices**: When to use each state type, SWR configuration, document state patterns
+  - **Migration Guide**: How to update old code that coupled document state with layout
+
+#### Key Architectural Principles Documented ✅
+
+1. **Document State Isolation**: `useDocumentManagerStore` is completely separate from `useLayoutStore`
+   - Layout changes don't affect document state
+   - Auto-save timers aren't interrupted by navigation
+   - Cursor position preserved during SWR revalidations
+   - Multi-document editing support
+
+2. **Three Content Update Pathways**: Each with different dirty flag and save behavior
+   - `updateContent()` - User edits (marks dirty, triggers save)
+   - `updateContentFromServer()` - External updates (no dirty flag, no save)
+   - `updateContentSilently()` - Prettier formatting (no dirty flag, no save)
+   - This separation prevents save indicator flicker
+
+3. **Prettier for AI Editability**: Not cosmetic - infrastructure for AI collaboration
+   - Transforms single-line HTML into multi-line format
+   - Enables AI line-by-line replacement
+   - Silent update path prevents triggering saves
+
+4. **Dual-Layer Debouncing**: Independent timers prevent operation conflicts
+   - 1000ms: User edit auto-save
+   - 2500ms: Prettier formatting
+   - Both with cancellation logic for continuous typing
+
+#### Verification & Consistency ✅
+- **Codebase Pattern Confirmed**: No files mix `useLayoutStore` with document state
+- **Single Source of Truth**: `useDocumentManagerStore` accessed only via `useDocument` hook
+- **Clean Separation**: Document editing logic isolated in 3 files (store, hook, debug panel)
+- **Historical Documentation**: SYSTEMIC-RE-RENDER-ISSUE.md explains why this architecture exists
+
+#### Impact
+- **Complete Reference**: Developers now have comprehensive documentation of the editor architecture
+- **Implementation Guidance**: Step-by-step guides for creating document-editing page views
+- **Best Practices**: Clear patterns for when to use each content update method
+- **Historical Context**: Understanding of why the architecture is designed this way
+- **State Management Clarity**: Four types of state with clear separation of concerns
+
+**Documentation Files Updated**:
+- `/docs/2.0-architecture/2.6-features/editor-architecture.md` (completely rewritten, 1024 lines)
+- `/docs/2.0-architecture/2.1-frontend/state-management.md` (completely rewritten, 688 lines)
+- `/docs/1.0-overview/changelog.md` (this entry)
+
+**Time**: 4 hours
+
+---
+
 ## 2025-10-01
 
 ### Documentation Update - Architecture & API Coverage
