@@ -67,6 +67,7 @@
       "notarize": true
     },
     "win": {
+      "publish": null,
       "target": [
         {
           "target": "nsis",
@@ -81,6 +82,7 @@
       "artifactName": "${productName}.${ext}"
     },
     "linux": {
+      "publish": null,
       "target": [
         "AppImage",
         "deb",
