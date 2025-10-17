@@ -345,7 +345,19 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     updateContentFromServer,
     saveWithDebounce,
     forceSave,
-  } = useDocument(page.id, page.content);
+  } = useDocument(page.id); // ✅ PageId-only pattern
+
+  // Store forceSave in ref to prevent cleanup effects from re-running
+  const forceSaveRef = useRef(forceSave);
+  useEffect(() => {
+    forceSaveRef.current = forceSave;
+  }, [forceSave]);
+
+  // Track isDirty in ref for window blur handler
+  const isDirtyRef = useRef(false);
+  useEffect(() => {
+    isDirtyRef.current = documentState?.isDirty || false;
+  }, [documentState?.isDirty]);
 
   useEffect(() => {
     setExternalSheets((prev) => {
@@ -1251,10 +1263,6 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
   }, [initializeAndActivate, page.id]);
 
   useEffect(() => {
-    setSheet(sanitizeSheetData(parseSheetContent(page.content)));
-  }, [page.content, page.id]);
-
-  useEffect(() => {
     setSelection({
       type: 'single',
       cell: { row: 0, column: 0 }
@@ -1376,43 +1384,56 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     };
   }, [documentState?.content, documentState?.isDirty, page.id, socket, updateContentFromServer]);
 
-  // Save on unmount if dirty
+  // Cleanup on unmount - auto-save any unsaved changes
+  // Empty deps array ensures cleanup only runs on TRUE component unmount
   useEffect(() => {
     return () => {
-      if (documentState?.isDirty) {
-        forceSave().catch(console.error);
+      if (isDirtyRef.current) {
+        forceSaveRef.current().catch(console.error);
       }
     };
-  }, [documentState?.isDirty, forceSave]);
+  }, []); // ✅ Empty deps - only runs on mount/unmount
 
-  // Save on window blur
+  // Auto-save on window blur
   useEffect(() => {
+    // Only run on client side with proper window API
     if (typeof window === 'undefined' || !window.addEventListener) return;
+
     const handleBlur = () => {
-      if (documentState?.isDirty) {
-        forceSave().catch(console.error);
+      // Check if dirty using ref (always current)
+      if (isDirtyRef.current) {
+        forceSaveRef.current().catch(console.error);
       }
     };
+
     window.addEventListener('blur', handleBlur);
     return () => {
-      window.removeEventListener('blur', handleBlur);
-    };
-  }, [documentState?.isDirty, forceSave]);
-
-  // Ctrl/Cmd + S shortcut
-  useEffect(() => {
-    if (typeof document === 'undefined' || !document.addEventListener) return;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key === 's') {
-        event.preventDefault();
-        forceSave().catch(console.error);
+      if (typeof window !== 'undefined' && window.removeEventListener) {
+        window.removeEventListener('blur', handleBlur);
       }
     };
+  }, []); // ✅ Empty deps - uses refs for latest state
+
+  // Handle keyboard shortcuts
+  useEffect(() => {
+    // Only run on client side with proper document API
+    if (typeof document === 'undefined' || !document.addEventListener) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl+S / Cmd+S to save
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        forceSaveRef.current();
+      }
+    };
+
     document.addEventListener('keydown', handleKeyDown);
     return () => {
-      document.removeEventListener('keydown', handleKeyDown);
+      if (typeof document !== 'undefined' && document.removeEventListener) {
+        document.removeEventListener('keydown', handleKeyDown);
+      }
     };
-  }, [forceSave]);
+  }, []); // ✅ Empty deps - uses ref for latest forceSave
 
   return (
     <div className="flex h-full flex-col">

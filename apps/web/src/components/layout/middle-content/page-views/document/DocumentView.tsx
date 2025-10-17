@@ -2,7 +2,6 @@
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import dynamic from 'next/dynamic';
-import { TreePage } from '@/hooks/usePageTree';
 import { useDocument } from '@/hooks/useDocument';
 import { Editor } from '@tiptap/react';
 import Toolbar from '@/components/editors/Toolbar';
@@ -16,44 +15,60 @@ import { fetchWithAuth } from '@/lib/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 
 interface DocumentViewProps {
-  page: TreePage;
+  pageId: string;
 }
 
 const MonacoEditor = dynamic(() => import('@/components/editors/MonacoEditor'), { ssr: false });
 const RichEditor = dynamic(() => import('@/components/editors/RichEditor'), { ssr: false });
 
 
-const DocumentView = ({ page }: DocumentViewProps) => {
+const DocumentView = ({ pageId }: DocumentViewProps) => {
   const { activeView } = useDocumentStore();
   const [editor, setEditor] = useState<Editor | null>(null);
-  const [isLoading] = useState(false);
   const [isReadOnly, setIsReadOnly] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const isDirtyRef = useRef(false);
+  const hasInitializedRef = useRef(false);
   const socket = useSocket();
   const { user } = useAuth();
-  
-  // Use the new document hook
+
+  // Use the new document hook - will fetch content if not cached
   const {
     document: documentState,
+    isLoading,
     initializeAndActivate,
     updateContent,
     updateContentFromServer,
     saveWithDebounce,
     forceSave,
-  } = useDocument(page.id, page.content);
-  
-  // Initialize document when component mounts
+  } = useDocument(pageId);
+
+  // Store forceSave in ref to prevent cleanup effects from re-running
+  const forceSaveRef = useRef(forceSave);
   useEffect(() => {
-    initializeAndActivate();
-  }, [initializeAndActivate]);
+    forceSaveRef.current = forceSave;
+  }, [forceSave]);
+
+  // Initialize document when component mounts (only once)
+  useEffect(() => {
+    if (!hasInitializedRef.current) {
+      hasInitializedRef.current = true;
+      initializeAndActivate();
+    }
+  }, [pageId, initializeAndActivate]); // Re-initialize on pageId change
+
+  // Reset initialization flag when pageId changes
+  useEffect(() => {
+    hasInitializedRef.current = false;
+  }, [pageId]);
 
   // Register editing state when document is dirty
   useEffect(() => {
-    const componentId = `document-${page.id}`;
+    const componentId = `document-${pageId}`;
 
     if (documentState?.isDirty && !isReadOnly) {
       useEditingStore.getState().startEditing(componentId, 'document', {
-        pageId: page.id,
+        pageId: pageId,
         componentName: 'DocumentView',
       });
     } else {
@@ -63,7 +78,7 @@ const DocumentView = ({ page }: DocumentViewProps) => {
     return () => {
       useEditingStore.getState().endEditing(componentId);
     };
-  }, [documentState?.isDirty, page.id, isReadOnly]);
+  }, [documentState?.isDirty, pageId, isReadOnly]);
 
   // Check user permissions
   useEffect(() => {
@@ -71,7 +86,7 @@ const DocumentView = ({ page }: DocumentViewProps) => {
       if (!user?.id) return;
 
       try {
-        const response = await fetchWithAuth(`/api/pages/${page.id}/permissions/check?userId=${user.id}`);
+        const response = await fetchWithAuth(`/api/pages/${pageId}/permissions/check?userId=${user.id}`);
         if (response.ok) {
           const permissions = await response.json();
           setIsReadOnly(!permissions.canEdit);
@@ -88,7 +103,7 @@ const DocumentView = ({ page }: DocumentViewProps) => {
     };
 
     checkPermissions();
-  }, [user?.id, page.id]);
+  }, [user?.id, pageId]);
 
   // Listen for content updates from other sources (AI, other users)
   useEffect(() => {
@@ -97,17 +112,15 @@ const DocumentView = ({ page }: DocumentViewProps) => {
     const handleContentUpdate = async (eventData: PageEventPayload) => {
       // Filter out self-triggered events to prevent refetch loop
       if (eventData.socketId && eventData.socketId === socket.id) {
-        console.log('📌 Ignoring self-triggered content-updated event');
         return;
       }
 
       // Only update if it's for the current page
-      if (eventData.pageId === page.id) {
-        console.log('📝 Document content updated via socket, fetching latest...');
+      if (eventData.pageId === pageId) {
 
         try {
           // Fetch the latest content from the server
-          const response = await fetchWithAuth(`/api/pages/${page.id}`);
+          const response = await fetchWithAuth(`/api/pages/${pageId}`);
           if (response.ok) {
             const updatedPage = await response.json();
 
@@ -129,40 +142,41 @@ const DocumentView = ({ page }: DocumentViewProps) => {
     return () => {
       socket.off('page:content-updated', handleContentUpdate);
     };
-  }, [socket, page.id, documentState, updateContentFromServer]);
+  }, [socket, pageId, documentState, updateContentFromServer]);
 
 
   // Handle content changes
-  const handleContentChange = useCallback((newContent: string | undefined, shouldSave = true) => {
+  const handleContentChange = useCallback((newContent: string | undefined) => {
     if (isReadOnly) {
       toast.error('You do not have permission to edit this document');
       return;
     }
 
     const content = newContent || '';
-    // Always update document state (sets isDirty flag)
+
+    // Update content (sets isDirty flag)
     updateContent(content);
 
-    // Only trigger save if requested (after formatting completes)
-    if (shouldSave) {
-      saveWithDebounce(content);
-    }
+    // Save timer - CRITICAL for data persistence (1000ms)
+    // Triggered every time content changes
+    saveWithDebounce(content);
   }, [updateContent, saveWithDebounce, isReadOnly]);
 
 
+  // Track isDirty in ref without causing effect recreation
+  useEffect(() => {
+    isDirtyRef.current = documentState?.isDirty || false;
+  }, [documentState?.isDirty]);
+
   // Cleanup on unmount - auto-save any unsaved changes
+  // Empty deps array ensures cleanup only runs on TRUE component unmount
   useEffect(() => {
     return () => {
-      // Force save if dirty before unmounting using the existing save mechanism
-      if (documentState?.isDirty) {
-        console.log('🚨 Component unmounting with unsaved changes, force saving...');
-        // Use forceSave which properly handles the save flow
-        forceSave().catch(error => {
-          console.error('Failed to save on unmount:', error);
-        });
+      if (isDirtyRef.current) {
+        forceSaveRef.current().catch(console.error);
       }
     };
-  }, [documentState?.isDirty, page.id, forceSave]);
+  }, []); // ✅ Empty deps - only runs on mount/unmount
 
   // Handle keyboard shortcuts
   useEffect(() => {
@@ -173,7 +187,7 @@ const DocumentView = ({ page }: DocumentViewProps) => {
       // Ctrl+S / Cmd+S to save
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault();
-        forceSave();
+        forceSaveRef.current();
       }
     };
 
@@ -183,7 +197,7 @@ const DocumentView = ({ page }: DocumentViewProps) => {
         document.removeEventListener('keydown', handleKeyDown);
       }
     };
-  }, [forceSave]); // ✅ Removed documentState dependency
+  }, []); // ✅ Empty deps - uses ref for latest forceSave
 
   // Auto-save on window blur
   useEffect(() => {
@@ -191,10 +205,9 @@ const DocumentView = ({ page }: DocumentViewProps) => {
     if (typeof window === 'undefined' || !window.addEventListener) return;
 
     const handleBlur = () => {
-      // Get fresh state at blur time
-      if (documentState?.isDirty) {
-        console.log('🔄 Window blur detected, auto-saving...');
-        forceSave().catch(console.error);
+      // Check if dirty using ref (always current)
+      if (isDirtyRef.current) {
+        forceSaveRef.current().catch(console.error);
       }
     };
 
@@ -204,7 +217,7 @@ const DocumentView = ({ page }: DocumentViewProps) => {
         window.removeEventListener('blur', handleBlur);
       }
     };
-  }, [documentState?.isDirty, forceSave]); // ✅ Only depend on isDirty flag
+  }, []); // ✅ Empty deps - uses refs for latest state
 
   return (
     <motion.div 

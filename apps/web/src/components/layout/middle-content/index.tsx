@@ -3,7 +3,7 @@
 import { useParams } from 'next/navigation';
 import { Skeleton } from "@/components/ui/skeleton";
 import { ViewHeader } from './content-header';
-import { usePageTree } from '@/hooks/usePageTree';
+import { usePageTree, TreePage } from '@/hooks/usePageTree';
 import { findNodeAndParent } from '@/lib/tree/tree-utils';
 import FolderView from './page-views/folder/FolderView';
 import AiChatView from './page-views/ai-page/AiChatView';
@@ -50,12 +50,20 @@ const PageContent = ({ pageId }: { pageId: string | null }) => {
   
   const componentName = getPageTypeComponent(page.type);
   const ViewComponent = componentMap[componentName as keyof typeof componentMap];
-  
+
   if (!ViewComponent) {
     return <div className="p-4">This page type is not supported.</div>;
   }
-  
-  return <ViewComponent key={page.id} page={page} />;
+
+  // DocumentView uses pageId-only pattern for stability
+  // Other components still use full page object (to be migrated)
+  if (componentName === 'DocumentView') {
+    return <DocumentView key={page.id} pageId={page.id} />;
+  }
+
+  // Other components still accept full page object
+  const Component = ViewComponent as React.ComponentType<{ page: TreePage }>;
+  return <Component key={page.id} page={page} />;
 };
 
 export default function CenterPanel() {

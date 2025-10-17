@@ -14,31 +14,33 @@ import { PageMention } from '@/lib/editor/tiptap-mention-config';
 
 interface RichEditorProps {
   value: string;
-  onChange: (value: string, shouldSave?: boolean) => void;
+  onChange: (value: string) => void;
   onEditorChange: (editor: Editor | null) => void;
   readOnly?: boolean;
 }
 
 const RichEditor = ({ value, onChange, onEditorChange, readOnly = false }: RichEditorProps) => {
-  const debounceTimeout = useRef<NodeJS.Timeout | null>(null);
+  // Formatting timer - OPTIONAL cosmetic improvement (2500ms)
+  // Does NOT block saves - user edits are saved after 1000ms regardless
+  const formatTimeout = useRef<NodeJS.Timeout | null>(null);
   const formatVersion = useRef(0);
 
-  const debouncedOnChange = useCallback(
+  const debouncedFormat = useCallback(
     (editor: Editor) => {
-      if (debounceTimeout.current) {
-        clearTimeout(debounceTimeout.current);
+      if (formatTimeout.current) {
+        clearTimeout(formatTimeout.current);
       }
       // Increment version - invalidates any in-flight formatting
       formatVersion.current++;
 
-      debounceTimeout.current = setTimeout(async () => {
+      formatTimeout.current = setTimeout(async () => {
         const currentVersion = formatVersion.current;
         const html = editor.getHTML();
         const formattedHtml = await formatHtml(html);
 
-        // Only update if no new typing happened during formatting
-        if (currentVersion === formatVersion.current) {
-          onChange(formattedHtml, true); // shouldSave=true after formatting
+        // Only update editor if no new typing and formatting actually changed content
+        if (currentVersion === formatVersion.current && formattedHtml !== html) {
+          onChange(formattedHtml); // Just update content, save handled by DocumentView
         }
       }, 2500); // Give Prettier time to format without disrupting typing
     },
@@ -70,12 +72,12 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false }: RichE
     autofocus: readOnly ? false : undefined,
     onUpdate: ({ editor }) => {
       if (!readOnly) {
-        // Immediate update to set isDirty flag (no save)
+        // Immediate update - just report the change
         const html = editor.getHTML();
-        onChange(html, false);
+        onChange(html);
 
-        // Debounced formatting and save
-        debouncedOnChange(editor);
+        // Debounced formatting (optional, cosmetic only)
+        debouncedFormat(editor);
       }
     },
     editorProps: {

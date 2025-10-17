@@ -3,7 +3,7 @@
 import { useParams, usePathname } from 'next/navigation';
 import { Skeleton } from "@/components/ui/skeleton";
 import { ViewHeader } from './content-header';
-import { usePageTree } from '@/hooks/usePageTree';
+import { usePageTree, TreePage } from '@/hooks/usePageTree';
 import { findNodeAndParent } from '@/lib/tree/tree-utils';
 import FolderView from './page-views/folder/FolderView';
 import AiChatView from './page-views/ai-page/AiChatView';
@@ -71,14 +71,26 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
   
   const componentName = getPageTypeComponent(page.type);
   const ViewComponent = componentMap[componentName as keyof typeof componentMap];
-  
-  const pageComponent = ViewComponent ? (
-    <ViewComponent page={page} />
-  ) : (
-    <div className="p-4 text-center text-muted-foreground">
-      This page type is not supported.
-    </div>
-  );
+
+  // DocumentView uses pageId-only pattern for stability
+  // Other components still use full page object (to be migrated)
+  let pageComponent: React.ReactNode;
+  if (!ViewComponent) {
+    pageComponent = (
+      <div className="p-4 text-center text-muted-foreground">
+        This page type is not supported.
+      </div>
+    );
+  } else if (componentName === 'DocumentView') {
+    // DocumentView accepts only pageId (new pattern)
+    pageComponent = <DocumentView pageId={page.id} />;
+  } else {
+    // Other components still accept full page object
+    // Type assertion: we've excluded DocumentView above, so ViewComponent here
+    // is one of the components that accepts { page: TreePage }
+    const Component = ViewComponent as React.ComponentType<{ page: TreePage }>;
+    pageComponent = <Component page={page} />;
+  }
 
   return (
     <div key={pageId} className="h-full transition-opacity duration-150">

@@ -1,23 +1,13 @@
 import { create } from 'zustand';
-import { patch, fetchWithAuth } from '@/lib/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth-fetch';
 import { persist } from 'zustand/middleware';
 import { getLayoutViewType, PageType } from '@pagespace/lib/client-safe';
 import { toast } from 'sonner';
 import { createClientLogger } from '@/lib/logging/client-logger';
 
 // Types
-export interface DocumentState {
-  id: string;
-  content: string;
-  isDirty: boolean;
-  version: number;
-  lastSaved: number;
-  saveTimeout?: NodeJS.Timeout;
-}
-
 export interface ViewState {
   viewType: 'document' | 'folder' | 'channel' | 'ai' | 'settings';
-  document: DocumentState | null;
   scrollPosition: number;
   timestamp: number;
 }
@@ -41,11 +31,7 @@ interface LayoutState {
   // Tree state (PERSISTED)
   treeExpanded: Set<string>;
   treeScrollPosition: number;
-  
-  // Document state (NOT PERSISTED - fresh on each session)
-  documents: Map<string, DocumentState>;
-  activeDocument: DocumentState | null;
-  
+
   // View cache (NOT PERSISTED - memory only)
   viewCache: Map<string, ViewState>;
   centerViewType: 'document' | 'folder' | 'channel' | 'ai' | 'settings';
@@ -66,7 +52,6 @@ interface LayoutState {
   setRightSidebarOpen: (open: boolean) => void;
   setTreeExpanded: (nodeId: string, expanded: boolean) => void;
   setTreeScrollPosition: (position: number) => void;
-  updateDocument: (pageId: string, updates: Partial<DocumentState>) => void;
   clearCache: () => void;
   hydrateFromUrl: (url: string) => void;
 }
@@ -151,8 +136,6 @@ export const useLayoutStore = create<LayoutState>()(
       rightSidebarOpen: false,
       treeExpanded: new Set(),
       treeScrollPosition: 0,
-      documents: new Map(),
-      activeDocument: null,
       viewCache: new Map(),
       centerViewType: 'document',
       isNavigating: false,
@@ -179,18 +162,6 @@ export const useLayoutStore = create<LayoutState>()(
           // Save current view state before navigation (non-blocking)
           if (state.activePageId) {
             state.saveCurrentView();
-            
-            // Save dirty documents in background
-            const currentDoc = state.activeDocument;
-            if (currentDoc?.isDirty) {
-              // Don't await - save in background
-              saveDocumentToServer(currentDoc).catch(error => {
-                layoutLogger.error('Background save failed during navigation', {
-                  pageId: currentDoc.id,
-                  error: error instanceof Error ? error : String(error),
-                });
-              });
-            }
           }
           
           // Immediately set the new page ID for instant navigation feedback
@@ -213,40 +184,21 @@ export const useLayoutStore = create<LayoutState>()(
           const cached = state.viewCache.get(pageId);
           if (cached) {
             set({
-              centerViewType: cached.viewType,
-              activeDocument: cached.document,
+              centerViewType: cached.viewType
             });
             return;
           }
-          
+
           // Lazy load page data in background - don't block navigation
           fetchPage(pageId).then(page => {
             if (!page) return;
-            
+
             const viewType = getViewType(page.type);
-            let document: DocumentState | null = null;
-            
-            if (viewType === 'document') {
-              document = {
-                id: pageId,
-                content: page.content || '',
-                isDirty: false,
-                version: 0,
-                lastSaved: Date.now()
-              };
-              
-              // Add to documents map
-              const currentState = get();
-              const newDocuments = new Map(currentState.documents);
-              newDocuments.set(pageId, document);
-              set({ documents: newDocuments });
-            }
-            
+
             // Only update if we're still on the same page
             if (get().activePageId === pageId) {
               set({
-                centerViewType: viewType,
-                activeDocument: document,
+                centerViewType: viewType
               });
             }
           }).catch(error => {
@@ -282,7 +234,7 @@ export const useLayoutStore = create<LayoutState>()(
       saveCurrentView: () => {
         const state = get();
         if (!state.activePageId) return;
-        
+
         // Implement LRU eviction
         if (state.viewCache.size >= MAX_CACHE_SIZE) {
           const firstKey = state.viewCache.keys().next().value;
@@ -290,14 +242,13 @@ export const useLayoutStore = create<LayoutState>()(
             state.viewCache.delete(firstKey);
           }
         }
-        
+
         const viewState: ViewState = {
           viewType: state.centerViewType,
-          document: state.activeDocument,
           scrollPosition: window.scrollY,
           timestamp: Date.now()
         };
-        
+
         const newCache = new Map(state.viewCache);
         newCache.set(state.activePageId, viewState);
         set({ viewCache: newCache });
@@ -306,14 +257,13 @@ export const useLayoutStore = create<LayoutState>()(
       restoreView: (pageId: string) => {
         const state = get();
         const cached = state.viewCache.get(pageId);
-        
+
         if (cached) {
           set({
             activePageId: pageId,
-            centerViewType: cached.viewType,
-            activeDocument: cached.document
+            centerViewType: cached.viewType
           });
-          
+
           // Restore scroll position
           setTimeout(() => {
             window.scrollTo(0, cached.scrollPosition);
@@ -353,34 +303,10 @@ export const useLayoutStore = create<LayoutState>()(
         set({ treeScrollPosition: position });
       },
       
-      updateDocument: (pageId: string, updates: Partial<DocumentState>) => {
-        const state = get();
-        const existing = state.documents.get(pageId);
-        
-        if (existing) {
-          const updated = { ...existing, ...updates };
-          const newDocuments = new Map(state.documents);
-          newDocuments.set(pageId, updated);
-          
-          // Only update if something actually changed
-          const hasChanged = Object.keys(updates).some(key => 
-            existing[key as keyof DocumentState] !== updates[key as keyof DocumentState]
-          );
-          
-          if (hasChanged) {
-            set({
-              documents: newDocuments,
-              activeDocument: state.activePageId === pageId ? updated : state.activeDocument
-            });
-          }
-        }
-      },
       
       clearCache: () => {
         set({
-          viewCache: new Map(),
-          documents: new Map(),
-          activeDocument: null
+          viewCache: new Map()
         });
       },
       
@@ -423,27 +349,3 @@ export const useLayoutStore = create<LayoutState>()(
   )
 );
 
-// Helper function to save document to server
-async function saveDocumentToServer(document: DocumentState): Promise<void> {
-  try {
-    await patch(`/api/pages/${document.id}`, {
-      content: document.content,
-      version: document.version
-    });
-    
-    // Update document state
-    useLayoutStore.getState().updateDocument(document.id, {
-      isDirty: false,
-      lastSaved: Date.now()
-    });
-    
-    toast.success('Page saved successfully!');
-  } catch (error) {
-    layoutLogger.error('Failed to save document to server', {
-      pageId: document.id,
-      error: error instanceof Error ? error : String(error),
-    });
-    toast.error('Failed to save page content');
-    throw error;
-  }
-}

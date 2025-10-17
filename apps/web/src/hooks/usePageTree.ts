@@ -3,6 +3,7 @@ import { useState, useCallback } from 'react';
 import { mergeChildren } from '@/lib/tree/tree-utils';
 import { Page } from '@pagespace/lib/client';
 import { fetchWithAuth } from '@/lib/auth-fetch';
+import { useEditingStore } from '@/stores/useEditingStore';
 
 type User = {
   id: string;
@@ -69,6 +70,13 @@ export function usePageTree(driveId?: string, trashView?: boolean) {
 
   const invalidateTree = useCallback(() => {
     if (swrKey) {
+      // Don't revalidate tree if user is actively editing to prevent component remounting
+      const isEditing = useEditingStore.getState().isAnyActive();
+      if (isEditing) {
+        console.log('⏸️ Skipping tree revalidation - editing in progress');
+        return;
+      }
+
       cache.delete(swrKey);
       mutate(); // Re-fetch
     }

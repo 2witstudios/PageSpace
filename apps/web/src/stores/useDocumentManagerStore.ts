@@ -6,6 +6,7 @@ export interface DocumentState {
   isDirty: boolean;
   version: number;
   lastSaved: number;
+  lastUpdateTime: number; // Timestamp of last content update
   saveTimeout?: NodeJS.Timeout;
 }
 
@@ -39,16 +40,18 @@ export const useDocumentManagerStore = create<DocumentManagerState>((set, get) =
   createDocument: (pageId: string, initialContent = '') => {
     const state = get();
     const newDocuments = new Map(state.documents);
-    
+
     if (!newDocuments.has(pageId)) {
+      const now = Date.now();
       newDocuments.set(pageId, {
         id: pageId,
         content: initialContent,
         isDirty: false,
         version: 0,
-        lastSaved: Date.now(),
+        lastSaved: now,
+        lastUpdateTime: now,
       });
-      
+
       set({ documents: newDocuments });
     }
   },
@@ -56,7 +59,7 @@ export const useDocumentManagerStore = create<DocumentManagerState>((set, get) =
   updateDocument: (pageId: string, updates: Partial<DocumentState>) => {
     const state = get();
     const document = state.documents.get(pageId);
-    
+
     if (document) {
       const newDocuments = new Map(state.documents);
       newDocuments.set(pageId, { ...document, ...updates });
@@ -90,7 +93,7 @@ export const useDocumentManagerStore = create<DocumentManagerState>((set, get) =
     const newSaving = new Set(state.savingDocuments);
     newSaving.delete(pageId);
     set({ savingDocuments: newSaving });
-    
+
     // Update the document's saved timestamp
     get().updateDocument(pageId, {
       isDirty: false,

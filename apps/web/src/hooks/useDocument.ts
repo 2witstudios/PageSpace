@@ -1,7 +1,7 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useDocumentManagerStore, DocumentState } from '@/stores/useDocumentManagerStore';
 import { toast } from 'sonner';
-import { patch } from '@/lib/auth-fetch';
+import { patch, fetchWithAuth } from '@/lib/auth-fetch';
 import { useSocket } from './useSocket';
 
 // Document state selectors
@@ -64,6 +64,9 @@ export const useDocumentSaving = (pageId: string) => {
   const saveDocument = useCallback(
     async (content: string) => {
       try {
+        // Record when save started to detect if updates happened during save
+        const saveStartTime = Date.now();
+
         markAsSaving(pageId);
 
         // Include socket ID in request headers to prevent self-refetch loop
@@ -74,13 +77,34 @@ export const useDocumentSaving = (pageId: string) => {
 
         await patch(`/api/pages/${pageId}`, { content }, { headers });
 
-        markAsSaved(pageId);
+        // Only mark as saved if NO updates happened since save started
+        // This prevents showing "Saved" when user typed during the save
+        const currentDoc = useDocumentManagerStore.getState().documents.get(pageId);
+
+        // Check: content matches AND no updates during save (lastUpdateTime < saveStartTime)
+        if (currentDoc &&
+            currentDoc.content === content &&
+            currentDoc.lastUpdateTime < saveStartTime) {
+          markAsSaved(pageId);
+        } else {
+          // Content changed while saving - remove from saving state but keep dirty
+          const state = useDocumentManagerStore.getState();
+          const newSaving = new Set(state.savingDocuments);
+          newSaving.delete(pageId);
+          useDocumentManagerStore.setState({ savingDocuments: newSaving });
+        }
 
         return true;
       } catch (error) {
         console.error('Save failed:', error);
         toast.error('Failed to save document');
-        markAsSaved(pageId); // Remove from saving state even on error
+
+        // Remove from saving state but keep isDirty true since save failed
+        const state = useDocumentManagerStore.getState();
+        const newSaving = new Set(state.savingDocuments);
+        newSaving.delete(pageId);
+        useDocumentManagerStore.setState({ savingDocuments: newSaving });
+
         throw error;
       }
     },
@@ -98,67 +122,118 @@ export const useDocument = (pageId: string, initialContent?: string) => {
   const documentState = useDocumentState(pageId);
   const saving = useDocumentSaving(pageId);
   const { setActiveDocument } = useActiveDocument();
-  
-  // Initialize document on mount
-  const initializeAndActivate = useCallback(() => {
-    documentState.initializeDocument(initialContent);
-    setActiveDocument(pageId);
-  }, [documentState, initialContent, setActiveDocument, pageId]);
+  const [isLoading, setIsLoading] = useState(false);
+
+  // Initialize document on mount - fetches content if not provided
+  const initializeAndActivate = useCallback(async () => {
+    // Check if document already exists - if so, just activate it
+    const existingDoc = useDocumentManagerStore.getState().documents.get(pageId);
+    if (existingDoc) {
+      setActiveDocument(pageId);
+      return;
+    }
+
+    // If initialContent provided, use it (optional optimization)
+    if (initialContent !== undefined) {
+      const createDocument = useDocumentManagerStore.getState().createDocument;
+      createDocument(pageId, initialContent);
+      setActiveDocument(pageId);
+      return;
+    }
+
+    // Otherwise, fetch content from API
+    setIsLoading(true);
+    try {
+      const response = await fetchWithAuth(`/api/pages/${pageId}`);
+      if (response.ok) {
+        const page = await response.json();
+        const createDocument = useDocumentManagerStore.getState().createDocument;
+        createDocument(pageId, page.content || '');
+        setActiveDocument(pageId);
+      } else {
+        console.error('Failed to fetch page content:', response.status);
+        const createDocument = useDocumentManagerStore.getState().createDocument;
+        createDocument(pageId, ''); // Fallback to empty
+        setActiveDocument(pageId);
+      }
+    } catch (error) {
+      console.error('Failed to fetch page content:', error);
+      const createDocument = useDocumentManagerStore.getState().createDocument;
+      createDocument(pageId, ''); // Fallback to empty
+      setActiveDocument(pageId);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [initialContent, setActiveDocument, pageId]);
   
   // Content update handler for user edits
   const updateContent = useCallback(
     (newContent: string) => {
-      documentState.updateDocument({
+      const currentDoc = useDocumentManagerStore.getState().documents.get(pageId);
+
+      // Only update if content actually changed
+      if (currentDoc?.content === newContent) return;
+
+      // Update content with timestamp and dirty flag
+      const updateDocument = useDocumentManagerStore.getState().updateDocument;
+      updateDocument(pageId, {
         content: newContent,
-        isDirty: true,
+        lastUpdateTime: Date.now(), // Track when content was last updated
+        isDirty: true, // Always mark as dirty on user edits
       });
     },
-    [documentState]
+    [pageId]
   );
   
   // Content update handler for server updates (already saved)
   const updateContentFromServer = useCallback(
     (newContent: string) => {
-      documentState.updateDocument({
+      const now = Date.now();
+      const updateDocument = useDocumentManagerStore.getState().updateDocument;
+      updateDocument(pageId, {
         content: newContent,
         isDirty: false,
-        lastSaved: Date.now(),
+        lastSaved: now,
+        lastUpdateTime: now, // Update timestamp for server updates too
       });
     },
-    [documentState]
+    [pageId]
   );
   
   // Auto-save with debouncing
   const saveWithDebounce = useCallback(
     (content: string, delay = 1000) => {
-      const document = documentState.document;
+      const document = useDocumentManagerStore.getState().documents.get(pageId);
       if (document?.saveTimeout) {
         clearTimeout(document.saveTimeout);
       }
-      
+
       const timeout = setTimeout(() => {
         saving.saveDocument(content).catch(console.error);
       }, delay);
-      
-      documentState.updateDocument({ saveTimeout: timeout });
+
+      const updateDocument = useDocumentManagerStore.getState().updateDocument;
+      updateDocument(pageId, { saveTimeout: timeout });
     },
-    [documentState, saving]
+    [pageId, saving]
   );
   
   // Force save (immediate)
   const forceSave = useCallback(async () => {
-    if (!documentState.document?.isDirty) return false;
-    
+    const document = useDocumentManagerStore.getState().documents.get(pageId);
+    if (!document?.isDirty) return false;
+
     // Clear debounced save
-    if (documentState.document.saveTimeout) {
-      clearTimeout(documentState.document.saveTimeout);
+    if (document.saveTimeout) {
+      clearTimeout(document.saveTimeout);
     }
-    
-    return saving.saveDocument(documentState.document.content);
-  }, [documentState, saving]);
+
+    return saving.saveDocument(document.content);
+  }, [pageId, saving]);
   
   return {
     document: documentState.document,
+    isLoading,
     isSaving: saving.isSaving,
     initializeAndActivate,
     updateContent,

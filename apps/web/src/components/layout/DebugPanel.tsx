@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useLayoutStore } from '@/stores/useLayoutStore';
+import { useDocumentManagerStore } from '@/stores/useDocumentManagerStore';
 import { useNavigation } from '@/components/layout/NavigationProvider';
 import { usePerformanceMonitor } from '@/hooks/usePerformanceMonitor';
 import { Button } from '@/components/ui/button';
@@ -27,6 +28,7 @@ export function DebugPanel() {
   const [isOpen, setIsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'layout' | 'performance'>('layout');
   const layoutStore = useLayoutStore();
+  const documentStore = useDocumentManagerStore();
   const { getMetrics, getAverageLoadTime, clearMetrics } = usePerformanceMonitor();
   
   // Navigation context is now always available
@@ -248,15 +250,15 @@ export function DebugPanel() {
                   <div className="space-y-3">
                     <h3 className="font-semibold flex items-center gap-2">
                       <FileText size={16} />
-                      Documents ({layoutStore.documents.size})
+                      Documents ({documentStore.documents.size})
                     </h3>
-                    {layoutStore.documents.size > 0 ? (
+                    {documentStore.documents.size > 0 ? (
                       <div className="space-y-2 max-h-40 overflow-y-auto">
-                        {Array.from(layoutStore.documents.entries()).map(([id, doc]) => (
+                        {Array.from(documentStore.documents.entries()).map(([id, doc]) => (
                           <div key={id} className="p-2 bg-muted rounded text-xs">
                             <div className="flex items-center justify-between">
                               <span className="font-mono truncate">{id}</span>
-                              <Badge 
+                              <Badge
                                 variant={doc.isDirty ? "destructive" : "default"}
                                 className="text-xs"
                               >

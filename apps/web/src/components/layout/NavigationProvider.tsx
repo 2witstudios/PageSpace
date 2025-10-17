@@ -32,65 +32,23 @@ export function NavigationProvider({
     }
   }, []);
 
-  // Handle focus/blur for auto-save - optimized with debouncing
-  useEffect(() => {
-    // Only run on client side with proper window API
-    if (typeof window === 'undefined' || !window.addEventListener) return;
-    
-    // Skip in development to reduce overhead
-    if (process.env.NODE_ENV === 'development') return;
-
-    let blurTimeout: NodeJS.Timeout;
-
-    const handleWindowBlur = () => {
-      // Debounce blur events to prevent rapid firing
-      clearTimeout(blurTimeout);
-      blurTimeout = setTimeout(() => {
-        // When window loses focus, save current document
-        const currentState = useLayoutStore.getState();
-        const currentDoc = currentState.activeDocument;
-        if (currentDoc?.isDirty) {
-          // The save will be handled by the store
-        }
-      }, 100); // 100ms debounce
-    };
-
-    // Only add blur handler for actual auto-save functionality
-    window.addEventListener('blur', handleWindowBlur);
-
-    return () => {
-      clearTimeout(blurTimeout);
-      if (typeof window !== 'undefined' && window.removeEventListener) {
-        window.removeEventListener('blur', handleWindowBlur);
-      }
-    };
-  }, []); // No dependencies to prevent loops
-
   // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (process.env.NODE_ENV === 'development') {
         console.log('🧹 NavigationProvider cleaning up...');
       }
-      
+
       // Get current state for cleanup
       const currentState = useLayoutStore.getState();
-      
+
       // Save current view before unmounting
       if (currentState.activePageId) {
         currentState.saveCurrentView();
       }
-      
-      // Save any dirty documents
-      const currentDoc = currentState.activeDocument;
-      if (currentDoc?.isDirty) {
-        // Force immediate save on unmount
-        if (process.env.NODE_ENV === 'development') {
-          console.log('💾 Force saving dirty document on unmount');
-        }
-        // Note: This is async but we can't await in cleanup
-        // The save should be handled by the beforeunload event
-      }
+
+      // Note: Document saves are now handled by individual page views (DocumentView, SheetView)
+      // on their own unmount, blur, and keyboard shortcut events
     };
   }, []); // No dependencies to prevent loops
 

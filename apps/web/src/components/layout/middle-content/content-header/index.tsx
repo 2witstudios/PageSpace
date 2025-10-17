@@ -38,7 +38,7 @@ export function ViewHeader({ children }: ContentHeaderProps = {}) {
   const {
     document,
     isSaving,
-  } = useDocument(page?.id || '', page?.content || '');
+  } = useDocument(page?.id || '');
 
   // Handle file download
   const handleDownload = async () => {
