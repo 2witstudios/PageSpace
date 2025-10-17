@@ -2,7 +2,7 @@
 
 **Try it free at [www.pagespace.ai](https://www.pagespace.ai)** • Self-host with Docker • [Discord](https://discord.gg/yxDQkTHXT5)
 
-> 🚀 **Open Beta** — PageSpace turns your projects into intelligent workspaces where AI agents collaborate alongside your team with real tools to create, edit, and organize content.
+> 🚀 PageSpace turns your projects into intelligent workspaces where AI agents collaborate alongside your team with real tools to create, edit, and organize content.
 
 ---
 
