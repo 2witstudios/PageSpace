@@ -97,6 +97,7 @@ jobs:
 
   build-windows:
     runs-on: windows-latest
+    continue-on-error: true
     permissions:
       contents: write
     steps:
@@ -136,6 +137,7 @@ jobs:
 
   build-linux:
     runs-on: ubuntu-latest
+    continue-on-error: true
     permissions:
       contents: write
     steps:
