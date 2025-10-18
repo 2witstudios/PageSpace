@@ -32,6 +32,7 @@
   "build": {
     "appId": "com.pagespace.app",
     "productName": "PageSpace",
+    "npmRebuild": false,
     "publish": {
       "provider": "github",
       "owner": "2witstudios",
