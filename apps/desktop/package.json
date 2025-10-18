@@ -14,9 +14,9 @@
     "dev": "cross-env NODE_ENV=development electron .",
     "build": "tsc",
     "package": "pnpm build && electron-builder",
-    "package:mac": "pnpm build && electron-builder --mac",
-    "package:win": "pnpm build && electron-builder --win",
-    "package:linux": "pnpm build && electron-builder --linux"
+    "package:mac": "pnpm build && electron-builder --mac --publish never",
+    "package:win": "pnpm build && electron-builder --win --publish never",
+    "package:linux": "pnpm build && electron-builder --linux --publish never"
   },
   "dependencies": {
     "electron-store": "^10.0.0",
