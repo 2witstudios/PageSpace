@@ -132,7 +132,7 @@ function createWindow(): void {
       console.log(`Network error (${errorCode}): ${errorDescription} for ${validatedURL}`);
 
       // Load offline page
-      const offlinePath = path.join(__dirname, '../offline.html');
+      const offlinePath = path.join(__dirname, '../../src/offline.html');
       mainWindow?.loadFile(offlinePath);
     }
     // For other errors (server errors, etc.), let the browser show its default error page
