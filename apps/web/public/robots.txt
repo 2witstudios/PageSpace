@@ -1,0 +1,13 @@
+# Allow all crawlers to index public pages
+User-agent: *
+Allow: /
+
+# Disallow private areas
+Disallow: /dashboard/
+Disallow: /admin/
+Disallow: /auth/
+Disallow: /settings/
+Disallow: /api/
+
+# Sitemap location
+Sitemap: https://pagespace.ai/sitemap.xml

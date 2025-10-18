@@ -6,10 +6,116 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import ContactForm from "@/components/shared/ContactForm";
 import PageSpaceDemo from "@/components/landing/PageSpaceDemo";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title: "PageSpace - AI-Powered Unified Workspace for Teams",
+  description: "A unified workspace combining documents, collaborative channels, and AI agents. Built for creators, teams, and businesses. Real-time collaboration with hierarchical AI agents.",
+  keywords: ["workspace", "AI workspace", "collaborative workspace", "team collaboration", "AI agents", "document management", "real-time collaboration", "PageSpace"],
+  authors: [{ name: "PageSpace" }],
+  creator: "PageSpace",
+  publisher: "PageSpace",
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: {
+      index: true,
+      follow: true,
+      'max-video-preview': -1,
+      'max-image-preview': 'large',
+      'max-snippet': -1,
+    },
+  },
+  openGraph: {
+    type: 'website',
+    locale: 'en_US',
+    url: 'https://pagespace.ai',
+    siteName: 'PageSpace',
+    title: 'PageSpace - AI-Powered Unified Workspace for Teams',
+    description: 'A unified workspace combining documents, collaborative channels, and AI agents. Built for creators, teams, and businesses.',
+    images: [
+      {
+        url: 'https://pagespace.ai/og-image.png',
+        width: 1200,
+        height: 630,
+        alt: 'PageSpace - Unified Workspace',
+      },
+    ],
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'PageSpace - AI-Powered Unified Workspace for Teams',
+    description: 'A unified workspace combining documents, collaborative channels, and AI agents. Built for creators, teams, and businesses.',
+    images: ['https://pagespace.ai/og-image.png'],
+    creator: '@pagespace',
+  },
+  alternates: {
+    canonical: 'https://pagespace.ai',
+  },
+};
 
 export default function Home() {
+  const organizationSchema = {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    "name": "PageSpace",
+    "url": "https://pagespace.ai",
+    "logo": "https://pagespace.ai/logo.png",
+    "description": "A unified workspace combining documents, collaborative channels, and AI agents.",
+    "sameAs": [
+      "https://github.com/2witstudios/PageSpace"
+    ]
+  };
+
+  const webApplicationSchema = {
+    "@context": "https://schema.org",
+    "@type": "WebApplication",
+    "name": "PageSpace",
+    "url": "https://pagespace.ai",
+    "applicationCategory": "BusinessApplication",
+    "operatingSystem": "Web Browser, Windows, macOS, Linux",
+    "offers": [
+      {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD",
+        "name": "Free Plan"
+      },
+      {
+        "@type": "Offer",
+        "price": "29.99",
+        "priceCurrency": "USD",
+        "name": "Pro Plan"
+      },
+      {
+        "@type": "Offer",
+        "price": "199.99",
+        "priceCurrency": "USD",
+        "name": "Business Plan"
+      }
+    ],
+    "description": "A unified workspace combining documents, collaborative channels, and AI agents. Built for creators, teams, and businesses.",
+    "screenshot": "https://pagespace.ai/og-image.png",
+    "featureList": [
+      "Real-time collaboration",
+      "AI-powered agents",
+      "Document management",
+      "Collaborative channels",
+      "Hierarchical AI agents",
+      "File organization"
+    ]
+  };
+
   return (
     <div className="flex flex-col min-h-screen">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(organizationSchema) }}
+      />
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(webApplicationSchema) }}
+      />
       <header className="w-full border-b">
         <div className="container mx-auto flex h-14 items-center px-4 sm:px-6 lg:px-8">
           <Link className="flex items-center justify-center" href="#">

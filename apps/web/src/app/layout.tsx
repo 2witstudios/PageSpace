@@ -17,8 +17,15 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "PageSpace",
-  description: "The collaborative workspace for your team.",
+  metadataBase: new URL('https://pagespace.ai'),
+  title: {
+    default: "PageSpace - AI-Powered Workspace",
+    template: "%s | PageSpace"
+  },
+  description: "A unified workspace combining documents, collaborative channels, and AI agents. Built for creators, teams, and businesses.",
+  keywords: ["workspace", "AI workspace", "collaborative workspace", "team collaboration", "AI agents", "document management"],
+  authors: [{ name: "PageSpace" }],
+  creator: "PageSpace",
   icons: {
     icon: [
       { url: "/favicon.ico", sizes: "any", type: "image/x-icon" },
@@ -26,6 +33,16 @@ export const metadata: Metadata = {
       { url: "/favicon-32x32.png", sizes: "32x32", type: "image/png" },
     ],
     apple: "/apple-touch-icon.png",
+  },
+  openGraph: {
+    type: 'website',
+    locale: 'en_US',
+    url: 'https://pagespace.ai',
+    siteName: 'PageSpace',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    creator: '@pagespace',
   },
 };
 
