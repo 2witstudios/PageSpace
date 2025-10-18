@@ -131,9 +131,10 @@ function createWindow(): void {
     if (networkErrors.includes(errorCode)) {
       console.log(`Network error (${errorCode}): ${errorDescription} for ${validatedURL}`);
 
-      // Load offline page
+      // Load offline page with the original URL as a query parameter
       const offlinePath = path.join(__dirname, '../../src/offline.html');
-      mainWindow?.loadFile(offlinePath);
+      const appUrl = getAppUrl();
+      mainWindow?.loadFile(offlinePath, { hash: encodeURIComponent(appUrl) });
     }
     // For other errors (server errors, etc.), let the browser show its default error page
   });

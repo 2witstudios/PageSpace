@@ -146,18 +146,13 @@
       button.textContent = 'Connecting...';
       status.textContent = 'Attempting to reconnect...';
 
-      // Send retry message to main process
-      if (window.electron && window.electron.retryConnection) {
-        window.electron.retryConnection();
-      }
+      // Get the original URL from the hash
+      const targetUrl = decodeURIComponent(window.location.hash.slice(1)) || 'https://pagespace.ai/dashboard';
 
-      // Re-enable button after 3 seconds to allow retry if still failing
+      // Navigate to the original URL after a short delay
       setTimeout(() => {
-        isRetrying = false;
-        button.disabled = false;
-        button.textContent = 'Retry Connection';
-        status.textContent = '';
-      }, 3000);
+        window.location.href = targetUrl;
+      }, 500);
     }
 
     // Listen for keyboard shortcuts
