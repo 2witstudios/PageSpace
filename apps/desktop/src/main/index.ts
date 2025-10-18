@@ -51,11 +51,11 @@ function injectDesktopStyles(): void {
   const css = `
     /* Make the top navbar/header draggable for window movement */
     /* Exclude sidebar navigation to prevent extra padding on left sidebar */
-    header:not(aside *):not([class*="sidebar"]),
-    nav:not(aside *):not([class*="sidebar"]),
-    [role="banner"]:not(aside *):not([class*="sidebar"]),
-    .navbar:not([class*="sidebar"]),
-    .header:not([class*="sidebar"]) {
+    header:not(aside *):not([class*="sidebar"]):not([class*="breadcrumb"]),
+    nav:not(aside *):not([class*="sidebar"]):not([class*="breadcrumb"]),
+    [role="banner"]:not(aside *):not([class*="sidebar"]):not([class*="breadcrumb"]),
+    .navbar:not([class*="sidebar"]):not([class*="breadcrumb"]),
+    .header:not([class*="sidebar"]):not([class*="breadcrumb"]) {
       -webkit-app-region: drag;
       padding-left: 80px !important; /* Space for traffic light buttons */
     }
