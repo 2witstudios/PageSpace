@@ -32,19 +32,27 @@ export default function Home() {
                   Documents, collaborative channels, and AI agents—all in one place. Built for creators, teams, and businesses.
                 </p>
               </div>
-              <div className="flex gap-4">
-                <Link
-                  className="inline-flex h-12 items-center justify-center rounded-md bg-primary px-8 text-sm font-medium text-primary-foreground shadow transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
-                  href="/dashboard"
-                >
-                  Get Started
-                </Link>
-                <Link
-                  className="inline-flex h-12 items-center justify-center rounded-md border border-input bg-background px-8 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
-                  href="#pricing"
-                >
-                  View Pricing
-                </Link>
+              <div className="flex flex-col items-center gap-3">
+                <div className="flex gap-4">
+                  <Link
+                    className="inline-flex h-12 items-center justify-center rounded-md bg-primary px-8 text-sm font-medium text-primary-foreground shadow transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+                    href="/dashboard"
+                  >
+                    Get Started
+                  </Link>
+                  <Link
+                    className="inline-flex h-12 items-center justify-center rounded-md border border-input bg-background px-8 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+                    href="#pricing"
+                  >
+                    View Pricing
+                  </Link>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Also available as a{" "}
+                  <Link href="/downloads" className="underline underline-offset-2 hover:text-foreground">
+                    desktop app for macOS, Windows, and Linux
+                  </Link>
+                </p>
               </div>
           <div className="container mx-auto px-4 md:px-6">
             <div className="flex flex-col items-center space-y-12">
@@ -290,6 +298,20 @@ export default function Home() {
             © 2025 pagespace. All rights reserved.
           </p>
           <nav className="sm:ml-auto flex gap-4 sm:gap-6">
+            <Link
+              className="text-xs hover:underline underline-offset-4 text-muted-foreground"
+              href="https://github.com/2witstudios/PageSpace"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              GitHub
+            </Link>
+            <Link
+              className="text-xs hover:underline underline-offset-4 text-muted-foreground"
+              href="/downloads"
+            >
+              Downloads
+            </Link>
             <Link
               className="text-xs hover:underline underline-offset-4 text-muted-foreground"
               href="/terms"
