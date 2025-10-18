@@ -174,3 +174,26 @@ jobs:
             apps/desktop/dist-electron/*.deb
             apps/desktop/dist-electron/*.rpm
           retention-days: 30
+
+  create-release:
+    needs: [build-macos, build-windows, build-linux]
+    runs-on: ubuntu-latest
+    if: always()  # Run even if Windows/Linux builds fail
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Draft Release
+        uses: softprops/action-gh-release@v1
+        with:
+          draft: true
+          files: |
+            artifacts/macos-packages/*
+            artifacts/windows-packages/*
+            artifacts/linux-packages/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
