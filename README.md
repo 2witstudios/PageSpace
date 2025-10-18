@@ -59,15 +59,24 @@ Claude: "Update all meeting notes in my PageSpace"
 ### Option 2: Desktop App (Native Experience)
 Download the native desktop app that connects to your cloud instance:
 
-- **macOS**: [Download DMG](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.dmg) (Intel & Apple Silicon)
+**macOS** (Signed & Notarized)
+- [Download DMG](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.dmg) - Universal (Intel & Apple Silicon)
+- [Download ZIP](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.zip) - Universal archive
+
+**Windows** ⚠️ *Unsigned software - security warning expected*
+- [Download Installer](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.exe) - NSIS installer with wizard
+- [Download Portable](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.exe) - Portable executable
+
+**Linux**
+- [Download AppImage](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.AppImage) - Universal (no installation)
+- [Download DEB](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.deb) - Debian/Ubuntu
+- [Download RPM](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.rpm) - Fedora/RHEL
 
 **Features:**
 - Native desktop integration with system tray
 - Minimize to tray, deep linking support
-- Automatic updates (macOS only)
+- Automatic updates (macOS only - signed builds)
 - Works with your cloud PageSpace instance
-
-**Note:** Currently only available for macOS. Windows and Linux versions can be built from source.
 
 **Build from source:**
 ```bash
@@ -176,7 +185,8 @@ PageSpace is a monorepo with a modern, production-ready stack:
 apps/
 ├── web/          # Next.js 15 main application
 ├── realtime/     # Socket.IO server for real-time sync
-└── processor/    # File processing service
+├── processor/    # File processing service
+└── desktop/      # Electron desktop wrapper
 
 packages/
 ├── db/           # Drizzle ORM + PostgreSQL schema
