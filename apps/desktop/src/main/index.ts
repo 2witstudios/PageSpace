@@ -363,7 +363,9 @@ function setupAutoUpdater(): void {
       .then((result) => {
         if (result.response === 0) {
           // User clicked "Restart Now"
-          autoUpdater.quitAndInstall();
+          isQuitting = true;
+          tray?.destroy();  // Destroy tray to ensure app actually quits
+          autoUpdater.quitAndInstall(false, true);  // Force immediate quit and relaunch
         }
       });
   });
