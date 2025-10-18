@@ -84,7 +84,6 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
@@ -93,6 +92,7 @@ jobs:
           path: |
             apps/desktop/dist-electron/*.dmg
             apps/desktop/dist-electron/*.zip
+            apps/desktop/dist-electron/*.yml
           retention-days: 30
 
   build-windows:
@@ -125,7 +125,6 @@ jobs:
         env:
           CSC_LINK: ${{ secrets.WINDOWS_CERTIFICATE }}
           CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PWD }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
@@ -133,6 +132,7 @@ jobs:
           name: windows-packages
           path: |
             apps/desktop/dist-electron/*.exe
+            apps/desktop/dist-electron/*.yml
           retention-days: 30
 
   build-linux:
@@ -162,8 +162,6 @@ jobs:
 
       - name: Package Linux app
         run: pnpm --filter desktop package:linux
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
@@ -173,6 +171,7 @@ jobs:
             apps/desktop/dist-electron/*.AppImage
             apps/desktop/dist-electron/*.deb
             apps/desktop/dist-electron/*.rpm
+            apps/desktop/dist-electron/*.yml
           retention-days: 30
 
   create-release:
