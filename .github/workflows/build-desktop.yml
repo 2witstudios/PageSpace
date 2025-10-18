@@ -37,6 +37,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Set version from git tag
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/desktop-v}
+          echo "Setting version to $VERSION"
+          cd apps/desktop
+          npm version $VERSION --no-git-tag-version --allow-same-version
+        shell: bash
+
       - name: Build desktop app TypeScript
         run: pnpm --filter desktop build
 
@@ -92,7 +100,7 @@ jobs:
           path: |
             apps/desktop/dist-electron/*.dmg
             apps/desktop/dist-electron/*.zip
-            apps/desktop/dist-electron/*.yml
+            apps/desktop/dist-electron/latest*.yml
           retention-days: 30
 
   build-windows:
@@ -117,6 +125,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Set version from git tag
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/desktop-v}
+          echo "Setting version to $VERSION"
+          cd apps/desktop
+          npm version $VERSION --no-git-tag-version --allow-same-version
+        shell: bash
+
       - name: Build desktop app TypeScript
         run: pnpm --filter desktop build
 
@@ -132,7 +148,7 @@ jobs:
           name: windows-packages
           path: |
             apps/desktop/dist-electron/*.exe
-            apps/desktop/dist-electron/*.yml
+            apps/desktop/dist-electron/latest*.yml
           retention-days: 30
 
   build-linux:
@@ -157,6 +173,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Set version from git tag
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/desktop-v}
+          echo "Setting version to $VERSION"
+          cd apps/desktop
+          npm version $VERSION --no-git-tag-version --allow-same-version
+        shell: bash
+
       - name: Build desktop app TypeScript
         run: pnpm --filter desktop build
 
@@ -171,7 +195,7 @@ jobs:
             apps/desktop/dist-electron/*.AppImage
             apps/desktop/dist-electron/*.deb
             apps/desktop/dist-electron/*.rpm
-            apps/desktop/dist-electron/*.yml
+            apps/desktop/dist-electron/latest*.yml
           retention-days: 30
 
   create-release:
