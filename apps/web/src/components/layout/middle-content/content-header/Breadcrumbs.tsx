@@ -24,7 +24,7 @@ export function Breadcrumbs() {
     : breadcrumbs;
 
   return (
-    <nav className="flex items-center text-sm text-muted-foreground">
+    <nav className="breadcrumb flex items-center text-sm text-muted-foreground">
       {displayPath.map((crumb, index) => (
         <div key={crumb.id} className="flex items-center">
           {index > 0 && <ChevronRight className="h-4 w-4 mx-1" />}
