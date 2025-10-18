@@ -116,6 +116,28 @@ function createWindow(): void {
     injectDesktopStyles();
   });
 
+  // Handle page load failures (e.g., offline, DNS errors)
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    // Only handle network-related errors (not server errors like 404, 500, etc.)
+    // This prevents the offline screen from being too "finicky"
+    const networkErrors = [
+      -105, // ERR_NAME_NOT_RESOLVED (DNS lookup failed)
+      -106, // ERR_INTERNET_DISCONNECTED (no internet connection)
+      -109, // ERR_ADDRESS_UNREACHABLE (network changed/lost)
+      -118, // ERR_CONNECTION_TIMED_OUT (connection timeout)
+      -137, // ERR_NAME_RESOLUTION_FAILED (DNS resolution failed)
+    ];
+
+    if (networkErrors.includes(errorCode)) {
+      console.log(`Network error (${errorCode}): ${errorDescription} for ${validatedURL}`);
+
+      // Load offline page
+      const offlinePath = path.join(__dirname, '../offline.html');
+      mainWindow?.loadFile(offlinePath);
+    }
+    // For other errors (server errors, etc.), let the browser show its default error page
+  });
+
   // Show window when ready
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show();
@@ -407,6 +429,13 @@ ipcMain.handle('get-app-url', () => getAppUrl());
 ipcMain.handle('set-app-url', (_event, url: string) => {
   store.set('appUrl', url);
   return true;
+});
+ipcMain.handle('retry-connection', () => {
+  // Reload the main app URL
+  if (mainWindow) {
+    const appUrl = getAppUrl();
+    mainWindow.loadURL(appUrl);
+  }
 });
 
 // App lifecycle

@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PageSpace - Offline</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+        'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    .container {
+      text-align: center;
+      max-width: 400px;
+      width: 100%;
+    }
+
+    .icon {
+      width: 80px;
+      height: 80px;
+      margin: 0 auto 24px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      backdrop-filter: blur(10px);
+    }
+
+    .icon svg {
+      width: 40px;
+      height: 40px;
+      stroke: white;
+      stroke-width: 2;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    h1 {
+      font-size: 28px;
+      font-weight: 600;
+      margin-bottom: 12px;
+      letter-spacing: -0.5px;
+    }
+
+    p {
+      font-size: 16px;
+      opacity: 0.9;
+      margin-bottom: 32px;
+      line-height: 1.5;
+    }
+
+    .retry-button {
+      background: white;
+      color: #667eea;
+      border: none;
+      padding: 14px 32px;
+      font-size: 16px;
+      font-weight: 600;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+
+    .retry-button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+    }
+
+    .retry-button:active {
+      transform: translateY(0);
+    }
+
+    .retry-button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .status {
+      margin-top: 24px;
+      font-size: 14px;
+      opacity: 0.8;
+    }
+
+    @media (prefers-color-scheme: light) {
+      body {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      }
+    }
+
+    @media (prefers-color-scheme: dark) {
+      body {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="icon">
+      <svg viewBox="0 0 24 24">
+        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+        <circle cx="12" cy="12" r="3"></circle>
+        <line x1="1" y1="1" x2="23" y2="23"></line>
+      </svg>
+    </div>
+
+    <h1>You're Offline</h1>
+    <p>PageSpace couldn't connect to the internet. Check your connection and try again.</p>
+
+    <button class="retry-button" onclick="handleRetry()">
+      Retry Connection
+    </button>
+
+    <div class="status" id="status"></div>
+  </div>
+
+  <script>
+    let isRetrying = false;
+
+    function handleRetry() {
+      if (isRetrying) return;
+
+      isRetrying = true;
+      const button = document.querySelector('.retry-button');
+      const status = document.getElementById('status');
+
+      button.disabled = true;
+      button.textContent = 'Connecting...';
+      status.textContent = 'Attempting to reconnect...';
+
+      // Send retry message to main process
+      if (window.electron && window.electron.retryConnection) {
+        window.electron.retryConnection();
+      }
+
+      // Re-enable button after 3 seconds to allow retry if still failing
+      setTimeout(() => {
+        isRetrying = false;
+        button.disabled = false;
+        button.textContent = 'Retry Connection';
+        status.textContent = '';
+      }, 3000);
+    }
+
+    // Listen for keyboard shortcuts
+    document.addEventListener('keydown', (e) => {
+      // Cmd/Ctrl + R to retry
+      if ((e.metaKey || e.ctrlKey) && e.key === 'r') {
+        e.preventDefault();
+        handleRetry();
+      }
+    });
+  </script>
+</body>
+</html>

@@ -19,6 +19,9 @@ contextBridge.exposeInMainWorld('electron', {
     ipcRenderer.on('open-preferences', () => callback());
   },
 
+  // Retry connection when offline
+  retryConnection: () => ipcRenderer.invoke('retry-connection'),
+
   // Platform information
   platform: process.platform,
 
@@ -32,6 +35,7 @@ export interface ElectronAPI {
   setAppUrl: (url: string) => Promise<boolean>;
   onDeepLink: (callback: (url: string) => void) => void;
   onOpenPreferences: (callback: () => void) => void;
+  retryConnection: () => Promise<void>;
   platform: NodeJS.Platform;
   version: string;
 }
