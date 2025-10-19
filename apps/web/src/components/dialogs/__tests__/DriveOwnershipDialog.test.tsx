@@ -109,9 +109,7 @@ describe('DriveOwnershipDialog', () => {
     expect(dropdowns).toHaveLength(2);
   });
 
-  it('should disable transfer button until admin selected', async () => {
-    const user = userEvent.setup();
-
+  it('should disable transfer button until admin selected', () => {
     render(
       <DriveOwnershipDialog
         isOpen={true}

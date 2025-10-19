@@ -206,6 +206,7 @@ describe('GET /api/account/drives-status', () => {
               ]),
             }),
           }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } as any;
       }
 
@@ -214,6 +215,7 @@ describe('GET /api/account/drives-status', () => {
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockResolvedValue([{ count }]),
         }),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any;
     });
 
