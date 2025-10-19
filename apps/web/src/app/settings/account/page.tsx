@@ -14,6 +14,8 @@ import { toast } from "sonner";
 import { User, Mail, Calendar, AlertTriangle, Loader2, ArrowLeft, Upload, X, CheckCircle2, AlertCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { patch, post, del, fetchWithAuth } from '@/lib/auth-fetch';
+import { DeleteAccountDialog } from "@/components/dialogs/DeleteAccountDialog";
+import { DriveOwnershipDialog } from "@/components/dialogs/DriveOwnershipDialog";
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -22,6 +24,19 @@ const fetcher = async (url: string) => {
   }
   return response.json();
 };
+
+interface Admin {
+  id: string;
+  name: string;
+  email: string;
+}
+
+interface MultiMemberDrive {
+  id: string;
+  name: string;
+  memberCount: number;
+  admins: Admin[];
+}
 
 export default function AccountPage() {
   const { user, isLoading: authLoading, mutate } = useAuth();
@@ -52,6 +67,13 @@ export default function AccountPage() {
   // Email verification state
   const [isResendingVerification, setIsResendingVerification] = useState(false);
   const [verificationEmailSent, setVerificationEmailSent] = useState(false);
+
+  // Delete account state
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
+  const [isOwnershipDialogOpen, setIsOwnershipDialogOpen] = useState(false);
+  const [multiMemberDrives, setMultiMemberDrives] = useState<MultiMemberDrive[]>([]);
+  const [soloDrivesCount, setSoloDrivesCount] = useState(0);
 
   // Load user data into form
   useEffect(() => {
@@ -209,6 +231,57 @@ export default function AccountPage() {
       toast.error(error instanceof Error ? error.message : "Failed to send verification email");
     } finally {
       setIsResendingVerification(false);
+    }
+  };
+
+  const handleInitiateAccountDeletion = async () => {
+    try {
+      // Fetch drives status
+      const response = await fetchWithAuth("/api/account/drives-status");
+      if (!response.ok) {
+        throw new Error("Failed to fetch drives status");
+      }
+
+      const data = await response.json();
+      setSoloDrivesCount(data.soloDrives.length);
+      setMultiMemberDrives(data.multiMemberDrives);
+
+      // If there are multi-member drives, show ownership dialog
+      if (data.multiMemberDrives.length > 0) {
+        setIsOwnershipDialogOpen(true);
+      } else {
+        // No multi-member drives, proceed directly to deletion confirmation
+        setIsDeleteDialogOpen(true);
+      }
+    } catch (error) {
+      console.error("Error checking drives:", error);
+      toast.error("Failed to check drive ownership status");
+    }
+  };
+
+  const handleAllDrivesHandled = () => {
+    setIsOwnershipDialogOpen(false);
+    setMultiMemberDrives([]);
+    setIsDeleteDialogOpen(true);
+  };
+
+  const handleDeleteAccount = async (emailConfirmation: string) => {
+    setIsDeletingAccount(true);
+    try {
+      await del("/api/account", { emailConfirmation });
+
+      toast.success("Account deleted successfully. Redirecting...");
+
+      // Clear authentication and redirect to home
+      setTimeout(() => {
+        window.location.href = "/";
+      }, 1000);
+    } catch (error) {
+      console.error("Account deletion error:", error);
+      const errorMessage = error instanceof Error ? error.message : "Failed to delete account";
+      toast.error(errorMessage);
+      setIsDeletingAccount(false);
+      setIsDeleteDialogOpen(false);
     }
   };
 
@@ -526,14 +599,37 @@ export default function AccountPage() {
           <Alert>
             <AlertTriangle className="h-4 w-4" />
             <AlertDescription>
-              Account deletion is permanent and cannot be undone. This feature is coming soon.
+              Account deletion is permanent and cannot be undone. All your data will be permanently deleted.
             </AlertDescription>
           </Alert>
-          <Button variant="destructive" className="mt-4" disabled>
-            Delete Account (Coming Soon)
+          <Button
+            variant="destructive"
+            className="mt-4"
+            onClick={handleInitiateAccountDeletion}
+            disabled={isDeletingAccount}
+          >
+            Delete Account
           </Button>
         </CardContent>
       </Card>
+
+      {/* Drive Ownership Dialog */}
+      <DriveOwnershipDialog
+        isOpen={isOwnershipDialogOpen}
+        onClose={() => setIsOwnershipDialogOpen(false)}
+        onAllDrivesHandled={handleAllDrivesHandled}
+        multiMemberDrives={multiMemberDrives}
+      />
+
+      {/* Delete Account Dialog */}
+      <DeleteAccountDialog
+        isOpen={isDeleteDialogOpen}
+        onClose={() => setIsDeleteDialogOpen(false)}
+        onConfirm={handleDeleteAccount}
+        userEmail={user.email || ""}
+        isDeleting={isDeletingAccount}
+        soloDrivesCount={soloDrivesCount}
+      />
     </div>
   );
 }
