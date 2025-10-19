@@ -74,8 +74,8 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({
     <div
       className={`group relative p-3 rounded-lg mb-2 ${
         role === 'user'
-          ? 'bg-primary/10 dark:bg-accent/20 ml-8'
-          : 'bg-gray-50 dark:bg-gray-800/50 mr-8'
+          ? 'bg-primary/10 dark:bg-accent/20 ml-2 sm:ml-8'
+          : 'bg-gray-50 dark:bg-gray-800/50 mr-2 sm:mr-8'
       }`}
     >
       <div className="flex items-center justify-between mb-1">
@@ -104,8 +104,10 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({
         />
       ) : (
         <>
-          <div className="text-gray-900 dark:text-gray-100 prose prose-sm dark:prose-invert max-w-none prose-pre:bg-gray-100 dark:prose-pre:bg-gray-800">
-            <MemoizedMarkdown content={content} id={`${messageId}-text`} />
+          <div className="text-gray-900 dark:text-gray-100 prose prose-sm dark:prose-invert max-w-full overflow-hidden prose-pre:bg-gray-100 dark:prose-pre:bg-gray-800">
+            <div className="break-words overflow-wrap-anywhere">
+              <MemoizedMarkdown content={content} id={`${messageId}-text`} />
+            </div>
           </div>
           {createdAt && (
             <div className="text-xs text-gray-500 mt-2">
@@ -263,7 +265,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
             // Type narrowing: we know this is a ToolGroupPart
             const toolGroup = group as ToolGroupPart;
             return (
-              <div key={`${message.id}-tool-${index}`} className="mr-8">
+              <div key={`${message.id}-tool-${index}`} className="mr-2 sm:mr-8">
                 <ToolCallRenderer
                   part={{
                     type: toolGroup.type,
