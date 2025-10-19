@@ -8,8 +8,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
+import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
-import { Bell, Mail, Loader2 } from 'lucide-react';
+import { Bell, Mail, Loader2, ArrowLeft } from 'lucide-react';
 import { patch, fetchWithAuth } from '@/lib/auth-fetch';
 
 const fetcher = async (url: string) => {
@@ -58,6 +59,22 @@ const PREFERENCE_GROUPS: PreferenceGroup[] = [
         label: 'Added to Workspace',
         description: 'When someone adds you to a workspace',
       },
+      {
+        type: 'DRIVE_JOINED',
+        label: 'Joined Workspace',
+        description: 'When you join a workspace',
+      },
+    ],
+  },
+  {
+    title: 'Workspace Management',
+    description: 'Get notified when your workspace role or permissions change',
+    types: [
+      {
+        type: 'DRIVE_ROLE_CHANGED',
+        label: 'Role Changed',
+        description: 'When your role in a workspace is updated',
+      },
     ],
   },
   {
@@ -84,6 +101,11 @@ const PREFERENCE_GROUPS: PreferenceGroup[] = [
         type: 'CONNECTION_ACCEPTED',
         label: 'Connection Accepted',
         description: 'When someone accepts your connection request',
+      },
+      {
+        type: 'CONNECTION_REJECTED',
+        label: 'Connection Declined',
+        description: 'When someone declines your connection request',
       },
     ],
   },
@@ -188,6 +210,15 @@ export default function NotificationsSettingsPage() {
   return (
     <div className="container max-w-4xl mx-auto py-10 space-y-8">
       <div>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => router.push('/settings')}
+          className="mb-4"
+        >
+          <ArrowLeft className="h-4 w-4 mr-2" />
+          Back to Settings
+        </Button>
         <h1 className="text-3xl font-bold flex items-center gap-2">
           <Bell className="h-8 w-8" />
           Email Notifications
