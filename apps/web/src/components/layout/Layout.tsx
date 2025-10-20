@@ -4,7 +4,7 @@ import { useAuth } from "@/hooks/use-auth";
 import TopBar from "@/components/layout/main-header";
 import MemoizedSidebar from "@/components/layout/left-sidebar/MemoizedSidebar";
 import CenterPanel from "@/components/layout/middle-content/CenterPanel";
-import MemoizedRightPanel from "@/components/layout/right-sidebar/MemoizedRightPanel";
+import RightPanel from "@/components/layout/right-sidebar";
 import { NavigationProvider } from "@/components/layout/NavigationProvider";
 import { GlobalChatProvider } from "@/contexts/GlobalChatContext";
 import { useBreakpoint } from "@/hooks/use-breakpoint";
@@ -15,7 +15,7 @@ import { useLayoutStore } from "@/stores/useLayoutStore";
 import { useHasHydrated } from "@/hooks/useHasHydrated";
 import { usePerformanceMonitor } from "@/hooks/usePerformanceMonitor";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, memo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Sheet,
   SheetContent,
@@ -175,7 +175,7 @@ function Layout({ children }: LayoutProps) {
 
         <div className="relative flex flex-1 min-h-0 overflow-hidden">
           {!shouldOverlaySidebars && leftSidebarOpen && (
-            <div className="relative hidden flex-shrink-0 xl:flex xl:w-[18rem] 2xl:w-80 pt-4">
+            <div className="relative hidden flex-shrink-0 xl:flex xl:w-[18rem] 2xl:w-80 pt-4 overflow-hidden">
               <MemoizedSidebar className="h-full w-full" />
             </div>
           )}
@@ -213,8 +213,8 @@ function Layout({ children }: LayoutProps) {
           </main>
 
           {!shouldOverlaySidebars && rightSidebarOpen && (
-            <div className="relative hidden flex-shrink-0 xl:flex xl:w-[18rem] 2xl:w-80 pt-4">
-              <MemoizedRightPanel className="h-full w-full" />
+            <div className="relative hidden flex-shrink-0 xl:flex xl:w-[18rem] 2xl:w-80 pt-4 overflow-hidden">
+              <RightPanel className="h-full w-full" />
             </div>
           )}
 
@@ -234,7 +234,7 @@ function Layout({ children }: LayoutProps) {
                 className="absolute inset-y-0 right-0 z-40 flex h-full max-w-full"
               >
                 <div className="h-full w-[min(22rem,90vw)] max-w-sm">
-                  <MemoizedRightPanel variant="overlay" className="h-full w-full" />
+                  <RightPanel variant="overlay" className="h-full w-full" />
                 </div>
               </motion.div>
             )}
@@ -301,7 +301,7 @@ function Layout({ children }: LayoutProps) {
                 <SheetTitle>Assistant panel</SheetTitle>
                 <SheetDescription>Chat with the global assistant</SheetDescription>
               </SheetHeader>
-              <MemoizedRightPanel variant="overlay" className="h-full w-full" />
+              <RightPanel variant="overlay" className="h-full w-full" />
             </SheetContent>
           </Sheet>
         </>
@@ -311,5 +311,6 @@ function Layout({ children }: LayoutProps) {
   );
 }
 
-// Memoize Layout to prevent unnecessary re-renders from auth activity updates
-export default memo(Layout);
+// Export Layout without memo to allow real-time updates from GlobalChatContext
+// The selective Zustand subscriptions (lines 38-43) already prevent unnecessary re-renders
+export default Layout;

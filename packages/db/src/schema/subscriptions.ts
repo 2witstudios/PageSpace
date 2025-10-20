@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, integer, boolean, date, index, unique } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, boolean, index } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
@@ -34,32 +34,9 @@ export const stripeEvents = pgTable('stripe_events', {
   }
 });
 
-export const aiUsageDaily = pgTable('ai_usage_daily', {
-  id: text('id').primaryKey().$defaultFn(() => createId()),
-  userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  date: date('date').notNull(), // UTC date
-  providerType: text('providerType').notNull(), // 'standard' or 'pro'
-  count: integer('count').default(0).notNull(),
-  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
-  updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
-}, (table) => {
-  return {
-    userDateProviderUnique: unique('ai_usage_daily_user_date_provider_unique').on(table.userId, table.date, table.providerType),
-    userIdx: index('ai_usage_daily_user_id_idx').on(table.userId),
-    dateIdx: index('ai_usage_daily_date_idx').on(table.date),
-  }
-});
-
 export const subscriptionsRelations = relations(subscriptions, ({ one }) => ({
   user: one(users, {
     fields: [subscriptions.userId],
-    references: [users.id],
-  }),
-}));
-
-export const aiUsageDailyRelations = relations(aiUsageDaily, ({ one }) => ({
-  user: one(users, {
-    fields: [aiUsageDaily.userId],
     references: [users.id],
   }),
 }));

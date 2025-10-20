@@ -45,8 +45,20 @@ interface LocationContext {
 const AssistantChatTab: React.FC = () => {
   const pathname = usePathname();
 
-  // Use shared global chat context - this is the key change!
-  const { chat, currentConversationId, isInitialized, createNewConversation, refreshConversation } = useGlobalChat();
+  // Use shared global chat context
+  const {
+    chatConfig,
+    messages: globalMessages,
+    setMessages: setGlobalMessages,
+    isStreaming: globalIsStreaming,
+    setIsStreaming: setGlobalIsStreaming,
+    stopStreaming: globalStopStreaming,
+    setStopStreaming: setGlobalStopStreaming,
+    currentConversationId,
+    isInitialized,
+    createNewConversation,
+    refreshConversation,
+  } = useGlobalChat();
 
   // Local state for component-specific concerns
   const [providerSettings, setProviderSettings] = useState<ProviderSettings | null>(null);
@@ -59,6 +71,7 @@ const AssistantChatTab: React.FC = () => {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<ChatInputRef>(null);
+  const prevStatusRef = useRef<string>('ready');
   
   // Auto-scroll to bottom function
   const scrollToBottom = () => {
@@ -199,19 +212,53 @@ const AssistantChatTab: React.FC = () => {
     extractLocationContext();
   }, [pathname]); // Only re-run when pathname changes, not on every drives refresh
 
-  // Use the shared Chat instance from context - this is what enables state sharing!
-  // Both AssistantChatTab and GlobalAssistantView will use the same Chat instance
+  // Create own Chat instance for streaming
+  // This component manages the stream and syncs to global state
   const {
-    messages,
+    messages: localMessages,
     sendMessage,
     status,
     error,
     regenerate,
-    setMessages,
+    setMessages: setLocalMessages,
     stop,
-  } = useChat({ chat });
+  } = useChat(chatConfig || {});
 
-  // ✅ Removed setMessages sync effect - AI SDK v5 manages messages internally
+  // Sync local messages to global state
+  // This ensures both views always render the same messages
+  useEffect(() => {
+    setGlobalMessages(localMessages);
+  }, [localMessages, setGlobalMessages]);
+
+  // Sync streaming status to global state
+  // This prevents race conditions when switching views mid-stream
+  useEffect(() => {
+    const isCurrentlyStreaming = status === 'submitted' || status === 'streaming';
+    const wasStreaming = prevStatusRef.current === 'submitted' || prevStatusRef.current === 'streaming';
+
+    // Only update global state if there's an actual transition
+    if (isCurrentlyStreaming && !wasStreaming) {
+      // We started streaming
+      setGlobalIsStreaming(true);
+    } else if (!isCurrentlyStreaming && wasStreaming) {
+      // We stopped streaming (actual transition, not just mounting as ready)
+      setGlobalIsStreaming(false);
+    }
+
+    // Update the ref for next comparison
+    prevStatusRef.current = status;
+  }, [status, setGlobalIsStreaming]);
+
+  // Register local stop function to global context when streaming
+  // This allows the other view to stop this view's stream
+  useEffect(() => {
+    const streaming = status === 'submitted' || status === 'streaming';
+    if (streaming) {
+      setGlobalStopStreaming(() => stop);
+    } else {
+      setGlobalStopStreaming(null);
+    }
+  }, [status, stop, setGlobalStopStreaming]);
 
   // Register streaming state with editing store (state-based protection)
   // Note: In AI SDK v5, status can be 'ready', 'submitted', 'streaming', or 'error'
@@ -233,10 +280,10 @@ const AssistantChatTab: React.FC = () => {
     };
   }, [status, currentConversationId]);
 
-  // ✅ Combined scroll effects - use messages.length instead of messages array
+  // ✅ Combined scroll effects - use globalMessages.length instead of messages array
   useEffect(() => {
     scrollToBottom();
-  }, [messages.length, status]);
+  }, [globalMessages.length, status]);
 
   // Reset error visibility when new error occurs
   useEffect(() => {
@@ -332,8 +379,10 @@ const AssistantChatTab: React.FC = () => {
     try {
       await del(`/api/ai_conversations/${currentConversationId}/messages/${messageId}`);
 
-      // Optimistically remove from UI
-      setMessages(messages.filter(m => m.id !== messageId));
+      // Optimistically remove from UI (both local and global)
+      const filtered = globalMessages.filter(m => m.id !== messageId);
+      setGlobalMessages(filtered);
+      setLocalMessages(filtered);
 
       toast.success('Message deleted');
     } catch (error) {
@@ -347,11 +396,11 @@ const AssistantChatTab: React.FC = () => {
     if (!currentConversationId) return;
 
     // Before regenerating, clean up old assistant responses after the last user message
-    const lastUserMsgIndex = messages.map(m => m.role).lastIndexOf('user');
+    const lastUserMsgIndex = globalMessages.map(m => m.role).lastIndexOf('user');
 
     if (lastUserMsgIndex !== -1) {
       // Get all assistant messages after the last user message
-      const assistantMessagesToDelete = messages
+      const assistantMessagesToDelete = globalMessages
         .slice(lastUserMsgIndex + 1)
         .filter(m => m.role === 'assistant');
 
@@ -364,11 +413,12 @@ const AssistantChatTab: React.FC = () => {
         }
       }
 
-      // Remove them from local state
-      const filteredMessages = messages.filter(
+      // Remove them from state (both local and global)
+      const filteredMessages = globalMessages.filter(
         m => !assistantMessagesToDelete.some(toDelete => toDelete.id === m.id)
       );
-      setMessages(filteredMessages);
+      setGlobalMessages(filteredMessages);
+      setLocalMessages(filteredMessages);
     }
 
     // Now regenerate with a clean slate
@@ -376,7 +426,7 @@ const AssistantChatTab: React.FC = () => {
   };
 
   // Calculate the last assistant message ID for the retry button
-  const lastAssistantMessageId = messages
+  const lastAssistantMessageId = globalMessages
     .filter(m => m.role === 'assistant')
     .slice(-1)[0]?.id;
 
@@ -414,7 +464,7 @@ const AssistantChatTab: React.FC = () => {
       <div className="flex-1 min-h-0 overflow-hidden">
         <ScrollArea className="h-full p-3" ref={scrollAreaRef}>
           <div className="space-y-3">
-            {messages.length === 0 ? (
+            {globalMessages.length === 0 ? (
               <div className="flex items-center justify-center h-20 text-muted-foreground text-xs text-center">
                 <div>
                   <p className="font-medium">Global Assistant</p>
@@ -427,7 +477,7 @@ const AssistantChatTab: React.FC = () => {
                 </div>
               </div>
             ) : (
-              messages.map(message => (
+              globalMessages.map(message => (
                 <CompactConversationMessageRenderer
                   key={message.id}
                   message={message}
@@ -439,7 +489,7 @@ const AssistantChatTab: React.FC = () => {
               ))
             )}
             
-            {status !== 'ready' && (
+            {globalIsStreaming && (
               <div className="p-2 rounded-lg bg-gray-50 dark:bg-gray-800/50">
                 <div className="text-xs font-medium mb-1 text-gray-700 dark:text-gray-300">
                   Global Assistant
@@ -503,9 +553,9 @@ const AssistantChatTab: React.FC = () => {
             driveId={locationContext?.currentDrive?.id}
             crossDrive={true}  // Allow searching across all drives in global assistant
           />
-          {status === 'streaming' || status === 'submitted' ? (
+          {globalIsStreaming ? (
             <Button
-              onClick={() => stop()}
+              onClick={() => globalStopStreaming?.()}
               variant="destructive"
               size="sm"
               className="h-8 px-3"

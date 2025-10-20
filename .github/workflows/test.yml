@@ -28,6 +28,16 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
 
@@ -62,6 +72,7 @@ jobs:
       - name: Run unit tests
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
+          REDIS_URL: redis://localhost:6379
           JWT_SECRET: test-secret-key-minimum-32-characters-long-for-ci
           JWT_ISSUER: pagespace-test
           JWT_AUDIENCE: pagespace-test-users

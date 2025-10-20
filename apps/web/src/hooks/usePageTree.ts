@@ -71,9 +71,10 @@ export function usePageTree(driveId?: string, trashView?: boolean) {
   const invalidateTree = useCallback(() => {
     if (swrKey) {
       // Don't revalidate tree if user is actively editing to prevent component remounting
-      const isEditing = useEditingStore.getState().isAnyActive();
+      // Allow revalidation during AI streaming to show real-time updates
+      const isEditing = useEditingStore.getState().isAnyEditing();
       if (isEditing) {
-        console.log('⏸️ Skipping tree revalidation - editing in progress');
+        console.log('⏸️ Skipping tree revalidation - document editing in progress');
         return;
       }
 

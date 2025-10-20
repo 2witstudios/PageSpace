@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { incrementUsage, ProviderType } from './usage-service';
+import { incrementUsage } from './usage-service';
+import { getTomorrowMidnightUTC, type ProviderType } from '@pagespace/lib';
 
 export interface RateLimitResult {
   allowed: boolean;
@@ -59,7 +60,7 @@ export function createRateLimitResponse(
   limit: number,
   resetTime?: Date
 ): NextResponse {
-  const resetTimeString = resetTime || getTomorrowMidnight();
+  const resetTimeString = resetTime || new Date(getTomorrowMidnightUTC());
 
   const errorMessage = providerType === 'pro'
     ? `Pro AI calls limited to ${limit} per day. Upgrade to Pro or Business for more access.`
@@ -83,16 +84,6 @@ export function createRateLimitResponse(
       },
     }
   );
-}
-
-/**
- * Get tomorrow midnight UTC for rate limit reset
- */
-function getTomorrowMidnight(): Date {
-  const tomorrow = new Date();
-  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
-  tomorrow.setUTCHours(0, 0, 0, 0);
-  return tomorrow;
 }
 
 /**

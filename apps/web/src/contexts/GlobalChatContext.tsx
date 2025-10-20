@@ -1,14 +1,31 @@
 'use client';
 
 import React, { createContext, useContext, ReactNode, useState, useCallback, useEffect, useMemo } from 'react';
-import { Chat } from '@ai-sdk/react';
 import { DefaultChatTransport, UIMessage } from 'ai';
 import { fetchWithAuth } from '@/lib/auth-fetch';
 import { conversationState } from '@/lib/ai/conversation-state';
 
 interface GlobalChatContextValue {
-  // The shared Chat instance - this is what persists across navigation
-  chat: Chat<UIMessage>;
+  // Shared chat configuration for creating Chat instances
+  // Each component creates its own Chat instance with this config
+  chatConfig: {
+    id: string | undefined;
+    messages: UIMessage[];
+    transport: DefaultChatTransport<UIMessage>;
+    onError: (error: Error) => void;
+  } | null;
+
+  // Global message state - shared across all views
+  messages: UIMessage[];
+  setMessages: (messages: UIMessage[]) => void;
+
+  // Global streaming status - tracks if ANY view is streaming
+  isStreaming: boolean;
+  setIsStreaming: (streaming: boolean) => void;
+
+  // Global stop function - allows ANY view to stop the stream
+  stopStreaming: (() => void) | null;
+  setStopStreaming: (fn: (() => void) | null) => void;
 
   // Current conversation state
   currentConversationId: string | null;
@@ -24,48 +41,25 @@ interface GlobalChatContextValue {
 
 const GlobalChatContext = createContext<GlobalChatContextValue | undefined>(undefined);
 
-/**
- * Creates a shared Chat instance that persists across component unmounts.
- * This follows the AI SDK v5 pattern from:
- * https://github.com/vercel/ai/blob/main/content/cookbook/01-next/74-use-shared-chat-context.mdx
- */
-function createChatInstance(
-  conversationId: string | null,
-  initialMessages: UIMessage[] = []
-): Chat<UIMessage> {
-  return new Chat<UIMessage>({
-    id: conversationId || undefined,
-    messages: initialMessages,
-    transport: new DefaultChatTransport({
-      api: conversationId
-        ? `/api/ai_conversations/${conversationId}/messages`
-        : '/api/ai/chat', // Fallback endpoint
-      fetch: (url, options) => {
-        const urlString = url instanceof Request ? url.url : url.toString();
-        return fetchWithAuth(urlString, options);
-      },
-    }),
-    onError: (error: Error) => {
-      console.error('❌ Global Chat Error:', error);
-      if (error.message?.includes('Unauthorized') || error.message?.includes('401')) {
-        console.error('🔒 Authentication failed - user may need to log in again');
-      }
-    },
-  });
-}
-
 export function GlobalChatProvider({ children }: { children: ReactNode }) {
-  // State for the shared Chat instance - this persists across navigation!
-  const [chat, setChat] = useState<Chat<UIMessage>>(() => createChatInstance(null, []));
-
   // Conversation management state
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [initialMessages, setInitialMessages] = useState<UIMessage[]>([]);
   const [isInitialized, setIsInitialized] = useState<boolean>(false);
 
+  // Global message state - THE single source of truth for messages
+  // Both views sync to and render from this state
+  const [messages, setMessages] = useState<UIMessage[]>([]);
+
+  // Global streaming status - tracks if ANY view is streaming
+  const [isStreaming, setIsStreaming] = useState<boolean>(false);
+
+  // Global stop function - allows ANY view to stop the active stream
+  const [stopStreaming, setStopStreaming] = useState<(() => void) | null>(null);
+
   /**
    * Load a conversation by ID
-   * This fetches messages and updates the Chat instance to use the new endpoint
+   * This fetches messages and updates the chat config
    */
   const loadConversation = useCallback(async (conversationId: string) => {
     try {
@@ -79,15 +73,12 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
       if (messagesResponse.ok) {
         const messageData = await messagesResponse.json();
         // Handle both old format (array) and new format (object with messages and pagination)
-        const messages = Array.isArray(messageData) ? messageData : messageData.messages || [];
+        const loadedMessages = Array.isArray(messageData) ? messageData : messageData.messages || [];
 
-        setInitialMessages(messages);
+        setInitialMessages(loadedMessages);
+        setMessages(loadedMessages); // Initialize global messages
         setCurrentConversationId(conversationId);
         conversationState.setActiveConversationId(conversationId);
-
-        // Create new Chat instance with updated conversation ID and messages
-        // This ensures the transport uses the correct API endpoint and initializes with history
-        setChat(createChatInstance(conversationId, messages));
 
         setIsInitialized(true);
       } else {
@@ -97,6 +88,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error('Error loading conversation:', error);
       setInitialMessages([]);
+      setMessages([]); // Clear global messages on error
       setIsInitialized(true);
     }
   }, []);
@@ -113,10 +105,8 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
       if (newConversation && newConversation.id) {
         setCurrentConversationId(newConversation.id);
         setInitialMessages([]);
+        setMessages([]); // Clear global messages for new conversation
         conversationState.setActiveConversationId(newConversation.id);
-
-        // Create new Chat instance for the new conversation with empty messages
-        setChat(createChatInstance(newConversation.id, []));
 
         // Update URL to reflect new conversation
         const url = new URL(window.location.href);
@@ -189,30 +179,50 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Run once on mount - functions are stable via useCallback
 
-  // Memoize context value to prevent unnecessary re-renders throughout the app
-  // Functions are already stable via useCallback, so we only need to track state changes
-  const contextValue: GlobalChatContextValue = useMemo(
-    () => ({
-      chat,
-      currentConversationId,
-      initialMessages,
-      isInitialized,
-      setCurrentConversationId,
-      loadConversation,
-      createNewConversation,
-      refreshConversation,
-    }),
-    [
-      chat,
-      currentConversationId,
-      initialMessages,
-      isInitialized,
-      setCurrentConversationId,
-      loadConversation,
-      createNewConversation,
-      refreshConversation,
-    ]
-  );
+  // Create stable chat config that components can use to create their own Chat instances
+  // Each component creates its own independent Chat instance
+  // Config is stable - only changes when conversation changes, not during streaming
+  // This prevents re-initialization which would abort ongoing streams
+  const chatConfig = useMemo(() => {
+    if (!currentConversationId) return null;
+
+    return {
+      id: currentConversationId,
+      messages: initialMessages, // Stable - only updates on conversation load
+      transport: new DefaultChatTransport({
+        api: `/api/ai_conversations/${currentConversationId}/messages`,
+        fetch: (url, options) => {
+          const urlString = url instanceof Request ? url.url : url.toString();
+          return fetchWithAuth(urlString, options);
+        },
+      }),
+      onError: (error: Error) => {
+        console.error('❌ Global Chat Error:', error);
+        if (error.message?.includes('Unauthorized') || error.message?.includes('401')) {
+          console.error('🔒 Authentication failed - user may need to log in again');
+        }
+      },
+    };
+  }, [currentConversationId, initialMessages]);
+
+  // Context value without memoization - allows chat config updates to propagate immediately
+  // Functions are already stable via useCallback
+  const contextValue: GlobalChatContextValue = {
+    chatConfig,
+    messages,
+    setMessages,
+    isStreaming,
+    setIsStreaming,
+    stopStreaming,
+    setStopStreaming,
+    currentConversationId,
+    initialMessages,
+    isInitialized,
+    setCurrentConversationId,
+    loadConversation,
+    createNewConversation,
+    refreshConversation,
+  };
 
   return (
     <GlobalChatContext.Provider value={contextValue}>

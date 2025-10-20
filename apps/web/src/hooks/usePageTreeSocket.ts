@@ -35,7 +35,7 @@ export function usePageTreeSocket(driveId?: string, trashView?: boolean) {
     revalidationTimeoutRef.current = setTimeout(() => {
       console.log('🌳 Executing debounced tree revalidation');
       invalidateTree();
-    }, 500); // 500ms debounce
+    }, 100); // 100ms debounce
   }, [invalidateTree]);
 
   // Handle page events

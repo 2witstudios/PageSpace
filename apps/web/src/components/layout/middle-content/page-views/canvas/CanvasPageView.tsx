@@ -10,6 +10,8 @@ import PreviewErrorBoundary from '@/components/sandbox/PreviewErrorBoundary';
 import { TreePage } from '@/hooks/usePageTree';
 import { useDocumentStore } from '@/stores/useDocumentStore';
 import { useAuth } from '@/hooks/use-auth';
+import { useSocket } from '@/hooks/useSocket';
+import { PageEventPayload } from '@/lib/socket-utils';
 
 interface CanvasPageViewProps {
   page: TreePage;
@@ -23,6 +25,7 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
   const { user } = useAuth();
+  const socket = useSocket();
 
   const saveContent = useCallback(async (pageId: string, newValue: string) => {
     console.log(`--- Saving Page ${pageId} ---`);
@@ -42,6 +45,42 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
     setDocument(page.id, initialText);
     setSaveCallback(saveContent);
   }, [page.id, page.content, setDocument, setSaveCallback, saveContent]);
+
+  // Listen for real-time content updates from AI tools
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleContentUpdate = async (eventData: PageEventPayload) => {
+      // Filter out self-triggered events
+      if (eventData.socketId && eventData.socketId === socket.id) {
+        return;
+      }
+
+      // Only update if it's for the current page
+      if (eventData.pageId === page.id) {
+        console.log(`[Canvas] Received content update for page ${page.id}`);
+
+        // Fetch fresh content
+        try {
+          const response = await fetchWithAuth(`/api/pages/${page.id}`);
+          if (response.ok) {
+            const updatedPage = await response.json();
+            const newContent = typeof updatedPage.content === 'string' ? updatedPage.content : '';
+            setContent(newContent);
+            toast.success('Canvas updated');
+          }
+        } catch (error) {
+          console.error('Failed to fetch updated canvas content:', error);
+        }
+      }
+    };
+
+    socket.on('page:content-updated', handleContentUpdate);
+
+    return () => {
+      socket.off('page:content-updated', handleContentUpdate);
+    };
+  }, [socket, page.id, setContent]);
 
   const handleNavigation = useCallback(async (url: string, isExternal: boolean) => {
     if (!url) return;
