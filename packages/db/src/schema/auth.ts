@@ -76,7 +76,7 @@ export const verificationTokens = pgTable('verification_tokens', {
 });
 
 import { userAiSettings } from './ai';
-import { subscriptions, aiUsageDaily } from './subscriptions';
+import { subscriptions } from './subscriptions';
 
 export const usersRelations = relations(users, ({ many }) => ({
   refreshTokens: many(refreshTokens),
@@ -85,7 +85,6 @@ export const usersRelations = relations(users, ({ many }) => ({
   mcpTokens: many(mcpTokens),
   verificationTokens: many(verificationTokens),
   subscriptions: many(subscriptions),
-  aiUsageDaily: many(aiUsageDaily),
 }));
 
 export const refreshTokensRelations = relations(refreshTokens, ({ one }) => ({

@@ -48,6 +48,11 @@ export * from './logger-database';
 export * from './ai-monitoring';
 export * from './activity-tracker';
 
+// Rate limiting and caching services (server-only)
+export { rateLimitCache } from './services/rate-limit-cache';
+export type { ProviderType, UsageTrackingResult } from './services/rate-limit-cache';
+export { getTodayUTC, getTomorrowMidnightUTC, getSecondsUntilMidnightUTC } from './services/date-utils';
+
 // File processing utilities (server-only)
 export * from './file-processor';
 
