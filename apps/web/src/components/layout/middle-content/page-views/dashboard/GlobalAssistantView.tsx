@@ -52,8 +52,18 @@ const GlobalAssistantView: React.FC = () => {
   const pathname = usePathname();
   const { rightSidebarOpen, toggleRightSidebar } = useLayoutStore();
 
-  // Use shared global chat config - components create their own Chat instances for proper subscriptions
-  const { chatConfig, currentConversationId, isInitialized, createNewConversation, refreshConversation } = useGlobalChat();
+  // Use shared global chat context
+  const {
+    chatConfig,
+    messages: globalMessages,
+    setMessages: setGlobalMessages,
+    isStreaming: globalIsStreaming,
+    setIsStreaming: setGlobalIsStreaming,
+    currentConversationId,
+    isInitialized,
+    createNewConversation,
+    refreshConversation,
+  } = useGlobalChat();
 
   // Local state for component-specific concerns
   const [providerSettings, setProviderSettings] = useState<ProviderSettings | null>(null);
@@ -129,20 +139,30 @@ const GlobalAssistantView: React.FC = () => {
 
   // URL watching and conversation loading is now handled by GlobalChatContext
 
-  // Create own Chat instance from shared config - this enables proper subscriptions!
-  // Both AssistantChatTab and GlobalAssistantView create their own instances with the same config,
-  // so they stay in sync via the backend while each hook properly subscribes to its own instance
+  // Create own Chat instance for streaming
+  // This component manages the stream and syncs to global state
   const {
-    messages,
+    messages: localMessages,
     sendMessage,
     status,
     error,
     regenerate,
-    setMessages,
+    setMessages: setLocalMessages,
     stop,
   } = useChat(chatConfig || {});
 
-  // ✅ Removed setMessages sync effect - AI SDK v5 manages messages internally
+  // Sync local messages to global state
+  // This ensures both views always render the same messages
+  useEffect(() => {
+    setGlobalMessages(localMessages);
+  }, [localMessages, setGlobalMessages]);
+
+  // Sync streaming status to global state
+  // This prevents race conditions when switching views mid-stream
+  useEffect(() => {
+    const streaming = status === 'submitted' || status === 'streaming';
+    setGlobalIsStreaming(streaming);
+  }, [status, setGlobalIsStreaming]);
 
   // Message action handlers (defined after useChat so we have access to messages, setMessages, regenerate)
   const handleEdit = async (messageId: string, newContent: string) => {
@@ -171,8 +191,10 @@ const GlobalAssistantView: React.FC = () => {
     try {
       await del(`/api/ai_conversations/${currentConversationId}/messages/${messageId}`);
 
-      // Remove from UI immediately (optimistic update)
-      setMessages(messages.filter(m => m.id !== messageId));
+      // Optimistically remove from UI (both local and global)
+      const filtered = globalMessages.filter(m => m.id !== messageId);
+      setGlobalMessages(filtered);
+      setLocalMessages(filtered);
 
       toast.success('Message deleted');
     } catch (error) {
@@ -186,11 +208,11 @@ const GlobalAssistantView: React.FC = () => {
     if (!currentConversationId) return;
 
     // Before regenerating, clean up old assistant responses after the last user message
-    const lastUserMsgIndex = messages.map(m => m.role).lastIndexOf('user');
+    const lastUserMsgIndex = globalMessages.map(m => m.role).lastIndexOf('user');
 
     if (lastUserMsgIndex !== -1) {
       // Get all assistant messages after the last user message
-      const assistantMessagesToDelete = messages
+      const assistantMessagesToDelete = globalMessages
         .slice(lastUserMsgIndex + 1)
         .filter(m => m.role === 'assistant');
 
@@ -203,11 +225,12 @@ const GlobalAssistantView: React.FC = () => {
         }
       }
 
-      // Remove them from local state
-      const filteredMessages = messages.filter(
+      // Remove them from state (both local and global)
+      const filteredMessages = globalMessages.filter(
         m => !assistantMessagesToDelete.some(toDelete => toDelete.id === m.id)
       );
-      setMessages(filteredMessages);
+      setGlobalMessages(filteredMessages);
+      setLocalMessages(filteredMessages);
     }
 
     // Now regenerate with a clean slate
@@ -215,7 +238,7 @@ const GlobalAssistantView: React.FC = () => {
   };
 
   // Determine last assistant message for retry button visibility
-  const lastAssistantMessageId = messages
+  const lastAssistantMessageId = globalMessages
     .filter(m => m.role === 'assistant')
     .slice(-1)[0]?.id;
 
@@ -239,10 +262,10 @@ const GlobalAssistantView: React.FC = () => {
     };
   }, [status, currentConversationId]);
 
-  // ✅ Combined scroll effects - use messages.length instead of messages array
+  // ✅ Combined scroll effects - use globalMessages.length instead of messages array
   useEffect(() => {
     scrollToBottom();
-  }, [messages.length, status]);
+  }, [globalMessages.length, status]);
 
   // Reset error visibility when new error occurs
   useEffect(() => {
@@ -436,12 +459,12 @@ const GlobalAssistantView: React.FC = () => {
                     </div>
                   </div>
                 </div>
-              ) : messages.length === 0 ? (
+              ) : globalMessages.length === 0 ? (
                 <div className="flex items-center justify-center h-32 text-muted-foreground">
                   <p>Welcome to your Global Assistant! Ask me anything about your workspace.</p>
                 </div>
               ) : (
-                messages.map(message => (
+                globalMessages.map(message => (
                   <MessageRenderer
                     key={message.id}
                     message={message}
@@ -519,7 +542,7 @@ const GlobalAssistantView: React.FC = () => {
             ) : (
               <Button
                 onClick={handleSendMessage}
-                disabled={!input.trim() || !providerSettings?.isAnyProviderConfigured || isLoading}
+                disabled={!input.trim() || !providerSettings?.isAnyProviderConfigured || isLoading || globalIsStreaming}
                 size="icon"
               >
                 <Send className="h-4 w-4" />
