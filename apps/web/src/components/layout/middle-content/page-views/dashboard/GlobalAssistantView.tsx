@@ -52,8 +52,8 @@ const GlobalAssistantView: React.FC = () => {
   const pathname = usePathname();
   const { rightSidebarOpen, toggleRightSidebar } = useLayoutStore();
 
-  // Use shared global chat context - same Chat instance as AssistantChatTab!
-  const { chat, currentConversationId, isInitialized, createNewConversation, refreshConversation } = useGlobalChat();
+  // Use shared global chat config - components create their own Chat instances for proper subscriptions
+  const { chatConfig, currentConversationId, isInitialized, createNewConversation, refreshConversation } = useGlobalChat();
 
   // Local state for component-specific concerns
   const [providerSettings, setProviderSettings] = useState<ProviderSettings | null>(null);
@@ -129,8 +129,9 @@ const GlobalAssistantView: React.FC = () => {
 
   // URL watching and conversation loading is now handled by GlobalChatContext
 
-  // Use the shared Chat instance from context - this is what enables state sharing!
-  // Both AssistantChatTab and GlobalAssistantView use the same Chat instance
+  // Create own Chat instance from shared config - this enables proper subscriptions!
+  // Both AssistantChatTab and GlobalAssistantView create their own instances with the same config,
+  // so they stay in sync via the backend while each hook properly subscribes to its own instance
   const {
     messages,
     sendMessage,
@@ -139,7 +140,7 @@ const GlobalAssistantView: React.FC = () => {
     regenerate,
     setMessages,
     stop,
-  } = useChat({ chat });
+  } = useChat(chatConfig || {});
 
   // ✅ Removed setMessages sync effect - AI SDK v5 manages messages internally
 

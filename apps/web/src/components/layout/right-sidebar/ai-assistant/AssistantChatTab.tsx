@@ -45,8 +45,8 @@ interface LocationContext {
 const AssistantChatTab: React.FC = () => {
   const pathname = usePathname();
 
-  // Use shared global chat context - this is the key change!
-  const { chat, currentConversationId, isInitialized, createNewConversation, refreshConversation } = useGlobalChat();
+  // Use shared global chat config - components create their own Chat instances for proper subscriptions
+  const { chatConfig, currentConversationId, isInitialized, createNewConversation, refreshConversation } = useGlobalChat();
 
   // Local state for component-specific concerns
   const [providerSettings, setProviderSettings] = useState<ProviderSettings | null>(null);
@@ -199,8 +199,9 @@ const AssistantChatTab: React.FC = () => {
     extractLocationContext();
   }, [pathname]); // Only re-run when pathname changes, not on every drives refresh
 
-  // Use the shared Chat instance from context - this is what enables state sharing!
-  // Both AssistantChatTab and GlobalAssistantView will use the same Chat instance
+  // Create own Chat instance from shared config - this enables proper subscriptions!
+  // Both AssistantChatTab and GlobalAssistantView create their own instances with the same config,
+  // so they stay in sync via the backend while each hook properly subscribes to its own instance
   const {
     messages,
     sendMessage,
@@ -209,7 +210,7 @@ const AssistantChatTab: React.FC = () => {
     regenerate,
     setMessages,
     stop,
-  } = useChat({ chat });
+  } = useChat(chatConfig || {});
 
   // ✅ Removed setMessages sync effect - AI SDK v5 manages messages internally
 
