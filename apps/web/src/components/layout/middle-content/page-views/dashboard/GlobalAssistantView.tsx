@@ -59,6 +59,8 @@ const GlobalAssistantView: React.FC = () => {
     setMessages: setGlobalMessages,
     isStreaming: globalIsStreaming,
     setIsStreaming: setGlobalIsStreaming,
+    stopStreaming: globalStopStreaming,
+    setStopStreaming: setGlobalStopStreaming,
     currentConversationId,
     isInitialized,
     createNewConversation,
@@ -77,6 +79,7 @@ const GlobalAssistantView: React.FC = () => {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<ChatInputRef>(null);
+  const prevStatusRef = useRef<string>('ready');
   
   // Auto-scroll to bottom function
   const scrollToBottom = () => {
@@ -160,9 +163,32 @@ const GlobalAssistantView: React.FC = () => {
   // Sync streaming status to global state
   // This prevents race conditions when switching views mid-stream
   useEffect(() => {
-    const streaming = status === 'submitted' || status === 'streaming';
-    setGlobalIsStreaming(streaming);
+    const isCurrentlyStreaming = status === 'submitted' || status === 'streaming';
+    const wasStreaming = prevStatusRef.current === 'submitted' || prevStatusRef.current === 'streaming';
+
+    // Only update global state if there's an actual transition
+    if (isCurrentlyStreaming && !wasStreaming) {
+      // We started streaming
+      setGlobalIsStreaming(true);
+    } else if (!isCurrentlyStreaming && wasStreaming) {
+      // We stopped streaming (actual transition, not just mounting as ready)
+      setGlobalIsStreaming(false);
+    }
+
+    // Update the ref for next comparison
+    prevStatusRef.current = status;
   }, [status, setGlobalIsStreaming]);
+
+  // Register local stop function to global context when streaming
+  // This allows the other view to stop this view's stream
+  useEffect(() => {
+    const streaming = status === 'submitted' || status === 'streaming';
+    if (streaming) {
+      setGlobalStopStreaming(() => stop);
+    } else {
+      setGlobalStopStreaming(null);
+    }
+  }, [status, stop, setGlobalStopStreaming]);
 
   // Message action handlers (defined after useChat so we have access to messages, setMessages, regenerate)
   const handleEdit = async (messageId: string, newContent: string) => {
@@ -476,7 +502,7 @@ const GlobalAssistantView: React.FC = () => {
                 ))
               )}
               
-              {status !== 'ready' && !isLoading && (
+              {globalIsStreaming && !isLoading && (
                 <div className="mb-4 p-3 rounded-lg bg-gray-50 dark:bg-gray-800/50 mr-8">
                   <div className="text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
                     Global Assistant
@@ -530,9 +556,9 @@ const GlobalAssistantView: React.FC = () => {
               driveId={locationContext?.currentDrive?.id}
               crossDrive={true}  // Allow searching across all drives in global assistant
             />
-            {status === 'streaming' || status === 'submitted' ? (
+            {globalIsStreaming ? (
               <Button
-                onClick={() => stop()}
+                onClick={() => globalStopStreaming?.()}
                 variant="destructive"
                 size="icon"
                 title="Stop generating"
@@ -542,7 +568,7 @@ const GlobalAssistantView: React.FC = () => {
             ) : (
               <Button
                 onClick={handleSendMessage}
-                disabled={!input.trim() || !providerSettings?.isAnyProviderConfigured || isLoading || globalIsStreaming}
+                disabled={!input.trim() || !providerSettings?.isAnyProviderConfigured || isLoading}
                 size="icon"
               >
                 <Send className="h-4 w-4" />

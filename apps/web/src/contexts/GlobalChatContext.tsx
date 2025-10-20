@@ -23,6 +23,10 @@ interface GlobalChatContextValue {
   isStreaming: boolean;
   setIsStreaming: (streaming: boolean) => void;
 
+  // Global stop function - allows ANY view to stop the stream
+  stopStreaming: (() => void) | null;
+  setStopStreaming: (fn: (() => void) | null) => void;
+
   // Current conversation state
   currentConversationId: string | null;
   initialMessages: UIMessage[];
@@ -49,6 +53,9 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
 
   // Global streaming status - tracks if ANY view is streaming
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
+
+  // Global stop function - allows ANY view to stop the active stream
+  const [stopStreaming, setStopStreaming] = useState<(() => void) | null>(null);
 
   /**
    * Load a conversation by ID
@@ -206,6 +213,8 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     setMessages,
     isStreaming,
     setIsStreaming,
+    stopStreaming,
+    setStopStreaming,
     currentConversationId,
     initialMessages,
     isInitialized,
