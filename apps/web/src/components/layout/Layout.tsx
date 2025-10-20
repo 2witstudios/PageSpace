@@ -175,7 +175,7 @@ function Layout({ children }: LayoutProps) {
 
         <div className="relative flex flex-1 min-h-0 overflow-hidden">
           {!shouldOverlaySidebars && leftSidebarOpen && (
-            <div className="relative hidden flex-shrink-0 xl:flex xl:w-[18rem] 2xl:w-80 pt-4">
+            <div className="relative hidden flex-shrink-0 xl:flex xl:w-[18rem] 2xl:w-80 pt-4 overflow-hidden">
               <MemoizedSidebar className="h-full w-full" />
             </div>
           )}
@@ -213,7 +213,7 @@ function Layout({ children }: LayoutProps) {
           </main>
 
           {!shouldOverlaySidebars && rightSidebarOpen && (
-            <div className="relative hidden flex-shrink-0 xl:flex xl:w-[18rem] 2xl:w-80 pt-4">
+            <div className="relative hidden flex-shrink-0 xl:flex xl:w-[18rem] 2xl:w-80 pt-4 overflow-hidden">
               <MemoizedRightPanel className="h-full w-full" />
             </div>
           )}

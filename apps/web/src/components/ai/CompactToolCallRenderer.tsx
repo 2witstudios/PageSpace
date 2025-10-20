@@ -276,9 +276,9 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
       >
         {isExpanded ? <ChevronDown className="h-3 w-3 flex-shrink-0" /> : <ChevronRight className="h-3 w-3 flex-shrink-0" />}
         {getToolIcon(toolName)}
-        <span className="font-medium truncate flex-1">{formatToolName(toolName)}</span>
+        <span className="font-medium truncate flex-1 min-w-0">{formatToolName(toolName)}</span>
         {getStatusIcon()}
-        <span className="text-gray-500 dark:text-gray-400 truncate max-w-[80px]">
+        <span className="text-gray-500 dark:text-gray-400 truncate max-w-[80px] min-w-0">
           {getCompactSummary()}
         </span>
       </button>
