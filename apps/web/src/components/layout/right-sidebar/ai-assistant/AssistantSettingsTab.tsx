@@ -22,6 +22,7 @@ interface ProviderSettings {
     anthropic: { isConfigured: boolean; hasApiKey: boolean };
     xai: { isConfigured: boolean; hasApiKey: boolean };
     ollama: { isConfigured: boolean; hasBaseUrl: boolean };
+    lmstudio: { isConfigured: boolean; hasBaseUrl: boolean };
     glm: { isConfigured: boolean; hasApiKey: boolean };
   };
   isAnyProviderConfigured: boolean;
@@ -45,6 +46,9 @@ const AssistantSettingsTab: React.FC = () => {
   const [ollamaModels, setOllamaModels] = useState<Record<string, string> | null>(null);
   const [ollamaModelsLoading, setOllamaModelsLoading] = useState(false);
   const [ollamaModelsError, setOllamaModelsError] = useState<string | null>(null);
+
+  // Dynamic LM Studio models state
+  const [lmstudioModels, setLmstudioModels] = useState<Record<string, string> | null>(null);
 
   // Fetch Ollama models dynamically
   const fetchOllamaModels = useCallback(async () => {
@@ -81,6 +85,33 @@ const AssistantSettingsTab: React.FC = () => {
       setOllamaModelsLoading(false);
     }
   }, [ollamaModels]);
+
+  // Fetch LM Studio models dynamically
+  const fetchLMStudioModels = useCallback(async () => {
+    // Return cached results if available
+    if (lmstudioModels) {
+      return lmstudioModels;
+    }
+
+    try {
+      const response = await fetchWithAuth('/api/ai/lmstudio/models');
+      const data = await response.json();
+
+      if (data.success && data.models && Object.keys(data.models).length > 0) {
+        setLmstudioModels(data.models);
+        return data.models;
+      } else {
+        // No fallback models - return empty object
+        setLmstudioModels({});
+        return {};
+      }
+    } catch (error) {
+      console.error('Failed to fetch LM Studio models:', error);
+      // No fallback models - return empty object
+      setLmstudioModels({});
+      return {};
+    }
+  }, [lmstudioModels]);
 
   // Load current settings
   const loadSettings = useCallback(async () => {
@@ -159,6 +190,20 @@ const AssistantSettingsTab: React.FC = () => {
         const defaultModel = Object.keys(AI_PROVIDERS.ollama.models)[0];
         setSelectedModel(defaultModel);
       }
+    } else if (provider === 'lmstudio') {
+      // Fetch LM Studio models lazily when provider is selected
+      try {
+        const models = await fetchLMStudioModels();
+        if (Object.keys(models).length > 0) {
+          const defaultModel = Object.keys(models)[0];
+          setSelectedModel(defaultModel);
+        } else {
+          // No models available - show error
+          toast.error('No models available in LM Studio. Please ensure LM Studio server is running and models are loaded.');
+        }
+      } catch {
+        toast.error('Failed to connect to LM Studio. Please ensure the server is running.');
+      }
     } else {
       // For other providers, use static models
       const defaultModel = Object.keys(AI_PROVIDERS[provider as keyof typeof AI_PROVIDERS].models)[0];
@@ -170,10 +215,13 @@ const AssistantSettingsTab: React.FC = () => {
     setSelectedModel(model);
   };
 
-  // Get models for the current provider (dynamic for Ollama, static for others)
-  const getCurrentProviderModels = () => {
+  // Get models for the current provider (dynamic for Ollama and LM Studio, static for others)
+  const getCurrentProviderModels = (): Record<string, string> => {
     if (selectedProvider === 'ollama' && ollamaModels) {
       return ollamaModels;
+    }
+    if (selectedProvider === 'lmstudio' && lmstudioModels) {
+      return lmstudioModels;
     }
     return AI_PROVIDERS[selectedProvider as keyof typeof AI_PROVIDERS]?.models || {};
   };
@@ -403,7 +451,7 @@ const AssistantSettingsTab: React.FC = () => {
                           disabled={!hasAccess}
                         >
                           <div className="flex items-center justify-between w-full">
-                            <span className={!hasAccess ? 'text-muted-foreground' : ''}>{name}</span>
+                            <span className={!hasAccess ? 'text-muted-foreground' : ''}>{name as string}</span>
                             {needsSubscription && !hasAccess && (
                               <Badge variant="outline" className="text-xs ml-2">
                                 Pro/Business

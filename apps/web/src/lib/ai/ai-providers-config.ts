@@ -220,6 +220,13 @@ export const AI_PROVIDERS = {
       'neural-chat:latest': 'Neural Chat',
     },
   },
+  lmstudio: {
+    name: 'LM Studio (Local)',
+    models: {
+      // Note: Model list will be discovered dynamically from running LM Studio instance
+      // No fallback models - requires LM Studio server to be running
+    },
+  },
   glm: {
     name: 'GLM Coder Plan',
     models: {

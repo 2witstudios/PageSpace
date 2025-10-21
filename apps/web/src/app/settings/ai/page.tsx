@@ -25,6 +25,7 @@ interface ProviderSettings {
     anthropic: { isConfigured: boolean; hasApiKey: boolean };
     xai: { isConfigured: boolean; hasApiKey: boolean };
     ollama: { isConfigured: boolean; hasBaseUrl: boolean };
+    lmstudio: { isConfigured: boolean; hasBaseUrl: boolean };
     glm: { isConfigured: boolean; hasApiKey: boolean };
   };
   isAnyProviderConfigured: boolean;
@@ -44,6 +45,7 @@ export default function AiSettingsPage() {
   const [anthropicApiKey, setAnthropicApiKey] = useState<string>('');
   const [xaiApiKey, setXaiApiKey] = useState<string>('');
   const [ollamaBaseUrl, setOllamaBaseUrl] = useState<string>('');
+  const [lmstudioBaseUrl, setLmstudioBaseUrl] = useState<string>('');
   const [glmApiKey, setGlmApiKey] = useState<string>('');
   const [showOpenRouterKey, setShowOpenRouterKey] = useState<boolean>(false);
   const [showGoogleKey, setShowGoogleKey] = useState<boolean>(false);
@@ -218,6 +220,60 @@ export default function AiSettingsPage() {
     } catch (error) {
       console.error('Failed to save Ollama base URL:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to save Ollama base URL. Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveLMStudioBaseUrl = async () => {
+    setSaving(true);
+    try {
+      if (!lmstudioBaseUrl.trim()) {
+        toast.error('Please enter a base URL');
+        setSaving(false);
+        return;
+      }
+
+      // Format the base URL - store user input as-is
+      let formattedUrl = lmstudioBaseUrl.trim();
+
+      // Remove trailing slash if present
+      formattedUrl = formattedUrl.replace(/\/$/, '');
+
+      // Save LM Studio base URL to backend
+      const result = await post<SaveSettingsResult>('/api/ai/settings', {
+        provider: 'lmstudio',
+        baseUrl: formattedUrl,
+      });
+
+      // Update provider settings locally
+      if (providerSettings) {
+        const updatedSettings = {
+          ...providerSettings,
+          providers: {
+            ...providerSettings.providers,
+            lmstudio: {
+              isConfigured: true,
+              hasBaseUrl: true,
+            },
+          },
+          isAnyProviderConfigured: true,
+        };
+        setProviderSettings(updatedSettings);
+      }
+
+      // Clear the input field
+      setLmstudioBaseUrl('');
+
+      // Broadcast settings update event for other components
+      window.dispatchEvent(new CustomEvent('ai-settings-updated', {
+        detail: { provider: 'lmstudio', baseUrlSaved: true }
+      }));
+
+      toast.success(result.message || 'LM Studio base URL saved successfully!');
+    } catch (error) {
+      console.error('Failed to save LM Studio base URL:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to save LM Studio base URL. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -708,6 +764,66 @@ export default function AiSettingsPage() {
             </p>
             <p className="mt-2">
               <strong>Popular models:</strong> llama3.2, codellama, mistral, qwen2.5-coder, gemma2
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* LM Studio Base URL */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between">
+            <span>LM Studio (Local AI)</span>
+            {isProviderConfigured('lmstudio') && (
+              <Badge variant="default" className="bg-green-500">
+                <CheckCircle className="h-3 w-3 mr-1" />
+                Configured
+              </Badge>
+            )}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Base URL</label>
+            <div className="flex gap-2">
+              <Input
+                type="text"
+                placeholder="http://localhost:1234/v1"
+                value={lmstudioBaseUrl}
+                onChange={(e) => setLmstudioBaseUrl(e.target.value)}
+                className="flex-1"
+              />
+              <Button
+                onClick={handleSaveLMStudioBaseUrl}
+                disabled={!lmstudioBaseUrl.trim() || saving}
+              >
+                {saving ? 'Saving...' : 'Save URL'}
+              </Button>
+            </div>
+          </div>
+          <div className="text-sm text-muted-foreground">
+            <p>Enter your LM Studio server base URL including the <code>/v1</code> path.</p>
+            <p className="mt-1">
+              <strong>Examples:</strong>
+            </p>
+            <ul className="list-disc list-inside mt-1 space-y-1">
+              <li>Local: <code>http://localhost:1234/v1</code></li>
+              <li>Docker: <code>http://host.docker.internal:1234/v1</code></li>
+            </ul>
+            <p className="mt-2">
+              Download LM Studio from{' '}
+              <a
+                href="https://lmstudio.ai"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 hover:underline"
+              >
+                lmstudio.ai
+              </a>
+              {' '}to run local models with a user-friendly interface.
+            </p>
+            <p className="mt-2">
+              <strong>Important:</strong> You must (1) load a model in LM Studio, then (2) start the local server under the &ldquo;Local Server&rdquo; tab before models will be available.
             </p>
           </div>
         </CardContent>

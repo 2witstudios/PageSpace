@@ -30,6 +30,7 @@ import {
   getUserAnthropicSettings,
   getUserXAISettings,
   getUserOllamaSettings,
+  getUserLMStudioSettings,
   getUserGLMSettings,
 } from '@/lib/ai/ai-utils';
 import { db, users, chatMessages, pages, eq, and } from '@pagespace/db';
@@ -983,6 +984,9 @@ export async function GET(request: Request) {
     // Check Ollama settings
     const ollamaSettings = await getUserOllamaSettings(userId);
 
+    // Check LM Studio settings
+    const lmstudioSettings = await getUserLMStudioSettings(userId);
+
     // Check GLM settings
     const glmSettings = await getUserGLMSettings(userId);
 
@@ -1018,12 +1022,16 @@ export async function GET(request: Request) {
           isConfigured: !!ollamaSettings?.isConfigured,
           hasBaseUrl: !!ollamaSettings?.baseUrl,
         },
+        lmstudio: {
+          isConfigured: !!lmstudioSettings?.isConfigured,
+          hasBaseUrl: !!lmstudioSettings?.baseUrl,
+        },
         glm: {
           isConfigured: !!glmSettings?.isConfigured,
           hasApiKey: !!glmSettings?.apiKey,
         },
       },
-      isAnyProviderConfigured: !!pageSpaceSettings?.isConfigured || !!openRouterSettings?.isConfigured || !!googleSettings?.isConfigured || !!openAISettings?.isConfigured || !!anthropicSettings?.isConfigured || !!xaiSettings?.isConfigured || !!ollamaSettings?.isConfigured || !!glmSettings?.isConfigured,
+      isAnyProviderConfigured: !!pageSpaceSettings?.isConfigured || !!openRouterSettings?.isConfigured || !!googleSettings?.isConfigured || !!openAISettings?.isConfigured || !!anthropicSettings?.isConfigured || !!xaiSettings?.isConfigured || !!ollamaSettings?.isConfigured || !!lmstudioSettings?.isConfigured || !!glmSettings?.isConfigured,
     });
 
   } catch (error) {
@@ -1053,6 +1061,7 @@ async function validateProviderModel(
     'anthropic',
     'xai',
     'ollama',
+    'lmstudio',
     'glm'
   ];
 
