@@ -273,6 +273,8 @@ const AssistantSettingsTab: React.FC = () => {
         return providerSettings.providers.xai?.isConfigured || false;
       case 'ollama':
         return providerSettings.providers.ollama?.isConfigured || false;
+      case 'lmstudio':
+        return providerSettings.providers.lmstudio?.isConfigured || false;
       default:
         return false;
     }
