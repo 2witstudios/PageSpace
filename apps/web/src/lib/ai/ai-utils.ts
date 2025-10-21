@@ -612,6 +612,110 @@ export async function deleteOllamaSettings(userId: string): Promise<void> {
 }
 
 /**
+ * Gets user's LM Studio settings
+ * Returns baseUrl for use with local LM Studio server instance
+ */
+export async function getUserLMStudioSettings(userId: string): Promise<{
+  baseUrl: string;
+  isConfigured: boolean;
+} | null> {
+  const settings = await db.query.userAiSettings.findFirst({
+    where: and(
+      eq(userAiSettings.userId, userId),
+      eq(userAiSettings.provider, 'lmstudio')
+    ),
+  });
+
+  if (!settings || !settings.baseUrl) {
+    return null;
+  }
+
+  return {
+    baseUrl: settings.baseUrl,
+    isConfigured: true,
+  };
+}
+
+/**
+ * Creates LM Studio provider settings for a user
+ * Stores the baseUrl for local LM Studio server connection
+ */
+export async function createLMStudioSettings(
+  userId: string,
+  baseUrl: string
+): Promise<void> {
+  // Validate and format the base URL - store user input as-is
+  let formattedUrl = baseUrl.trim();
+
+  // Remove trailing slash if present
+  formattedUrl = formattedUrl.replace(/\/$/, '');
+
+  const baseUrlSummary = (() => {
+    try {
+      const parsed = new URL(formattedUrl);
+      return {
+        origin: `${parsed.protocol}//${parsed.hostname}${parsed.port ? `:${parsed.port}` : ''}`,
+        hasCustomPath: parsed.pathname !== '/',
+      };
+    } catch {
+      return { origin: formattedUrl };
+    }
+  })();
+
+  aiLogger.debug('Persisting LM Studio base URL', {
+    userId: maskIdentifier(userId),
+    ...baseUrlSummary,
+  });
+
+  // Check if settings already exist
+  const existingSettings = await db.query.userAiSettings.findFirst({
+    where: and(
+      eq(userAiSettings.userId, userId),
+      eq(userAiSettings.provider, 'lmstudio')
+    ),
+  });
+
+  if (existingSettings) {
+    // Update existing settings
+    await db
+      .update(userAiSettings)
+      .set({
+        baseUrl: formattedUrl,
+        updatedAt: new Date(),
+      })
+      .where(eq(userAiSettings.id, existingSettings.id));
+  } else {
+    // Create new settings
+    await db.insert(userAiSettings).values({
+      id: createId(),
+      userId,
+      provider: 'lmstudio',
+      baseUrl: formattedUrl,
+      // Note: LM Studio doesn't use API keys, so encryptedApiKey is null
+    });
+  }
+}
+
+/**
+ * Deletes LM Studio provider settings for a user
+ * Removes the baseUrl configuration from database
+ */
+export async function deleteLMStudioSettings(userId: string): Promise<void> {
+  const existingSettings = await db.query.userAiSettings.findFirst({
+    where: and(
+      eq(userAiSettings.userId, userId),
+      eq(userAiSettings.provider, 'lmstudio')
+    ),
+  });
+
+  if (existingSettings) {
+    await db
+      .delete(userAiSettings)
+      .where(eq(userAiSettings.id, existingSettings.id));
+  }
+}
+
+/**
  * Gets user's GLM API settings
  * Returns decrypted API key for use with GLM Coder Plan provider
  */

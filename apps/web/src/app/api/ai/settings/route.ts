@@ -21,6 +21,9 @@ import {
   getUserOllamaSettings,
   createOllamaSettings,
   deleteOllamaSettings,
+  getUserLMStudioSettings,
+  createLMStudioSettings,
+  deleteLMStudioSettings,
   getUserGLMSettings,
   createGLMSettings,
   deleteGLMSettings
@@ -64,6 +67,9 @@ export async function GET(request: Request) {
     // Check Ollama settings
     const ollamaSettings = await getUserOllamaSettings(userId);
 
+    // Check LM Studio settings
+    const lmstudioSettings = await getUserLMStudioSettings(userId);
+
     // Check GLM settings
     const glmSettings = await getUserGLMSettings(userId);
 
@@ -100,12 +106,16 @@ export async function GET(request: Request) {
           isConfigured: !!ollamaSettings?.isConfigured,
           hasBaseUrl: !!ollamaSettings?.baseUrl,
         },
+        lmstudio: {
+          isConfigured: !!lmstudioSettings?.isConfigured,
+          hasBaseUrl: !!lmstudioSettings?.baseUrl,
+        },
         glm: {
           isConfigured: !!glmSettings?.isConfigured,
           hasApiKey: !!glmSettings?.apiKey,
         },
       },
-      isAnyProviderConfigured: !!(pageSpaceSettings?.isConfigured || openRouterSettings?.isConfigured || googleSettings?.isConfigured || openAISettings?.isConfigured || anthropicSettings?.isConfigured || xaiSettings?.isConfigured || ollamaSettings?.isConfigured || glmSettings?.isConfigured),
+      isAnyProviderConfigured: !!(pageSpaceSettings?.isConfigured || openRouterSettings?.isConfigured || googleSettings?.isConfigured || openAISettings?.isConfigured || anthropicSettings?.isConfigured || xaiSettings?.isConfigured || ollamaSettings?.isConfigured || lmstudioSettings?.isConfigured || glmSettings?.isConfigured),
     });
   } catch (error) {
     loggers.ai.error('Failed to get AI settings', error as Error);
@@ -130,18 +140,18 @@ export async function POST(request: Request) {
     const { provider, apiKey, baseUrl } = body;
 
     // Validate input
-    if (!provider || !['openrouter', 'google', 'openai', 'anthropic', 'xai', 'ollama', 'glm'].includes(provider)) {
+    if (!provider || !['openrouter', 'google', 'openai', 'anthropic', 'xai', 'ollama', 'lmstudio', 'glm'].includes(provider)) {
       return NextResponse.json(
-        { error: 'Invalid provider. Must be "openrouter", "google", "openai", "anthropic", "xai", "ollama", or "glm"' },
+        { error: 'Invalid provider. Must be "openrouter", "google", "openai", "anthropic", "xai", "ollama", "lmstudio", or "glm"' },
         { status: 400 }
       );
     }
 
     // Validate based on provider type
-    if (provider === 'ollama') {
+    if (provider === 'ollama' || provider === 'lmstudio') {
       if (!baseUrl || typeof baseUrl !== 'string' || !baseUrl.trim()) {
         return NextResponse.json(
-          { error: 'Base URL is required for Ollama' },
+          { error: `Base URL is required for ${provider === 'ollama' ? 'Ollama' : 'LM Studio'}` },
           { status: 400 }
         );
       }
@@ -172,6 +182,8 @@ export async function POST(request: Request) {
         await createXAISettings(userId, sanitizedApiKey);
       } else if (provider === 'ollama') {
         await createOllamaSettings(userId, sanitizedBaseUrl);
+      } else if (provider === 'lmstudio') {
+        await createLMStudioSettings(userId, sanitizedBaseUrl);
       } else if (provider === 'glm') {
         await createGLMSettings(userId, sanitizedApiKey);
       }
@@ -184,6 +196,7 @@ export async function POST(request: Request) {
         anthropic: 'Anthropic',
         xai: 'xAI',
         ollama: 'Ollama',
+        lmstudio: 'LM Studio',
         glm: 'GLM Coder Plan'
       };
       
@@ -225,9 +238,9 @@ export async function PATCH(request: Request) {
     const { provider, model } = body;
 
     // Validate input - pagespace and openrouter_free are valid providers
-    if (!provider || !['pagespace', 'openrouter', 'openrouter_free', 'google', 'openai', 'anthropic', 'xai', 'ollama', 'glm'].includes(provider)) {
+    if (!provider || !['pagespace', 'openrouter', 'openrouter_free', 'google', 'openai', 'anthropic', 'xai', 'ollama', 'lmstudio', 'glm'].includes(provider)) {
       return NextResponse.json(
-        { error: 'Invalid provider. Must be "pagespace", "openrouter", "openrouter_free", "google", "openai", "anthropic", "xai", "ollama", or "glm"' },
+        { error: 'Invalid provider. Must be "pagespace", "openrouter", "openrouter_free", "google", "openai", "anthropic", "xai", "ollama", "lmstudio", or "glm"' },
         { status: 400 }
       );
     }
@@ -309,9 +322,9 @@ export async function DELETE(request: Request) {
     const { provider } = body;
 
     // Validate input
-    if (!provider || !['openrouter', 'google', 'openai', 'anthropic', 'xai', 'ollama', 'glm'].includes(provider)) {
+    if (!provider || !['openrouter', 'google', 'openai', 'anthropic', 'xai', 'ollama', 'lmstudio', 'glm'].includes(provider)) {
       return NextResponse.json(
-        { error: 'Invalid provider. Must be "openrouter", "google", "openai", "anthropic", "xai", "ollama", or "glm"' },
+        { error: 'Invalid provider. Must be "openrouter", "google", "openai", "anthropic", "xai", "ollama", "lmstudio", or "glm"' },
         { status: 400 }
       );
     }
@@ -330,6 +343,8 @@ export async function DELETE(request: Request) {
         await deleteXAISettings(userId);
       } else if (provider === 'ollama') {
         await deleteOllamaSettings(userId);
+      } else if (provider === 'lmstudio') {
+        await deleteLMStudioSettings(userId);
       } else if (provider === 'glm') {
         await deleteGLMSettings(userId);
       }

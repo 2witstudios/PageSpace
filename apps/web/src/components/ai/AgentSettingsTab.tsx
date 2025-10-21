@@ -8,7 +8,8 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrig
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useForm, Controller } from 'react-hook-form';
-import { patch } from '@/lib/auth-fetch';
+import { patch, fetchWithAuth } from '@/lib/auth-fetch';
+import { AI_PROVIDERS } from '@/lib/ai/ai-providers-config';
 
 interface AgentConfig {
   systemPrompt: string;
@@ -26,7 +27,6 @@ interface AgentSettingsTabProps {
   selectedModel: string;
   onProviderChange: (provider: string) => void;
   onModelChange: (model: string) => void;
-  availableProviders: Record<string, { name: string; models: Record<string, string> }>;
   isProviderConfigured: (provider: string) => boolean;
 }
 
@@ -42,18 +42,23 @@ interface FormData {
   aiModel: string;
 }
 
-const AgentSettingsTab = forwardRef<AgentSettingsTabRef, AgentSettingsTabProps>(({ 
-  pageId, 
-  config, 
-  onConfigUpdate, 
-  selectedProvider, 
-  selectedModel, 
-  onProviderChange, 
-  onModelChange, 
-  availableProviders, 
-  isProviderConfigured 
+const AgentSettingsTab = forwardRef<AgentSettingsTabRef, AgentSettingsTabProps>(({
+  pageId,
+  config,
+  onConfigUpdate,
+  selectedProvider,
+  selectedModel,
+  onProviderChange,
+  onModelChange,
+  isProviderConfigured
 }, ref) => {
   const [isSaving, setIsSaving] = useState(false);
+
+  // Dynamic Ollama models state
+  const [ollamaModels, setOllamaModels] = useState<Record<string, string> | null>(null);
+
+  // Dynamic LM Studio models state
+  const [lmstudioModels, setLmstudioModels] = useState<Record<string, string> | null>(null);
 
   const { register, handleSubmit, setValue, reset, control, watch } = useForm<FormData>({
     defaultValues: {
@@ -75,6 +80,71 @@ const AgentSettingsTab = forwardRef<AgentSettingsTabRef, AgentSettingsTabProps>(
       });
     }
   }, [config, reset, selectedProvider, selectedModel]);
+
+  // Fetch Ollama models dynamically
+  const fetchOllamaModels = useCallback(async () => {
+    // Return cached results if available
+    if (ollamaModels) {
+      return ollamaModels;
+    }
+
+    try {
+      const response = await fetchWithAuth('/api/ai/ollama/models');
+      const data = await response.json();
+
+      if (data.success && data.models && Object.keys(data.models).length > 0) {
+        setOllamaModels(data.models);
+        return data.models;
+      } else {
+        // No fallback models - return empty object
+        setOllamaModels({});
+        return {};
+      }
+    } catch (error) {
+      console.error('Failed to fetch Ollama models:', error);
+      // No fallback models - return empty object
+      setOllamaModels({});
+      return {};
+    }
+  }, [ollamaModels]);
+
+  // Fetch LM Studio models dynamically
+  const fetchLMStudioModels = useCallback(async () => {
+    // Return cached results if available
+    if (lmstudioModels) {
+      return lmstudioModels;
+    }
+
+    try {
+      const response = await fetchWithAuth('/api/ai/lmstudio/models');
+      const data = await response.json();
+
+      if (data.success && data.models && Object.keys(data.models).length > 0) {
+        setLmstudioModels(data.models);
+        return data.models;
+      } else {
+        // No fallback models - return empty object
+        setLmstudioModels({});
+        return {};
+      }
+    } catch (error) {
+      console.error('Failed to fetch LM Studio models:', error);
+      // No fallback models - return empty object
+      setLmstudioModels({});
+      return {};
+    }
+  }, [lmstudioModels]);
+
+  // Get models for the current provider (dynamic for Ollama and LM Studio, static for others)
+  const getCurrentProviderModels = (): Record<string, string> => {
+    if (selectedProvider === 'ollama' && ollamaModels) {
+      return ollamaModels;
+    }
+    if (selectedProvider === 'lmstudio' && lmstudioModels) {
+      return lmstudioModels;
+    }
+    return AI_PROVIDERS[selectedProvider as keyof typeof AI_PROVIDERS]?.models || {};
+  };
 
   const onSubmit = useCallback(async (data: FormData) => {
     setIsSaving(true);
@@ -111,6 +181,20 @@ const AgentSettingsTab = forwardRef<AgentSettingsTabRef, AgentSettingsTabProps>(
     },
     isSaving
   }), [handleSubmit, onSubmit, isSaving]);
+
+  // Eagerly fetch models when provider is Ollama or LM Studio
+  useEffect(() => {
+    if (selectedProvider === 'ollama' && !ollamaModels) {
+      fetchOllamaModels().catch(() => {
+        console.debug('Initial Ollama model fetch failed');
+      });
+    }
+    if (selectedProvider === 'lmstudio' && !lmstudioModels) {
+      fetchLMStudioModels().catch(() => {
+        console.debug('Initial LM Studio model fetch failed');
+      });
+    }
+  }, [selectedProvider, ollamaModels, lmstudioModels, fetchOllamaModels, fetchLMStudioModels]);
 
   const handleSelectAllTools = () => {
     const allToolNames = config?.availableTools.map(tool => tool.name) || [];
@@ -153,7 +237,7 @@ const AgentSettingsTab = forwardRef<AgentSettingsTabRef, AgentSettingsTabProps>(
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {Object.entries(availableProviders).map(([key, provider]) => {
+                    {Object.entries(AI_PROVIDERS).map(([key, provider]) => {
                       const configured = isProviderConfigured(key);
                       return (
                         <SelectItem key={key} value={key} disabled={!configured}>
@@ -177,8 +261,8 @@ const AgentSettingsTab = forwardRef<AgentSettingsTabRef, AgentSettingsTabProps>(
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
-                      <SelectLabel>{availableProviders[selectedProvider]?.name} Models</SelectLabel>
-                      {Object.entries(availableProviders[selectedProvider]?.models || {}).map(([key, name]) => (
+                      <SelectLabel>{AI_PROVIDERS[selectedProvider as keyof typeof AI_PROVIDERS]?.name} Models</SelectLabel>
+                      {Object.entries(getCurrentProviderModels()).map(([key, name]) => (
                         <SelectItem key={key} value={key}>
                           {name}
                         </SelectItem>

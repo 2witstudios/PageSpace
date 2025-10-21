@@ -17,7 +17,7 @@ import { useEditingStore } from '@/stores/useEditingStore';
 import { ConversationMessageRenderer } from '@/components/ai/ConversationMessageRenderer';
 import { buildPagePath } from '@/lib/tree/tree-utils';
 import { useDriveStore } from '@/hooks/useDrive';
-import { AI_PROVIDERS, getBackendProvider } from '@/lib/ai/ai-providers-config';
+import { getBackendProvider } from '@/lib/ai/ai-providers-config';
 import { useAuth } from '@/hooks/use-auth';
 import { toast } from 'sonner';
 import AgentSettingsTab, { AgentSettingsTabRef } from '@/components/ai/AgentSettingsTab';
@@ -334,9 +334,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   
   const handleProviderChange = (provider: string) => {
     setSelectedProvider(provider);
-    // Set default model for the selected provider
-    const defaultModel = Object.keys(AI_PROVIDERS[provider as keyof typeof AI_PROVIDERS].models)[0];
-    setSelectedModel(defaultModel);
+    // Note: Model selection is now handled by AgentSettingsTab
+    // which will fetch dynamic models for Ollama/LM Studio
   };
   
   const handleModelChange = (model: string) => {
@@ -730,7 +729,6 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             selectedModel={selectedModel}
             onProviderChange={handleProviderChange}
             onModelChange={handleModelChange}
-            availableProviders={AI_PROVIDERS}
             isProviderConfigured={isProviderConfigured}
           />
         </TabsContent>

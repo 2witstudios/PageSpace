@@ -28,6 +28,8 @@ import {
   createXAISettings,
   getUserOllamaSettings,
   createOllamaSettings,
+  getUserLMStudioSettings,
+  createLMStudioSettings,
   getUserGLMSettings,
   createGLMSettings,
 } from './ai-utils';
@@ -41,6 +43,7 @@ export interface ProviderRequest {
   anthropicApiKey?: string;
   xaiApiKey?: string;
   ollamaBaseUrl?: string;
+  lmstudioBaseUrl?: string;
   glmApiKey?: string;
 }
 
@@ -72,6 +75,7 @@ export async function createAIProvider(
     anthropicApiKey,
     xaiApiKey,
     ollamaBaseUrl,
+    lmstudioBaseUrl,
     glmApiKey,
   } = request;
 
@@ -281,6 +285,30 @@ export async function createAIProvider(
         baseURL: ollamaApiUrl,
       });
       model = ollamaProvider(currentModel);
+
+    } else if (currentProvider === 'lmstudio') {
+      // Handle LM Studio setup
+      let lmstudioSettings = await getUserLMStudioSettings(userId);
+
+      if (!lmstudioSettings && lmstudioBaseUrl) {
+        await createLMStudioSettings(userId, lmstudioBaseUrl);
+        lmstudioSettings = { baseUrl: lmstudioBaseUrl, isConfigured: true };
+      }
+
+      if (!lmstudioSettings) {
+        return {
+          error: 'LM Studio base URL not configured. Please provide a base URL for your local LM Studio server.',
+          status: 400,
+        };
+      }
+
+      // Create LM Studio provider instance with base URL
+      // LM Studio uses OpenAI-compatible API - no path suffix needed as user provides full URL
+      const lmstudioProvider = createOpenAICompatible({
+        name: 'lmstudio',
+        baseURL: lmstudioSettings.baseUrl,
+      });
+      model = lmstudioProvider(currentModel);
 
     } else if (currentProvider === 'glm') {
       // Handle GLM Coder Plan setup
