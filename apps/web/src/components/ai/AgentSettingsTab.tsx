@@ -194,7 +194,8 @@ const AgentSettingsTab = forwardRef<AgentSettingsTabRef, AgentSettingsTabProps>(
         console.debug('Initial LM Studio model fetch failed');
       });
     }
-  }, [selectedProvider, ollamaModels, lmstudioModels, fetchOllamaModels, fetchLMStudioModels]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProvider]); // Only selectedProvider - fetch functions are stable, models checked inline
 
   const handleSelectAllTools = () => {
     const allToolNames = config?.availableTools.map(tool => tool.name) || [];

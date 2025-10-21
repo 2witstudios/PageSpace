@@ -64,23 +64,21 @@ const AssistantSettingsTab: React.FC = () => {
       const response = await fetchWithAuth('/api/ai/ollama/models');
       const data = await response.json();
 
-      if (data.success && data.models) {
+      if (data.success && data.models && Object.keys(data.models).length > 0) {
         setOllamaModels(data.models);
         return data.models;
       } else {
-        // Use fallback models if fetch failed but returned data
-        const fallbackModels = AI_PROVIDERS.ollama.models;
-        setOllamaModels(fallbackModels);
-        setOllamaModelsError(data.error || 'Using fallback models');
-        return fallbackModels;
+        // No fallback models - return empty object
+        setOllamaModels({});
+        setOllamaModelsError(data.error || 'No models available');
+        return {};
       }
     } catch (error) {
       console.error('Failed to fetch Ollama models:', error);
-      // Use static fallback models
-      const fallbackModels = AI_PROVIDERS.ollama.models;
-      setOllamaModels(fallbackModels);
-      setOllamaModelsError('Connection failed. Using fallback models.');
-      return fallbackModels;
+      // No fallback models - return empty object
+      setOllamaModels({});
+      setOllamaModelsError('Connection failed');
+      return {};
     } finally {
       setOllamaModelsLoading(false);
     }
@@ -142,7 +140,7 @@ const AssistantSettingsTab: React.FC = () => {
           }
         }
 
-        // If current provider is Ollama, eagerly fetch models to avoid empty dropdown
+        // If current provider is Ollama or LM Studio, eagerly fetch models to avoid empty dropdown
         if (uiProvider === 'ollama') {
           try {
             await fetchOllamaModels();
@@ -151,13 +149,21 @@ const AssistantSettingsTab: React.FC = () => {
             console.debug('Initial Ollama model fetch failed, will use fallback models');
           }
         }
+        if (uiProvider === 'lmstudio') {
+          try {
+            await fetchLMStudioModels();
+          } catch {
+            // Silently handle errors - fetchLMStudioModels already has error handling
+            console.debug('Initial LM Studio model fetch failed');
+          }
+        }
       }
     } catch (error) {
       console.error('Failed to load settings:', error);
     } finally {
       setLoading(false);
     }
-  }, [fetchOllamaModels]);
+  }, [fetchOllamaModels, fetchLMStudioModels]);
 
   useEffect(() => {
     loadSettings();
@@ -183,12 +189,15 @@ const AssistantSettingsTab: React.FC = () => {
       // Fetch Ollama models lazily when provider is selected
       try {
         const models = await fetchOllamaModels();
-        const defaultModel = Object.keys(models)[0];
-        setSelectedModel(defaultModel);
+        if (Object.keys(models).length > 0) {
+          const defaultModel = Object.keys(models)[0];
+          setSelectedModel(defaultModel);
+        } else {
+          // No models available - show error
+          toast.error('No models available in Ollama. Please ensure Ollama server is running and models are downloaded.');
+        }
       } catch {
-        // Fallback to static models
-        const defaultModel = Object.keys(AI_PROVIDERS.ollama.models)[0];
-        setSelectedModel(defaultModel);
+        toast.error('Failed to connect to Ollama. Please ensure the server is running.');
       }
     } else if (provider === 'lmstudio') {
       // Fetch LM Studio models lazily when provider is selected
