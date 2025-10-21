@@ -300,11 +300,13 @@ describe('rate-limit-cache', () => {
     const hasRedis = !!process.env.REDIS_URL;
 
     it.skipIf(!hasRedis)('uses Redis when REDIS_URL is set', async () => {
+      await cache.waitForReady();
       const stats = cache.getCacheStats();
       expect(stats.redisAvailable).toBe(true);
     });
 
     it.skipIf(!hasRedis)('can increment and read from Redis', async () => {
+      await cache.waitForReady();
       await cache.incrementUsage(testUserId, testProvider, testLimit);
 
       const usage = await cache.getCurrentUsage(testUserId, testProvider, testLimit);
@@ -313,11 +315,13 @@ describe('rate-limit-cache', () => {
 
     it.skipIf(!hasRedis)('Redis counter persists across cache instances', async () => {
       // Make a call with first instance
+      await cache.waitForReady();
       await cache.incrementUsage(testUserId, testProvider, testLimit);
       await cache.shutdown();
 
       // Create new instance and check count
       const newCache = RateLimitCache.getInstance({ enableRedis: true });
+      await newCache.waitForReady();
       const usage = await newCache.getCurrentUsage(testUserId, testProvider, testLimit);
 
       expect(usage.currentCount).toBe(1);

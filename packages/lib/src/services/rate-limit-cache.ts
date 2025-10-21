@@ -35,6 +35,7 @@ export class RateLimitCache {
   private memoryCache = new Map<string, { count: number; expiresAt: number }>();
   private config: RateLimitConfig;
   private isRedisAvailable = false;
+  private initializationPromise: Promise<void> | null = null;
 
   private constructor(config: Partial<RateLimitConfig> = {}) {
     this.config = {
@@ -43,7 +44,7 @@ export class RateLimitCache {
       ...config
     };
 
-    this.initializeRedis();
+    this.initializationPromise = this.initializeRedis();
     this.startMemoryCacheCleanup();
   }
 
@@ -345,6 +346,15 @@ export class RateLimitCache {
       memoryEntries: this.memoryCache.size,
       redisAvailable: this.isRedisAvailable
     };
+  }
+
+  /**
+   * Wait for initialization to complete (useful for tests)
+   */
+  async waitForReady(): Promise<void> {
+    if (this.initializationPromise) {
+      await this.initializationPromise;
+    }
   }
 
   /**
