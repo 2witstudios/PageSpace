@@ -205,9 +205,9 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     };
   }, [currentConversationId, initialMessages]);
 
-  // Context value without memoization - allows chat config updates to propagate immediately
+  // Context value with memoization - prevents SWR revalidation loops and unnecessary re-renders
   // Functions are already stable via useCallback
-  const contextValue: GlobalChatContextValue = {
+  const contextValue: GlobalChatContextValue = useMemo(() => ({
     chatConfig,
     messages,
     setMessages,
@@ -222,7 +222,18 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     loadConversation,
     createNewConversation,
     refreshConversation,
-  };
+  }), [
+    chatConfig,
+    messages,
+    isStreaming,
+    stopStreaming,
+    currentConversationId,
+    initialMessages,
+    isInitialized,
+    loadConversation,
+    createNewConversation,
+    refreshConversation,
+  ]);
 
   return (
     <GlobalChatContext.Provider value={contextValue}>
