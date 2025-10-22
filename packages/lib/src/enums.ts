@@ -6,6 +6,7 @@ export enum PageType {
   CANVAS = 'CANVAS',
   FILE = 'FILE',
   SHEET = 'SHEET',
+  CALENDAR = 'CALENDAR',
 }
 
 export enum PermissionAction {

@@ -15,6 +15,7 @@ import { getPageTypeComponent } from '@pagespace/lib/client-safe';
 import CanvasPageView from './page-views/canvas/CanvasPageView';
 import GlobalAssistantView from './page-views/dashboard/GlobalAssistantView';
 import SheetView from './page-views/sheet/SheetView';
+import CalendarView from './page-views/calendar/CalendarView';
 
 
 const PageContent = ({ pageId }: { pageId: string | null }) => {
@@ -46,6 +47,7 @@ const PageContent = ({ pageId }: { pageId: string | null }) => {
     CanvasPageView,
     FileViewer,
     SheetView,
+    CalendarView,
   };
   
   const componentName = getPageTypeComponent(page.type);
@@ -55,10 +57,14 @@ const PageContent = ({ pageId }: { pageId: string | null }) => {
     return <div className="p-4">This page type is not supported.</div>;
   }
 
-  // DocumentView uses pageId-only pattern for stability
+  // DocumentView and CalendarView use pageId-only pattern for stability
   // Other components still use full page object (to be migrated)
   if (componentName === 'DocumentView') {
     return <DocumentView key={page.id} pageId={page.id} />;
+  }
+
+  if (componentName === 'CalendarView') {
+    return <CalendarView key={page.id} pageId={page.id} />;
   }
 
   // Other components still accept full page object

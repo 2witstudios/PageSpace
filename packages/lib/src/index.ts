@@ -18,6 +18,8 @@ export * from './notifications';
 export * from './page-types.config';
 export * from './page-type-validators';
 export * from './sheet';
+export * from './calendar-types';
+export * from './calendar-utils';
 
 // Auth and security utilities (server-only)
 export * from './auth-utils';

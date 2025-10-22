@@ -1,5 +1,6 @@
 import { PageType } from './enums';
 import { createEmptySheet, serializeSheetContent } from './sheet';
+import { serializeCalendarContent, createEmptyCalendar } from './calendar-types';
 
 export interface PageTypeCapabilities {
   canHaveChildren: boolean;
@@ -20,7 +21,7 @@ export interface PageTypeConfig {
   type: PageType;
   displayName: string;
   description: string;
-  iconName: 'Folder' | 'FileText' | 'MessageSquare' | 'Sparkles' | 'Palette' | 'FileIcon' | 'Table';
+  iconName: 'Folder' | 'FileText' | 'MessageSquare' | 'Sparkles' | 'Palette' | 'FileIcon' | 'Table' | 'Calendar';
   emoji: string;
   capabilities: PageTypeCapabilities;
   defaultContent: () => any;
@@ -167,6 +168,28 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     uiComponent: 'SheetView',
     layoutViewType: 'document',
   },
+  [PageType.CALENDAR]: {
+    type: PageType.CALENDAR,
+    displayName: 'Calendar',
+    description: 'Event calendar with hierarchical aggregation',
+    iconName: 'Calendar',
+    emoji: '📅',
+    capabilities: {
+      canHaveChildren: true,
+      canAcceptUploads: false,
+      canBeConverted: false,
+      supportsRealtime: true,
+      supportsVersioning: true,
+      supportsAI: true,
+    },
+    defaultContent: () => serializeCalendarContent(createEmptyCalendar()),
+    allowedChildTypes: Object.values(PageType),
+    apiValidation: {
+      optionalFields: ['events', 'config'],
+    },
+    uiComponent: 'CalendarView',
+    layoutViewType: 'document',
+  },
 };
 
 // Helper functions
@@ -260,4 +283,8 @@ export function isChannelPage(type: PageType): boolean {
 
 export function isAIChatPage(type: PageType): boolean {
   return type === PageType.AI_CHAT;
+}
+
+export function isCalendarPage(type: PageType): boolean {
+  return type === PageType.CALENDAR;
 }

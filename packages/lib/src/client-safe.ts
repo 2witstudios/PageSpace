@@ -22,6 +22,10 @@ export * from './page-type-validators';
 // Sheet utilities (safe - pure JavaScript functions)
 export * from './sheet';
 
+// Calendar types and utilities (safe - pure JavaScript functions)
+export * from './calendar-types';
+export * from './calendar-utils';
+
 // Page content parsing (safe - no server dependencies)
 export * from './page-content-parser';
 
