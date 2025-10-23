@@ -11,7 +11,7 @@ import { TextStyleKit } from '@tiptap/extension-text-style';
 import { TableKit } from '@tiptap/extension-table';
 import { formatHtml } from '@/lib/editor/prettier';
 import { PageMention } from '@/lib/editor/tiptap-mention-config';
-import { PaginationPlus } from '@/lib/editor/pagination';
+import { PaginationPlus, PAGE_SIZES, getMarginPreset } from '@/lib/editor/pagination';
 
 interface RichEditorProps {
   value: string;
@@ -20,9 +20,26 @@ interface RichEditorProps {
   onEditorChange: (editor: Editor | null) => void;
   readOnly?: boolean;
   isPaginated?: boolean;
+  pageSize?: string;
+  margins?: string;
+  showPageNumbers?: boolean;
+  showHeaders?: boolean;
+  showFooters?: boolean;
 }
 
-const RichEditor = ({ value, onChange, onFormatChange, onEditorChange, readOnly = false, isPaginated = false }: RichEditorProps) => {
+const RichEditor = ({
+  value,
+  onChange,
+  onFormatChange,
+  onEditorChange,
+  readOnly = false,
+  isPaginated = false,
+  pageSize = 'letter',
+  margins = 'normal',
+  showPageNumbers = true,
+  showHeaders = false,
+  showFooters = false
+}: RichEditorProps) => {
   // Formatting timer - CRITICAL for AI editability (2500ms)
   // Prettier formats HTML so AI can reliably edit structured content
   // Uses silent update via onFormatChange to avoid marking as dirty
@@ -56,6 +73,14 @@ const RichEditor = ({ value, onChange, onFormatChange, onEditorChange, readOnly 
     [onChange, onFormatChange]
   );
 
+  // Compute pagination configuration from props
+  // This ensures editor initializes with correct database values
+  const pageSizeConfig = isPaginated ? PAGE_SIZES[pageSize.toUpperCase() as keyof typeof PAGE_SIZES] : null;
+  const marginPreset = isPaginated ? getMarginPreset(margins) : null;
+  const computedFooterRight = showPageNumbers ? 'Page {page}' : '';
+  const computedHeaderHeight = showHeaders ? 30 : 0;
+  const computedFooterHeight = (showFooters || showPageNumbers) ? 30 : 0;
+
   const editor = useEditor({
     immediatelyRender: false,
     extensions: [
@@ -76,18 +101,19 @@ const RichEditor = ({ value, onChange, onFormatChange, onEditorChange, readOnly 
       CharacterCount,
       PageMention,
       // Conditionally add pagination based on isPaginated flag
-      ...(isPaginated ? [
+      // Use computed values from props instead of hardcoded defaults
+      ...(isPaginated && pageSizeConfig && marginPreset ? [
         PaginationPlus.configure({
-          pageHeight: 1056, // US Letter height: 11" × 96 DPI
-          pageWidth: 816,   // US Letter width: 8.5" × 96 DPI
-          marginTop: 96,    // 1 inch
-          marginBottom: 96, // 1 inch
-          marginLeft: 96,   // 1 inch
-          marginRight: 96,  // 1 inch
+          pageHeight: pageSizeConfig.pageHeight,
+          pageWidth: pageSizeConfig.pageWidth,
+          marginTop: marginPreset.top,
+          marginBottom: marginPreset.bottom,
+          marginLeft: marginPreset.left,
+          marginRight: marginPreset.right,
           pageGap: 50,      // Gap between pages
-          pageHeaderHeight: 30,
-          pageFooterHeight: 30,
-          footerRight: 'Page {page}',
+          pageHeaderHeight: computedHeaderHeight,
+          pageFooterHeight: computedFooterHeight,
+          footerRight: computedFooterRight,
           footerLeft: '',
           headerRight: '',
           headerLeft: '',
@@ -123,7 +149,7 @@ const RichEditor = ({ value, onChange, onFormatChange, onEditorChange, readOnly 
       scrollThreshold: 80,
       scrollMargin: 80,
     },
-  }, [isPaginated]); // Recreate editor when pagination changes
+  }, [isPaginated, pageSize, margins, showPageNumbers, showHeaders, showFooters]); // Recreate when pagination settings change
 
   useEffect(() => {
     if (editor) {

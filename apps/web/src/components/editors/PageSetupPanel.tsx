@@ -1,23 +1,61 @@
 "use client";
 
-import React from 'react';
+import React, { useState } from 'react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
+import { fetchWithAuth } from '@/lib/auth-fetch';
 
 interface PageSetupPanelProps {
   pageId: string;
-  // Visual only props for now - no backend wiring
+  pageSize: string;
+  margins: string;
+  showPageNumbers: boolean;
+  showHeaders: boolean;
+  showFooters: boolean;
+  onSettingChange?: (field: string, value: string | boolean) => void;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export function PageSetupPanel({ pageId }: PageSetupPanelProps) {
-  // pageId will be used when wiring up backend functionality
+export function PageSetupPanel({
+  pageId,
+  pageSize,
+  margins,
+  showPageNumbers,
+  showHeaders,
+  showFooters,
+  onSettingChange
+}: PageSetupPanelProps) {
+  const [isUpdating, setIsUpdating] = useState(false);
+
+  const updateSetting = async (field: string, value: string | boolean) => {
+    setIsUpdating(true);
+    try {
+      await fetchWithAuth(`/api/pages/${pageId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [field]: value }),
+      });
+
+      // Notify parent component of the change
+      if (onSettingChange) {
+        onSettingChange(field, value);
+      }
+    } catch (error) {
+      console.error(`Failed to update ${field}:`, error);
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
   return (
     <div className="flex items-center gap-4 p-2 border-b border-[var(--separator)]">
       {/* Page Size Dropdown */}
       <div className="flex items-center gap-2">
         <label className="text-sm text-muted-foreground whitespace-nowrap">Size:</label>
-        <Select defaultValue="letter" disabled>
+        <Select
+          value={pageSize}
+          onValueChange={(value) => updateSetting('pageSize', value)}
+          disabled={isUpdating}
+        >
           <SelectTrigger className="w-40 h-8">
             <SelectValue />
           </SelectTrigger>
@@ -34,7 +72,11 @@ export function PageSetupPanel({ pageId }: PageSetupPanelProps) {
       {/* Margins Dropdown */}
       <div className="flex items-center gap-2">
         <label className="text-sm text-muted-foreground whitespace-nowrap">Margins:</label>
-        <Select defaultValue="normal" disabled>
+        <Select
+          value={margins}
+          onValueChange={(value) => updateSetting('margins', value)}
+          disabled={isUpdating}
+        >
           <SelectTrigger className="w-32 h-8">
             <SelectValue />
           </SelectTrigger>
@@ -51,7 +93,12 @@ export function PageSetupPanel({ pageId }: PageSetupPanelProps) {
 
       {/* Page Numbers Checkbox */}
       <div className="flex items-center gap-2">
-        <Checkbox id="pageNumbers" defaultChecked disabled />
+        <Checkbox
+          id="pageNumbers"
+          checked={showPageNumbers}
+          onCheckedChange={(checked) => updateSetting('showPageNumbers', checked === true)}
+          disabled={isUpdating}
+        />
         <label htmlFor="pageNumbers" className="text-sm cursor-pointer">
           Page numbers
         </label>
@@ -59,7 +106,12 @@ export function PageSetupPanel({ pageId }: PageSetupPanelProps) {
 
       {/* Headers Checkbox */}
       <div className="flex items-center gap-2">
-        <Checkbox id="headers" disabled />
+        <Checkbox
+          id="headers"
+          checked={showHeaders}
+          onCheckedChange={(checked) => updateSetting('showHeaders', checked === true)}
+          disabled={isUpdating}
+        />
         <label htmlFor="headers" className="text-sm cursor-pointer">
           Headers
         </label>
@@ -67,7 +119,12 @@ export function PageSetupPanel({ pageId }: PageSetupPanelProps) {
 
       {/* Footers Checkbox */}
       <div className="flex items-center gap-2">
-        <Checkbox id="footers" disabled />
+        <Checkbox
+          id="footers"
+          checked={showFooters}
+          onCheckedChange={(checked) => updateSetting('showFooters', checked === true)}
+          disabled={isUpdating}
+        />
         <label htmlFor="footers" className="text-sm cursor-pointer">
           Footers
         </label>

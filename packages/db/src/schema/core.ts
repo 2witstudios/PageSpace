@@ -26,6 +26,11 @@ export const pages = pgTable('pages', {
   type: pageType('type').notNull(),
   content: text('content').default('').notNull(),
   isPaginated: boolean('isPaginated').default(false).notNull(),
+  pageSize: text('pageSize').default('letter').notNull(), // 'letter' | 'a4' | 'legal' | 'a3' | 'tabloid'
+  margins: text('margins').default('normal').notNull(), // 'normal' | 'narrow' | 'wide'
+  showPageNumbers: boolean('showPageNumbers').default(true).notNull(),
+  showHeaders: boolean('showHeaders').default(false).notNull(),
+  showFooters: boolean('showFooters').default(false).notNull(),
   position: real('position').notNull(),
   isTrashed: boolean('isTrashed').default(false).notNull(),
   aiProvider: text('aiProvider'),

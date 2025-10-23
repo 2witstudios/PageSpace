@@ -29,6 +29,11 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
   const [isReadOnly, setIsReadOnly] = useState(false);
   const [isPaginated, setIsPaginated] = useState(false);
   const [isPageSetupOpen, setIsPageSetupOpen] = useState(false);
+  const [pageSize, setPageSize] = useState<string>('letter');
+  const [margins, setMargins] = useState<string>('normal');
+  const [showPageNumbers, setShowPageNumbers] = useState<boolean>(true);
+  const [showHeaders, setShowHeaders] = useState<boolean>(false);
+  const [showFooters, setShowFooters] = useState<boolean>(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const isDirtyRef = useRef(false);
   const hasInitializedRef = useRef(false);
@@ -66,7 +71,7 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
     hasInitializedRef.current = false;
   }, [pageId]);
 
-  // Fetch pagination setting from page data
+  // Fetch pagination settings from page data
   useEffect(() => {
     const fetchPageSettings = async () => {
       try {
@@ -74,6 +79,11 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
         if (response.ok) {
           const page = await response.json();
           setIsPaginated(page.isPaginated || false);
+          setPageSize(page.pageSize || 'letter');
+          setMargins(page.margins || 'normal');
+          setShowPageNumbers(page.showPageNumbers ?? true);
+          setShowHeaders(page.showHeaders ?? false);
+          setShowFooters(page.showFooters ?? false);
         }
       } catch (error) {
         console.error('Failed to fetch page settings:', error);
@@ -283,7 +293,21 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
                   transition={{ duration: 0.2 }}
                   className="overflow-hidden"
                 >
-                  <PageSetupPanel pageId={pageId} />
+                  <PageSetupPanel
+                    pageId={pageId}
+                    pageSize={pageSize}
+                    margins={margins}
+                    showPageNumbers={showPageNumbers}
+                    showHeaders={showHeaders}
+                    showFooters={showFooters}
+                    onSettingChange={(field, value) => {
+                      if (field === 'pageSize') setPageSize(value as string);
+                      else if (field === 'margins') setMargins(value as string);
+                      else if (field === 'showPageNumbers') setShowPageNumbers(value as boolean);
+                      else if (field === 'showHeaders') setShowHeaders(value as boolean);
+                      else if (field === 'showFooters') setShowFooters(value as boolean);
+                    }}
+                  />
                 </motion.div>
               )}
             </AnimatePresence>
@@ -338,6 +362,11 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
                   onEditorChange={setEditor}
                   readOnly={isReadOnly}
                   isPaginated={isPaginated}
+                  pageSize={pageSize}
+                  margins={margins}
+                  showPageNumbers={showPageNumbers}
+                  showHeaders={showHeaders}
+                  showFooters={showFooters}
                 />
               </div>
             </motion.div>

@@ -233,8 +233,11 @@ export const PaginationPlus = Extension.create<PaginationPlusOptions>({
           apply: (tr, oldDeco: DecorationSet, oldState: EditorState, newState: EditorState) => {
             const pageCount = calculatePageCount(editor.view, this.options);
             const currentPageCount = getExistingPageCount(editor.view);
+
+            const pageCountChanged = (pageCount > 1 ? pageCount : 1) !== currentPageCount;
+
             if (
-              (pageCount > 1 ? pageCount : 1) !== currentPageCount ||
+              pageCountChanged ||
               this.storage.pageBreakBackground !== this.options.pageBreakBackground ||
               this.storage.pageHeight !== this.options.pageHeight ||
               this.storage.pageWidth !== this.options.pageWidth ||
@@ -244,7 +247,13 @@ export const PaginationPlus = Extension.create<PaginationPlusOptions>({
               this.storage.marginRight !== this.options.marginRight ||
               this.storage.pageGap !== this.options.pageGap ||
               this.storage.contentMarginTop !== this.options.contentMarginTop ||
-              this.storage.contentMarginBottom !== this.options.contentMarginBottom
+              this.storage.contentMarginBottom !== this.options.contentMarginBottom ||
+              this.storage.footerLeft !== this.options.footerLeft ||
+              this.storage.footerRight !== this.options.footerRight ||
+              this.storage.headerLeft !== this.options.headerLeft ||
+              this.storage.headerRight !== this.options.headerRight ||
+              this.storage.pageHeaderHeight !== this.options.pageHeaderHeight ||
+              this.storage.pageFooterHeight !== this.options.pageFooterHeight
             ) {
               const widgetList = createDecoration(newState, this.options);
               this.storage = { ...this.options };
@@ -295,79 +304,115 @@ export const PaginationPlus = Extension.create<PaginationPlusOptions>({
     return {
       updatePageBreakBackground:
         (color: string) =>
-        () => {
+        ({ state, dispatch }) => {
+          console.log('[Command] updatePageBreakBackground called', { color, before: this.options.pageBreakBackground });
           this.options.pageBreakBackground = color;
+          console.log('[Command] updatePageBreakBackground after mutation', { after: this.options.pageBreakBackground });
+          if (dispatch) {
+            console.log('[Command] updatePageBreakBackground dispatching transaction');
+            dispatch(state.tr);
+          }
           return true;
         },
       updatePageSize:
         (size: PageSize) =>
-        () => {
+        ({ state, dispatch }) => {
           this.options.pageHeight = size.pageHeight;
           this.options.pageWidth = size.pageWidth;
           this.options.marginTop = size.marginTop;
           this.options.marginBottom = size.marginBottom;
           this.options.marginLeft = size.marginLeft;
           this.options.marginRight = size.marginRight;
+          if (dispatch) {
+            dispatch(state.tr);
+          }
           return true;
         },
       updatePageWidth:
         (width: number) =>
-        () => {
+        ({ state, dispatch }) => {
           this.options.pageWidth = width;
+          if (dispatch) {
+            dispatch(state.tr);
+          }
           return true;
         },
       updatePageHeight:
         (height: number) =>
-        () => {
+        ({ state, dispatch }) => {
           this.options.pageHeight = height;
+          if (dispatch) {
+            dispatch(state.tr);
+          }
           return true;
         },
       updatePageGap:
         (gap: number) =>
-        () => {
+        ({ state, dispatch }) => {
           this.options.pageGap = gap;
+          if (dispatch) {
+            dispatch(state.tr);
+          }
           return true;
         },
       updateMargins:
         (margins: { top: number; bottom: number; left: number; right: number }) =>
-        () => {
+        ({ state, dispatch }) => {
           this.options.marginTop = margins.top;
           this.options.marginBottom = margins.bottom;
           this.options.marginLeft = margins.left;
           this.options.marginRight = margins.right;
+          if (dispatch) {
+            dispatch(state.tr);
+          }
           return true;
         },
       updateContentMargins:
         (margins: { top: number; bottom: number }) =>
-        () => {
+        ({ state, dispatch }) => {
           this.options.contentMarginTop = margins.top;
           this.options.contentMarginBottom = margins.bottom;
+          if (dispatch) {
+            dispatch(state.tr);
+          }
           return true;
         },
       updateHeaderHeight:
         (height: number) =>
-        () => {
+        ({ state, dispatch }) => {
           this.options.pageHeaderHeight = height;
+          if (dispatch) {
+            dispatch(state.tr);
+          }
           return true;
         },
       updateFooterHeight:
         (height: number) =>
-        () => {
+        ({ state, dispatch }) => {
           this.options.pageFooterHeight = height;
+          if (dispatch) {
+            dispatch(state.tr);
+          }
           return true;
         },
       updateHeaderContent:
         (left: string, right: string) =>
-        () => {
+        ({ state, dispatch }) => {
           this.options.headerLeft = left;
           this.options.headerRight = right;
+          if (dispatch) {
+            dispatch(state.tr);
+          }
           return true;
         },
       updateFooterContent:
         (left: string, right: string) =>
-        () => {
+        ({ state, dispatch }) => {
           this.options.footerLeft = left;
           this.options.footerRight = right;
+          if (dispatch) {
+            dispatch(state.tr);
+          }
           return true;
         },
     };

@@ -187,6 +187,11 @@ const patchSchema = z.object({
   aiModel: z.string().optional(),
   parentId: z.string().nullable().optional(),
   isPaginated: z.boolean().optional(),
+  pageSize: z.enum(['letter', 'a4', 'legal', 'a3', 'tabloid']).optional(),
+  margins: z.enum(['normal', 'narrow', 'wide']).optional(),
+  showPageNumbers: z.boolean().optional(),
+  showHeaders: z.boolean().optional(),
+  showFooters: z.boolean().optional(),
 });
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ pageId: string }> }) {

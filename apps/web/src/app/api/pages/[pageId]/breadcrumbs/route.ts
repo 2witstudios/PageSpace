@@ -11,6 +11,11 @@ type QueryResultRow = {
   type: 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'FILE' | 'SHEET';
   content: string;
   isPaginated: boolean;
+  pageSize: string;
+  margins: string;
+  showPageNumbers: boolean;
+  showHeaders: boolean;
+  showFooters: boolean;
   position: number;
   isTrashed: boolean;
   aiProvider: string | null;
@@ -87,6 +92,11 @@ async function getBreadcrumbs(pageId: string): Promise<BreadcrumbPage[]> {
     type: row.type as typeof pages.$inferSelect.type,
     content: row.content,
     isPaginated: row.isPaginated,
+    pageSize: row.pageSize,
+    margins: row.margins,
+    showPageNumbers: row.showPageNumbers,
+    showHeaders: row.showHeaders,
+    showFooters: row.showFooters,
     position: row.position,
     isTrashed: row.isTrashed,
     aiProvider: row.aiProvider,
