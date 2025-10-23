@@ -11,6 +11,7 @@ import { TextStyleKit } from '@tiptap/extension-text-style';
 import { TableKit } from '@tiptap/extension-table';
 import { formatHtml } from '@/lib/editor/prettier';
 import { PageMention } from '@/lib/editor/tiptap-mention-config';
+import { PaginationPlus } from '@/lib/editor/pagination';
 
 interface RichEditorProps {
   value: string;
@@ -18,9 +19,10 @@ interface RichEditorProps {
   onFormatChange?: (value: string) => void;
   onEditorChange: (editor: Editor | null) => void;
   readOnly?: boolean;
+  isPaginated?: boolean;
 }
 
-const RichEditor = ({ value, onChange, onFormatChange, onEditorChange, readOnly = false }: RichEditorProps) => {
+const RichEditor = ({ value, onChange, onFormatChange, onEditorChange, readOnly = false, isPaginated = false }: RichEditorProps) => {
   // Formatting timer - CRITICAL for AI editability (2500ms)
   // Prettier formats HTML so AI can reliably edit structured content
   // Uses silent update via onFormatChange to avoid marking as dirty
@@ -73,6 +75,29 @@ const RichEditor = ({ value, onChange, onFormatChange, onEditorChange, readOnly 
       TableKit,
       CharacterCount,
       PageMention,
+      // Conditionally add pagination based on isPaginated flag
+      ...(isPaginated ? [
+        PaginationPlus.configure({
+          pageHeight: 1056, // US Letter height: 11" × 96 DPI
+          pageWidth: 816,   // US Letter width: 8.5" × 96 DPI
+          marginTop: 96,    // 1 inch
+          marginBottom: 96, // 1 inch
+          marginLeft: 96,   // 1 inch
+          marginRight: 96,  // 1 inch
+          pageGap: 50,      // Gap between pages
+          pageHeaderHeight: 30,
+          pageFooterHeight: 30,
+          footerRight: 'Page {page}',
+          footerLeft: '',
+          headerRight: '',
+          headerLeft: '',
+          contentMarginTop: 10,
+          contentMarginBottom: 10,
+          pageBreakBackground: '#ffffff',
+          pageGapBorderColor: '#e5e5e5',
+          pageGapBorderSize: 1,
+        }),
+      ] : []),
     ],
     content: value,
     editable: !readOnly,
@@ -89,8 +114,8 @@ const RichEditor = ({ value, onChange, onFormatChange, onEditorChange, readOnly 
     },
     editorProps: {
       attributes: {
-        class: readOnly 
-          ? 'tiptap m-5 cursor-text' 
+        class: readOnly
+          ? 'tiptap m-5 cursor-text'
           : 'tiptap m-5 focus:outline-none',
         tabindex: readOnly ? '-1' : '0',
         style: readOnly ? 'user-select: text; -webkit-user-select: text;' : '',
@@ -98,7 +123,7 @@ const RichEditor = ({ value, onChange, onFormatChange, onEditorChange, readOnly 
       scrollThreshold: 80,
       scrollMargin: 80,
     },
-  });
+  }, [isPaginated]); // Recreate editor when pagination changes
 
   useEffect(() => {
     if (editor) {
@@ -184,7 +209,6 @@ const RichEditor = ({ value, onChange, onFormatChange, onEditorChange, readOnly 
       onEditorChange(null);
     };
   }, [editor, onEditorChange, readOnly]);
-
 
   return (
     <div className="relative flex flex-col w-full h-full">

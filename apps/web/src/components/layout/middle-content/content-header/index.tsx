@@ -6,6 +6,7 @@ import { Breadcrumbs } from './Breadcrumbs';
 import { EditorToggles } from './EditorToggles';
 import { SaveStatusIndicator } from './SaveStatusIndicator';
 import { ShareDialog } from './page-settings/ShareDialog';
+import { PaginationToggle } from './PaginationToggle';
 import { usePageTree } from '@/hooks/usePageTree';
 import { findNodeAndParent } from '@/lib/tree/tree-utils';
 import { useParams } from 'next/navigation';
@@ -27,6 +28,7 @@ export function ViewHeader({ children }: ContentHeaderProps = {}) {
   const driveId = params.driveId as string;
   const { tree } = usePageTree(driveId);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isPaginated, setIsPaginated] = useState(false);
 
   const pageResult = pageId ? findNodeAndParent(tree, pageId) : null;
   const page = pageResult?.node;
@@ -39,6 +41,25 @@ export function ViewHeader({ children }: ContentHeaderProps = {}) {
     document,
     isSaving,
   } = useDocument(page?.id || '');
+
+  // Fetch pagination setting from page data
+  React.useEffect(() => {
+    const fetchPageSettings = async () => {
+      if (!page?.id || !pageIsDocument) return;
+
+      try {
+        const response = await fetchWithAuth(`/api/pages/${page.id}`);
+        if (response.ok) {
+          const pageData = await response.json();
+          setIsPaginated(pageData.isPaginated || false);
+        }
+      } catch (error) {
+        console.error('Failed to fetch page settings:', error);
+      }
+    };
+
+    fetchPageSettings();
+  }, [page?.id, pageIsDocument]);
 
   // Handle file download
   const handleDownload = async () => {
@@ -79,6 +100,13 @@ export function ViewHeader({ children }: ContentHeaderProps = {}) {
         </div>
         <div className="flex items-center gap-2">
           {pageIsDocument && <EditorToggles />}
+          {pageIsDocument && page && (
+            <PaginationToggle
+              pageId={page.id}
+              initialIsPaginated={isPaginated}
+              onToggle={setIsPaginated}
+            />
+          )}
           {(pageIsDocument || pageIsSheet) && page && (
             <ExportDropdown pageId={page.id} pageTitle={page.title} pageType={page.type} />
           )}

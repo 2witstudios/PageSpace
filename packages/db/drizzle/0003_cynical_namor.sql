@@ -1,0 +1,1 @@
+ALTER TABLE "pages" ADD COLUMN "isPaginated" boolean DEFAULT false NOT NULL;

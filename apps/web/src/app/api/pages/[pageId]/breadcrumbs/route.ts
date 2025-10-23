@@ -10,6 +10,7 @@ type QueryResultRow = {
   title: string;
   type: 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'FILE' | 'SHEET';
   content: string;
+  isPaginated: boolean;
   position: number;
   isTrashed: boolean;
   aiProvider: string | null;
@@ -85,6 +86,7 @@ async function getBreadcrumbs(pageId: string): Promise<BreadcrumbPage[]> {
     title: row.title,
     type: row.type as typeof pages.$inferSelect.type,
     content: row.content,
+    isPaginated: row.isPaginated,
     position: row.position,
     isTrashed: row.isTrashed,
     aiProvider: row.aiProvider,

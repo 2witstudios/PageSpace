@@ -186,6 +186,7 @@ const patchSchema = z.object({
   aiProvider: z.string().optional(),
   aiModel: z.string().optional(),
   parentId: z.string().nullable().optional(),
+  isPaginated: z.boolean().optional(),
 });
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ pageId: string }> }) {

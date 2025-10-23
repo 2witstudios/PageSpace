@@ -22,6 +22,13 @@
       "when": 1761001444334,
       "tag": "0002_tidy_moon_knight",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1761192316405,
+      "tag": "0003_cynical_namor",
+      "breakpoints": true
     }
   ]
 }
