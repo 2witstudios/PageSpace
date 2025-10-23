@@ -32,7 +32,7 @@ const AssistantHistoryTab: React.FC = () => {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Load conversations once on mount
+  // Load conversations on mount and when conversation or pathname changes
   useEffect(() => {
     const loadConversations = async () => {
       try {
@@ -50,7 +50,7 @@ const AssistantHistoryTab: React.FC = () => {
     };
 
     loadConversations();
-  }, []); // Only load once on mount
+  }, [globalConversationId, pathname]); // Refetch when conversation changes or navigation occurs
 
   // Sync local active conversation ID with global context
   useEffect(() => {
