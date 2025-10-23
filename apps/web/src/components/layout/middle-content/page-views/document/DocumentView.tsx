@@ -14,6 +14,7 @@ import { toast } from 'sonner';
 import { useAuth } from '@/hooks/use-auth';
 import { fetchWithAuth } from '@/lib/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
+import { useLocalStorage } from '@/hooks/useLocalStorage';
 
 interface DocumentViewProps {
   pageId: string;
@@ -28,7 +29,7 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
   const [editor, setEditor] = useState<Editor | null>(null);
   const [isReadOnly, setIsReadOnly] = useState(false);
   const [isPaginated, setIsPaginated] = useState(false);
-  const [isPageSetupOpen, setIsPageSetupOpen] = useState(false);
+  const [isPageSetupOpen, setIsPageSetupOpen] = useLocalStorage('pageSetupPanelOpen', false);
   const [pageSize, setPageSize] = useState<string>('letter');
   const [margins, setMargins] = useState<string>('normal');
   const [showPageNumbers, setShowPageNumbers] = useState<boolean>(true);

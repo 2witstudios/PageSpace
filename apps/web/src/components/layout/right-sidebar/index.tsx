@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { usePathname } from "next/navigation";
 import { History, MessageSquare, Settings } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { createClientLogger } from "@/lib/logging/client-logger";
+import { useLocalStorage } from "@/hooks/useLocalStorage";
 
 import AssistantChatTab from "./ai-assistant/AssistantChatTab";
 import AssistantHistoryTab from "./ai-assistant/AssistantHistoryTab";
@@ -50,35 +51,17 @@ export default function RightPanel({ className }: RightPanelProps) {
   });
 
   const defaultTab = isDashboardOrDrive ? "history" : "chat";
-  const [activeTab, setActiveTab] = useState<string>(defaultTab);
+  const [activeTab, setActiveTab] = useLocalStorage("globalAssistantActiveTab", defaultTab);
 
+  // Override chat tab to history when on dashboard/drive view
   useEffect(() => {
-    const savedTab = localStorage.getItem("globalAssistantActiveTab");
-
-    if (isDashboardOrDrive && savedTab === "chat") {
+    if (isDashboardOrDrive && activeTab === "chat") {
       setActiveTab("history");
-    } else if (savedTab && ["chat", "history", "settings"].includes(savedTab)) {
-      if (!isDashboardOrDrive || savedTab !== "chat") {
-        setActiveTab(savedTab);
-      }
     }
-  }, [isDashboardOrDrive]);
-
-  useEffect(() => {
-    const handleStorageChange = () => {
-      const savedTab = localStorage.getItem("globalAssistantActiveTab");
-      if (savedTab && ["history", "settings"].includes(savedTab)) {
-        setActiveTab(savedTab);
-      }
-    };
-
-    window.addEventListener("storage", handleStorageChange);
-    return () => window.removeEventListener("storage", handleStorageChange);
-  }, []);
+  }, [isDashboardOrDrive, activeTab, setActiveTab]);
 
   const handleTabChange = (tab: string) => {
     setActiveTab(tab);
-    localStorage.setItem("globalAssistantActiveTab", tab);
   };
 
   return (

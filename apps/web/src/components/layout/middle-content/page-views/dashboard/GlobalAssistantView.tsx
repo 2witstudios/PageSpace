@@ -16,6 +16,7 @@ import { fetchWithAuth, patch, del } from '@/lib/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
 import { toast } from 'sonner';
+import { useLocalStorage } from '@/hooks/useLocalStorage';
 
 
 interface ProviderSettings {
@@ -51,6 +52,7 @@ interface LocationContext {
 const GlobalAssistantView: React.FC = () => {
   const pathname = usePathname();
   const { rightSidebarOpen, toggleRightSidebar } = useLayoutStore();
+  const [, setGlobalAssistantActiveTab] = useLocalStorage('globalAssistantActiveTab', 'chat');
 
   // Use shared global chat context
   const {
@@ -331,10 +333,8 @@ const GlobalAssistantView: React.FC = () => {
     if (!rightSidebarOpen) {
       toggleRightSidebar();
     }
-    // Set the active tab to settings
-    localStorage.setItem('globalAssistantActiveTab', 'settings');
-    // Trigger a storage event to update the sidebar if it's already open
-    window.dispatchEvent(new Event('storage'));
+    // Set the active tab to settings (automatically syncs with right sidebar)
+    setGlobalAssistantActiveTab('settings');
   };
 
   const handleOpenHistory = () => {
@@ -342,10 +342,8 @@ const GlobalAssistantView: React.FC = () => {
     if (!rightSidebarOpen) {
       toggleRightSidebar();
     }
-    // Set the active tab to history
-    localStorage.setItem('globalAssistantActiveTab', 'history');
-    // Trigger a storage event to update the sidebar if it's already open
-    window.dispatchEvent(new Event('storage'));
+    // Set the active tab to history (automatically syncs with right sidebar)
+    setGlobalAssistantActiveTab('history');
   };
 
   const handleSendMessage = async () => {
