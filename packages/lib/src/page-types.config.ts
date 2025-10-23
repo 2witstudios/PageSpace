@@ -1,5 +1,6 @@
 import { PageType } from './enums';
 import { createEmptySheet, serializeSheetContent } from './sheet';
+import { createEmptyCalendar, serializeCalendarContent } from './calendar';
 
 export interface PageTypeCapabilities {
   canHaveChildren: boolean;
@@ -20,7 +21,7 @@ export interface PageTypeConfig {
   type: PageType;
   displayName: string;
   description: string;
-  iconName: 'Folder' | 'FileText' | 'MessageSquare' | 'Sparkles' | 'Palette' | 'FileIcon' | 'Table';
+  iconName: 'Folder' | 'FileText' | 'MessageSquare' | 'Sparkles' | 'Palette' | 'FileIcon' | 'Table' | 'Calendar';
   emoji: string;
   capabilities: PageTypeCapabilities;
   defaultContent: () => any;
@@ -165,6 +166,25 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     defaultContent: () => serializeSheetContent(createEmptySheet()),
     allowedChildTypes: [],
     uiComponent: 'SheetView',
+    layoutViewType: 'document',
+  },
+  [PageType.CALENDAR]: {
+    type: PageType.CALENDAR,
+    displayName: 'Calendar',
+    description: 'Event scheduling and planning',
+    iconName: 'Calendar',
+    emoji: '📅',
+    capabilities: {
+      canHaveChildren: false,
+      canAcceptUploads: false,
+      canBeConverted: false,
+      supportsRealtime: true,
+      supportsVersioning: true,
+      supportsAI: true,
+    },
+    defaultContent: () => serializeCalendarContent(createEmptyCalendar()),
+    allowedChildTypes: [],
+    uiComponent: 'CalendarView',
     layoutViewType: 'document',
   },
 };
