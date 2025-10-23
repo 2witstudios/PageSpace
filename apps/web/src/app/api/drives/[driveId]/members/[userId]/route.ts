@@ -4,6 +4,7 @@ import { drives, driveMembers, users, userProfiles, pagePermissions, pages } fro
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 import { createDriveNotification } from '@pagespace/lib';
+import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/socket-utils';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -201,6 +202,14 @@ export async function PATCH(
           'role_changed',
           role,
           currentUserId
+        );
+
+        // Broadcast role change event to the affected user
+        await broadcastDriveMemberEvent(
+          createDriveMemberEventPayload(driveId, userId, 'member_role_changed', {
+            role,
+            driveName: drive[0].name
+          })
         );
       }
     }

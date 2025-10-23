@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { buildTree } from '@pagespace/lib/server';
-import { pages, drives, pageType, pagePermissions, driveMembers, db, and, eq, inArray, asc, sql } from '@pagespace/db';
-import { z } from 'zod/v4';
+import { pages, drives, pagePermissions, driveMembers, db, and, eq, inArray, asc, sql } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
@@ -125,92 +124,5 @@ export async function GET(
       { error: 'Failed to fetch pages' },
       { status: 500 }
     );
-  }
-}
-
-const createPageSchema = z.object({
-  title: z.string().min(1),
-  type: z.enum(pageType.enumValues),
-  parentId: z.string().nullable(),
-  position: z.number(),
-});
-
-export async function POST(
-  request: NextRequest,
-  context: { params: Promise<{ driveId: string }> }
-) {
-  const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
-  if (isAuthError(auth)) {
-    return auth.error;
-  }
-  const userId = auth.userId;
-
-  try {
-    const { driveId } = await context.params;
-    const body = await request.json();
-    const { title, type, parentId, position } = createPageSchema.parse(body);
-
-    const newPage = await db.transaction(async (tx) => {
-      const drive = await tx.query.drives.findFirst({
-        where: eq(drives.id, driveId),
-      });
-
-      if (!drive) {
-        throw new Error('Drive not found.');
-      }
-
-      // Check if user is owner or admin
-      const isOwner = drive.ownerId === userId;
-      let isAdmin = false;
-
-      if (!isOwner) {
-        const adminMembership = await tx.select()
-          .from(driveMembers)
-          .where(and(
-            eq(driveMembers.driveId, driveId),
-            eq(driveMembers.userId, userId),
-            eq(driveMembers.role, 'ADMIN')
-          ))
-          .limit(1);
-
-        isAdmin = adminMembership.length > 0;
-      }
-
-      if (!isOwner && !isAdmin) {
-        throw new Error('Only drive owners and admins can create pages.');
-      }
-
-      if (parentId) {
-        const parentPage = await tx.query.pages.findFirst({
-          where: and(eq(pages.id, parentId), eq(pages.driveId, drive.id)),
-        });
-        if (!parentPage) {
-          throw new Error('Parent page not found in the specified drive.');
-        }
-      }
-
-      const [createdPage] = await tx.insert(pages).values({
-        title,
-        type,
-        position,
-        driveId: drive.id,
-        parentId,
-        updatedAt: new Date(),
-      }).returning();
-
-      // AI_CHAT pages now use the new AI SDK v5 system
-      // No need for separate aiChats table - messages are stored in chatMessages
-
-      return createdPage;
-    });
-
-    return NextResponse.json(newPage, { status: 201 });
-  } catch (error) {
-    loggers.api.error('Error creating page:', error as Error);
-    const errorMessage = error instanceof Error ? error.message : 'Failed to create page';
-    if (error instanceof z.ZodError) {
-      return NextResponse.json({ error: error.issues }, { status: 400 });
-    }
-    return NextResponse.json({ error: errorMessage }, { status: 500 });
   }
 }

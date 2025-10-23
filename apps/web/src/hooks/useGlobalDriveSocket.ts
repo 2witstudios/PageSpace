@@ -1,7 +1,7 @@
 import { useEffect, useCallback, useRef } from 'react';
 import { useSocket } from './useSocket';
 import { useDriveStore } from './useDrive';
-import { DriveEventPayload } from '@/lib/socket-utils';
+import { DriveEventPayload, DriveMemberEventPayload } from '@/lib/socket-utils';
 
 /**
  * Hook that listens for global drive events and updates the drive store
@@ -28,31 +28,25 @@ export function useGlobalDriveSocket() {
     }, 500); // 500ms debounce
   }, [fetchDrives]);
 
-  // Handle drive events
-  const handleDriveEvent = useCallback((eventData: DriveEventPayload) => {
-    console.log(`🚀 GLOBAL DRIVE EVENT: ${eventData.operation} for drive "${eventData.name || eventData.driveId}"`);
-    
-    switch (eventData.operation) {
+  // Handle drive events (including member events)
+  const handleDriveEvent = useCallback((eventData: DriveEventPayload | DriveMemberEventPayload) => {
+    const operation = eventData.operation;
+
+    console.log(`🚀 GLOBAL DRIVE EVENT: ${operation}`, eventData);
+
+    switch (operation) {
       case 'created':
-        // For created drives, immediately refetch to get the full drive object
-        console.log('🌍 New drive created, refetching drives list');
-        debouncedRefetch();
-        break;
-        
       case 'updated':
-        // For updates, refetch to get the latest data
-        console.log('🌍 Drive updated, refetching drives list');
-        debouncedRefetch();
-        break;
-        
       case 'deleted':
-        // For deletions, refetch to remove from list
-        console.log('🌍 Drive deleted, refetching drives list');
+      case 'member_added':
+      case 'member_role_changed':
+      case 'member_removed':
+        console.log(`🌍 Drive ${operation}, refetching drives list`);
         debouncedRefetch();
         break;
-        
+
       default:
-        console.log('🌍 Unknown drive operation:', eventData.operation);
+        console.log('🌍 Unknown drive operation:', operation);
     }
   }, [debouncedRefetch]);
 
@@ -65,15 +59,23 @@ export function useGlobalDriveSocket() {
 
     console.log('🌍 useGlobalDriveSocket: Setting up global drive listeners');
 
-    // Join the global drives channel
+    // Join the global drives channel AND user-specific drives channel
     if (!hasJoinedRef.current) {
       socket.emit('join_global_drives');
+      socket.emit('join', `user:${socket.id}:drives`); // Join user-specific channel for member events
       hasJoinedRef.current = true;
-      console.log('🌍 Joined global:drives channel');
+      console.log('🌍 Joined global:drives and user:drives channels');
     }
-    
-    // Listen for drive events
-    const events = ['drive:created', 'drive:updated', 'drive:deleted'];
+
+    // Listen for drive events (both global and user-specific)
+    const events = [
+      'drive:created',
+      'drive:updated',
+      'drive:deleted',
+      'drive:member_added',
+      'drive:member_role_changed',
+      'drive:member_removed'
+    ];
     
     events.forEach(event => {
       socket.on(event, handleDriveEvent);
@@ -104,11 +106,12 @@ export function useGlobalDriveSocket() {
         clearTimeout(revalidationTimeoutRef.current);
       }
       
-      // Leave the global drives channel when unmounting
+      // Leave the global drives channel and user-specific drives channel when unmounting
       if (socket && hasJoinedRef.current) {
         socket.emit('leave_global_drives');
+        socket.emit('leave', `user:${socket.id}:drives`);
         hasJoinedRef.current = false;
-        console.log('🌍 Left global:drives channel');
+        console.log('🌍 Left global:drives and user:drives channels');
       }
     };
   }, [socket]);

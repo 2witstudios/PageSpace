@@ -8,7 +8,8 @@ export * from './permissions-cached'; // Server-only: cached permissions (prefer
 // Export specific functions from original permissions that aren't in cached version
 export {
   getUserAccessiblePagesInDriveWithDetails,
-  getUserAccessiblePagesInDrive
+  getUserAccessiblePagesInDrive,
+  isDriveOwnerOrAdmin
 } from './permissions';
 export * from './tree-utils';
 export * from './utils';

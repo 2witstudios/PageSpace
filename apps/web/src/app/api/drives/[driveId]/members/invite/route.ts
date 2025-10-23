@@ -4,6 +4,7 @@ import { driveMembers, drives, pagePermissions, pages } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createDriveNotification, isEmailVerified } from '@pagespace/lib';
 import { loggers } from '@pagespace/lib/server';
+import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/socket-utils';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -106,6 +107,14 @@ export async function POST(
 
       memberId = existingMember[0].id;
     }
+
+    // Broadcast member added/updated event to the affected user
+    await broadcastDriveMemberEvent(
+      createDriveMemberEventPayload(driveId, invitedUserId, 'member_added', {
+        role,
+        driveName: drive[0].name
+      })
+    );
 
     // Validate that all pageIds belong to this drive
     const validPages = await db.select({ id: pages.id })

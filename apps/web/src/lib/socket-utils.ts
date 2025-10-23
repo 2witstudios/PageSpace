@@ -13,6 +13,7 @@ const loggers = browserLoggers;
 
 export type PageOperation = 'created' | 'updated' | 'moved' | 'deleted' | 'restored' | 'trashed' | 'content-updated';
 export type DriveOperation = 'created' | 'updated' | 'deleted';
+export type DriveMemberOperation = 'member_added' | 'member_role_changed' | 'member_removed';
 export type TaskOperation = 'task_list_created' | 'task_added' | 'task_updated' | 'task_completed';
 export type UsageOperation = 'updated';
 
@@ -31,6 +32,14 @@ export interface DriveEventPayload {
   operation: DriveOperation;
   name?: string;
   slug?: string;
+}
+
+export interface DriveMemberEventPayload {
+  driveId: string;
+  userId: string; // The affected user
+  operation: DriveMemberOperation;
+  role?: 'OWNER' | 'ADMIN' | 'MEMBER';
+  driveName?: string;
 }
 
 export interface TaskEventPayload {
@@ -150,6 +159,55 @@ export async function broadcastDriveEvent(payload: DriveEventPayload): Promise<v
 }
 
 /**
+ * Broadcasts a drive member event to the realtime server
+ * Sent to user-specific channel so only affected user receives it
+ * @param payload - The event payload to broadcast
+ */
+export async function broadcastDriveMemberEvent(payload: DriveMemberEventPayload): Promise<void> {
+  // Only broadcast if realtime URL is configured
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping member event broadcast', {
+      event: 'drive_member',
+      userId: maskIdentifier(payload.userId)
+    });
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify({
+      channelId: `user:${payload.userId}:drives`,
+      event: `drive:${payload.operation}`,
+      payload,
+    });
+
+    await fetch(`${realtimeUrl}/api/broadcast`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+    });
+
+    if (verboseRealtimeLogging) {
+      realtimeLogger.debug('Drive member event broadcasted', {
+        operation: payload.operation,
+        userId: maskIdentifier(payload.userId),
+        driveId: maskIdentifier(payload.driveId)
+      });
+    }
+  } catch (error) {
+    // Log error but don't throw - broadcasting failures shouldn't break operations
+    realtimeLogger.error(
+      'Failed to broadcast drive member event',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'drive_member',
+        operation: payload.operation
+      }
+    );
+  }
+}
+
+/**
  * Helper to create a page event payload
  */
 export function createPageEventPayload(
@@ -184,6 +242,26 @@ export function createDriveEventPayload(
 ): DriveEventPayload {
   return {
     driveId,
+    operation,
+    ...options,
+  };
+}
+
+/**
+ * Helper to create a drive member event payload
+ */
+export function createDriveMemberEventPayload(
+  driveId: string,
+  userId: string,
+  operation: DriveMemberOperation,
+  options: {
+    role?: 'OWNER' | 'ADMIN' | 'MEMBER';
+    driveName?: string;
+  } = {}
+): DriveMemberEventPayload {
+  return {
+    driveId,
+    userId,
     operation,
     ...options,
   };

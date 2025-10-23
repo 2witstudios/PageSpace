@@ -6,6 +6,7 @@ import {
   getDefaultContent,
   PageType as PageTypeEnum,
   isAIChatPage,
+  isDriveOwnerOrAdmin,
 } from '@pagespace/lib';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
 import { loggers } from '@pagespace/lib/server';
@@ -39,12 +40,23 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
     }
 
+    // Check drive exists
     const drive = await db.query.drives.findFirst({
-      where: and(eq(drives.id, driveId), eq(drives.ownerId, userId)),
+      where: eq(drives.id, driveId),
     });
 
     if (!drive) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+    }
+
+    // Check if user is owner or admin (uses centralized utility)
+    const hasPermission = await isDriveOwnerOrAdmin(userId, driveId);
+
+    if (!hasPermission) {
+      return NextResponse.json(
+        { error: 'Only drive owners and admins can create pages' },
+        { status: 403 }
+      );
     }
 
     const lastPage = await db.query.pages.findFirst({
