@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic';
 import { useDocument } from '@/hooks/useDocument';
 import { Editor } from '@tiptap/react';
 import Toolbar from '@/components/editors/Toolbar';
+import { PageSetupPanel } from '@/components/editors/PageSetupPanel';
 import { motion, AnimatePresence } from 'motion/react';
 import { useDocumentStore } from '@/stores/useDocumentStore';
 import { useSocket } from '@/hooks/useSocket';
@@ -27,6 +28,7 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
   const [editor, setEditor] = useState<Editor | null>(null);
   const [isReadOnly, setIsReadOnly] = useState(false);
   const [isPaginated, setIsPaginated] = useState(false);
+  const [isPageSetupOpen, setIsPageSetupOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const isDirtyRef = useRef(false);
   const hasInitializedRef = useRef(false);
@@ -263,7 +265,28 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
             transition={{ duration: 0.2 }}
             className="sticky top-0 z-10 mx-4 mt-4 rounded-lg liquid-glass-thin border border-[var(--separator)] shadow-[var(--shadow-ambient)] overflow-hidden"
           >
-            <Toolbar editor={editor} />
+            {/* Formatting Toolbar */}
+            <Toolbar
+              editor={editor}
+              isPaginated={isPaginated}
+              isPageSetupOpen={isPageSetupOpen}
+              onTogglePageSetup={() => setIsPageSetupOpen(!isPageSetupOpen)}
+            />
+
+            {/* Page Setup Panel - collapsible dropdown below toolbar */}
+            <AnimatePresence>
+              {isPaginated && isPageSetupOpen && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: "auto", opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="overflow-hidden"
+                >
+                  <PageSetupPanel pageId={pageId} />
+                </motion.div>
+              )}
+            </AnimatePresence>
           </motion.div>
         )}
       </AnimatePresence>

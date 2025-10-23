@@ -2,16 +2,19 @@
 
 import { Editor } from '@tiptap/react';
 import {
-  Bold, Italic, Strikethrough, Code, Heading1, Heading2, Heading3, Pilcrow, List, ListOrdered, Quote
+  Bold, Italic, Strikethrough, Code, Heading1, Heading2, Heading3, Pilcrow, List, ListOrdered, Quote, Settings
 } from 'lucide-react';
 import React from 'react';
 import TableMenu from './TableMenu';
 
 interface ToolbarProps {
   editor: Editor | null;
+  isPaginated?: boolean;
+  isPageSetupOpen?: boolean;
+  onTogglePageSetup?: () => void;
 }
 
-const Toolbar = ({ editor }: ToolbarProps) => {
+const Toolbar = ({ editor, isPaginated, isPageSetupOpen, onTogglePageSetup }: ToolbarProps) => {
   if (!editor) {
     return null;
   }
@@ -34,6 +37,19 @@ const Toolbar = ({ editor }: ToolbarProps) => {
         <button onMouseDown={(e) => e.preventDefault()} onClick={() => editor.chain().focus().toggleBlockquote().run()} className={`p-2 rounded-md transition-colors ${editor.isActive('blockquote') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Quote size={16} /></button>
         <div className="w-[1px] h-6 bg-border mx-1" />
         <TableMenu editor={editor} />
+        {isPaginated && (
+          <>
+            <div className="w-[1px] h-6 bg-border mx-1" />
+            <button
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={onTogglePageSetup}
+              className={`p-2 rounded-md transition-colors ${isPageSetupOpen ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}
+              title="Page Setup"
+            >
+              <Settings size={16} />
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
