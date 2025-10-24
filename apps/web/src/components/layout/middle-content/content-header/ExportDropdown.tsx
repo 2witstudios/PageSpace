@@ -12,6 +12,7 @@ import { FileDown, FileText, FileSpreadsheet, Sheet, Printer } from 'lucide-reac
 import { toast } from 'sonner';
 import { PageType } from '@pagespace/lib/client-safe';
 import { fetchWithAuth } from '@/lib/auth-fetch';
+import { printPaginatedDocument } from '@/lib/editor/pagination';
 
 type ExportFormat = 'docx' | 'csv' | 'xlsx';
 
@@ -19,9 +20,17 @@ interface ExportDropdownProps {
   pageId: string;
   pageTitle: string;
   pageType: PageType;
+  editorElement?: HTMLElement | null;
+  isPaginated?: boolean;
 }
 
-export function ExportDropdown({ pageId, pageTitle, pageType }: ExportDropdownProps) {
+export function ExportDropdown({
+  pageId,
+  pageTitle,
+  pageType,
+  editorElement,
+  isPaginated = false
+}: ExportDropdownProps) {
   const [isExporting, setIsExporting] = useState(false);
 
   const handleExport = async (format: ExportFormat) => {
@@ -62,8 +71,21 @@ export function ExportDropdown({ pageId, pageTitle, pageType }: ExportDropdownPr
     }
   };
 
-  const handlePrint = () => {
-    window.print();
+  const handlePrint = async () => {
+    // Use pagination-aware print handler if document is paginated and editor is available
+    if (isPaginated && editorElement) {
+      try {
+        await printPaginatedDocument(editorElement);
+      } catch (error) {
+        console.error('Error printing paginated document:', error);
+        toast.error('Print failed', {
+          description: 'Could not prepare document for printing',
+        });
+      }
+    } else {
+      // Fall back to standard browser print
+      window.print();
+    }
   };
 
   const isDocument = pageType === 'DOCUMENT';

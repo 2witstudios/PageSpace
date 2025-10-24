@@ -17,6 +17,7 @@ import { Download } from 'lucide-react';
 import { isDocumentPage, isFilePage, isSheetPage } from '@pagespace/lib/client-safe';
 import { ExportDropdown } from './ExportDropdown';
 import { fetchWithAuth } from '@/lib/auth-fetch';
+import { useEditorDomStore } from '@/stores/useEditorDomStore';
 
 interface ContentHeaderProps {
   children?: React.ReactNode;
@@ -29,6 +30,7 @@ export function ViewHeader({ children }: ContentHeaderProps = {}) {
   const { tree } = usePageTree(driveId);
   const [isDownloading, setIsDownloading] = useState(false);
   const [isPaginated, setIsPaginated] = useState(false);
+  const editorElement = useEditorDomStore((state) => state.editorElement);
 
   const pageResult = pageId ? findNodeAndParent(tree, pageId) : null;
   const page = pageResult?.node;
@@ -108,7 +110,13 @@ export function ViewHeader({ children }: ContentHeaderProps = {}) {
             />
           )}
           {(pageIsDocument || pageIsSheet) && page && (
-            <ExportDropdown pageId={page.id} pageTitle={page.title} pageType={page.type} />
+            <ExportDropdown
+              pageId={page.id}
+              pageTitle={page.title}
+              pageType={page.type}
+              editorElement={editorElement}
+              isPaginated={isPaginated}
+            />
           )}
           {pageIsFile && (
             <Button

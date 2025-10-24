@@ -18,6 +18,7 @@ interface RichEditorProps {
   onChange: (value: string) => void;
   onFormatChange?: (value: string) => void;
   onEditorChange: (editor: Editor | null) => void;
+  onEditorDomChange?: (element: HTMLElement | null) => void;
   readOnly?: boolean;
   isPaginated?: boolean;
   pageSize?: string;
@@ -32,6 +33,7 @@ const RichEditor = ({
   onChange,
   onFormatChange,
   onEditorChange,
+  onEditorDomChange,
   readOnly = false,
   isPaginated = false,
   pageSize = 'letter',
@@ -235,6 +237,17 @@ const RichEditor = ({
       onEditorChange(null);
     };
   }, [editor, onEditorChange, readOnly]);
+
+  // Expose editor DOM element for print handler
+  useEffect(() => {
+    if (editor && onEditorDomChange) {
+      const editorElement = editor.view.dom as HTMLElement;
+      onEditorDomChange(editorElement);
+      return () => {
+        onEditorDomChange(null);
+      };
+    }
+  }, [editor, onEditorDomChange]);
 
   return (
     <div className="relative flex flex-col w-full h-full">

@@ -627,10 +627,11 @@
 /* Print Styles - Clean document output */
 @media print {
   /* Hide ALL UI chrome - comprehensive selectors */
+  /* Note: For paginated documents, print-handler.ts injects additional hiding rules */
   header,
   nav,
   aside,
-  footer,
+  footer:not(.rm-page-footer):not(.rm-first-page-footer),
   form,
   .toolbar,
   button,
@@ -649,9 +650,9 @@
   [class*="Sidebar"],
   [class*="panel"],
   [class*="Panel"],
-  /* Header selectors */
-  [class*="header"],
-  [class*="Header"],
+  /* Header selectors - but not pagination headers */
+  [class*="header"]:not(.rm-page-header):not(.rm-first-page-header):not(.rm-page-header-left):not(.rm-page-header-right):not(.rm-first-page-header-left):not(.rm-first-page-header-right),
+  [class*="Header"]:not(.rm-page-header):not(.rm-first-page-header):not(.rm-page-header-left):not(.rm-page-header-right):not(.rm-first-page-header-left):not(.rm-first-page-header-right),
   [class*="breadcrumb"],
   [class*="Breadcrumb"],
   /* UI components */
@@ -812,10 +813,22 @@
     background: white !important;
   }
 
-  /* Page setup - NO MARGIN to disable browser headers/footers */
+  /* Reset body/html for clean print output */
+  html, body {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Page setup - Default for non-paginated documents */
+  /* For paginated documents, the print-handler.ts will inject specific @page rules */
   @page {
     margin: 0;
     size: A4 portrait;
+  }
+
+  /* Paginated documents will override @page with exact dimensions */
+  body:has(.rm-with-pagination) {
+    /* Print handler injects custom @page rules and pagination-specific styles */
   }
 
   /* Enhanced page break handling - like Google Drive */

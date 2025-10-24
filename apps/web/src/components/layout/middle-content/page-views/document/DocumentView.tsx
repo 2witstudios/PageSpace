@@ -15,6 +15,7 @@ import { useAuth } from '@/hooks/use-auth';
 import { fetchWithAuth } from '@/lib/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useLocalStorage } from '@/hooks/useLocalStorage';
+import { useEditorDomStore } from '@/stores/useEditorDomStore';
 
 interface DocumentViewProps {
   pageId: string;
@@ -40,6 +41,7 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
   const hasInitializedRef = useRef(false);
   const socket = useSocket();
   const { user } = useAuth();
+  const setEditorElement = useEditorDomStore((state) => state.setEditorElement);
 
   // Use the new document hook - will fetch content if not cached
   const {
@@ -256,6 +258,11 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
     };
   }, []); // ✅ Empty deps - uses refs for latest state
 
+  // Handle editor DOM element changes - expose to store for print handler
+  const handleEditorDomChange = useCallback((element: HTMLElement | null) => {
+    setEditorElement(element);
+  }, [setEditorElement]);
+
   return (
     <motion.div 
       initial={{ opacity: 0, y: 10 }}
@@ -361,6 +368,7 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
                   onChange={handleContentChange}
                   onFormatChange={handleFormatChange}
                   onEditorChange={setEditor}
+                  onEditorDomChange={handleEditorDomChange}
                   readOnly={isReadOnly}
                   isPaginated={isPaginated}
                   pageSize={pageSize}

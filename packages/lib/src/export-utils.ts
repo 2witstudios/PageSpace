@@ -1,20 +1,84 @@
 import HTMLtoDOCX from 'html-to-docx';
 import * as XLSX from 'xlsx';
 
+export interface DocxPageConfig {
+  pageSize?: string; // 'letter', 'a4', 'legal', etc.
+  marginTop?: number;
+  marginBottom?: number;
+  marginLeft?: number;
+  marginRight?: number;
+}
+
+/**
+ * Converts pixels at 96 DPI to twips (1/20 of a point)
+ * Used for DOCX margin calculations
+ */
+function pixelsToTwips(pixels: number): number {
+  // 1 pixel at 96 DPI = 15 twips
+  return Math.round(pixels * 15);
+}
+
 /**
  * Generates a DOCX buffer from HTML content
  * @param html - The HTML content to convert
  * @param title - The document title
+ * @param config - Optional pagination configuration for page size and margins
  * @returns A Buffer containing the DOCX data
  */
-export async function generateDOCX(html: string, title: string): Promise<Buffer> {
+export async function generateDOCX(
+  html: string,
+  title: string,
+  config?: DocxPageConfig
+): Promise<Buffer> {
   try {
-    const docxData = await HTMLtoDOCX(html, null, {
+    // Build document options
+    const options: Record<string, unknown> = {
       table: { row: { cantSplit: true } },
       footer: true,
       pageNumber: true,
       title: title,
-    });
+    };
+
+    // Apply pagination config if provided
+    if (config) {
+      // Convert page size to DOCX orientation
+      if (config.pageSize) {
+        const sizeUpper = config.pageSize.toUpperCase();
+        // Map PageSpace sizes to DOCX paper sizes
+        const sizeMap: Record<string, string> = {
+          LETTER: 'letter',
+          A4: 'A4',
+          A3: 'A3',
+          A5: 'A5',
+          LEGAL: 'legal',
+          TABLOID: 'tabloid',
+        };
+        if (sizeMap[sizeUpper]) {
+          options.orientation = 'portrait';
+          // Note: fontSize in html-to-docx doesn't control page size,
+          // the library handles standard sizes internally
+        }
+      }
+
+      // Convert margins from pixels to twips for DOCX
+      // Ensure we have valid margin values
+      const hasValidMargins =
+        (typeof config.marginTop === 'number' && config.marginTop >= 0) ||
+        (typeof config.marginBottom === 'number' && config.marginBottom >= 0) ||
+        (typeof config.marginLeft === 'number' && config.marginLeft >= 0) ||
+        (typeof config.marginRight === 'number' && config.marginRight >= 0);
+
+      if (hasValidMargins) {
+        options.margins = {
+          top: pixelsToTwips(config.marginTop ?? 96),
+          bottom: pixelsToTwips(config.marginBottom ?? 96),
+          left: pixelsToTwips(config.marginLeft ?? 96),
+          right: pixelsToTwips(config.marginRight ?? 96),
+        };
+      }
+    }
+
+    const docxData = await HTMLtoDOCX(html, null, options);
 
     // Convert ArrayBuffer or Blob to Buffer
     if (docxData instanceof ArrayBuffer) {
