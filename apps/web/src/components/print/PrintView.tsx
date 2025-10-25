@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { Loader2 } from 'lucide-react';
 import DOMPurify from 'dompurify';
-import { calculatePageBreaks, type PageBreakMetadata } from '@/lib/editor/pagination/page-breaker';
+import { calculatePageBreaks } from '@/lib/editor/pagination/page-breaker';
 import ReadOnlyEditor from './ReadOnlyEditor';
 
 // Page type from database
@@ -45,7 +45,6 @@ interface PrintViewProps {
 export default function PrintView({ page }: PrintViewProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [isEditorMounted, setIsEditorMounted] = useState(false);
-  const [breaks, setBreaks] = useState<PageBreakMetadata[]>([]);
   const [pageContents, setPageContents] = useState<HTMLElement[][]>([]);
   const [error, setError] = useState<string | null>(null);
   const editorElementRef = useRef<HTMLElement | null>(null);
@@ -95,8 +94,6 @@ export default function PrintView({ page }: PrintViewProps) {
           pageContentAreaHeight: 800,
           overflowTolerance: 10,
         });
-
-        setBreaks(pageBreaks);
 
         // Split content elements into pages
         const pages: HTMLElement[][] = [];

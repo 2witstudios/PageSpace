@@ -35,7 +35,11 @@
  */
 
 import { calculatePageBreaks } from './page-breaker';
-import { loggers } from '@pagespace/lib/server';
+import { browserLoggers } from '@pagespace/lib/logger-browser';
+
+// Use browser-safe logger to prevent server-side code bundling into client
+// This file is imported by ExportDropdown.tsx which is a client component
+const loggers = browserLoggers;
 
 interface PaginationPrintConfig {
   pageWidth: number;

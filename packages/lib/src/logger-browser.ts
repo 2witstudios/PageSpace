@@ -360,5 +360,6 @@ export const browserLoggers = {
   ai: browserLogger.child({ module: 'ai' }),
   realtime: browserLogger.child({ module: 'realtime' }),
   permissions: browserLogger.child({ module: 'permissions' }),
-  monitoring: browserLogger.child({ module: 'monitoring' })
+  monitoring: browserLogger.child({ module: 'monitoring' }),
+  performance: browserLogger.child({ module: 'performance' })
 };

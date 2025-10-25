@@ -1,7 +1,7 @@
 import { notFound, redirect } from 'next/navigation';
 import { db, pages, eq } from '@pagespace/db';
 import { canUserViewPage } from '@pagespace/lib/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { validateJWTToken } from '@/lib/auth';
 import { cookies } from 'next/headers';
 import PrintView from '@/components/print/PrintView';
 
@@ -52,12 +52,9 @@ export default async function PrintPage({ params }: PrintPageProps) {
   }
 
   // Verify JWT and get user
-  const authResult = await authenticateRequestWithOptions(
-    { cookies: { get: (name: string) => cookieStore.get(name)?.value } } as any,
-    { allow: ['jwt'], requireCSRF: false }
-  );
+  const authResult = await validateJWTToken(token);
 
-  if (isAuthError(authResult)) {
+  if (!authResult) {
     redirect('/login?redirect=/print/' + pageId);
   }
 
@@ -82,7 +79,7 @@ export default async function PrintPage({ params }: PrintPageProps) {
         <div className="text-center">
           <h1 className="text-2xl font-bold mb-2">Access Denied</h1>
           <p className="text-muted-foreground">
-            You don't have permission to print this document.
+            You do not have permission to print this document.
           </p>
         </div>
       </div>

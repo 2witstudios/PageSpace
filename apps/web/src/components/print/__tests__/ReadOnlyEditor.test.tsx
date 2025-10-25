@@ -24,7 +24,7 @@ vi.mock('@tiptap/react', () => ({
       isDestroyed: false,
     };
   }),
-  EditorContent: ({ editor }: { editor: any }) => {
+  EditorContent: ({ editor }: { editor: unknown }) => {
     return <div data-testid="editor-content">{editor ? 'Editor Loaded' : 'No Editor'}</div>;
   },
 }));
@@ -113,7 +113,8 @@ describe('ReadOnlyEditor', () => {
 
       render(<ReadOnlyEditor content="<p>Test</p>" />);
 
-      const config = (useEditor as any).mock.calls[0][0];
+      const mockUseEditor = useEditor as unknown as vi.Mock;
+      const config = mockUseEditor.mock.calls[0][0];
       expect(config.extensions).toBeDefined();
       expect(config.extensions.length).toBeGreaterThan(0);
     });
@@ -135,13 +136,13 @@ describe('ReadOnlyEditor', () => {
 
       render(<ReadOnlyEditor content="<p>Test</p>" />);
 
-      const config = (useEditor as any).mock.calls[0][0];
+      const mockUseEditor = useEditor as unknown as vi.Mock;
+      const config = mockUseEditor.mock.calls[0][0];
       expect(config.editorProps?.attributes?.class).toBe('tiptap');
       expect(config.editorProps?.attributes?.tabindex).toBe('-1');
     });
 
     it('disables link clicks in print view', async () => {
-      const { useEditor } = await import('@tiptap/react');
       const StarterKit = await import('@tiptap/starter-kit');
 
       render(<ReadOnlyEditor content="<p>Test</p>" />);
@@ -232,9 +233,10 @@ describe('ReadOnlyEditor', () => {
     it('does not call onMount if editor fails to initialize', async () => {
       // Temporarily override the useEditor mock to return null
       const { useEditor } = await import('@tiptap/react');
-      const originalMock = (useEditor as any).getMockImplementation();
+      const mockUseEditor = useEditor as unknown as vi.Mock;
+      const originalMock = mockUseEditor.getMockImplementation();
 
-      (useEditor as any).mockImplementationOnce(() => null);
+      mockUseEditor.mockImplementationOnce(() => null);
 
       const onMount = vi.fn();
 
@@ -244,7 +246,7 @@ describe('ReadOnlyEditor', () => {
 
       // Restore original mock
       if (originalMock) {
-        (useEditor as any).mockImplementation(originalMock);
+        mockUseEditor.mockImplementation(originalMock);
       }
     });
   });
