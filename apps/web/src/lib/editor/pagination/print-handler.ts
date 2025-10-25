@@ -34,6 +34,9 @@
  * - Automatic cleanup: removes all injected elements after printing
  */
 
+import { calculatePageBreaks } from './page-breaker';
+import { loggers } from '@pagespace/lib/server';
+
 interface PaginationPrintConfig {
   pageWidth: number;
   pageHeight: number;
@@ -106,7 +109,10 @@ function extractPaginationConfig(editorElement: HTMLElement): PaginationPrintCon
 
   // Validate that we have reasonable values
   if (config.pageWidth < 100 || config.pageWidth > 5000) {
-    console.warn('Invalid page width detected, using default');
+    loggers.performance.warn('Invalid page width detected, using default', {
+      detectedWidth: config.pageWidth,
+      defaultWidth: 816,
+    });
     config.pageWidth = 816;
   }
 
@@ -137,7 +143,10 @@ function calculatePageHeight(config: PaginationPrintConfig): number {
 
   // Validate reasonable page height (between 400px and 5000px)
   if (totalHeight < 400 || totalHeight > 5000) {
-    console.warn('Calculated page height out of range, using default:', totalHeight);
+    loggers.performance.warn('Calculated page height out of range, using default', {
+      calculatedHeight: totalHeight,
+      defaultHeight: 1056,
+    });
     return 1056; // US Letter height default
   }
 
@@ -168,6 +177,7 @@ function findPageBreaks(editorElement: HTMLElement): HTMLElement[] {
  * - Track cumulative offsetHeight
  * - When cumulative height exceeds pageContentAreaHeight, inject break BEFORE that element
  * - This guarantees 1:1 matching because we use identical math to the pagination extension
+ * - CSS padding provides spacing on every page automatically
  *
  * Returns array of injected elements for cleanup
  */
@@ -184,26 +194,28 @@ function injectContentPageBreaks(
   const contentElements = Array.from(proseMirrorContent) as HTMLElement[];
 
   if (contentElements.length === 0) {
-    console.warn('No content elements found');
+    loggers.performance.warn('No content elements found for pagination');
     return injectedElements;
   }
 
   const pageContentAreaHeight = config.pageContentAreaHeight;
 
-  console.log(`Height-based pagination: pageContentAreaHeight = ${pageContentAreaHeight}px`);
+  loggers.performance.info('Starting height-based pagination calculation', {
+    pageContentAreaHeight,
+    elementCount: contentElements.length,
+  });
 
-  // Track cumulative height of current page
-  let currentPageHeight = 0;
-  let pageNumber = 1;
+  // Use refactored calculatePageBreaks() for break calculation
+  const breaks = calculatePageBreaks(contentElements, {
+    pageContentAreaHeight,
+    overflowTolerance: 10,
+  });
 
-  // Iterate through content elements, calculating when to break
-  for (let i = 0; i < contentElements.length; i++) {
-    const element = contentElements[i];
-    const elementHeight = element.offsetHeight;
+  // Inject page break elements at calculated positions
+  for (const breakMeta of breaks) {
+    const element = contentElements[breakMeta.elementIndex];
 
-    // Check if this element would overflow the current page
-    if (currentPageHeight + elementHeight > pageContentAreaHeight && currentPageHeight > 0) {
-      // This element doesn't fit on current page - inject break BEFORE it
+    if (element && element.parentNode) {
       const pageBreakDiv = document.createElement('div');
       pageBreakDiv.className = 'temp-print-page-break';
       pageBreakDiv.style.pageBreakBefore = 'always';
@@ -213,32 +225,23 @@ function injectContentPageBreaks(
       pageBreakDiv.style.padding = '0';
       pageBreakDiv.setAttribute('data-temp-print', 'true');
 
-      // Insert before this element
-      if (element.parentNode) {
-        element.parentNode.insertBefore(pageBreakDiv, element);
-        injectedElements.push(pageBreakDiv);
+      element.parentNode.insertBefore(pageBreakDiv, element);
+      injectedElements.push(pageBreakDiv);
 
-        console.log(
-          `Injected page break #${pageNumber}: before element ${i} ` +
-          `(page was ${currentPageHeight}px, element is ${elementHeight}px, ` +
-          `total would be ${currentPageHeight + elementHeight}px > ${pageContentAreaHeight}px)`
-        );
-
-        pageNumber++;
-      }
-
-      // This element starts a new page
-      currentPageHeight = elementHeight;
-    } else {
-      // Element fits on current page
-      currentPageHeight += elementHeight;
+      loggers.performance.debug('Injected page break', {
+        pageIndex: breakMeta.pageIndex,
+        elementIndex: breakMeta.elementIndex,
+        previousPageHeight: breakMeta.previousPageHeight,
+        triggerElementHeight: breakMeta.triggerElementHeight,
+        threshold: pageContentAreaHeight + 10,
+      });
     }
   }
 
-  console.log(
-    `Height-based pagination complete: ` +
-    `injected ${injectedElements.length} breaks across ${pageNumber} pages`
-  );
+  loggers.performance.info('Height-based pagination complete', {
+    pageBreaksInjected: injectedElements.length,
+    totalPages: breaks.length + 1,
+  });
 
   return injectedElements;
 }
@@ -265,10 +268,14 @@ function injectPrintStyles(config: PaginationPrintConfig): HTMLStyleElement {
   const pageWidthMM = Math.round(config.pageWidth * mmPerPixel * 100) / 100;
   const pageHeightMM = Math.round(pageHeight * mmPerPixel * 100) / 100;
 
+  // Calculate total padding from config values
+  const totalPaddingTop = config.marginTop + config.pageHeaderHeight + config.contentMarginTop;
+  const totalPaddingBottom = config.marginBottom + config.pageFooterHeight + config.contentMarginBottom;
+
   style.textContent = `
-    /* Pagination-aware print styles */
+    /* Pagination-aware print styles - Simplified approach */
     @media print {
-      /* Use exact page size - NO margins to prevent browser headers/footers */
+      /* Use exact page size - NO margins to prevent browser headers/footers (URL, date, etc.) */
       @page {
         size: ${pageWidthMM}mm ${pageHeightMM}mm;
         margin: 0;
@@ -296,7 +303,7 @@ function injectPrintStyles(config: PaginationPrintConfig): HTMLStyleElement {
         display: none !important;
       }
 
-      /* CRITICAL: Hide ALL pagination decorations - they're editor-only visual aids */
+      /* CRITICAL: Hide ALL pagination decoration widgets - they're editor-only visual aids */
       [data-rm-pagination],
       .rm-first-page-header,
       .rm-page-break,
@@ -330,8 +337,12 @@ function injectPrintStyles(config: PaginationPrintConfig): HTMLStyleElement {
         background: white !important;
       }
 
-      /* Ensure content doesn't overflow */
+      /* Apply padding to content - this creates spacing on EVERY page */
       .ProseMirror {
+        padding-top: ${totalPaddingTop}px !important;
+        padding-bottom: ${totalPaddingBottom}px !important;
+        padding-left: ${config.marginLeft}px !important;
+        padding-right: ${config.marginRight}px !important;
         max-width: 100% !important;
         overflow: visible !important;
         background: white !important;
@@ -368,20 +379,21 @@ export function preparePaginatedPrint(editorElement: HTMLElement): (() => void) 
   // Extract pagination config from editor
   const config = extractPaginationConfig(editorElement);
   if (!config) {
-    console.warn('Pagination not active - using default print behavior');
+    loggers.performance.warn('Pagination not active - using default print behavior');
     return null;
   }
 
   // Find all calculated page breaks
   const pageBreaks = findPageBreaks(editorElement);
   if (pageBreaks.length === 0) {
-    console.warn('No page breaks found - document may be too short or pagination not initialized');
+    loggers.performance.warn('No page breaks found - document may be too short or pagination not initialized');
   }
 
-  console.log('Pagination print prepared:', {
-    pageBreaks: pageBreaks.length,
-    config,
-    pageHeight: calculatePageHeight(config),
+  loggers.performance.info('Pagination print prepared', {
+    pageBreaksFound: pageBreaks.length,
+    pageWidth: config.pageWidth,
+    pageContentAreaHeight: config.pageContentAreaHeight,
+    calculatedPageHeight: calculatePageHeight(config),
   });
 
   // Inject temporary page break elements into content using height-based calculation
@@ -405,9 +417,13 @@ export function preparePaginatedPrint(editorElement: HTMLElement): (() => void) 
         styleElement.remove();
       }
 
-      console.log(`Pagination print cleanup: removed ${injectedBreaks.length} page breaks and styles`);
+      loggers.performance.info('Pagination print cleanup complete', {
+        pageBreaksRemoved: injectedBreaks.length,
+      });
     } catch (error) {
-      console.warn('Error cleaning up pagination print elements:', error);
+      loggers.performance.warn('Error cleaning up pagination print elements', {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   };
 }
@@ -418,7 +434,7 @@ export function preparePaginatedPrint(editorElement: HTMLElement): (() => void) 
 export async function printPaginatedDocument(editorElement: HTMLElement | null): Promise<void> {
   // Validate element exists and is in the DOM
   if (!editorElement || !document.contains(editorElement)) {
-    console.error('Cannot print: editor element not found or not attached to DOM');
+    loggers.performance.error('Cannot print: editor element not found or not attached to DOM');
     throw new Error('Editor element not available for printing');
   }
 
