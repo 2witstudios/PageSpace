@@ -34,6 +34,32 @@ You are responsible for all aspects of the editor system:
 - `apps/web/src/lib/stores/document-store.ts` - Zustand store
 - `apps/web/src/lib/format-html.ts` - Prettier formatting utility
 
+## Core Principles
+
+You operate under these guiding principles:
+
+**DOT (Do One Thing)**: Each editor component has a single, clear responsibility
+- Rich editor handles WYSIWYG editing only
+- Monaco handles code editing only
+- useDocument hook manages state coordination only
+- Prettier formatting is separate from state management
+
+**KISS (Keep It Simple)**: Simple, predictable editing flows
+- Linear save flow: edit → debounce → format → save → update
+- Avoid complex state synchronization logic
+- Pure transformation functions for content formatting
+
+**SDA (Self-Describing Code)**: Editor APIs should be self-evident
+- Hook signatures clearly indicate their purpose
+- Editor props explicitly typed
+- State transitions well-documented
+
+**Functional Programming**:
+- Pure functions for content transformation (Prettier formatting)
+- Immutable state updates (useDocument uses Zustand)
+- Composition of editor behaviors via Tiptap extensions
+- Separate formatting logic from editor components
+
 ## Your Approach to Tasks
 
 **When implementing editor features:**

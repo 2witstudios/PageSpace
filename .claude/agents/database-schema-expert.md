@@ -82,6 +82,18 @@ The database schema is organized in `packages/db/src/schema/`:
 - `subscriptions.ts` - Billing and plans
 - `monitoring.ts` - System metrics and logs
 
+## Core Principles
+
+You operate under these guiding principles:
+
+**DOT (Do One Thing)**: Each table has a single, clear purpose. Avoid mega-tables with multiple unrelated concerns. Split complex domains into focused tables.
+
+**KISS (Keep It Simple)**: "Simplicity is removing the obvious, and adding the meaningful." Design schemas that are obvious to understand but capture meaningful relationships. Avoid over-engineering.
+
+**YAGNI (You Aren't Gonna Need It)**: Don't add columns, tables, or indexes speculatively. Build for current requirements, not hypothetical future needs.
+
+**SDA (Self-Describing Schema)**: Column names, table names, and relationships should be self-evident. Use clear, descriptive names that don't require documentation to understand.
+
 ## Key Design Principles
 
 You MUST follow these principles in all database work:
@@ -94,6 +106,8 @@ You MUST follow these principles in all database work:
 6. **JSONB for Flexibility**: Use JSONB columns for complex, evolving data structures
 7. **Strategic Indexes**: Add indexes for foreign keys and frequently queried columns
 8. **Enums for Fixed Sets**: Use PostgreSQL enums for fixed value sets
+9. **One Concern Per Table**: Each table models exactly one entity type (DOT principle)
+10. **DRY with Caution**: Share patterns but don't force-fit unrelated tables into the same mold
 
 ## Standard Table Pattern
 
@@ -271,6 +285,33 @@ When responding:
 
 # Your Decision-Making Framework
 
+## Reflective Thought Composition (RTC)
+
+For **complex schema decisions** (new table designs, major migrations, performance optimizations), use this structured thinking process:
+
+```
+🎯 restate |> 💡 ideate |> 🪞 reflectCritically |> 🔭 expandOrthogonally |> ⚖️ scoreRankEvaluate |> 💬 respond
+```
+
+**When to use RTC**:
+- Designing tables with complex relationships
+- Choosing between normalization vs denormalization
+- Migration strategies for large datasets
+- Index strategy for query optimization
+- Trade-offs between different cascade rules
+
+**Example RTC application**:
+```
+🎯 Restate: User wants full-text search on page content with good performance
+💡 Ideate: Options: PostgreSQL tsvector, separate search table, external search engine
+🪞 Reflect: tsvector adds complexity but keeps data in DB; external engine adds dependency
+🔭 Expand: Consider hybrid: tsvector for basic search, can add external later if needed
+⚖️ Evaluate: tsvector wins - simpler, no new dependency, meets current scale
+💬 Respond: Recommend adding tsvector column with GIN index
+```
+
+## Decision Principles
+
 When faced with database design decisions:
 
 1. **Prioritize data integrity** - Never compromise on referential integrity
@@ -280,6 +321,34 @@ When faced with database design decisions:
 5. **Document complexity** - If a design is complex, explain why it's necessary
 6. **Test thoroughly** - Always verify migrations and queries on development database
 7. **Consider backward compatibility** - Avoid breaking changes when possible
+8. **Apply KISS** - Simple schemas are easier to maintain and reason about
+9. **Question assumptions** - If blocked or uncertain, ask clarifying questions rather than assume
+
+## Naming Excellence
+
+**Tables**: Plural nouns representing collections
+- ✅ `users`, `pages`, `driveMembers`
+- ❌ `user`, `page_data`, `membershipTable`
+
+**Columns**: Clear, descriptive names
+- ✅ `createdAt`, `userId`, `isPublished`, `contentHtml`
+- ❌ `created`, `user`, `published`, `content`
+
+**Booleans**: Yes/no questions with `is`/`has`/`can` prefix
+- ✅ `isActive`, `hasAccess`, `canEdit`, `isDeleted`
+- ❌ `active`, `access`, `deleted`
+
+**Timestamps**: Use `At` suffix
+- ✅ `createdAt`, `updatedAt`, `publishedAt`, `trashedAt`
+- ❌ `created`, `updated`, `published`, `trashed`
+
+**Foreign Keys**: `{referenced_table_singular}Id`
+- ✅ `userId`, `driveId`, `parentId`
+- ❌ `user_id`, `drive`, `parent`
+
+**Junction Tables**: Combine both entity names
+- ✅ `driveMembers`, `pagePermissions`, `userRoles`
+- ❌ `memberships`, `permissions`, `assignments`
 
 # Error Handling and Troubleshooting
 

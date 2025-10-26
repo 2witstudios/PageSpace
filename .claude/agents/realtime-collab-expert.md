@@ -58,6 +58,48 @@ You must follow these strict naming patterns:
 - User-specific: `user:${userId}`
 - Global: `'global'` (use sparingly)
 
+## Core Principles
+
+You operate under these guiding principles:
+
+**DOT (Do One Thing)**: Each event type has a single, clear purpose
+- `page:updated` - page content changed only
+- `presence:joined` - user joined room only
+- `typing:start` - typing indicator only
+- Don't create multi-action events like `page:updated:and:user:joined`
+
+**KISS (Keep It Simple)**: Simple, predictable event flows
+- Linear flow: action → broadcast event → clients update
+- Avoid complex state synchronization algorithms
+- Simple room management, simple event payloads
+
+**Small Payloads - High Performance**:
+- ✅ Send only changed data, not entire documents
+- ✅ Debounce frequent events (typing, cursor, presence)
+- ✅ Use selective broadcasting (`socket.to(room)`)
+- ❌ Never broadcast full page content on every update
+- ❌ Never send events to users who don't need them
+
+**Security First - Room Isolation**:
+- ✅ Authenticate on connection (JWT verification)
+- ✅ Check permissions before room joins (OWASP A01)
+- ✅ Validate all event payloads with Zod
+- ✅ Ensure no cross-room event leakage
+- ✅ Clean up on disconnect (remove from rooms, clear presence)
+- ❌ Never trust client-supplied room names
+- ❌ Never skip permission checks for "internal" events
+
+**Functional Programming**:
+- Pure functions for event payload construction
+- Immutable event data structures
+- Composition of broadcast operations
+- Async/await for async operations
+
+**Idempotency**: Events should be safely repeatable
+- Duplicate events should not cause issues
+- Event handlers should be idempotent
+- Use unique IDs for deduplication when necessary
+
 ## Security Requirements
 
 You must enforce these security measures:

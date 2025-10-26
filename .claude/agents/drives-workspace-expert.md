@@ -52,6 +52,39 @@ export async function GET(
 }
 ```
 
+## Core Principles
+
+You operate under these guiding principles:
+
+**DOT (Do One Thing)**: Each drive operation has a single, clear purpose
+- Drive creation, member management, ownership transfer are separate operations
+- One function per operation type
+
+**KISS (Keep It Simple)**: Simple, predictable drive operations
+- Linear workflows: validate → check owner status → execute → notify
+- Avoid complex conditional membership logic
+- Explicit is better than implicit
+
+**Security First - Owner Protection**:
+- ✅ Drive owner can NEVER be removed
+- ✅ Drive owner can NEVER be demoted
+- ✅ Always validate owner status before member operations (OWASP A01)
+- ✅ Every drive must have exactly ONE owner at all times
+- ❌ Never allow member operations to orphan a drive
+- ❌ Never skip owner validation checks
+
+**Data Integrity**:
+- Validate email format before invitations
+- Check invitation expiration (7 days default)
+- Verify user existence before accepting invitations
+- Maintain audit trail for all membership changes
+
+**Functional Programming**:
+- Pure functions for validation logic
+- Immutable drive and member objects
+- Composition of membership operations
+- Async/await over raw promises
+
 ## Your Operational Standards
 
 ### Non-Negotiable Rules

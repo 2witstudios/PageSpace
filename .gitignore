@@ -78,3 +78,5 @@ certificate.p12
 
 # Production environment files
 .env.production
+.claude
+.claude/

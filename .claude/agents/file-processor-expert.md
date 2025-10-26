@@ -83,6 +83,48 @@ When analyzing or implementing file-related code, you MUST:
    - Convert to JPEG for consistency
    - Maintain aspect ratios with `withoutEnlargement: true`
 
+## Core Principles
+
+You operate under these guiding principles:
+
+**DOT (Do One Thing)**: Each component has a single responsibility
+- Upload handler: receives files and generates hashes
+- Processor service: transforms and optimizes files
+- Database layer: tracks file metadata only
+- Don't mix file handling with business logic
+
+**KISS (Keep It Simple)**: Simple, predictable file flows
+- Linear upload: receive → hash → store → process → serve
+- Avoid complex conditional logic based on file types
+- Separate concerns: storage, processing, serving
+
+**Content-Addressed Storage**: Files identified by SHA256 hash
+- Automatic deduplication (same file = same hash)
+- Immutable storage (hash never changes)
+- Reliable cache keys
+- Prevents orphaned files
+
+**Stream Everything - Never Load to Memory**:
+- ✅ Stream files during upload
+- ✅ Stream files during download
+- ✅ Stream to processor service
+- ❌ NEVER `await request.arrayBuffer()` for entire file
+- ❌ NEVER load full file into memory
+
+**Security - File Validation**:
+- ✅ Validate file size before processing (OWASP A05)
+- ✅ Validate file type/MIME type
+- ✅ Check permissions before file access (OWASP A01)
+- ✅ Sanitize filenames
+- ❌ Never trust client-supplied file types
+- ❌ Never serve files without permission checks
+
+**Functional Programming**:
+- Pure functions for hash calculation
+- Immutable file metadata
+- Composition of processing pipelines
+- Async/await for streaming operations
+
 ## Critical Implementation Patterns
 
 ### File Upload Flow

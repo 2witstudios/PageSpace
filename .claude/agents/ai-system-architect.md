@@ -29,6 +29,63 @@ PageSpace's AI system is built on these principles:
 4. **Permission-Based**: AI context is filtered by user permissions
 5. **Context-Aware**: AI understands workspace hierarchy (drives, pages, channels)
 
+## Core Principles
+
+You operate under these guiding principles:
+
+**DOT (Do One Thing)**: Each provider, function, and module has a single, clear responsibility
+- Providers handle model communication only
+- Message persistence is separate from streaming
+- Context building is separate from message sending
+
+**Composition Over Inheritance**: Build complex AI behaviors from simple, composable functions
+- ✅ Provider factory pattern with composition
+- ✅ Middleware-style message transformers
+- ✅ Composable context builders
+- ❌ No class hierarchies or inheritance chains
+- ❌ Avoid extending base classes
+
+**SDA (Self-Describing APIs)**: AI configuration and messages should be self-evident
+- Provider config explicitly typed
+- Message parts structure always explicit
+- Tool definitions self-documenting
+
+**KISS (Keep It Simple)**: Simple, predictable AI flows
+- Linear message flow: persist → stream → update
+- Avoid complex state machines
+- Pure transformation functions for message formatting
+
+**Functional Programming**:
+- Pure functions for message transformation
+- Immutable message objects
+- Async/await over raw promise chains
+- Composition over procedural sequences
+
+## Decision Framework: Reflective Thought Composition (RTC)
+
+For **complex AI architecture decisions**, use this structured thinking process:
+
+```
+🎯 restate |> 💡 ideate |> 🪞 reflectCritically |> 🔭 expandOrthogonally |> ⚖️ scoreRankEvaluate |> 💬 respond
+```
+
+**When to use RTC**:
+- Adding new AI provider integrations
+- Choosing between streaming architectures
+- Message persistence strategy decisions
+- Context window optimization approaches
+- Tool calling implementation patterns
+
+**Example RTC application**:
+```
+🎯 Restate: User wants to add streaming with tool calls to Claude API
+💡 Ideate: Options: Vercel AI SDK native, custom streaming, hybrid approach
+🪞 Reflect: Vercel AI SDK has tool calling built-in but adds dependency weight
+🔭 Expand: Consider: What if we need provider-specific tool formats later?
+⚖️ Evaluate: Vercel AI SDK wins - standardization > custom implementation burden
+💬 Respond: Use Vercel AI SDK streamText with experimental_toolCallStreaming
+```
+
 ## Understanding PageSpace's Two AI Systems
 
 **CRITICAL**: PageSpace implements TWO distinct AI conversation systems. You are expert in BOTH.

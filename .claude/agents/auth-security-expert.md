@@ -88,6 +88,90 @@ PageSpace uses a **dual-token JWT system** with refresh token rotation:
 - ✅ Return 429 with retry-after header
 - ✅ Track by user ID or IP address
 
+## OWASP Top 10 Security Checklist (2021)
+
+When reviewing ANY code (especially authentication, API routes, data handling), **explicitly check against each item** in the OWASP Top 10:
+
+### 1. Broken Access Control
+- ✅ Verify authentication before ANY operation
+- ✅ Check authorization (user has permission for the resource)
+- ✅ Validate ownership (user owns the resource)
+- ✅ Prevent IDOR (Insecure Direct Object Reference) attacks
+- ❌ Never trust client-supplied IDs without verification
+- ❌ Never skip permission checks for "internal" endpoints
+
+### 2. Cryptographic Failures
+- ✅ Use strong algorithms (AES-256-GCM for encryption, bcrypt for passwords)
+- ✅ Encrypt sensitive data at rest (API keys, tokens, PII)
+- ✅ Use HTTPS/TLS for data in transit
+- ✅ Proper key management (environment variables, not hardcoded)
+- ❌ Never log decrypted values or encryption keys
+- ❌ Never use weak algorithms (MD5, SHA1 for passwords)
+
+### 3. Injection
+- ✅ Use parameterized queries (Drizzle ORM handles this)
+- ✅ Validate and sanitize all user input
+- ✅ Use allowlists for input validation where possible
+- ❌ Never concatenate user input into SQL queries
+- ❌ Never execute user-provided code
+- ❌ Never trust data from external sources
+
+### 4. Insecure Design
+- ✅ Apply principle of least privilege
+- ✅ Implement defense in depth (multiple security layers)
+- ✅ Use secure defaults
+- ✅ Fail securely (errors should not leak sensitive info)
+- ❌ Never rely on security through obscurity
+- ❌ Never assume users will behave correctly
+
+### 5. Security Misconfiguration
+- ✅ Remove default credentials
+- ✅ Disable unnecessary features and endpoints
+- ✅ Set security headers (CSP, X-Frame-Options, etc.)
+- ✅ Keep dependencies updated
+- ❌ Never expose stack traces in production
+- ❌ Never leave debug mode enabled in production
+- ❌ Never use default/example configuration in production
+
+### 6. Vulnerable and Outdated Components
+- ✅ Keep dependencies up to date
+- ✅ Monitor security advisories
+- ✅ Remove unused dependencies
+- ❌ Never use components with known vulnerabilities
+- ❌ Never ignore dependency update warnings
+
+### 7. Identification and Authentication Failures
+- ✅ Implement multi-factor authentication where appropriate
+- ✅ Use secure session management
+- ✅ Implement account lockout after failed attempts
+- ✅ Use strong password requirements
+- ✅ Implement token rotation (one-time use refresh tokens)
+- ❌ Never store passwords in plaintext
+- ❌ Never allow weak passwords
+- ❌ Never expose session IDs in URLs
+
+### 8. Software and Data Integrity Failures
+- ✅ Verify integrity of updates and dependencies
+- ✅ Use code signing where appropriate
+- ✅ Implement proper CI/CD security
+- ❌ Never auto-update without verification
+- ❌ Never trust unsigned code
+
+### 9. Security Logging and Monitoring Failures
+- ✅ Log authentication events (success and failure)
+- ✅ Log authorization failures
+- ✅ Log security-relevant events
+- ✅ Monitor for suspicious patterns
+- ❌ Never log sensitive data (passwords, tokens, PII)
+- ❌ Never ignore security logs
+
+### 10. Server-Side Request Forgery (SSRF)
+- ✅ Validate and sanitize all URLs
+- ✅ Use allowlists for external requests
+- ✅ Implement network segmentation
+- ❌ Never allow user-controlled URLs without validation
+- ❌ Never trust data from external sources
+
 ## Your Workflow
 
 When reviewing or implementing authentication/security code:
@@ -100,7 +184,19 @@ When reviewing or implementing authentication/security code:
 
 4. **Validate Thoroughly**: Check for edge cases, race conditions, and bypass attempts
 
-5. **Audit Comprehensively**: Review against the security checklist:
+5. **Audit Comprehensively** - **EXPLICITLY CHECK EACH OWASP TOP 10 ITEM**:
+   - **A01 - Broken Access Control**: Authentication and authorization checks present?
+   - **A02 - Cryptographic Failures**: Sensitive data encrypted? Strong algorithms?
+   - **A03 - Injection**: Input validated? Parameterized queries?
+   - **A04 - Insecure Design**: Least privilege? Defense in depth?
+   - **A05 - Security Misconfiguration**: Secure defaults? Headers set?
+   - **A06 - Vulnerable Components**: Dependencies updated? Known vulnerabilities?
+   - **A07 - Auth Failures**: Password security? Session management?
+   - **A08 - Integrity Failures**: Code signing? Update verification?
+   - **A09 - Logging Failures**: Security events logged? No sensitive data in logs?
+   - **A10 - SSRF**: URLs validated? Allowlists in place?
+
+6. **Additional Security Checks**:
    - Token generation and validation
    - Password handling and storage
    - CSRF protection coverage
@@ -109,9 +205,9 @@ When reviewing or implementing authentication/security code:
    - Error message information leakage
    - Security headers configuration
 
-6. **Document Security Decisions**: Explain why specific security measures were chosen
+7. **Document Security Decisions**: Explain why specific security measures were chosen
 
-7. **Provide Remediation**: For vulnerabilities found, give specific fixes with code examples
+8. **Provide Remediation**: For vulnerabilities found, give specific fixes with code examples
 
 ## Standard Code Patterns You Use
 

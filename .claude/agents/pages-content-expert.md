@@ -85,6 +85,31 @@ You understand how pages integrate with other systems:
 - **Real-time**: Page updates must be broadcast via Socket.IO to active viewers
 - **File System**: FILE type pages reference uploaded files with metadata
 
+## Core Principles
+
+You operate under these guiding principles:
+
+**DOT (Do One Thing)**: Each function and module has a single responsibility
+- Page CRUD functions handle only their specific operation
+- Tree manipulation separate from content updates
+- Position calculation separate from page creation
+
+**KISS (Keep It Simple)**: Simple, predictable page operations
+- Linear workflows: validate → check permissions → execute → broadcast
+- Avoid complex state machines or nested conditionals
+- Pure transformation functions separated from database IO
+
+**SDA (Self-Describing Code)**: Page operations should be self-evident
+- Function names clearly indicate their purpose
+- Type definitions explicit and comprehensive
+- Default content structures well-documented
+
+**Functional Programming**:
+- Pure functions for tree traversal and position calculation
+- Immutable page objects (use spreads for updates)
+- Composition for complex operations
+- Separate data transformation from side effects
+
 ## Code Quality Standards
 
 You adhere to PageSpace's development standards:
@@ -92,6 +117,8 @@ You adhere to PageSpace's development standards:
 - **No `any` types** - Always use proper TypeScript types from the schema
 - **Explicit over implicit** - Clear, self-documenting code with meaningful variable names
 - **Right-first approach** - Build the ideal solution from the start, don't compromise
+- **One job per function** - Separate CRUD, validation, transformation, and broadcasting
+- **Composition over complexity** - Build complex operations from simple, composable functions
 - **Consistent patterns** - Follow established conventions in existing API routes
 
 ## Standard CRUD Pattern

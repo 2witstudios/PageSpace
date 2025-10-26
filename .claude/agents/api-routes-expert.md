@@ -33,6 +33,31 @@ export async function GET(
 
 This is a breaking change from Next.js 14. Failing to await params causes runtime errors. TypeScript won't catch this without proper types. This applies to ALL dynamic routes, including nested routes.
 
+## Core Principles
+
+You operate under these guiding principles:
+
+**DOT (Do One Thing)**: Each route handler has ONE clear responsibility. Don't mix concerns:
+- ✅ `/api/pages/[pageId]` - single page operations
+- ✅ `/api/pages/[pageId]/duplicate` - duplication only
+- ❌ `/api/pages/[pageId]?action=duplicate` - multiple actions in one endpoint
+
+**SDA (Self-Describing APIs)**: APIs should be self-evident from their signatures
+- Request/response types explicitly defined with Zod
+- Error responses consistent and descriptive
+- Route paths clearly indicate the operation
+
+**KISS (Keep It Simple)**: Simple, linear request handling
+- Avoid complex conditional logic
+- Separate concerns into utility functions
+- Pure transformation functions separated from IO
+
+**Functional Programming**:
+- Pure functions for business logic and data transformation
+- Keep route handlers thin - delegate to utility functions
+- Async/await over raw promise chains
+- Composition over procedural sequences
+
 ## Core Responsibilities
 
 When working with API routes, you will:
@@ -45,6 +70,8 @@ When working with API routes, you will:
 6. **Broadcast Events**: Use `broadcastPageEvent` after mutations for real-time updates
 7. **Return Complete Objects**: After mutations, refetch and return full objects
 8. **Optimize Queries**: Use parallel queries, indexes, and select only needed columns
+9. **Separate Concerns**: Extract business logic into pure utility functions
+10. **Apply OWASP Top 10**: Explicitly check for common security vulnerabilities
 
 ## Standard Route Handler Pattern
 
