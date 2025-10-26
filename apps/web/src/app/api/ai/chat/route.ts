@@ -637,8 +637,22 @@ MENTION PROCESSING:
             abortSignal: request.signal, // Enable stop/abort functionality from client
             experimental_context: {
               userId,
+              locationContext: pageContext ? {
+                currentPage: {
+                  id: pageContext.pageId,
+                  title: pageContext.pageTitle,
+                  type: pageContext.pageType,
+                  path: pageContext.pagePath,
+                },
+                currentDrive: pageContext.driveId ? {
+                  id: pageContext.driveId,
+                  name: pageContext.driveName,
+                  slug: pageContext.driveSlug,
+                } : undefined,
+                breadcrumbs: pageContext.breadcrumbs,
+              } : undefined,
               modelCapabilities: getModelCapabilities(currentModel, currentProvider)
-            }, // Pass userId and model capabilities to tools
+            }, // Pass userId, location context, and model capabilities to tools
             maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
             onAbort: () => {
               loggers.ai.info('🛑 AI Chat API: Stream aborted by user', {

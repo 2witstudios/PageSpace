@@ -459,10 +459,29 @@ export const agentCommunicationTools = {
         
         // 7. Build system prompt with agent configuration
         let systemPrompt = targetAgent.systemPrompt || '';
-        
+
         // Add timestamp context
         systemPrompt += '\n\n' + buildTimestampSystemPrompt();
-        
+
+        // Add location context if available (drive and page awareness)
+        if (executionContext?.locationContext) {
+          const loc = executionContext.locationContext;
+          if (loc.currentDrive) {
+            systemPrompt += `\n\nCONTEXT AWARENESS:\n`;
+            systemPrompt += `• Current Drive: ${loc.currentDrive.name} (${loc.currentDrive.slug})\n`;
+            systemPrompt += `• Drive ID: ${loc.currentDrive.id}\n`;
+            if (loc.currentPage) {
+              systemPrompt += `• Current Page: ${loc.currentPage.title}\n`;
+              systemPrompt += `• Page Type: ${loc.currentPage.type}\n`;
+              systemPrompt += `• Page Path: ${loc.currentPage.path}\n`;
+            }
+            if (loc.breadcrumbs && loc.breadcrumbs.length > 0) {
+              systemPrompt += `• Breadcrumb Path: ${loc.breadcrumbs.join(' > ')}\n`;
+            }
+            systemPrompt += `\nYou are operating within this context. Use this drive and page information when using tools like list_pages, create_page, etc. Default to the current drive (${loc.currentDrive.id}) unless explicitly told otherwise.`;
+          }
+        }
+
         // Add cross-agent context
         systemPrompt += `\n\nYou are being consulted by another agent or user. Respond helpfully based on your expertise and conversation history.`;
         
@@ -476,10 +495,12 @@ export const agentCommunicationTools = {
         const agentTools = filterToolsForAgent(targetAgent.enabledTools as string[] | null);
         
         // 10. Create enhanced execution context for nested calls
+        // Preserve locationContext so nested agents know which drive/page they're operating in
         const nestedContext = {
           ...executionContext,
           agentCallDepth: callDepth + 1,
-          currentAgentId: agentId
+          currentAgentId: agentId,
+          locationContext: executionContext?.locationContext, // Explicitly preserve location context
         } as ToolExecutionContext & { agentCallDepth: number; currentAgentId: string };
         
         // 11. Process with target agent's configuration (ephemeral - no persistence)
