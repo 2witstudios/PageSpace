@@ -16,6 +16,7 @@ export async function GET(request: Request) {
 
     const { searchParams } = new URL(request.url);
     const pageId = searchParams.get('pageId');
+    const conversationId = searchParams.get('conversationId'); // Optional filter
 
     if (!pageId) {
       return NextResponse.json({ error: 'pageId is required' }, { status: 400 });
@@ -31,12 +32,14 @@ export async function GET(request: Request) {
     }
 
     // Direct database query for messages
+    // If conversationId provided, filter by conversation session
     const dbMessages = await db
       .select()
       .from(chatMessages)
       .where(and(
         eq(chatMessages.pageId, pageId),
-        eq(chatMessages.isActive, true)
+        eq(chatMessages.isActive, true),
+        conversationId ? eq(chatMessages.conversationId, conversationId) : undefined
       ))
       .orderBy(chatMessages.createdAt);
 

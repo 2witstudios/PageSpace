@@ -11,7 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Loader2, Send, Settings, MessageSquare, StopCircle } from 'lucide-react';
+import { Loader2, Send, Settings, MessageSquare, StopCircle, History, Plus } from 'lucide-react';
 import { UIMessage, DefaultChatTransport } from 'ai';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { ConversationMessageRenderer } from '@/components/ai/ConversationMessageRenderer';
@@ -21,7 +21,9 @@ import { getBackendProvider } from '@/lib/ai/ai-providers-config';
 import { useAuth } from '@/hooks/use-auth';
 import { toast } from 'sonner';
 import AgentSettingsTab, { AgentSettingsTabRef } from '@/components/ai/AgentSettingsTab';
+import AgentHistoryTab from '@/components/ai/AgentHistoryTab';
 import { fetchWithAuth, patch, del } from '@/lib/auth-fetch';
+import useSWR, { mutate } from 'swr';
 
 interface AiChatViewProps {
     page: TreePage;
@@ -69,6 +71,49 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const [showError, setShowError] = useState(true);
   const [isReadOnly, setIsReadOnly] = useState<boolean>(false);
   const [editVersion, setEditVersion] = useState(0); // Track edit version for forcing re-renders
+
+  // Conversation state
+  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
+
+  // SWR for conversation list with caching and auto-revalidation
+  const conversationsKey = `/api/agents/${page.id}/conversations`;
+  const { data: conversationsData, isLoading: isLoadingConversations } = useSWR(
+    // Only fetch when History tab is active
+    activeTab === 'history' ? conversationsKey : null,
+    async (url) => {
+      const response = await fetchWithAuth(url);
+      if (!response.ok) throw new Error('Failed to load conversations');
+      return response.json();
+    },
+    {
+      revalidateOnFocus: false,
+      revalidateOnReconnect: false,
+      dedupingInterval: 5000, // Dedupe requests within 5 seconds
+    }
+  );
+
+  // Transform conversations data with proper date parsing
+  const conversations = React.useMemo(() => {
+    if (!conversationsData?.conversations) return [];
+    return conversationsData.conversations.map((conv: {
+      id: string;
+      title: string;
+      preview: string;
+      createdAt: string;
+      updatedAt: string;
+      messageCount: number;
+      lastMessage: { role: string; timestamp: string };
+    }) => ({
+      ...conv,
+      createdAt: new Date(conv.createdAt),
+      updatedAt: new Date(conv.updatedAt),
+      lastMessage: {
+        ...conv.lastMessage,
+        timestamp: new Date(conv.lastMessage.timestamp),
+      },
+    }));
+  }, [conversationsData]);
+
   const { user } = useAuth();
   
   // Refs for auto-scrolling and chat input
@@ -196,6 +241,70 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     regenerate();
   };
 
+  // Conversation management functions (wrapped in useCallback for stable references)
+
+  const loadConversation = React.useCallback(async (conversationId: string) => {
+    try {
+      const response = await fetchWithAuth(
+        `/api/agents/${page.id}/conversations/${conversationId}/messages`
+      );
+      if (response.ok) {
+        const data = await response.json();
+        setMessages(data.messages);
+        setCurrentConversationId(conversationId);
+        setActiveTab('chat'); // Switch to chat tab
+        toast.success('Conversation loaded');
+      }
+    } catch (error) {
+      console.error('Failed to load conversation:', error);
+      toast.error('Failed to load conversation');
+    }
+  }, [page.id, setMessages, setActiveTab]);
+
+  const createNewConversation = React.useCallback(async () => {
+    try {
+      const response = await fetchWithAuth(`/api/agents/${page.id}/conversations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setCurrentConversationId(data.conversationId);
+        setMessages([]); // Clear chat
+        setActiveTab('chat');
+        // Invalidate SWR cache to reload conversations list
+        mutate(conversationsKey);
+        toast.success('New conversation started');
+      }
+    } catch (error) {
+      console.error('Failed to create conversation:', error);
+      toast.error('Failed to create new conversation');
+    }
+  }, [page.id, setMessages, setActiveTab, conversationsKey]);
+
+  const deleteConversation = React.useCallback(async (conversationId: string) => {
+    try {
+      const response = await fetchWithAuth(
+        `/api/agents/${page.id}/conversations/${conversationId}`,
+        { method: 'DELETE' }
+      );
+      if (response.ok) {
+        // If deleting current conversation, clear messages
+        if (conversationId === currentConversationId) {
+          setMessages([]);
+          setCurrentConversationId(null);
+        }
+        // Invalidate SWR cache to reload conversations list
+        mutate(conversationsKey);
+        toast.success('Conversation deleted');
+      }
+    } catch (error) {
+      console.error('Failed to delete conversation:', error);
+      toast.error('Failed to delete conversation');
+    }
+  }, [page.id, currentConversationId, setMessages, conversationsKey]);
+
   // Determine last assistant message for retry button visibility
   const lastAssistantMessageId = messages
     .filter(m => m.role === 'assistant')
@@ -255,40 +364,53 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     const initializeChat = async () => {
       try {
         // Parallelize API calls for faster loading
-        const [configResponse, messagesResponse, agentConfigResponse] = await Promise.all([
+        const [configResponse, agentConfigResponse] = await Promise.all([
           fetchWithAuth(`/api/ai/chat?pageId=${page.id}`),
-          fetchWithAuth(`/api/ai/chat/messages?pageId=${page.id}`),
           fetchWithAuth(`/api/pages/${page.id}/agent-config`)
         ]);
-        
+
         // Process config data
         if (configResponse.ok) {
           const configData: ProviderSettings = await configResponse.json();
           setProviderSettings(configData);
-          
+
           // Set current provider and model from server (now includes page-specific settings)
           setSelectedProvider(configData.currentProvider);
           setSelectedModel(configData.currentModel);
-          
+
           // Show API key input if no providers are configured
           if (!configData.isAnyProviderConfigured) {
             setShowApiKeyInput(true);
           }
         }
-        
-        // Process messages data
-        if (messagesResponse.ok) {
-          const existingMessages: UIMessage[] = await messagesResponse.json();
-          setInitialMessages(existingMessages);
-        } else {
+
+        // ✅ Conversation Fix: Always create a new conversation on page load
+        // This prevents loading old messages from default conversation (conv_default_pageId)
+        // Users can access old conversations via the History tab
+        const newConvResponse = await fetchWithAuth(`/api/agents/${page.id}/conversations`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+
+        if (newConvResponse.ok) {
+          const newConvData = await newConvResponse.json();
+          setCurrentConversationId(newConvData.conversationId);
+
+          // Start with empty messages (fresh conversation)
           setInitialMessages([]);
+          setMessages([]);
+        } else {
+          // Fallback: if conversation creation fails, start with empty state
+          setInitialMessages([]);
+          setMessages([]);
         }
 
         // Process agent config data
         if (agentConfigResponse.ok) {
           const agentConfigData = await agentConfigResponse.json();
           setAgentConfig(agentConfigData);
-          
+
           // Set provider and model from page config if available
           if (agentConfigData.aiProvider) {
             setSelectedProvider(agentConfigData.aiProvider);
@@ -297,11 +419,12 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             setSelectedModel(agentConfigData.aiModel);
           }
         }
-        
+
         setIsInitialized(true);
       } catch (error) {
         console.error('Failed to initialize chat:', error);
         setInitialMessages([]);
+        setMessages([]);
         setIsInitialized(true);
       }
     };
@@ -309,8 +432,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     // Reset initialization state when page changes
     setIsInitialized(false);
     setInitialMessages([]);
+    setCurrentConversationId(null); // Reset conversation on page change
     initializeChat();
-  }, [page.id]);
+  }, [page.id, setMessages]); // setMessages from useChat is stable
 
   const handleApiKeySubmit = () => {
     const hasKey = selectedProvider === 'openrouter' ? openRouterApiKey.trim() : googleApiKey.trim();
@@ -474,16 +598,33 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col h-full">
         <div className="p-4 border-b border-[var(--separator)]">
           <div className="flex items-center justify-between">
-            <TabsList className="grid grid-cols-2 max-w-md">
+            <TabsList className="grid grid-cols-3 max-w-lg">
               <TabsTrigger value="chat" className="flex items-center space-x-2">
                 <MessageSquare className="h-4 w-4" />
                 <span className="hidden sm:inline">Chat</span>
+              </TabsTrigger>
+              <TabsTrigger value="history" className="flex items-center space-x-2">
+                <History className="h-4 w-4" />
+                <span className="hidden sm:inline">History</span>
               </TabsTrigger>
               <TabsTrigger value="settings" className="flex items-center space-x-2">
                 <Settings className="h-4 w-4" />
                 <span className="hidden sm:inline">Settings</span>
               </TabsTrigger>
             </TabsList>
+
+            {/* New Chat Button - Only show when Chat tab is active */}
+            {activeTab === 'chat' && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={createNewConversation}
+                className="flex items-center space-x-2"
+              >
+                <Plus className="h-4 w-4" />
+                <span className="hidden sm:inline">New Chat</span>
+              </Button>
+            )}
 
             {/* Save Settings Button - Only show when Settings tab is active */}
             {activeTab === 'settings' && (
@@ -620,6 +761,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                     {
                       body: {
                         chatId: page.id,
+                        conversationId: currentConversationId, // Include conversation session ID
                         selectedProvider: selectedProvider, // Don't convert - send UI provider directly
                         selectedModel,
                         openRouterApiKey: openRouterApiKey || undefined,
@@ -674,6 +816,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                       {
                         body: {
                           chatId: page.id,
+                          conversationId: currentConversationId, // Include conversation session ID
                           selectedProvider: selectedProvider,
                           selectedModel,
                           openRouterApiKey: openRouterApiKey || undefined,
@@ -716,6 +859,18 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
               </p>
             </div>
           )}
+        </TabsContent>
+
+        {/* History Tab */}
+        <TabsContent value="history" className="flex-1 overflow-hidden">
+          <AgentHistoryTab
+            conversations={conversations}
+            currentConversationId={currentConversationId}
+            onSelectConversation={loadConversation}
+            onCreateNew={createNewConversation}
+            onDeleteConversation={deleteConversation}
+            isLoading={isLoadingConversations}
+          />
         </TabsContent>
 
         {/* Settings Tab */}

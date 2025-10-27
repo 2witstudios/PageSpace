@@ -1,9 +1,9 @@
 import { tool, stepCountIs } from 'ai';
 import { z } from 'zod';
 import { generateText, convertToModelMessages, UIMessage } from 'ai';
-import { db, pages, chatMessages, drives, eq, and, asc, sql } from '@pagespace/db';
+import { db, pages, chatMessages, drives, eq, and, sql } from '@pagespace/db';
 import { canUserViewPage } from '@pagespace/lib/server';
-import { convertDbMessageToUIMessage, sanitizeMessagesForModel } from '@/lib/ai/assistant-utils';
+import { sanitizeMessagesForModel } from '@/lib/ai/assistant-utils';
 import { driveTools } from './drive-tools';
 import { pageReadTools } from './page-read-tools';
 import { pageWriteTools } from './page-write-tools';
@@ -23,7 +23,6 @@ import { AI_PROVIDERS, getModelDisplayName } from '@/lib/ai/ai-providers-config'
 
 // Constants
 const MAX_AGENT_DEPTH = 3;
-const MAX_CONVERSATION_WINDOW = 50; // Limit messages for performance
 
 /**
  * Get configured AI model for agent using the centralized provider factory
@@ -367,7 +366,7 @@ export const agentCommunicationTools = {
    * Consult another AI agent in the workspace for specialized knowledge or assistance
    */
   ask_agent: tool({
-    description: 'Consult another AI agent in the workspace for specialized knowledge or assistance. The target agent will process your question with its full conversation history and configuration, but the interaction will not be saved to the target agent\'s conversation.',
+    description: 'Consult another AI agent in the workspace for specialized knowledge or assistance. This tool provides STATELESS consultations - each call is independent with no conversation memory. The target agent will not see previous consultation history. Provide sufficient context in your question since the agent won\'t have conversation history.',
     inputSchema: z.object({
       agentPath: z.string().describe('Semantic path to the agent (e.g., "/finance/Budget Analyst", "/dev/Code Assistant") for context and user readability'),
       agentId: z.string().describe('Unique ID of the AI agent page to consult'), 
@@ -425,36 +424,22 @@ export const agentCommunicationTools = {
           });
           throw new Error(`Insufficient permissions to consult agent "${targetAgent.title}"`);
         }
-        
-        // 3. Load target agent's conversation history (with window limit for performance)
-        const agentHistory = await db.select()
-          .from(chatMessages)
-          .where(and(
-            eq(chatMessages.pageId, agentId),
-            eq(chatMessages.isActive, true)
-          ))
-          .orderBy(asc(chatMessages.createdAt))
-          .limit(MAX_CONVERSATION_WINDOW);
-        
-        // 4. Convert database messages to UI messages
-        const historyMessages = agentHistory.map(convertDbMessageToUIMessage);
-        
-        // 5. Build message chain for target agent
+
+        // 3. Build message for stateless consultation (no conversation history)
+        // Each ask_agent call is completely independent
         const userMessage: UIMessage = {
           id: `temp-${Date.now()}`,
           role: 'user' as const,
-          parts: [{ 
-            type: 'text', 
-            text: `${context ? `Context: ${context}\n\n` : ''}${question}` 
+          parts: [{
+            type: 'text',
+            text: `${context ? `Context: ${context}\n\n` : ''}${question}`
           }]
         };
-        
-        const messages: UIMessage[] = [
-          ...historyMessages,
-          userMessage
-        ];
-        
-        // 6. Sanitize messages for AI model
+
+        // Stateless consultation - only the current question, no history
+        const messages: UIMessage[] = [userMessage];
+
+        // 4. Sanitize messages for AI model
         const sanitizedMessages = sanitizeMessagesForModel(messages);
         
         // 7. Build system prompt with agent configuration
@@ -567,7 +552,7 @@ export const agentCommunicationTools = {
           metadata: {
             agentId: targetAgent.id,
             processingTime,
-            messagesInHistory: historyMessages.length,
+            stateless: true, // Indicate this was a stateless consultation
             callDepth: callDepth + 1,
             // Use display names from AI_PROVIDERS config
             provider: targetAgent.aiProvider

@@ -293,6 +293,7 @@ function reconstructMessageFromStructuredContent(
 export async function saveMessageToDatabase({
   messageId,
   pageId,
+  conversationId,
   userId,
   role,
   content,
@@ -303,6 +304,7 @@ export async function saveMessageToDatabase({
 }: {
   messageId: string;
   pageId: string;
+  conversationId: string; // Group messages into conversation sessions
   userId: string | null;
   role: 'user' | 'assistant' | 'system';
   content: string;
@@ -344,6 +346,7 @@ export async function saveMessageToDatabase({
       .values({
         id: messageId,
         pageId,
+        conversationId, // Group messages into conversation sessions
         userId,
         role,
         content: structuredContent,
@@ -360,6 +363,7 @@ export async function saveMessageToDatabase({
           toolCalls: toolCalls ? JSON.stringify(toolCalls) : null,
           toolResults: toolResults ? JSON.stringify(toolResults) : null,
           agentRole: agentRole || 'PARTNER',
+          conversationId, // Update conversationId if message is reprocessed
         }
       });
   } catch (error) {
