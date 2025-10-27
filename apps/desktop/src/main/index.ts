@@ -3,6 +3,8 @@ import electronUpdaterPkg from 'electron-updater';
 const { autoUpdater } = electronUpdaterPkg;
 import * as path from 'path';
 import Store from 'electron-store';
+import { getMCPManager } from './mcp-manager';
+import type { MCPConfig } from '../shared/mcp-types';
 
 // Configuration store for user preferences
 interface StoreSchema {
@@ -435,8 +437,117 @@ ipcMain.handle('retry-connection', () => {
   }
 });
 
+// MCP IPC handlers
+ipcMain.handle('mcp:get-config', async () => {
+  const mcpManager = getMCPManager();
+  return mcpManager.getConfig();
+});
+
+ipcMain.handle('mcp:update-config', async (_event, config: MCPConfig) => {
+  const mcpManager = getMCPManager();
+  await mcpManager.updateConfig(config);
+  return { success: true };
+});
+
+ipcMain.handle('mcp:start-server', async (_event, name: string) => {
+  const mcpManager = getMCPManager();
+  try {
+    await mcpManager.startServer(name);
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('mcp:stop-server', async (_event, name: string) => {
+  const mcpManager = getMCPManager();
+  try {
+    await mcpManager.stopServer(name);
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('mcp:restart-server', async (_event, name: string) => {
+  const mcpManager = getMCPManager();
+  try {
+    await mcpManager.restartServer(name);
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('mcp:get-server-statuses', async () => {
+  const mcpManager = getMCPManager();
+  return mcpManager.getServerStatuses();
+});
+
+// Broadcast status changes to all windows
+function broadcastMCPStatusChange() {
+  const mcpManager = getMCPManager();
+  const statuses = mcpManager.getServerStatuses();
+
+  BrowserWindow.getAllWindows().forEach((window) => {
+    window.webContents.send('mcp:status-changed', statuses);
+  });
+}
+
+// Poll MCP status and broadcast changes
+let mcpStatusInterval: NodeJS.Timeout | null = null;
+
+function startMCPStatusBroadcasting() {
+  if (mcpStatusInterval) return;
+
+  mcpStatusInterval = setInterval(() => {
+    broadcastMCPStatusChange();
+  }, 3000); // Poll every 3 seconds
+}
+
+function stopMCPStatusBroadcasting() {
+  if (mcpStatusInterval) {
+    clearInterval(mcpStatusInterval);
+    mcpStatusInterval = null;
+  }
+}
+
+// MCP Tools IPC handlers (for AI integration)
+ipcMain.handle('mcp:get-available-tools', async () => {
+  // TODO: Implement MCP protocol communication to fetch tools from running servers
+  // For now, return empty array
+  // Full implementation requires:
+  // 1. MCP protocol message exchange via stdio
+  // 2. Tool definition parsing
+  // 3. Tool schema conversion
+  console.log('MCP: get-available-tools called - not yet implemented');
+  return [];
+});
+
+ipcMain.handle('mcp:execute-tool', async (_event, serverName: string, toolName: string, args: any) => {
+  // TODO: Implement tool execution via MCP protocol
+  // Full implementation requires:
+  // 1. Send MCP tool call message to server
+  // 2. Wait for response
+  // 3. Parse and return result
+  console.log(`MCP: execute-tool called for ${serverName}.${toolName} - not yet implemented`);
+  throw new Error('MCP tool execution not yet implemented');
+});
+
 // App lifecycle
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // Initialize MCP manager
+  try {
+    const mcpManager = getMCPManager();
+    await mcpManager.initialize();
+    console.log('MCP Manager initialized successfully');
+
+    // Start broadcasting status changes
+    startMCPStatusBroadcasting();
+  } catch (error) {
+    console.error('Failed to initialize MCP Manager:', error);
+  }
+
   createWindow();
   createMenu();
   createTray();
@@ -456,8 +567,19 @@ app.on('window-all-closed', () => {
   }
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', async () => {
   isQuitting = true;
+
+  // Stop broadcasting status
+  stopMCPStatusBroadcasting();
+
+  // Shutdown MCP servers
+  try {
+    const mcpManager = getMCPManager();
+    await mcpManager.shutdown();
+  } catch (error) {
+    console.error('Error shutting down MCP servers:', error);
+  }
 });
 
 // Handle deep links (pagespace://)

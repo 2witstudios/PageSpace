@@ -6,9 +6,20 @@ import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/ca
 import { Button } from "@/components/ui/button";
 import { Settings, User, Plug2, Key, ArrowLeft, CreditCard, Bell } from "lucide-react";
 
+interface SettingsCategory {
+  title: string;
+  description: string;
+  icon: typeof Settings;
+  href: string;
+  available: boolean;
+  desktopOnly?: boolean;
+}
+
 export default function SettingsPage() {
   const router = useRouter();
-  const settingsCategories = [
+  const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
+
+  const settingsCategories: SettingsCategory[] = [
     {
       title: "General",
       description: "Basic settings and preferences",
@@ -39,10 +50,18 @@ export default function SettingsPage() {
     },
     {
       title: "MCP Connection",
-      description: "Configure Model Context Protocol connections",
+      description: "Connect external tools to PageSpace (Cloud)",
       icon: Plug2,
       href: "/settings/mcp",
       available: true,
+    },
+    {
+      title: "Local MCP Servers",
+      description: "Run your own MCP servers (Desktop only)",
+      icon: Plug2,
+      href: "/settings/local-mcp",
+      available: true,
+      desktopOnly: true,
     },
     {
       title: "AI API Keys",
@@ -51,7 +70,13 @@ export default function SettingsPage() {
       href: "/settings/ai",
       available: true,
     },
-  ];
+  ].filter((category: SettingsCategory) => {
+    // Filter out desktop-only features if not on desktop
+    if (category.desktopOnly && !isDesktop) {
+      return false;
+    }
+    return true;
+  });
 
   return (
     <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10">
