@@ -9,6 +9,13 @@ import {
   MCPServerStatus,
   MCPServerStatusInfo,
   MCP_CONSTANTS,
+  JSONRPCRequest,
+  JSONRPCResponse,
+  MCPTool,
+  MCPToolsListResponse,
+  MCPToolCallRequest,
+  MCPToolCallResponse,
+  ToolExecutionResult,
 } from '../shared/mcp-types';
 import { validateMCPConfig } from '../shared/mcp-validation';
 
@@ -20,6 +27,12 @@ interface MCPServerProcess {
   startedAt?: Date;
   crashCount: number;
   lastCrashAt?: Date;
+}
+
+interface PendingJSONRPCRequest {
+  resolve: (value: JSONRPCResponse) => void;
+  reject: (error: Error) => void;
+  timeout: NodeJS.Timeout;
 }
 
 /**
@@ -66,6 +79,14 @@ export class MCPManager {
   private servers: Map<string, MCPServerProcess> = new Map();
   private configPath: string;
   private logDir: string;
+
+  // JSON-RPC communication tracking
+  private pendingRequests: Map<string, Map<string | number, PendingJSONRPCRequest>> = new Map();
+  private nextRequestId = 1;
+  private stdoutBuffers: Map<string, string> = new Map();
+
+  // Tool discovery and caching
+  private toolCache: Map<string, MCPTool[]> = new Map();
 
   constructor() {
     const userDataPath = app.getPath('userData');
@@ -257,9 +278,19 @@ export class MCPManager {
         this.logServerError(name, new Error(server.error || 'Process exited'));
       });
 
-      // Capture stdout/stderr for logging
+      // Initialize JSON-RPC tracking for this server
+      if (!this.pendingRequests.has(name)) {
+        this.pendingRequests.set(name, new Map());
+      }
+      if (!this.stdoutBuffers.has(name)) {
+        this.stdoutBuffers.set(name, '');
+      }
+
+      // Capture stdout for JSON-RPC responses
       childProcess.stdout?.on('data', (data) => {
-        this.logServerOutput(name, 'stdout', data.toString());
+        const output = data.toString();
+        this.logServerOutput(name, 'stdout', output);
+        this.handleStdoutData(name, output);
       });
 
       childProcess.stderr?.on('data', (data) => {
@@ -273,6 +304,11 @@ export class MCPManager {
       if (childProcess.exitCode === null && !childProcess.killed) {
         server.status = 'running';
         console.log(`Server ${name} started successfully`);
+
+        // Fetch tools from server (async, don't wait for completion)
+        this.getMCPTools(name).catch((error) => {
+          console.error(`Failed to fetch tools from ${name} after startup:`, error);
+        });
       } else {
         throw new Error('Process exited immediately after start');
       }
@@ -301,6 +337,22 @@ export class MCPManager {
     }
 
     server.status = 'stopped';
+
+    // Reject all pending JSON-RPC requests
+    const pendingMap = this.pendingRequests.get(name);
+    if (pendingMap) {
+      for (const [requestId, pending] of pendingMap.entries()) {
+        clearTimeout(pending.timeout);
+        pending.reject(new Error(`Server ${name} is stopping`));
+      }
+      pendingMap.clear();
+    }
+
+    // Clear stdout buffer
+    this.stdoutBuffers.set(name, '');
+
+    // Clear tool cache
+    this.clearToolCache(name);
 
     // Kill the process
     server.process.kill('SIGTERM');
@@ -331,6 +383,7 @@ export class MCPManager {
   async restartServer(name: string): Promise<void> {
     await this.stopServer(name);
     await this.startServer(name);
+    // Tool cache will be automatically refreshed by startServer's getMCPTools call
   }
 
   /**
@@ -417,6 +470,327 @@ export class MCPManager {
     } catch (err) {
       console.error('Failed to write error log:', err);
     }
+  }
+
+  /**
+   * Handle stdout data and parse JSON-RPC responses
+   */
+  private handleStdoutData(serverName: string, data: string): void {
+    // Append to buffer
+    const currentBuffer = this.stdoutBuffers.get(serverName) || '';
+    const newBuffer = currentBuffer + data;
+    this.stdoutBuffers.set(serverName, newBuffer);
+
+    // Try to parse complete JSON-RPC messages (newline-delimited)
+    const lines = newBuffer.split('\n');
+
+    // Keep the last incomplete line in the buffer
+    const incompleteLineIndex = newBuffer.endsWith('\n') ? lines.length : lines.length - 1;
+    this.stdoutBuffers.set(serverName, lines[incompleteLineIndex] || '');
+
+    // Process complete lines
+    for (let i = 0; i < incompleteLineIndex; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+
+      try {
+        const message = JSON.parse(line) as JSONRPCResponse;
+        this.handleJSONRPCResponse(serverName, message);
+      } catch (error) {
+        console.warn(`Failed to parse JSON-RPC message from ${serverName}:`, line, error);
+      }
+    }
+  }
+
+  /**
+   * Handle a parsed JSON-RPC response
+   */
+  private handleJSONRPCResponse(serverName: string, response: JSONRPCResponse): void {
+    const pendingMap = this.pendingRequests.get(serverName);
+    if (!pendingMap) return;
+
+    const pending = pendingMap.get(response.id);
+    if (!pending) {
+      console.warn(`Received JSON-RPC response with unknown ID ${response.id} from ${serverName}`);
+      return;
+    }
+
+    // Clear timeout
+    clearTimeout(pending.timeout);
+    pendingMap.delete(response.id);
+
+    // Resolve or reject based on response
+    if (response.error) {
+      pending.reject(new Error(`JSON-RPC error: ${response.error.message} (code: ${response.error.code})`));
+    } else {
+      pending.resolve(response);
+    }
+  }
+
+  /**
+   * Send a JSON-RPC request to a server and wait for response
+   */
+  async sendJSONRPCRequest(
+    serverName: string,
+    method: string,
+    params?: Record<string, unknown> | unknown[]
+  ): Promise<JSONRPCResponse> {
+    const server = this.servers.get(serverName);
+    if (!server || !server.process || server.status !== 'running') {
+      throw new Error(`Server ${serverName} is not running`);
+    }
+
+    const requestId = this.nextRequestId++;
+    const request: JSONRPCRequest = {
+      jsonrpc: '2.0',
+      id: requestId,
+      method,
+      params,
+    };
+
+    // Create promise that will be resolved when response arrives
+    return new Promise<JSONRPCResponse>((resolve, reject) => {
+      // Set up timeout
+      const timeout = setTimeout(() => {
+        const pendingMap = this.pendingRequests.get(serverName);
+        if (pendingMap) {
+          pendingMap.delete(requestId);
+        }
+        reject(new Error(`JSON-RPC request timeout after ${MCP_CONSTANTS.JSONRPC_REQUEST_TIMEOUT_MS}ms`));
+      }, MCP_CONSTANTS.JSONRPC_REQUEST_TIMEOUT_MS);
+
+      // Store pending request
+      const pendingMap = this.pendingRequests.get(serverName);
+      if (!pendingMap) {
+        clearTimeout(timeout);
+        reject(new Error(`Server ${serverName} has no pending requests map`));
+        return;
+      }
+
+      pendingMap.set(requestId, { resolve, reject, timeout });
+
+      // Send request via stdin
+      const requestStr = JSON.stringify(request) + '\n';
+      const writeSuccess = server.process.stdin?.write(requestStr);
+
+      if (!writeSuccess) {
+        clearTimeout(timeout);
+        pendingMap.delete(requestId);
+        reject(new Error(`Failed to write JSON-RPC request to ${serverName} stdin`));
+      }
+    });
+  }
+
+  /**
+   * Wait for a specific JSON-RPC response by ID
+   * This is an alternative approach if you want to manually manage request/response matching
+   */
+  async waitForJSONRPCResponse(
+    serverName: string,
+    requestId: string | number,
+    timeoutMs: number = MCP_CONSTANTS.JSONRPC_REQUEST_TIMEOUT_MS
+  ): Promise<JSONRPCResponse> {
+    return new Promise<JSONRPCResponse>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        const pendingMap = this.pendingRequests.get(serverName);
+        if (pendingMap) {
+          pendingMap.delete(requestId);
+        }
+        reject(new Error(`JSON-RPC response timeout for request ${requestId}`));
+      }, timeoutMs);
+
+      const pendingMap = this.pendingRequests.get(serverName);
+      if (!pendingMap) {
+        clearTimeout(timeout);
+        reject(new Error(`Server ${serverName} has no pending requests map`));
+        return;
+      }
+
+      pendingMap.set(requestId, { resolve, reject, timeout });
+    });
+  }
+
+  /**
+   * Fetch tools from a specific MCP server and cache them
+   * Called automatically after server starts
+   */
+  async getMCPTools(serverName: string): Promise<MCPTool[]> {
+    try {
+      console.log(`Fetching tools from server ${serverName}...`);
+
+      // Send tools/list request
+      const response = await this.sendJSONRPCRequest(serverName, 'tools/list', {});
+
+      if (!response.result) {
+        console.warn(`No result in tools/list response from ${serverName}`);
+        return [];
+      }
+
+      const toolsListResponse = response.result as MCPToolsListResponse;
+
+      // Convert to MCPTool format with server name
+      const tools: MCPTool[] = toolsListResponse.tools.map(tool => ({
+        name: tool.name,
+        description: tool.description || '',
+        inputSchema: tool.inputSchema,
+        serverName,
+      }));
+
+      // Cache the tools
+      this.toolCache.set(serverName, tools);
+
+      console.log(`Cached ${tools.length} tools from server ${serverName}`);
+      return tools;
+    } catch (error) {
+      console.error(`Failed to fetch tools from ${serverName}:`, error);
+      // Cache empty array on error
+      this.toolCache.set(serverName, []);
+      return [];
+    }
+  }
+
+  /**
+   * Refresh tool cache for a specific server
+   * Called when server restarts
+   */
+  async refreshToolCache(serverName: string): Promise<void> {
+    console.log(`Refreshing tool cache for ${serverName}...`);
+
+    // Invalidate existing cache
+    this.toolCache.delete(serverName);
+
+    // Fetch fresh tools
+    await this.getMCPTools(serverName);
+  }
+
+  /**
+   * Get aggregated tools from all enabled and running servers
+   */
+  getAggregatedTools(): MCPTool[] {
+    const allTools: MCPTool[] = [];
+
+    for (const [serverName, server] of this.servers.entries()) {
+      // Only include tools from running servers that are enabled
+      if (server.status === 'running' && server.config.enabled !== false) {
+        const tools = this.toolCache.get(serverName) || [];
+        allTools.push(...tools);
+      }
+    }
+
+    return allTools;
+  }
+
+  /**
+   * Get tools from a specific server (from cache)
+   */
+  getServerTools(serverName: string): MCPTool[] {
+    return this.toolCache.get(serverName) || [];
+  }
+
+  /**
+   * Clear tool cache for a specific server
+   */
+  clearToolCache(serverName: string): void {
+    this.toolCache.delete(serverName);
+  }
+
+  /**
+   * Clear all tool caches
+   */
+  clearAllToolCaches(): void {
+    this.toolCache.clear();
+  }
+
+  /**
+   * Execute a tool on a specific MCP server
+   * @param serverName The name of the server to execute the tool on
+   * @param toolName The name of the tool to execute
+   * @param args The arguments to pass to the tool
+   * @returns ToolExecutionResult with success/error information
+   */
+  async executeTool(
+    serverName: string,
+    toolName: string,
+    args?: Record<string, unknown>
+  ): Promise<ToolExecutionResult> {
+    try {
+      console.log(`Executing tool ${toolName} on server ${serverName} with args:`, args);
+
+      // Verify server is running
+      const server = this.servers.get(serverName);
+      if (!server || server.status !== 'running') {
+        return {
+          success: false,
+          error: `Server ${serverName} is not running (status: ${server?.status || 'not found'})`,
+        };
+      }
+
+      // Prepare tool call request
+      const toolCallRequest: MCPToolCallRequest = {
+        name: toolName,
+        arguments: args,
+      };
+
+      // Send tools/call JSON-RPC request
+      const response = await this.sendJSONRPCRequest(serverName, 'tools/call', toolCallRequest);
+
+      if (!response.result) {
+        return {
+          success: false,
+          error: 'No result in tool execution response',
+        };
+      }
+
+      const toolResponse = response.result as MCPToolCallResponse;
+
+      // Check if the tool response indicates an error
+      if (toolResponse.isError) {
+        const errorText = toolResponse.content
+          .filter(c => c.type === 'text')
+          .map(c => c.text)
+          .join('\n');
+        return {
+          success: false,
+          error: errorText || 'Tool execution failed',
+        };
+      }
+
+      // Return successful result
+      return {
+        success: true,
+        result: toolResponse,
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`Tool execution failed for ${toolName} on ${serverName}:`, error);
+
+      return {
+        success: false,
+        error: errorMessage,
+      };
+    }
+  }
+
+  /**
+   * Execute a tool by full tool name (format: mcp_servername_toolname)
+   * Parses the server name from the tool name and executes
+   */
+  async executeToolByFullName(
+    fullToolName: string,
+    args?: Record<string, unknown>
+  ): Promise<ToolExecutionResult> {
+    // Parse tool name format: mcp_servername_toolname
+    const match = fullToolName.match(/^mcp_([^_]+)_(.+)$/);
+
+    if (!match) {
+      return {
+        success: false,
+        error: `Invalid tool name format: ${fullToolName}. Expected format: mcp_servername_toolname`,
+      };
+    }
+
+    const [, serverName, toolName] = match;
+    return this.executeTool(serverName, toolName, args);
   }
 }
 

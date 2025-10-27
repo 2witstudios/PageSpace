@@ -2,7 +2,7 @@
  * Type definitions for Electron API when running in desktop app
  */
 
-import type { MCPConfig, MCPServerStatusInfo } from './mcp';
+import type { MCPConfig, MCPServerStatusInfo, MCPTool, ToolExecutionResult } from './mcp';
 
 export interface ElectronAPI {
   getAppUrl: () => Promise<string>;
@@ -20,6 +20,15 @@ export interface ElectronAPI {
     restartServer: (name: string) => Promise<{ success: boolean; error?: string }>;
     getServerStatuses: () => Promise<Record<string, MCPServerStatusInfo>>;
     onStatusChange: (callback: (statuses: Record<string, MCPServerStatusInfo>) => void) => () => void;
+    // Tool operations (Phase 2)
+    getAvailableTools: () => Promise<MCPTool[]>;
+    executeTool: (serverName: string, toolName: string, args?: Record<string, unknown>) => Promise<ToolExecutionResult>;
+  };
+  ws: {
+    getStatus: () => Promise<{
+      connected: boolean;
+      reconnectAttempts: number;
+    }>;
   };
   isDesktop: true;
 }

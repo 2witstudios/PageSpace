@@ -4,6 +4,7 @@ const { autoUpdater } = electronUpdaterPkg;
 import * as path from 'path';
 import Store from 'electron-store';
 import { getMCPManager } from './mcp-manager';
+import { initializeWSClient, shutdownWSClient, getWSClient } from './ws-client';
 import type { MCPConfig } from '../shared/mcp-types';
 
 // Configuration store for user preferences
@@ -514,24 +515,43 @@ function stopMCPStatusBroadcasting() {
 
 // MCP Tools IPC handlers (for AI integration)
 ipcMain.handle('mcp:get-available-tools', async () => {
-  // TODO: Implement MCP protocol communication to fetch tools from running servers
-  // For now, return empty array
-  // Full implementation requires:
-  // 1. MCP protocol message exchange via stdio
-  // 2. Tool definition parsing
-  // 3. Tool schema conversion
-  console.log('MCP: get-available-tools called - not yet implemented');
-  return [];
+  try {
+    const mcpManager = getMCPManager();
+    const tools = mcpManager.getAggregatedTools();
+    console.log(`MCP: Returning ${tools.length} aggregated tools from all running servers`);
+    return tools;
+  } catch (error) {
+    console.error('MCP: Failed to get available tools:', error);
+    return [];
+  }
 });
 
-ipcMain.handle('mcp:execute-tool', async (_event, serverName: string, toolName: string, args: any) => {
-  // TODO: Implement tool execution via MCP protocol
-  // Full implementation requires:
-  // 1. Send MCP tool call message to server
-  // 2. Wait for response
-  // 3. Parse and return result
-  console.log(`MCP: execute-tool called for ${serverName}.${toolName} - not yet implemented`);
-  throw new Error('MCP tool execution not yet implemented');
+ipcMain.handle('mcp:execute-tool', async (_event, serverName: string, toolName: string, args: Record<string, unknown>) => {
+  try {
+    console.log(`MCP: Executing tool ${toolName} on server ${serverName}`);
+    const mcpManager = getMCPManager();
+    const result = await mcpManager.executeTool(serverName, toolName, args);
+    return result;
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error(`MCP: Tool execution failed for ${serverName}.${toolName}:`, error);
+    return {
+      success: false,
+      error: errorMessage,
+    };
+  }
+});
+
+// WebSocket MCP Bridge IPC handlers
+ipcMain.handle('ws:get-status', () => {
+  const wsClient = getWSClient();
+  if (!wsClient) {
+    return {
+      connected: false,
+      reconnectAttempts: 0,
+    };
+  }
+  return wsClient.getStatus();
 });
 
 // App lifecycle
@@ -552,10 +572,18 @@ app.whenReady().then(async () => {
   createMenu();
   createTray();
 
+  // Initialize WebSocket client for MCP bridge
+  if (mainWindow) {
+    initializeWSClient(mainWindow);
+  }
+
   app.on('activate', () => {
     // On macOS, re-create window when dock icon is clicked
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
+      if (mainWindow) {
+        initializeWSClient(mainWindow);
+      }
     }
   });
 });
@@ -572,6 +600,13 @@ app.on('before-quit', async () => {
 
   // Stop broadcasting status
   stopMCPStatusBroadcasting();
+
+  // Shutdown WebSocket client
+  try {
+    shutdownWSClient();
+  } catch (error) {
+    console.error('Error shutting down WebSocket client:', error);
+  }
 
   // Shutdown MCP servers
   try {

@@ -46,10 +46,13 @@ import {
 } from 'lucide-react';
 import { useMCP } from '@/hooks/useMCP';
 import type { MCPServerStatus } from '@/types/mcp';
+import { Switch } from '@/components/ui/switch';
+import { useMCPStore } from '@/stores/useMCPStore';
 
 export default function LocalMCPSettingsPage() {
   const router = useRouter();
   const mcp = useMCP();
+  const { globalMCPEnabled, setGlobalMCPEnabled } = useMCPStore();
 
   const [configJson, setConfigJson] = useState('');
   const [jsonError, setJsonError] = useState('');
@@ -248,6 +251,36 @@ export default function LocalMCPSettingsPage() {
           Only use servers from trusted sources. Review configuration carefully before starting servers.
         </AlertDescription>
       </Alert>
+
+      {/* Global MCP Toggle */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle>Enable MCP Tools in AI</CardTitle>
+              <CardDescription className="mt-2">
+                Allow AI chats to use tools from your running MCP servers.
+                You can enable/disable MCP tools per-chat even when this is enabled.
+              </CardDescription>
+            </div>
+            <Switch
+              checked={globalMCPEnabled}
+              onCheckedChange={setGlobalMCPEnabled}
+              aria-label="Enable MCP tools globally"
+            />
+          </div>
+        </CardHeader>
+        {globalMCPEnabled && (
+          <CardContent>
+            <Alert>
+              <CheckCircle2 className="h-4 w-4" />
+              <AlertDescription>
+                MCP tools are now available for AI chats. Enable them per-chat from the chat header.
+              </AlertDescription>
+            </Alert>
+          </CardContent>
+        )}
+      </Card>
 
       {/* Tabs: Server Management vs JSON Config */}
       <Tabs defaultValue="servers" className="w-full">

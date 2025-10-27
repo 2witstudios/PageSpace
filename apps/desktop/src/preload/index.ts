@@ -4,6 +4,8 @@ import type {
   MCPConfig,
   MCPServerStatus,
   MCPServerStatusInfo,
+  MCPTool,
+  ToolExecutionResult,
 } from '../shared/mcp-types';
 
 // Expose protected methods that allow the renderer process to use
@@ -47,6 +49,15 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.on('mcp:status-changed', subscription);
       return () => ipcRenderer.removeListener('mcp:status-changed', subscription);
     },
+    // Tool operations (Phase 2)
+    getAvailableTools: () => ipcRenderer.invoke('mcp:get-available-tools'),
+    executeTool: (serverName: string, toolName: string, args?: Record<string, unknown>) =>
+      ipcRenderer.invoke('mcp:execute-tool', serverName, toolName, args),
+  },
+
+  // WebSocket MCP Bridge
+  ws: {
+    getStatus: () => ipcRenderer.invoke('ws:get-status'),
   },
 
   // Desktop flag for feature detection
@@ -70,6 +81,15 @@ export interface ElectronAPI {
     restartServer: (name: string) => Promise<{ success: boolean; error?: string }>;
     getServerStatuses: () => Promise<Record<string, MCPServerStatusInfo>>;
     onStatusChange: (callback: (statuses: Record<string, MCPServerStatusInfo>) => void) => () => void;
+    // Tool operations (Phase 2)
+    getAvailableTools: () => Promise<MCPTool[]>;
+    executeTool: (serverName: string, toolName: string, args?: Record<string, unknown>) => Promise<ToolExecutionResult>;
+  };
+  ws: {
+    getStatus: () => Promise<{
+      connected: boolean;
+      reconnectAttempts: number;
+    }>;
   };
   isDesktop: true;
 }

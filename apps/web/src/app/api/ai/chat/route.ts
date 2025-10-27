@@ -54,6 +54,9 @@ import { maskIdentifier } from '@/lib/logging/mask';
 import { trackFeature } from '@pagespace/lib/activity-tracker';
 import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
 import { getModelCapabilities } from '@/lib/ai/model-capabilities';
+import { convertMCPToolsToAISDKSchemas } from '@/lib/ai/mcp-tool-converter';
+import type { MCPTool } from '@/types/mcp';
+import { getMCPBridge } from '@/lib/mcp-bridge';
 
 
 // Allow streaming responses up to 5 minutes for complex AI agent interactions
@@ -112,6 +115,7 @@ export async function POST(request: Request) {
       ollamaBaseUrl,
       glmApiKey,
       pageContext,
+      mcpTools, // MCP tool schemas from desktop client (optional)
       // Note: agentRole no longer needed - handled server-side via page configuration
     }: {
       messages: UIMessage[],
@@ -126,6 +130,7 @@ export async function POST(request: Request) {
       xaiApiKey?: string,
       ollamaBaseUrl?: string,
       glmApiKey?: string,
+      mcpTools?: MCPTool[], // MCP tool schemas from desktop (client-side execution)
       pageContext?: {
         pageId: string,
         pageTitle: string,
@@ -414,6 +419,115 @@ export async function POST(request: Request) {
       // No tool restrictions configured, use default role-based filtering for compatibility
       filteredTools = ToolPermissionFilter.filterTools(pageSpaceTools, AgentRole.PARTNER);
       loggers.ai.debug('AI Page Chat API: Using default tool filtering (PARTNER role)');
+    }
+
+    // DESKTOP MCP INTEGRATION: Merge MCP tools from client if provided
+    if (mcpTools && mcpTools.length > 0) {
+      try {
+        loggers.ai.info('AI Chat API: Integrating MCP tools from desktop', {
+          mcpToolCount: mcpTools.length,
+          toolNames: mcpTools.map(t => `${t.serverName}__${t.name}`),
+          userId: maskIdentifier(userId),
+          chatId: maskIdentifier(chatId)
+        });
+
+        // Convert MCP tools to AI SDK format (schemas only, no execute functions)
+        const mcpToolSchemas = convertMCPToolsToAISDKSchemas(mcpTools);
+
+        // Create execute functions that signal client-side execution
+        // The AI SDK will call these, but we throw a special error that the client intercepts
+        const mcpToolsWithExecute: Record<string, unknown> = {};
+        for (const [toolName, toolSchema] of Object.entries(mcpToolSchemas)) {
+          mcpToolsWithExecute[toolName] = {
+            ...toolSchema,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            execute: async (args: any) => {
+              // Ensure userId is defined (it should be from authentication)
+              if (!userId) {
+                throw new Error('User ID not available for MCP tool execution');
+              }
+
+              // Parse tool name format: servername__toolname
+              const parts = toolName.split('__');
+              if (parts.length !== 2) {
+                loggers.ai.error('AI Chat API: Invalid MCP tool name format', {
+                  toolName,
+                  userId: maskIdentifier(userId)
+                });
+                throw new Error(`Invalid MCP tool name format: ${toolName}`);
+              }
+
+              const [serverName, actualToolName] = parts;
+
+              loggers.ai.debug('AI Chat API: Executing MCP tool via WebSocket bridge', {
+                toolName: actualToolName,
+                serverName,
+                userId: maskIdentifier(userId),
+                hasArgs: !!args
+              });
+
+              try {
+                const mcpBridge = getMCPBridge();
+
+                // Check if user is connected
+                if (!mcpBridge.isUserConnected(userId)) {
+                  const errorMsg = 'Desktop app not connected. Please ensure PageSpace Desktop is running.';
+                  loggers.ai.warn('AI Chat API: User not connected to desktop', {
+                    userId: maskIdentifier(userId),
+                    toolName: actualToolName,
+                    serverName
+                  });
+                  throw new Error(errorMsg);
+                }
+
+                // Execute tool via WebSocket bridge
+                const result = await mcpBridge.executeTool(
+                  userId,
+                  serverName,
+                  actualToolName,
+                  args
+                );
+
+                loggers.ai.info('AI Chat API: MCP tool execution succeeded', {
+                  toolName: actualToolName,
+                  serverName,
+                  userId: maskIdentifier(userId)
+                });
+
+                return result;
+              } catch (error) {
+                loggers.ai.error('AI Chat API: MCP tool execution failed', error as Error, {
+                  toolName: actualToolName,
+                  serverName,
+                  userId: maskIdentifier(userId)
+                });
+                throw error;
+              }
+            }
+          };
+        }
+
+        // Merge MCP tools with PageSpace tools
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        filteredTools = { ...filteredTools, ...mcpToolsWithExecute } as any;
+
+        loggers.ai.info('AI Chat API: Successfully merged MCP tools', {
+          totalTools: Object.keys(filteredTools).length,
+          mcpTools: Object.keys(mcpToolSchemas).length,
+          pageSpaceTools: Object.keys(filteredTools).length - Object.keys(mcpToolSchemas).length
+        });
+      } catch (error) {
+        loggers.ai.error('AI Chat API: Failed to integrate MCP tools', error as Error, {
+          userId: maskIdentifier(userId),
+          chatId: maskIdentifier(chatId)
+        });
+        // Continue without MCP tools rather than failing the entire request
+      }
+    } else {
+      loggers.ai.debug('AI Chat API: No MCP tools provided in request', {
+        userId: maskIdentifier(userId),
+        chatId: maskIdentifier(chatId)
+      });
     }
 
     // DATABASE-FIRST ARCHITECTURE:
