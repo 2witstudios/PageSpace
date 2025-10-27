@@ -33,14 +33,17 @@ export async function GET(request: Request) {
 
     // Direct database query for messages
     // If conversationId provided, filter by conversation session
+    // Build conditions array and filter out undefined to prevent Drizzle errors
+    const conditions = [
+      eq(chatMessages.pageId, pageId),
+      eq(chatMessages.isActive, true),
+      conversationId && eq(chatMessages.conversationId, conversationId)
+    ].filter(Boolean);
+
     const dbMessages = await db
       .select()
       .from(chatMessages)
-      .where(and(
-        eq(chatMessages.pageId, pageId),
-        eq(chatMessages.isActive, true),
-        conversationId ? eq(chatMessages.conversationId, conversationId) : undefined
-      ))
+      .where(and(...conditions))
       .orderBy(chatMessages.createdAt);
 
     // Convert to UIMessage format with tool calls and results

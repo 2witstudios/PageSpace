@@ -180,8 +180,10 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       // Persist to backend (already handles structured content correctly)
       await patch(`/api/ai/chat/messages/${messageId}`, { content: newContent });
 
-      // Refetch messages and force remount
-      const messagesResponse = await fetchWithAuth(`/api/ai/chat/messages?pageId=${page.id}`);
+      // Refetch messages and force remount - MUST include conversationId to maintain isolation
+      const messagesResponse = await fetchWithAuth(
+        `/api/ai/chat/messages?pageId=${page.id}&conversationId=${currentConversationId}`
+      );
       if (messagesResponse.ok) {
         const freshMessages: UIMessage[] = await messagesResponse.json();
         setMessages(freshMessages);
