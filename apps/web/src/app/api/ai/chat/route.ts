@@ -101,6 +101,7 @@ export async function POST(request: Request) {
     const {
       messages, // Used ONLY to extract new user message, NOT for conversation history
       chatId: requestChatId, // chat ID (page ID) - standard AI SDK pattern
+      conversationId: requestConversationId, // Conversation session ID (auto-generated if not provided)
       selectedProvider: requestSelectedProvider,
       selectedModel: requestSelectedModel,
       openRouterApiKey,
@@ -115,6 +116,7 @@ export async function POST(request: Request) {
     }: {
       messages: UIMessage[],
       chatId?: string,
+      conversationId?: string, // Optional - will be auto-generated if not provided
       selectedProvider?: string,
       selectedModel?: string,
       openRouterApiKey?: string,
@@ -220,17 +222,24 @@ export async function POST(request: Request) {
     // Extract custom agent configuration from page
     const customSystemPrompt = page.systemPrompt;
     const enabledTools = page.enabledTools as string[] | null;
-    
+
     loggers.ai.debug('AI Page Chat API: Using custom agent configuration', {
       hasCustomSystemPrompt: !!customSystemPrompt,
       enabledToolsCount: enabledTools?.length || 0,
       pageName: page.title
     });
-    
+
+    // Auto-generate conversationId if not provided (seamless UX)
+    const conversationId = requestConversationId || createId();
+    loggers.ai.debug('AI Chat API: Conversation session', {
+      conversationId,
+      isNewConversation: !requestConversationId
+    });
+
     // Process @mentions in the user's message
     let mentionSystemPrompt = '';
     let mentionedPageIds: string[] = [];
-    
+
     // Save user's message immediately to database (database-first approach)
     const userMessage = messages[messages.length - 1]; // Last message is the new user message
     let userPromptContent: string | undefined;
@@ -253,10 +262,11 @@ export async function POST(request: Request) {
         }
         
         loggers.ai.debug('AI Chat API: Saving user message immediately', { id: messageId, contentLength: messageContent.length });
-        
+
         await db.insert(chatMessages).values({
           id: messageId,
           pageId: chatId,
+          conversationId, // Group messages into conversation sessions
           userId,
           role: 'user',
           content: messageContent,
@@ -415,12 +425,14 @@ export async function POST(request: Request) {
       pageId: chatId
     });
 
-    // Read ALL active messages from database (source of truth)
+    // Read messages from current conversation only (NOT all conversations on this page)
+    // This ensures each conversation is isolated and the AI only sees the current conversation's context
     const dbMessages = await db
       .select()
       .from(chatMessages)
       .where(and(
         eq(chatMessages.pageId, chatId),
+        eq(chatMessages.conversationId, conversationId),
         eq(chatMessages.isActive, true)
       ))
       .orderBy(chatMessages.createdAt);
@@ -637,8 +649,22 @@ MENTION PROCESSING:
             abortSignal: request.signal, // Enable stop/abort functionality from client
             experimental_context: {
               userId,
+              locationContext: pageContext ? {
+                currentPage: {
+                  id: pageContext.pageId,
+                  title: pageContext.pageTitle,
+                  type: pageContext.pageType,
+                  path: pageContext.pagePath,
+                },
+                currentDrive: pageContext.driveId ? {
+                  id: pageContext.driveId,
+                  name: pageContext.driveName,
+                  slug: pageContext.driveSlug,
+                } : undefined,
+                breadcrumbs: pageContext.breadcrumbs,
+              } : undefined,
               modelCapabilities: getModelCapabilities(currentModel, currentProvider)
-            }, // Pass userId and model capabilities to tools
+            }, // Pass userId, location context, and model capabilities to tools
             maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
             onAbort: () => {
               loggers.ai.info('🛑 AI Chat API: Stream aborted by user', {
@@ -719,6 +745,7 @@ MENTION PROCESSING:
               await saveMessageToDatabase({
                 messageId,
                 pageId: chatId,
+                conversationId, // Group messages into conversation sessions
                 userId: null, // AI message
                 role: 'assistant',
                 content: messageContent,

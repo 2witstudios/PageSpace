@@ -62,6 +62,7 @@ export const pages = pgTable('pages', {
 export const chatMessages = pgTable('chat_messages', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   pageId: text('pageId').notNull().references(() => pages.id, { onDelete: 'cascade' }),
+  conversationId: text('conversationId').notNull().$defaultFn(() => createId()), // Group messages into conversation sessions
   role: text('role').notNull(),
   content: text('content').notNull(),
   toolCalls: jsonb('toolCalls'),
@@ -76,6 +77,8 @@ export const chatMessages = pgTable('chat_messages', {
     return {
         pageIdx: index('chat_messages_page_id_idx').on(table.pageId),
         userIdx: index('chat_messages_user_id_idx').on(table.userId),
+        conversationIdx: index('chat_messages_conversation_id_idx').on(table.conversationId), // Index for conversation filtering
+        pageConversationIdx: index('chat_messages_page_id_conversation_id_idx').on(table.pageId, table.conversationId), // Composite index for queries
         pageIsActiveCreatedAtIndex: index('chat_messages_page_id_is_active_created_at_idx').on(table.pageId, table.isActive, table.createdAt),
     }
 });

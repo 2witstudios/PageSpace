@@ -9,7 +9,7 @@ import {
   isProviderError,
   type ProviderRequest
 } from '@/lib/ai/provider-factory';
-import { db, pages, eq, chatMessages } from '@pagespace/db';
+import { db, pages, drives, eq, chatMessages } from '@pagespace/db';
 import { pageSpaceTools } from '@/lib/ai/ai-tools';
 import { buildTimestampSystemPrompt } from '@/lib/ai/timestamp-utils';
 import { ToolExecutionContext } from '@/lib/ai/types';
@@ -182,6 +182,12 @@ export async function POST(request: Request) {
       );
     }
 
+    // Get the drive information for context awareness
+    const [drive] = await db
+      .select()
+      .from(drives)
+      .where(eq(drives.id, agent.driveId));
+
     // Get agent configuration
     const systemPrompt = agent.systemPrompt || 'You are a helpful AI assistant.';
     const enabledTools = agent.enabledTools || [];
@@ -242,7 +248,12 @@ export async function POST(request: Request) {
           title: agent.title,
           type: agent.type,
           path: `/${agent.title}` // Simplified path
-        }
+        },
+        currentDrive: drive ? {
+          id: drive.id,
+          name: drive.name,
+          slug: drive.slug
+        } : undefined
       }
     };
 
@@ -258,18 +269,29 @@ export async function POST(request: Request) {
     // Generate response using the AI model
     let responseText = '';
     try {
+      // Build enhanced system prompt with drive context awareness
+      let enhancedSystemPrompt = `${systemPrompt}\n\n${buildTimestampSystemPrompt()}`;
+
+      if (drive) {
+        enhancedSystemPrompt += `\n\nCONTEXT AWARENESS:\n`;
+        enhancedSystemPrompt += `• Current Drive: ${drive.name} (${drive.slug})\n`;
+        enhancedSystemPrompt += `• Drive ID: ${drive.id}\n`;
+        enhancedSystemPrompt += `\nYou are operating within this drive. Use this drive ID (${drive.id}) as the default when using tools like list_pages, create_page, etc. unless explicitly told otherwise.`;
+      }
+
       loggers.api.debug('Starting agent consultation with tools', {
         agentId,
         agentTitle: agent.title,
         toolsEnabled: Array.isArray(enabledTools) ? enabledTools.length : 0,
         availableToolsCount: Object.keys(availableTools).length,
-        enabledToolsList: enabledTools
+        enabledToolsList: enabledTools,
+        hasDriveContext: !!drive
       });
 
       const result = Object.keys(availableTools).length > 0
         ? await generateText({
             model,
-            system: `${systemPrompt}\n\n${buildTimestampSystemPrompt()}`,
+            system: enhancedSystemPrompt,
             messages: convertToModelMessages(conversationMessages.filter(m => m.role !== 'system').map(m => ({
               role: m.role as 'user' | 'assistant' | 'system',
               content: m.content,
@@ -293,7 +315,7 @@ export async function POST(request: Request) {
           })
         : await generateText({
             model,
-            system: `${systemPrompt}\n\n${buildTimestampSystemPrompt()}`,
+            system: enhancedSystemPrompt,
             messages: convertToModelMessages(conversationMessages.filter(m => m.role !== 'system').map(m => ({
               role: m.role as 'user' | 'assistant' | 'system',
               content: m.content,
