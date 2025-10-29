@@ -26,13 +26,26 @@ export function useMCP() {
 
   // Load configuration
   const loadConfig = useCallback(async () => {
-    if (!isDesktop || !window.electron) return;
+    console.log('[useMCP] loadConfig called');
+    console.log('[useMCP] isDesktop:', isDesktop);
+    console.log('[useMCP] window.electron exists:', !!window.electron);
+
+    if (!isDesktop || !window.electron) {
+      console.log('[useMCP] Skipping loadConfig - not desktop or no electron API');
+      return;
+    }
 
     try {
+      console.log('[useMCP] Calling window.electron.mcp.getConfig()');
       const loadedConfig = await window.electron.mcp.getConfig();
+      console.log('[useMCP] Received config from Electron:', JSON.stringify(loadedConfig, null, 2));
+      console.log('[useMCP] Server count:', Object.keys(loadedConfig.mcpServers).length);
+
       setConfig(loadedConfig);
+      console.log('[useMCP] Config state updated');
     } catch (error) {
-      console.error('Failed to load MCP config:', error);
+      console.error('[useMCP] Failed to load MCP config:', error);
+      console.error('[useMCP] Error details:', error instanceof Error ? error.message : String(error));
       toast.error('Failed to load MCP configuration');
     }
   }, [isDesktop]);
@@ -135,18 +148,34 @@ export function useMCP() {
 
   // Update configuration
   const updateConfig = useCallback(async (newConfig: MCPConfig) => {
+    console.log('[useMCP] updateConfig called');
+    console.log('[useMCP] New config to save:', JSON.stringify(newConfig, null, 2));
+    console.log('[useMCP] window.electron exists:', !!window.electron);
+
     if (!window.electron) {
+      console.error('[useMCP] Cannot update config - not running in desktop app');
       return { success: false, error: 'Not running in desktop app' };
     }
 
     try {
+      console.log('[useMCP] Calling window.electron.mcp.updateConfig()');
       await window.electron.mcp.updateConfig(newConfig);
+      console.log('[useMCP] Electron updateConfig returned successfully');
+
       setConfig(newConfig);
+      console.log('[useMCP] Local state updated with new config');
+
       toast.success('Configuration saved successfully');
+
+      console.log('[useMCP] Calling loadConfig() to verify save');
       await loadConfig();
+      console.log('[useMCP] loadConfig() completed');
+
       return { success: true };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Invalid configuration';
+      console.error('[useMCP] Failed to update config:', error);
+      console.error('[useMCP] Error message:', errorMessage);
       toast.error(errorMessage);
       return { success: false, error: errorMessage };
     }

@@ -23,7 +23,7 @@
     "electron-store": "^10.0.0",
     "electron-updater": "^6.6.2",
     "ws": "^8.18.3",
-    "zod": "^4.1.11"
+    "zod": "^4.0.16"
   },
   "devDependencies": {
     "@types/node": "^20.17.12",

@@ -123,9 +123,15 @@ export class MCPManager {
    * Load configuration from disk
    */
   private async loadConfig(): Promise<void> {
+    console.log('[MCP Manager] loadConfig called');
+    console.log('[MCP Manager] Config file path:', this.configPath);
+
     try {
       const configData = await fs.readFile(this.configPath, 'utf-8');
+      console.log('[MCP Manager] Raw config data read from disk:', configData);
+
       this.config = JSON.parse(configData);
+      console.log('[MCP Manager] Parsed config:', JSON.stringify(this.config, null, 2));
 
       // Initialize server process tracking
       for (const [name, serverConfig] of Object.entries(this.config.mcpServers)) {
@@ -138,13 +144,17 @@ export class MCPManager {
           });
         }
       }
+
+      console.log('[MCP Manager] Config loaded successfully, server count:', Object.keys(this.config.mcpServers).length);
     } catch (error: any) {
       if (error.code === 'ENOENT') {
         // Config file doesn't exist yet - create default
+        console.log('[MCP Manager] Config file does not exist, creating default empty config');
         this.config = { mcpServers: {} };
         await this.saveConfig();
       } else {
-        console.error('Failed to load MCP config:', error);
+        console.error('[MCP Manager] Failed to load MCP config:', error);
+        console.error('[MCP Manager] Error details:', error.code, error.message);
         throw error;
       }
     }
@@ -154,11 +164,23 @@ export class MCPManager {
    * Save configuration to disk
    */
   async saveConfig(): Promise<void> {
+    console.log('[MCP Manager] saveConfig called');
+    console.log('[MCP Manager] Config file path:', this.configPath);
+    console.log('[MCP Manager] Config to save:', JSON.stringify(this.config, null, 2));
+
     try {
       const configData = JSON.stringify(this.config, null, 2);
+      console.log('[MCP Manager] Stringified config data (length:', configData.length, 'bytes)');
+
       await fs.writeFile(this.configPath, configData, 'utf-8');
+      console.log('[MCP Manager] Config successfully written to disk');
+
+      // Verify the write by reading it back
+      const verification = await fs.readFile(this.configPath, 'utf-8');
+      console.log('[MCP Manager] Verification read:', verification.length, 'bytes');
     } catch (error) {
-      console.error('Failed to save MCP config:', error);
+      console.error('[MCP Manager] Failed to save MCP config:', error);
+      console.error('[MCP Manager] Error details:', error instanceof Error ? error.message : String(error));
       throw error;
     }
   }
@@ -167,19 +189,29 @@ export class MCPManager {
    * Get current configuration
    */
   getConfig(): MCPConfig {
-    return this.config;
+    console.log('[MCP Manager] getConfig called');
+    console.log('[MCP Manager] Returning in-memory config:', JSON.stringify(this.config, null, 2));
+    console.log('[MCP Manager] Server count:', Object.keys(this.config.mcpServers).length);
+
+    // Return deep clone to prevent external mutations of internal state
+    return JSON.parse(JSON.stringify(this.config));
   }
 
   /**
    * Update configuration with validation
    */
   async updateConfig(newConfig: MCPConfig): Promise<void> {
+    console.log('[MCP Manager] updateConfig called');
+    console.log('[MCP Manager] New config:', JSON.stringify(newConfig, null, 2));
+
     // Validate configuration
     const validation = validateMCPConfig(newConfig);
     if (!validation.success) {
+      console.error('[MCP Manager] Validation failed:', validation.error);
       throw new Error(`Invalid configuration: ${validation.error}`);
     }
 
+    console.log('[MCP Manager] Validation passed, updating config');
     this.config = validation.data;
 
     // Update server process tracking
@@ -207,7 +239,9 @@ export class MCPManager {
       }
     }
 
+    console.log('[MCP Manager] Saving config to disk');
     await this.saveConfig();
+    console.log('[MCP Manager] Config saved successfully');
   }
 
   /**

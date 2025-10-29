@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useMCP } from "@/hooks/useMCP";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Settings, User, Plug2, Key, ArrowLeft, CreditCard, Bell } from "lucide-react";
@@ -17,7 +18,8 @@ interface SettingsCategory {
 
 export default function SettingsPage() {
   const router = useRouter();
-  const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
+  const mcp = useMCP();
+  const isDesktop = mcp.isDesktop;
 
   const settingsCategories: SettingsCategory[] = [
     {

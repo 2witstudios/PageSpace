@@ -440,14 +440,26 @@ ipcMain.handle('retry-connection', () => {
 
 // MCP IPC handlers
 ipcMain.handle('mcp:get-config', async () => {
+  console.log('[MCP IPC] mcp:get-config handler called');
   const mcpManager = getMCPManager();
-  return mcpManager.getConfig();
+  const config = mcpManager.getConfig();
+  console.log('[MCP IPC] Returning config to renderer:', JSON.stringify(config, null, 2));
+  return config;
 });
 
 ipcMain.handle('mcp:update-config', async (_event, config: MCPConfig) => {
+  console.log('[MCP IPC] mcp:update-config handler called');
   const mcpManager = getMCPManager();
-  await mcpManager.updateConfig(config);
-  return { success: true };
+  try {
+    console.log('[MCP IPC] Received config from renderer:', JSON.stringify(config, null, 2));
+    await mcpManager.updateConfig(config);
+    console.log('[MCP IPC] Config updated successfully, returning success');
+    return { success: true };
+  } catch (error: any) {
+    console.error('[MCP IPC] Failed to update config:', error);
+    console.error('[MCP IPC] Error message:', error.message);
+    return { success: false, error: error.message };
+  }
 });
 
 ipcMain.handle('mcp:start-server', async (_event, name: string) => {
