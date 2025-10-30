@@ -134,6 +134,30 @@ describe('WebSocket Connection Manager', () => {
         unregisterConnection('user_999', mockClient);
       }).not.toThrow();
     });
+
+    it('should not remove new connection when old connection closes (race condition)', () => {
+      // Register initial connection
+      registerConnection('user_123', mockClient);
+      expect(getConnection('user_123')).toBe(mockClient);
+
+      // User reconnects with new connection
+      // This closes mockClient and stores mockClient2
+      registerConnection('user_123', mockClient2);
+      expect(getConnection('user_123')).toBe(mockClient2);
+
+      // Old connection's close handler fires (simulating race condition)
+      // This should NOT remove mockClient2 from the connections map
+      unregisterConnection('user_123', mockClient);
+
+      // New connection should still be registered
+      expect(getConnection('user_123')).toBe(mockClient2);
+
+      // Old connection metadata should be cleaned up
+      expect(getConnectionMetadata(mockClient)).toBeUndefined();
+
+      // New connection metadata should still exist
+      expect(getConnectionMetadata(mockClient2)).toBeDefined();
+    });
   });
 
   describe('getConnection', () => {

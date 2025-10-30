@@ -1,4 +1,4 @@
-import { getConnection } from '@/lib/ws-connections';
+import { getConnection, checkConnectionHealth } from '@/lib/ws-connections';
 import { nanoid } from 'nanoid';
 import { logger } from '@pagespace/lib';
 
@@ -64,6 +64,15 @@ export class MCPBridge {
       // WebSocket.OPEN === 1
       throw new Error(
         'Desktop app not connected. Please ensure PageSpace Desktop is running and connected.'
+      );
+    }
+
+    // Defense-in-depth: Verify connection is healthy and challenge-verified
+    // Prevents sending tool arguments to unverified connections (info disclosure)
+    const health = checkConnectionHealth(connection);
+    if (!health.isHealthy) {
+      throw new Error(
+        `Desktop connection unhealthy: ${health.reason}. Please reconnect PageSpace Desktop.`
       );
     }
 

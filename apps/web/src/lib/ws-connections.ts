@@ -74,15 +74,29 @@ export function registerConnection(
 
 /**
  * Unregister a WebSocket connection
+ * Only removes the connection if it's still the active one (prevents race condition)
  */
 export function unregisterConnection(userId: string, ws: WebSocket): void {
-  connections.delete(userId);
+  // Only remove if this is still the active connection
+  // Prevents race condition when old connection closes after new one registered
+  const currentConnection = connections.get(userId);
+  if (currentConnection === ws) {
+    connections.delete(userId);
+    wsLogger.info('WebSocket connection unregistered', {
+      userId,
+      totalConnections: connections.size,
+      action: 'unregister',
+    });
+  } else {
+    wsLogger.debug('Skipped unregistering stale connection', {
+      userId,
+      action: 'unregister_skipped',
+      reason: 'not_active_connection',
+    });
+  }
+
+  // Always clean up metadata for this specific WebSocket
   connectionMetadata.delete(ws);
-  wsLogger.info('WebSocket connection unregistered', {
-    userId,
-    totalConnections: connections.size,
-    action: 'unregister',
-  });
 }
 
 /**
