@@ -184,31 +184,6 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       api: '/api/ai/chat',
       fetch: (url, options) => {
         const urlString = url instanceof Request ? url.url : url.toString();
-
-        // Inject MCP tools into request body if available (desktop mode only)
-        if (options?.body && mcpToolSchemas.length > 0) {
-          try {
-            const body = JSON.parse(options.body as string);
-            const enhancedBody = {
-              ...body,
-              mcpTools: mcpToolSchemas, // Add MCP tool schemas for server-side merging
-            };
-
-            console.log(`🔧 AiChatView: Injecting ${mcpToolSchemas.length} MCP tools into request`, {
-              toolNames: mcpToolSchemas.map(t => `${t.serverName}.${t.name}`)
-            });
-
-            return fetchWithAuth(urlString, {
-              ...options,
-              body: JSON.stringify(enhancedBody),
-            });
-          } catch (error) {
-            console.error('❌ AiChatView: Failed to inject MCP tools into request body', error);
-            // Fall back to original request if injection fails
-            return fetchWithAuth(urlString, options);
-          }
-        }
-
         return fetchWithAuth(urlString, options);
       },
     }),
@@ -230,7 +205,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       // Don't show technical details to users - error display is handled in UI
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [page.id, mcpToolSchemas]); // Include mcpToolSchemas to update when MCP tools change
+  }), [page.id]); // chatConfig is stable - only depends on page.id
 
   const {
     messages,
@@ -862,6 +837,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                         selectedModel,
                         openRouterApiKey: openRouterApiKey || undefined,
                         googleApiKey: googleApiKey || undefined,
+                        mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined, // Pass MCP tools directly like Global Assistant
                         pageContext: {
                           pageId: page.id,
                           pageTitle: page.title,
@@ -917,6 +893,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                           selectedModel,
                           openRouterApiKey: openRouterApiKey || undefined,
                           googleApiKey: googleApiKey || undefined,
+                          mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined, // Pass MCP tools directly like Global Assistant
                           pageContext: {
                             pageId: page.id,
                             pageTitle: page.title,
