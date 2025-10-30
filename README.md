@@ -77,6 +77,7 @@ Download the native desktop app that connects to your cloud instance:
 - Minimize to tray, deep linking support
 - Automatic updates (macOS only - signed builds)
 - Works with your cloud PageSpace instance
+- **Local MCP server support** (desktop-only) - Run MCP servers locally on your computer like Claude Desktop (Context7, Figma, Notion, etc.)
 
 **Build from source:**
 ```bash
