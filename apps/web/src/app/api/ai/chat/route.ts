@@ -54,7 +54,7 @@ import { maskIdentifier } from '@/lib/logging/mask';
 import { trackFeature } from '@pagespace/lib/activity-tracker';
 import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
 import { getModelCapabilities } from '@/lib/ai/model-capabilities';
-import { convertMCPToolsToAISDKSchemas } from '@/lib/ai/mcp-tool-converter';
+import { convertMCPToolsToAISDKSchemas, parseMCPToolName } from '@/lib/ai/mcp-tool-converter';
 import type { MCPTool } from '@/types/mcp';
 import { getMCPBridge } from '@/lib/mcp-bridge';
 
@@ -426,7 +426,7 @@ export async function POST(request: Request) {
       try {
         loggers.ai.info('AI Chat API: Integrating MCP tools from desktop', {
           mcpToolCount: mcpTools.length,
-          toolNames: mcpTools.map(t => `${t.serverName}__${t.name}`),
+          toolNames: mcpTools.map(t => `mcp:${t.serverName}:${t.name}`),
           userId: maskIdentifier(userId),
           chatId: maskIdentifier(chatId)
         });
@@ -447,9 +447,9 @@ export async function POST(request: Request) {
                 throw new Error('User ID not available for MCP tool execution');
               }
 
-              // Parse tool name format: servername__toolname
-              const parts = toolName.split('__');
-              if (parts.length !== 2) {
+              // Parse tool name using shared parser (supports both mcp:server:tool and legacy mcp__server__tool)
+              const parsed = parseMCPToolName(toolName);
+              if (!parsed) {
                 loggers.ai.error('AI Chat API: Invalid MCP tool name format', {
                   toolName,
                   userId: maskIdentifier(userId)
@@ -457,7 +457,7 @@ export async function POST(request: Request) {
                 throw new Error(`Invalid MCP tool name format: ${toolName}`);
               }
 
-              const [serverName, actualToolName] = parts;
+              const { serverName, toolName: actualToolName } = parsed;
 
               loggers.ai.debug('AI Chat API: Executing MCP tool via WebSocket bridge', {
                 toolName: actualToolName,

@@ -28,7 +28,7 @@ import { AgentRoleUtils } from '@/lib/ai/agent-roles';
 import { RolePromptBuilder } from '@/lib/ai/role-prompts';
 import { ToolPermissionFilter } from '@/lib/ai/tool-permissions';
 import { getModelCapabilities } from '@/lib/ai/model-capabilities';
-import { convertMCPToolsToAISDKSchemas } from '@/lib/ai/mcp-tool-converter';
+import { convertMCPToolsToAISDKSchemas, parseMCPToolName } from '@/lib/ai/mcp-tool-converter';
 import { getMCPBridge } from '@/lib/mcp-bridge';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
@@ -556,7 +556,7 @@ MENTION PROCESSING:
       try {
         loggers.api.info('Global Assistant Chat API: Integrating MCP tools from desktop', {
           mcpToolCount: mcpTools.length,
-          toolNames: mcpTools.map((t: MCPTool) => `${t.serverName}__${t.name}`),
+          toolNames: mcpTools.map((t: MCPTool) => `mcp:${t.serverName}:${t.name}`),
           userId: maskIdentifier(userId),
           conversationId
         });
@@ -570,13 +570,12 @@ MENTION PROCESSING:
           mcpToolsWithExecute[toolName] = {
             ...toolSchema,
             execute: async (args: Record<string, unknown>) => {
-              // Parse server name and tool name from format: mcp:servername:toolname
-              const parts = toolName.split(':');
-              if (parts.length !== 3 || parts[0] !== 'mcp') {
+              // Parse tool name using shared parser (supports both mcp:server:tool and legacy mcp__server__tool)
+              const parsed = parseMCPToolName(toolName);
+              if (!parsed) {
                 throw new Error(`Invalid MCP tool name format: ${toolName}`);
               }
-              const serverName = parts[1];
-              const originalToolName = parts[2];
+              const { serverName, toolName: originalToolName } = parsed;
 
               loggers.api.debug('MCP Tool Execute: Calling tool via bridge', {
                 toolName,
