@@ -19,11 +19,15 @@
     "package:linux": "pnpm build && electron-builder --linux --publish never"
   },
   "dependencies": {
+    "ai": "^5.0.81",
     "electron-store": "^10.0.0",
-    "electron-updater": "^6.6.2"
+    "electron-updater": "^6.6.2",
+    "ws": "^8.18.3",
+    "zod": "^4.0.16"
   },
   "devDependencies": {
     "@types/node": "^20.17.12",
+    "@types/ws": "^8.18.1",
     "cross-env": "^7.0.3",
     "electron": "^33.3.1",
     "electron-builder": "^26.0.8",

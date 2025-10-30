@@ -1,4 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type {
+  MCPServerConfig,
+  MCPConfig,
+  MCPServerStatus,
+  MCPServerStatusInfo,
+  MCPTool,
+  ToolExecutionResult,
+} from '../shared/mcp-types';
 
 // Expose protected methods that allow the renderer process to use
 // ipcRenderer without exposing the entire object
@@ -27,6 +35,39 @@ contextBridge.exposeInMainWorld('electron', {
 
   // App version
   version: process.env.npm_package_version || '1.0.0',
+
+  // Authentication
+  auth: {
+    getJWT: () => ipcRenderer.invoke('auth:get-jwt'),
+    clearAuth: () => ipcRenderer.invoke('auth:clear-auth'),
+  },
+
+  // MCP Server Management
+  mcp: {
+    getConfig: () => ipcRenderer.invoke('mcp:get-config'),
+    updateConfig: (config: MCPConfig) => ipcRenderer.invoke('mcp:update-config', config),
+    startServer: (name: string) => ipcRenderer.invoke('mcp:start-server', name),
+    stopServer: (name: string) => ipcRenderer.invoke('mcp:stop-server', name),
+    restartServer: (name: string) => ipcRenderer.invoke('mcp:restart-server', name),
+    getServerStatuses: () => ipcRenderer.invoke('mcp:get-server-statuses'),
+    onStatusChange: (callback: (statuses: Record<string, MCPServerStatusInfo>) => void) => {
+      const subscription = (_event: any, statuses: Record<string, MCPServerStatusInfo>) => callback(statuses);
+      ipcRenderer.on('mcp:status-changed', subscription);
+      return () => ipcRenderer.removeListener('mcp:status-changed', subscription);
+    },
+    // Tool operations (Phase 2)
+    getAvailableTools: () => ipcRenderer.invoke('mcp:get-available-tools'),
+    executeTool: (serverName: string, toolName: string, args?: Record<string, unknown>) =>
+      ipcRenderer.invoke('mcp:execute-tool', serverName, toolName, args),
+  },
+
+  // WebSocket MCP Bridge
+  ws: {
+    getStatus: () => ipcRenderer.invoke('ws:get-status'),
+  },
+
+  // Desktop flag for feature detection
+  isDesktop: true,
 });
 
 // Type definitions for the exposed API
@@ -38,10 +79,34 @@ export interface ElectronAPI {
   retryConnection: () => Promise<void>;
   platform: NodeJS.Platform;
   version: string;
+  auth: {
+    getJWT: () => Promise<string | null>;
+    clearAuth: () => Promise<void>;
+  };
+  mcp: {
+    getConfig: () => Promise<MCPConfig>;
+    updateConfig: (config: MCPConfig) => Promise<{ success: boolean }>;
+    startServer: (name: string) => Promise<{ success: boolean; error?: string }>;
+    stopServer: (name: string) => Promise<{ success: boolean; error?: string }>;
+    restartServer: (name: string) => Promise<{ success: boolean; error?: string }>;
+    getServerStatuses: () => Promise<Record<string, MCPServerStatusInfo>>;
+    onStatusChange: (callback: (statuses: Record<string, MCPServerStatusInfo>) => void) => () => void;
+    // Tool operations (Phase 2)
+    getAvailableTools: () => Promise<MCPTool[]>;
+    executeTool: (serverName: string, toolName: string, args?: Record<string, unknown>) => Promise<ToolExecutionResult>;
+  };
+  ws: {
+    getStatus: () => Promise<{
+      connected: boolean;
+      reconnectAttempts: number;
+    }>;
+  };
+  isDesktop: true;
 }
 
 declare global {
   interface Window {
     electron: ElectronAPI;
+    isDesktop?: boolean;
   }
 }

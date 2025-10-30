@@ -1,8 +1,12 @@
-import { app, BrowserWindow, Menu, shell, ipcMain, Tray, nativeImage, dialog } from 'electron';
+import { app, BrowserWindow, Menu, shell, ipcMain, Tray, nativeImage, dialog, session } from 'electron';
 import electronUpdaterPkg from 'electron-updater';
 const { autoUpdater } = electronUpdaterPkg;
 import * as path from 'path';
 import Store from 'electron-store';
+import { getMCPManager } from './mcp-manager';
+import { initializeWSClient, shutdownWSClient, getWSClient } from './ws-client';
+import type { MCPConfig } from '../shared/mcp-types';
+import { logger } from './logger';
 
 // Configuration store for user preferences
 interface StoreSchema {
@@ -26,16 +30,30 @@ let isQuitting = false; // Track if app is quitting (used to distinguish close f
 function getAppUrl(): string {
   // Allow user to override the URL
   const customUrl = store.get('appUrl');
-  if (customUrl) return customUrl;
+  if (customUrl) {
+    // Force HTTPS for non-localhost URLs (security requirement)
+    let url = customUrl;
+    if (!url.includes('localhost') && !url.includes('127.0.0.1')) {
+      url = url.replace(/^http:/, 'https:');
+    }
+    return url;
+  }
 
   // Default URLs based on environment
   // Desktop app loads directly to dashboard, skipping landing page
+  let baseUrl: string;
   if (process.env.NODE_ENV === 'development') {
-    return (process.env.PAGESPACE_URL || 'http://localhost:3000') + '/dashboard';
+    baseUrl = process.env.PAGESPACE_URL || 'http://localhost:3000';
+  } else {
+    baseUrl = process.env.PAGESPACE_URL || 'https://pagespace.ai';
   }
 
-  // Production URL - PageSpace cloud instance
-  return (process.env.PAGESPACE_URL || 'https://pagespace.ai') + '/dashboard';
+  // Force HTTPS for non-localhost URLs (security requirement)
+  if (!baseUrl.includes('localhost') && !baseUrl.includes('127.0.0.1')) {
+    baseUrl = baseUrl.replace(/^http:/, 'https:');
+  }
+
+  return baseUrl + '/dashboard';
 }
 
 // Inject desktop-specific styles for titlebar and window dragging
@@ -435,16 +453,207 @@ ipcMain.handle('retry-connection', () => {
   }
 });
 
+// Auth IPC handlers
+/**
+ * Retrieves JWT token from Electron's secure cookie storage.
+ * Used for Bearer token authentication in Desktop app.
+ * @returns JWT string or null if not authenticated
+ */
+ipcMain.handle('auth:get-jwt', async () => {
+  try {
+    // Debug: List all cookies to see what's available
+    const allCookies = await session.defaultSession.cookies.get({});
+    console.log('[Auth IPC] Total cookies in session:', allCookies.length);
+    console.log('[Auth IPC] Cookie names:', allCookies.map(c => `${c.name} (domain: ${c.domain}, path: ${c.path})`));
+
+    // Get JWT from Electron's session cookies (stored as 'accessToken')
+    const cookies = await session.defaultSession.cookies.get({ name: 'accessToken' });
+    if (cookies.length > 0) {
+      console.log('[Auth IPC] JWT token retrieved from cookies (accessToken)');
+      return cookies[0].value;
+    }
+    console.log('[Auth IPC] No JWT token found in cookies (accessToken)');
+    return null;
+  } catch (error) {
+    console.error('[Auth IPC] Failed to get JWT token:', error);
+    return null;
+  }
+});
+
+/**
+ * Clears authentication data (JWT cookies) from Electron session.
+ * Called during logout to ensure clean state.
+ */
+ipcMain.handle('auth:clear-auth', async () => {
+  try {
+    // Clear all cookies (including JWT)
+    await session.defaultSession.clearStorageData({
+      storages: ['cookies'],
+    });
+    console.log('[Auth IPC] Auth data cleared successfully');
+  } catch (error) {
+    console.error('[Auth IPC] Failed to clear auth data:', error);
+  }
+});
+
+// MCP IPC handlers
+ipcMain.handle('mcp:get-config', async () => {
+  logger.debug('mcp:get-config handler called', {});
+  const mcpManager = getMCPManager();
+  const config = mcpManager.getConfig();
+  logger.debug('Returning config to renderer', { config });
+  return config;
+});
+
+ipcMain.handle('mcp:update-config', async (_event, config: MCPConfig) => {
+  logger.debug('mcp:update-config handler called', {});
+  const mcpManager = getMCPManager();
+  try {
+    logger.debug('Received config from renderer', { config });
+    await mcpManager.updateConfig(config);
+    logger.info('Config updated successfully', {});
+    return { success: true };
+  } catch (error: any) {
+    logger.error('Failed to update config', { error });
+    logger.error('Error message', { errorMessage: error.message });
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('mcp:start-server', async (_event, name: string) => {
+  const mcpManager = getMCPManager();
+  try {
+    await mcpManager.startServer(name);
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('mcp:stop-server', async (_event, name: string) => {
+  const mcpManager = getMCPManager();
+  try {
+    await mcpManager.stopServer(name);
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('mcp:restart-server', async (_event, name: string) => {
+  const mcpManager = getMCPManager();
+  try {
+    await mcpManager.restartServer(name);
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('mcp:get-server-statuses', async () => {
+  const mcpManager = getMCPManager();
+  return mcpManager.getServerStatuses();
+});
+
+// Broadcast status changes to all windows
+function broadcastMCPStatusChange() {
+  const mcpManager = getMCPManager();
+  const statuses = mcpManager.getServerStatuses();
+
+  BrowserWindow.getAllWindows().forEach((window) => {
+    window.webContents.send('mcp:status-changed', statuses);
+  });
+}
+
+// Poll MCP status and broadcast changes
+let mcpStatusInterval: NodeJS.Timeout | null = null;
+
+function startMCPStatusBroadcasting() {
+  if (mcpStatusInterval) return;
+
+  mcpStatusInterval = setInterval(() => {
+    broadcastMCPStatusChange();
+  }, 3000); // Poll every 3 seconds
+}
+
+function stopMCPStatusBroadcasting() {
+  if (mcpStatusInterval) {
+    clearInterval(mcpStatusInterval);
+    mcpStatusInterval = null;
+  }
+}
+
+// MCP Tools IPC handlers (for AI integration)
+ipcMain.handle('mcp:get-available-tools', async () => {
+  try {
+    const mcpManager = getMCPManager();
+    const tools = mcpManager.getAggregatedTools();
+    logger.debug('Returning aggregated tools from all running servers', { toolCount: tools.length });
+    return tools;
+  } catch (error) {
+    logger.error('Failed to get available tools', { error });
+    return [];
+  }
+});
+
+ipcMain.handle('mcp:execute-tool', async (_event, serverName: string, toolName: string, args: Record<string, unknown>) => {
+  try {
+    logger.debug('Executing tool', { serverName, toolName });
+    const mcpManager = getMCPManager();
+    const result = await mcpManager.executeTool(serverName, toolName, args);
+    return result;
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    logger.error('Tool execution failed', { serverName, toolName, error });
+    return {
+      success: false,
+      error: errorMessage,
+    };
+  }
+});
+
+// WebSocket MCP Bridge IPC handlers
+ipcMain.handle('ws:get-status', () => {
+  const wsClient = getWSClient();
+  if (!wsClient) {
+    return {
+      connected: false,
+      reconnectAttempts: 0,
+    };
+  }
+  return wsClient.getStatus();
+});
+
 // App lifecycle
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // Initialize MCP manager
+  try {
+    const mcpManager = getMCPManager();
+    await mcpManager.initialize();
+    logger.info('MCP Manager initialized successfully', {});
+
+    // Start broadcasting status changes
+    startMCPStatusBroadcasting();
+  } catch (error) {
+    logger.error('Failed to initialize MCP Manager', { error });
+  }
+
   createWindow();
   createMenu();
   createTray();
+
+  // Initialize WebSocket client for MCP bridge
+  if (mainWindow) {
+    initializeWSClient(mainWindow);
+  }
 
   app.on('activate', () => {
     // On macOS, re-create window when dock icon is clicked
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
+      if (mainWindow) {
+        initializeWSClient(mainWindow);
+      }
     }
   });
 });
@@ -456,8 +665,26 @@ app.on('window-all-closed', () => {
   }
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', async () => {
   isQuitting = true;
+
+  // Stop broadcasting status
+  stopMCPStatusBroadcasting();
+
+  // Shutdown WebSocket client
+  try {
+    shutdownWSClient();
+  } catch (error) {
+    logger.error('Error shutting down WebSocket client', { error });
+  }
+
+  // Shutdown MCP servers
+  try {
+    const mcpManager = getMCPManager();
+    await mcpManager.shutdown();
+  } catch (error) {
+    logger.error('Error shutting down MCP servers', { error });
+  }
 });
 
 // Handle deep links (pagespace://)

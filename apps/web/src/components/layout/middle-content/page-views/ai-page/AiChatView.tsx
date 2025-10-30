@@ -24,6 +24,11 @@ import AgentSettingsTab, { AgentSettingsTabRef } from '@/components/ai/AgentSett
 import AgentHistoryTab from '@/components/ai/AgentHistoryTab';
 import { fetchWithAuth, patch, del } from '@/lib/auth-fetch';
 import useSWR, { mutate } from 'swr';
+import { useMCPStore } from '@/stores/useMCPStore';
+import { useMCP } from '@/hooks/useMCP';
+import { Badge } from '@/components/ui/badge';
+import { Switch } from '@/components/ui/switch';
+import { Server } from 'lucide-react';
 
 interface AiChatViewProps {
     page: TreePage;
@@ -74,6 +79,47 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
   // Conversation state
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
+
+  // MCP state
+  const { isChatMCPEnabled, setChatMCPEnabled } = useMCPStore();
+  const mcp = useMCP();
+  const chatMCPEnabled = isChatMCPEnabled(page.id);
+  const [mcpToolSchemas, setMcpToolSchemas] = useState<Array<{
+    name: string;
+    description: string;
+    inputSchema: { type: 'object'; properties: Record<string, unknown>; required?: string[] };
+    serverName: string;
+  }>>([]);
+
+  // Count running MCP servers
+  const runningMCPServers = React.useMemo(() => {
+    if (!mcp.isDesktop) return 0;
+    return Object.values(mcp.serverStatuses).filter(s => s.status === 'running').length;
+  }, [mcp.isDesktop, mcp.serverStatuses]);
+
+  // Fetch MCP tools when chat MCP is enabled and servers are running
+  useEffect(() => {
+    const fetchMCPTools = async () => {
+      if (mcp.isDesktop && chatMCPEnabled && runningMCPServers > 0 && window.electron) {
+        try {
+          console.log('🔧 AiChatView: Fetching MCP tools from Electron');
+          const tools = await window.electron.mcp.getAvailableTools();
+          console.log(`✅ AiChatView: Fetched ${tools.length} MCP tools`, tools.map(t => `${t.serverName}.${t.name}`));
+          setMcpToolSchemas(tools);
+        } catch (error) {
+          console.error('❌ AiChatView: Failed to fetch MCP tools', error);
+          setMcpToolSchemas([]);
+          toast.error('Failed to load MCP tools');
+        }
+      } else {
+        // Clear MCP tools when disabled or no servers running
+        console.log('🔧 AiChatView: Clearing MCP tools (disabled or no servers running)');
+        setMcpToolSchemas([]);
+      }
+    };
+
+    fetchMCPTools();
+  }, [mcp.isDesktop, chatMCPEnabled, runningMCPServers]);
 
   // SWR for conversation list with caching and auto-revalidation
   const conversationsKey = `/api/agents/${page.id}/conversations`;
@@ -138,6 +184,31 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       api: '/api/ai/chat',
       fetch: (url, options) => {
         const urlString = url instanceof Request ? url.url : url.toString();
+
+        // Inject MCP tools into request body if available (desktop mode only)
+        if (options?.body && mcpToolSchemas.length > 0) {
+          try {
+            const body = JSON.parse(options.body as string);
+            const enhancedBody = {
+              ...body,
+              mcpTools: mcpToolSchemas, // Add MCP tool schemas for server-side merging
+            };
+
+            console.log(`🔧 AiChatView: Injecting ${mcpToolSchemas.length} MCP tools into request`, {
+              toolNames: mcpToolSchemas.map(t => `${t.serverName}.${t.name}`)
+            });
+
+            return fetchWithAuth(urlString, {
+              ...options,
+              body: JSON.stringify(enhancedBody),
+            });
+          } catch (error) {
+            console.error('❌ AiChatView: Failed to inject MCP tools into request body', error);
+            // Fall back to original request if injection fails
+            return fetchWithAuth(urlString, options);
+          }
+        }
+
         return fetchWithAuth(urlString, options);
       },
     }),
@@ -159,7 +230,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       // Don't show technical details to users - error display is handled in UI
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [page.id]); // initialMessages intentionally excluded - passed once for AI SDK v5 pattern
+  }), [page.id, mcpToolSchemas]); // Include mcpToolSchemas to update when MCP tools change
 
   const {
     messages,
@@ -615,17 +686,40 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
               </TabsTrigger>
             </TabsList>
 
-            {/* New Chat Button - Only show when Chat tab is active */}
+            {/* Chat tab actions */}
             {activeTab === 'chat' && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={createNewConversation}
-                className="flex items-center space-x-2"
-              >
-                <Plus className="h-4 w-4" />
-                <span className="hidden sm:inline">New Chat</span>
-              </Button>
+              <div className="flex items-center gap-3">
+                {/* MCP Toggle (Desktop only, enabled by default per-chat) */}
+                {mcp.isDesktop && (
+                  <div className="flex items-center gap-2 border border-[var(--separator)] rounded-lg px-3 py-1.5">
+                    <Server className="h-4 w-4 text-muted-foreground" />
+                    <span className="text-sm text-muted-foreground hidden md:inline">MCP</span>
+                    {runningMCPServers > 0 && chatMCPEnabled && (
+                      <Badge variant="default" className="h-5 text-xs">
+                        {runningMCPServers}
+                      </Badge>
+                    )}
+                    <Switch
+                      checked={chatMCPEnabled}
+                      onCheckedChange={(checked) => setChatMCPEnabled(page.id, checked)}
+                      disabled={runningMCPServers === 0}
+                      aria-label="Enable/disable MCP tools for this chat"
+                      className="scale-75 md:scale-100"
+                    />
+                  </div>
+                )}
+
+                {/* New Chat Button */}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={createNewConversation}
+                  className="flex items-center space-x-2"
+                >
+                  <Plus className="h-4 w-4" />
+                  <span className="hidden sm:inline">New Chat</span>
+                </Button>
+              </div>
             )}
 
             {/* Save Settings Button - Only show when Settings tab is active */}
