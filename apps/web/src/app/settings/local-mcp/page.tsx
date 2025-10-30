@@ -126,7 +126,7 @@ export default function LocalMCPSettingsPage() {
     const result = await mcp.addServer(newServerName, {
       command: newServerCommand,
       args,
-      autoStart: false,
+      autoStart: true,
       enabled: true,
     });
 
