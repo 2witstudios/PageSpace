@@ -18,6 +18,7 @@ import {
   stopCleanupInterval,
   triggerCleanup,
   getConnectionStats,
+  clearAllConnectionsForTesting,
 } from '../ws-connections';
 
 // Mock logger to prevent console output during tests
@@ -57,6 +58,8 @@ describe('WebSocket Connection Manager', () => {
   afterEach(() => {
     // Stop any running cleanup intervals
     stopCleanupInterval();
+    // Clear all connections to ensure test isolation
+    clearAllConnectionsForTesting();
   });
 
   describe('registerConnection', () => {
@@ -244,7 +247,7 @@ describe('WebSocket Connection Manager', () => {
       const health = checkConnectionHealth(closedClient);
 
       expect(health.isHealthy).toBe(false);
-      expect(health.reason).toBe('Connection is not open');
+      expect(health.reason).toBe('Connection not open (state: CLOSED)');
       expect(health.readyState).toBe(3);
     });
 
@@ -254,7 +257,7 @@ describe('WebSocket Connection Manager', () => {
       const health = checkConnectionHealth(mockClient);
 
       expect(health.isHealthy).toBe(false);
-      expect(health.reason).toBe('Challenge not verified');
+      expect(health.reason).toBe('Challenge verification not completed');
     });
 
     it('should return unhealthy for unregistered connection', () => {

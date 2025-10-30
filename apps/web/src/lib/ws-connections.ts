@@ -396,3 +396,12 @@ export function getUserIdForConnection(ws: WebSocket): string | undefined {
   const metadata = connectionMetadata.get(ws);
   return metadata?.userId;
 }
+
+/**
+ * Clear all connections (for testing purposes only)
+ * @internal
+ */
+export function clearAllConnectionsForTesting(): void {
+  connections.clear();
+  connectionMetadata.clear();
+}
