@@ -2,13 +2,14 @@
 
 ## Executive Summary
 
-This document summarizes the comprehensive security hardening applied to the WebSocket MCP Bridge implementation in PageSpace. The fixes address **7 CRITICAL** and **3 HIGH** severity vulnerabilities identified during a security audit based on OWASP Top 10 2021 standards.
+This document summarizes the comprehensive security hardening applied to the WebSocket MCP Bridge implementation in PageSpace. The fixes address **9 CRITICAL** and **3 HIGH** severity vulnerabilities identified during a security audit based on OWASP Top 10 2021 standards.
 
-**Date**: 2025-10-27
+**Date**: 2025-10-29 (Updated with JWT expiry & fingerprint enforcement fixes)
+**Original Date**: 2025-10-27
 **Scope**: WebSocket authentication and authorization for MCP tool execution
-**Files Modified**: 6 files
+**Files Modified**: 8 files
 **Files Created**: 3 files
-**Tests Added**: 1 comprehensive security test suite (50+ test cases)
+**Tests Added**: 1 comprehensive security test suite (52+ test cases)
 
 ---
 
@@ -58,27 +59,56 @@ This document summarizes the comprehensive security hardening applied to the Web
 
 ---
 
-#### 3. A07 - Authentication Failures: No Connection Fingerprinting
+#### 3. A07 - Authentication Failures: No Connection Fingerprinting ✅ FIXED
 
-**Severity**: HIGH
-**CVSS**: 7.5 (High)
+**Severity**: CRITICAL (Originally HIGH)
+**CVSS**: 8.1 (High)
 
 **Issue**: No mechanism to detect session hijacking or device changes. If JWT cookie was stolen, attacker could connect from different location/device without detection.
 
-**Fix**: Implemented connection fingerprinting:
+**Fix**: Implemented connection fingerprinting with enforcement:
 - Generate `SHA256(IP + User-Agent)` fingerprint on connection
 - Store in connection metadata
-- Log fingerprint changes for monitoring
-- Future: Can be enhanced to require re-authentication on fingerprint mismatch
+- **Verify fingerprint on every ping message**
+- Close connection with `fingerprint_mismatch` error if fingerprint changes
+- Log security event with `severity: critical` for monitoring
 
 **Files Modified**:
 - `/apps/web/src/lib/ws-security.ts`: Fingerprint generation
 - `/apps/web/src/lib/ws-connections.ts`: Fingerprint storage and verification
-- `/apps/web/src/app/api/mcp-ws/route.ts`: Fingerprint tracking
+- `/apps/web/src/app/api/mcp-ws/route.ts`: Fingerprint tracking and enforcement on ping
 
 ---
 
-#### 4. A09 - Logging Failures: Insufficient Security Logging
+#### 4. A07 - Authentication Failures: No JWT Expiry Enforcement ✅ FIXED
+
+**Severity**: CRITICAL
+**CVSS**: 8.8 (High)
+
+**Issue**: JWT tokens were verified only during initial connection handshake. After authentication, connections persisted indefinitely even after:
+- JWT expires (15-minute access token lifetime)
+- User logs out
+- User password is changed (tokenVersion incremented)
+
+**Fix**: Implemented automatic JWT expiry enforcement:
+- Extract JWT expiry time (`exp` claim) during connection handshake
+- Calculate time until expiry and set automatic disconnection timer
+- Connection automatically closed with code 1008 when JWT expires
+- Timer cleanup on disconnect to prevent memory leaks
+- Log `ws_jwt_expired` event when connection is terminated due to expiry
+
+**Files Modified**:
+- `/apps/web/src/lib/ws-connections.ts`: JWT expiry timer implementation
+- `/apps/web/src/app/api/mcp-ws/route.ts`: JWT expiry enforcement during UPGRADE
+
+**Security Impact**:
+- Desktop clients can no longer maintain active connections after JWT expiry
+- Automatic disconnection ensures stale sessions are terminated
+- Forces periodic re-authentication (every 15 minutes)
+
+---
+
+#### 5. A09 - Logging Failures: Insufficient Security Logging
 
 **Severity**: HIGH
 **CVSS**: 7.3 (High)
@@ -101,7 +131,7 @@ This document summarizes the comprehensive security hardening applied to the Web
 
 ---
 
-#### 5. A04 - Insecure Design: No Message Size Validation
+#### 6. A04 - Insecure Design: No Message Size Validation
 
 **Severity**: MEDIUM
 **CVSS**: 5.3 (Medium)
@@ -120,7 +150,7 @@ This document summarizes the comprehensive security hardening applied to the Web
 
 ---
 
-#### 6. A06 - Security Misconfiguration: Missing Security Headers
+#### 7. A06 - Security Misconfiguration: Missing Security Headers
 
 **Severity**: MEDIUM
 **CVSS**: 4.3 (Medium)
@@ -144,7 +174,7 @@ This document summarizes the comprehensive security hardening applied to the Web
 
 ---
 
-#### 7. A02 - Cryptographic Failures: No WSS Enforcement
+#### 8. A02 - Cryptographic Failures: No WSS Enforcement
 
 **Severity**: MEDIUM
 **CVSS**: 5.9 (Medium)
@@ -668,10 +698,13 @@ All security events logged by the WebSocket MCP Bridge:
 | `ws_insecure_connection_rejected` | error | Non-WSS connection in production | ip, url |
 | `ws_authentication_failed` | warn | Invalid/missing JWT | ip, reason |
 | `ws_connection_established` | info | Successful JWT validation | userId, ip, fingerprint |
+| `ws_jwt_expiry_timer_set` | info | JWT expiry timer scheduled | userId, expiresAt |
+| `ws_jwt_expired` | info | JWT expired, connection closed | userId, expiresAt |
 | `ws_challenge_verified` | info | Challenge verification success | userId |
 | `ws_challenge_verification_failed` | warn | Challenge verification failed | userId, reason |
 | `ws_challenge_failed_no_token` | error | Token missing during challenge | userId |
 | `ws_challenge_failed_invalid_token` | error | Token invalid during challenge | userId |
+| `ws_fingerprint_mismatch` | critical | Connection fingerprint changed | userId, reason |
 | `ws_unauthorized_tool_execution_attempt` | warn | Tool execution before challenge | userId, toolName |
 | `ws_tool_execution_request` | info | Tool execution requested | userId, serverName, toolName, requestId |
 | `ws_tool_execution_result` | info | Tool execution completed | userId, requestId, success |

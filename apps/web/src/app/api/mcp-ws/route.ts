@@ -10,6 +10,8 @@ import {
   isChallengeVerified,
   startCleanupInterval,
   checkConnectionHealth,
+  setJWTExpiryTimer,
+  verifyConnectionFingerprint,
 } from '@/lib/ws-connections';
 import {
   generateChallenge,
@@ -48,18 +50,20 @@ startCleanupInterval();
  * 2. Server validates JWT signature and expiration
  * 3. Server verifies secure connection (WSS in production)
  * 4. Server generates connection fingerprint (IP + User-Agent hash)
- * 5. Server sends cryptographic challenge to client
- * 6. Client responds with SHA256(challenge + userId + sessionId)
- * 7. Server verifies challenge response (max 3 attempts, 30s expiration)
- * 8. Connection marked as verified, tool execution enabled
- * 9. Connection health check before each tool execution
- * 10. Rate limiting: 100 tool executions per minute per user
- * 11. All security events logged for audit trail
+ * 5. Server extracts JWT expiry and sets automatic disconnection timer
+ * 6. Server sends cryptographic challenge to client
+ * 7. Client responds with SHA256(challenge + userId + sessionId)
+ * 8. Server verifies challenge response (max 3 attempts, 30s expiration)
+ * 9. Connection marked as verified, tool execution enabled
+ * 10. On each ping: verify fingerprint hasn't changed (detect session hijacking)
+ * 11. Connection health check before each tool execution
+ * 12. Rate limiting: 100 tool executions per minute per user
+ * 13. All security events logged for audit trail
  *
  * Defense in Depth:
- * - JWT authentication (initial + periodic revalidation)
+ * - JWT authentication (initial + automatic expiry enforcement)
  * - Challenge-response verification (post-connection)
- * - Connection fingerprinting (detect session hijacking)
+ * - Connection fingerprinting (verified on each ping, detects session hijacking)
  * - Connection health checks (verify state before tool execution)
  * - Rate limiting (prevent abuse)
  * - Message size validation (prevent DoS)
@@ -115,7 +119,34 @@ export async function UPGRADE(
     fingerprint: fingerprint.substring(0, 16) + '...', // Partial for privacy
   });
 
-  // SECURITY CHECK 4: Generate challenge for post-connection verification
+  // SECURITY CHECK 4: Extract JWT and set expiry timer for automatic disconnection
+  const cookieHeader = request.headers.get('cookie');
+  const accessToken = cookieHeader
+    ?.split(';')
+    .find((c) => c.trim().startsWith('accessToken='))
+    ?.split('=')[1];
+
+  if (accessToken) {
+    const payload = await decodeToken(accessToken);
+    if (payload?.exp) {
+      const expiresAt = new Date(payload.exp * 1000); // JWT exp is in seconds
+      setJWTExpiryTimer(client, expiresAt, () => {
+        logSecurityEvent('ws_jwt_expired', {
+          userId,
+          expiresAt: expiresAt.toISOString(),
+          severity: 'info',
+        });
+      });
+
+      logSecurityEvent('ws_jwt_expiry_timer_set', {
+        userId,
+        expiresAt: expiresAt.toISOString(),
+        severity: 'info',
+      });
+    }
+  }
+
+  // SECURITY CHECK 5: Generate challenge for post-connection verification
   const challenge = generateChallenge(userId);
 
   // Send challenge to client
@@ -281,12 +312,31 @@ export async function UPGRADE(
 
       // Handle ping/pong for health checks
       if (isPingMessage(message)) {
+        // SECURITY CHECK 7: Verify connection fingerprint on ping to detect session hijacking
+        const currentFingerprint = getConnectionFingerprint(request);
+        if (!verifyConnectionFingerprint(client, currentFingerprint)) {
+          logSecurityEvent('ws_fingerprint_mismatch', {
+            userId,
+            severity: 'critical',
+            reason: 'Connection fingerprint changed - possible session hijacking',
+          });
+          client.send(
+            JSON.stringify({
+              type: 'error',
+              error: 'fingerprint_mismatch',
+              message: 'Security violation: connection fingerprint mismatch',
+            })
+          );
+          client.close(1008, 'Security violation');
+          return;
+        }
+
         updateLastPing(client);
         client.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
         return;
       }
 
-      // SECURITY CHECK 7: Connection health check before tool execution
+      // SECURITY CHECK 8: Connection health check before tool execution
       if (isToolExecuteMessage(message)) {
         const health = checkConnectionHealth(client);
 
@@ -308,7 +358,7 @@ export async function UPGRADE(
         }
       }
 
-      // SECURITY CHECK 8: Rate limiting on tool execution
+      // SECURITY CHECK 9: Rate limiting on tool execution
       if (isToolExecuteMessage(message)) {
         const rateLimit = checkToolExecutionRateLimit(userId);
 
