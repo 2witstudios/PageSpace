@@ -2,11 +2,13 @@ import React, { useEffect, useState, useRef } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Switch } from '@/components/ui/switch';
 import AiInput from '@/components/ai/AiInput';
 import { ChatInputRef } from '@/components/messages/ChatInput';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Loader2, Send, Settings, Plus, History, StopCircle } from 'lucide-react';
+import { Loader2, Send, Settings, Plus, History, StopCircle, Server } from 'lucide-react';
 import { MessageRenderer } from '@/components/ai/MessageRenderer';
 import { AgentRole, AgentRoleUtils } from '@/lib/ai/agent-roles';
 import { RoleSelector } from '@/components/ai/RoleSelector';
@@ -15,6 +17,8 @@ import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth, patch, del } from '@/lib/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
+import { useMCPStore } from '@/stores/useMCPStore';
+import { useMCP } from '@/hooks/useMCP';
 import { toast } from 'sonner';
 
 
@@ -74,7 +78,24 @@ const GlobalAssistantView: React.FC = () => {
   const [currentAgentRole, setCurrentAgentRole] = useState<AgentRole>(AgentRoleUtils.getDefaultRole());
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
-  
+
+  // MCP state
+  const { isChatMCPEnabled, setChatMCPEnabled } = useMCPStore();
+  const mcp = useMCP();
+  const mcpEnabled = isChatMCPEnabled(currentConversationId || 'global');
+  const [mcpToolSchemas, setMcpToolSchemas] = useState<Array<{
+    name: string;
+    description: string;
+    inputSchema: { type: 'object'; properties: Record<string, unknown>; required?: string[] };
+    serverName: string;
+  }>>([]);
+
+  // Count running MCP servers
+  const runningMCPServers = React.useMemo(() => {
+    if (!mcp.isDesktop) return 0;
+    return Object.values(mcp.serverStatuses).filter(s => s.status === 'running').length;
+  }, [mcp.isDesktop, mcp.serverStatuses]);
+
   // Refs for auto-scrolling and chat input
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -317,6 +338,30 @@ const GlobalAssistantView: React.FC = () => {
     loadProviderSettings();
   }, []);
 
+  // Fetch MCP tools when MCP is enabled and servers are running
+  useEffect(() => {
+    const fetchMCPTools = async () => {
+      if (mcp.isDesktop && mcpEnabled && runningMCPServers > 0 && window.electron) {
+        try {
+          console.log('🔧 GlobalAssistantView: Fetching MCP tools from Electron');
+          const tools = await window.electron.mcp.getAvailableTools();
+          console.log(`✅ GlobalAssistantView: Fetched ${tools.length} MCP tools`, tools.map(t => `${t.serverName}.${t.name}`));
+          setMcpToolSchemas(tools);
+        } catch (error) {
+          console.error('❌ GlobalAssistantView: Failed to fetch MCP tools', error);
+          setMcpToolSchemas([]);
+          toast.error('Failed to load MCP tools');
+        }
+      } else {
+        // Clear MCP tools when disabled or no servers running
+        console.log('🔧 GlobalAssistantView: Clearing MCP tools (disabled or no servers running)');
+        setMcpToolSchemas([]);
+      }
+    };
+
+    fetchMCPTools();
+  }, [mcp.isDesktop, mcpEnabled, runningMCPServers]);
+
   // Use context method to create new conversation
   const handleNewConversation = async () => {
     try {
@@ -351,13 +396,14 @@ const GlobalAssistantView: React.FC = () => {
   const handleSendMessage = async () => {
     if (!input.trim() || !currentConversationId) return;
 
-    // Send the message with location context
+    // Send the message with location context and MCP tools
     sendMessage(
       { text: input },
       {
         body: {
           agentRole: currentAgentRole,
           locationContext: locationContext || undefined,
+          mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
         }
       }
     );
@@ -417,6 +463,26 @@ const GlobalAssistantView: React.FC = () => {
         </div>
 
         <div className="flex items-center space-x-2">
+          {/* MCP Toggle (Desktop only, enabled by default per-conversation) */}
+          {mcp.isDesktop && (
+            <div className="flex items-center gap-2 border border-[var(--separator)] rounded-lg px-3 py-1.5">
+              <Server className="h-4 w-4 text-muted-foreground" />
+              <span className="text-sm text-muted-foreground hidden md:inline">MCP</span>
+              {runningMCPServers > 0 && mcpEnabled && (
+                <Badge variant="default" className="h-5 text-xs">
+                  {runningMCPServers}
+                </Badge>
+              )}
+              <Switch
+                checked={mcpEnabled}
+                onCheckedChange={(checked) => setChatMCPEnabled(currentConversationId || 'global', checked)}
+                disabled={runningMCPServers === 0}
+                aria-label="Enable/disable MCP tools for this conversation"
+                className="scale-75 md:scale-100"
+              />
+            </div>
+          )}
+
           <Button
             variant="ghost"
             size="icon"

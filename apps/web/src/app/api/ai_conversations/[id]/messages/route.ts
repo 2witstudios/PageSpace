@@ -28,8 +28,11 @@ import { AgentRoleUtils } from '@/lib/ai/agent-roles';
 import { RolePromptBuilder } from '@/lib/ai/role-prompts';
 import { ToolPermissionFilter } from '@/lib/ai/tool-permissions';
 import { getModelCapabilities } from '@/lib/ai/model-capabilities';
+import { convertMCPToolsToAISDKSchemas } from '@/lib/ai/mcp-tool-converter';
+import { getMCPBridge } from '@/lib/mcp-bridge';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
+import type { MCPTool } from '@/types/mcp';
 
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
@@ -217,7 +220,8 @@ export async function POST(
       ollamaBaseUrl,
       glmApiKey,
       locationContext,
-      agentRole: roleString
+      agentRole: roleString,
+      mcpTools
     } = requestBody;
 
     // Validate required parameters
@@ -545,15 +549,78 @@ MENTION PROCESSING:
 • Don't explicitly mention that you're reading @mentioned docs unless relevant to the conversation`;
 
     // Filter tools based on agent role permissions
-    const roleFilteredTools = ToolPermissionFilter.filterTools(pageSpaceTools, agentRole);
-    
+    let finalTools = ToolPermissionFilter.filterTools(pageSpaceTools, agentRole);
+
+    // Merge MCP tools if provided
+    if (mcpTools && mcpTools.length > 0) {
+      try {
+        loggers.api.info('Global Assistant Chat API: Integrating MCP tools from desktop', {
+          mcpToolCount: mcpTools.length,
+          toolNames: mcpTools.map((t: MCPTool) => `${t.serverName}__${t.name}`),
+          userId: maskIdentifier(userId),
+          conversationId
+        });
+
+        // Convert MCP tools to AI SDK format
+        const mcpToolSchemas = convertMCPToolsToAISDKSchemas(mcpTools);
+
+        // Create execute functions that proxy to WebSocket bridge
+        const mcpToolsWithExecute: Record<string, unknown> = {};
+        for (const [toolName, toolSchema] of Object.entries(mcpToolSchemas)) {
+          mcpToolsWithExecute[toolName] = {
+            ...toolSchema,
+            execute: async (args: Record<string, unknown>) => {
+              // Parse server name and tool name from format: mcp:servername:toolname
+              const parts = toolName.split(':');
+              if (parts.length !== 3 || parts[0] !== 'mcp') {
+                throw new Error(`Invalid MCP tool name format: ${toolName}`);
+              }
+              const serverName = parts[1];
+              const originalToolName = parts[2];
+
+              loggers.api.debug('MCP Tool Execute: Calling tool via bridge', {
+                toolName,
+                serverName,
+                originalToolName,
+                userId: maskIdentifier(userId)
+              });
+
+              // executeTool returns Promise<unknown> - resolves with result or rejects with error
+              const result = await getMCPBridge().executeTool(userId, serverName, originalToolName, args);
+              return result;
+            }
+          };
+        }
+
+        // Merge MCP tools with PageSpace tools
+        finalTools = { ...finalTools, ...mcpToolsWithExecute } as Record<string, unknown>;
+
+        loggers.api.info('Global Assistant Chat API: Successfully merged MCP tools', {
+          totalTools: Object.keys(finalTools).length,
+          mcpTools: Object.keys(mcpToolSchemas).length,
+          pageSpaceTools: Object.keys(finalTools).length - Object.keys(mcpToolSchemas).length
+        });
+      } catch (error) {
+        loggers.api.error('Global Assistant Chat API: Failed to integrate MCP tools', error as Error, {
+          userId: maskIdentifier(userId),
+          conversationId
+        });
+        // Continue without MCP tools rather than failing the entire request
+      }
+    } else {
+      loggers.api.debug('Global Assistant Chat API: No MCP tools provided in request', {
+        userId: maskIdentifier(userId),
+        conversationId
+      });
+    }
+
     loggers.api.debug('🔄 Global Assistant Chat API: Starting streamText', { model: currentModel, agentRole });
 
     const result = streamText({
       model,
       system: systemPrompt,
       messages: modelMessages,
-      tools: roleFilteredTools,
+      tools: finalTools,
       stopWhen: stepCountIs(100),
       abortSignal: request.signal, // Enable stop/abort functionality from client
       experimental_context: {

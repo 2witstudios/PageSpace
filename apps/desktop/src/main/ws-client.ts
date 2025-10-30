@@ -1,6 +1,7 @@
 import WebSocket from 'ws';
 import { BrowserWindow } from 'electron';
 import { getMCPManager } from './mcp-manager';
+import crypto from 'crypto';
 
 /**
  * WebSocket Client for MCP Bridge
@@ -67,7 +68,7 @@ export class WSClient {
 
     try {
       const cookies = await this.mainWindow.webContents.session.cookies.get({
-        name: 'token',
+        name: 'accessToken',
       });
 
       if (cookies.length > 0) {
@@ -106,7 +107,7 @@ export class WSClient {
     try {
       this.ws = new WebSocket(url, {
         headers: {
-          Cookie: `token=${token}`,
+          Cookie: `accessToken=${token}`,
         },
       });
 
@@ -164,6 +165,14 @@ export class WSClient {
 
         case 'pong':
           // Heartbeat response
+          break;
+
+        case 'challenge':
+          await this.handleChallenge(message.challenge);
+          break;
+
+        case 'challenge_verified':
+          console.log('[WS-Client] Challenge verified successfully');
           break;
 
         case 'tool_execute':
@@ -226,6 +235,64 @@ export class WSClient {
         success: false,
         error: errorMessage,
       });
+    }
+  }
+
+  /**
+   * Handle challenge-response authentication
+   */
+  private async handleChallenge(challenge: string): Promise<void> {
+    console.log('[WS-Client] Received authentication challenge');
+
+    try {
+      // Get JWT token to extract userId and sessionId
+      const token = await this.getJWTToken();
+      if (!token) {
+        console.error('[WS-Client] No JWT token available for challenge response');
+        return;
+      }
+
+      // Decode JWT to extract userId and sessionId
+      const payload = this.decodeJWT(token);
+      if (!payload || !payload.userId || !payload.sessionId) {
+        console.error('[WS-Client] Invalid JWT payload for challenge response');
+        return;
+      }
+
+      // Compute challenge response: SHA256(challenge + userId + sessionId)
+      const responseString = `${challenge}${payload.userId}${payload.sessionId}`;
+      const response = crypto.createHash('sha256').update(responseString).digest('hex');
+
+      console.log('[WS-Client] Sending challenge response');
+
+      // Send challenge response to server
+      this.sendMessage({
+        type: 'challenge_response',
+        response,
+      });
+    } catch (error) {
+      console.error('[WS-Client] Error handling challenge:', error);
+    }
+  }
+
+  /**
+   * Decode JWT token to extract payload
+   */
+  private decodeJWT(token: string): { userId: string; sessionId: string } | null {
+    try {
+      // JWT format: header.payload.signature
+      const parts = token.split('.');
+      if (parts.length !== 3) {
+        console.error('[WS-Client] Invalid JWT format');
+        return null;
+      }
+
+      // Decode base64url payload
+      const payload = Buffer.from(parts[1], 'base64url').toString('utf-8');
+      return JSON.parse(payload);
+    } catch (error) {
+      console.error('[WS-Client] Error decoding JWT:', error);
+      return null;
     }
   }
 

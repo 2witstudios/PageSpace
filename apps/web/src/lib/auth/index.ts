@@ -257,9 +257,9 @@ export async function authenticateRequestWithOptions(
     return authResult;
   }
 
-  // Apply CSRF validation only for JWT-authenticated requests
-  // MCP tokens are exempt from CSRF protection (they use Bearer auth, not cookies)
-  if (requireCSRF && authResult.tokenType === 'jwt') {
+  // Apply CSRF validation only for cookie-based JWT authentication
+  // Bearer tokens (header-based auth) are CSRF-exempt because they're not sent automatically by browsers
+  if (requireCSRF && authResult.tokenType === 'jwt' && authResult.source === 'cookie') {
     const { validateCSRF } = await import('./csrf-validation');
     const csrfError = await validateCSRF(request);
     if (csrfError) {

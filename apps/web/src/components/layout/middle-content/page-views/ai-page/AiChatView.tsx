@@ -81,7 +81,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
 
   // MCP state
-  const { globalMCPEnabled, isChatMCPEnabled, setChatMCPEnabled } = useMCPStore();
+  const { isChatMCPEnabled, setChatMCPEnabled } = useMCPStore();
   const mcp = useMCP();
   const chatMCPEnabled = isChatMCPEnabled(page.id);
   const [mcpToolSchemas, setMcpToolSchemas] = useState<Array<{
@@ -113,10 +113,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
         }
       } else {
         // Clear MCP tools when disabled or no servers running
-        if (mcpToolSchemas.length > 0) {
-          console.log('🔧 AiChatView: Clearing MCP tools (disabled or no servers running)');
-          setMcpToolSchemas([]);
-        }
+        console.log('🔧 AiChatView: Clearing MCP tools (disabled or no servers running)');
+        setMcpToolSchemas([]);
       }
     };
 
@@ -691,8 +689,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             {/* Chat tab actions */}
             {activeTab === 'chat' && (
               <div className="flex items-center gap-3">
-                {/* MCP Toggle (Desktop only) */}
-                {mcp.isDesktop && globalMCPEnabled && (
+                {/* MCP Toggle (Desktop only, enabled by default per-chat) */}
+                {mcp.isDesktop && (
                   <div className="flex items-center gap-2 border border-[var(--separator)] rounded-lg px-3 py-1.5">
                     <Server className="h-4 w-4 text-muted-foreground" />
                     <span className="text-sm text-muted-foreground hidden md:inline">MCP</span>
@@ -705,7 +703,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                       checked={chatMCPEnabled}
                       onCheckedChange={(checked) => setChatMCPEnabled(page.id, checked)}
                       disabled={runningMCPServers === 0}
-                      aria-label="Enable MCP tools for this chat"
+                      aria-label="Enable/disable MCP tools for this chat"
                       className="scale-75 md:scale-100"
                     />
                   </div>

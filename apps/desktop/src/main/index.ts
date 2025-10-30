@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, shell, ipcMain, Tray, nativeImage, dialog } from 'electron';
+import { app, BrowserWindow, Menu, shell, ipcMain, Tray, nativeImage, dialog, session } from 'electron';
 import electronUpdaterPkg from 'electron-updater';
 const { autoUpdater } = electronUpdaterPkg;
 import * as path from 'path';
@@ -435,6 +435,49 @@ ipcMain.handle('retry-connection', () => {
   if (mainWindow) {
     const appUrl = getAppUrl();
     mainWindow.loadURL(appUrl);
+  }
+});
+
+// Auth IPC handlers
+/**
+ * Retrieves JWT token from Electron's secure cookie storage.
+ * Used for Bearer token authentication in Desktop app.
+ * @returns JWT string or null if not authenticated
+ */
+ipcMain.handle('auth:get-jwt', async () => {
+  try {
+    // Debug: List all cookies to see what's available
+    const allCookies = await session.defaultSession.cookies.get({});
+    console.log('[Auth IPC] Total cookies in session:', allCookies.length);
+    console.log('[Auth IPC] Cookie names:', allCookies.map(c => `${c.name} (domain: ${c.domain}, path: ${c.path})`));
+
+    // Get JWT from Electron's session cookies (stored as 'accessToken')
+    const cookies = await session.defaultSession.cookies.get({ name: 'accessToken' });
+    if (cookies.length > 0) {
+      console.log('[Auth IPC] JWT token retrieved from cookies (accessToken)');
+      return cookies[0].value;
+    }
+    console.log('[Auth IPC] No JWT token found in cookies (accessToken)');
+    return null;
+  } catch (error) {
+    console.error('[Auth IPC] Failed to get JWT token:', error);
+    return null;
+  }
+});
+
+/**
+ * Clears authentication data (JWT cookies) from Electron session.
+ * Called during logout to ensure clean state.
+ */
+ipcMain.handle('auth:clear-auth', async () => {
+  try {
+    // Clear all cookies (including JWT)
+    await session.defaultSession.clearStorageData({
+      storages: ['cookies'],
+    });
+    console.log('[Auth IPC] Auth data cleared successfully');
+  } catch (error) {
+    console.error('[Auth IPC] Failed to clear auth data:', error);
   }
 });
 

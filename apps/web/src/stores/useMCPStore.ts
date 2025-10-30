@@ -1,20 +1,20 @@
 /**
- * MCP Store - Manages MCP server settings and UI toggle state
- * Zustand store for global and per-chat MCP configuration
+ * MCP Store - Manages MCP server settings and per-chat MCP toggle state
+ * Zustand store for per-chat MCP configuration
+ *
+ * MCP is enabled by default when servers are running.
+ * Users can disable MCP per-chat if desired (opt-out model).
  */
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 interface MCPStoreState {
-  // Global MCP toggle - controls whether MCP tools are available at all
-  globalMCPEnabled: boolean;
-
   // Per-chat MCP toggles - map of chatId to enabled state
+  // Default is true (enabled), users can opt-out per-chat
   perChatMCP: Record<string, boolean>;
 
   // Actions
-  setGlobalMCPEnabled: (enabled: boolean) => void;
   setChatMCPEnabled: (chatId: string, enabled: boolean) => void;
   isChatMCPEnabled: (chatId: string) => boolean;
 
@@ -30,14 +30,8 @@ interface MCPStoreState {
 export const useMCPStore = create<MCPStoreState>()(
   persist(
     (set, get) => ({
-      // Default state - MCP disabled globally
-      globalMCPEnabled: false,
+      // Default state - empty perChatMCP map (defaults to enabled)
       perChatMCP: {},
-
-      // Set global MCP enabled/disabled
-      setGlobalMCPEnabled: (enabled: boolean) => {
-        set({ globalMCPEnabled: enabled });
-      },
 
       // Set per-chat MCP enabled/disabled
       setChatMCPEnabled: (chatId: string, enabled: boolean) => {
@@ -50,13 +44,12 @@ export const useMCPStore = create<MCPStoreState>()(
       },
 
       // Check if MCP is enabled for a specific chat
-      // Returns true only if both global AND per-chat are enabled
+      // Returns true by default (opt-out model), false only if explicitly disabled
       isChatMCPEnabled: (chatId: string): boolean => {
         const state = get();
-        if (!state.globalMCPEnabled) return false;
-
-        // If no per-chat setting exists, default to false (must explicitly enable)
-        return state.perChatMCP[chatId] ?? false;
+        // If no per-chat setting exists, default to true (enabled)
+        // Users must explicitly disable MCP per-chat
+        return state.perChatMCP[chatId] ?? true;
       },
 
       // Clear per-chat MCP setting for a specific chat
@@ -75,7 +68,7 @@ export const useMCPStore = create<MCPStoreState>()(
     }),
     {
       name: 'mcp-settings', // localStorage key
-      version: 1,
+      version: 2, // Increment version to reset old settings with global toggle
     }
   )
 );

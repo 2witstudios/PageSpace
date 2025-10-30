@@ -12,6 +12,19 @@ export interface ElectronAPI {
   retryConnection: () => Promise<void>;
   platform: NodeJS.Platform;
   version: string;
+  auth: {
+    /**
+     * Gets the JWT token from Electron's secure cookie storage.
+     * Used for Bearer token authentication in Desktop app.
+     * @returns JWT string or null if not authenticated
+     */
+    getJWT: () => Promise<string | null>;
+    /**
+     * Clears authentication data (JWT cookies) from Electron session.
+     * Called during logout.
+     */
+    clearAuth: () => Promise<void>;
+  };
   mcp: {
     getConfig: () => Promise<MCPConfig>;
     updateConfig: (config: MCPConfig) => Promise<{ success: boolean }>;

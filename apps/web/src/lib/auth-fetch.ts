@@ -21,6 +21,8 @@ class AuthFetch {
   private logger = createClientLogger({ namespace: 'auth', component: 'auth-fetch' });
   private csrfToken: string | null = null;
   private csrfTokenPromise: Promise<string | null> | null = null;
+  private jwtCache: { token: string | null; timestamp: number } | null = null;
+  private readonly JWT_CACHE_TTL = 5000; // 5 seconds
 
   async fetch(url: string, options?: FetchOptions): Promise<Response> {
     const { skipAuth = false, maxRetries = 1, ...fetchOptions } = options || {};
@@ -30,26 +32,52 @@ class AuthFetch {
       return fetch(url, fetchOptions);
     }
 
-    // Check if this request needs CSRF protection
-    const needsCSRF = this.requiresCSRFToken(url, fetchOptions.method);
+    // Detect Desktop environment
+    const isDesktop = typeof window !== 'undefined' && 'electron' in window;
 
-    // Get CSRF token if needed
+    // Prepare headers
     let headers = { ...fetchOptions.headers };
-    if (needsCSRF) {
-      const token = await this.getCSRFToken();
-      if (token) {
-        headers = {
-          ...headers,
-          'X-CSRF-Token': token,
-        };
+
+    if (isDesktop) {
+      // Desktop: Use Bearer token authentication (CSRF-exempt)
+      try {
+        // Get JWT from Electron's secure storage (cached for performance)
+        const jwt = await this.getJWTFromElectron();
+        if (jwt) {
+          headers = {
+            ...headers,
+            'Authorization': `Bearer ${jwt}`,
+          };
+          this.logger.debug('Desktop: Using Bearer token authentication', { url });
+        } else {
+          this.logger.warn('Desktop: No JWT available for Bearer token', { url });
+        }
+      } catch (error) {
+        this.logger.error('Desktop: Failed to get JWT for Bearer token', {
+          url,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    } else {
+      // Web: Use cookie-based authentication with CSRF protection
+      const needsCSRF = this.requiresCSRFToken(url, fetchOptions.method);
+      if (needsCSRF) {
+        const token = await this.getCSRFToken();
+        if (token) {
+          headers = {
+            ...headers,
+            'X-CSRF-Token': token,
+          };
+        }
       }
     }
 
     // Make the initial request
+    // Note: Desktop uses 'include' to receive cookies on login, but sends them as Bearer token
     let response = await fetch(url, {
       ...fetchOptions,
       headers,
-      credentials: 'include', // Always include cookies
+      credentials: 'include', // Always include cookies (needed for login and fallback)
     });
 
     // If we get a 401 and haven't retried yet, try to refresh
@@ -74,14 +102,17 @@ class AuthFetch {
       if (refreshSuccess) {
         this.logger.info('Token refresh successful, retrying original request', { url });
 
-        // Get fresh CSRF token if needed
-        if (needsCSRF) {
-          const token = await this.getCSRFToken(true);
-          if (token) {
-            headers = {
-              ...headers,
-              'X-CSRF-Token': token,
-            };
+        // Get fresh CSRF token if needed (Web only)
+        if (!isDesktop) {
+          const needsCSRF = this.requiresCSRFToken(url, fetchOptions.method);
+          if (needsCSRF) {
+            const token = await this.getCSRFToken(true);
+            if (token) {
+              headers = {
+                ...headers,
+                'X-CSRF-Token': token,
+              };
+            }
           }
         }
 
@@ -96,7 +127,8 @@ class AuthFetch {
       }
     }
 
-    // Handle CSRF token errors (403) - refresh CSRF token and retry once
+    // Handle CSRF token errors (403) - refresh CSRF token and retry once (Web only)
+    const needsCSRF = !isDesktop && this.requiresCSRFToken(url, fetchOptions.method);
     if (response.status === 403 && needsCSRF && maxRetries > 0) {
       const errorBody = await response.clone().json().catch(() => ({}));
 
@@ -289,6 +321,33 @@ class AuthFetch {
   }
 
   /**
+   * Gets JWT token from Electron with caching to avoid excessive IPC calls.
+   * Cache is valid for 5 seconds to balance performance and freshness.
+   * @returns JWT string or null if not authenticated
+   */
+  private async getJWTFromElectron(): Promise<string | null> {
+    const now = Date.now();
+
+    // Return cached token if still valid
+    if (this.jwtCache && (now - this.jwtCache.timestamp) < this.JWT_CACHE_TTL) {
+      return this.jwtCache.token;
+    }
+
+    // Fetch fresh token from Electron
+    const token = window.electron ? await window.electron.auth.getJWT() : null;
+    this.jwtCache = { token, timestamp: now };
+    return token;
+  }
+
+  /**
+   * Clears the cached JWT token.
+   * Should be called when user logs out or when token needs to be refreshed.
+   */
+  clearJWTCache(): void {
+    this.jwtCache = null;
+  }
+
+  /**
    * Checks if a request requires CSRF token
    * CSRF is required for:
    * - Mutation methods (POST, PUT, PATCH, DELETE)
@@ -392,3 +451,4 @@ export const put = authFetch.put.bind(authFetch);
 export const del = authFetch.delete.bind(authFetch);
 export const patch = authFetch.patch.bind(authFetch);
 export const clearCSRFToken = authFetch.clearCSRFToken.bind(authFetch);
+export const clearJWTCache = authFetch.clearJWTCache.bind(authFetch);

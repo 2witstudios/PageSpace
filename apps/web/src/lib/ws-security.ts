@@ -448,6 +448,11 @@ export function logSecurityEvent(
  * @returns true if connection is secure or in development
  */
 export function isSecureConnection(url: string): boolean {
+  // Allow localhost connections (development only)
+  if (url.includes('localhost') || url.includes('127.0.0.1')) {
+    return true;
+  }
+
   // Always allow in development
   if (process.env.NODE_ENV !== 'production') {
     return true;

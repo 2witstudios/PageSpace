@@ -36,6 +36,12 @@ contextBridge.exposeInMainWorld('electron', {
   // App version
   version: process.env.npm_package_version || '1.0.0',
 
+  // Authentication
+  auth: {
+    getJWT: () => ipcRenderer.invoke('auth:get-jwt'),
+    clearAuth: () => ipcRenderer.invoke('auth:clear-auth'),
+  },
+
   // MCP Server Management
   mcp: {
     getConfig: () => ipcRenderer.invoke('mcp:get-config'),
@@ -73,6 +79,10 @@ export interface ElectronAPI {
   retryConnection: () => Promise<void>;
   platform: NodeJS.Platform;
   version: string;
+  auth: {
+    getJWT: () => Promise<string | null>;
+    clearAuth: () => Promise<void>;
+  };
   mcp: {
     getConfig: () => Promise<MCPConfig>;
     updateConfig: (config: MCPConfig) => Promise<{ success: boolean }>;
