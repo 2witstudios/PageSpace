@@ -48,10 +48,15 @@ export class WSClient {
    * Get WebSocket URL based on environment
    */
   private getWebSocketUrl(): string {
-    const baseUrl =
+    let baseUrl =
       process.env.NODE_ENV === 'development'
         ? process.env.PAGESPACE_URL || 'http://localhost:3000'
         : process.env.PAGESPACE_URL || 'https://pagespace.ai';
+
+    // Force HTTPS for non-localhost URLs (security requirement)
+    if (!baseUrl.includes('localhost') && !baseUrl.includes('127.0.0.1')) {
+      baseUrl = baseUrl.replace(/^http:/, 'https:');
+    }
 
     // Convert http/https to ws/wss
     return baseUrl.replace(/^http/, 'ws') + '/api/mcp-ws';

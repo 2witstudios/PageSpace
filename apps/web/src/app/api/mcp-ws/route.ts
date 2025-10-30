@@ -77,7 +77,7 @@ export async function UPGRADE(
     request.headers.get('x-forwarded-for')?.split(',')[0].trim() || 'unknown';
 
   // SECURITY CHECK 1: Verify secure connection in production
-  if (!isSecureConnection(requestUrl)) {
+  if (!isSecureConnection(requestUrl, request)) {
     logSecurityEvent('ws_insecure_connection_rejected', {
       ip: clientIp,
       url: requestUrl,

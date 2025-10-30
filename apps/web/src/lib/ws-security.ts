@@ -444,10 +444,14 @@ export function logSecurityEvent(
 /**
  * Verify WebSocket connection uses secure protocol in production
  *
+ * Checks X-Forwarded-Proto header first (for reverse proxy deployments),
+ * then falls back to URL protocol check (for direct connections).
+ *
  * @param url - Request URL
+ * @param request - Optional NextRequest object to check headers
  * @returns true if connection is secure or in development
  */
-export function isSecureConnection(url: string): boolean {
+export function isSecureConnection(url: string, request?: { headers: { get: (name: string) => string | null } }): boolean {
   // Allow localhost connections (development only)
   if (url.includes('localhost') || url.includes('127.0.0.1')) {
     return true;
@@ -458,7 +462,16 @@ export function isSecureConnection(url: string): boolean {
     return true;
   }
 
-  // In production, enforce WSS (secure WebSocket)
+  // In production behind reverse proxy: check X-Forwarded-Proto header
+  // This tells us the original client protocol (https) even if the backend receives http
+  if (request) {
+    const forwardedProto = request.headers.get('x-forwarded-proto');
+    if (forwardedProto === 'https' || forwardedProto === 'wss') {
+      return true;
+    }
+  }
+
+  // Fallback: check URL protocol directly (for direct connections without proxy)
   return url.startsWith('wss://') || url.startsWith('https://');
 }
 

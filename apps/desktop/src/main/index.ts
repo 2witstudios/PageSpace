@@ -29,16 +29,30 @@ let isQuitting = false; // Track if app is quitting (used to distinguish close f
 function getAppUrl(): string {
   // Allow user to override the URL
   const customUrl = store.get('appUrl');
-  if (customUrl) return customUrl;
+  if (customUrl) {
+    // Force HTTPS for non-localhost URLs (security requirement)
+    let url = customUrl;
+    if (!url.includes('localhost') && !url.includes('127.0.0.1')) {
+      url = url.replace(/^http:/, 'https:');
+    }
+    return url;
+  }
 
   // Default URLs based on environment
   // Desktop app loads directly to dashboard, skipping landing page
+  let baseUrl: string;
   if (process.env.NODE_ENV === 'development') {
-    return (process.env.PAGESPACE_URL || 'http://localhost:3000') + '/dashboard';
+    baseUrl = process.env.PAGESPACE_URL || 'http://localhost:3000';
+  } else {
+    baseUrl = process.env.PAGESPACE_URL || 'https://pagespace.ai';
   }
 
-  // Production URL - PageSpace cloud instance
-  return (process.env.PAGESPACE_URL || 'https://pagespace.ai') + '/dashboard';
+  // Force HTTPS for non-localhost URLs (security requirement)
+  if (!baseUrl.includes('localhost') && !baseUrl.includes('127.0.0.1')) {
+    baseUrl = baseUrl.replace(/^http:/, 'https:');
+  }
+
+  return baseUrl + '/dashboard';
 }
 
 // Inject desktop-specific styles for titlebar and window dragging
