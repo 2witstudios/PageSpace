@@ -252,15 +252,21 @@ export class WSClient {
         return;
       }
 
-      // Decode JWT to extract userId and sessionId
+      // Decode JWT to extract userId, tokenVersion, and iat
       const payload = this.decodeJWT(token);
-      if (!payload || !payload.userId || !payload.sessionId) {
+      if (!payload || !payload.userId || payload.tokenVersion === undefined) {
         console.error('[WS-Client] Invalid JWT payload for challenge response');
         return;
       }
 
+      // Compute sessionId the same way the server does
+      // sessionId = SHA256(userId:tokenVersion:iat)
+      const sessionId = crypto.createHash('sha256')
+        .update(`${payload.userId}:${payload.tokenVersion}:${payload.iat || 0}`)
+        .digest('hex');
+
       // Compute challenge response: SHA256(challenge + userId + sessionId)
-      const responseString = `${challenge}${payload.userId}${payload.sessionId}`;
+      const responseString = `${challenge}${payload.userId}${sessionId}`;
       const response = crypto.createHash('sha256').update(responseString).digest('hex');
 
       console.log('[WS-Client] Sending challenge response');
@@ -278,7 +284,7 @@ export class WSClient {
   /**
    * Decode JWT token to extract payload
    */
-  private decodeJWT(token: string): { userId: string; sessionId: string } | null {
+  private decodeJWT(token: string): { userId: string; tokenVersion: number; iat?: number } | null {
     try {
       // JWT format: header.payload.signature
       const parts = token.split('.');
