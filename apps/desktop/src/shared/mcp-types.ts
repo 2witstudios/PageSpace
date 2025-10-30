@@ -169,6 +169,8 @@ export const MCP_CONSTANTS = {
   TOOL_EXECUTION_TIMEOUT_MIN: 1000, // 1 second (minimum allowed)
   TOOL_EXECUTION_TIMEOUT_MAX: 300000, // 5 minutes (maximum allowed)
   JSONRPC_REQUEST_TIMEOUT_MS: 30000, // 30 seconds
+  MAX_STDOUT_BUFFER_SIZE_BYTES: 1024 * 1024, // 1MB - prevents memory exhaustion from malformed JSON-RPC output
+  STDOUT_BUFFER_WARNING_SIZE_BYTES: 512 * 1024, // 512KB - warn when buffer grows large
 } as const;
 
 /**

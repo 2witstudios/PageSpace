@@ -20,6 +20,25 @@ import {
 } from '../shared/mcp-types';
 import { validateMCPConfig } from '../shared/mcp-validation';
 
+/**
+ * Simple logger for MCP Manager
+ * Uses console methods with structured context for better debugging
+ */
+const logger = {
+  debug: (message: string, context?: Record<string, unknown>) => {
+    console.log(`[MCP Manager] ${message}`, context || {});
+  },
+  info: (message: string, context?: Record<string, unknown>) => {
+    console.log(`[MCP Manager] ${message}`, context || {});
+  },
+  warn: (message: string, context?: Record<string, unknown>) => {
+    console.warn(`[MCP Manager] ${message}`, context || {});
+  },
+  error: (message: string, context?: Record<string, unknown>) => {
+    console.error(`[MCP Manager] ${message}`, context || {});
+  },
+};
+
 interface MCPServerProcess {
   config: MCPServerConfig;
   process: ChildProcess | null;
@@ -89,6 +108,14 @@ export class MCPManager {
   // Tool discovery and caching
   private toolCache: Map<string, MCPTool[]> = new Map();
 
+  // Log rate limiting and batching (Issue #2)
+  private lastRotationCheck: Map<string, number> = new Map();
+  private logWriteBuffer: Map<string, string[]> = new Map();
+  private logFlushTimers: Map<string, NodeJS.Timeout> = new Map();
+  private readonly ROTATION_CHECK_INTERVAL_MS = 60000; // 60 seconds
+  private readonly LOG_FLUSH_INTERVAL_MS = 1000; // 1 second
+  private readonly LOG_BUFFER_MAX_SIZE = 100; // Flush after 100 lines
+
   constructor() {
     const userDataPath = app.getPath('userData');
     this.configPath = path.join(userDataPath, 'local-mcp-config.json');
@@ -113,9 +140,9 @@ export class MCPManager {
       // Auto-start enabled servers
       await this.autoStartServers();
 
-      console.log('MCP Manager initialized');
+      logger.info('MCP Manager initialized', { configPath: this.configPath });
     } catch (error) {
-      console.error('Failed to initialize MCP Manager:', error);
+      logger.error('Failed to initialize MCP Manager', { error });
       throw error;
     }
   }
@@ -124,15 +151,14 @@ export class MCPManager {
    * Load configuration from disk
    */
   private async loadConfig(): Promise<void> {
-    console.log('[MCP Manager] loadConfig called');
-    console.log('[MCP Manager] Config file path:', this.configPath);
+    logger.debug('loadConfig called', { configPath: this.configPath });
 
     try {
       const configData = await fs.readFile(this.configPath, 'utf-8');
-      console.log('[MCP Manager] Raw config data read from disk:', configData);
+      logger.debug('Raw config data read from disk', { sizeBytes: configData.length });
 
       this.config = JSON.parse(configData);
-      console.log('[MCP Manager] Parsed config:', JSON.stringify(this.config, null, 2));
+      logger.debug('Parsed config', { serverCount: Object.keys(this.config.mcpServers).length });
 
       // Initialize server process tracking
       for (const [name, serverConfig] of Object.entries(this.config.mcpServers)) {
@@ -398,6 +424,36 @@ export class MCPManager {
     // Clear tool cache
     this.clearToolCache(name);
 
+    // Issue #3: Clear overflow and logging state to prevent memory leak
+    // Flush any pending log buffers before clearing
+    const stdoutKey = `${name}:stdout`;
+    const stderrKey = `${name}:stderr`;
+
+    await Promise.all([
+      this.flushLogBuffer(name, 'stdout').catch(() => {
+        /* ignore flush errors on shutdown */
+      }),
+      this.flushLogBuffer(name, 'stderr').catch(() => {
+        /* ignore flush errors on shutdown */
+      }),
+    ]);
+
+    // Clear log buffers and timers
+    this.logWriteBuffer.delete(stdoutKey);
+    this.logWriteBuffer.delete(stderrKey);
+
+    [stdoutKey, stderrKey].forEach((key) => {
+      const timer = this.logFlushTimers.get(key);
+      if (timer) {
+        clearTimeout(timer);
+        this.logFlushTimers.delete(key);
+      }
+    });
+
+    // Clear rotation check timestamp for this server's log file
+    const logFile = path.join(this.logDir, `mcp-${name}.log`);
+    this.lastRotationCheck.delete(logFile);
+
     // Kill the process
     server.process.kill('SIGTERM');
 
@@ -418,7 +474,7 @@ export class MCPManager {
     });
 
     server.process = null;
-    console.log(`Server ${name} stopped`);
+    logger.info('Server stopped', { serverName: name });
   }
 
   /**
@@ -477,22 +533,71 @@ export class MCPManager {
   }
 
   /**
-   * Log server output to file with rotation
+   * Log server output to file with rotation (Issue #2: Rate-limited & batched)
    */
-  private async logServerOutput(name: string, stream: 'stdout' | 'stderr', data: string): Promise<void> {
+  private logServerOutput(name: string, stream: 'stdout' | 'stderr', data: string): void {
     const timestamp = new Date().toISOString();
     const logLine = `[${timestamp}] [${name}] [${stream}] ${data}`;
+    const logKey = `${name}:${stream}`;
 
+    // Add to buffer
+    if (!this.logWriteBuffer.has(logKey)) {
+      this.logWriteBuffer.set(logKey, []);
+    }
+    this.logWriteBuffer.get(logKey)!.push(logLine);
+
+    // Flush immediately if buffer is full (prevents memory bloat)
+    if (this.logWriteBuffer.get(logKey)!.length >= this.LOG_BUFFER_MAX_SIZE) {
+      this.flushLogBuffer(name, stream).catch((error) => {
+        logger.error('Failed to flush log buffer (full)', { name, stream, error });
+      });
+    } else {
+      // Schedule flush if not already scheduled
+      if (!this.logFlushTimers.has(logKey)) {
+        const timer = setTimeout(() => {
+          this.flushLogBuffer(name, stream).catch((error) => {
+            logger.error('Failed to flush log buffer (timer)', { name, stream, error });
+          });
+        }, this.LOG_FLUSH_INTERVAL_MS);
+        this.logFlushTimers.set(logKey, timer);
+      }
+    }
+  }
+
+  /**
+   * Flush buffered logs to disk (Issue #2: Rate-limited rotation checks)
+   */
+  private async flushLogBuffer(name: string, stream: 'stdout' | 'stderr'): Promise<void> {
+    const logKey = `${name}:${stream}`;
+    const buffer = this.logWriteBuffer.get(logKey);
+
+    if (!buffer || buffer.length === 0) return;
+
+    // Clear timer
+    const timer = this.logFlushTimers.get(logKey);
+    if (timer) {
+      clearTimeout(timer);
+      this.logFlushTimers.delete(logKey);
+    }
+
+    // Get all buffered lines
+    const lines = buffer.splice(0, buffer.length);
     const logFile = path.join(this.logDir, `mcp-${name}.log`);
 
     try {
-      // Check if rotation is needed
-      await rotateLogFile(logFile);
+      // Rate-limited rotation check (max once per 60 seconds per file)
+      const now = Date.now();
+      const lastCheck = this.lastRotationCheck.get(logFile) || 0;
 
-      // Append log line
-      await fs.appendFile(logFile, logLine);
+      if (now - lastCheck > this.ROTATION_CHECK_INTERVAL_MS) {
+        await rotateLogFile(logFile);
+        this.lastRotationCheck.set(logFile, now);
+      }
+
+      // Write all buffered lines at once (reduces I/O operations)
+      await fs.appendFile(logFile, lines.join('\n') + '\n');
     } catch (error) {
-      console.error(`Failed to write to log file ${logFile}:`, error);
+      logger.error('Failed to write to log file', { logFile, error });
     }
   }
 
@@ -523,6 +628,72 @@ export class MCPManager {
     // Append to buffer
     const currentBuffer = this.stdoutBuffers.get(serverName) || '';
     const newBuffer = currentBuffer + data;
+
+    // SECURITY: Prevent unbounded memory growth from malformed output
+    // If buffer exceeds maximum size, parse valid messages BEFORE clearing (Issue #1)
+    if (newBuffer.length > MCP_CONSTANTS.MAX_STDOUT_BUFFER_SIZE_BYTES) {
+      logger.error('stdout buffer overflow - attempting to parse valid messages before clearing', {
+        serverName,
+        bufferSize: newBuffer.length,
+        maxSize: MCP_CONSTANTS.MAX_STDOUT_BUFFER_SIZE_BYTES,
+      });
+
+      // CRITICAL FIX (Issue #1): Extract and parse any valid JSON-RPC messages BEFORE clearing
+      const lines = newBuffer.split('\n');
+      const incompleteLineIndex = newBuffer.endsWith('\n') ? lines.length : lines.length - 1;
+
+      let parsedCount = 0;
+      let failedCount = 0;
+
+      for (let i = 0; i < incompleteLineIndex; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+
+        try {
+          const message = JSON.parse(line) as JSONRPCResponse;
+          this.handleJSONRPCResponse(serverName, message);
+          parsedCount++;
+        } catch (error) {
+          // Invalid JSON, skip this line
+          failedCount++;
+        }
+      }
+
+      logger.info('Buffer overflow recovery complete', {
+        serverName,
+        parsedMessages: parsedCount,
+        failedLines: failedCount,
+        totalLines: incompleteLineIndex,
+      });
+
+      // Now clear the buffer
+      this.stdoutBuffers.set(serverName, '');
+
+      // Log the error to file for diagnostics
+      this.logServerError(
+        serverName,
+        new Error(
+          `stdout buffer overflow (${newBuffer.length} bytes). ` +
+          `Parsed ${parsedCount} valid messages before clearing. ` +
+          `Server may not be sending newline-delimited JSON-RPC responses.`
+        )
+      );
+      return;
+    }
+
+    // Warn when buffer grows large (early warning before overflow)
+    if (
+      newBuffer.length > MCP_CONSTANTS.STDOUT_BUFFER_WARNING_SIZE_BYTES &&
+      currentBuffer.length <= MCP_CONSTANTS.STDOUT_BUFFER_WARNING_SIZE_BYTES
+    ) {
+      logger.warn('stdout buffer growing large', {
+        serverName,
+        bufferSize: newBuffer.length,
+        warningThreshold: MCP_CONSTANTS.STDOUT_BUFFER_WARNING_SIZE_BYTES,
+        maxThreshold: MCP_CONSTANTS.MAX_STDOUT_BUFFER_SIZE_BYTES,
+      });
+    }
+
     this.stdoutBuffers.set(serverName, newBuffer);
 
     // Try to parse complete JSON-RPC messages (newline-delimited)
