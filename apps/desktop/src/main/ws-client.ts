@@ -2,6 +2,7 @@ import WebSocket from 'ws';
 import { BrowserWindow } from 'electron';
 import { getMCPManager } from './mcp-manager';
 import crypto from 'crypto';
+import { logger } from './logger';
 
 /**
  * WebSocket Client for MCP Bridge
@@ -67,7 +68,7 @@ export class WSClient {
    */
   private async getJWTToken(): Promise<string | null> {
     if (!this.mainWindow) {
-      console.error('[WS-Client] Main window not available');
+      logger.error('Main window not available', {});
       return null;
     }
 
@@ -80,10 +81,10 @@ export class WSClient {
         return cookies[0].value;
       }
 
-      console.warn('[WS-Client] JWT token not found in cookies');
+      logger.warn('JWT token not found in cookies', {});
       return null;
     } catch (error) {
-      console.error('[WS-Client] Error extracting JWT token:', error);
+      logger.error('Error extracting JWT token', { error });
       return null;
     }
   }
@@ -93,21 +94,21 @@ export class WSClient {
    */
   async connect(): Promise<void> {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      console.log('[WS-Client] Already connected');
+      logger.debug('Already connected', {});
       return;
     }
 
     // Get JWT token
     const token = await this.getJWTToken();
     if (!token) {
-      console.error('[WS-Client] Cannot connect without JWT token');
+      logger.error('Cannot connect without JWT token', {});
       // Retry after delay
       this.scheduleReconnect();
       return;
     }
 
     const url = this.getWebSocketUrl();
-    console.log(`[WS-Client] Connecting to ${url}...`);
+    logger.info('Connecting to server', { url });
 
     try {
       this.ws = new WebSocket(url, {
@@ -118,7 +119,7 @@ export class WSClient {
 
       this.setupEventHandlers();
     } catch (error) {
-      console.error('[WS-Client] Connection error:', error);
+      logger.error('Connection error', { error });
       this.scheduleReconnect();
     }
   }
@@ -130,7 +131,7 @@ export class WSClient {
     if (!this.ws) return;
 
     this.ws.on('open', () => {
-      console.log('[WS-Client] Connected to server');
+      logger.info('Connected to server', {});
       this.reconnectAttempts = 0;
       this.reconnectDelay = 1000;
       this.startHeartbeat();
@@ -141,9 +142,10 @@ export class WSClient {
     });
 
     this.ws.on('close', (code: number, reason: Buffer) => {
-      console.log(
-        `[WS-Client] Disconnected. Code: ${code}, Reason: ${reason.toString()}`
-      );
+      logger.info('Disconnected', {
+        code,
+        reason: reason.toString(),
+      });
       this.stopHeartbeat();
 
       if (!this.isIntentionallyClosed) {
@@ -152,7 +154,7 @@ export class WSClient {
     });
 
     this.ws.on('error', (error: Error) => {
-      console.error('[WS-Client] WebSocket error:', error);
+      logger.error('WebSocket error', { error });
     });
   }
 
@@ -165,7 +167,7 @@ export class WSClient {
 
       switch (message.type) {
         case 'connected':
-          console.log('[WS-Client] Welcome message received:', message);
+          logger.debug('Welcome message received', { message });
           break;
 
         case 'pong':
@@ -177,7 +179,7 @@ export class WSClient {
           break;
 
         case 'challenge_verified':
-          console.log('[WS-Client] Challenge verified successfully');
+          logger.info('Challenge verified successfully', {});
           break;
 
         case 'tool_execute':
@@ -187,14 +189,14 @@ export class WSClient {
           break;
 
         case 'error':
-          console.error('[WS-Client] Server error:', message.error);
+          logger.error('Server error', { error: message.error });
           break;
 
         default:
-          console.warn('[WS-Client] Unknown message type:', message.type);
+          logger.warn('Unknown message type', { messageType: message.type });
       }
     } catch (error) {
-      console.error('[WS-Client] Error parsing message:', error);
+      logger.error('Error parsing message', { error });
     }
   }
 
@@ -204,9 +206,10 @@ export class WSClient {
   private async handleToolExecutionRequest(
     request: ToolExecutionRequest
   ): Promise<void> {
-    console.log(
-      `[WS-Client] Tool execution request: ${request.serverName}.${request.toolName}`
-    );
+    logger.debug('Tool execution request received', {
+      serverName: request.serverName,
+      toolName: request.toolName,
+    });
 
     try {
       const mcpManager = getMCPManager();
@@ -225,13 +228,15 @@ export class WSClient {
         error: result.error,
       });
 
-      console.log(
-        `[WS-Client] Tool execution ${result.success ? 'succeeded' : 'failed'}: ${request.serverName}.${request.toolName}`
-      );
+      logger.debug('Tool execution result', {
+        serverName: request.serverName,
+        toolName: request.toolName,
+        success: result.success,
+      });
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
-      console.error('[WS-Client] Tool execution error:', error);
+      logger.error('Tool execution error', { error });
 
       // Send error result back to server
       this.sendMessage({
@@ -247,20 +252,20 @@ export class WSClient {
    * Handle challenge-response authentication
    */
   private async handleChallenge(challenge: string): Promise<void> {
-    console.log('[WS-Client] Received authentication challenge');
+    logger.debug('Received authentication challenge', {});
 
     try {
       // Get JWT token to extract userId and sessionId
       const token = await this.getJWTToken();
       if (!token) {
-        console.error('[WS-Client] No JWT token available for challenge response');
+        logger.error('No JWT token available for challenge response', {});
         return;
       }
 
       // Decode JWT to extract userId, tokenVersion, and iat
       const payload = this.decodeJWT(token);
       if (!payload || !payload.userId || payload.tokenVersion === undefined) {
-        console.error('[WS-Client] Invalid JWT payload for challenge response');
+        logger.error('Invalid JWT payload for challenge response', {});
         return;
       }
 
@@ -274,7 +279,7 @@ export class WSClient {
       const responseString = `${challenge}${payload.userId}${sessionId}`;
       const response = crypto.createHash('sha256').update(responseString).digest('hex');
 
-      console.log('[WS-Client] Sending challenge response');
+      logger.debug('Sending challenge response', {});
 
       // Send challenge response to server
       this.sendMessage({
@@ -282,7 +287,7 @@ export class WSClient {
         response,
       });
     } catch (error) {
-      console.error('[WS-Client] Error handling challenge:', error);
+      logger.error('Error handling challenge', { error });
     }
   }
 
@@ -294,7 +299,7 @@ export class WSClient {
       // JWT format: header.payload.signature
       const parts = token.split('.');
       if (parts.length !== 3) {
-        console.error('[WS-Client] Invalid JWT format');
+        logger.error('Invalid JWT format', {});
         return null;
       }
 
@@ -302,7 +307,7 @@ export class WSClient {
       const payload = Buffer.from(parts[1], 'base64url').toString('utf-8');
       return JSON.parse(payload);
     } catch (error) {
-      console.error('[WS-Client] Error decoding JWT:', error);
+      logger.error('Error decoding JWT', { error });
       return null;
     }
   }
@@ -312,14 +317,14 @@ export class WSClient {
    */
   private sendMessage(message: WebSocketMessage): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      console.error('[WS-Client] Cannot send message - not connected');
+      logger.error('Cannot send message - not connected', {});
       return;
     }
 
     try {
       this.ws.send(JSON.stringify(message));
     } catch (error) {
-      console.error('[WS-Client] Error sending message:', error);
+      logger.error('Error sending message', { error });
     }
   }
 
@@ -361,9 +366,11 @@ export class WSClient {
       this.maxReconnectDelay
     );
 
-    console.log(
-      `[WS-Client] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})...`
-    );
+    logger.info('Scheduling reconnection', {
+      attempt: this.reconnectAttempts,
+      maxAttempts: this.maxReconnectAttempts,
+      delayMs: delay,
+    });
 
     this.reconnectTimeout = setTimeout(() => {
       this.connect();
@@ -387,7 +394,7 @@ export class WSClient {
    * Close connection gracefully
    */
   close(): void {
-    console.log('[WS-Client] Closing connection gracefully');
+    logger.info('Closing connection gracefully', {});
     this.isIntentionallyClosed = true;
 
     this.stopHeartbeat();
@@ -412,7 +419,7 @@ let wsClient: WSClient | null = null;
  */
 export function initializeWSClient(mainWindow: BrowserWindow): void {
   if (wsClient) {
-    console.warn('[WS-Client] Already initialized');
+    logger.warn('Already initialized', {});
     return;
   }
 

@@ -3,6 +3,7 @@ import {
   Experimental_StdioMCPTransport,
 } from 'ai';
 import { ChildProcess } from 'child_process';
+import { logger } from './logger';
 
 /**
  * MCP Bridge - Connects to MCP servers and fetches available tools
@@ -46,7 +47,7 @@ export class MCPBridge {
       // because the AI SDK expects to spawn its own process.
       // Instead, we'll need to expose tool definitions via a different mechanism.
 
-      console.log(`MCP Bridge: Skipping connection to ${serverName} - process already spawned`);
+      logger.debug('Skipping connection - process already spawned', { serverName });
 
       // TODO: Implement proper MCP client integration
       // For now, we'll just track that the server is running
@@ -57,7 +58,7 @@ export class MCPBridge {
       // 4. Store them for use in AI chat
 
     } catch (error) {
-      console.error(`Failed to connect to MCP server ${serverName}:`, error);
+      logger.error('Failed to connect to MCP server', { serverName, error });
       throw error;
     }
   }
@@ -71,7 +72,7 @@ export class MCPBridge {
       try {
         await client.client.close();
       } catch (error) {
-        console.error(`Error closing MCP client for ${serverName}:`, error);
+        logger.error('Error closing MCP client', { serverName, error });
       }
       this.clients.delete(serverName);
     }
@@ -96,7 +97,7 @@ export class MCPBridge {
           });
         }
       } catch (error) {
-        console.error(`Error fetching tools from ${serverName}:`, error);
+        logger.error('Error fetching tools from server', { serverName, error });
       }
     }
 
@@ -127,7 +128,7 @@ export class MCPBridge {
       const result = await tool.execute(args);
       return result;
     } catch (error) {
-      console.error(`Error executing tool ${toolName} on ${serverName}:`, error);
+      logger.error('Error executing tool on server', { toolName, serverName, error });
       throw error;
     }
   }

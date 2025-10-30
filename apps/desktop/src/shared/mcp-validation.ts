@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { logger } from '../main/logger';
 
 /**
  * Zod schema for MCP Server configuration validation
@@ -37,13 +38,13 @@ export const MCPConfigSchema = z.object({
  */
 export function validateMCPConfig(config: unknown): { success: true; data: z.infer<typeof MCPConfigSchema> } | { success: false; error: string } {
   try {
-    console.log('[MCP Validation] Validating config:', JSON.stringify(config, null, 2));
+    logger.debug('Validating config', { config });
     const result = MCPConfigSchema.parse(config);
-    console.log('[MCP Validation] ✓ Config is valid');
+    logger.debug('Config is valid', {});
     return { success: true, data: result };
   } catch (error) {
     if (error instanceof z.ZodError) {
-      console.error('[MCP Validation] ✗ Validation failed:', error.errors);
+      logger.error('Validation failed', { errors: error.errors });
       // Include all errors for better debugging
       const allErrors = error.errors.map(err => `${err.path.join('.')}: ${err.message}`).join('; ');
       const firstError = error.errors[0];
@@ -52,7 +53,7 @@ export function validateMCPConfig(config: unknown): { success: true; data: z.inf
         error: `${firstError.path.join('.')}: ${firstError.message}`,
       };
     }
-    console.error('[MCP Validation] ✗ Unknown validation error:', error);
+    logger.error('Unknown validation error', { error });
     return {
       success: false,
       error: 'Invalid configuration format',
@@ -75,20 +76,20 @@ export function validateServerConfig(name: string, config: unknown): { success: 
 
   // Validate config
   try {
-    console.log(`[MCP Validation] Validating server "${name}":`, JSON.stringify(config, null, 2));
+    logger.debug('Validating server config', { serverName: name, config });
     const result = MCPServerConfigSchema.parse(config);
-    console.log(`[MCP Validation] ✓ Server "${name}" config is valid`);
+    logger.debug('Server config is valid', { serverName: name });
     return { success: true, data: result };
   } catch (error) {
     if (error instanceof z.ZodError) {
-      console.error(`[MCP Validation] ✗ Server "${name}" validation failed:`, error.errors);
+      logger.error('Server validation failed', { serverName: name, errors: error.errors });
       const firstError = error.errors[0];
       return {
         success: false,
         error: `${firstError.path.join('.')}: ${firstError.message}`,
       };
     }
-    console.error(`[MCP Validation] ✗ Unknown validation error for server "${name}":`, error);
+    logger.error('Unknown validation error for server', { serverName: name, error });
     return {
       success: false,
       error: 'Invalid server configuration',

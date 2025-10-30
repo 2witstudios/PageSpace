@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
+import { logger } from './logger';
 
 /**
  * Command Path Resolver for Packaged Electron Apps
@@ -39,7 +40,7 @@ export async function resolveCommand(command: string): Promise<string> {
   }
 
   // Fallback to unresolved command (might still work in some cases)
-  console.warn(`[Command Resolver] Could not resolve "${command}" to absolute path, using as-is`);
+  logger.warn('Could not resolve command to absolute path, using as-is', { command });
   return command;
 }
 
@@ -176,7 +177,7 @@ function expandVersionManagerPaths(basePath: string): string[] {
 
     return binPaths;
   } catch (error) {
-    console.warn(`[Command Resolver] Error expanding version manager paths for ${basePath}:`, error);
+    logger.warn('Error expanding version manager paths', { basePath, error });
     return [];
   }
 }

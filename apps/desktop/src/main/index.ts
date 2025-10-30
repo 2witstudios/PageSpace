@@ -6,6 +6,7 @@ import Store from 'electron-store';
 import { getMCPManager } from './mcp-manager';
 import { initializeWSClient, shutdownWSClient, getWSClient } from './ws-client';
 import type { MCPConfig } from '../shared/mcp-types';
+import { logger } from './logger';
 
 // Configuration store for user preferences
 interface StoreSchema {
@@ -497,24 +498,24 @@ ipcMain.handle('auth:clear-auth', async () => {
 
 // MCP IPC handlers
 ipcMain.handle('mcp:get-config', async () => {
-  console.log('[MCP IPC] mcp:get-config handler called');
+  logger.debug('mcp:get-config handler called', {});
   const mcpManager = getMCPManager();
   const config = mcpManager.getConfig();
-  console.log('[MCP IPC] Returning config to renderer:', JSON.stringify(config, null, 2));
+  logger.debug('Returning config to renderer', { config });
   return config;
 });
 
 ipcMain.handle('mcp:update-config', async (_event, config: MCPConfig) => {
-  console.log('[MCP IPC] mcp:update-config handler called');
+  logger.debug('mcp:update-config handler called', {});
   const mcpManager = getMCPManager();
   try {
-    console.log('[MCP IPC] Received config from renderer:', JSON.stringify(config, null, 2));
+    logger.debug('Received config from renderer', { config });
     await mcpManager.updateConfig(config);
-    console.log('[MCP IPC] Config updated successfully, returning success');
+    logger.info('Config updated successfully', {});
     return { success: true };
   } catch (error: any) {
-    console.error('[MCP IPC] Failed to update config:', error);
-    console.error('[MCP IPC] Error message:', error.message);
+    logger.error('Failed to update config', { error });
+    logger.error('Error message', { errorMessage: error.message });
     return { success: false, error: error.message };
   }
 });
@@ -587,23 +588,23 @@ ipcMain.handle('mcp:get-available-tools', async () => {
   try {
     const mcpManager = getMCPManager();
     const tools = mcpManager.getAggregatedTools();
-    console.log(`MCP: Returning ${tools.length} aggregated tools from all running servers`);
+    logger.debug('Returning aggregated tools from all running servers', { toolCount: tools.length });
     return tools;
   } catch (error) {
-    console.error('MCP: Failed to get available tools:', error);
+    logger.error('Failed to get available tools', { error });
     return [];
   }
 });
 
 ipcMain.handle('mcp:execute-tool', async (_event, serverName: string, toolName: string, args: Record<string, unknown>) => {
   try {
-    console.log(`MCP: Executing tool ${toolName} on server ${serverName}`);
+    logger.debug('Executing tool', { serverName, toolName });
     const mcpManager = getMCPManager();
     const result = await mcpManager.executeTool(serverName, toolName, args);
     return result;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error(`MCP: Tool execution failed for ${serverName}.${toolName}:`, error);
+    logger.error('Tool execution failed', { serverName, toolName, error });
     return {
       success: false,
       error: errorMessage,
@@ -629,12 +630,12 @@ app.whenReady().then(async () => {
   try {
     const mcpManager = getMCPManager();
     await mcpManager.initialize();
-    console.log('MCP Manager initialized successfully');
+    logger.info('MCP Manager initialized successfully', {});
 
     // Start broadcasting status changes
     startMCPStatusBroadcasting();
   } catch (error) {
-    console.error('Failed to initialize MCP Manager:', error);
+    logger.error('Failed to initialize MCP Manager', { error });
   }
 
   createWindow();
@@ -674,7 +675,7 @@ app.on('before-quit', async () => {
   try {
     shutdownWSClient();
   } catch (error) {
-    console.error('Error shutting down WebSocket client:', error);
+    logger.error('Error shutting down WebSocket client', { error });
   }
 
   // Shutdown MCP servers
@@ -682,7 +683,7 @@ app.on('before-quit', async () => {
     const mcpManager = getMCPManager();
     await mcpManager.shutdown();
   } catch (error) {
-    console.error('Error shutting down MCP servers:', error);
+    logger.error('Error shutting down MCP servers', { error });
   }
 });
 

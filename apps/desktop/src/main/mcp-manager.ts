@@ -19,25 +19,7 @@ import {
   ToolExecutionResult,
 } from '../shared/mcp-types';
 import { validateMCPConfig } from '../shared/mcp-validation';
-
-/**
- * Simple logger for MCP Manager
- * Uses console methods with structured context for better debugging
- */
-const logger = {
-  debug: (message: string, context?: Record<string, unknown>) => {
-    console.log(`[MCP Manager] ${message}`, context || {});
-  },
-  info: (message: string, context?: Record<string, unknown>) => {
-    console.log(`[MCP Manager] ${message}`, context || {});
-  },
-  warn: (message: string, context?: Record<string, unknown>) => {
-    console.warn(`[MCP Manager] ${message}`, context || {});
-  },
-  error: (message: string, context?: Record<string, unknown>) => {
-    console.error(`[MCP Manager] ${message}`, context || {});
-  },
-};
+import { logger } from './logger';
 
 interface MCPServerProcess {
   config: MCPServerConfig;
@@ -172,16 +154,16 @@ export class MCPManager {
         }
       }
 
-      console.log('[MCP Manager] Config loaded successfully, server count:', Object.keys(this.config.mcpServers).length);
+      logger.info('Config loaded successfully', { serverCount: Object.keys(this.config.mcpServers).length });
     } catch (error: any) {
       if (error.code === 'ENOENT') {
         // Config file doesn't exist yet - create default
-        console.log('[MCP Manager] Config file does not exist, creating default empty config');
+        logger.info('Config file does not exist, creating default empty config', { configPath: this.configPath });
         this.config = { mcpServers: {} };
         await this.saveConfig();
       } else {
-        console.error('[MCP Manager] Failed to load MCP config:', error);
-        console.error('[MCP Manager] Error details:', error.code, error.message);
+        logger.error('Failed to load MCP config', { error, configPath: this.configPath });
+        logger.error('Error details', { errorCode: error.code, errorMessage: error.message });
         throw error;
       }
     }
@@ -191,23 +173,23 @@ export class MCPManager {
    * Save configuration to disk
    */
   async saveConfig(): Promise<void> {
-    console.log('[MCP Manager] saveConfig called');
-    console.log('[MCP Manager] Config file path:', this.configPath);
-    console.log('[MCP Manager] Config to save:', JSON.stringify(this.config, null, 2));
+    logger.debug('saveConfig called', {});
+    logger.debug('Config file path', { configPath: this.configPath });
+    logger.debug('Config to save', { config: this.config });
 
     try {
       const configData = JSON.stringify(this.config, null, 2);
-      console.log('[MCP Manager] Stringified config data (length:', configData.length, 'bytes)');
+      logger.debug('Stringified config data', { dataLength: configData.length });
 
       await fs.writeFile(this.configPath, configData, 'utf-8');
-      console.log('[MCP Manager] Config successfully written to disk');
+      logger.info('Config successfully written to disk', { configPath: this.configPath });
 
       // Verify the write by reading it back
       const verification = await fs.readFile(this.configPath, 'utf-8');
-      console.log('[MCP Manager] Verification read:', verification.length, 'bytes');
+      logger.debug('Verification read', { verificationLength: verification.length });
     } catch (error) {
-      console.error('[MCP Manager] Failed to save MCP config:', error);
-      console.error('[MCP Manager] Error details:', error instanceof Error ? error.message : String(error));
+      logger.error('Failed to save MCP config', { error, configPath: this.configPath });
+      logger.error('Error details', { errorMessage: error instanceof Error ? error.message : String(error) });
       throw error;
     }
   }
@@ -216,9 +198,9 @@ export class MCPManager {
    * Get current configuration
    */
   getConfig(): MCPConfig {
-    console.log('[MCP Manager] getConfig called');
-    console.log('[MCP Manager] Returning in-memory config:', JSON.stringify(this.config, null, 2));
-    console.log('[MCP Manager] Server count:', Object.keys(this.config.mcpServers).length);
+    logger.debug('getConfig called', {});
+    logger.debug('Returning in-memory config', { config: this.config });
+    logger.debug('Server count', { serverCount: Object.keys(this.config.mcpServers).length });
 
     // Return deep clone to prevent external mutations of internal state
     return JSON.parse(JSON.stringify(this.config));
@@ -228,17 +210,17 @@ export class MCPManager {
    * Update configuration with validation
    */
   async updateConfig(newConfig: MCPConfig): Promise<void> {
-    console.log('[MCP Manager] updateConfig called');
-    console.log('[MCP Manager] New config:', JSON.stringify(newConfig, null, 2));
+    logger.debug('updateConfig called', {});
+    logger.debug('New config', { newConfig });
 
     // Validate configuration
     const validation = validateMCPConfig(newConfig);
     if (!validation.success) {
-      console.error('[MCP Manager] Validation failed:', validation.error);
+      logger.error('Validation failed', { validationError: validation.error });
       throw new Error(`Invalid configuration: ${validation.error}`);
     }
 
-    console.log('[MCP Manager] Validation passed, updating config');
+    logger.debug('Validation passed, updating config', {});
     this.config = validation.data;
 
     // Update server process tracking
@@ -266,9 +248,9 @@ export class MCPManager {
       }
     }
 
-    console.log('[MCP Manager] Saving config to disk');
+    logger.debug('Saving config to disk', {});
     await this.saveConfig();
-    console.log('[MCP Manager] Config saved successfully');
+    logger.info('Config saved successfully', {});
   }
 
   /**
@@ -279,10 +261,10 @@ export class MCPManager {
     for (const [name, server] of this.servers.entries()) {
       if (server.config.autoStart !== false && server.config.enabled !== false) {
         try {
-          console.log(`[MCP Manager] Auto-starting server: ${name}`);
+          logger.info('Auto-starting server', { serverName: name });
           await this.startServer(name);
         } catch (error) {
-          console.error(`Failed to auto-start server ${name}:`, error);
+          logger.error('Failed to auto-start server', { serverName: name, error });
         }
       }
     }
@@ -307,7 +289,7 @@ export class MCPManager {
     try {
       // Resolve command path (critical for packaged apps where PATH is minimal)
       const resolvedCommand = await resolveCommand(config.command);
-      console.log(`[MCP Manager] Resolved command "${config.command}" to "${resolvedCommand}"`);
+      logger.debug('Resolved command', { command: config.command, resolvedCommand });
 
       // Construct enhanced environment with Node.js paths
       const enhancedEnv = getEnhancedEnvironment();
@@ -324,14 +306,14 @@ export class MCPManager {
 
       // Set up event handlers
       childProcess.on('error', (error) => {
-        console.error(`Server ${name} process error:`, error);
+        logger.error('Server process error', { serverName: name, error });
         server.status = 'error';
         server.error = error.message;
         this.logServerError(name, error);
       });
 
       childProcess.on('exit', (code, signal) => {
-        console.log(`Server ${name} exited with code ${code}, signal ${signal}`);
+        logger.info('Server exited', { serverName: name, exitCode: code, signal });
 
         if (server.status === 'running') {
           // Unexpected exit - mark as crashed
@@ -373,11 +355,11 @@ export class MCPManager {
       // Check if process is still running
       if (childProcess.exitCode === null && !childProcess.killed) {
         server.status = 'running';
-        console.log(`Server ${name} started successfully`);
+        logger.info('Server started successfully', { serverName: name });
 
         // Fetch tools from server (async, don't wait for completion)
         this.getMCPTools(name).catch((error) => {
-          console.error(`Failed to fetch tools from ${name} after startup:`, error);
+          logger.error('Failed to fetch tools after startup', { serverName: name, error });
         });
       } else {
         throw new Error('Process exited immediately after start');
@@ -387,7 +369,7 @@ export class MCPManager {
       server.status = 'error';
       server.error = errorMessage;
       server.process = null;
-      console.error(`Failed to start server ${name}:`, error);
+      logger.error('Failed to start server', { serverName: name, error });
       this.logServerError(name, error instanceof Error ? error : new Error(errorMessage));
       throw error;
     }
@@ -519,17 +501,17 @@ export class MCPManager {
    * Shutdown all servers (called on app quit)
    */
   async shutdown(): Promise<void> {
-    console.log('Shutting down all MCP servers...');
+    logger.info('Shutting down all MCP servers', {});
     const stopPromises: Promise<void>[] = [];
 
     for (const name of this.servers.keys()) {
       stopPromises.push(this.stopServer(name).catch((error) => {
-        console.error(`Error stopping server ${name}:`, error);
+        logger.error('Error stopping server', { serverName: name, error });
       }));
     }
 
     await Promise.all(stopPromises);
-    console.log('All MCP servers stopped');
+    logger.info('All MCP servers stopped', {});
   }
 
   /**
@@ -617,7 +599,7 @@ export class MCPManager {
       // Append error log
       await fs.appendFile(errorLogFile, logLine);
     } catch (err) {
-      console.error('Failed to write error log:', err);
+      logger.error('Failed to write error log', { error: err });
     }
   }
 
@@ -712,7 +694,7 @@ export class MCPManager {
         const message = JSON.parse(line) as JSONRPCResponse;
         this.handleJSONRPCResponse(serverName, message);
       } catch (error) {
-        console.warn(`Failed to parse JSON-RPC message from ${serverName}:`, line, error);
+        logger.warn('Failed to parse JSON-RPC message', { serverName, line, error });
       }
     }
   }
@@ -726,7 +708,7 @@ export class MCPManager {
 
     const pending = pendingMap.get(response.id);
     if (!pending) {
-      console.warn(`Received JSON-RPC response with unknown ID ${response.id} from ${serverName}`);
+      logger.warn('Unknown response ID', { serverName, responseId: response.id });
       return;
     }
 
@@ -831,13 +813,13 @@ export class MCPManager {
    */
   async getMCPTools(serverName: string): Promise<MCPTool[]> {
     try {
-      console.log(`Fetching tools from server ${serverName}...`);
+      logger.debug('Fetching tools from server', { serverName });
 
       // Send tools/list request
       const response = await this.sendJSONRPCRequest(serverName, 'tools/list', {});
 
       if (!response.result) {
-        console.warn(`No result in tools/list response from ${serverName}`);
+        logger.warn('No result in tools/list response', { serverName });
         return [];
       }
 
@@ -854,10 +836,10 @@ export class MCPManager {
       // Cache the tools
       this.toolCache.set(serverName, tools);
 
-      console.log(`Cached ${tools.length} tools from server ${serverName}`);
+      logger.info('Cached tools from server', { serverName, toolCount: tools.length });
       return tools;
     } catch (error) {
-      console.error(`Failed to fetch tools from ${serverName}:`, error);
+      logger.error('Failed to fetch tools', { serverName, error });
       // Cache empty array on error
       this.toolCache.set(serverName, []);
       return [];
@@ -869,7 +851,7 @@ export class MCPManager {
    * Called when server restarts
    */
   async refreshToolCache(serverName: string): Promise<void> {
-    console.log(`Refreshing tool cache for ${serverName}...`);
+    logger.debug('Refreshing tool cache', { serverName });
 
     // Invalidate existing cache
     this.toolCache.delete(serverName);
@@ -929,7 +911,7 @@ export class MCPManager {
     args?: Record<string, unknown>
   ): Promise<ToolExecutionResult> {
     try {
-      console.log(`Executing tool ${toolName} on server ${serverName} with args:`, args);
+      logger.debug('Executing tool', { serverName, toolName, args });
 
       // Verify server is running
       const server = this.servers.get(serverName);
@@ -977,7 +959,7 @@ export class MCPManager {
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error(`Tool execution failed for ${toolName} on ${serverName}:`, error);
+      logger.error('Tool execution failed', { serverName, toolName, error });
 
       return {
         success: false,

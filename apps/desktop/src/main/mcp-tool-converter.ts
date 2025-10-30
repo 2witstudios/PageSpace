@@ -5,6 +5,7 @@
 
 import { z } from 'zod';
 import type { MCPTool } from '../shared/mcp-types';
+import { logger } from './logger';
 
 /**
  * AI SDK Tool Definition (matches Vercel AI SDK format)
@@ -160,7 +161,7 @@ function jsonSchemaToZod(
 
     default:
       // Fallback for unsupported types
-      console.warn(`Unsupported JSON Schema type "${type}" for property "${propertyName}", using z.unknown()`);
+      logger.warn('Unsupported JSON Schema type, using z.unknown()', { type, propertyName });
       zodSchema = z.unknown();
   }
 
@@ -205,10 +206,11 @@ export function convertMCPToolToAISDK(
           zodProperties[propName] = zodProperties[propName].optional();
         }
       } catch (error) {
-        console.warn(
-          `Failed to convert property "${propName}" for tool "${namespacedName}":`,
-          error
-        );
+        logger.warn('Failed to convert property for tool', {
+          propName,
+          namespacedName,
+          error,
+        });
         // Skip problematic properties
         continue;
       }
@@ -221,7 +223,11 @@ export function convertMCPToolToAISDK(
       parameters,
     };
   } catch (error) {
-    console.error(`Failed to convert MCP tool "${mcpTool.serverName}.${mcpTool.name}":`, error);
+    logger.error('Failed to convert MCP tool', {
+      serverName: mcpTool.serverName,
+      toolName: mcpTool.name,
+      error,
+    });
     throw error;
   }
 }
@@ -244,15 +250,19 @@ export function convertMCPToolsToAISDK(
       const aiTool = convertMCPToolToAISDK(mcpTool);
       convertedTools.set(namespacedName, aiTool);
     } catch (error) {
-      console.warn(
-        `Skipping tool "${mcpTool.serverName}.${mcpTool.name}" due to conversion error:`,
-        error
-      );
+      logger.warn('Skipping tool due to conversion error', {
+        serverName: mcpTool.serverName,
+        toolName: mcpTool.name,
+        error,
+      });
       // Continue with other tools
     }
   }
 
-  console.log(`Successfully converted ${convertedTools.size}/${mcpTools.length} MCP tools to AI SDK format`);
+  logger.info('Successfully converted MCP tools to AI SDK format', {
+    convertedCount: convertedTools.size,
+    totalCount: mcpTools.length,
+  });
   return convertedTools;
 }
 
