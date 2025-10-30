@@ -3,6 +3,7 @@ import * as fs from 'fs/promises';
 import * as fsSync from 'fs';
 import * as path from 'path';
 import { app } from 'electron';
+import { resolveCommand, getEnhancedEnvironment } from './command-resolver';
 import {
   MCPServerConfig,
   MCPConfig,
@@ -278,9 +279,16 @@ export class MCPManager {
     server.status = 'starting';
 
     try {
-      // Spawn the MCP server process
-      const childProcess = spawn(config.command, config.args, {
-        env: { ...process.env, ...config.env },
+      // Resolve command path (critical for packaged apps where PATH is minimal)
+      const resolvedCommand = await resolveCommand(config.command);
+      console.log(`[MCP Manager] Resolved command "${config.command}" to "${resolvedCommand}"`);
+
+      // Construct enhanced environment with Node.js paths
+      const enhancedEnv = getEnhancedEnvironment();
+
+      // Spawn the MCP server process with enhanced environment
+      const childProcess = spawn(resolvedCommand, config.args, {
+        env: { ...enhancedEnv, ...config.env }, // User config.env takes precedence
         stdio: ['pipe', 'pipe', 'pipe'], // stdin, stdout, stderr
       });
 
