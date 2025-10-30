@@ -17,8 +17,6 @@ import {
   generateChallenge,
   verifyChallengeResponse,
   clearChallenge,
-  checkToolExecutionRateLimit,
-  resetRateLimit,
   getConnectionFingerprint,
   validateMessageSize,
   logSecurityEvent,
@@ -57,15 +55,15 @@ startCleanupInterval();
  * 9. Connection marked as verified, tool execution enabled
  * 10. On each ping: verify fingerprint hasn't changed (detect session hijacking)
  * 11. Connection health check before each tool execution
- * 12. Rate limiting: 100 tool executions per minute per user
- * 13. All security events logged for audit trail
+ * 12. All security events logged for audit trail
+ *
+ * Note: Tool execution rate limiting is handled by AI SDK's stepCountIs(100) limit per request
  *
  * Defense in Depth:
  * - JWT authentication (initial + automatic expiry enforcement)
  * - Challenge-response verification (post-connection)
  * - Connection fingerprinting (verified on each ping, detects session hijacking)
  * - Connection health checks (verify state before tool execution)
- * - Rate limiting (prevent abuse)
  * - Message size validation (prevent DoS)
  * - Automatic stale connection cleanup (prevent memory leaks)
  * - Comprehensive security logging
@@ -358,35 +356,6 @@ export async function UPGRADE(
         }
       }
 
-      // SECURITY CHECK 9: Rate limiting on tool execution
-      if (isToolExecuteMessage(message)) {
-        const rateLimit = checkToolExecutionRateLimit(userId);
-
-        if (!rateLimit.allowed) {
-          logSecurityEvent('ws_rate_limit_exceeded', {
-            userId,
-            retryAfter: rateLimit.retryAfter,
-            severity: 'warn',
-          });
-          client.send(
-            JSON.stringify({
-              type: 'error',
-              error: 'rate_limit_exceeded',
-              retryAfter: rateLimit.retryAfter,
-            })
-          );
-          return;
-        }
-
-        logSecurityEvent('ws_tool_execution_request', {
-          userId,
-          serverName: message.serverName,
-          toolName: message.toolName,
-          requestId: message.id,
-          severity: 'info',
-        });
-      }
-
       // Handle tool execution responses
       if (isToolResultMessage(message)) {
         logSecurityEvent('ws_tool_execution_result', {
@@ -429,7 +398,6 @@ export async function UPGRADE(
     // Clean up resources
     unregisterConnection(userId, client);
     clearChallenge(userId);
-    resetRateLimit(userId);
   });
 
   // Handle errors

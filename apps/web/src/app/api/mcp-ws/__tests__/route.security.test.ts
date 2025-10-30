@@ -35,7 +35,6 @@ vi.mock('@/lib/mcp-bridge', () => ({
 vi.mock('@/lib/ws-security', () => ({
   generateChallenge: vi.fn(),
   verifyChallengeResponse: vi.fn(),
-  checkToolExecutionRateLimit: vi.fn(),
   getConnectionFingerprint: vi.fn(),
 }));
 
@@ -47,7 +46,6 @@ import {
 import {
   generateChallenge,
   verifyChallengeResponse,
-  checkToolExecutionRateLimit,
   getConnectionFingerprint,
 } from '@/lib/ws-security';
 
@@ -109,46 +107,6 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
 
       // Simulate JWT expiration - connection should be terminated
       // This test ensures connections don't persist after token expiration
-    });
-
-    it('should enforce rate limiting on tool execution requests', async () => {
-      vi.mocked(verifyAuth).mockResolvedValue({
-        id: 'user_123',
-        role: 'user',
-        tokenVersion: 1,
-      });
-
-      vi.mocked(checkToolExecutionRateLimit).mockReturnValue({
-        allowed: false,
-        retryAfter: 30,
-      });
-
-      const { UPGRADE } = await import('../route');
-      await UPGRADE(mockClient, mockServer, mockRequest);
-
-      // Get the message handler
-      const messageHandler = vi.mocked(mockClient.on).mock.calls.find(
-        (call) => call[0] === 'message'
-      )?.[1];
-
-      expect(messageHandler).toBeDefined();
-
-      if (messageHandler) {
-        // Simulate tool execution request
-        const toolRequest = JSON.stringify({
-          type: 'tool_execute',
-          id: 'req_123',
-          serverName: 'test-server',
-          toolName: 'test-tool',
-        });
-
-        await messageHandler(Buffer.from(toolRequest));
-
-        // Should receive rate limit error
-        expect(mockClient.send).toHaveBeenCalledWith(
-          expect.stringContaining('rate_limit_exceeded')
-        );
-      }
     });
 
     it('should prevent unauthorized tool execution', async () => {
@@ -464,10 +422,6 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
         tokenVersion: 1,
       });
 
-      vi.mocked(checkToolExecutionRateLimit).mockReturnValue({
-        allowed: true,
-      });
-
       const { UPGRADE } = await import('../route');
       await UPGRADE(mockClient, mockServer, mockRequest);
 
@@ -487,44 +441,6 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
         await messageHandler(Buffer.from(toolRequest));
 
         // Should log tool execution
-        expect(consoleSpy).toHaveBeenCalled();
-
-        consoleSpy.mockRestore();
-      }
-    });
-
-    it('should log rate limit violations', async () => {
-      vi.mocked(verifyAuth).mockResolvedValue({
-        id: 'user_123',
-        role: 'user',
-        tokenVersion: 1,
-      });
-
-      vi.mocked(checkToolExecutionRateLimit).mockReturnValue({
-        allowed: false,
-        retryAfter: 30,
-      });
-
-      const { UPGRADE } = await import('../route');
-      await UPGRADE(mockClient, mockServer, mockRequest);
-
-      const messageHandler = vi.mocked(mockClient.on).mock.calls.find(
-        (call) => call[0] === 'message'
-      )?.[1];
-
-      if (messageHandler) {
-        const consoleSpy = vi.spyOn(console, 'warn');
-
-        const toolRequest = JSON.stringify({
-          type: 'tool_execute',
-          id: 'req_123',
-          serverName: 'test',
-          toolName: 'test',
-        });
-
-        await messageHandler(Buffer.from(toolRequest));
-
-        // Should log rate limit violation
         expect(consoleSpy).toHaveBeenCalled();
 
         consoleSpy.mockRestore();
