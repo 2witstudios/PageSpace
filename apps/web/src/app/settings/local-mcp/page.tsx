@@ -8,15 +8,6 @@ import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from '@/components/ui/dialog';
-import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -26,8 +17,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Label } from '@/components/ui/label';
-import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import {
   ArrowLeft,
@@ -39,9 +28,7 @@ import {
   CheckCircle2,
   XCircle,
   Loader2,
-  Plus,
   Trash2,
-  Book,
   Terminal,
 } from 'lucide-react';
 import { useMCP } from '@/hooks/useMCP';
@@ -53,12 +40,6 @@ export default function LocalMCPSettingsPage() {
 
   const [configJson, setConfigJson] = useState('');
   const [jsonError, setJsonError] = useState('');
-  const [addDialogOpen, setAddDialogOpen] = useState(false);
-  const [newServerName, setNewServerName] = useState('');
-  const [newServerCommand, setNewServerCommand] = useState('npx');
-  const [newServerArgs, setNewServerArgs] = useState('-y @modelcontextprotocol/server-filesystem');
-  const [nameError, setNameError] = useState('');
-  const [argsError, setArgsError] = useState('');
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [serverToDelete, setServerToDelete] = useState<string | null>(null);
 
@@ -79,63 +60,6 @@ export default function LocalMCPSettingsPage() {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Invalid JSON';
       setJsonError(errorMessage);
-    }
-  };
-
-  const validateServerName = (name: string): boolean => {
-    if (!name.trim()) {
-      setNameError('Server name is required');
-      return false;
-    }
-
-    const nameRegex = /^[a-zA-Z0-9_-]+$/;
-    if (!nameRegex.test(name)) {
-      setNameError('Server name can only contain letters, numbers, hyphens, and underscores');
-      return false;
-    }
-
-    if (mcp.config.mcpServers[name]) {
-      setNameError('A server with this name already exists');
-      return false;
-    }
-
-    setNameError('');
-    return true;
-  };
-
-  const validateArgs = (args: string): boolean => {
-    if (!args.trim()) {
-      setArgsError('Arguments are required');
-      return false;
-    }
-
-    setArgsError('');
-    return true;
-  };
-
-  const handleAddServer = async () => {
-    const nameValid = validateServerName(newServerName);
-    const argsValid = validateArgs(newServerArgs);
-
-    if (!nameValid || !argsValid) {
-      return;
-    }
-
-    const args = newServerArgs.split(' ').filter(arg => arg.trim());
-
-    const result = await mcp.addServer(newServerName, {
-      command: newServerCommand,
-      args,
-      autoStart: true,
-      enabled: true,
-    });
-
-    if (result.success) {
-      setAddDialogOpen(false);
-      setNewServerName('');
-      setNewServerArgs('-y @modelcontextprotocol/server-filesystem');
-      setNameError('');
-      setArgsError('');
     }
   };
 
@@ -260,97 +184,12 @@ export default function LocalMCPSettingsPage() {
             <Terminal className="h-4 w-4 mr-2" />
             Configuration
           </TabsTrigger>
-          <TabsTrigger value="guide">
-            <Book className="h-4 w-4 mr-2" />
-            Getting Started
-          </TabsTrigger>
         </TabsList>
 
         {/* Servers Tab */}
         <TabsContent value="servers" className="space-y-4">
           <div className="flex justify-between items-center">
             <h2 className="text-xl font-semibold">Your MCP Servers</h2>
-            <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
-              <DialogTrigger asChild>
-                <Button>
-                  <Plus className="h-4 w-4 mr-2" />
-                  Add Server
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Add MCP Server</DialogTitle>
-                  <DialogDescription>
-                    Configure a new MCP server to run on your machine.
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="space-y-4 py-4">
-                  <div>
-                    <Label htmlFor="server-name">Server Name</Label>
-                    <Input
-                      id="server-name"
-                      placeholder="filesystem"
-                      value={newServerName}
-                      onChange={(e) => {
-                        setNewServerName(e.target.value);
-                        setNameError('');
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          handleAddServer();
-                        }
-                      }}
-                    />
-                    {nameError && (
-                      <p className="text-sm text-red-500 mt-1">{nameError}</p>
-                    )}
-                  </div>
-                  <div>
-                    <Label htmlFor="server-command">Command</Label>
-                    <Input
-                      id="server-command"
-                      placeholder="npx"
-                      value={newServerCommand}
-                      onChange={(e) => setNewServerCommand(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          handleAddServer();
-                        }
-                      }}
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="server-args">Arguments</Label>
-                    <Input
-                      id="server-args"
-                      placeholder="-y @modelcontextprotocol/server-filesystem /path/to/dir"
-                      value={newServerArgs}
-                      onChange={(e) => {
-                        setNewServerArgs(e.target.value);
-                        setArgsError('');
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          handleAddServer();
-                        }
-                      }}
-                    />
-                    {argsError && (
-                      <p className="text-sm text-red-500 mt-1">{argsError}</p>
-                    )}
-                  </div>
-                </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setAddDialogOpen(false)}>
-                    Cancel
-                  </Button>
-                  <Button onClick={handleAddServer}>Add Server</Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
           </div>
 
           {Object.keys(mcp.config.mcpServers).length === 0 ? (
@@ -359,7 +198,7 @@ export default function LocalMCPSettingsPage() {
                 <Server className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
                 <h3 className="text-lg font-semibold mb-2">No MCP servers configured</h3>
                 <p className="text-muted-foreground mb-4">
-                  Add your first MCP server to extend AI capabilities
+                  Add servers by editing the configuration in the Configuration tab
                 </p>
               </CardContent>
             </Card>
@@ -486,75 +325,6 @@ export default function LocalMCPSettingsPage() {
           </Card>
         </TabsContent>
 
-        {/* Getting Started Tab */}
-        <TabsContent value="guide" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Getting Started with MCP Servers</CardTitle>
-              <CardDescription>
-                Learn how to configure and use MCP servers with PageSpace
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div>
-                <h3 className="font-semibold mb-2">What are MCP Servers?</h3>
-                <p className="text-sm text-muted-foreground">
-                  Model Context Protocol (MCP) servers provide AI models with access to external tools
-                  and data sources. Run servers like filesystem access, GitHub integration, database
-                  connections, and more.
-                </p>
-              </div>
-
-              <div>
-                <h3 className="font-semibold mb-2">Popular MCP Servers</h3>
-                <ul className="space-y-2 text-sm">
-                  <li>
-                    <strong>Filesystem:</strong> <code className="bg-muted px-2 py-1 rounded">npx -y @modelcontextprotocol/server-filesystem /path/to/directory</code>
-                  </li>
-                  <li>
-                    <strong>GitHub:</strong> <code className="bg-muted px-2 py-1 rounded">npx -y @modelcontextprotocol/server-github</code>
-                  </li>
-                  <li>
-                    <strong>Slack:</strong> <code className="bg-muted px-2 py-1 rounded">npx -y @modelcontextprotocol/server-slack</code>
-                  </li>
-                </ul>
-              </div>
-
-              <div>
-                <h3 className="font-semibold mb-2">Configuration Format</h3>
-                <p className="text-sm text-muted-foreground mb-2">
-                  PageSpace uses the same configuration format as Claude Desktop:
-                </p>
-                <pre className="bg-muted p-4 rounded text-xs overflow-x-auto">
-{`{
-  "mcpServers": {
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users/you/Documents"],
-      "env": {},
-      "autoStart": true,
-      "enabled": true
-    }
-  }
-}`}
-                </pre>
-              </div>
-
-              <div>
-                <h3 className="font-semibold mb-2">Environment Variables</h3>
-                <p className="text-sm text-muted-foreground">
-                  Add environment variables to the <code>env</code> object for API keys and credentials:
-                </p>
-                <pre className="bg-muted p-4 rounded text-xs overflow-x-auto mt-2">
-{`"env": {
-  "GITHUB_TOKEN": "ghp_your_token_here",
-  "DEBUG": "mcp:*"
-}`}
-                </pre>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
       </Tabs>
 
       {/* Confirmation Dialog for Server Deletion */}

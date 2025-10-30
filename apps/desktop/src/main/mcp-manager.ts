@@ -245,12 +245,14 @@ export class MCPManager {
   }
 
   /**
-   * Auto-start servers marked with autoStart: true
+   * Auto-start servers on app launch (unless autoStart: false)
+   * Defaults to auto-start if autoStart field is not specified
    */
   private async autoStartServers(): Promise<void> {
     for (const [name, server] of this.servers.entries()) {
-      if (server.config.autoStart && server.config.enabled !== false) {
+      if (server.config.autoStart !== false && server.config.enabled !== false) {
         try {
+          console.log(`[MCP Manager] Auto-starting server: ${name}`);
           await this.startServer(name);
         } catch (error) {
           console.error(`Failed to auto-start server ${name}:`, error);
