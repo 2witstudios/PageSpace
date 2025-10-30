@@ -102,8 +102,27 @@ class AuthFetch {
       if (refreshSuccess) {
         this.logger.info('Token refresh successful, retrying original request', { url });
 
-        // Get fresh CSRF token if needed (Web only)
-        if (!isDesktop) {
+        if (isDesktop) {
+          // Desktop: Get fresh Bearer token (cache was already cleared in refreshToken())
+          try {
+            const freshJwt = await this.getJWTFromElectron();
+            if (freshJwt) {
+              headers = {
+                ...headers,
+                'Authorization': `Bearer ${freshJwt}`,
+              };
+              this.logger.debug('Desktop: Updated Bearer token after refresh', { url });
+            } else {
+              this.logger.warn('Desktop: No fresh JWT available after refresh', { url });
+            }
+          } catch (error) {
+            this.logger.error('Desktop: Failed to get fresh JWT after refresh', {
+              url,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        } else {
+          // Web: Get fresh CSRF token if needed
           const needsCSRF = this.requiresCSRFToken(url, fetchOptions.method);
           if (needsCSRF) {
             const token = await this.getCSRFToken(true);
@@ -116,7 +135,7 @@ class AuthFetch {
           }
         }
 
-        // Retry the original request
+        // Retry the original request with fresh credentials
         response = await fetch(url, {
           ...fetchOptions,
           headers,
@@ -173,12 +192,17 @@ class AuthFetch {
 
     try {
       const success = await this.refreshPromise;
-      
+
       // Process queued requests
       const queue = [...this.refreshQueue];
       this.refreshQueue = [];
 
       if (success) {
+        // Clear JWT cache so all retries (original + queued) get fresh token
+        // This must happen BEFORE retrying any requests
+        this.clearJWTCache();
+        this.logger.debug('JWT cache cleared after successful token refresh');
+
         // Retry all queued requests using this.fetch to preserve auth logic
         this.logger.info('Token refresh successful, retrying queued requests', {
           queuedRequests: queue.length,
