@@ -174,16 +174,92 @@ function findPageBreaks(editorElement: HTMLElement): HTMLElement[] {
 }
 
 /**
- * Injects temporary page break elements into content using height-based calculation
+ * Creates a page wrapper div with proper padding for print output
+ * Uses inline styles for maximum specificity to override globals.css
+ */
+function createPageWrapper(config: PaginationPrintConfig, isLastPage: boolean = false): HTMLDivElement {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'print-page';
+  wrapper.setAttribute('data-temp-print', 'true');
+
+  // Calculate total padding
+  const paddingTop = config.marginTop + config.pageHeaderHeight + config.contentMarginTop;
+  const paddingBottom = config.marginBottom + config.pageFooterHeight + config.contentMarginBottom;
+
+  // Use cssText for comprehensive inline styles that override everything
+  // Inline styles have highest specificity and always win over class-based CSS
+  const pageBreakCSS = !isLastPage
+    ? 'break-after: page; page-break-after: always;'
+    : 'break-after: auto; page-break-after: auto;';
+
+  wrapper.style.cssText = `
+    box-sizing: border-box !important;
+    display: block !important;
+    width: 100% !important;
+    margin: 0 !important;
+    background: white !important;
+    padding-top: ${paddingTop}px !important;
+    padding-bottom: ${paddingBottom}px !important;
+    padding-left: ${config.marginLeft}px !important;
+    padding-right: ${config.marginRight}px !important;
+    ${pageBreakCSS}
+  `;
+
+  return wrapper;
+}
+
+/**
+ * Wraps content segments between page breaks into individual page containers
+ * This ensures padding applies per-page instead of accumulating across breaks
+ */
+function wrapContentIntoPages(
+  contentElements: HTMLElement[],
+  breaks: Array<{ elementIndex: number; pageIndex: number; previousPageHeight: number; triggerElementHeight: number }>,
+  config: PaginationPrintConfig,
+  proseMirrorContainer: HTMLElement
+): HTMLElement[] {
+  const pageWrappers: HTMLElement[] = [];
+  let currentElementIndex = 0;
+
+  // Process each page
+  for (let pageIndex = 0; pageIndex <= breaks.length; pageIndex++) {
+    const isLastPage = pageIndex === breaks.length;
+    const wrapper = createPageWrapper(config, isLastPage);
+
+    // Determine end index for this page
+    const endIndex = isLastPage
+      ? contentElements.length
+      : breaks[pageIndex].elementIndex;
+
+    // Move elements from current index to end index into wrapper
+    while (currentElementIndex < endIndex) {
+      const element = contentElements[currentElementIndex];
+      if (element && element.parentNode === proseMirrorContainer) {
+        wrapper.appendChild(element);
+      }
+      currentElementIndex++;
+    }
+
+    // Only add wrapper if it has content
+    if (wrapper.children.length > 0) {
+      pageWrappers.push(wrapper);
+    }
+  }
+
+  return pageWrappers;
+}
+
+/**
+ * Injects page wrapper elements into content using height-based calculation
  *
- * Strategy: Use the SAME algorithm as PaginationExtension to calculate break positions
- * - Iterate through content elements in order
- * - Track cumulative offsetHeight
- * - When cumulative height exceeds pageContentAreaHeight, inject break BEFORE that element
- * - This guarantees 1:1 matching because we use identical math to the pagination extension
- * - CSS padding provides spacing on every page automatically
+ * Strategy: Use the SAME algorithm as PaginationExtension to calculate break positions,
+ * then wrap content segments between breaks into individual page containers.
+ * - Calculate break positions using identical math to pagination extension
+ * - Wrap content between breaks in .print-page containers
+ * - Each wrapper has its own padding (prevents accumulation)
+ * - This guarantees 1:1 matching with paginated editor view
  *
- * Returns array of injected elements for cleanup
+ * Returns array of injected wrapper elements for cleanup
  */
 function injectContentPageBreaks(
   editorElement: HTMLElement,
@@ -191,9 +267,16 @@ function injectContentPageBreaks(
 ): HTMLElement[] {
   const injectedElements: HTMLElement[] = [];
 
+  // Get ProseMirror container
+  const proseMirrorContainer = editorElement.querySelector('.ProseMirror') as HTMLElement;
+  if (!proseMirrorContainer) {
+    loggers.performance.warn('ProseMirror container not found');
+    return injectedElements;
+  }
+
   // Get all ProseMirror content elements (actual content, not decorations)
-  const proseMirrorContent = editorElement.querySelectorAll(
-    '.ProseMirror > *:not([data-rm-pagination]):not(.rm-first-page-header)'
+  const proseMirrorContent = proseMirrorContainer.querySelectorAll(
+    ':scope > *:not([data-rm-pagination]):not(.rm-first-page-header)'
   );
   const contentElements = Array.from(proseMirrorContent) as HTMLElement[];
 
@@ -215,35 +298,22 @@ function injectContentPageBreaks(
     overflowTolerance: 10,
   });
 
-  // Inject page break elements at calculated positions
-  for (const breakMeta of breaks) {
-    const element = contentElements[breakMeta.elementIndex];
+  loggers.performance.info('Wrapping content into page containers', {
+    pageBreaksCalculated: breaks.length,
+    totalPages: breaks.length + 1,
+  });
 
-    if (element && element.parentNode) {
-      const pageBreakDiv = document.createElement('div');
-      pageBreakDiv.className = 'temp-print-page-break';
-      pageBreakDiv.style.pageBreakBefore = 'always';
-      pageBreakDiv.style.breakBefore = 'page';
-      pageBreakDiv.style.height = '0';
-      pageBreakDiv.style.margin = '0';
-      pageBreakDiv.style.padding = '0';
-      pageBreakDiv.setAttribute('data-temp-print', 'true');
+  // Wrap content segments into page containers
+  const pageWrappers = wrapContentIntoPages(contentElements, breaks, config, proseMirrorContainer);
 
-      element.parentNode.insertBefore(pageBreakDiv, element);
-      injectedElements.push(pageBreakDiv);
-
-      loggers.performance.debug('Injected page break', {
-        pageIndex: breakMeta.pageIndex,
-        elementIndex: breakMeta.elementIndex,
-        previousPageHeight: breakMeta.previousPageHeight,
-        triggerElementHeight: breakMeta.triggerElementHeight,
-        threshold: pageContentAreaHeight + 10,
-      });
-    }
-  }
+  // Insert wrappers back into ProseMirror container
+  pageWrappers.forEach(wrapper => {
+    proseMirrorContainer.appendChild(wrapper);
+    injectedElements.push(wrapper);
+  });
 
   loggers.performance.info('Height-based pagination complete', {
-    pageBreaksInjected: injectedElements.length,
+    pageWrappersCreated: pageWrappers.length,
     totalPages: breaks.length + 1,
   });
 
@@ -271,10 +341,6 @@ function injectPrintStyles(config: PaginationPrintConfig): HTMLStyleElement {
   const mmPerPixel = 0.264583; // 1px = 0.264583mm at 96 DPI
   const pageWidthMM = Math.round(config.pageWidth * mmPerPixel * 100) / 100;
   const pageHeightMM = Math.round(pageHeight * mmPerPixel * 100) / 100;
-
-  // Calculate total padding from config values
-  const totalPaddingTop = config.marginTop + config.pageHeaderHeight + config.contentMarginTop;
-  const totalPaddingBottom = config.marginBottom + config.pageFooterHeight + config.contentMarginBottom;
 
   style.textContent = `
     /* Pagination-aware print styles - Simplified approach */
@@ -324,16 +390,6 @@ function injectPrintStyles(config: PaginationPrintConfig): HTMLStyleElement {
         left: -9999px !important;
       }
 
-      /* Temporary page breaks injected by JavaScript - ensure they work */
-      .temp-print-page-break {
-        page-break-before: always !important;
-        break-before: page !important;
-        height: 0 !important;
-        margin: 0 !important;
-        padding: 0 !important;
-        border: none !important;
-      }
-
       /* Preserve editor container styling */
       .rm-with-pagination {
         border: none !important;
@@ -341,15 +397,26 @@ function injectPrintStyles(config: PaginationPrintConfig): HTMLStyleElement {
         background: white !important;
       }
 
-      /* Apply padding to content - this creates spacing on EVERY page */
-      .ProseMirror {
-        padding-top: ${totalPaddingTop}px !important;
-        padding-bottom: ${totalPaddingBottom}px !important;
-        padding-left: ${config.marginLeft}px !important;
-        padding-right: ${config.marginRight}px !important;
+      /* CRITICAL: Override globals.css line 781 padding on .ProseMirror */
+      /* Use direct child selector to target only .ProseMirror that contains .print-page */
+      .rm-with-pagination.ProseMirror:has(.print-page),
+      .rm-with-pagination .ProseMirror:has(.print-page),
+      .ProseMirror:has([data-temp-print="true"]) {
+        padding: 0 !important;
+        margin: 0 !important;
         max-width: 100% !important;
         overflow: visible !important;
         background: white !important;
+      }
+
+      /* Block inheritance from .ProseMirror to .print-page children */
+      /* This prevents the 20mm padding from globals.css from affecting wrappers */
+      .ProseMirror > .print-page,
+      .ProseMirror > [data-temp-print="true"] {
+        /* Inline styles handle padding - this just blocks inheritance */
+        all: revert !important;
+        display: block !important;
+        width: 100% !important;
       }
 
       /* Clean white background for print */
@@ -400,11 +467,17 @@ export function preparePaginatedPrint(editorElement: HTMLElement): (() => void) 
     calculatedPageHeight: calculatePageHeight(config),
   });
 
-  // Inject temporary page break elements into content using height-based calculation
-  const injectedBreaks = injectContentPageBreaks(editorElement, config);
-
-  // Inject print styles
+  // CRITICAL: Inject print styles FIRST before measuring heights
+  // This ensures height calculations happen in the same CSS context as print output
   const styleElement = injectPrintStyles(config);
+
+  // Force style computation by reading offsetHeight on any element
+  // This ensures the injected CSS is fully applied before we measure
+  // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+  void editorElement.offsetHeight;
+
+  // Now inject page wrappers - heights will be measured with print CSS active
+  const injectedBreaks = injectContentPageBreaks(editorElement, config);
 
   // Return cleanup function that removes both injected breaks and styles
   return () => {

@@ -19,6 +19,7 @@ RUN pnpm install --frozen-lockfile
 COPY packages ./packages
 COPY apps ./apps
 COPY tsconfig.json ./
+COPY turbo.json ./
 
 # Rebuild the source code only when needed
 FROM node:22.17.0-alpine AS builder
@@ -42,7 +43,8 @@ ENV NEXT_PUBLIC_REALTIME_URL=$NEXT_PUBLIC_REALTIME_URL
 
 # Build with development env to ensure Tailwind v4 processes correctly
 # Increased memory for Scribe.js and other heavy dependencies
-RUN cd apps/web && NODE_OPTIONS="--max-old-space-size=2048" pnpm build
+# Use Turbo to build web app and all its dependencies (@pagespace/lib, @pagespace/db)
+RUN NODE_OPTIONS="--max-old-space-size=2048" pnpm build --filter=web...
 
 # Reset NODE_ENV for production runtime
 ENV NODE_ENV=production
