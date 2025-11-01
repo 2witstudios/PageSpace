@@ -19,6 +19,7 @@ export default function SignUp() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [acceptedTos, setAcceptedTos] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState("Creating account...");
@@ -38,6 +39,13 @@ export default function SignUp() {
       return;
     }
 
+    // Client-side TOS acceptance validation
+    if (!acceptedTos) {
+      setError("You must accept the Terms of Service and Privacy Policy");
+      toast.error("You must accept the Terms of Service and Privacy Policy");
+      return;
+    }
+
     setIsLoading(true);
     setLoadingMessage("Creating account...");
 
@@ -52,6 +60,7 @@ export default function SignUp() {
           email,
           password,
           confirmPassword,
+          acceptedTos,
         }),
         credentials: 'include',
         redirect: 'manual', // Don't auto-follow redirects, we'll handle them
@@ -172,6 +181,26 @@ export default function SignUp() {
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                 />
+              </div>
+              <div className="flex items-start gap-2">
+                <input
+                  type="checkbox"
+                  id="acceptedTos"
+                  checked={acceptedTos}
+                  onChange={(e) => setAcceptedTos(e.target.checked)}
+                  className="mt-1 h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                  required
+                />
+                <label htmlFor="acceptedTos" className="text-sm text-muted-foreground">
+                  I agree to the{" "}
+                  <Link href="/tos" target="_blank" className="underline hover:text-foreground">
+                    Terms of Service
+                  </Link>{" "}
+                  and{" "}
+                  <Link href="/privacy" target="_blank" className="underline hover:text-foreground">
+                    Privacy Policy
+                  </Link>
+                </label>
               </div>
               {error && <p className="text-red-500 text-sm">{error}</p>}
               <Button type="submit" className="w-full" disabled={isLoading}>
