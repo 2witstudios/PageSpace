@@ -29,9 +29,9 @@ export default function PrivacyPolicy() {
               PageSpace is designed with privacy and security as core principles:
             </p>
             <ul className="list-disc pl-6 mb-4">
-              <li><strong>Secure Cloud Storage:</strong> Your data is stored securely in our cloud infrastructure with access controls and monitoring</li>
+              <li><strong>Secure Cloud Storage:</strong> Your data is stored in our cloud infrastructure with access controls and security logging</li>
               <li><strong>Authentication Security:</strong> Passwords are securely hashed using bcrypt, and sessions are managed with JWT tokens</li>
-              <li><strong>Data Protection:</strong> Sensitive information like API keys is encrypted using AES-256-GCM encryption</li>
+              <li><strong>Data Protection:</strong> Sensitive information like API keys is encrypted using AES-256-GCM encryption. Note that document content and chat messages are stored as plain text to enable search functionality</li>
               <li><strong>Transparency:</strong> Clear information about how we handle your data and what security measures we implement</li>
             </ul>
           </section>
@@ -97,17 +97,17 @@ export default function PrivacyPolicy() {
 
             <h3 className="text-xl font-semibold mb-3">5.2 Database Storage</h3>
             <p className="mb-4">
-              Your data is stored in our cloud database infrastructure with industry-standard security measures, including:
+              Your data is stored in our cloud database infrastructure with security measures appropriate for a service of this type, including:
             </p>
             <ul className="list-disc pl-6 mb-4">
-              <li><strong>Access Controls:</strong> Database access is restricted and monitored</li>
+              <li><strong>Access Controls:</strong> Database access is restricted to authorized services and personnel, with all operations logged for security analysis</li>
               <li><strong>Password Security:</strong> User passwords are securely hashed using bcrypt</li>
               <li><strong>API Key Encryption:</strong> Personal AI service API keys are encrypted using AES-256-GCM</li>
               <li><strong>Connection Security:</strong> Database connections use secure protocols</li>
-              <li><strong>Content Storage:</strong> Document content and chat messages are currently stored as plain text in our database</li>
+              <li><strong>Content Storage:</strong> Document content and chat messages are stored as plain text in our database to enable full-text search and collaboration features. This means content is not encrypted at rest in the database</li>
             </ul>
             <p className="mb-4">
-              <strong>Note:</strong> For enhanced security needs, consider our self-hosted deployment option where you have full control over data encryption and storage.
+              <strong>Note:</strong> Our logging infrastructure captures database operations, errors, and security events for troubleshooting and security analysis, but does not constitute real-time monitoring or intrusion detection.
             </p>
           </section>
 
@@ -128,20 +128,20 @@ export default function PrivacyPolicy() {
           <section className="mb-8">
             <h2 className="text-2xl font-semibold mb-4">7. Data Security</h2>
             <p className="mb-4">
-              We implement comprehensive security measures including:
+              We implement security measures appropriate for a cloud-based workspace service, including:
             </p>
             <ul className="list-disc pl-6 mb-4">
               <li><strong>Data in Transit:</strong> Secure HTTPS connections for all web traffic</li>
               <li><strong>Password Security:</strong> bcrypt hashing with salt rounds for user passwords</li>
               <li><strong>Session Management:</strong> JWT tokens with proper expiration and validation</li>
               <li><strong>API Key Protection:</strong> AES-256-GCM encryption for user-provided AI service keys</li>
-              <li><strong>Database Access:</strong> Restricted access controls and connection monitoring</li>
+              <li><strong>Database Access:</strong> Restricted access controls with comprehensive logging of operations, errors, and security events</li>
               <li><strong>Input Validation:</strong> Comprehensive sanitization and validation of user inputs</li>
               <li><strong>Rate Limiting:</strong> Protection against abuse and excessive API usage</li>
               <li><strong>CSRF Protection:</strong> Built-in protection against cross-site request forgery</li>
             </ul>
             <p className="mb-4">
-              While we implement strong security measures, no system is 100% secure. We encourage users to use strong passwords and follow good security practices.
+              While we implement commercially reasonable security measures, no system is 100% secure. We encourage users to use strong passwords, enable two-factor authentication where available, and follow good security practices. You are responsible for maintaining backups of critical data.
             </p>
           </section>
 
@@ -211,7 +211,7 @@ export default function PrivacyPolicy() {
           <section className="mb-8">
             <h2 className="text-2xl font-semibold mb-4">14. Data Security Incidents</h2>
             <p className="mb-4">
-              In the event of a data security incident that affects your personal information, we will notify affected users via email within 72 hours of discovering the incident, in accordance with applicable data protection laws.
+              In the event of a data security incident that affects your personal information, we will notify affected users via email within 72 hours of discovering the incident, where technically feasible and in accordance with applicable data protection laws. Notification will include information about the nature of the incident, the data affected, and steps we are taking to address it.
             </p>
           </section>
 
