@@ -94,7 +94,7 @@ class ChatViewModel: ObservableObject {
 
         switch chunk.type {
         case "text-delta":
-            if let text = chunk.delta?.text {
+            if let text = chunk.delta {
                 currentMessage.appendText(text)
                 streamingMessage = currentMessage
                 updateStreamingMessageInUI()

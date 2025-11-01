@@ -51,14 +51,14 @@ class AgentService: ObservableObject {
 
         // 2. Load all drives
         do {
-            let drivesResponse: DriveListResponse = try await apiClient.request(
+            let drives: [Drive] = try await apiClient.request(
                 endpoint: APIEndpoints.drives,
                 method: .GET
             )
-            print("✅ Loaded \(drivesResponse.drives.count) drives")
+            print("✅ Loaded \(drives.count) drives")
 
             // 3. For each drive, load pages and filter AI_CHAT pages
-            for drive in drivesResponse.drives {
+            for drive in drives {
                 do {
                     // Backend returns tree array directly (not wrapped)
                     let pageTree: [Page] = try await apiClient.request(
@@ -115,14 +115,46 @@ class AgentService: ObservableObject {
         selectedAgent = agent
     }
 
+    // MARK: - Update Global Agent Conversation ID
+
+    func updateGlobalAgentConversationId(_ conversationId: String) {
+        // Find and update the global agent in the agents array
+        if let index = agents.firstIndex(where: { $0.type == .global }) {
+            let updatedAgent = Agent(
+                id: agents[index].id,
+                type: .global,
+                title: agents[index].title,
+                subtitle: agents[index].subtitle,
+                icon: agents[index].icon,
+                driveId: agents[index].driveId,
+                driveName: agents[index].driveName,
+                pageId: agents[index].pageId,
+                pagePath: agents[index].pagePath,
+                aiProvider: agents[index].aiProvider,
+                aiModel: agents[index].aiModel,
+                systemPrompt: agents[index].systemPrompt,
+                enabledTools: agents[index].enabledTools,
+                conversationId: conversationId
+            )
+            agents[index] = updatedAgent
+
+            // Update selected agent if it's the global agent
+            if selectedAgent?.type == .global {
+                selectedAgent = updatedAgent
+            }
+
+            print("✅ Updated global agent with conversationId: \(conversationId)")
+        }
+    }
+
     // MARK: - Get Drives
 
     func getDrives() async throws -> [Drive] {
-        let response: DriveListResponse = try await apiClient.request(
+        let drives: [Drive] = try await apiClient.request(
             endpoint: APIEndpoints.drives,
             method: .GET
         )
-        return response.drives
+        return drives
     }
 
     // MARK: - Get Pages for Drive

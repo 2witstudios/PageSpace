@@ -51,13 +51,14 @@ struct Drive: Identifiable, Codable {
     let ownerId: String
     let createdAt: Date
     let updatedAt: Date
-    let isActive: Bool
+    let isActive: Bool?  // Optional - backend may not return this
+
+    // Additional fields from backend
+    let isOwned: Bool?  // Whether current user owns this drive
+    let role: String?   // User's role in this drive (OWNER, ADMIN, MEMBER, VIEWER)
 }
 
-struct DriveListResponse: Codable {
-    let drives: [Drive]
-}
-
+// NOTE: DriveListResponse removed - API returns [Drive] array directly
 // NOTE: PageListResponse removed - API returns [Page] tree array directly
 
 // MARK: - Agent Model (Unified representation)

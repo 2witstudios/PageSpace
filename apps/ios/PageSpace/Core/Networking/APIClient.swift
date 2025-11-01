@@ -49,6 +49,29 @@ class APIClient {
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
 
+    // Token refresh management - use actor for thread-safe async access
+    private actor TokenRefreshCoordinator {
+        private var isRefreshing = false
+
+        func beginRefresh() -> Bool {
+            if isRefreshing {
+                return false // Already refreshing
+            }
+            isRefreshing = true
+            return true
+        }
+
+        func endRefresh() {
+            isRefreshing = false
+        }
+
+        func isCurrentlyRefreshing() -> Bool {
+            return isRefreshing
+        }
+    }
+
+    private let tokenRefreshCoordinator = TokenRefreshCoordinator()
+
     private init() {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 30
@@ -78,7 +101,8 @@ class APIClient {
         endpoint: String,
         method: HTTPMethod = .GET,
         body: (any Encodable)? = nil,
-        queryParams: [String: String]? = nil
+        queryParams: [String: String]? = nil,
+        retryCount: Int = 0
     ) async throws -> T {
         let url = try buildURL(endpoint: endpoint, queryParams: queryParams)
         var request = URLRequest(url: url)
@@ -113,6 +137,24 @@ class APIClient {
 
             let decoded = try decoder.decode(T.self, from: data)
             return decoded
+        } catch APIError.unauthorized {
+            // Token might be expired - try to refresh and retry (only once)
+            if retryCount == 0 {
+                print("⚠️ Got 401 unauthorized - attempting token refresh...")
+                if try await refreshTokenIfNeeded() {
+                    print("✅ Token refreshed successfully - retrying request...")
+                    // Retry the request with new token
+                    return try await self.request(
+                        endpoint: endpoint,
+                        method: method,
+                        body: body,
+                        queryParams: queryParams,
+                        retryCount: 1
+                    )
+                }
+            }
+            // If refresh failed or this is a retry, throw the error
+            throw APIError.unauthorized
         } catch let error as APIError {
             throw error
         } catch let error as DecodingError {
@@ -127,55 +169,92 @@ class APIClient {
     func streamRequest(
         endpoint: String,
         method: HTTPMethod = .POST,
-        body: (any Encodable)? = nil
+        body: (any Encodable)? = nil,
+        retryCount: Int = 0
     ) -> AsyncThrowingStream<SSEEvent, Error> {
         AsyncThrowingStream { continuation in
             Task {
                 do {
-                    let url = try buildURL(endpoint: endpoint)
-                    var request = URLRequest(url: url)
-                    request.httpMethod = method.rawValue
-                    request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-
-                    // Add authentication
-                    addAuthHeaders(to: &request, method: method)
-
-                    // Add body
-                    if let body = body {
-                        request.httpBody = try encoder.encode(AnyEncodable(body))
-                        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                    }
-
-                    let (bytes, response) = try await session.bytes(for: request)
-
-                    guard let httpResponse = response as? HTTPURLResponse else {
-                        continuation.finish(throwing: APIError.invalidResponse)
-                        return
-                    }
-
-                    try handleHTTPStatus(httpResponse.statusCode)
-
-                    // Parse SSE stream
-                    var buffer = ""
-                    for try await byte in bytes {
-                        let char = Character(UnicodeScalar(byte))
-                        buffer.append(char)
-
-                        // SSE messages end with double newline
-                        if buffer.hasSuffix("\n\n") {
-                            let event = parseSSEEvent(buffer)
-                            if let event = event {
-                                continuation.yield(event)
-                            }
-                            buffer = ""
-                        }
-                    }
-
-                    continuation.finish()
+                    try await attemptStreamRequest(
+                        endpoint: endpoint,
+                        method: method,
+                        body: body,
+                        retryCount: retryCount,
+                        continuation: continuation
+                    )
                 } catch {
                     continuation.finish(throwing: error)
                 }
             }
+        }
+    }
+
+    private func attemptStreamRequest(
+        endpoint: String,
+        method: HTTPMethod,
+        body: (any Encodable)?,
+        retryCount: Int,
+        continuation: AsyncThrowingStream<SSEEvent, Error>.Continuation
+    ) async throws {
+        do {
+            let url = try buildURL(endpoint: endpoint)
+            var request = URLRequest(url: url)
+            request.httpMethod = method.rawValue
+            request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+
+            // Add authentication
+            addAuthHeaders(to: &request, method: method)
+
+            // Add body
+            if let body = body {
+                request.httpBody = try encoder.encode(AnyEncodable(body))
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            }
+
+            let (bytes, response) = try await session.bytes(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw APIError.invalidResponse
+            }
+
+            try handleHTTPStatus(httpResponse.statusCode)
+
+            // Parse SSE stream
+            var buffer = ""
+            for try await byte in bytes {
+                let char = Character(UnicodeScalar(byte))
+                buffer.append(char)
+
+                // SSE messages end with double newline
+                if buffer.hasSuffix("\n\n") {
+                    let event = parseSSEEvent(buffer)
+                    if let event = event {
+                        continuation.yield(event)
+                    }
+                    buffer = ""
+                }
+            }
+
+            continuation.finish()
+        } catch APIError.unauthorized {
+            // Token might be expired - try to refresh and retry (only once)
+            if retryCount == 0 {
+                print("⚠️ Stream got 401 unauthorized - attempting token refresh...")
+                if try await refreshTokenIfNeeded() {
+                    print("✅ Token refreshed - retrying stream request...")
+                    // Retry the stream request with new token
+                    try await attemptStreamRequest(
+                        endpoint: endpoint,
+                        method: method,
+                        body: body,
+                        retryCount: 1,
+                        continuation: continuation
+                    )
+                    return
+                }
+            }
+            // If refresh failed or this is a retry, throw the error
+            throw APIError.unauthorized
         }
     }
 
@@ -204,9 +283,58 @@ class APIClient {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
 
-        // Add CSRF token for write operations
-        if method != .GET, let csrfToken = AuthManager.shared.getCSRFToken() {
+        // Add CSRF token for all authenticated requests (backend requires it for GET too)
+        if let csrfToken = AuthManager.shared.getCSRFToken() {
             request.setValue(csrfToken, forHTTPHeaderField: "X-CSRF-Token")
+        }
+    }
+
+    // MARK: - Token Refresh
+
+    private func refreshTokenIfNeeded() async throws -> Bool {
+        // Check if another request is already refreshing using actor
+        if await tokenRefreshCoordinator.isCurrentlyRefreshing() {
+            // Wait a bit for the other refresh to complete
+            try await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+            // Return true if token is now available (refresh succeeded)
+            return AuthManager.shared.getToken() != nil
+        }
+
+        // Try to begin refresh (returns false if already refreshing)
+        guard await tokenRefreshCoordinator.beginRefresh() else {
+            // Another task started refreshing between check and begin
+            try await Task.sleep(nanoseconds: 500_000_000)
+            return AuthManager.shared.getToken() != nil
+        }
+
+        defer {
+            Task {
+                await tokenRefreshCoordinator.endRefresh()
+            }
+        }
+
+        do {
+            // Attempt to refresh the token (returns Void, throws on error)
+            try await AuthManager.shared.refreshToken()
+
+            // Check if we now have a valid token
+            if AuthManager.shared.getToken() != nil {
+                print("✅ Token refresh successful")
+                return true
+            } else {
+                print("❌ Token refresh failed - no token after refresh")
+                await MainActor.run {
+                    AuthManager.shared.logout()
+                }
+                return false
+            }
+        } catch {
+            print("❌ Token refresh error: \(error.localizedDescription)")
+            // Clear tokens on error
+            await MainActor.run {
+                AuthManager.shared.logout()
+            }
+            return false
         }
     }
 

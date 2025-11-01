@@ -13,10 +13,15 @@ class UnifiedChatViewModel: ObservableObject {
     private let aiService = AIService.shared
     private let pageAIService = PageAIService.shared
     private let conversationService = ConversationService.shared
+    private let agentService = AgentService.shared
     private var streamingMessage: StreamingMessage?
+
+    // Track conversationId separately in case agent doesn't have one yet
+    private var activeConversationId: String?
 
     init(agent: Agent) {
         self.agent = agent
+        self.activeConversationId = agent.conversationId
     }
 
     // MARK: - Load Messages
@@ -29,8 +34,11 @@ class UnifiedChatViewModel: ObservableObject {
             switch agent.type {
             case .global:
                 // Load from Global AI conversation
-                guard let conversationId = agent.conversationId else {
-                    throw NSError(domain: "UnifiedChatViewModel", code: 1, userInfo: [NSLocalizedDescriptionKey: "No conversation ID for global agent"])
+                guard let conversationId = activeConversationId else {
+                    // New user with no conversation yet - show empty messages
+                    messages = []
+                    isLoading = false
+                    return
                 }
 
                 let response = try await aiService.loadMessages(conversationId: conversationId)
@@ -99,12 +107,26 @@ class UnifiedChatViewModel: ObservableObject {
     // MARK: - Send to Global AI
 
     private func sendGlobalMessage(_ userMessage: Message) async throws {
-        guard let conversationId = agent.conversationId else {
-            throw NSError(domain: "UnifiedChatViewModel", code: 1, userInfo: [NSLocalizedDescriptionKey: "No conversation ID"])
+        // Auto-create conversation if needed (for new users)
+        var conversationId = activeConversationId
+
+        if conversationId == nil {
+            print("ℹ️ Creating new global conversation for first message")
+            let newConversation = try await conversationService.createConversation(title: "Global Assistant")
+            conversationId = newConversation.id
+            activeConversationId = conversationId
+            print("✅ Created global conversation: \(conversationId!)")
+
+            // Update the agent in AgentService with the new conversationId
+            agentService.updateGlobalAgentConversationId(conversationId!)
+        }
+
+        guard let finalConversationId = conversationId else {
+            throw NSError(domain: "UnifiedChatViewModel", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to get or create conversation ID"])
         }
 
         let stream = aiService.sendMessage(
-            conversationId: conversationId,
+            conversationId: finalConversationId,
             messages: messages
         )
 
@@ -151,7 +173,7 @@ class UnifiedChatViewModel: ObservableObject {
 
         switch chunk.type {
         case "text-delta":
-            if let text = chunk.delta?.text {
+            if let text = chunk.delta {
                 currentMessage.appendText(text)
                 streamingMessage = currentMessage
                 updateStreamingMessageInUI()
