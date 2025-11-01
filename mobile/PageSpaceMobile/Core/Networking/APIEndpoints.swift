@@ -21,7 +21,7 @@ enum APIEndpoints {
     // MARK: - AI Settings
     static let aiSettings = "/api/ai/settings"
 
-    // MARK: - Page AI (Future)
+    // MARK: - Page AI (CHAT_AI)
     static let pageAI = "/api/ai/chat"
 
     static func pageMessages(pageId: String) -> String {
@@ -32,7 +32,7 @@ enum APIEndpoints {
         "/api/pages/\(pageId)/agent-config"
     }
 
-    // MARK: - Pages & Drives (Future)
+    // MARK: - Pages & Drives
     static let drives = "/api/drives"
 
     static func drivePages(driveId: String) -> String {

@@ -2,7 +2,15 @@
 
 ## Overview
 
-PageSpace Mobile is a native iOS companion app that provides a streamlined interface for interacting with PageSpace's AI chat system. This app is a **thin UI layer** - all AI processing, tool execution, and data persistence happens on the PageSpace backend.
+PageSpace Mobile is a native iOS companion app that provides a streamlined interface for interacting with PageSpace's AI agents. This app is a **thin UI layer** - all AI processing, tool execution, and data persistence happens on the PageSpace backend.
+
+### Agent-Based Architecture
+
+The app uses an **agent system** similar to Claude Projects, where you can:
+- Chat with the **Global AI Assistant** (default)
+- Access specialized **Page AI agents** from your workspace
+- Switch between agents seamlessly
+- Agents are organized by drives (workspaces)
 
 ## Architecture
 
@@ -40,13 +48,18 @@ PageSpaceMobile/
 │   │   ├── Message.swift                 # Message & MessagePart models
 │   │   ├── Conversation.swift            # Conversation model
 │   │   ├── User.swift                    # User profile
+│   │   ├── Page.swift                    # Page, Drive, Agent models
 │   │   └── PageContext.swift             # Page/Drive context
 │   └── Services/
-│       ├── AIService.swift               # AI chat operations
+│       ├── AIService.swift               # Global AI operations
+│       ├── PageAIService.swift           # Page AI operations
+│       ├── AgentService.swift            # Agent management
 │       ├── ConversationService.swift     # Conversation CRUD
-│       ├── RealtimeService.swift         # Socket.IO integration
-│       └── SettingsService.swift         # AI settings management
+│       └── RealtimeService.swift         # Socket.IO integration
 ├── Features/
+│   ├── Agents/
+│   │   ├── AgentListView.swift           # Agent browser (like Claude Projects)
+│   │   └── AgentPickerView.swift         # Agent switcher modal
 │   ├── Auth/
 │   │   ├── LoginView.swift
 │   │   └── LoginViewModel.swift
@@ -80,10 +93,15 @@ PageSpaceMobile/
 
 ### Phase 1: Core AI Chat
 - ✅ Authentication (login with JWT)
-- ✅ Global AI conversations (create, list, view)
+- ✅ **Agent system** (Global AI + Page AI agents)
+- ✅ **Agent browser** (grouped by drives, like Claude Projects)
+- ✅ **Agent switching** (seamlessly switch between contexts)
+- ✅ Global AI conversations (personal assistant)
+- ✅ Page AI chat (specialized agents)
 - ✅ Send messages with SSE streaming
 - ✅ Render message parts (text + tool calls)
 - ✅ Message history with pagination
+- ✅ Default to Global Assistant
 
 ### Phase 2: Enhanced UX
 - ⬜ Offline mode with local caching

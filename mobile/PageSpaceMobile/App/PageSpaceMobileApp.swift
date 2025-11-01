@@ -42,9 +42,9 @@ struct ContentView: View {
 struct MainTabView: View {
     var body: some View {
         TabView {
-            ConversationListView()
+            AgentListView()
                 .tabItem {
-                    Label("Chats", systemImage: "bubble.left.and.bubble.right")
+                    Label("Agents", systemImage: "brain.head.profile")
                 }
 
             SettingsView()
