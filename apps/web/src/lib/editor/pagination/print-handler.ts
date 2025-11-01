@@ -177,7 +177,7 @@ function findPageBreaks(editorElement: HTMLElement): HTMLElement[] {
  * Creates a page wrapper div with proper padding for print output
  * Uses inline styles for maximum specificity to override globals.css
  */
-function createPageWrapper(config: PaginationPrintConfig, isLastPage: boolean = false): HTMLDivElement {
+function createPageWrapper(config: PaginationPrintConfig): HTMLDivElement {
   const wrapper = document.createElement('div');
   wrapper.className = 'print-page';
   wrapper.setAttribute('data-temp-print', 'true');
@@ -188,21 +188,21 @@ function createPageWrapper(config: PaginationPrintConfig, isLastPage: boolean = 
 
   // Use cssText for comprehensive inline styles that override everything
   // Inline styles have highest specificity and always win over class-based CSS
-  const pageBreakCSS = !isLastPage
-    ? 'break-after: page; page-break-after: always;'
-    : 'break-after: auto; page-break-after: auto;';
-
+  // CRITICAL: Use margin for vertical spacing, padding for horizontal
+  // CSS page breaks collapse padding at fragmentation boundaries but preserve margins
   wrapper.style.cssText = `
     box-sizing: border-box !important;
     display: block !important;
     width: 100% !important;
-    margin: 0 !important;
     background: white !important;
-    padding-top: ${paddingTop}px !important;
-    padding-bottom: ${paddingBottom}px !important;
+    margin-top: ${paddingTop}px !important;
+    margin-bottom: ${paddingBottom}px !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
     padding-left: ${config.marginLeft}px !important;
     padding-right: ${config.marginRight}px !important;
-    ${pageBreakCSS}
   `;
 
   return wrapper;
@@ -224,7 +224,7 @@ function wrapContentIntoPages(
   // Process each page
   for (let pageIndex = 0; pageIndex <= breaks.length; pageIndex++) {
     const isLastPage = pageIndex === breaks.length;
-    const wrapper = createPageWrapper(config, isLastPage);
+    const wrapper = createPageWrapper(config);
 
     // Determine end index for this page
     const endIndex = isLastPage
@@ -409,14 +409,15 @@ function injectPrintStyles(config: PaginationPrintConfig): HTMLStyleElement {
         background: white !important;
       }
 
-      /* Block inheritance from .ProseMirror to .print-page children */
-      /* This prevents the 20mm padding from globals.css from affecting wrappers */
+      /* Ensure print-page wrappers render correctly without interference */
+      /* The :has() selectors above already prevent globals.css padding from affecting these */
       .ProseMirror > .print-page,
       .ProseMirror > [data-temp-print="true"] {
-        /* Inline styles handle padding - this just blocks inheritance */
-        all: revert !important;
+        /* Let inline styles (set in createPageWrapper) handle all properties */
+        /* Removed 'all: revert' which was stripping inline padding values */
         display: block !important;
         width: 100% !important;
+        box-sizing: border-box !important;
       }
 
       /* Clean white background for print */
@@ -473,7 +474,6 @@ export function preparePaginatedPrint(editorElement: HTMLElement): (() => void) 
 
   // Force style computation by reading offsetHeight on any element
   // This ensures the injected CSS is fully applied before we measure
-  // eslint-disable-next-line @typescript-eslint/no-unused-expressions
   void editorElement.offsetHeight;
 
   // Now inject page wrappers - heights will be measured with print CSS active
