@@ -3,20 +3,25 @@ import Combine
 
 @MainActor
 class ChatViewModel: ObservableObject {
-    let conversationId: String
+    let agent: Agent
 
     @Published var messages: [Message] = []
-    @Published var conversation: Conversation?
     @Published var isLoading = false
     @Published var isStreaming = false
     @Published var error: String?
 
     private let aiService = AIService.shared
+    private let pageAIService = PageAIService.shared
     private let conversationService = ConversationService.shared
+    private let agentService = AgentService.shared
     private var streamingMessage: StreamingMessage?
 
-    init(conversationId: String) {
-        self.conversationId = conversationId
+    // Track conversationId separately in case agent doesn't have one yet
+    private var activeConversationId: String?
+
+    init(agent: Agent) {
+        self.agent = agent
+        self.activeConversationId = agent.conversationId
     }
 
     // MARK: - Load Messages
@@ -26,12 +31,27 @@ class ChatViewModel: ObservableObject {
         error = nil
 
         do {
-            // Load conversation details
-            conversation = try await conversationService.getConversation(conversationId)
+            switch agent.type {
+            case .global:
+                // Load from Global AI conversation
+                guard let conversationId = activeConversationId else {
+                    // New user with no conversation yet - show empty messages
+                    messages = []
+                    isLoading = false
+                    return
+                }
 
-            // Load messages
-            let response = try await aiService.loadMessages(conversationId: conversationId)
-            messages = response.messages
+                let response = try await aiService.loadMessages(conversationId: conversationId)
+                messages = response.messages
+
+            case .pageAI:
+                // Load from Page AI
+                guard let pageId = agent.pageId else {
+                    throw NSError(domain: "UnifiedChatViewModel", code: 2, userInfo: [NSLocalizedDescriptionKey: "No page ID for page AI agent"])
+                }
+
+                messages = try await pageAIService.loadMessages(pageId: pageId)
+            }
 
         } catch {
             self.error = error.localizedDescription
@@ -60,15 +80,12 @@ class ChatViewModel: ObservableObject {
         error = nil
 
         do {
-            // Include entire message history
-            let stream = aiService.sendMessage(
-                conversationId: conversationId,
-                messages: messages
-            )
+            switch agent.type {
+            case .global:
+                try await sendGlobalMessage(userMessage)
 
-            // Process stream chunks
-            for try await chunk in stream {
-                processStreamChunk(chunk)
+            case .pageAI:
+                try await sendPageMessage(userMessage)
             }
 
             // Streaming message already in UI from updateStreamingMessageInUI()
@@ -85,6 +102,68 @@ class ChatViewModel: ObservableObject {
 
         isStreaming = false
         streamingMessage = nil
+    }
+
+    // MARK: - Send to Global AI
+
+    private func sendGlobalMessage(_ userMessage: Message) async throws {
+        // Auto-create conversation if needed (for new users)
+        var conversationId = activeConversationId
+
+        if conversationId == nil {
+            print("ℹ️ Creating new global conversation for first message")
+            let newConversation = try await conversationService.createConversation(title: "Global Assistant")
+            conversationId = newConversation.id
+            activeConversationId = conversationId
+            print("✅ Created global conversation: \(conversationId!)")
+
+            // Update the agent in AgentService with the new conversationId
+            agentService.updateGlobalAgentConversationId(conversationId!)
+        }
+
+        guard let finalConversationId = conversationId else {
+            throw NSError(domain: "UnifiedChatViewModel", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to get or create conversation ID"])
+        }
+
+        let stream = aiService.sendMessage(
+            conversationId: finalConversationId,
+            messages: messages
+        )
+
+        for try await chunk in stream {
+            processStreamChunk(chunk)
+        }
+    }
+
+    // MARK: - Send to Page AI
+
+    private func sendPageMessage(_ userMessage: Message) async throws {
+        guard let pageId = agent.pageId else {
+            throw NSError(domain: "UnifiedChatViewModel", code: 2, userInfo: [NSLocalizedDescriptionKey: "No page ID"])
+        }
+
+        // Build page context
+        let pageContext = PageAIMessageRequest.PageContext(
+            pageId: pageId,
+            pageTitle: agent.title,
+            pageType: "AI_CHAT",
+            pagePath: agent.pagePath ?? "/",
+            parentPath: nil,
+            breadcrumbs: buildBreadcrumbs(),
+            driveId: agent.driveId ?? "",
+            driveName: agent.driveName ?? "",
+            driveSlug: agent.driveId ?? ""
+        )
+
+        let stream = pageAIService.sendMessage(
+            pageId: pageId,
+            messages: messages,
+            pageContext: pageContext
+        )
+
+        for try await chunk in stream {
+            processStreamChunk(chunk)
+        }
     }
 
     // MARK: - Stream Processing
@@ -141,5 +220,11 @@ class ChatViewModel: ObservableObject {
 
         // Add updated streaming message
         messages.append(streamingMessage.toMessage())
+    }
+
+    private func buildBreadcrumbs() -> [String] {
+        // Build breadcrumbs from agent path
+        guard let path = agent.pagePath else { return [] }
+        return path.split(separator: "/").map(String.init)
     }
 }

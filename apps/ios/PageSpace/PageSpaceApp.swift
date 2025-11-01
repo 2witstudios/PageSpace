@@ -32,25 +32,11 @@ struct ContentView: View {
 
     var body: some View {
         if authManager.isAuthenticated {
-            MainTabView()
+            NavigationStack {
+                HomeView()
+            }
         } else {
             LoginView()
-        }
-    }
-}
-
-struct MainTabView: View {
-    var body: some View {
-        TabView {
-            AgentListView()
-                .tabItem {
-                    Label("Agents", systemImage: "brain.head.profile")
-                }
-
-            SettingsView()
-                .tabItem {
-                    Label("Settings", systemImage: "gear")
-                }
         }
     }
 }

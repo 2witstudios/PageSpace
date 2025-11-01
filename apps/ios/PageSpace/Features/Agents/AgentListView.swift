@@ -3,6 +3,7 @@ import SwiftUI
 struct AgentListView: View {
     @StateObject private var agentService = AgentService.shared
     @State private var selectedAgent: Agent?
+    @State private var isSidebarOpen = false
 
     var body: some View {
         NavigationStack {
@@ -43,7 +44,7 @@ struct AgentListView: View {
                         }
                     }
                     .navigationDestination(for: Agent.self) { agent in
-                        UnifiedChatView(agent: agent)
+                        ChatView(agent: agent, isSidebarOpen: $isSidebarOpen)
                     }
                     .refreshable {
                         await agentService.loadAllAgents()

@@ -25,9 +25,10 @@ struct ConversationListView: View {
                 } else {
                     List {
                         ForEach(viewModel.conversations) { conversation in
-                            NavigationLink(destination: ChatView(conversationId: conversation.id)) {
+                            // TODO: Update to use new HomeView architecture
+                            // NavigationLink(destination: ChatView(conversationId: conversation.id)) {
                                 ConversationRow(conversation: conversation)
-                            }
+                            // }
                         }
                         .onDelete { indexSet in
                             Task {

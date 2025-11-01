@@ -5,12 +5,13 @@ import SwiftUI
 struct QuickChatView: View {
     @StateObject private var agentService = AgentService.shared
     @State private var showAgentPicker = false
+    @State private var isSidebarOpen = false
 
     var body: some View {
         NavigationView {
             Group {
                 if let currentAgent = agentService.selectedAgent {
-                    UnifiedChatView(agent: currentAgent)
+                    ChatView(agent: currentAgent, isSidebarOpen: $isSidebarOpen)
                 } else if agentService.isLoading {
                     ProgressView("Loading...")
                 } else {

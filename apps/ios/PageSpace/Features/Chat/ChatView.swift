@@ -1,14 +1,13 @@
 import SwiftUI
 
 struct ChatView: View {
-    let conversationId: String
-
     @StateObject private var viewModel: ChatViewModel
     @State private var messageText = ""
+    @Binding var isSidebarOpen: Bool
 
-    init(conversationId: String) {
-        self.conversationId = conversationId
-        _viewModel = StateObject(wrappedValue: ChatViewModel(conversationId: conversationId))
+    init(agent: Agent, isSidebarOpen: Binding<Bool>) {
+        _viewModel = StateObject(wrappedValue: ChatViewModel(agent: agent))
+        _isSidebarOpen = isSidebarOpen
     }
 
     var body: some View {
@@ -68,8 +67,28 @@ struct ChatView: View {
             }
             .padding()
         }
-        .navigationTitle(viewModel.conversation?.title ?? "Chat")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        isSidebarOpen.toggle()
+                    }
+                }) {
+                    Image(systemName: "line.3.horizontal")
+                }
+            }
+            ToolbarItem(placement: .principal) {
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        isSidebarOpen.toggle()
+                    }
+                }) {
+                    Text(viewModel.agent.title)
+                        .font(.headline)
+                }
+            }
+        }
         .task {
             await viewModel.loadMessages()
         }
@@ -89,7 +108,25 @@ struct ChatView: View {
 }
 
 #Preview {
-    NavigationView {
-        ChatView(conversationId: "preview-conversation-id")
+    struct PreviewWrapper: View {
+        @State private var isSidebarOpen = false
+
+        var body: some View {
+            NavigationView {
+                ChatView(
+                    agent: Agent(
+                        id: "global_preview",
+                        type: .global,
+                        title: "Global Assistant",
+                        subtitle: "Your personal AI assistant",
+                        icon: "brain.head.profile",
+                        conversationId: "global"
+                    ),
+                    isSidebarOpen: $isSidebarOpen
+                )
+            }
+        }
     }
+
+    return PreviewWrapper()
 }
