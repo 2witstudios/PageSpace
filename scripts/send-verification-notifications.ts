@@ -12,7 +12,7 @@
  */
 
 import { db, users, eq, isNull } from '@pagespace/db';
-import { createNotification } from '@pagespace/lib/notifications';
+import { createNotification } from '@pagespace/lib';
 
 async function sendVerificationNotifications() {
   console.log('🔍 Finding users with unverified emails...');

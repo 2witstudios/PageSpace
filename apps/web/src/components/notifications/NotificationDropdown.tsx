@@ -48,6 +48,8 @@ const NotificationIcon = ({ type }: { type: string }) => {
       return <MessageCircle className="h-4 w-4" />;
     case 'EMAIL_VERIFICATION_REQUIRED':
       return <Mail className="h-4 w-4" />;
+    case 'TOS_PRIVACY_UPDATED':
+      return <FileText className="h-4 w-4" />;
     case 'DRIVE_JOINED':
     case 'DRIVE_ROLE_CHANGED':
       return <Users className="h-4 w-4" />;
@@ -176,6 +178,14 @@ export default function NotificationDropdown() {
                         // Navigate to account settings
                         setIsDropdownOpen(false);
                         router.push('/settings/account');
+                      } else if (notification.type === 'TOS_PRIVACY_UPDATED' &&
+                          notification.metadata &&
+                          typeof notification.metadata === 'object' &&
+                          'documentUrl' in notification.metadata &&
+                          typeof notification.metadata.documentUrl === 'string') {
+                        // Navigate to the TOS or Privacy page
+                        setIsDropdownOpen(false);
+                        router.push(notification.metadata.documentUrl);
                       } else if (notification.type === 'NEW_DIRECT_MESSAGE' &&
                           notification.metadata &&
                           typeof notification.metadata === 'object' &&

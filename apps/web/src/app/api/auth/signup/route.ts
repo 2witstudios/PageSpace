@@ -24,6 +24,9 @@ const signupSchema = z.object({
     .regex(/[a-z]/, { message: "Password must contain at least one lowercase letter" })
     .regex(/[0-9]/, { message: "Password must contain at least one number" }),
   confirmPassword: z.string().min(1, { message: "Please confirm your password" }),
+  acceptedTos: z.boolean().refine((val) => val === true, {
+    message: "You must accept the Terms of Service and Privacy Policy",
+  }),
 }).refine((data) => data.password === data.confirmPassword, {
   message: "Passwords do not match",
   path: ["confirmPassword"],
@@ -102,6 +105,7 @@ export async function POST(req: Request) {
       // Storage tracking (quota/tier computed from subscriptionTier)
       storageUsedBytes: 0,
       subscriptionTier: 'free',
+      tosAcceptedAt: new Date(),
     }).returning().then(res => res[0]);
 
     // Create a personal drive for the new user

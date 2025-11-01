@@ -5,6 +5,7 @@ import { sendNotificationEmail } from './services/notification-email-service';
 // Export types and guards
 export * from './notifications/types';
 export * from './notifications/guards';
+import type { NotificationType } from './notifications/types';
 
 async function broadcastNotification(userId: string, notification: unknown) {
   try {
@@ -22,20 +23,6 @@ async function broadcastNotification(userId: string, notification: unknown) {
     console.error('Failed to broadcast notification:', error);
   }
 }
-
-export type NotificationType =
-  | 'PERMISSION_GRANTED'
-  | 'PERMISSION_REVOKED'
-  | 'PERMISSION_UPDATED'
-  | 'PAGE_SHARED'
-  | 'DRIVE_INVITED'
-  | 'DRIVE_JOINED'
-  | 'DRIVE_ROLE_CHANGED'
-  | 'CONNECTION_REQUEST'
-  | 'CONNECTION_ACCEPTED'
-  | 'CONNECTION_REJECTED'
-  | 'NEW_DIRECT_MESSAGE'
-  | 'EMAIL_VERIFICATION_REQUIRED';
 
 interface CreateNotificationParams {
   userId: string;
@@ -355,4 +342,53 @@ export async function createOrUpdateMessageNotification(
     },
     triggeredByUserId,
   });
+}
+
+/**
+ * Broadcasts TOS/Privacy update notifications to all users
+ * @param documentType - The type of document that was updated ('tos' | 'privacy')
+ * @param documentUrl - The URL to the updated document (e.g., '/terms' or '/privacy')
+ */
+export async function broadcastTosPrivacyUpdate(
+  documentType: 'tos' | 'privacy'
+) {
+  try {
+    // Get all active users (users with verified emails or at least one login)
+    const allUsers = await db.select({ id: users.id }).from(users);
+
+    const title = documentType === 'tos'
+      ? 'Terms of Service Updated'
+      : 'Privacy Policy Updated';
+
+    const message = documentType === 'tos'
+      ? 'Our Terms of Service have been updated. Please review the changes.'
+      : 'Our Privacy Policy has been updated. Please review the changes.';
+
+    const documentUrl = documentType === 'tos' ? '/terms' : '/privacy';
+
+    // Create notifications for all users
+    const notificationPromises = allUsers.map(user =>
+      createNotification({
+        userId: user.id,
+        type: 'TOS_PRIVACY_UPDATED',
+        title,
+        message,
+        metadata: {
+          documentType,
+          documentUrl,
+          updatedAt: new Date().toISOString(),
+        },
+      })
+    );
+
+    await Promise.all(notificationPromises);
+
+    return {
+      success: true,
+      notifiedUsers: allUsers.length,
+    };
+  } catch (error) {
+    console.error('Failed to broadcast TOS/Privacy update:', error);
+    throw error;
+  }
 }

@@ -171,6 +171,29 @@ export type DriveRoleChangedNotification = NotificationBase & {
   };
 };
 
+// Email verification notification
+export type EmailVerificationRequiredNotification = NotificationBase & {
+  type: 'EMAIL_VERIFICATION_REQUIRED';
+  title: string;
+  message: string;
+  metadata: {
+    email: string;
+    settingsUrl?: string;
+  };
+};
+
+// TOS/Privacy updated notification
+export type TosPrivacyUpdatedNotification = NotificationBase & {
+  type: 'TOS_PRIVACY_UPDATED';
+  title: string;
+  message: string;
+  metadata: {
+    documentType: 'tos' | 'privacy';
+    documentUrl: string;
+    updatedAt: string;
+  };
+};
+
 // Union of all notification types
 export type Notification =
   | ConnectionRequestNotification
@@ -183,7 +206,9 @@ export type Notification =
   | PageSharedNotification
   | DriveInvitedNotification
   | DriveJoinedNotification
-  | DriveRoleChangedNotification;
+  | DriveRoleChangedNotification
+  | EmailVerificationRequiredNotification
+  | TosPrivacyUpdatedNotification;
 
 // Type for notification types
 export type NotificationType = Notification['type'];
