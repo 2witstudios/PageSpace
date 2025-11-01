@@ -5,7 +5,7 @@ struct AgentListView: View {
     @State private var selectedAgent: Agent?
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             ZStack {
                 if agentService.isLoading && agentService.agents.isEmpty {
                     ProgressView("Loading agents...")
