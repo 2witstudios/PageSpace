@@ -28,6 +28,7 @@ RUN pnpm install --frozen-lockfile
 # Copy only the source code needed (avoid copying node_modules)
 COPY packages ./packages
 COPY apps ./apps
+COPY scripts ./scripts
 COPY tsconfig.json ./
 
 # Build the database package to ensure latest schema changes are compiled

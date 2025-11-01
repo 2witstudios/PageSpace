@@ -347,7 +347,7 @@ export async function createOrUpdateMessageNotification(
 /**
  * Broadcasts TOS/Privacy update notifications to all users
  * @param documentType - The type of document that was updated ('tos' | 'privacy')
- * @param documentUrl - The URL to the updated document (e.g., '/tos' or '/privacy')
+ * @param documentUrl - The URL to the updated document (e.g., '/terms' or '/privacy')
  */
 export async function broadcastTosPrivacyUpdate(
   documentType: 'tos' | 'privacy'
@@ -364,7 +364,7 @@ export async function broadcastTosPrivacyUpdate(
       ? 'Our Terms of Service have been updated. Please review the changes.'
       : 'Our Privacy Policy has been updated. Please review the changes.';
 
-    const documentUrl = documentType === 'tos' ? '/tos' : '/privacy';
+    const documentUrl = documentType === 'tos' ? '/terms' : '/privacy';
 
     // Create notifications for all users
     const notificationPromises = allUsers.map(user =>
