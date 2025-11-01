@@ -1,0 +1,799 @@
+# iOS App UI Restructuring - ChatGPT/Claude Style Navigation
+
+## Goal
+Transform the iOS app from dual-tab navigation (Agents + Settings) to a single chat view with left sliding menu, matching ChatGPT/Claude apps.
+
+## Target Design
+- **Primary View**: Always show chat interface (ChatView)
+- **Left Sidebar**: Sliding drawer with:
+  - Chats section (conversation history)
+  - Agents section (grouped: Global + by Drive)
+  - Files section (placeholder)
+- **Navigation**: Single-window chat with sidebar overlay
+- **Chat Title**: Tappable to open agent selector in sidebar
+- **Menu Button**: Hamburger icon (top-left) to open/close sidebar
+
+## Naming Conventions
+Following iOS/SwiftUI best practices:
+- **HomeView**: Root authenticated container (replaces MainTabView)
+- **ChatView**: Main chat interface (renamed from UnifiedChatView)
+- **Sidebar**: Left sliding menu (was SideMenuView)
+- **ConversationList**: History list component (was ConversationListView)
+- Drop "View" suffix where the type is obvious from context
+
+## Context from Existing Features
+- **Per-agent conversations**: Already implemented in web app
+- **Multiple conversation threads**: Already supported per agent
+- **Agent grouping**: Global Assistant + Page AI agents by drive
+- **Data models**: Agent, Conversation, Message already exist
+- **Services**: AgentService, AIService, PageAIService already handle backend
+
+## Apple SwiftUI Documentation Reference
+
+This section documents the official Apple SwiftUI patterns and APIs we'll use for this implementation, based on comprehensive research from Apple's official documentation.
+
+### Core SwiftUI Components
+
+#### 1. ZStack (iOS 13.0+)
+**Purpose**: Overlay views in a depth-based stack
+**Documentation**: `struct ZStack` overlays its subviews, aligning them in both axes
+**Usage in our app**: Main container for chat view + overlaid sidebar
+
+```swift
+ZStack(alignment: .leading) {
+    // Background: Chat view (full screen)
+    ChatView(...)
+
+    // Foreground: Sidebar overlay
+    if isSidebarOpen {
+        Sidebar(...)
+            .transition(.move(edge: .leading))
+    }
+}
+```
+
+**Key properties**:
+- `alignment`: Alignment guide for subviews (we'll use `.leading` for left-aligned menu)
+- `content`: ViewBuilder closure containing subviews
+- Subviews are drawn back-to-front (last view is on top)
+
+#### 2. NavigationStack (iOS 16.0+)
+**Purpose**: Manage navigation hierarchy with programmatic control
+**Documentation**: `struct NavigationStack` displays a root view and enables presenting additional views
+**Current usage**: Already used in AgentListView, UnifiedChatView
+**Future usage**: Maintain for settings navigation from side menu
+
+```swift
+NavigationStack {
+    MainChatView()
+}
+```
+
+**Key features**:
+- Manages its own navigation state automatically
+- Use `path` parameter for programmatic navigation control
+- Replaces deprecated `NavigationView` in iOS 16+
+
+#### 3. State Management
+
+##### @State (iOS 13.0+)
+**Purpose**: Single source of truth for view-local state
+**Documentation**: Property wrapper that can read and write a value managed by SwiftUI
+**Usage**: Sidebar open/close state in HomeView
+
+```swift
+struct HomeView: View {
+    @State private var isSidebarOpen: Bool = false
+    // SwiftUI automatically re-renders when this changes
+}
+```
+
+**Key behaviors**:
+- `wrappedValue`: The actual boolean/value
+- `projectedValue`: A binding (`$isSidebarOpen`) to pass to child views
+- SwiftUI owns the storage and triggers view updates on changes
+
+##### @Binding (iOS 13.0+)
+**Purpose**: Two-way connection to a value owned by a parent view
+**Documentation**: Property wrapper that can read and write a value owned by a source of truth
+**Usage**: Pass sidebar state from HomeView to Sidebar
+
+```swift
+struct Sidebar: View {
+    @Binding var isOpen: Bool
+    // Changes to isOpen update parent's @State
+}
+
+// Usage:
+Sidebar(isOpen: $isSidebarOpen)
+```
+
+**Key features**:
+- No storage - references parent's @State
+- Bidirectional: child can modify parent's state
+- Use `$` prefix to create binding from @State
+
+##### @ObservedObject (Combine, iOS 13.0+)
+**Purpose**: Subscribe to external reference type that publishes changes
+**Documentation**: ObservableObject protocol with objectWillChange publisher
+**Usage**: AgentService in views
+
+```swift
+class AgentService: ObservableObject {
+    @Published var agents: [Agent] = []
+    @Published var selectedAgent: Agent?
+    @Published var conversations: [UUID: [Conversation]] = [:]
+}
+
+struct Sidebar: View {
+    @ObservedObject var agentService: AgentService
+    // View re-renders when any @Published property changes
+}
+```
+
+**Key behaviors**:
+- Class must conform to `ObservableObject`
+- Use `@Published` on properties to trigger updates
+- `objectWillChange` publisher fires before property changes
+
+#### 4. Animations & Transitions
+
+##### Animation (iOS 13.0+)
+**Purpose**: Define how views change over time
+**Documentation**: Creates smooth visual transitions from one state to another
+
+**Types we'll use**:
+
+1. **Spring animations** (iOS 17.0+):
+```swift
+.animation(.spring(response: 0.3, dampingFraction: 0.8), value: isMenuOpen)
+```
+- `response`: Duration in seconds (0.3 = 300ms)
+- `dampingFraction`: Bounciness (0.8 = slightly bouncy, 1.0 = no bounce)
+- New `.bouncy`, `.smooth`, `.snappy` presets available in iOS 17+
+
+2. **Ease animations**:
+```swift
+.animation(.easeInOut(duration: 0.2), value: isMenuOpen)
+```
+- `.easeIn`: Starts slow, accelerates
+- `.easeOut`: Starts fast, decelerates
+- `.easeInOut`: Combines both (smooth start and end)
+
+3. **Linear animation**:
+```swift
+.animation(.linear(duration: 0.25), value: isMenuOpen)
+```
+- Constant speed throughout
+
+**Best practices**:
+- Always specify the `value` parameter (iOS 17+) to scope animations
+- Use `withAnimation { }` block for explicit state changes
+- Spring animations feel more natural for UI interactions
+
+##### AnyTransition (iOS 13.0+)
+**Purpose**: Define insertion/removal animations for views
+**Documentation**: Type-erased transition for conditional views
+
+**Built-in transitions**:
+- `.move(edge:)`: Slide from specified edge
+- `.opacity`: Fade in/out
+- `.scale`: Grow/shrink
+- `.slide`: Slide horizontally
+- `.asymmetric(insertion:removal:)`: Different in/out animations
+
+**Usage in our sidebar**:
+```swift
+if isSidebarOpen {
+    Sidebar(...)
+        .transition(.move(edge: .leading))
+}
+```
+
+**Combined transitions**:
+```swift
+.transition(
+    .asymmetric(
+        insertion: .move(edge: .leading).combined(with: .opacity),
+        removal: .move(edge: .leading)
+    )
+)
+```
+
+#### 5. Gestures
+
+##### DragGesture (iOS 13.0+)
+**Purpose**: Recognize dragging motions
+**Documentation**: A dragging motion that invokes an action as the drag-event sequence changes
+
+**Key properties**:
+- `minimumDistance`: CGFloat - minimum drag before gesture succeeds (default: 10pt)
+- `coordinateSpace`: Which space to measure in (`.local` or `.global`)
+
+**DragGesture.Value properties**:
+- `translation`: CGSize - drag distance from start point
+- `predictedEndTranslation`: CGSize - predicted final position
+- `location`: CGPoint - current touch location
+- `startLocation`: CGPoint - initial touch location
+
+**Usage patterns**:
+
+1. **Open sidebar from left edge** (in HomeView):
+```swift
+.gesture(
+    DragGesture(minimumDistance: 20)
+        .onChanged { value in
+            // Optional: Track drag progress for interactive animation
+            if value.translation.width > 0 {
+                // Dragging right
+            }
+        }
+        .onEnded { value in
+            if value.translation.width > 50 {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                    isSidebarOpen = true
+                }
+            }
+        }
+)
+```
+
+2. **Close sidebar by swiping left** (in Sidebar):
+```swift
+.gesture(
+    DragGesture()
+        .onEnded { value in
+            if value.translation.width < -50 {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                    isOpen = false
+                }
+            }
+        }
+)
+```
+
+**Gesture modifiers** (from Gesture protocol):
+- `.onChanged(_:)`: Called continuously during drag
+- `.onEnded(_:)`: Called when gesture completes
+- `.updating(_:body:)`: Update @GestureState during drag
+- `.simultaneously(with:)`: Combine with other gestures
+- `.sequenced(before:)`: Chain gestures in sequence
+
+##### View.gesture modifier
+**Purpose**: Attach gestures to views
+**Documentation**: Part of View protocol
+
+```swift
+.gesture(DragGesture().onEnded { ... })
+```
+
+**Gesture priorities**:
+- Use `.highPriorityGesture()` for menu-specific gestures
+- Use `.simultaneousGesture()` when both parent/child should respond
+- Default `.gesture()` gives child views priority
+
+#### 6. GeometryReader (iOS 13.0+)
+**Purpose**: Read view's size and coordinate space
+**Documentation**: Container that defines content as function of its own size
+
+**Usage for responsive sidebar width**:
+```swift
+GeometryReader { geometry in
+    Sidebar(...)
+        .frame(width: geometry.size.width * 0.8) // 80% of screen width
+        .frame(maxWidth: 300) // Cap at 300pt
+}
+```
+
+**Key properties**:
+- `geometry.size`: CGSize of the container
+- `geometry.safeAreaInsets`: Safe area insets
+- `geometry.frame(in:)`: Position in specified coordinate space
+
+**Caution**: GeometryReader expands to fill available space - use with care
+
+#### 7. View Modifiers for Layout
+
+##### .offset(x:y:)
+**Purpose**: Shift view's position without affecting layout
+**Usage**: Slide sidebar in/out
+
+```swift
+Sidebar(...)
+    .offset(x: isSidebarOpen ? 0 : -300)
+```
+
+**Important**: Offset doesn't affect view's layout space - other views don't reflow
+
+##### .frame(width:height:alignment:)
+**Purpose**: Set view's size
+**Usage**: Fix sidebar width
+
+```swift
+.frame(width: 300, alignment: .leading)
+```
+
+##### .overlay(alignment:content:)
+**Purpose**: Layer content on top of view
+**Alternative to**: ZStack when you need one primary view with overlays
+
+```swift
+ChatView(...)
+    .overlay(alignment: .leading) {
+        if isSidebarOpen {
+            Sidebar(...)
+        }
+    }
+```
+
+##### .background(alignment:content:)
+**Purpose**: Layer content behind view
+**Usage**: Add backdrop behind sidebar
+
+```swift
+.background {
+    if isSidebarOpen {
+        Color.black.opacity(0.3)
+            .ignoresSafeArea()
+            .onTapGesture {
+                withAnimation { isSidebarOpen = false }
+            }
+    }
+}
+```
+
+### SwiftUI Layout System
+
+#### Proposed Layout Hierarchy
+
+```
+HomeView (root container)
+├─ ZStack(alignment: .leading)
+│  ├─ ChatView (background, full screen)
+│  │  └─ NavigationStack
+│  │     ├─ ScrollView (messages)
+│  │     └─ .toolbar
+│  │        ├─ .navigationBarLeading: Hamburger button
+│  │        └─ .principal: Agent title (tappable)
+│  └─ Conditional overlay (foreground)
+│     ├─ Backdrop: Color.black.opacity(0.3)
+│     │  └─ .onTapGesture { close sidebar }
+│     └─ Sidebar
+│        ├─ VStack
+│        │  ├─ Header: "New Chat" button
+│        │  ├─ ScrollView
+│        │  │  ├─ Section: "Chats"
+│        │  │  │  └─ ConversationList
+│        │  │  ├─ Section: "Agents"
+│        │  │  │  └─ ForEach(grouped agents)
+│        │  │  └─ Section: "Files"
+│        │  │     └─ Button("Coming soon")
+│        │  └─ Footer: Settings link
+│        └─ .offset(x: isSidebarOpen ? 0 : -300)
+│           .animation(.spring(...), value: isSidebarOpen)
+│           .gesture(DragGesture().onEnded { swipe left to close })
+└─ .gesture(DragGesture().onEnded { swipe right from edge to open })
+```
+
+### Performance Considerations
+
+#### Drawing Optimization
+**Issue**: Complex animations can cause jank on older devices
+**Solution**: Use `.drawingGroup()` for GPU-accelerated rendering
+
+```swift
+Sidebar(...)
+    .drawingGroup() // Renders entire view as single texture
+```
+
+**When to use**:
+- Complex animations with many subviews
+- Noticeable frame drops during transitions
+- Trade-off: Higher memory usage
+
+#### Lazy Loading
+**Issue**: Loading all conversations upfront could be slow
+**Solution**: Use LazyVStack for conversation list
+
+```swift
+ScrollView {
+    LazyVStack(spacing: 0) {
+        ForEach(conversations) { conversation in
+            ConversationRow(conversation: conversation)
+        }
+    }
+}
+```
+
+**Benefits**:
+- Only renders visible rows
+- Reduces initial memory footprint
+- Smooth scrolling even with 100+ conversations
+
+### iOS Version Compatibility
+
+**Minimum Deployment Target**: iOS 16.0 (for NavigationStack)
+**Current Features Used**:
+- iOS 13.0: @State, @Binding, @ObservedObject, Animation, ZStack, DragGesture
+- iOS 16.0: NavigationStack (replacing NavigationView)
+- iOS 17.0+: Spring animation presets (optional)
+
+**Deprecation notes**:
+- `NavigationView` → `NavigationStack` (iOS 16.0+)
+- `.animation(_:)` without value → `.animation(_:value:)` (iOS 17.0+)
+
+## Implementation Phases
+
+### Phase 1: Create New Components
+**Est: 3-4 hours**
+
+#### 1.1 Create HomeView.swift
+**File**: `apps/ios/PageSpace/Features/Navigation/HomeView.swift`
+- Root container view managing chat + sidebar state
+- `@State private var isSidebarOpen: Bool = false`
+- Contains ChatView as primary content
+- Overlays Sidebar when open
+- Handles backdrop tap to close sidebar
+- Manages gesture for opening sidebar from left edge
+
+**Key responsibilities**:
+- State: `isSidebarOpen`, `selectedAgent`, `currentConversation`
+- Layout: ZStack with chat (full screen) + sidebar overlay (sliding)
+- Gestures: Drag from left edge to open, tap backdrop to close
+
+#### 1.2 Rename UnifiedChatView.swift → ChatView.swift
+**File**: `apps/ios/PageSpace/Features/Chat/ChatView.swift` (renamed)
+- Rename existing UnifiedChatView to ChatView
+- Update all imports throughout the codebase
+- Add `@Binding var isSidebarOpen: Bool` parameter
+- Add hamburger menu button (top-left toolbar)
+- Make chat title tappable to toggle sidebar
+- Remove old AgentPicker sheet button (lines 72-88)
+
+**New toolbar**:
+```swift
+.toolbar {
+    ToolbarItem(placement: .navigationBarLeading) {
+        Button(action: { isSidebarOpen.toggle() }) {
+            Image(systemName: "line.3.horizontal")
+        }
+    }
+    ToolbarItem(placement: .principal) {
+        Button(action: { isSidebarOpen.toggle() }) {
+            Text(agent.title)
+                .font(.headline)
+        }
+    }
+}
+```
+
+#### 1.3 Create Sidebar.swift
+**File**: `apps/ios/PageSpace/Features/Navigation/Sidebar.swift`
+- Left sliding drawer (300pt wide)
+- Custom slide animation from left edge
+- Three main sections:
+  1. **Header**: "New Chat" button (+ icon)
+  2. **Content Sections**:
+     - "Chats" (collapsible): Recent conversation list
+     - "Agents" (collapsible): Agent selector grouped by drive
+     - "Files" (placeholder): "Coming soon" button
+  3. **Footer**: Settings link
+
+**Key features**:
+- `@Binding var isOpen: Bool`
+- `@Binding var selectedAgent: Agent?`
+- Drag gesture to dismiss (swipe left)
+- Smooth slide transition (.offset() + animation)
+- Semi-transparent backdrop overlay
+- Reuse existing agent grouping logic from AgentService
+
+#### 1.4 Create ConversationList.swift
+**File**: `apps/ios/PageSpace/Features/Navigation/ConversationList.swift`
+- Display conversation history for selected agent
+- Grouped by date (Today, Yesterday, Last 7 Days, Older)
+- Each row: conversation title + preview (first message snippet)
+- Tap to load conversation in main chat
+- Swipe actions: Delete, Rename (future)
+
+**Key features**:
+- `@ObservedObject var agentService: AgentService`
+- Fetch conversations from API for current agent
+- Format dates with relative formatting
+- Handle empty state ("No conversations yet")
+
+### Phase 2: Integrate & Connect
+**Est: 2-3 hours**
+
+#### 2.1 Update PageSpaceApp.swift
+**File**: `apps/ios/PageSpace/PageSpaceApp.swift`
+
+**Changes**:
+- Remove `MainTabView` instantiation
+- Replace with `HomeView()` (when authenticated)
+- Keep existing auth routing: `ContentView` checks auth, shows `LoginView` or `HomeView`
+
+**Before**:
+```swift
+if authService.isAuthenticated {
+    MainTabView()
+} else {
+    LoginView()
+}
+```
+
+**After**:
+```swift
+if authService.isAuthenticated {
+    HomeView()
+} else {
+    LoginView()
+}
+```
+
+#### 2.2 Update ChatViewModel.swift
+**File**: `apps/ios/PageSpace/Features/Chat/ChatViewModel.swift` (renamed from UnifiedChatViewModel)
+
+**Changes**:
+1. Rename class from `UnifiedChatViewModel` to `ChatViewModel`
+2. Add `conversationId: UUID?` to init
+3. If `conversationId` provided, load existing messages
+4. Update message sending to include conversation context
+5. Auto-create conversation if starting fresh (existing logic)
+
+**Add method**:
+```swift
+func loadConversation(_ conversationId: UUID) async {
+    // Fetch messages for this conversation
+    // Update @Published messages
+}
+```
+
+#### 2.3 Update AgentService.swift
+**File**: `apps/ios/PageSpace/Core/Services/AgentService.swift`
+
+**Add conversation management**:
+```swift
+@Published var conversations: [UUID: [Conversation]] = [:] // keyed by agent ID
+@Published var currentConversation: Conversation?
+
+func fetchConversations(for agent: Agent) async throws -> [Conversation]
+func createConversation(for agent: Agent, title: String?) async throws -> Conversation
+func loadConversation(_ conversationId: UUID) async throws -> Conversation
+func deleteConversation(_ conversationId: UUID) async throws
+```
+
+**API endpoints to call**:
+- GET `/api/ai-chat/conversations?agentId={id}` (for page AI)
+- GET `/api/ai-chat/global/conversations` (for global)
+- POST `/api/ai-chat/conversations` (create new)
+- DELETE `/api/ai-chat/conversations/{id}` (delete)
+
+
+### Phase 3: Connect Data Flow
+**Est: 2 hours**
+
+#### 3.1 Conversation API Integration
+**Files**: `Core/Services/AgentService.swift`, `Core/Services/APIClient.swift`
+
+**Endpoints to implement**:
+1. **Fetch conversations**:
+   - Global: `GET /api/ai-chat/global/conversations`
+   - Page AI: `GET /api/ai-chat/conversations?pageId={pageId}`
+
+2. **Create conversation**:
+   - Global: `POST /api/ai-chat/global/conversations`
+   - Page AI: Handled by existing message send (auto-creates)
+
+3. **Load conversation messages**:
+   - Global: `GET /api/ai-chat/global/conversations/{id}/messages`
+   - Page AI: `GET /api/pages/{pageId}/ai-messages?conversationId={id}`
+
+4. **Delete conversation**:
+   - Global: `DELETE /api/ai-chat/global/conversations/{id}`
+   - Page AI: Archive/soft delete via API
+
+#### 3.2 State Management Flow
+**Connection points**:
+
+1. **HomeView** → AgentService
+   - Observes `selectedAgent`, `currentConversation`
+   - Passes to ChatView
+
+2. **Sidebar** → AgentService
+   - Reads `agents` (existing)
+   - Reads `conversations[selectedAgent.id]`
+   - Triggers: agent selection, conversation load, new chat
+
+3. **ConversationList** → AgentService
+   - Reads `conversations[selectedAgent.id]`
+   - Triggers: load conversation, delete conversation
+
+4. **ChatView** → ChatViewModel
+   - Receives `agent`, `conversationId` (optional)
+   - Loads messages from conversation if provided
+   - Creates new conversation if fresh
+
+### Phase 4: Polish & Cleanup
+**Est: 1-2 hours**
+
+#### 4.1 Remove Deprecated Files
+**Action**: Delete or move to archive
+- `apps/ios/PageSpace/Features/Agents/AgentListView.swift` (no longer primary view)
+- `apps/ios/PageSpace/Features/Agents/AgentPickerView.swift` (replaced by menu)
+- Remove `MainTabView` code from `PageSpaceApp.swift`
+
+#### 4.2 Add Animations & Transitions
+**In HomeView + Sidebar**:
+
+1. **Sidebar slide animation**:
+```swift
+.offset(x: isSidebarOpen ? 0 : -300)
+.animation(.spring(response: 0.3, dampingFraction: 0.8), value: isSidebarOpen)
+```
+
+2. **Backdrop fade**:
+```swift
+Color.black.opacity(isSidebarOpen ? 0.3 : 0)
+    .animation(.easeInOut(duration: 0.2), value: isSidebarOpen)
+```
+
+3. **Drag gesture** (open from left edge):
+```swift
+DragGesture(minimumDistance: 20)
+    .onEnded { value in
+        if value.translation.width > 50 {
+            withAnimation { isSidebarOpen = true }
+        }
+    }
+```
+
+4. **Drag to close** (swipe left on sidebar):
+```swift
+DragGesture()
+    .onEnded { value in
+        if value.translation.width < -50 {
+            withAnimation { isSidebarOpen = false }
+        }
+    }
+```
+
+#### 4.3 Test Complete Navigation Flow
+**Manual test checklist**:
+- [ ] Open app → see chat view (not agent list)
+- [ ] Tap hamburger → sidebar slides in from left
+- [ ] Sidebar shows: Chats, Agents (grouped), Files (placeholder)
+- [ ] Tap agent → starts new chat, sidebar closes
+- [ ] Tap conversation → loads that conversation, sidebar closes
+- [ ] Tap chat title → sidebar opens
+- [ ] Swipe from left edge → sidebar opens
+- [ ] Tap backdrop → sidebar closes
+- [ ] Swipe sidebar left → sidebar closes
+- [ ] "New Chat" button → starts fresh conversation
+- [ ] Settings link → navigates to settings
+- [ ] Files button → shows "Coming soon"
+
+### Phase 5: Future Enhancements (Not in this PR)
+- Conversation search
+- Conversation rename/delete UI
+- Files section implementation
+- Keyboard shortcuts
+- iPad split view optimization
+
+## File Structure After Changes
+
+```
+apps/ios/PageSpace/
+├── PageSpaceApp.swift [MODIFIED]
+├── Features/
+│   ├── Navigation/ [NEW DIRECTORY]
+│   │   ├── HomeView.swift [NEW]
+│   │   ├── Sidebar.swift [NEW]
+│   │   └── ConversationList.swift [NEW]
+│   ├── Chat/
+│   │   ├── ChatView.swift [RENAMED from UnifiedChatView.swift]
+│   │   ├── ChatViewModel.swift [RENAMED from UnifiedChatViewModel.swift]
+│   │   └── QuickChatView.swift [KEEP - update references]
+│   ├── Agents/
+│   │   ├── AgentListView.swift [DEPRECATED]
+│   │   └── AgentPickerView.swift [DEPRECATED]
+│   └── Settings/
+│       └── SettingsView.swift [KEEP - access via sidebar]
+├── Core/
+│   ├── Services/
+│   │   ├── AgentService.swift [MODIFIED]
+│   │   └── APIClient.swift [MODIFIED - new endpoints]
+│   └── Models/
+│       ├── Agent.swift [KEEP]
+│       ├── Conversation.swift [KEEP]
+│       └── Message.swift [KEEP]
+```
+
+## Technical Decisions
+
+### Why Custom Sliding Drawer vs Native Options?
+
+**Rejected**:
+- `.sheet()`: Comes from bottom, not left
+- `NavigationSplitView`: Different UX, not overlay pattern
+- `.sidebar`: macOS-focused, not iOS-native feel
+
+**Chosen**: Custom sliding drawer
+- Most ChatGPT/Claude-like UX
+- Full control over animations
+- Overlay pattern (doesn't push content)
+- Swipeable from screen edge
+
+### Agent Selection Behavior
+**Decision**: Tapping agent starts NEW chat
+- Rationale: Matches user expectation from clarification
+- Conversations list shows history (resumable)
+- Clear separation: agents = new, conversations = resume
+
+### Conversation Storage
+**Leveraging existing backend**:
+- Global conversations: Already in DB via web app
+- Page AI conversations: Already tracked per page
+- Just need to wire mobile UI to existing APIs
+
+## Testing Strategy
+
+### Unit Tests (Future)
+- AgentService conversation methods
+- Conversation list grouping logic
+- Message loading from conversation context
+
+### Manual Testing (This PR)
+- Complete navigation flow (see Phase 4.3)
+- All gestures (tap, swipe, drag)
+- State persistence (selected agent, current conversation)
+- API integration (fetch, create, load conversations)
+
+## Risks & Mitigations
+
+**Risk 1**: API endpoints for conversations might not exist
+- **Mitigation**: Check web app API routes, implement mobile-specific if needed
+- **Fallback**: Start with just agent switching, add conversations in follow-up
+
+**Risk 2**: Custom drawer animation performance
+- **Mitigation**: Use `.drawingGroup()` for GPU acceleration if needed
+- **Fallback**: Simplify animation to basic slide without spring
+
+**Risk 3**: Conversation loading causes UI lag
+- **Mitigation**: Show loading indicator, lazy load messages
+- **Fallback**: Limit initial message load to last 50
+
+## Success Criteria
+- [ ] No more tab navigation (single chat view)
+- [ ] Hamburger menu opens left sliding sidebar
+- [ ] Sidebar contains Chats/Agents/Files sections
+- [ ] Agent selection starts new chat
+- [ ] Conversation history loads specific thread
+- [ ] Chat title tappable to open sidebar
+- [ ] Smooth animations (no jank)
+- [ ] Settings accessible from sidebar
+
+## Estimated Timeline
+- **Phase 1**: 3-4 hours (new components)
+- **Phase 2**: 2-3 hours (modify existing)
+- **Phase 3**: 2 hours (data flow)
+- **Phase 4**: 1-2 hours (polish)
+- **Total**: ~8-11 hours
+
+## Next Steps
+1. Create `Features/Navigation/` directory
+2. Implement `HomeView.swift` (Phase 1.1)
+3. Rename `UnifiedChatView.swift` → `ChatView.swift` (Phase 1.2)
+4. Implement `Sidebar.swift` (Phase 1.3)
+5. Wire up to `PageSpaceApp.swift` (Phase 2.1)
+6. Test basic sidebar open/close
+7. Continue through phases sequentially
+
+## File Renaming Checklist
+When renaming files, update all references:
+- [ ] Rename `UnifiedChatView.swift` → `ChatView.swift`
+- [ ] Rename `UnifiedChatViewModel.swift` → `ChatViewModel.swift`
+- [ ] Update `QuickChatView.swift` imports
+- [ ] Update `AgentListView.swift` imports (if still in use)
+- [ ] Update `PageSpaceApp.swift` references
+- [ ] Search codebase for "UnifiedChat" string occurrences
+- [ ] Update Xcode project file if needed
