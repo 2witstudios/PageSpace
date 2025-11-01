@@ -12,7 +12,7 @@ export default function TermsOfService() {
             ← Back to Home
           </Link>
           <h1 className="text-4xl font-bold mb-2">Terms of Service</h1>
-          <p className="text-muted-foreground">Last updated: January 21, 2025</p>
+          <p className="text-muted-foreground">Last updated: November 1, 2025</p>
         </div>
 
         <div className="prose prose-lg max-w-none dark:prose-invert">
