@@ -193,7 +193,7 @@ export default function SignUp() {
                 />
                 <label htmlFor="acceptedTos" className="text-sm text-muted-foreground">
                   I agree to the{" "}
-                  <Link href="/tos" target="_blank" className="underline hover:text-foreground">
+                  <Link href="/terms" target="_blank" className="underline hover:text-foreground">
                     Terms of Service
                   </Link>{" "}
                   and{" "}
