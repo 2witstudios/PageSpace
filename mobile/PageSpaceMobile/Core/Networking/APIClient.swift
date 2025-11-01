@@ -92,6 +92,15 @@ class APIClient {
 
             try handleHTTPStatus(httpResponse.statusCode)
 
+            // Handle empty responses (204 No Content, DELETE operations, etc.)
+            // If the body is empty or we're expecting EmptyResponse, return without decoding
+            if data.isEmpty || httpResponse.statusCode == 204 {
+                // Check if T is EmptyResponse
+                if let emptyResponse = EmptyResponse() as? T {
+                    return emptyResponse
+                }
+            }
+
             let decoded = try decoder.decode(T.self, from: data)
             return decoded
         } catch let error as APIError {

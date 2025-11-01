@@ -71,14 +71,15 @@ class ChatViewModel: ObservableObject {
                 processStreamChunk(chunk)
             }
 
-            // Finalize streaming message
-            if let finalMessage = streamingMessage?.toMessage() {
-                messages.append(finalMessage)
-            }
+            // Streaming message already in UI from updateStreamingMessageInUI()
+            // No need to append again - it's already there!
 
         } catch {
             self.error = error.localizedDescription
             // Remove incomplete streaming message on error
+            if let streamingMessageId = streamingMessage?.id {
+                messages.removeAll { $0.id == streamingMessageId }
+            }
             streamingMessage = nil
         }
 
