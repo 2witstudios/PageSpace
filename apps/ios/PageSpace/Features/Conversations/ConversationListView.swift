@@ -76,7 +76,7 @@ struct ConversationRow: View {
                     .lineLimit(2)
             }
 
-            Text(conversation.updatedAt, style: .relative)
+            Text(conversation.lastMessageAt, style: .relative)
                 .font(.caption)
                 .foregroundColor(.secondary)
         }

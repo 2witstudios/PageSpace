@@ -21,7 +21,9 @@ class ChatViewModel: ObservableObject {
 
     init(agent: Agent) {
         self.agent = agent
-        self.activeConversationId = agent.conversationId
+        // Always start with a fresh conversation (user requirement)
+        // A new conversation will be created on first message
+        self.activeConversationId = nil
     }
 
     // MARK: - Load Messages

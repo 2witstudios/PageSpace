@@ -19,11 +19,11 @@ class ConversationService: ObservableObject {
         isLoading = true
         defer { isLoading = false }
 
-        let response: ConversationListResponse = try await apiClient.request(
+        let response: [Conversation] = try await apiClient.request(
             endpoint: APIEndpoints.conversations
         )
 
-        conversations = response.conversations
+        conversations = response
     }
 
     // MARK: - Get Global Conversation

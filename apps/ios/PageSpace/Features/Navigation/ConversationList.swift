@@ -99,21 +99,23 @@ struct ConversationList: View {
     // MARK: - Data Loading
 
     private func loadConversations() async {
-        guard let agent = agentService.selectedAgent else {
-            conversations = []
-            return
-        }
-
         isLoading = true
         error = nil
 
         do {
-            // TODO: Fetch conversations from API for this agent
-            // For now, use empty array as placeholder
-            conversations = []
+            // Fetch ALL conversations (not filtered by agent per user requirements)
+            let conversationService = ConversationService.shared
+            try await conversationService.loadConversations()
+
+            // Sort by most recent first
+            conversations = conversationService.conversations.sorted {
+                $0.lastMessageAt > $1.lastMessageAt
+            }
+
             isLoading = false
         } catch {
             self.error = error.localizedDescription
+            conversations = []
             isLoading = false
         }
     }
@@ -125,7 +127,7 @@ struct ConversationList: View {
         let now = Date()
 
         return Dictionary(grouping: conversations) { conversation in
-            let date = conversation.updatedAt
+            let date = conversation.lastMessageAt
 
             if calendar.isDateInToday(date) {
                 return "Today"

@@ -2,18 +2,18 @@ import Foundation
 
 struct Conversation: Identifiable, Codable {
     let id: String
-    let userId: String
     var title: String?
+    let type: String?
+    let contextId: String?
+    let lastMessageAt: Date
     let createdAt: Date
-    let updatedAt: Date
-    let isActive: Bool
 
     // Local-only properties (not from API)
     var lastMessage: String?
     var unreadCount: Int?
 
     enum CodingKeys: String, CodingKey {
-        case id, userId, title, createdAt, updatedAt, isActive
+        case id, title, type, contextId, lastMessageAt, createdAt
     }
 }
 

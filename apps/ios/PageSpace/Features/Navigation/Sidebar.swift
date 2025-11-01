@@ -12,6 +12,7 @@ struct Sidebar: View {
     @Binding var isOpen: Bool
     @ObservedObject var agentService: AgentService
     @State private var expandedSections: Set<SidebarSection> = [.agents]
+    @State private var showSettings = false
 
     enum SidebarSection: String, CaseIterable {
         case chats = "Chats"
@@ -204,7 +205,7 @@ struct Sidebar: View {
 
     private var footer: some View {
         Button(action: {
-            // TODO: Navigate to settings
+            showSettings = true
         }) {
             HStack {
                 Image(systemName: "gearshape")
@@ -215,6 +216,10 @@ struct Sidebar: View {
             .padding()
         }
         .buttonStyle(PlainButtonStyle())
+        .sheet(isPresented: $showSettings) {
+            SettingsView()
+                .environmentObject(AuthManager.shared)
+        }
     }
 
     // MARK: - Computed Properties

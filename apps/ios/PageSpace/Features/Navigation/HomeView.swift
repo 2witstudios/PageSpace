@@ -20,6 +20,7 @@ struct HomeView: View {
                     agent: selectedAgent,
                     isSidebarOpen: $isSidebarOpen
                 )
+                .id(selectedAgent.id) // Force recreation when agent changes
                 .zIndex(0)
             } else {
                 // Show loading or empty state when no agent selected
@@ -50,10 +51,13 @@ struct HomeView: View {
                 .zIndex(2)
             }
         }
-        .task {
-            // Load agents on app start
-            if agentService.agents.isEmpty {
-                await agentService.loadAllAgents()
+        .onAppear {
+            // Delay agent loading to ensure auth state is stable after login
+            Task {
+                try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds
+                if agentService.agents.isEmpty {
+                    await agentService.loadAllAgents()
+                }
             }
         }
     }

@@ -47,6 +47,15 @@ class AuthManager: ObservableObject {
         currentUser = response.user
         isAuthenticated = true
 
+        // Verify token persistence before proceeding
+        guard getToken() == response.token else {
+            throw NSError(
+                domain: "AuthManager",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to persist authentication token"]
+            )
+        }
+
         return response.user
     }
 
@@ -75,6 +84,15 @@ class AuthManager: ObservableObject {
         // Update state
         currentUser = response.user
         isAuthenticated = true
+
+        // Verify token persistence before proceeding
+        guard getToken() == response.token else {
+            throw NSError(
+                domain: "AuthManager",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to persist authentication token"]
+            )
+        }
 
         return response.user
     }
