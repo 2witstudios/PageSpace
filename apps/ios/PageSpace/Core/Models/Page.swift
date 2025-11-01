@@ -7,15 +7,25 @@ struct Page: Identifiable, Codable {
     let driveId: String
     let title: String
     let type: PageType
-    let path: String
     let parentId: String?
     let position: Int
     let createdAt: Date
     let updatedAt: Date
-    let isActive: Bool
 
-    // AI Chat config (if type == AI_CHAT)
-    var aiConfig: PageAIConfig?
+    // AI Chat config (if type == AI_CHAT) - flattened from backend
+    var aiProvider: String?
+    var aiModel: String?
+    var systemPrompt: String?
+    var enabledTools: [String]?
+
+    // Tree structure support
+    var children: [Page]?
+
+    // Computed property for path generation
+    var path: String {
+        // Fallback path based on title if needed
+        return "/\(title.lowercased().replacingOccurrences(of: " ", with: "-"))"
+    }
 }
 
 enum PageType: String, Codable {
@@ -29,16 +39,7 @@ enum PageType: String, Codable {
 }
 
 // MARK: - Page AI Configuration
-
-struct PageAIConfig: Codable, Hashable {
-    let pageId: String
-    var systemPrompt: String?
-    var enabledTools: [String]?
-    var aiProvider: String?
-    var aiModel: String?
-    let createdAt: Date
-    let updatedAt: Date
-}
+// NOTE: AI config is now flattened directly into Page struct (see lines 15-19)
 
 // MARK: - Drive Models
 
@@ -57,9 +58,7 @@ struct DriveListResponse: Codable {
     let drives: [Drive]
 }
 
-struct PageListResponse: Codable {
-    let pages: [Page]
-}
+// NOTE: PageListResponse removed - API returns [Page] tree array directly
 
 // MARK: - Agent Model (Unified representation)
 
@@ -75,12 +74,17 @@ struct Agent: Identifiable, Codable, Hashable {
     // For Page AI agents
     let pageId: String?
     let pagePath: String?
-    let aiConfig: PageAIConfig?
+
+    // Flattened AI config from page
+    let aiProvider: String?
+    let aiModel: String?
+    let systemPrompt: String?
+    let enabledTools: [String]?
 
     // For Global AI
     let conversationId: String?
 
-    init(id: String, type: AgentType, title: String, subtitle: String? = nil, icon: String = "brain", driveId: String? = nil, driveName: String? = nil, pageId: String? = nil, pagePath: String? = nil, aiConfig: PageAIConfig? = nil, conversationId: String? = nil) {
+    init(id: String, type: AgentType, title: String, subtitle: String? = nil, icon: String = "brain", driveId: String? = nil, driveName: String? = nil, pageId: String? = nil, pagePath: String? = nil, aiProvider: String? = nil, aiModel: String? = nil, systemPrompt: String? = nil, enabledTools: [String]? = nil, conversationId: String? = nil) {
         self.id = id
         self.type = type
         self.title = title
@@ -90,7 +94,10 @@ struct Agent: Identifiable, Codable, Hashable {
         self.driveName = driveName
         self.pageId = pageId
         self.pagePath = pagePath
-        self.aiConfig = aiConfig
+        self.aiProvider = aiProvider
+        self.aiModel = aiModel
+        self.systemPrompt = systemPrompt
+        self.enabledTools = enabledTools
         self.conversationId = conversationId
     }
 
@@ -118,7 +125,10 @@ struct Agent: Identifiable, Codable, Hashable {
             driveName: drive.name,
             pageId: page.id,
             pagePath: page.path,
-            aiConfig: page.aiConfig
+            aiProvider: page.aiProvider,
+            aiModel: page.aiModel,
+            systemPrompt: page.systemPrompt,
+            enabledTools: page.enabledTools
         )
     }
 }

@@ -21,47 +21,89 @@ class AgentService: ObservableObject {
         isLoading = true
         error = nil
 
+        var allAgents: [Agent] = []
+        var globalAgent: Agent?
+        var errorMessages: [String] = []
+
+        // 1. Load Global AI conversation (may be null for new users)
         do {
-            var allAgents: [Agent] = []
+            if let globalConversation = try await conversationService.getGlobalConversation() {
+                globalAgent = Agent.fromGlobalConversation(globalConversation)
+                allAgents.append(globalAgent!)
+                print("✅ Global conversation loaded: \(globalConversation.id)")
+            } else {
+                // Create a default global agent for new users
+                globalAgent = Agent(
+                    id: "global_default",
+                    type: .global,
+                    title: "Global Assistant",
+                    subtitle: "Your personal AI assistant",
+                    icon: "brain.head.profile",
+                    conversationId: nil
+                )
+                allAgents.append(globalAgent!)
+                print("ℹ️ No global conversation found, created default agent")
+            }
+        } catch {
+            errorMessages.append("Failed to load global conversation: \(error.localizedDescription)")
+            print("❌ Global conversation error: \(error)")
+        }
 
-            // 1. Load Global AI conversation
-            let globalConversation = try await conversationService.getGlobalConversation()
-            let globalAgent = Agent.fromGlobalConversation(globalConversation)
-            allAgents.append(globalAgent)
-
-            // 2. Load all drives
+        // 2. Load all drives
+        do {
             let drivesResponse: DriveListResponse = try await apiClient.request(
                 endpoint: APIEndpoints.drives,
                 method: .GET
             )
+            print("✅ Loaded \(drivesResponse.drives.count) drives")
 
             // 3. For each drive, load pages and filter AI_CHAT pages
             for drive in drivesResponse.drives {
-                let pagesResponse: PageListResponse = try await apiClient.request(
-                    endpoint: APIEndpoints.drivePages(driveId: drive.id),
-                    method: .GET
-                )
+                do {
+                    // Backend returns tree array directly (not wrapped)
+                    let pageTree: [Page] = try await apiClient.request(
+                        endpoint: APIEndpoints.drivePages(driveId: drive.id),
+                        method: .GET
+                    )
 
-                // Filter to AI_CHAT pages only
-                let aiChatPages = pagesResponse.pages.filter { $0.type == .aiChat }
+                    // Flatten tree structure to get all pages
+                    let allPages = flattenPageTree(pageTree)
+                    print("✅ Drive '\(drive.name)': Loaded \(allPages.count) pages")
 
-                // Create agents from AI chat pages
-                for page in aiChatPages {
-                    let agent = Agent.fromPage(page, drive: drive)
-                    allAgents.append(agent)
+                    // Filter to AI_CHAT pages only
+                    let aiChatPages = allPages.filter { $0.type == .aiChat }
+                    print("  └─ Found \(aiChatPages.count) AI chat pages")
+
+                    // Create agents from AI chat pages
+                    for page in aiChatPages {
+                        let agent = Agent.fromPage(page, drive: drive)
+                        allAgents.append(agent)
+                    }
+                } catch {
+                    // Log error but continue with other drives
+                    let errorMsg = "Failed to load pages for drive '\(drive.name)': \(error.localizedDescription)"
+                    errorMessages.append(errorMsg)
+                    print("❌ \(errorMsg)")
                 }
             }
-
-            // Update published property
-            agents = allAgents
-
-            // Set default selected agent to global if none selected
-            if selectedAgent == nil {
-                selectedAgent = globalAgent
-            }
-
         } catch {
-            self.error = error.localizedDescription
+            // If we can't load drives, that's a critical error
+            errorMessages.append("Failed to load drives: \(error.localizedDescription)")
+            print("❌ Drives error: \(error)")
+        }
+
+        // Update published property with whatever we managed to load
+        agents = allAgents
+        print("📊 Total agents loaded: \(allAgents.count)")
+
+        // Set default selected agent to global if none selected
+        if selectedAgent == nil, let defaultAgent = globalAgent {
+            selectedAgent = defaultAgent
+        }
+
+        // Set error message if any errors occurred (but don't fail completely)
+        if !errorMessages.isEmpty {
+            self.error = errorMessages.joined(separator: "\n")
         }
 
         isLoading = false
@@ -86,11 +128,13 @@ class AgentService: ObservableObject {
     // MARK: - Get Pages for Drive
 
     func getPages(driveId: String) async throws -> [Page] {
-        let response: PageListResponse = try await apiClient.request(
+        // Backend returns tree array directly
+        let pageTree: [Page] = try await apiClient.request(
             endpoint: APIEndpoints.drivePages(driveId: driveId),
             method: .GET
         )
-        return response.pages
+        // Return flattened list
+        return flattenPageTree(pageTree)
     }
 
     // MARK: - Get AI Chat Pages Only
@@ -98,5 +142,23 @@ class AgentService: ObservableObject {
     func getAIChatPages(driveId: String) async throws -> [Page] {
         let pages = try await getPages(driveId: driveId)
         return pages.filter { $0.type == .aiChat }
+    }
+
+    // MARK: - Tree Flattening Helper
+
+    private func flattenPageTree(_ pages: [Page]) -> [Page] {
+        var result: [Page] = []
+
+        for page in pages {
+            // Add the current page
+            result.append(page)
+
+            // Recursively add all children
+            if let children = page.children {
+                result.append(contentsOf: flattenPageTree(children))
+            }
+        }
+
+        return result
     }
 }

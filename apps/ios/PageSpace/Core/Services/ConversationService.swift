@@ -28,8 +28,10 @@ class ConversationService: ObservableObject {
 
     // MARK: - Get Global Conversation
 
-    func getGlobalConversation() async throws -> Conversation {
-        try await apiClient.request(endpoint: APIEndpoints.globalConversation)
+    func getGlobalConversation() async throws -> Conversation? {
+        // Backend can return null if no global conversation exists yet
+        let result: Conversation? = try? await apiClient.request(endpoint: APIEndpoints.globalConversation)
+        return result
     }
 
     // MARK: - Create Conversation

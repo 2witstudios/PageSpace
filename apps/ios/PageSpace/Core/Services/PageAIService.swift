@@ -75,8 +75,17 @@ class PageAIService: ObservableObject {
     }
 
     // MARK: - Get Page AI Config
+    // NOTE: These methods are currently unused but kept for future API interactions
+    // AI config is now flattened into the Page model
 
-    func getPageConfig(pageId: String) async throws -> PageAIConfig {
+    struct PageAIConfigUpdate: Codable {
+        var systemPrompt: String?
+        var enabledTools: [String]?
+        var aiProvider: String?
+        var aiModel: String?
+    }
+
+    func getPageConfig(pageId: String) async throws -> PageAIConfigUpdate {
         try await apiClient.request(
             endpoint: APIEndpoints.pageAgentConfig(pageId: pageId),
             method: .GET
@@ -85,7 +94,7 @@ class PageAIService: ObservableObject {
 
     // MARK: - Update Page AI Config
 
-    func updatePageConfig(pageId: String, config: PageAIConfig) async throws -> PageAIConfig {
+    func updatePageConfig(pageId: String, config: PageAIConfigUpdate) async throws -> PageAIConfigUpdate {
         try await apiClient.request(
             endpoint: APIEndpoints.pageAgentConfig(pageId: pageId),
             method: .PATCH,
