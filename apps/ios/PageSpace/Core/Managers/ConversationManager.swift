@@ -57,6 +57,9 @@ class ConversationManager: ObservableObject {
     /// Throttle to batch rapid stream updates (prevents SwiftUI frame overload)
     private let streamThrottle = StreamThrottle(interval: 0.05) // 50ms batching
 
+    /// Active streaming task (for cancellation support)
+    private var streamTask: Task<Void, Never>?
+
     private init() {}
 
     // MARK: - Load Conversation (Atomic Operation)
@@ -172,41 +175,82 @@ class ConversationManager: ObservableObject {
                 )
             }
 
-            // Stream message
-            let stream = aiService.sendMessage(
-                conversationId: finalConversationId,
-                messages: messages
-            )
+            // Stream message (wrapped in Task for cancellation support)
+            streamTask = Task {
+                do {
+                    let stream = aiService.sendMessage(
+                        conversationId: finalConversationId,
+                        messages: messages
+                    )
 
-            for try await chunk in stream {
-                processStreamChunk(chunk)
+                    for try await chunk in stream {
+                        // Check if task was cancelled
+                        if Task.isCancelled {
+                            print("🛑 Stream cancelled by user")
+                            break
+                        }
+                        processStreamChunk(chunk)
+                    }
+
+                    // Flush any pending throttled updates (ensures final UI update)
+                    streamThrottle.flush()
+
+                    // Move streaming message to completed messages
+                    // Use builder (source of truth) instead of streamingMessage (throttled snapshot)
+                    // to ensure we capture all chunks, including any pending in the throttle
+                    if let builder = streamingMessageBuilder {
+                        messages.append(builder.toMessage())
+                    }
+
+                    print("✅ Message sent successfully")
+
+                } catch is CancellationError {
+                    print("🛑 Stream cancelled")
+                } catch {
+                    self.error = "Failed to send message: \(error.localizedDescription)"
+                    print("❌ Failed to send message: \(error)")
+
+                    // Clear incomplete streaming message on error
+                    streamThrottle.cancel()
+                    streamingMessage = nil
+                    streamingMessageBuilder = nil
+                }
+
+                isStreaming = false
+                streamingMessage = nil
+                streamingMessageBuilder = nil
+                streamTask = nil
             }
 
-            // Flush any pending throttled updates (ensures final UI update)
-            streamThrottle.flush()
-
-            // Move streaming message to completed messages
-            // Use builder (source of truth) instead of streamingMessage (throttled snapshot)
-            // to ensure we capture all chunks, including any pending in the throttle
-            if let builder = streamingMessageBuilder {
-                messages.append(builder.toMessage())
-            }
-
-            print("✅ Message sent successfully")
+            // Wait for task to complete
+            await streamTask?.value
 
         } catch {
-            self.error = "Failed to send message: \(error.localizedDescription)"
-            print("❌ Failed to send message: \(error)")
+            self.error = "Failed to create conversation: \(error.localizedDescription)"
+            print("❌ Failed to create conversation: \(error)")
 
-            // Clear incomplete streaming message on error
-            streamThrottle.cancel()
+            isStreaming = false
             streamingMessage = nil
             streamingMessageBuilder = nil
+            streamTask = nil
         }
+    }
 
-        isStreaming = false
+    // MARK: - Stop Streaming
+
+    /// Stop the current streaming operation
+    func stopStreaming() {
+        print("🛑 ConversationManager.stopStreaming - cancelling active stream")
+
+        // Cancel the active streaming task
+        streamTask?.cancel()
+        streamTask = nil
+
+        // Clean up streaming state
+        streamThrottle.cancel()
         streamingMessage = nil
         streamingMessageBuilder = nil
+        isStreaming = false
     }
 
     // MARK: - Stream Processing

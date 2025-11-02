@@ -63,14 +63,26 @@ struct ChatView: View {
 
                 Button {
                     Task {
-                        await sendMessage()
+                        if conversationManager.isStreaming {
+                            conversationManager.stopStreaming()
+                        } else {
+                            await sendMessage()
+                        }
                     }
                 } label: {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 32))
-                        .foregroundColor(canSend ? .blue : .gray)
+                    if conversationManager.isStreaming {
+                        Image(systemName: "stop.circle.fill")
+                            .font(.system(size: 32))
+                            .foregroundColor(.red)
+                    } else {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 32))
+                            .foregroundColor(canSend ? .blue : .gray)
+                    }
                 }
-                .disabled(!canSend)
+                .disabled(!canSend && !conversationManager.isStreaming)
+                .accessibilityLabel(conversationManager.isStreaming ? "Stop generating" : "Send message")
+                .animation(.easeInOut(duration: 0.2), value: conversationManager.isStreaming)
             }
             .padding()
         }
