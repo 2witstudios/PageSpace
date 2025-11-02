@@ -75,6 +75,9 @@ class ConversationManager: ObservableObject {
 
         print("🟢 ConversationManager.loadConversation - loading: \(conversation.displayTitle)")
 
+        // Capture the conversation ID we're loading for race condition protection
+        let loadingConversationId = conversation.id
+
         isLoadingConversation = true
         error = nil
 
@@ -87,9 +90,12 @@ class ConversationManager: ObservableObject {
             // Fetch messages from API
             let response = try await aiService.loadMessages(conversationId: conversation.id)
 
-            // Atomic update - only set if still loading this conversation
-            // (guards against race conditions if user quickly switches conversations)
-            if isLoadingConversation {
+            // Verify the response still matches the currently selected conversation
+            // This prevents race conditions when rapidly switching conversations:
+            // - User clicks conversation A → loadConversation(A) starts
+            // - Before A's API returns, user clicks conversation B → loadConversation(B) starts
+            // - If A returns first, we discard it because currentConversationId != A's ID
+            if currentConversationId == loadingConversationId {
                 messages = response.messages
 
                 // Update selected agent to match loaded conversation
@@ -97,10 +103,17 @@ class ConversationManager: ObservableObject {
                 selectedAgentContextId = conversation.contextId
 
                 print("✅ Loaded \(messages.count) messages for conversation: \(conversation.displayTitle)")
+            } else {
+                print("⚠️ Discarding stale response for \(conversation.displayTitle) - user switched to different conversation")
             }
         } catch {
-            self.error = "Failed to load conversation: \(error.localizedDescription)"
-            print("❌ Failed to load conversation \(conversation.id): \(error)")
+            // Only set error if still on the same conversation
+            if currentConversationId == loadingConversationId {
+                self.error = "Failed to load conversation: \(error.localizedDescription)"
+                print("❌ Failed to load conversation \(conversation.id): \(error)")
+            } else {
+                print("⚠️ Discarding error for \(conversation.displayTitle) - user switched to different conversation")
+            }
         }
 
         isLoadingConversation = false
