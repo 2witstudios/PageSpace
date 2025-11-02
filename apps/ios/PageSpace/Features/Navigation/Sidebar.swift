@@ -7,64 +7,53 @@
 
 import SwiftUI
 
-/// Left sliding sidebar with navigation, agent selection, and conversation history
+/// Navigation destinations for sidebar
+enum SidebarDestination: Hashable {
+    case agents
+    case channels
+}
+
+/// Left sliding sidebar with ChatGPT/Claude-style navigation
+/// Features: Agents, Channels, Files buttons at top, Recents list, and user profile footer
 struct Sidebar: View {
     @Binding var isOpen: Bool
     @ObservedObject var agentService: AgentService
-    @State private var expandedSections: Set<SidebarSection> = [.agents]
-    @State private var showSettings = false
+    @EnvironmentObject var authManager: AuthManager
 
-    enum SidebarSection: String, CaseIterable {
-        case chats = "Chats"
-        case agents = "Agents"
-        case files = "Files"
-    }
+    // Navigation callback
+    var onNavigate: (SidebarDestination) -> Void
+
+    @State private var showSettings = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header with New Chat button
-            header
+            // Navigation Buttons Section
+            navigationButtons
+                .padding(.horizontal)
+                .padding(.top, 16)
 
             Divider()
+                .padding(.top, 12)
 
-            // Main content
+            // Recents Section Header
+            recentsHeader
+                .padding(.horizontal)
+                .padding(.top, 12)
+
+            // Conversation List
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    // Chats Section
-                    sectionHeader(.chats)
-                    if expandedSections.contains(.chats) {
-                        ConversationList(agentService: agentService, closeSidebar: {
-                            withAnimation(.easeInOut(duration: 0.3)) {
-                                isOpen = false
-                            }
-                        })
+                ConversationList(agentService: agentService, closeSidebar: {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        isOpen = false
                     }
-
-                    Divider()
-                        .padding(.vertical, 8)
-
-                    // Agents Section
-                    sectionHeader(.agents)
-                    if expandedSections.contains(.agents) {
-                        agentsSection
-                    }
-
-                    Divider()
-                        .padding(.vertical, 8)
-
-                    // Files Section
-                    sectionHeader(.files)
-                    if expandedSections.contains(.files) {
-                        filesPlaceholder
-                    }
-                }
+                })
                 .padding(.horizontal)
             }
 
             Divider()
 
-            // Footer with Settings
-            footer
+            // User Profile Footer
+            userProfileFooter
         }
         .frame(width: 280)
         .background(Color(UIColor.systemBackground))
@@ -76,172 +65,180 @@ struct Sidebar: View {
         }
     }
 
-    // MARK: - Header
+    // MARK: - Navigation Buttons
 
-    private var header: some View {
-        HStack {
-            Text("PageSpace")
-                .font(.headline)
-            Spacer()
-            Button(action: {
-                withAnimation(.easeInOut(duration: 0.3)) {
-                    isOpen = false
-                }
-            }) {
-                Image(systemName: "xmark")
-                    .foregroundColor(.secondary)
-            }
-        }
-        .padding()
-    }
-
-    // MARK: - Section Headers
-
-    private func sectionHeader(_ section: SidebarSection) -> some View {
-        Button(action: {
-            withAnimation(.easeInOut(duration: 0.2)) {
-                if expandedSections.contains(section) {
-                    expandedSections.remove(section)
-                } else {
-                    expandedSections.insert(section)
-                }
-            }
-        }) {
-            HStack {
-                Text(section.rawValue)
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.primary)
-                Spacer()
-                Image(systemName: expandedSections.contains(section) ? "chevron.down" : "chevron.right")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            .padding(.vertical, 8)
-        }
-        .buttonStyle(PlainButtonStyle())
-    }
-
-    // MARK: - Agents Section
-
-    private var agentsSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            // Global Agents
-            if !globalAgents.isEmpty {
-                Text("Global")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .padding(.top, 4)
-
-                ForEach(globalAgents) { agent in
-                    agentRow(agent)
-                }
-            }
-
-            // Page AI Agents by Drive
-            ForEach(groupedPageAgents.keys.sorted(), id: \.self) { driveName in
-                if let agents = groupedPageAgents[driveName] {
-                    Text(driveName)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .padding(.top, 8)
-
-                    ForEach(agents) { agent in
-                        agentRow(agent)
+    private var navigationButtons: some View {
+        VStack(spacing: 8) {
+            // Agents Button
+            NavigationButton(
+                icon: "person.2.fill",
+                title: "Agents",
+                action: {
+                    onNavigate(.agents)
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        isOpen = false
                     }
                 }
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
-    private func agentRow(_ agent: Agent) -> some View {
-        Button(action: {
-            // Start new chat with this agent
-            agentService.selectAgent(agent)
-            withAnimation(.easeInOut(duration: 0.3)) {
-                isOpen = false
-            }
-        }) {
-            HStack(spacing: 8) {
-                Image(systemName: agent.icon)
-                    .font(.caption)
-                    .foregroundColor(agent.type == .global ? .blue : .purple)
-                    .frame(width: 20)
-                Text(agent.title)
-                    .font(.subheadline)
-                    .foregroundColor(.primary)
-                    .lineLimit(1)
-                Spacer()
-                if agentService.selectedAgent?.id == agent.id {
-                    Image(systemName: "checkmark")
-                        .font(.caption2)
-                        .foregroundColor(.blue)
-                }
-            }
-            .padding(.vertical, 6)
-            .padding(.horizontal, 8)
-            .background(
-                agentService.selectedAgent?.id == agent.id ?
-                Color.blue.opacity(0.1) : Color.clear
             )
-            .cornerRadius(6)
+
+            // Channels Button
+            NavigationButton(
+                icon: "number.circle.fill",
+                title: "Channels",
+                action: {
+                    onNavigate(.channels)
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        isOpen = false
+                    }
+                }
+            )
+
+            // Files Button (disabled/placeholder)
+            NavigationButton(
+                icon: "doc.fill",
+                title: "Files",
+                action: {},
+                isDisabled: true
+            )
         }
-        .buttonStyle(PlainButtonStyle())
     }
 
-    // MARK: - Files Section
+    // MARK: - Recents Header
 
-    private var filesPlaceholder: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Files coming soon")
-                .font(.caption)
+    private var recentsHeader: some View {
+        HStack {
+            Image(systemName: "clock")
+                .font(.subheadline)
                 .foregroundColor(.secondary)
-                .padding(.vertical, 4)
+            Text("Recents")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+                .foregroundColor(.primary)
+            Spacer()
         }
     }
 
-    // MARK: - Footer
+    // MARK: - User Profile Footer
 
-    private var footer: some View {
+    private var userProfileFooter: some View {
         Button(action: {
             showSettings = true
         }) {
-            HStack {
-                Image(systemName: "gearshape")
-                Text("Settings")
-                    .font(.subheadline)
+            HStack(spacing: 12) {
+                // Avatar Circle
+                Circle()
+                    .fill(LinearGradient(
+                        colors: [.blue, .purple],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ))
+                    .frame(width: 40, height: 40)
+                    .overlay(
+                        Text(userInitials)
+                            .font(.headline)
+                            .foregroundColor(.white)
+                    )
+
+                // User Info
+                VStack(alignment: .leading, spacing: 2) {
+                    if let user = authManager.currentUser {
+                        Text(user.name ?? "User")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                            .foregroundColor(.primary)
+                            .lineLimit(1)
+
+                        Text(user.email)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                    } else {
+                        Text("Loading...")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
                 Spacer()
+
+                // Settings Indicator
+                Image(systemName: "ellipsis")
+                    .foregroundColor(.secondary)
+                    .rotationEffect(.degrees(90))
             }
             .padding()
+            .contentShape(Rectangle())
         }
         .buttonStyle(PlainButtonStyle())
         .sheet(isPresented: $showSettings) {
-            SettingsView()
-                .environmentObject(AuthManager.shared)
+            SettingsSheet()
+                .environmentObject(authManager)
         }
     }
 
     // MARK: - Computed Properties
 
-    private var globalAgents: [Agent] {
-        agentService.agents.filter { $0.type == .global }
-    }
+    private var userInitials: String {
+        guard let user = authManager.currentUser else { return "?" }
 
-    private var pageAgents: [Agent] {
-        agentService.agents.filter { $0.type == .pageAI }
-    }
-
-    private var groupedPageAgents: [String: [Agent]] {
-        Dictionary(grouping: pageAgents) { agent in
-            agent.driveName ?? "Unknown"
+        if let name = user.name, !name.isEmpty {
+            let components = name.components(separatedBy: " ")
+            let initials = components.compactMap { $0.first }.prefix(2)
+            return String(initials).uppercased()
+        } else {
+            return user.email.prefix(1).uppercased()
         }
+    }
+}
+
+/// Navigation button component for sidebar
+struct NavigationButton: View {
+    let icon: String
+    let title: String
+    let action: () -> Void
+    var isDisabled: Bool = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.body)
+                    .foregroundColor(isDisabled ? .secondary.opacity(0.5) : .primary)
+                    .frame(width: 24)
+
+                Text(title)
+                    .font(.body)
+                    .fontWeight(.medium)
+                    .foregroundColor(isDisabled ? .secondary.opacity(0.5) : .primary)
+
+                Spacer()
+
+                if isDisabled {
+                    Text("Soon")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.secondary.opacity(0.1))
+                        .cornerRadius(4)
+                }
+            }
+            .padding(.vertical, 12)
+            .padding(.horizontal, 16)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.secondary.opacity(0.1))
+            )
+        }
+        .buttonStyle(PlainButtonStyle())
+        .disabled(isDisabled)
     }
 }
 
 #Preview {
     struct PreviewWrapper: View {
         @State private var isOpen = true
+        @StateObject private var authManager = AuthManager.shared
 
         var body: some View {
             ZStack(alignment: .leading) {
@@ -251,8 +248,12 @@ struct Sidebar: View {
                 if isOpen {
                     Sidebar(
                         isOpen: $isOpen,
-                        agentService: AgentService.shared
+                        agentService: AgentService.shared,
+                        onNavigate: { destination in
+                            print("Navigate to: \(destination)")
+                        }
                     )
+                    .environmentObject(authManager)
                     .offset(x: isOpen ? 0 : -280)
                 }
             }

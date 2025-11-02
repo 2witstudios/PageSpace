@@ -32,9 +32,7 @@ struct ContentView: View {
 
     var body: some View {
         if authManager.isAuthenticated {
-            NavigationStack {
-                HomeView()
-            }
+            HomeView()
         } else {
             LoginView()
         }

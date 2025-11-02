@@ -10,45 +10,59 @@ import SwiftUI
 /// Root authenticated container managing chat interface and sidebar navigation
 struct HomeView: View {
     @StateObject private var agentService = AgentService.shared
+    @EnvironmentObject var authManager: AuthManager
+
     @State private var isSidebarOpen: Bool = false
+    @State private var navigationPath = NavigationPath()
 
     var body: some View {
-        ZStack(alignment: .leading) {
-            // Main chat view (always present)
-            if let selectedAgent = agentService.selectedAgent {
-                ChatView(
-                    agent: selectedAgent,
-                    isSidebarOpen: $isSidebarOpen
-                )
-                .id(selectedAgent.id) // Force recreation when agent changes
-                .zIndex(0)
-            } else {
-                // Show loading or empty state when no agent selected
-                VStack {
-                    ProgressView("Loading...")
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .zIndex(0)
-            }
-
-            // Sidebar (slides in from left)
-            if isSidebarOpen {
-                Color.black.opacity(0.3)
-                    .ignoresSafeArea()
-                    .onTapGesture {
-                        withAnimation(.easeInOut(duration: 0.3)) {
-                            isSidebarOpen = false
-                        }
+        NavigationStack(path: $navigationPath) {
+            ZStack(alignment: .leading) {
+                // Main chat view (always present)
+                if let selectedAgent = agentService.selectedAgent {
+                    ChatView(
+                        agent: selectedAgent,
+                        isSidebarOpen: $isSidebarOpen
+                    )
+                    .id(selectedAgent.id) // Force recreation when agent changes
+                    .zIndex(0)
+                } else {
+                    // Show loading or empty state when no agent selected
+                    VStack {
+                        ProgressView("Loading...")
                     }
-                    .zIndex(1)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .zIndex(0)
+                }
 
-                Sidebar(
-                    isOpen: $isSidebarOpen,
-                    agentService: agentService
-                )
-                .offset(x: isSidebarOpen ? 0 : -280)
-                .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isSidebarOpen)
-                .zIndex(2)
+                // Sidebar (slides in from left)
+                if isSidebarOpen {
+                    Color.black.opacity(0.3)
+                        .ignoresSafeArea()
+                        .onTapGesture {
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                isSidebarOpen = false
+                            }
+                        }
+                        .zIndex(1)
+
+                    Sidebar(
+                        isOpen: $isSidebarOpen,
+                        agentService: agentService,
+                        onNavigate: handleNavigation
+                    )
+                    .offset(x: isSidebarOpen ? 0 : -280)
+                    .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isSidebarOpen)
+                    .zIndex(2)
+                }
+            }
+            .navigationDestination(for: SidebarDestination.self) { destination in
+                switch destination {
+                case .agents:
+                    AgentsListView(agentService: agentService)
+                case .channels:
+                    ChannelsListView()
+                }
             }
         }
         .onAppear {
@@ -61,8 +75,15 @@ struct HomeView: View {
             }
         }
     }
+
+    // MARK: - Navigation Handler
+
+    private func handleNavigation(_ destination: SidebarDestination) {
+        navigationPath.append(destination)
+    }
 }
 
 #Preview {
     HomeView()
+        .environmentObject(AuthManager.shared)
 }
