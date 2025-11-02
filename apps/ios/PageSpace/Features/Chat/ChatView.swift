@@ -1,10 +1,10 @@
 import SwiftUI
 
 struct ChatView: View {
-    let agent: Agent
     @Binding var isSidebarOpen: Bool
 
     @EnvironmentObject var conversationManager: ConversationManager
+    @EnvironmentObject var agentService: AgentService
     @State private var messageText = ""
 
     var body: some View {
@@ -91,8 +91,30 @@ struct ChatView: View {
                         isSidebarOpen.toggle()
                     }
                 }) {
-                    Text(agent.title)
-                        .font(.headline)
+                    VStack(spacing: 2) {
+                        if let conversation = conversationManager.currentConversation {
+                            // Show conversation title
+                            Text(conversation.displayTitle)
+                                .font(.headline)
+                            // Optionally show agent type in small text
+                            Text(agentTypeLabel(conversation.type ?? "global"))
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        } else if let agent = agentService.selectedAgent {
+                            // New conversation - show agent name
+                            Text(agent.title)
+                                .font(.headline)
+                            if let subtitle = agent.subtitle {
+                                Text(subtitle)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        } else {
+                            // Fallback
+                            Text("Chat")
+                                .font(.headline)
+                        }
+                    }
                 }
             }
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -103,25 +125,16 @@ struct ChatView: View {
                 }
             }
         }
-        .task {
-            // Load conversation when view appears
-            print("🟡 ChatView.task triggered - agent: \(agent.title), agentConversationId: \(agent.conversationId ?? "nil"), managerConversationId: \(conversationManager.currentConversationId ?? "nil")")
+    }
 
-            // Simple logic: Only load conversation if agent explicitly has one (from Recents)
-            // Otherwise, start fresh conversation
-            if let agentConversationId = agent.conversationId {
-                // Agent has a conversation ID (from Recents) - load it if different
-                if agentConversationId != conversationManager.currentConversationId {
-                    print("ℹ️ Loading conversation from Recents: \(agentConversationId)")
-                    await conversationManager.loadConversation(agentConversationId)
-                } else {
-                    print("ℹ️ Conversation already loaded: \(agentConversationId)")
-                }
-            } else {
-                // No conversation ID (from AgentsList) - start fresh
-                print("ℹ️ Starting new conversation with agent: \(agent.title)")
-                conversationManager.createNewConversation()
-            }
+    // MARK: - Helper Methods
+
+    private func agentTypeLabel(_ type: String) -> String {
+        switch type {
+        case "global": return "Global Assistant"
+        case "page": return "Page AI"
+        case "drive": return "Drive AI"
+        default: return ""
         }
     }
 
@@ -142,21 +155,13 @@ struct ChatView: View {
     struct PreviewWrapper: View {
         @State private var isSidebarOpen = false
         @StateObject private var conversationManager = ConversationManager.shared
+        @StateObject private var agentService = AgentService.shared
 
         var body: some View {
             NavigationView {
-                ChatView(
-                    agent: Agent(
-                        id: "global_preview",
-                        type: .global,
-                        title: "Global Assistant",
-                        subtitle: "Your personal AI assistant",
-                        icon: "brain.head.profile",
-                        conversationId: "global"
-                    ),
-                    isSidebarOpen: $isSidebarOpen
-                )
-                .environmentObject(conversationManager)
+                ChatView(isSidebarOpen: $isSidebarOpen)
+                    .environmentObject(conversationManager)
+                    .environmentObject(agentService)
             }
         }
     }

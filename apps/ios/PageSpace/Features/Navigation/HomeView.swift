@@ -20,22 +20,10 @@ struct HomeView: View {
         NavigationStack(path: $navigationPath) {
             ZStack(alignment: .leading) {
                 // Main chat view (always present)
-                if let selectedAgent = agentService.selectedAgent {
-                    ChatView(
-                        agent: selectedAgent,
-                        isSidebarOpen: $isSidebarOpen
-                    )
-                    .environmentObject(conversationManager)  // Provide ConversationManager to ChatView
-                    .id(conversationManager.currentConversationId ?? "new") // Key by currentConversationId
+                ChatView(isSidebarOpen: $isSidebarOpen)
+                    .environmentObject(conversationManager)
+                    .environmentObject(agentService)
                     .zIndex(0)
-                } else {
-                    // Show loading or empty state when no agent selected
-                    VStack {
-                        ProgressView("Loading...")
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .zIndex(0)
-                }
 
                 // Sidebar (slides in from left)
                 if isSidebarOpen {
@@ -53,7 +41,8 @@ struct HomeView: View {
                         agentService: agentService,
                         onNavigate: handleNavigation
                     )
-                    .environmentObject(conversationManager)  // Provide ConversationManager to Sidebar
+                    .environmentObject(conversationManager)
+                    .environmentObject(agentService)
                     .offset(x: isSidebarOpen ? 0 : -280)
                     .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isSidebarOpen)
                     .zIndex(2)

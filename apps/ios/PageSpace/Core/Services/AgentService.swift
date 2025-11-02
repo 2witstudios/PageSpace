@@ -25,31 +25,18 @@ class AgentService: ObservableObject {
         var globalAgent: Agent?
         var errorMessages: [String] = []
 
-        // 1. Load Global AI conversation (may be null for new users)
-        do {
-            if let globalConversation = try await conversationService.getGlobalConversation() {
-                globalAgent = Agent.fromGlobalConversation(globalConversation)
-                allAgents.append(globalAgent!)
-                print("✅ Global conversation loaded: \(globalConversation.id)")
-            } else {
-                // Create a default global agent for new users
-                globalAgent = Agent(
-                    id: "global_default",
-                    type: .global,
-                    title: "Global Assistant",
-                    subtitle: "Your personal AI assistant",
-                    icon: "brain.head.profile",
-                    conversationId: nil
-                )
-                allAgents.append(globalAgent!)
-                print("ℹ️ No global conversation found, created default agent")
-            }
-        } catch {
-            errorMessages.append("Failed to load global conversation: \(error.localizedDescription)")
-            print("❌ Global conversation error: \(error)")
-        }
+        // 1. Create Global Assistant agent (no conversation ID needed)
+        globalAgent = Agent(
+            id: "global_default",
+            type: .global,
+            title: "Global Assistant",
+            subtitle: "Your personal AI assistant",
+            icon: "brain.head.profile"
+        )
+        allAgents.append(globalAgent!)
+        print("✅ Global Assistant agent created")
 
-        // 2. Load all drives
+        // 2. Load all drives and their AI chat pages
         do {
             let drives: [Drive] = try await apiClient.request(
                 endpoint: APIEndpoints.drives,
@@ -57,7 +44,7 @@ class AgentService: ObservableObject {
             )
             print("✅ Loaded \(drives.count) drives")
 
-            // 3. For each drive, load pages and filter AI_CHAT pages
+            // For each drive, load pages and filter AI_CHAT pages
             for drive in drives {
                 do {
                     // Backend returns tree array directly (not wrapped)
@@ -112,7 +99,22 @@ class AgentService: ObservableObject {
     // MARK: - Select Agent
 
     func selectAgent(_ agent: Agent) {
-        selectedAgent = agent
+        print("🎯 AgentService.selectAgent - agent: \(agent.title), type: \(agent.type)")
+        self.selectedAgent = agent
+
+        // Update ConversationManager's selected agent info for new conversations
+        let conversationManager = ConversationManager.shared
+
+        if agent.type == .global {
+            conversationManager.selectedAgentType = "global"
+            conversationManager.selectedAgentContextId = nil
+        } else if agent.type == .pageAI {
+            conversationManager.selectedAgentType = "page"
+            conversationManager.selectedAgentContextId = agent.pageId
+        }
+
+        // Create fresh conversation
+        conversationManager.createNewConversation()
     }
 
     // MARK: - Update Global Agent Conversation ID

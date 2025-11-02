@@ -21,6 +21,14 @@ class ConversationManager: ObservableObject {
     /// Current conversation ID being displayed
     @Published var currentConversationId: String?
 
+    /// Track the loaded conversation (for display)
+    @Published var currentConversation: Conversation?
+
+    /// Track the AGENT user selected (for creating new conversations)
+    /// This is set by AgentService when user picks an agent
+    @Published var selectedAgentType: String? = nil  // "global", pageId, or driveId
+    @Published var selectedAgentContextId: String? = nil  // nil for global, pageId/driveId otherwise
+
     /// Completed messages for the current conversation (immutable history)
     @Published private(set) var messages: [Message] = []
 
@@ -40,7 +48,6 @@ class ConversationManager: ObservableObject {
 
     private let conversationService = ConversationService.shared
     private let aiService = AIService.shared
-    private let agentService = AgentService.shared
 
     // MARK: - Internal State (Not Published)
 
@@ -56,35 +63,41 @@ class ConversationManager: ObservableObject {
 
     /// Load a specific conversation's messages
     /// This is an atomic operation - old messages are cleared before new ones load
-    func loadConversation(_ conversationId: String) async {
+    func loadConversation(_ conversation: Conversation) async {
         // Guard against redundant loads
-        guard conversationId != currentConversationId else {
-            print("ℹ️ Conversation \(conversationId) already loaded")
+        guard conversation.id != currentConversationId else {
+            print("ℹ️ Conversation \(conversation.id) already loaded")
             return
         }
 
-        print("🟢 ConversationManager.loadConversation - loading: \(conversationId)")
+        print("🟢 ConversationManager.loadConversation - loading: \(conversation.displayTitle)")
 
         isLoadingConversation = true
         error = nil
 
         // CRITICAL: Clear old messages immediately
         messages = []
+        currentConversation = conversation
+        currentConversationId = conversation.id
 
         do {
             // Fetch messages from API
-            let response = try await aiService.loadMessages(conversationId: conversationId)
+            let response = try await aiService.loadMessages(conversationId: conversation.id)
 
             // Atomic update - only set if still loading this conversation
             // (guards against race conditions if user quickly switches conversations)
             if isLoadingConversation {
                 messages = response.messages
-                currentConversationId = conversationId
-                print("✅ Loaded \(messages.count) messages for conversation: \(conversationId)")
+
+                // Update selected agent to match loaded conversation
+                selectedAgentType = conversation.type ?? "global"
+                selectedAgentContextId = conversation.contextId
+
+                print("✅ Loaded \(messages.count) messages for conversation: \(conversation.displayTitle)")
             }
         } catch {
             self.error = "Failed to load conversation: \(error.localizedDescription)"
-            print("❌ Failed to load conversation \(conversationId): \(error)")
+            print("❌ Failed to load conversation \(conversation.id): \(error)")
         }
 
         isLoadingConversation = false
@@ -94,8 +107,9 @@ class ConversationManager: ObservableObject {
 
     /// Start a new conversation (clears current state)
     func createNewConversation() {
-        print("🆕 ConversationManager.createNewConversation")
+        print("🆕 ConversationManager.createNewConversation - agent: \(selectedAgentType ?? "unknown")")
         currentConversationId = nil
+        currentConversation = nil
         messages = []
         streamingMessage = nil
         streamingMessageBuilder = nil
@@ -132,20 +146,11 @@ class ConversationManager: ObservableObject {
             var conversationId = currentConversationId
 
             if conversationId == nil {
-                // Get current agent to determine conversation type
-                let currentAgent = agentService.selectedAgent
-                let type: String
-                let contextId: String?
+                // Use selected agent info to determine conversation type
+                let type = selectedAgentType ?? "global"
+                let contextId = selectedAgentContextId
 
-                if currentAgent?.type == .pageAI {
-                    type = "page"
-                    contextId = currentAgent?.pageId
-                    print("ℹ️ Creating new PAGE conversation for agent: \(currentAgent?.title ?? "unknown")")
-                } else {
-                    type = "global"
-                    contextId = nil
-                    print("ℹ️ Creating new GLOBAL conversation")
-                }
+                print("ℹ️ Creating new \(type.uppercased()) conversation with contextId: \(contextId ?? "nil")")
 
                 // Don't set a title - let backend auto-generate from first message
                 let newConversation = try await conversationService.createConversation(
@@ -155,6 +160,7 @@ class ConversationManager: ObservableObject {
                 )
                 conversationId = newConversation.id
                 currentConversationId = conversationId
+                currentConversation = newConversation
                 print("✅ Created \(type) conversation: \(conversationId!) with contextId: \(contextId ?? "nil")")
             }
 

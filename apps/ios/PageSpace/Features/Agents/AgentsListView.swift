@@ -70,21 +70,12 @@ struct AgentsListView: View {
     // MARK: - Actions
 
     private func selectAgent(_ agent: Agent) {
-        // For Global Assistant, always start fresh (no conversationId)
-        if agent.type == .global {
-            let freshAgent = Agent(
-                id: "global_default",
-                type: .global,
-                title: "Global Assistant",
-                subtitle: "Your personal AI assistant",
-                icon: "brain.head.profile",
-                conversationId: nil  // Start fresh conversation
-            )
-            agentService.selectAgent(freshAgent)
-        } else {
-            // PAGE_AI agents already have conversationId = nil
-            agentService.selectAgent(agent)
-        }
+        print("🎯 AgentsListView.selectAgent - agent: \(agent.title)")
+
+        // AgentService.selectAgent will handle setting ConversationManager state
+        agentService.selectAgent(agent)
+
+        // Close sidebar/dismiss view
         dismiss()
     }
 

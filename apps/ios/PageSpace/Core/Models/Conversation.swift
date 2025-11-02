@@ -3,8 +3,8 @@ import Foundation
 struct Conversation: Identifiable, Codable {
     let id: String
     var title: String?
-    let type: String?
-    let contextId: String?
+    let type: String?          // "global" | "page" | "drive"
+    let contextId: String?     // pageId for page, driveId for drive, nil for global
     let lastMessageAt: Date
     let createdAt: Date
 
@@ -14,6 +14,28 @@ struct Conversation: Identifiable, Codable {
 
     enum CodingKeys: String, CodingKey {
         case id, title, type, contextId, lastMessageAt, createdAt
+    }
+
+    // MARK: - Computed Properties
+
+    /// Display title with fallback
+    var displayTitle: String {
+        title ?? "New Conversation"
+    }
+
+    /// Check if this is a global conversation
+    var isGlobal: Bool {
+        type == "global"
+    }
+
+    /// Check if this is a page AI conversation
+    var isPageAI: Bool {
+        type == "page"
+    }
+
+    /// Check if this is a drive AI conversation
+    var isDriveAI: Bool {
+        type == "drive"
     }
 }
 

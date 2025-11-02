@@ -2,6 +2,7 @@ import SwiftUI
 
 struct AgentListView: View {
     @StateObject private var agentService = AgentService.shared
+    @StateObject private var conversationManager = ConversationManager.shared
     @State private var selectedAgent: Agent?
     @State private var isSidebarOpen = false
 
@@ -44,7 +45,13 @@ struct AgentListView: View {
                         }
                     }
                     .navigationDestination(for: Agent.self) { agent in
-                        ChatView(agent: agent, isSidebarOpen: $isSidebarOpen)
+                        // Select agent when navigating (updates ConversationManager state)
+                        ChatView(isSidebarOpen: $isSidebarOpen)
+                            .environmentObject(conversationManager)
+                            .environmentObject(agentService)
+                            .onAppear {
+                                agentService.selectAgent(agent)
+                            }
                     }
                     .refreshable {
                         await agentService.loadAllAgents()

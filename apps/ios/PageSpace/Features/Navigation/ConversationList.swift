@@ -104,25 +104,12 @@ struct ConversationList: View {
     // MARK: - Conversation Selection
 
     private func selectConversation(_ conversation: Conversation) async {
-        print("🟣 ConversationList.selectConversation - conversationId: \(conversation.id), title: \(conversation.title ?? "nil")")
+        print("🟣 ConversationList.selectConversation - conversationId: \(conversation.id), title: \(conversation.displayTitle)")
 
-        // Create global agent with STABLE ID and conversationId
-        let globalAgent = Agent(
-            id: "global_default",  // Use stable ID
-            type: .global,
-            title: conversation.title ?? "Global Assistant",  // Use conversation title, fallback to "Global Assistant"
-            subtitle: "Your personal AI assistant",
-            icon: "brain.head.profile",
-            conversationId: conversation.id  // Store which conversation to load
-        )
+        // Simply load the conversation directly
+        await conversationManager.loadConversation(conversation)
 
-        // Select this agent (updates selectedAgent in AgentService)
-        agentService.selectAgent(globalAgent)
-
-        // Load conversation through ConversationManager (atomic operation)
-        await conversationManager.loadConversation(conversation.id)
-
-        print("✅ Conversation switched to: \(conversation.id)")
+        print("✅ Conversation switched to: \(conversation.displayTitle)")
     }
 
     // MARK: - Data Loading

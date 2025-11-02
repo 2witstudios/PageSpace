@@ -4,14 +4,17 @@ import SwiftUI
 /// but allows switching to any agent via the picker
 struct QuickChatView: View {
     @StateObject private var agentService = AgentService.shared
+    @StateObject private var conversationManager = ConversationManager.shared
     @State private var showAgentPicker = false
     @State private var isSidebarOpen = false
 
     var body: some View {
         NavigationView {
             Group {
-                if let currentAgent = agentService.selectedAgent {
-                    ChatView(agent: currentAgent, isSidebarOpen: $isSidebarOpen)
+                if agentService.selectedAgent != nil {
+                    ChatView(isSidebarOpen: $isSidebarOpen)
+                        .environmentObject(conversationManager)
+                        .environmentObject(agentService)
                 } else if agentService.isLoading {
                     ProgressView("Loading...")
                 } else {

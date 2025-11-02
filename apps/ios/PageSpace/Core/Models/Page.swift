@@ -61,19 +61,22 @@ struct Drive: Identifiable, Codable {
 // NOTE: DriveListResponse removed - API returns [Drive] array directly
 // NOTE: PageListResponse removed - API returns [Page] tree array directly
 
-// MARK: - Agent Model (Unified representation)
+// MARK: - Agent Model
+/// Represents an agent TYPE that the user can select to start a chat
+/// NOT used for displaying loaded conversations - use Conversation model instead
+/// Agent info for loaded conversations comes from Conversation.type/contextId
 
 struct Agent: Identifiable, Codable, Hashable {
     let id: String
     let type: AgentType
-    let title: String
-    let subtitle: String?
-    let icon: String // SF Symbol name
+    let title: String          // Display name: "Global Assistant" or page name
+    let subtitle: String?      // Description
+    let icon: String           // SF Symbol name
     let driveId: String?
     let driveName: String?
 
     // For Page AI agents
-    let pageId: String?
+    let pageId: String?        // For .pageAI type
     let pagePath: String?
 
     // Flattened AI config from page
@@ -82,10 +85,7 @@ struct Agent: Identifiable, Codable, Hashable {
     let systemPrompt: String?
     let enabledTools: [String]?
 
-    // For Global AI
-    let conversationId: String?
-
-    init(id: String, type: AgentType, title: String, subtitle: String? = nil, icon: String = "brain", driveId: String? = nil, driveName: String? = nil, pageId: String? = nil, pagePath: String? = nil, aiProvider: String? = nil, aiModel: String? = nil, systemPrompt: String? = nil, enabledTools: [String]? = nil, conversationId: String? = nil) {
+    init(id: String, type: AgentType, title: String, subtitle: String? = nil, icon: String = "brain", driveId: String? = nil, driveName: String? = nil, pageId: String? = nil, pagePath: String? = nil, aiProvider: String? = nil, aiModel: String? = nil, systemPrompt: String? = nil, enabledTools: [String]? = nil) {
         self.id = id
         self.type = type
         self.title = title
@@ -99,19 +99,6 @@ struct Agent: Identifiable, Codable, Hashable {
         self.aiModel = aiModel
         self.systemPrompt = systemPrompt
         self.enabledTools = enabledTools
-        self.conversationId = conversationId
-    }
-
-    // Create from Global AI conversation
-    static func fromGlobalConversation(_ conversation: Conversation) -> Agent {
-        Agent(
-            id: "global_\(conversation.id)",
-            type: .global,
-            title: "Global Assistant",
-            subtitle: "Your personal AI assistant",
-            icon: "brain.head.profile",
-            conversationId: conversation.id
-        )
     }
 
     // Create from Page AI
