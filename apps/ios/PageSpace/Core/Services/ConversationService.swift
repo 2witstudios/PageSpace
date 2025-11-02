@@ -36,8 +36,8 @@ class ConversationService: ObservableObject {
 
     // MARK: - Create Conversation
 
-    func createConversation(title: String? = nil) async throws -> Conversation {
-        let request = CreateConversationRequest(title: title)
+    func createConversation(title: String? = nil, type: String = "global", contextId: String? = nil) async throws -> Conversation {
+        let request = CreateConversationRequest(title: title, type: type, contextId: contextId)
         let conversation: Conversation = try await apiClient.request(
             endpoint: APIEndpoints.conversations,
             method: .POST,

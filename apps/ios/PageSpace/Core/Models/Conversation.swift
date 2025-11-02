@@ -39,6 +39,8 @@ struct Pagination: Codable {
 
 struct CreateConversationRequest: Codable {
     let title: String?
+    let type: String // 'global' | 'page' | 'drive'
+    let contextId: String? // null for global, pageId for page chats
 }
 
 struct UpdateConversationRequest: Codable {

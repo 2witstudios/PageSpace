@@ -107,7 +107,7 @@ struct Agent: Identifiable, Codable, Hashable {
         Agent(
             id: "global_\(conversation.id)",
             type: .global,
-            title: conversation.title ?? "Global Assistant",
+            title: "Global Assistant",
             subtitle: "Your personal AI assistant",
             icon: "brain.head.profile",
             conversationId: conversation.id

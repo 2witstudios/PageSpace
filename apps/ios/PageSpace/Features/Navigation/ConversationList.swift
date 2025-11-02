@@ -110,7 +110,7 @@ struct ConversationList: View {
         let globalAgent = Agent(
             id: "global_default",  // Use stable ID
             type: .global,
-            title: "Global Assistant",  // Always use "Global Assistant" title
+            title: conversation.title ?? "Global Assistant",  // Use conversation title, fallback to "Global Assistant"
             subtitle: "Your personal AI assistant",
             icon: "brain.head.profile",
             conversationId: conversation.id  // Store which conversation to load

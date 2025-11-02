@@ -37,6 +37,7 @@ class ConversationManager: ObservableObject {
 
     private let conversationService = ConversationService.shared
     private let aiService = AIService.shared
+    private let agentService = AgentService.shared
     private var streamingMessage: StreamingMessage?
 
     private init() {}
@@ -118,12 +119,30 @@ class ConversationManager: ObservableObject {
             var conversationId = currentConversationId
 
             if conversationId == nil {
-                print("ℹ️ Creating new global conversation for first message")
+                // Get current agent to determine conversation type
+                let currentAgent = agentService.selectedAgent
+                let type: String
+                let contextId: String?
+
+                if currentAgent?.type == .pageAI {
+                    type = "page"
+                    contextId = currentAgent?.pageId
+                    print("ℹ️ Creating new PAGE conversation for agent: \(currentAgent?.title ?? "unknown")")
+                } else {
+                    type = "global"
+                    contextId = nil
+                    print("ℹ️ Creating new GLOBAL conversation")
+                }
+
                 // Don't set a title - let backend auto-generate from first message
-                let newConversation = try await conversationService.createConversation(title: nil)
+                let newConversation = try await conversationService.createConversation(
+                    title: nil,
+                    type: type,
+                    contextId: contextId
+                )
                 conversationId = newConversation.id
                 currentConversationId = conversationId
-                print("✅ Created global conversation: \(conversationId!)")
+                print("✅ Created \(type) conversation: \(conversationId!) with contextId: \(contextId ?? "nil")")
             }
 
             guard let finalConversationId = conversationId else {
