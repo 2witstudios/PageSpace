@@ -1,44 +1,48 @@
 import SwiftUI
+import MarkdownUI
 
 struct MessageRow: View {
     let message: Message
 
     var body: some View {
-        HStack {
-            if message.role == .user {
-                Spacer()
-            }
-
-            VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
                 ForEach(message.parts) { part in
-                    MessagePartView(part: part)
+                    MessagePartView(part: part, role: message.role)
                 }
 
                 Text(message.createdAt, style: .time)
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
-            .padding(12)
-            .background(message.role == .user ? Color.blue : Color(.systemGray6))
-            .foregroundColor(message.role == .user ? .white : .primary)
-            .cornerRadius(16)
-            .frame(maxWidth: UIScreen.main.bounds.width * 0.75, alignment: message.role == .user ? .trailing : .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(messageBackground)
+        }
+    }
 
-            if message.role == .assistant {
-                Spacer()
-            }
+    @ViewBuilder
+    private var messageBackground: some View {
+        if message.role == .user {
+            Color.blue.opacity(0.08)
+        } else {
+            Color(.systemGray6).opacity(0.5)
         }
     }
 }
 
 struct MessagePartView: View {
     let part: MessagePart
+    let role: MessageRole
 
     var body: some View {
         switch part {
         case .text(let textPart):
-            Text(textPart.text)
+            Markdown(textPart.text)
+                .markdownTheme(.pagespace)
                 .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
         case .tool(let tool):
             ToolView(tool: tool)
@@ -161,17 +165,164 @@ struct ToolView: View {
     }
 }
 
+// MARK: - Custom Markdown Theme
+
+extension Theme {
+    static let pagespace = Theme()
+        .text {
+            ForegroundColor(.primary)
+            FontSize(16)
+        }
+        .code {
+            FontFamilyVariant(.monospaced)
+            FontSize(.em(0.94))
+            BackgroundColor(Color(.systemGray5).opacity(0.8))
+        }
+        .strong {
+            FontWeight(.semibold)
+        }
+        .emphasis {
+            FontStyle(.italic)
+        }
+        .link {
+            ForegroundColor(.blue)
+            UnderlineStyle(.single)
+        }
+        .heading1 { configuration in
+            VStack(alignment: .leading, spacing: 0) {
+                configuration.label
+                    .markdownMargin(top: .zero, bottom: .em(0.3))
+                    .markdownTextStyle {
+                        FontWeight(.bold)
+                        FontSize(.em(2))
+                    }
+                Divider()
+            }
+        }
+        .heading2 { configuration in
+            configuration.label
+                .markdownMargin(top: .em(0.5), bottom: .em(0.3))
+                .markdownTextStyle {
+                    FontWeight(.bold)
+                    FontSize(.em(1.5))
+                }
+        }
+        .heading3 { configuration in
+            configuration.label
+                .markdownMargin(top: .em(0.5), bottom: .em(0.3))
+                .markdownTextStyle {
+                    FontWeight(.semibold)
+                    FontSize(.em(1.25))
+                }
+        }
+        .heading4 { configuration in
+            configuration.label
+                .markdownMargin(top: .em(0.5), bottom: .em(0.3))
+                .markdownTextStyle {
+                    FontWeight(.semibold)
+                    FontSize(.em(1.1))
+                }
+        }
+        .heading5 { configuration in
+            configuration.label
+                .markdownMargin(top: .em(0.5), bottom: .em(0.3))
+                .markdownTextStyle {
+                    FontWeight(.semibold)
+                    FontSize(.em(1))
+                }
+        }
+        .heading6 { configuration in
+            configuration.label
+                .markdownMargin(top: .em(0.5), bottom: .em(0.3))
+                .markdownTextStyle {
+                    FontWeight(.semibold)
+                    FontSize(.em(0.9))
+                    ForegroundColor(.secondary)
+                }
+        }
+        .paragraph { configuration in
+            configuration.label
+                .markdownMargin(top: .zero, bottom: .em(0.8))
+        }
+        .listItem { configuration in
+            configuration.label
+                .markdownMargin(top: .em(0.2))
+        }
+        .codeBlock { configuration in
+            ScrollView(.horizontal, showsIndicators: false) {
+                configuration.label
+                    .padding(12)
+                    .markdownTextStyle {
+                        FontFamilyVariant(.monospaced)
+                        FontSize(.em(0.88))
+                    }
+            }
+            .background(Color(.systemGray5))
+            .cornerRadius(8)
+            .markdownMargin(top: .em(0.5), bottom: .em(0.8))
+        }
+        .blockquote { configuration in
+            HStack(spacing: 0) {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color.secondary.opacity(0.5))
+                    .frame(width: 4)
+                configuration.label
+                    .markdownTextStyle {
+                        ForegroundColor(.secondary)
+                    }
+                    .padding(.leading, 12)
+            }
+            .markdownMargin(top: .em(0.5), bottom: .em(0.8))
+        }
+        .table { configuration in
+            configuration.label
+                .markdownTableBorderStyle(.init(color: .secondary.opacity(0.3)))
+                .markdownTableBackgroundStyle(
+                    .alternatingRows(Color(.systemGray6).opacity(0.5), Color.clear)
+                )
+                .markdownMargin(top: .em(0.5), bottom: .em(0.8))
+        }
+}
+
 #Preview {
-    VStack {
+    VStack(spacing: 0) {
         MessageRow(message: Message(
             role: .user,
-            parts: [.text(TextPart(text: "Hello, how can you help me?"))]
+            parts: [.text(TextPart(text: "Hello, can you help me with **markdown** formatting? I need to see `inline code` and:\n\n```swift\nlet test = \"code blocks\"\n```"))]
         ))
 
         MessageRow(message: Message(
             role: .assistant,
             parts: [
-                .text(TextPart(text: "I can help you with many things! Let me search for information.")),
+                .text(TextPart(text: """
+I can help you with **markdown** formatting! Here are some examples:
+
+# Heading 1
+## Heading 2
+### Heading 3
+
+**Bold text** and *italic text* work great. You can also use `inline code` or code blocks:
+
+```swift
+struct Example {
+    let value: String
+}
+```
+
+Here's a list:
+- First item
+- Second item
+- Third item
+
+And even [links](https://example.com) and tables:
+
+| Feature | Status |
+|---------|--------|
+| Bold    | ✅     |
+| Code    | ✅     |
+
+> This is a blockquote with important information.
+""")),
                 .tool(ToolPart(
                     type: "tool-list_drives",
                     toolCallId: "call_123",
@@ -183,5 +334,4 @@ struct ToolView: View {
             ]
         ))
     }
-    .padding()
 }

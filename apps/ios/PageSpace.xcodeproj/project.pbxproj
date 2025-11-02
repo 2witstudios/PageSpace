@@ -6,6 +6,12 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		FB1468862EB7968B00458088 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = FB1468852EB7968B00458088 /* MarkdownUI */; };
+		FB1468882EB7968E00458088 /* AsyncAlgorithms in Frameworks */ = {isa = PBXBuildFile; productRef = FB1468872EB7968E00458088 /* AsyncAlgorithms */; };
+		FB14688A2EB7969100458088 /* SocketIO in Frameworks */ = {isa = PBXBuildFile; productRef = FB1468892EB7969100458088 /* SocketIO */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		FB1142FC2EB63AB900AD4A1E /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -65,6 +71,9 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FB1468862EB7968B00458088 /* MarkdownUI in Frameworks */,
+				FB1468882EB7968E00458088 /* AsyncAlgorithms in Frameworks */,
+				FB14688A2EB7969100458088 /* SocketIO in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -91,6 +100,7 @@
 				FB1142F02EB63AB600AD4A1E /* PageSpace */,
 				FB1142FE2EB63AB900AD4A1E /* PageSpaceTests */,
 				FB1143082EB63AB900AD4A1E /* PageSpaceUITests */,
+				FB1468842EB7968400458088 /* Frameworks */,
 				FB1142EF2EB63AB600AD4A1E /* Products */,
 			);
 			sourceTree = "<group>";
@@ -103,6 +113,13 @@
 				FB1143052EB63AB900AD4A1E /* PageSpaceUITests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		FB1468842EB7968400458088 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -125,6 +142,9 @@
 			);
 			name = PageSpace;
 			packageProductDependencies = (
+				FB1468852EB7968B00458088 /* MarkdownUI */,
+				FB1468872EB7968E00458088 /* AsyncAlgorithms */,
+				FB1468892EB7969100458088 /* SocketIO */,
 			);
 			productName = PageSpace;
 			productReference = FB1142EE2EB63AB600AD4A1E /* PageSpace.app */;
@@ -605,6 +625,24 @@
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		FB1468852EB7968B00458088 /* MarkdownUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FB1468212EB6410A00458088 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */;
+			productName = MarkdownUI;
+		};
+		FB1468872EB7968E00458088 /* AsyncAlgorithms */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FB1468222EB6413D00458088 /* XCRemoteSwiftPackageReference "swift-async-algorithms" */;
+			productName = AsyncAlgorithms;
+		};
+		FB1468892EB7969100458088 /* SocketIO */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FB1468202EB640F300458088 /* XCRemoteSwiftPackageReference "socket" */;
+			productName = SocketIO;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = FB1142E62EB63AB600AD4A1E /* Project object */;
 }
