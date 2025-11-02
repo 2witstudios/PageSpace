@@ -40,17 +40,14 @@ struct MessagePartView: View {
             Text(textPart.text)
                 .textSelection(.enabled)
 
-        case .toolCall(let toolCall):
-            ToolCallView(toolCall: toolCall)
-
-        case .toolResult(let toolResult):
-            ToolResultView(toolResult: toolResult)
+        case .tool(let tool):
+            ToolView(tool: tool)
         }
     }
 }
 
-struct ToolCallView: View {
-    let toolCall: ToolCallPart
+struct ToolView: View {
+    let tool: ToolPart
     @State private var isExpanded = false
 
     var body: some View {
@@ -61,33 +58,90 @@ struct ToolCallView: View {
                 }
             } label: {
                 HStack {
-                    Image(systemName: "wrench.and.screwdriver")
-                    Text(formatToolName(toolCall.toolName))
+                    toolIcon
+                    Text(formatToolName(tool.toolName))
                         .font(.subheadline)
                         .fontWeight(.medium)
                     Spacer()
+                    toolStateIndicator
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                         .font(.caption)
                 }
             }
-            .foregroundColor(.secondary)
+            .foregroundColor(foregroundColor)
 
-            if isExpanded, let input = toolCall.input {
-                Text("Input:")
-                    .font(.caption)
-                    .fontWeight(.semibold)
+            if isExpanded {
+                // Show input if available
+                if let input = tool.input {
+                    Text("Input:")
+                        .font(.caption)
+                        .fontWeight(.semibold)
 
-                Text(formatJSON(input))
-                    .font(.caption)
-                    .monospaced()
-                    .padding(8)
-                    .background(Color(.systemGray5))
-                    .cornerRadius(8)
+                    Text(formatJSON(input))
+                        .font(.caption)
+                        .monospaced()
+                        .padding(8)
+                        .background(Color(.systemGray5))
+                        .cornerRadius(8)
+                }
+
+                // Show output if available
+                if let output = tool.output {
+                    Text(tool.state == .outputError ? "Error:" : "Output:")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .padding(.top, 4)
+
+                    Text(formatJSON(output))
+                        .font(.caption)
+                        .monospaced()
+                        .padding(8)
+                        .background(Color(.systemGray5))
+                        .cornerRadius(8)
+                }
             }
         }
         .padding(8)
         .background(Color(.systemGray4).opacity(0.3))
         .cornerRadius(8)
+    }
+
+    private var toolIcon: some View {
+        Group {
+            switch tool.state {
+            case .outputError:
+                Image(systemName: "exclamationmark.triangle")
+            case .outputAvailable, .done:
+                Image(systemName: "checkmark.circle")
+            case .streaming, .inputStreaming:
+                Image(systemName: "arrow.clockwise")
+            default:
+                Image(systemName: "wrench.and.screwdriver")
+            }
+        }
+    }
+
+    private var toolStateIndicator: some View {
+        Group {
+            switch tool.state {
+            case .streaming, .inputStreaming:
+                ProgressView()
+                    .scaleEffect(0.7)
+            default:
+                EmptyView()
+            }
+        }
+    }
+
+    private var foregroundColor: Color {
+        switch tool.state {
+        case .outputError:
+            return .red
+        case .outputAvailable, .done:
+            return .green
+        default:
+            return .secondary
+        }
     }
 
     private func formatToolName(_ name: String) -> String {
@@ -97,50 +151,13 @@ struct ToolCallView: View {
             .joined(separator: " ")
     }
 
-    private func formatJSON(_ value: AnyCodable) -> String {
-        String(describing: value.value)
-    }
-}
-
-struct ToolResultView: View {
-    let toolResult: ToolResultPart
-    @State private var isExpanded = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Button {
-                withAnimation {
-                    isExpanded.toggle()
-                }
-            } label: {
-                HStack {
-                    Image(systemName: toolResult.isError ? "exclamationmark.triangle" : "checkmark.circle")
-                    Text(toolResult.isError ? "Tool Error" : "Tool Result")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                    Spacer()
-                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.caption)
-                }
-            }
-            .foregroundColor(toolResult.isError ? .red : .green)
-
-            if isExpanded, let result = toolResult.result {
-                Text(formatJSON(result))
-                    .font(.caption)
-                    .monospaced()
-                    .padding(8)
-                    .background(Color(.systemGray5))
-                    .cornerRadius(8)
-            }
+    private func formatJSON(_ value: Any) -> String {
+        if let dict = value as? [String: Any] {
+            return String(describing: dict)
+        } else if let codable = value as? AnyCodable {
+            return String(describing: codable.value)
         }
-        .padding(8)
-        .background(Color(.systemGray4).opacity(0.3))
-        .cornerRadius(8)
-    }
-
-    private func formatJSON(_ value: AnyCodable) -> String {
-        String(describing: value.value)
+        return String(describing: value)
     }
 }
 
@@ -155,10 +172,13 @@ struct ToolResultView: View {
             role: .assistant,
             parts: [
                 .text(TextPart(text: "I can help you with many things! Let me search for information.")),
-                .toolCall(ToolCallPart(
+                .tool(ToolPart(
+                    type: "tool-list_drives",
                     toolCallId: "call_123",
-                    toolName: "search_pages",
-                    input: AnyCodable(["query": "example"])
+                    toolName: "list_drives",
+                    input: ["query": AnyCodable("example")],
+                    output: AnyCodable(["drives": ["Drive 1", "Drive 2"]]),
+                    state: .outputAvailable
                 ))
             ]
         ))

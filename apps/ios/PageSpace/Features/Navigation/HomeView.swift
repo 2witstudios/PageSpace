@@ -10,6 +10,7 @@ import SwiftUI
 /// Root authenticated container managing chat interface and sidebar navigation
 struct HomeView: View {
     @StateObject private var agentService = AgentService.shared
+    @StateObject private var conversationManager = ConversationManager.shared
     @EnvironmentObject var authManager: AuthManager
 
     @State private var isSidebarOpen: Bool = false
@@ -24,7 +25,8 @@ struct HomeView: View {
                         agent: selectedAgent,
                         isSidebarOpen: $isSidebarOpen
                     )
-                    .id(selectedAgent.id) // Force recreation when agent changes
+                    .environmentObject(conversationManager)  // Provide ConversationManager to ChatView
+                    .id(conversationManager.currentConversationId ?? "new") // Key by currentConversationId
                     .zIndex(0)
                 } else {
                     // Show loading or empty state when no agent selected
@@ -51,6 +53,7 @@ struct HomeView: View {
                         agentService: agentService,
                         onNavigate: handleNavigation
                     )
+                    .environmentObject(conversationManager)  // Provide ConversationManager to Sidebar
                     .offset(x: isSidebarOpen ? 0 : -280)
                     .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isSidebarOpen)
                     .zIndex(2)

@@ -116,36 +116,8 @@ class AgentService: ObservableObject {
     }
 
     // MARK: - Update Global Agent Conversation ID
-
-    func updateGlobalAgentConversationId(_ conversationId: String) {
-        // Find and update the global agent in the agents array
-        if let index = agents.firstIndex(where: { $0.type == .global }) {
-            let updatedAgent = Agent(
-                id: agents[index].id,
-                type: .global,
-                title: agents[index].title,
-                subtitle: agents[index].subtitle,
-                icon: agents[index].icon,
-                driveId: agents[index].driveId,
-                driveName: agents[index].driveName,
-                pageId: agents[index].pageId,
-                pagePath: agents[index].pagePath,
-                aiProvider: agents[index].aiProvider,
-                aiModel: agents[index].aiModel,
-                systemPrompt: agents[index].systemPrompt,
-                enabledTools: agents[index].enabledTools,
-                conversationId: conversationId
-            )
-            agents[index] = updatedAgent
-
-            // Update selected agent if it's the global agent
-            if selectedAgent?.type == .global {
-                selectedAgent = updatedAgent
-            }
-
-            print("✅ Updated global agent with conversationId: \(conversationId)")
-        }
-    }
+    // NOTE: This method is no longer needed with ConversationManager architecture
+    // Kept for backwards compatibility but can be removed in future cleanup
 
     // MARK: - Get Drives
 

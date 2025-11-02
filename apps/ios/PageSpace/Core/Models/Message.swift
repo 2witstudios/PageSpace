@@ -7,13 +7,13 @@ struct Message: Identifiable, Codable, Equatable {
     let role: MessageRole
     var parts: [MessagePart]
     let createdAt: Date
-    let isActive: Bool
+    let isActive: Bool?  // Optional - backend doesn't send this field (internal database only)
 
     enum CodingKeys: String, CodingKey {
         case id, role, parts, createdAt, isActive
     }
 
-    init(id: String = UUID().uuidString, role: MessageRole, parts: [MessagePart], createdAt: Date = Date(), isActive: Bool = true) {
+    init(id: String = UUID().uuidString, role: MessageRole, parts: [MessagePart], createdAt: Date = Date(), isActive: Bool? = nil) {
         self.id = id
         self.role = role
         self.parts = parts
@@ -31,17 +31,14 @@ enum MessageRole: String, Codable {
 
 enum MessagePart: Codable, Equatable, Identifiable {
     case text(TextPart)
-    case toolCall(ToolCallPart)
-    case toolResult(ToolResultPart)
+    case tool(ToolPart)
 
     var id: String {
         switch self {
         case .text(let part):
-            return part.id
-        case .toolCall(let part):
-            return part.id
-        case .toolResult(let part):
-            return part.id
+            return part.id ?? UUID().uuidString
+        case .tool(let part):
+            return part.id ?? part.toolCallId  // Use toolCallId as stable identifier
         }
     }
 
@@ -54,17 +51,14 @@ enum MessagePart: Codable, Equatable, Identifiable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let type = try container.decode(String.self, forKey: .type)
 
-        switch type {
-        case "text":
+        if type == "text" {
             let textPart = try TextPart(from: decoder)
             self = .text(textPart)
-        case "tool-call":
-            let toolCall = try ToolCallPart(from: decoder)
-            self = .toolCall(toolCall)
-        case "tool-result":
-            let toolResult = try ToolResultPart(from: decoder)
-            self = .toolResult(toolResult)
-        default:
+        } else if type.hasPrefix("tool-") {
+            // Handle any tool type (e.g., "tool-list_drives", "tool-read_page", etc.)
+            let toolPart = try ToolPart(from: decoder)
+            self = .tool(toolPart)
+        } else {
             throw DecodingError.dataCorruptedError(
                 forKey: .type,
                 in: container,
@@ -77,9 +71,7 @@ enum MessagePart: Codable, Equatable, Identifiable {
         switch self {
         case .text(let part):
             try part.encode(to: encoder)
-        case .toolCall(let part):
-            try part.encode(to: encoder)
-        case .toolResult(let part):
+        case .tool(let part):
             try part.encode(to: encoder)
         }
     }
@@ -88,50 +80,47 @@ enum MessagePart: Codable, Equatable, Identifiable {
 // MARK: - Text Part
 
 struct TextPart: Codable, Equatable {
-    let id: String
+    let id: String?  // Optional - backend doesn't send IDs for message parts
     let type: String
     let text: String
 
-    init(id: String = UUID().uuidString, text: String) {
+    init(id: String? = nil, text: String) {
         self.id = id
         self.type = "text"
         self.text = text
     }
 }
 
-// MARK: - Tool Call Part
+// MARK: - Tool State
 
-struct ToolCallPart: Codable, Equatable {
-    let id: String
-    let type: String
+enum ToolState: String, Codable {
+    case inputStreaming = "input-streaming"
+    case inputAvailable = "input-available"
+    case outputAvailable = "output-available"
+    case outputError = "output-error"
+    case done
+    case streaming
+}
+
+// MARK: - Tool Part
+
+struct ToolPart: Codable, Equatable {
+    let id: String?  // Optional - backend doesn't send IDs for message parts
+    let type: String  // "tool-{toolName}" (e.g., "tool-list_drives")
     let toolCallId: String
     let toolName: String
-    let input: AnyCodable?
+    let input: [String: AnyCodable]?
+    let output: AnyCodable?
+    let state: ToolState
 
-    init(id: String = UUID().uuidString, toolCallId: String, toolName: String, input: AnyCodable? = nil) {
+    init(id: String? = nil, type: String, toolCallId: String, toolName: String, input: [String: AnyCodable]? = nil, output: AnyCodable? = nil, state: ToolState) {
         self.id = id
-        self.type = "tool-call"
+        self.type = type
         self.toolCallId = toolCallId
         self.toolName = toolName
         self.input = input
-    }
-}
-
-// MARK: - Tool Result Part
-
-struct ToolResultPart: Codable, Equatable {
-    let id: String
-    let type: String
-    let toolCallId: String
-    let result: AnyCodable?
-    let isError: Bool
-
-    init(id: String = UUID().uuidString, toolCallId: String, result: AnyCodable? = nil, isError: Bool = false) {
-        self.id = id
-        self.type = "tool-result"
-        self.toolCallId = toolCallId
-        self.result = result
-        self.isError = isError
+        self.output = output
+        self.state = state
     }
 }
 
@@ -227,12 +216,28 @@ struct StreamingMessage {
         }
     }
 
-    mutating func addToolCall(_ toolCall: ToolCallPart) {
-        parts.append(.toolCall(toolCall))
+    mutating func addTool(_ tool: ToolPart) {
+        parts.append(.tool(tool))
     }
 
-    mutating func addToolResult(_ toolResult: ToolResultPart) {
-        parts.append(.toolResult(toolResult))
+    mutating func updateTool(toolCallId: String, output: AnyCodable?, state: ToolState) {
+        // Find and update existing tool part by toolCallId
+        if let index = parts.firstIndex(where: {
+            if case .tool(let toolPart) = $0, toolPart.toolCallId == toolCallId {
+                return true
+            }
+            return false
+        }), case .tool(let existingTool) = parts[index] {
+            parts[index] = .tool(ToolPart(
+                id: existingTool.id,
+                type: existingTool.type,
+                toolCallId: existingTool.toolCallId,
+                toolName: existingTool.toolName,
+                input: existingTool.input,
+                output: output,
+                state: state
+            ))
+        }
     }
 
     func toMessage() -> Message {

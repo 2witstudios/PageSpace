@@ -10,6 +10,7 @@ import SwiftUI
 /// Display conversation history for the selected agent, grouped by date
 struct ConversationList: View {
     @ObservedObject var agentService: AgentService
+    @EnvironmentObject var conversationManager: ConversationManager
     let closeSidebar: () -> Void
 
     @State private var conversations: [Conversation] = []
@@ -70,14 +71,18 @@ struct ConversationList: View {
 
     private func conversationRow(_ conversation: Conversation) -> some View {
         Button(action: {
-            // TODO: Load this conversation in the chat view
-            // For now, just close the sidebar
-            closeSidebar()
+            Task {
+                // Load this conversation in the chat view
+                await selectConversation(conversation)
+
+                // Close sidebar AFTER conversation loads
+                closeSidebar()
+            }
         }) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(conversation.title ?? "New Conversation")
+                Text(conversation.title ?? "Recent conversation")
                     .font(.subheadline)
-                    .foregroundColor(.primary)
+                    .foregroundColor(conversation.title != nil ? .primary : .secondary)
                     .lineLimit(1)
 
                 if let preview = conversation.preview {
@@ -94,6 +99,30 @@ struct ConversationList: View {
             .cornerRadius(6)
         }
         .buttonStyle(PlainButtonStyle())
+    }
+
+    // MARK: - Conversation Selection
+
+    private func selectConversation(_ conversation: Conversation) async {
+        print("🟣 ConversationList.selectConversation - conversationId: \(conversation.id), title: \(conversation.title ?? "nil")")
+
+        // Create global agent with STABLE ID and conversationId
+        let globalAgent = Agent(
+            id: "global_default",  // Use stable ID
+            type: .global,
+            title: "Global Assistant",  // Always use "Global Assistant" title
+            subtitle: "Your personal AI assistant",
+            icon: "brain.head.profile",
+            conversationId: conversation.id  // Store which conversation to load
+        )
+
+        // Select this agent (updates selectedAgent in AgentService)
+        agentService.selectAgent(globalAgent)
+
+        // Load conversation through ConversationManager (atomic operation)
+        await conversationManager.loadConversation(conversation.id)
+
+        print("✅ Conversation switched to: \(conversation.id)")
     }
 
     // MARK: - Data Loading

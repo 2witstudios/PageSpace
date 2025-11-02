@@ -1,45 +1,48 @@
 import SwiftUI
 
 struct ChatView: View {
-    @StateObject private var viewModel: ChatViewModel
-    @State private var messageText = ""
+    let agent: Agent
     @Binding var isSidebarOpen: Bool
 
-    init(agent: Agent, isSidebarOpen: Binding<Bool>) {
-        _viewModel = StateObject(wrappedValue: ChatViewModel(agent: agent))
-        _isSidebarOpen = isSidebarOpen
-    }
+    @EnvironmentObject var conversationManager: ConversationManager
+    @State private var messageText = ""
 
     var body: some View {
         VStack(spacing: 0) {
             // Messages List
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 16) {
-                        ForEach(viewModel.messages) { message in
-                            MessageRow(message: message)
-                                .id(message.id)
-                        }
-
-                        // Streaming indicator
-                        if viewModel.isStreaming {
-                            HStack {
-                                ProgressView()
-                                    .progressViewStyle(.circular)
-                                Text("AI is thinking...")
-                                    .font(.subheadline)
-                                    .foregroundColor(.secondary)
+            if conversationManager.isLoadingConversation {
+                // Show loading state while conversation loads
+                ProgressView("Loading conversation...")
+                    .frame(maxHeight: .infinity)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 16) {
+                            ForEach(conversationManager.messages) { message in
+                                MessageRow(message: message)
+                                    .id(message.id)
                             }
-                            .padding()
+
+                            // Streaming indicator
+                            if conversationManager.isStreaming {
+                                HStack {
+                                    ProgressView()
+                                        .progressViewStyle(.circular)
+                                    Text("AI is thinking...")
+                                        .font(.subheadline)
+                                        .foregroundColor(.secondary)
+                                }
+                                .padding()
+                            }
                         }
+                        .padding()
                     }
-                    .padding()
-                }
-                .onChange(of: viewModel.messages.count) { oldValue, newValue in
-                    // Auto-scroll to bottom when new messages arrive
-                    if let lastMessage = viewModel.messages.last {
-                        withAnimation {
-                            proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                    .onChange(of: conversationManager.messages.count) { oldValue, newValue in
+                        // Auto-scroll to bottom when new messages arrive
+                        if let lastMessage = conversationManager.messages.last {
+                            withAnimation {
+                                proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                            }
                         }
                     }
                 }
@@ -52,7 +55,7 @@ struct ChatView: View {
                 TextField("Message...", text: $messageText, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(1...5)
-                    .disabled(viewModel.isStreaming)
+                    .disabled(conversationManager.isStreaming)
 
                 Button {
                     Task {
@@ -84,18 +87,26 @@ struct ChatView: View {
                         isSidebarOpen.toggle()
                     }
                 }) {
-                    Text(viewModel.agent.title)
+                    Text(agent.title)
                         .font(.headline)
                 }
             }
         }
         .task {
-            await viewModel.loadMessages()
+            // Load conversation when view appears
+            print("🟡 ChatView.task triggered - agent: \(agent.title), conversationId: \(agent.conversationId ?? "nil")")
+
+            if let conversationId = agent.conversationId {
+                await conversationManager.loadConversation(conversationId)
+            } else {
+                // New conversation - clear state
+                conversationManager.createNewConversation()
+            }
         }
     }
 
     private var canSend: Bool {
-        !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !viewModel.isStreaming
+        !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !conversationManager.isStreaming
     }
 
     private func sendMessage() async {
@@ -103,13 +114,14 @@ struct ChatView: View {
         guard !text.isEmpty else { return }
 
         messageText = ""
-        await viewModel.sendMessage(text)
+        await conversationManager.sendMessage(text)
     }
 }
 
 #Preview {
     struct PreviewWrapper: View {
         @State private var isSidebarOpen = false
+        @StateObject private var conversationManager = ConversationManager.shared
 
         var body: some View {
             NavigationView {
@@ -124,6 +136,7 @@ struct ChatView: View {
                     ),
                     isSidebarOpen: $isSidebarOpen
                 )
+                .environmentObject(conversationManager)
             }
         }
     }
