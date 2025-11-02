@@ -39,13 +39,13 @@ struct ConversationList: View {
                     .foregroundColor(.secondary)
                     .padding(.vertical, 8)
             } else {
-                ForEach(groupedConversations.keys.sorted(by: >), id: \.self) { dateGroup in
+                ForEach(sortedDateGroups, id: \.self) { dateGroup in
                     if let groupConversations = groupedConversations[dateGroup] {
                         // Date group header
                         Text(dateGroup)
                             .font(.caption2)
                             .foregroundColor(.secondary)
-                            .padding(.top, dateGroup == groupedConversations.keys.sorted(by: >).first ? 0 : 8)
+                            .padding(.top, dateGroup == sortedDateGroups.first ? 0 : 8)
 
                         // Conversations in this group
                         ForEach(groupConversations) { conversation in
@@ -168,6 +168,20 @@ struct ConversationList: View {
             } else {
                 return "Older"
             }
+        }
+    }
+
+    /// Sorted date groups in chronological order (Today first, Older last)
+    private var sortedDateGroups: [String] {
+        let groupOrder: [String: Int] = [
+            "Today": 0,
+            "Yesterday": 1,
+            "Last 7 Days": 2,
+            "Older": 3
+        ]
+
+        return groupedConversations.keys.sorted {
+            groupOrder[$0, default: 999] < groupOrder[$1, default: 999]
         }
     }
 }
