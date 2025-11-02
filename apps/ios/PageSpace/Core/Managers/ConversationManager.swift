@@ -21,8 +21,11 @@ class ConversationManager: ObservableObject {
     /// Current conversation ID being displayed
     @Published var currentConversationId: String?
 
-    /// Messages for the current conversation
-    @Published var messages: [Message] = []
+    /// Completed messages for the current conversation (immutable history)
+    @Published private(set) var messages: [Message] = []
+
+    /// Currently streaming message (separate from completed messages)
+    @Published private(set) var streamingMessage: Message?
 
     /// Loading state for conversation switching
     @Published var isLoadingConversation = false
@@ -38,7 +41,14 @@ class ConversationManager: ObservableObject {
     private let conversationService = ConversationService.shared
     private let aiService = AIService.shared
     private let agentService = AgentService.shared
-    private var streamingMessage: StreamingMessage?
+
+    // MARK: - Internal State (Not Published)
+
+    /// Internal accumulator for building streaming message
+    private var streamingMessageBuilder: StreamingMessage?
+
+    /// Throttle to batch rapid stream updates (prevents SwiftUI frame overload)
+    private let streamThrottle = StreamThrottle(interval: 0.05) // 50ms batching
 
     private init() {}
 
@@ -87,6 +97,9 @@ class ConversationManager: ObservableObject {
         print("🆕 ConversationManager.createNewConversation")
         currentConversationId = nil
         messages = []
+        streamingMessage = nil
+        streamingMessageBuilder = nil
+        streamThrottle.cancel()
         error = nil
     }
 
@@ -107,9 +120,9 @@ class ConversationManager: ObservableObject {
         // Add to UI immediately
         messages.append(userMessage)
 
-        // Create streaming message for assistant
+        // Create streaming message builder for assistant
         let assistantMessageId = UUID().uuidString
-        streamingMessage = StreamingMessage(id: assistantMessageId, role: .assistant)
+        streamingMessageBuilder = StreamingMessage(id: assistantMessageId, role: .assistant)
 
         isStreaming = true
         error = nil
@@ -163,78 +176,96 @@ class ConversationManager: ObservableObject {
                 processStreamChunk(chunk)
             }
 
+            // Flush any pending throttled updates
+            streamThrottle.flush()
+
+            // Move streaming message to completed messages
+            if let completed = streamingMessage {
+                messages.append(completed)
+            }
+
             print("✅ Message sent successfully")
 
         } catch {
             self.error = "Failed to send message: \(error.localizedDescription)"
             print("❌ Failed to send message: \(error)")
 
-            // Remove incomplete streaming message on error
-            if let streamingMessageId = streamingMessage?.id {
-                messages.removeAll { $0.id == streamingMessageId }
-            }
+            // Clear incomplete streaming message on error
+            streamThrottle.cancel()
             streamingMessage = nil
+            streamingMessageBuilder = nil
         }
 
         isStreaming = false
         streamingMessage = nil
+        streamingMessageBuilder = nil
     }
 
     // MARK: - Stream Processing
 
     private func processStreamChunk(_ chunk: StreamChunk) {
-        guard var currentMessage = streamingMessage else { return }
+        guard var builder = streamingMessageBuilder else { return }
 
+        // Accumulate chunk into internal builder (NOT published immediately)
         switch chunk.type {
         case "text-delta":
             if let text = chunk.delta {
-                currentMessage.appendText(text)
-                streamingMessage = currentMessage
-                updateStreamingMessageInUI()
+                builder.appendText(text)
+                streamingMessageBuilder = builder
+                scheduleStreamingUpdate()
             }
 
         case let type where type.hasPrefix("tool-"):
             // Handle any tool type (e.g., "tool-list_drives", "tool-read_page")
-            if let toolCall = chunk.toolCall {
+            // Tool data is flat at the top level (matches Vercel AI SDK v5 format)
+
+            if let toolCallId = chunk.toolCallId, let toolName = chunk.toolName {
+                // Tool call with input (tool-input-* events)
+                // Use updateOrAddTool to prevent duplicates from multiple events
                 let toolPart = ToolPart(
                     type: chunk.type,
-                    toolCallId: toolCall.toolCallId,
-                    toolName: toolCall.toolName,
-                    input: toolCall.input != nil ? ["data": toolCall.input!] : nil,
+                    toolCallId: toolCallId,
+                    toolName: toolName,
+                    input: chunk.input != nil ? (chunk.input!.value as? [String: AnyCodable]) : nil,
                     output: nil,
                     state: .inputAvailable
                 )
-                currentMessage.addTool(toolPart)
-                streamingMessage = currentMessage
-                updateStreamingMessageInUI()
-            } else if let toolResult = chunk.toolResult {
-                // Update existing tool with output
-                currentMessage.updateTool(
-                    toolCallId: toolResult.toolCallId,
-                    output: toolResult.result,
-                    state: toolResult.isError == true ? .outputError : .outputAvailable
+                builder.updateOrAddTool(toolPart)
+                streamingMessageBuilder = builder
+                scheduleStreamingUpdate()
+            } else if let toolCallId = chunk.toolCallId, chunk.output != nil {
+                // Tool result (tool-output-available)
+                builder.updateTool(
+                    toolCallId: toolCallId,
+                    output: chunk.output,
+                    state: chunk.isError == true ? .outputError : .outputAvailable
                 )
-                streamingMessage = currentMessage
-                updateStreamingMessageInUI()
+                streamingMessageBuilder = builder
+                scheduleStreamingUpdate()
             }
 
         case "finish":
-            currentMessage.isComplete = true
-            streamingMessage = currentMessage
+            builder.isComplete = true
+            streamingMessageBuilder = builder
+            // Flush immediately on finish to show complete message
+            streamThrottle.flush()
 
         default:
             break
         }
     }
 
-    private func updateStreamingMessageInUI() {
-        guard let streamingMessage = streamingMessage else { return }
+    /// Schedules a throttled update of the streaming message in the UI
+    /// Updates are batched at 50ms intervals to prevent SwiftUI frame overload
+    private func scheduleStreamingUpdate() {
+        streamThrottle.execute { [weak self] in
+            guard let self = self else { return }
 
-        // Remove previous streaming message if exists
-        messages.removeAll { $0.id == streamingMessage.id }
-
-        // Add updated streaming message
-        messages.append(streamingMessage.toMessage())
+            // Build complete message from accumulator and publish atomically
+            if let builder = self.streamingMessageBuilder {
+                self.streamingMessage = builder.toMessage()
+            }
+        }
     }
 }
 

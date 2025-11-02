@@ -18,21 +18,17 @@ struct ChatView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(spacing: 16) {
+                            // Completed messages
                             ForEach(conversationManager.messages) { message in
                                 MessageRow(message: message)
                                     .id(message.id)
                             }
 
-                            // Streaming indicator
-                            if conversationManager.isStreaming {
-                                HStack {
-                                    ProgressView()
-                                        .progressViewStyle(.circular)
-                                    Text("AI is thinking...")
-                                        .font(.subheadline)
-                                        .foregroundColor(.secondary)
-                                }
-                                .padding()
+                            // Currently streaming message (separate from completed)
+                            if let streamingMessage = conversationManager.streamingMessage {
+                                MessageRow(message: streamingMessage)
+                                    .id(streamingMessage.id)
+                                    .opacity(0.95) // Subtle visual indicator
                             }
                         }
                         .padding()
@@ -42,6 +38,14 @@ struct ChatView: View {
                         if let lastMessage = conversationManager.messages.last {
                             withAnimation {
                                 proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                            }
+                        }
+                    }
+                    .onChange(of: conversationManager.streamingMessage?.id) { oldValue, newValue in
+                        // Auto-scroll when streaming message appears or updates
+                        if let streamingId = newValue {
+                            withAnimation {
+                                proxy.scrollTo(streamingId, anchor: .bottom)
                             }
                         }
                     }
@@ -94,13 +98,31 @@ struct ChatView: View {
         }
         .task {
             // Load conversation when view appears
-            print("🟡 ChatView.task triggered - agent: \(agent.title), conversationId: \(agent.conversationId ?? "nil")")
+            print("🟡 ChatView.task triggered - agent: \(agent.title), agentConversationId: \(agent.conversationId ?? "nil"), managerConversationId: \(conversationManager.currentConversationId ?? "nil")")
 
-            if let conversationId = agent.conversationId {
-                await conversationManager.loadConversation(conversationId)
+            // Check if manager already has a conversation loaded
+            if let currentManagerId = conversationManager.currentConversationId {
+                // Manager has a conversation loaded
+                if let agentId = agent.conversationId, agentId != currentManagerId {
+                    // Agent wants a different conversation - load it
+                    print("ℹ️ Loading agent's conversation: \(agentId)")
+                    await conversationManager.loadConversation(agentId)
+                } else {
+                    // Manager's conversation matches or agent has none - keep current state
+                    print("ℹ️ Keeping current conversation: \(currentManagerId)")
+                }
+            } else if let agentId = agent.conversationId {
+                // Manager has no conversation, but agent does - load it
+                print("ℹ️ Loading conversation from agent: \(agentId)")
+                await conversationManager.loadConversation(agentId)
             } else {
-                // New conversation - clear state
-                conversationManager.createNewConversation()
+                // Both are nil - only clear if truly empty (prevent clearing during send)
+                if conversationManager.messages.isEmpty && conversationManager.streamingMessage == nil {
+                    print("ℹ️ Starting new conversation")
+                    conversationManager.createNewConversation()
+                } else {
+                    print("ℹ️ Messages already exist, not clearing")
+                }
             }
         }
     }

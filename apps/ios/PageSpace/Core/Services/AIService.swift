@@ -116,19 +116,21 @@ class AIService: ObservableObject {
 struct StreamChunk: Codable {
     let type: String
     let index: Int?
-    let delta: String?  // Direct string - matches Vercel AI SDK v5 UIMessage stream format
-    let toolCall: ToolCallChunk?
-    let toolResult: ToolResultChunk?
+    let delta: String?  // For text-delta events
 
-    struct ToolCallChunk: Codable {
-        let toolCallId: String
-        let toolName: String
-        let input: AnyCodable?
-    }
+    // Tool call fields (flat at top level - matches Vercel AI SDK v5 format)
+    let toolCallId: String?
+    let toolName: String?
+    let input: AnyCodable?
 
-    struct ToolResultChunk: Codable {
-        let toolCallId: String
-        let result: AnyCodable?
-        let isError: Bool?
-    }
+    // Tool result fields (flat at top level)
+    let output: AnyCodable?
+
+    // Error handling
+    let isError: Bool?
+
+    // Optional metadata
+    let providerExecuted: Bool?
+    let dynamic: Bool?
+    let preliminary: Bool?
 }

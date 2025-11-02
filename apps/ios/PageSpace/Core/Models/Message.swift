@@ -196,12 +196,14 @@ struct StreamingMessage {
     var role: MessageRole
     var parts: [MessagePart]
     var isComplete: Bool
+    let createdAt: Date  // Preserve timestamp from when streaming started
 
     init(id: String, role: MessageRole) {
         self.id = id
         self.role = role
         self.parts = []
         self.isComplete = false
+        self.createdAt = Date()  // Capture when streaming begins
     }
 
     mutating func appendText(_ text: String) {
@@ -218,6 +220,30 @@ struct StreamingMessage {
 
     mutating func addTool(_ tool: ToolPart) {
         parts.append(.tool(tool))
+    }
+
+    mutating func updateOrAddTool(_ tool: ToolPart) {
+        // Check if tool with this toolCallId already exists
+        if let index = parts.firstIndex(where: {
+            if case .tool(let existingTool) = $0, existingTool.toolCallId == tool.toolCallId {
+                return true
+            }
+            return false
+        }), case .tool(let existingTool) = parts[index] {
+            // Update existing tool with new input/state (preserve output if it exists)
+            parts[index] = .tool(ToolPart(
+                id: existingTool.id,
+                type: tool.type,
+                toolCallId: tool.toolCallId,
+                toolName: tool.toolName,
+                input: tool.input ?? existingTool.input,
+                output: existingTool.output,
+                state: tool.state
+            ))
+        } else {
+            // Tool doesn't exist yet, add it
+            parts.append(.tool(tool))
+        }
     }
 
     mutating func updateTool(toolCallId: String, output: AnyCodable?, state: ToolState) {
@@ -241,6 +267,6 @@ struct StreamingMessage {
     }
 
     func toMessage() -> Message {
-        Message(id: id, role: role, parts: parts, createdAt: Date())
+        return Message(id: id, role: role, parts: parts, createdAt: createdAt)
     }
 }

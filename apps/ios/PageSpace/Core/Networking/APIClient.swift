@@ -74,7 +74,7 @@ class APIClient {
 
     private init() {
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForRequest = 300  // 5 minutes for AI streaming responses
         config.timeoutIntervalForResource = 300 // 5 minutes for streaming
         self.session = URLSession(configuration: config)
 
