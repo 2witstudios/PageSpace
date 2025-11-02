@@ -130,10 +130,16 @@ struct ChatView: View {
                 }
             }
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button(action: {
-                    conversationManager.createNewConversation()
-                }) {
-                    Image(systemName: "plus")
+                HStack(spacing: 12) {
+                    // Provider/Model Picker Button
+                    ProviderPickerButton()
+
+                    // New Conversation Button
+                    Button(action: {
+                        conversationManager.createNewConversation()
+                    }) {
+                        Image(systemName: "plus")
+                    }
                 }
             }
         }

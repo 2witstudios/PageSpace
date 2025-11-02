@@ -44,6 +44,21 @@ class ConversationManager: ObservableObject {
     /// Error message if any
     @Published var error: String?
 
+    // MARK: - AI Provider/Model Selection
+
+    /// Currently selected AI provider (e.g., "pagespace", "openrouter", "google")
+    @Published var selectedProvider: String = "pagespace"
+
+    /// Currently selected AI model (e.g., "glm-4.5-air", "gpt-4o")
+    @Published var selectedModel: String = "glm-4.5-air"
+
+    /// Provider settings from backend (configuration status per provider)
+    @Published var providerSettings: AISettings?
+
+    /// Agent-specific overrides from page/drive configuration
+    /// When set, these override the user's default provider/model
+    @Published var agentConfigOverrides: AgentConfig?
+
     // MARK: - Services
 
     private let conversationService = ConversationService.shared
@@ -60,7 +75,81 @@ class ConversationManager: ObservableObject {
     /// Active streaming task (for cancellation support)
     private var streamTask: Task<Void, Never>?
 
-    private init() {}
+    private init() {
+        // Load provider settings on initialization
+        Task {
+            await loadProviderSettings()
+        }
+    }
+
+    // MARK: - Provider Settings
+
+    /// Load provider settings from backend
+    func loadProviderSettings() async {
+        do {
+            let settings = try await aiService.getSettings()
+            self.providerSettings = settings
+            self.selectedProvider = settings.currentProvider
+            self.selectedModel = settings.currentModel
+            print("✅ Loaded provider settings: \(settings.currentProvider)/\(settings.currentModel)")
+        } catch {
+            print("❌ Failed to load provider settings: \(error)")
+        }
+    }
+
+    /// Update provider selection
+    func updateProvider(_ provider: String, model: String) async {
+        self.selectedProvider = provider
+        self.selectedModel = model
+
+        // Optionally persist to backend
+        do {
+            _ = try await aiService.updateSettings(provider: provider, model: model)
+            print("✅ Updated provider settings: \(provider)/\(model)")
+        } catch {
+            print("⚠️ Failed to persist provider settings: \(error)")
+        }
+    }
+
+    /// Load agent-specific configuration overrides for a page/drive
+    func loadAgentConfig(contextType: String, contextId: String) async {
+        // Only page agents support custom configuration
+        guard contextType == "page" else {
+            agentConfigOverrides = nil
+            return
+        }
+
+        do {
+            let config = try await aiService.getAgentConfig(pageId: contextId)
+            self.agentConfigOverrides = config
+
+            // Apply overrides if present
+            if let provider = config.aiProvider {
+                self.selectedProvider = provider
+            }
+            if let model = config.aiModel {
+                self.selectedModel = model
+            }
+
+            print("✅ Loaded agent config overrides for page \(contextId)")
+        } catch {
+            print("⚠️ Failed to load agent config: \(error)")
+            agentConfigOverrides = nil
+        }
+    }
+
+    /// Get the active provider/model (considers overrides)
+    func getActiveProviderModel() -> (provider: String, model: String) {
+        let provider = agentConfigOverrides?.aiProvider ?? selectedProvider
+        let model = agentConfigOverrides?.aiModel ?? selectedModel
+        return (provider, model)
+    }
+
+    /// Check if a provider is configured and available
+    func isProviderConfigured(_ provider: String) -> Bool {
+        guard let settings = providerSettings else { return false }
+        return settings.isProviderConfigured(provider)
+    }
 
     // MARK: - Load Conversation (Atomic Operation)
 
@@ -102,6 +191,11 @@ class ConversationManager: ObservableObject {
                 selectedAgentType = conversation.type ?? "global"
                 selectedAgentContextId = conversation.contextId
 
+                // Load agent-specific configuration overrides for page agents
+                if let contextType = conversation.type, let contextId = conversation.contextId {
+                    await loadAgentConfig(contextType: contextType, contextId: contextId)
+                }
+
                 print("✅ Loaded \(messages.count) messages for conversation: \(conversation.displayTitle)")
             } else {
                 print("⚠️ Discarding stale response for \(conversation.displayTitle) - user switched to different conversation")
@@ -131,6 +225,13 @@ class ConversationManager: ObservableObject {
         streamingMessageBuilder = nil
         streamThrottle.cancel()
         error = nil
+
+        // Clear agent overrides and reset to user defaults
+        agentConfigOverrides = nil
+        if let settings = providerSettings {
+            selectedProvider = settings.currentProvider
+            selectedModel = settings.currentModel
+        }
     }
 
     // MARK: - Send Message
@@ -191,9 +292,14 @@ class ConversationManager: ObservableObject {
             // Stream message (wrapped in Task for cancellation support)
             streamTask = Task {
                 do {
+                    // Get active provider/model (considers agent overrides)
+                    let (provider, model) = getActiveProviderModel()
+
                     let stream = aiService.sendMessage(
                         conversationId: finalConversationId,
-                        messages: messages
+                        messages: messages,
+                        provider: provider,
+                        model: model
                     )
 
                     for try await chunk in stream {

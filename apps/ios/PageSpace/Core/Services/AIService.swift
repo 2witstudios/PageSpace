@@ -87,12 +87,52 @@ class AIService: ObservableObject {
             let model: String
         }
 
+        struct UpdateResponse: Codable {
+            let success: Bool
+            let provider: String
+            let model: String
+            let message: String
+        }
+
         let request = UpdateRequest(provider: provider, model: model)
-        return try await apiClient.request(
+
+        // PATCH returns simple success response, not full AISettings
+        let _: UpdateResponse = try await apiClient.request(
             endpoint: APIEndpoints.aiSettings,
             method: .PATCH,
             body: request
         )
+
+        // Fetch updated settings after successful update
+        return try await getSettings()
+    }
+
+    // MARK: - Agent Configuration
+
+    /// Get agent-specific configuration for a page
+    func getAgentConfig(pageId: String) async throws -> AgentConfig {
+        let endpoint = "/api/pages/\(pageId)/agent-config"
+        return try await apiClient.request(endpoint: endpoint)
+    }
+
+    // MARK: - Dynamic Models
+
+    /// Load available models from Ollama
+    func getOllamaModels() async throws -> [String] {
+        struct OllamaResponse: Codable {
+            let models: [String]
+        }
+        let response: OllamaResponse = try await apiClient.request(endpoint: "/api/ai/ollama/models")
+        return response.models
+    }
+
+    /// Load available models from LM Studio
+    func getLMStudioModels() async throws -> [String] {
+        struct LMStudioResponse: Codable {
+            let models: [String]
+        }
+        let response: LMStudioResponse = try await apiClient.request(endpoint: "/api/ai/lmstudio/models")
+        return response.models
     }
 
     // MARK: - Stream Parsing
