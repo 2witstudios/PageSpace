@@ -18,8 +18,14 @@ class AuthManager: ObservableObject {
         // Load token from Keychain on init
         Task { @MainActor in
             if loadToken() != nil {
-                isAuthenticated = true
-                // TODO: Validate token and load user info
+                // Validate token and load user info
+                do {
+                    try await loadCurrentUser()
+                } catch {
+                    // If token validation fails, logout
+                    print("Failed to load user on init: \(error.localizedDescription)")
+                    logout()
+                }
             }
         }
     }
@@ -117,6 +123,29 @@ class AuthManager: ObservableObject {
         saveRefreshToken(response.refreshToken)
         csrfToken = response.csrfToken
         saveCSRFToken(response.csrfToken)
+    }
+
+    @MainActor
+    func loadCurrentUser() async throws {
+        let endpoint = APIEndpoints.me
+
+        do {
+            let user: User = try await APIClient.shared.request(
+                endpoint: endpoint,
+                method: .GET
+            )
+
+            // Update current user
+            currentUser = user
+            isAuthenticated = true
+        } catch APIError.unauthorized {
+            // Token is invalid or expired - clear authentication
+            logout()
+            throw APIError.unauthorized
+        } catch {
+            // Other errors - don't logout, just rethrow
+            throw error
+        }
     }
 
     @MainActor

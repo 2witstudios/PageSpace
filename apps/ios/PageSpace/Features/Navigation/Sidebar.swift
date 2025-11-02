@@ -126,18 +126,62 @@ struct Sidebar: View {
         }) {
             HStack(spacing: 12) {
                 // Avatar Circle
-                Circle()
-                    .fill(LinearGradient(
-                        colors: [.blue, .purple],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ))
-                    .frame(width: 40, height: 40)
-                    .overlay(
-                        Text(userInitials)
-                            .font(.headline)
-                            .foregroundColor(.white)
-                    )
+                Group {
+                    if let user = authManager.currentUser,
+                       let imageURL = user.image,
+                       let url = URL(string: imageURL) {
+                        // Remote avatar image
+                        AsyncImage(url: url) { phase in
+                            switch phase {
+                            case .success(let image):
+                                image
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                            case .failure, .empty:
+                                // Fallback to gradient circle with initials
+                                Circle()
+                                    .fill(LinearGradient(
+                                        colors: [.blue, .purple],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    ))
+                                    .overlay(
+                                        Text(userInitials)
+                                            .font(.headline)
+                                            .foregroundColor(.white)
+                                    )
+                            @unknown default:
+                                // Fallback for future cases
+                                Circle()
+                                    .fill(LinearGradient(
+                                        colors: [.blue, .purple],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    ))
+                                    .overlay(
+                                        Text(userInitials)
+                                            .font(.headline)
+                                            .foregroundColor(.white)
+                                    )
+                            }
+                        }
+                    } else {
+                        // Default gradient circle with initials
+                        Circle()
+                            .fill(LinearGradient(
+                                colors: [.blue, .purple],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ))
+                            .overlay(
+                                Text(userInitials)
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+                            )
+                    }
+                }
+                .frame(width: 40, height: 40)
+                .clipShape(Circle())
 
                 // User Info
                 VStack(alignment: .leading, spacing: 2) {
