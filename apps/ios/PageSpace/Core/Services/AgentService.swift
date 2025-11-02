@@ -117,10 +117,6 @@ class AgentService: ObservableObject {
         conversationManager.createNewConversation()
     }
 
-    // MARK: - Update Global Agent Conversation ID
-    // NOTE: This method is no longer needed with ConversationManager architecture
-    // Kept for backwards compatibility but can be removed in future cleanup
-
     // MARK: - Get Drives
 
     func getDrives() async throws -> [Drive] {
