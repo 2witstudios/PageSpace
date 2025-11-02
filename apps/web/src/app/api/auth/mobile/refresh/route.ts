@@ -100,10 +100,17 @@ export async function POST(req: Request) {
     });
 
     // Generate new CSRF token for mobile client
+    // Decode the new access token to get its actual iat claim
+    const newDecoded = await decodeToken(newAccessToken);
+    if (!newDecoded?.iat) {
+      loggers.auth.error('Failed to decode access token for CSRF generation');
+      return Response.json({ error: 'Failed to generate session' }, { status: 500 });
+    }
+
     const sessionId = getSessionIdFromJWT({
       userId: user.id,
       tokenVersion: user.tokenVersion,
-      iat: Math.floor(Date.now() / 1000)
+      iat: newDecoded.iat
     });
     const csrfToken = generateCSRFToken(sessionId);
 

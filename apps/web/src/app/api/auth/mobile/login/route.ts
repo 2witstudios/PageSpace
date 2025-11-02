@@ -2,7 +2,7 @@ import { users, refreshTokens } from '@pagespace/db';
 import { db, eq } from '@pagespace/db';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod/v4';
-import { generateAccessToken, generateRefreshToken, checkRateLimit, resetRateLimit, RATE_LIMIT_CONFIGS } from '@pagespace/lib/server';
+import { generateAccessToken, generateRefreshToken, checkRateLimit, resetRateLimit, RATE_LIMIT_CONFIGS, decodeToken } from '@pagespace/lib/server';
 import { generateCSRFToken, getSessionIdFromJWT } from '@pagespace/lib/server';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
@@ -107,10 +107,17 @@ export async function POST(req: Request) {
     });
 
     // Generate CSRF token for mobile client
+    // Decode the access token to get its actual iat claim
+    const decoded = await decodeToken(accessToken);
+    if (!decoded?.iat) {
+      loggers.auth.error('Failed to decode access token for CSRF generation');
+      return Response.json({ error: 'Failed to generate session' }, { status: 500 });
+    }
+
     const sessionId = getSessionIdFromJWT({
       userId: user.id,
       tokenVersion: user.tokenVersion,
-      iat: Math.floor(Date.now() / 1000)
+      iat: decoded.iat
     });
     const csrfToken = generateCSRFToken(sessionId);
 
