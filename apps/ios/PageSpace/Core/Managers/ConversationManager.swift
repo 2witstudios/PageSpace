@@ -176,12 +176,14 @@ class ConversationManager: ObservableObject {
                 processStreamChunk(chunk)
             }
 
-            // Flush any pending throttled updates
+            // Flush any pending throttled updates (ensures final UI update)
             streamThrottle.flush()
 
             // Move streaming message to completed messages
-            if let completed = streamingMessage {
-                messages.append(completed)
+            // Use builder (source of truth) instead of streamingMessage (throttled snapshot)
+            // to ensure we capture all chunks, including any pending in the throttle
+            if let builder = streamingMessageBuilder {
+                messages.append(builder.toMessage())
             }
 
             print("✅ Message sent successfully")
@@ -206,13 +208,21 @@ class ConversationManager: ObservableObject {
     private func processStreamChunk(_ chunk: StreamChunk) {
         guard var builder = streamingMessageBuilder else { return }
 
-        // Accumulate chunk into internal builder (NOT published immediately)
+        // Accumulate chunk into internal builder
         switch chunk.type {
         case "text-delta":
             if let text = chunk.delta {
+                let isFirstTextChunk = builder.parts.isEmpty
                 builder.appendText(text)
                 streamingMessageBuilder = builder
-                scheduleStreamingUpdate()
+
+                if isFirstTextChunk {
+                    // Bypass throttle for first chunk (instant feedback, prevents empty bubble)
+                    streamingMessage = builder.toMessage()
+                } else {
+                    // Use throttle for subsequent chunks (batching for performance)
+                    scheduleStreamingUpdate()
+                }
             }
 
         case let type where type.hasPrefix("tool-"):
