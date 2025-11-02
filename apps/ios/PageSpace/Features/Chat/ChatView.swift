@@ -95,34 +95,32 @@ struct ChatView: View {
                         .font(.headline)
                 }
             }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(action: {
+                    conversationManager.createNewConversation()
+                }) {
+                    Image(systemName: "plus")
+                }
+            }
         }
         .task {
             // Load conversation when view appears
             print("🟡 ChatView.task triggered - agent: \(agent.title), agentConversationId: \(agent.conversationId ?? "nil"), managerConversationId: \(conversationManager.currentConversationId ?? "nil")")
 
-            // Check if manager already has a conversation loaded
-            if let currentManagerId = conversationManager.currentConversationId {
-                // Manager has a conversation loaded
-                if let agentId = agent.conversationId, agentId != currentManagerId {
-                    // Agent wants a different conversation - load it
-                    print("ℹ️ Loading agent's conversation: \(agentId)")
-                    await conversationManager.loadConversation(agentId)
+            // Simple logic: Only load conversation if agent explicitly has one (from Recents)
+            // Otherwise, start fresh conversation
+            if let agentConversationId = agent.conversationId {
+                // Agent has a conversation ID (from Recents) - load it if different
+                if agentConversationId != conversationManager.currentConversationId {
+                    print("ℹ️ Loading conversation from Recents: \(agentConversationId)")
+                    await conversationManager.loadConversation(agentConversationId)
                 } else {
-                    // Manager's conversation matches or agent has none - keep current state
-                    print("ℹ️ Keeping current conversation: \(currentManagerId)")
+                    print("ℹ️ Conversation already loaded: \(agentConversationId)")
                 }
-            } else if let agentId = agent.conversationId {
-                // Manager has no conversation, but agent does - load it
-                print("ℹ️ Loading conversation from agent: \(agentId)")
-                await conversationManager.loadConversation(agentId)
             } else {
-                // Both are nil - only clear if truly empty (prevent clearing during send)
-                if conversationManager.messages.isEmpty && conversationManager.streamingMessage == nil {
-                    print("ℹ️ Starting new conversation")
-                    conversationManager.createNewConversation()
-                } else {
-                    print("ℹ️ Messages already exist, not clearing")
-                }
+                // No conversation ID (from AgentsList) - start fresh
+                print("ℹ️ Starting new conversation with agent: \(agent.title)")
+                conversationManager.createNewConversation()
             }
         }
     }
