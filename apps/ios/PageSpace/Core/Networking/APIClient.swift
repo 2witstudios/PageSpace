@@ -219,20 +219,29 @@ class APIClient {
 
             try handleHTTPStatus(httpResponse.statusCode)
 
-            // Parse SSE stream
-            var buffer = ""
-            for try await byte in bytes {
-                let char = Character(UnicodeScalar(byte))
-                buffer.append(char)
+            // Parse SSE stream with proper UTF-8 handling
+            var byteBuffer = Data()  // Accumulate bytes for UTF-8 decoding
+            var eventBuffer = ""     // Decoded UTF-8 string buffer
 
-                // SSE messages end with double newline
-                if buffer.hasSuffix("\n\n") {
-                    let event = parseSSEEvent(buffer)
-                    if let event = event {
-                        continuation.yield(event)
+            for try await byte in bytes {
+                byteBuffer.append(byte)
+
+                // Try to decode accumulated bytes as UTF-8
+                if let decodedString = String(data: byteBuffer, encoding: .utf8) {
+                    // Successfully decoded - append to event buffer
+                    eventBuffer.append(decodedString)
+                    byteBuffer.removeAll()  // Clear decoded bytes
+
+                    // SSE messages end with double newline
+                    if eventBuffer.hasSuffix("\n\n") {
+                        let event = parseSSEEvent(eventBuffer)
+                        if let event = event {
+                            continuation.yield(event)
+                        }
+                        eventBuffer = ""
                     }
-                    buffer = ""
                 }
+                // If decoding fails, keep accumulating bytes (incomplete multi-byte UTF-8 sequence)
             }
 
             continuation.finish()
