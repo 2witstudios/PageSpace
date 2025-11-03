@@ -34,6 +34,7 @@ struct ChatView: View {
                         }
                         .padding()
                     }
+                    .scrollDismissesKeyboard(.immediately)
                     .onChange(of: conversationManager.messages.count) { oldValue, newValue in
                         // Auto-scroll to bottom when new messages arrive
                         if let lastMessage = conversationManager.messages.last {
