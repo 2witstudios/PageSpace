@@ -216,3 +216,27 @@ func getProviderList() -> [String] {
         "glm"
     ]
 }
+
+// MARK: - Subscription Tier Restrictions
+
+/// Checks if a model requires a Pro or Business subscription
+/// Mirrors web app's requiresSubscription() function
+func requiresSubscription(provider: String, model: String) -> Bool {
+    return provider == "pagespace" && model == "glm-4.6"
+}
+
+/// Checks if a user has access to a specific model based on their subscription tier
+/// Mirrors web app's hasModelAccess() function
+func hasModelAccess(provider: String, model: String, userTier: String?) -> Bool {
+    // If the model doesn't require a subscription, it's accessible to everyone
+    if !requiresSubscription(provider: provider, model: model) {
+        return true
+    }
+
+    // For models that require subscription, check if user is Pro or Business
+    guard let tier = userTier else {
+        return false
+    }
+
+    return tier == "pro" || tier == "business"
+}
