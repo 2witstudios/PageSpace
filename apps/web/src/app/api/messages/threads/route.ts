@@ -117,12 +117,13 @@ async function fetchDMConversations(userId: string) {
       id: typedRow.id,
       participant1Id: typedRow.participant1Id,
       participant2Id: typedRow.participant2Id,
-      lastMessageAt: typedRow.lastMessageAt,
+      // Convert PostgreSQL timestamp strings to ISO 8601 for iOS compatibility
+      lastMessageAt: typedRow.lastMessageAt ? new Date(typedRow.lastMessageAt).toISOString() : null,
       lastMessagePreview: typedRow.lastMessagePreview,
-      participant1LastRead: typedRow.participant1LastRead,
-      participant2LastRead: typedRow.participant2LastRead,
-      createdAt: typedRow.createdAt,
-      lastRead: typedRow.last_read,
+      participant1LastRead: typedRow.participant1LastRead ? new Date(typedRow.participant1LastRead).toISOString() : null,
+      participant2LastRead: typedRow.participant2LastRead ? new Date(typedRow.participant2LastRead).toISOString() : null,
+      createdAt: new Date(typedRow.createdAt).toISOString(),
+      lastRead: typedRow.last_read ? new Date(typedRow.last_read).toISOString() : null,
       otherUser: {
         id: typedRow.other_user_id,
         name: typedRow.other_user_name,

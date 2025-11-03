@@ -3,6 +3,7 @@ import { buildTree } from '@pagespace/lib/server';
 import { pages, drives, pagePermissions, driveMembers, db, and, eq, inArray, asc, sql } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { jsonResponse } from '@pagespace/lib/api-utils';
 
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 
@@ -117,7 +118,7 @@ export async function GET(
     }
 
     const pageTree = buildTree(pageResults);
-    return NextResponse.json(pageTree);
+    return jsonResponse(pageTree);
   } catch (error) {
     loggers.api.error('Error fetching pages:', error as Error);
     return NextResponse.json(

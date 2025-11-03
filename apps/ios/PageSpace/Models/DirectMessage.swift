@@ -5,12 +5,15 @@ import Foundation
 struct DMUser: Codable, Hashable, Identifiable {
     let id: String
     let name: String
-    let username: String
+    let username: String?  // Optional - user_profiles may not exist for all users
     let email: String
     let image: String?
 
     var displayName: String {
-        name.isEmpty ? username : name
+        if !name.isEmpty {
+            return name
+        }
+        return username ?? email
     }
 
     var avatarUrl: URL? {

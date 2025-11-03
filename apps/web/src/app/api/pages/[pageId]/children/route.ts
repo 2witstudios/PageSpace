@@ -3,6 +3,7 @@ import { pages, db, and, eq, asc } from '@pagespace/db';
 import { decodeToken, canUserViewPage } from '@pagespace/lib/server';
 import { parse } from 'cookie';
 import { loggers } from '@pagespace/lib/server';
+import { jsonResponse } from '@pagespace/lib/api-utils';
 
 export async function GET(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
   const { pageId } = await params;
@@ -32,7 +33,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       ),
       orderBy: [asc(pages.position)],
     });
-    return NextResponse.json(children);
+    return jsonResponse(children);
   } catch (error) {
     loggers.api.error(`Error fetching children for page ${pageId}:`, error as Error);
     return NextResponse.json({ error: 'Failed to fetch page children' }, { status: 500 });

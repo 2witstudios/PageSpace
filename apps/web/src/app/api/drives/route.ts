@@ -5,6 +5,7 @@ import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/socket-utils
 import { loggers } from '@pagespace/lib/server';
 import { trackDriveOperation } from '@pagespace/lib/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { jsonResponse } from '@pagespace/lib/api-utils';
 
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 
@@ -88,7 +89,7 @@ export async function GET(req: Request) {
       drives: uniqueDrives.map((d) => ({ id: d.id, name: d.name, slug: d.slug })),
     });
 
-    return NextResponse.json(uniqueDrives);
+    return jsonResponse(uniqueDrives);
   } catch (error) {
     loggers.api.error('Error fetching drives:', error as Error);
     return NextResponse.json({ error: 'Failed to fetch drives' }, { status: 500 });
@@ -140,7 +141,7 @@ export async function POST(request: Request) {
       slug: newDrive[0].slug,
     });
 
-    return NextResponse.json({ ...newDrive[0], isOwned: true, role: 'OWNER' as const }, { status: 201 });
+    return jsonResponse({ ...newDrive[0], isOwned: true, role: 'OWNER' as const }, { status: 201 });
   } catch (error) {
     loggers.api.error('Error creating drive:', error as Error);
     return NextResponse.json({ error: 'Failed to create drive' }, { status: 500 });

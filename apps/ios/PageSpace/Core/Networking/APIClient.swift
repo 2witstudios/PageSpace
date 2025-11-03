@@ -79,16 +79,41 @@ class APIClient {
         self.session = URLSession(configuration: config)
 
         self.decoder = JSONDecoder()
-        // Use custom date decoder to handle ISO8601 with fractional seconds
+        // Use custom date decoder to handle ISO8601 with and without fractional seconds
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        let fallbackFormatter = ISO8601DateFormatter()
+        fallbackFormatter.formatOptions = [.withInternetDateTime]
+
         decoder.dateDecodingStrategy = .custom { decoder in
             let container = try decoder.singleValueContainer()
+
+            // Handle null for optional dates - this will fail gracefully for optionals
+            if container.decodeNil() {
+                throw DecodingError.dataCorruptedError(
+                    in: container,
+                    debugDescription: "Null date value encountered"
+                )
+            }
+
             let dateString = try container.decode(String.self)
+
+            // Try with fractional seconds first (e.g., "2025-11-03T12:34:56.789Z")
             if let date = formatter.date(from: dateString) {
                 return date
             }
-            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid date format")
+
+            // Fallback: try without fractional seconds (e.g., "2025-11-03T12:34:56Z")
+            if let date = fallbackFormatter.date(from: dateString) {
+                return date
+            }
+
+            // If both fail, provide detailed error message
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Invalid date format. Expected ISO8601 format (e.g., '2025-11-03T12:34:56.789Z' or '2025-11-03T12:34:56Z'), but received: '\(dateString)'"
+            )
         }
 
         self.encoder = JSONEncoder()

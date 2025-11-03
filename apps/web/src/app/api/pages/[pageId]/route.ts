@@ -8,6 +8,7 @@ import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
 import { loggers } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { jsonResponse } from '@pagespace/lib/api-utils';
 
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 
@@ -173,7 +174,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       messages
     };
 
-    return NextResponse.json(pageWithDetails);
+    return jsonResponse(pageWithDetails);
   } catch (error) {
     loggers.api.error('Error fetching page details:', error as Error);
     return NextResponse.json({ error: 'Failed to fetch page details' }, { status: 500 });
@@ -301,7 +302,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
       hasTitleUpdate: !!safeBody.title
     });
 
-    return NextResponse.json(updatedPageWithDetails);
+    return jsonResponse(updatedPageWithDetails);
   } catch (error) {
     loggers.api.error('Error updating page:', error as Error);
     if (error instanceof z.ZodError) {

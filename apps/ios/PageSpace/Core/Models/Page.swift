@@ -8,7 +8,7 @@ struct Page: Identifiable, Codable {
     let title: String
     let type: PageType
     let parentId: String?
-    let position: Int
+    let position: Double  // Changed from Int to support fractional positions from drag-and-drop reordering
     let createdAt: Date
     let updatedAt: Date
 
@@ -51,7 +51,6 @@ struct Drive: Identifiable, Codable {
     let ownerId: String
     let createdAt: Date
     let updatedAt: Date
-    let isActive: Bool?  // Optional - backend may not return this
 
     // Additional fields from backend
     let isOwned: Bool?  // Whether current user owns this drive
