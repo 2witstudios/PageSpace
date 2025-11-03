@@ -6,6 +6,7 @@ struct ChatView: View {
     @EnvironmentObject var conversationManager: ConversationManager
     @EnvironmentObject var agentService: AgentService
     @State private var messageText = ""
+    @FocusState private var isTextFieldFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -57,6 +58,7 @@ struct ChatView: View {
             // Input Area
             HStack(spacing: 12) {
                 TextField("Message...", text: $messageText, axis: .vertical)
+                    .focused($isTextFieldFocused)
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(1...5)
                     .disabled(conversationManager.isStreaming)
@@ -151,6 +153,12 @@ struct ChatView: View {
                         Image(systemName: "plus")
                     }
                 }
+            }
+        }
+        .onChange(of: isSidebarOpen) { oldValue, newValue in
+            if newValue {
+                // Dismiss keyboard when sidebar opens
+                isTextFieldFocused = false
             }
         }
     }
