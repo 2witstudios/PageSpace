@@ -76,6 +76,62 @@ archive/
 # Mac code signing certificates
 certificate.p12
 
+# Swift & Xcode
+## Build artifacts
+DerivedData/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+## Xcode user data
+*.xcuserstate
+*.xcuserdata
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+*.moved-aside
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.pbxuser
+
+## Swift Package Manager
+.swiftpm/
+.build/
+Packages/
+# Uncomment to ignore resolved dependencies (optional)
+# Package.resolved
+
+## CocoaPods (if used in future)
+Pods/
+# Exception: keep project workspaces in repo
+!*.xcworkspace
+# Re-ignore user workspaces inside xcodeproj
+*.xcodeproj/*.xcworkspace
+
+## Carthage (if used)
+Carthage/Build/
+Carthage/Checkouts/
+
+## Fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+fastlane/test_output/
+
+## Code coverage
+*.gcda
+*.gcno
+*.gcov
+
+## Playgrounds
+timeline.xctimeline
+playground.xcworkspace
+
+## AppCode (JetBrains IDE)
+# .idea/ already covered above
+
 # Production environment files
 .env.production
 .claude
