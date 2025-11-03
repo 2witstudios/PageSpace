@@ -106,7 +106,7 @@ struct AgentRow: View {
         HStack(spacing: 12) {
             Image(systemName: agent.icon)
                 .font(.title3)
-                .foregroundColor(agent.type == .global ? .blue : .purple)
+                .foregroundColor(DesignTokens.Colors.primary)
                 .frame(width: 32)
 
             VStack(alignment: .leading, spacing: 4) {
@@ -125,7 +125,7 @@ struct AgentRow: View {
 
             if isSelected {
                 Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(.blue)
+                    .foregroundColor(DesignTokens.Colors.primary)
             }
         }
         .padding(.vertical, 4)

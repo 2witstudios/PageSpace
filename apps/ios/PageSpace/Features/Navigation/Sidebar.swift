@@ -3,6 +3,7 @@
 //  PageSpace
 //
 //  Created on 2025-11-01.
+//  Redesigned for minimal, modern aesthetic matching web app
 //
 
 import SwiftUI
@@ -13,8 +14,8 @@ enum SidebarDestination: Hashable {
     case messages
 }
 
-/// Left sliding sidebar with ChatGPT/Claude-style navigation
-/// Features: Agents, Channels, Files buttons at top, Recents list, and user profile footer
+/// Left sliding sidebar with minimal, modern design
+/// Features: Ghost button navigation, hairline separators, refined typography
 struct Sidebar: View {
     @Binding var isOpen: Bool
     @ObservedObject var agentService: AgentService
@@ -29,34 +30,37 @@ struct Sidebar: View {
         VStack(alignment: .leading, spacing: 0) {
             // Navigation Buttons Section
             navigationButtons
-                .padding(.horizontal)
-                .padding(.top, 16)
+                .padding(.horizontal, DesignTokens.Spacing.large)
+                .padding(.top, DesignTokens.Spacing.large)
 
-            Divider()
-                .padding(.top, 12)
+            // Hairline separator
+            hairlineSeparator
+                .padding(.top, DesignTokens.Spacing.medium)
 
             // Recents Section Header
             recentsHeader
-                .padding(.horizontal)
-                .padding(.top, 12)
+                .padding(.horizontal, DesignTokens.Spacing.large)
+                .padding(.top, DesignTokens.Spacing.sectionHeaderTop)
+                .padding(.bottom, DesignTokens.Spacing.sectionHeaderBottom)
 
             // Conversation List
             ScrollView {
                 ConversationList(agentService: agentService, closeSidebar: {
-                    withAnimation(.easeInOut(duration: 0.3)) {
+                    withAnimation(DesignTokens.Animation.sidebarSlide) {
                         isOpen = false
                     }
                 })
-                .padding(.horizontal)
+                .padding(.horizontal, DesignTokens.Spacing.large)
             }
 
-            Divider()
+            // Hairline separator
+            hairlineSeparator
 
             // User Profile Footer
             userProfileFooter
         }
-        .frame(width: 280)
-        .background(Color(UIColor.systemBackground))
+        .frame(width: DesignTokens.Spacing.sidebarWidth)
+        .background(DesignTokens.Colors.sidebarBackground)
         .task {
             // Load agents when sidebar appears
             if agentService.agents.isEmpty {
@@ -68,33 +72,33 @@ struct Sidebar: View {
     // MARK: - Navigation Buttons
 
     private var navigationButtons: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: DesignTokens.Spacing.xsmall) {
             // Agents Button
-            NavigationButton(
+            GhostNavigationButton(
                 icon: "person.2.fill",
                 title: "Agents",
                 action: {
                     onNavigate(.agents)
-                    withAnimation(.easeInOut(duration: 0.3)) {
+                    withAnimation(DesignTokens.Animation.sidebarSlide) {
                         isOpen = false
                     }
                 }
             )
 
             // Messages Button
-            NavigationButton(
+            GhostNavigationButton(
                 icon: "message.circle.fill",
                 title: "Messages",
                 action: {
                     onNavigate(.messages)
-                    withAnimation(.easeInOut(duration: 0.3)) {
+                    withAnimation(DesignTokens.Animation.sidebarSlide) {
                         isOpen = false
                     }
                 }
             )
 
             // Files Button (disabled/placeholder)
-            NavigationButton(
+            GhostNavigationButton(
                 icon: "doc.fill",
                 title: "Files",
                 action: {},
@@ -103,19 +107,23 @@ struct Sidebar: View {
         }
     }
 
-    // MARK: - Recents Header
+    // MARK: - Section Header
 
     private var recentsHeader: some View {
-        HStack {
-            Image(systemName: "clock")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-            Text("Recents")
-                .font(.subheadline)
-                .fontWeight(.semibold)
-                .foregroundColor(.primary)
-            Spacer()
-        }
+        Text("Recents")
+            .font(.caption)
+            .fontWeight(.semibold)
+            .foregroundColor(DesignTokens.Colors.extraMutedText)
+            .tracking(DesignTokens.Typography.captionTracking)
+            .textCase(.uppercase)
+    }
+
+    // MARK: - Hairline Separator
+
+    private var hairlineSeparator: some View {
+        Rectangle()
+            .fill(DesignTokens.Colors.separator)
+            .frame(height: 0.5)
     }
 
     // MARK: - User Profile Footer
@@ -124,7 +132,7 @@ struct Sidebar: View {
         Button(action: {
             showSettings = true
         }) {
-            HStack(spacing: 12) {
+            HStack(spacing: DesignTokens.Spacing.medium) {
                 // Avatar Circle
                 Group {
                     if let user = authManager.currentUser,
@@ -138,79 +146,40 @@ struct Sidebar: View {
                                     .resizable()
                                     .aspectRatio(contentMode: .fill)
                             case .failure, .empty:
-                                // Fallback to gradient circle with initials
-                                Circle()
-                                    .fill(LinearGradient(
-                                        colors: [.blue, .purple],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    ))
-                                    .overlay(
-                                        Text(userInitials)
-                                            .font(.headline)
-                                            .foregroundColor(.white)
-                                    )
+                                avatarFallback
                             @unknown default:
-                                // Fallback for future cases
-                                Circle()
-                                    .fill(LinearGradient(
-                                        colors: [.blue, .purple],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    ))
-                                    .overlay(
-                                        Text(userInitials)
-                                            .font(.headline)
-                                            .foregroundColor(.white)
-                                    )
+                                avatarFallback
                             }
                         }
                     } else {
-                        // Default gradient circle with initials
-                        Circle()
-                            .fill(LinearGradient(
-                                colors: [.blue, .purple],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ))
-                            .overlay(
-                                Text(userInitials)
-                                    .font(.headline)
-                                    .foregroundColor(.white)
-                            )
+                        avatarFallback
                     }
                 }
                 .frame(width: 40, height: 40)
                 .clipShape(Circle())
 
-                // User Info
-                VStack(alignment: .leading, spacing: 2) {
-                    if let user = authManager.currentUser {
-                        Text(user.name ?? "User")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                            .foregroundColor(.primary)
-                            .lineLimit(1)
-
-                        Text(user.email)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                    } else {
-                        Text("Loading...")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    }
+                // User Info - Name only, cleaner
+                if let user = authManager.currentUser {
+                    Text(user.name ?? "User")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                        .tracking(DesignTokens.Typography.bodyTracking)
+                } else {
+                    Text("Loading...")
+                        .font(.subheadline)
+                        .foregroundColor(DesignTokens.Colors.mutedText)
                 }
 
                 Spacer()
 
-                // Settings Indicator
-                Image(systemName: "ellipsis")
-                    .foregroundColor(.secondary)
-                    .rotationEffect(.degrees(90))
+                // Settings Icon - gear instead of ellipsis
+                Image(systemName: "gearshape.fill")
+                    .font(.system(size: DesignTokens.IconSize.small))
+                    .foregroundColor(DesignTokens.Colors.mutedText)
             }
-            .padding()
+            .padding(DesignTokens.Spacing.large)
             .contentShape(Rectangle())
         }
         .buttonStyle(PlainButtonStyle())
@@ -218,6 +187,22 @@ struct Sidebar: View {
             SettingsSheet()
                 .environmentObject(authManager)
         }
+    }
+
+    // MARK: - Avatar Fallback
+
+    private var avatarFallback: some View {
+        Circle()
+            .fill(LinearGradient(
+                colors: [DesignTokens.Colors.brandBlue, DesignTokens.Colors.brandBlueDark],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ))
+            .overlay(
+                Text(userInitials)
+                    .font(.headline)
+                    .foregroundColor(.white)
+            )
     }
 
     // MARK: - Computed Properties
@@ -235,47 +220,80 @@ struct Sidebar: View {
     }
 }
 
-/// Navigation button component for sidebar
-struct NavigationButton: View {
+// MARK: - Ghost Navigation Button Component
+
+/// Minimal ghost button for sidebar navigation - inspired by Claude Code
+/// No background by default, subtle hover states, clean typography
+struct GhostNavigationButton: View {
     let icon: String
     let title: String
     let action: () -> Void
     var isDisabled: Bool = false
 
+    @State private var isPressed = false
+
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 12) {
+            HStack(spacing: DesignTokens.Spacing.small) {
                 Image(systemName: icon)
-                    .font(.body)
-                    .foregroundColor(isDisabled ? .secondary.opacity(0.5) : .primary)
-                    .frame(width: 24)
+                    .font(.system(size: DesignTokens.IconSize.medium))
+                    .foregroundColor(foregroundColor)
+                    .frame(width: DesignTokens.IconSize.large)
 
                 Text(title)
                     .font(.body)
                     .fontWeight(.medium)
-                    .foregroundColor(isDisabled ? .secondary.opacity(0.5) : .primary)
+                    .foregroundColor(foregroundColor)
+                    .tracking(DesignTokens.Typography.bodyTracking)
 
                 Spacer()
 
                 if isDisabled {
                     Text("Soon")
                         .font(.caption2)
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.secondary.opacity(0.1))
-                        .cornerRadius(4)
+                        .foregroundColor(Color.secondary.opacity(0.5))
+                        .padding(.horizontal, DesignTokens.Spacing.xxsmall)
+                        .padding(.vertical, DesignTokens.Spacing.xxxsmall)
+                        .background(Color.secondary.opacity(0.08))
+                        .cornerRadius(DesignTokens.CornerRadius.small)
                 }
             }
-            .padding(.vertical, 12)
-            .padding(.horizontal, 16)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.secondary.opacity(0.1))
-            )
+            .padding(.vertical, DesignTokens.Spacing.sidebarItemVertical)
+            .padding(.horizontal, DesignTokens.Spacing.sidebarItemHorizontal)
+            .background(backgroundColor)
+            .contentShape(Rectangle())
+            .animation(DesignTokens.Animation.quickTransition, value: isPressed)
         }
-        .buttonStyle(PlainButtonStyle())
+        .buttonStyle(GhostButtonStyle(isPressed: $isPressed))
         .disabled(isDisabled)
+    }
+
+    private var foregroundColor: Color {
+        if isDisabled {
+            return Color.secondary.opacity(0.5)
+        }
+        return .primary
+    }
+
+    private var backgroundColor: Color {
+        if isPressed && !isDisabled {
+            return DesignTokens.Colors.hoverBackground
+        }
+        return Color.clear
+    }
+}
+
+// MARK: - Ghost Button Style
+
+/// Custom button style for ghost buttons with press state
+struct GhostButtonStyle: ButtonStyle {
+    @Binding var isPressed: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .onChange(of: configuration.isPressed) { oldValue, newValue in
+                isPressed = newValue
+            }
     }
 }
 
@@ -298,7 +316,7 @@ struct NavigationButton: View {
                         }
                     )
                     .environmentObject(authManager)
-                    .offset(x: isOpen ? 0 : -280)
+                    .offset(x: isOpen ? 0 : -DesignTokens.Spacing.sidebarWidth)
                 }
             }
         }

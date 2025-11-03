@@ -13,9 +13,10 @@ struct MessageThreadRow: View {
                     size: 48
                 )
             } else {
+                // Channel icon - orange for visual distinction from AI agents (blue)
                 Image(systemName: "number.circle.fill")
                     .font(.system(size: 48))
-                    .foregroundColor(.blue)
+                    .foregroundColor(DesignTokens.Colors.channel)
             }
 
             // Content
@@ -59,7 +60,7 @@ struct MessageThreadRow: View {
             if let unreadCount = thread.unreadCount, unreadCount > 0 {
                 ZStack {
                     Circle()
-                        .fill(Color.blue)
+                        .fill(DesignTokens.Colors.primary)
                         .frame(width: 24, height: 24)
 
                     Text("\(min(unreadCount, 99))")

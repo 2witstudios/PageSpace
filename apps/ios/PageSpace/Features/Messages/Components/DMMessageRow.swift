@@ -28,7 +28,7 @@ struct DMMessageRow: View {
                 Text(message.content)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .background(isSent ? Color.blue : Color(uiColor: .systemGray5))
+                    .background(isSent ? DesignTokens.Colors.primary : Color(uiColor: .systemGray5))
                     .foregroundColor(isSent ? .white : .primary)
                     .cornerRadius(16)
 
@@ -41,7 +41,7 @@ struct DMMessageRow: View {
                     if isSent && message.isRead {
                         Image(systemName: "checkmark.circle.fill")
                             .font(.caption2)
-                            .foregroundColor(.blue)
+                            .foregroundColor(DesignTokens.Colors.primary)
                     }
 
                     if message.isEdited {

@@ -77,7 +77,7 @@ struct ChatView: View {
                     } else {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.system(size: 32))
-                            .foregroundColor(canSend ? .blue : .gray)
+                            .foregroundColor(canSend ? DesignTokens.Colors.primary : .gray)
                     }
                 }
                 .disabled(!canSend && !conversationManager.isStreaming)

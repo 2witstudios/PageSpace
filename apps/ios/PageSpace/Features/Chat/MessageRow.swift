@@ -25,9 +25,9 @@ struct MessageRow: View {
     @ViewBuilder
     private var messageBackground: some View {
         if message.role == .user {
-            Color.blue.opacity(0.08)
+            DesignTokens.Colors.primary.opacity(0.08)
         } else {
-            Color(.systemGray6).opacity(0.5)
+            DesignTokens.Colors.assistantMessageBackground
         }
     }
 }
@@ -140,9 +140,9 @@ struct ToolView: View {
     private var foregroundColor: Color {
         switch tool.state {
         case .outputError:
-            return .red
+            return DesignTokens.Colors.error
         case .outputAvailable, .done:
-            return .green
+            return DesignTokens.Colors.success
         default:
             return .secondary
         }
@@ -185,7 +185,7 @@ extension Theme {
             FontStyle(.italic)
         }
         .link {
-            ForegroundColor(.blue)
+            ForegroundColor(DesignTokens.Colors.primary)
             UnderlineStyle(.single)
         }
         .heading1 { configuration in

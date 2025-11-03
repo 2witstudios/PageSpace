@@ -9,7 +9,7 @@ struct LoginView: View {
                 // Logo
                 Image(systemName: "brain.head.profile")
                     .font(.system(size: 80))
-                    .foregroundColor(.blue)
+                    .foregroundColor(DesignTokens.Colors.primary)
                     .padding(.top, 60)
 
                 Text("PageSpace")
@@ -56,7 +56,7 @@ struct LoginView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding()
-                    .background(Color.blue)
+                    .background(DesignTokens.Colors.primary)
                     .foregroundColor(.white)
                     .cornerRadius(10)
                     .disabled(viewModel.isLoading || !viewModel.isFormValid)

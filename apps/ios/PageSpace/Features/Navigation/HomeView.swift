@@ -30,7 +30,7 @@ struct HomeView: View {
                     Color.black.opacity(0.3)
                         .ignoresSafeArea()
                         .onTapGesture {
-                            withAnimation(.easeInOut(duration: 0.3)) {
+                            withAnimation(DesignTokens.Animation.sidebarSlide) {
                                 isSidebarOpen = false
                             }
                         }
@@ -43,7 +43,7 @@ struct HomeView: View {
                     )
                     .environmentObject(conversationManager)
                     .environmentObject(agentService)
-                    .offset(x: isSidebarOpen ? 0 : -280)
+                    .offset(x: isSidebarOpen ? 0 : -DesignTokens.Spacing.sidebarWidth)
                     .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isSidebarOpen)
                     .zIndex(2)
                 }

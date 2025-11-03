@@ -3,11 +3,13 @@
 //  PageSpace
 //
 //  Created on 2025-11-01.
+//  Updated for minimal, modern aesthetic
 //
 
 import SwiftUI
 
 /// Display conversation history for the selected agent, grouped by date
+/// Minimal styling with hairline separators and subtle hover states
 struct ConversationList: View {
     @ObservedObject var agentService: AgentService
     @EnvironmentObject var conversationManager: ConversationManager
@@ -18,34 +20,36 @@ struct ConversationList: View {
     @State private var error: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 0) {
             if isLoading {
-                HStack {
+                HStack(spacing: DesignTokens.Spacing.small) {
                     ProgressView()
                         .scaleEffect(0.8)
                     Text("Loading conversations...")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(DesignTokens.Colors.mutedText)
                 }
-                .padding(.vertical, 8)
+                .padding(.vertical, DesignTokens.Spacing.small)
             } else if let error = error {
                 Text("Error: \(error)")
                     .font(.caption)
                     .foregroundColor(.red)
-                    .padding(.vertical, 8)
+                    .padding(.vertical, DesignTokens.Spacing.small)
             } else if conversations.isEmpty {
                 Text("No conversations yet")
                     .font(.caption)
-                    .foregroundColor(.secondary)
-                    .padding(.vertical, 8)
+                    .foregroundColor(DesignTokens.Colors.mutedText)
+                    .padding(.vertical, DesignTokens.Spacing.small)
             } else {
                 ForEach(sortedDateGroups, id: \.self) { dateGroup in
                     if let groupConversations = groupedConversations[dateGroup] {
                         // Date group header
                         Text(dateGroup)
                             .font(.caption2)
-                            .foregroundColor(.secondary)
-                            .padding(.top, dateGroup == sortedDateGroups.first ? 0 : 8)
+                            .fontWeight(.semibold)
+                            .foregroundColor(DesignTokens.Colors.extraMutedText)
+                            .textCase(.uppercase)
+                            .padding(.top, dateGroup == sortedDateGroups.first ? DesignTokens.Spacing.small : DesignTokens.Spacing.medium)
 
                         // Conversations in this group
                         ForEach(groupConversations) { conversation in
@@ -69,36 +73,21 @@ struct ConversationList: View {
 
     // MARK: - Conversation Row
 
+    @ViewBuilder
     private func conversationRow(_ conversation: Conversation) -> some View {
-        Button(action: {
-            Task {
-                // Load this conversation in the chat view
-                await selectConversation(conversation)
+        ConversationRowButton(
+            conversation: conversation,
+            isSelected: conversationManager.currentConversation?.id == conversation.id,
+            action: {
+                Task {
+                    // Load this conversation in the chat view
+                    await selectConversation(conversation)
 
-                // Close sidebar AFTER conversation loads
-                closeSidebar()
-            }
-        }) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(conversation.title ?? "Recent conversation")
-                    .font(.subheadline)
-                    .foregroundColor(conversation.title != nil ? .primary : .secondary)
-                    .lineLimit(1)
-
-                if let preview = conversation.preview {
-                    Text(preview)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .lineLimit(2)
+                    // Close sidebar AFTER conversation loads
+                    closeSidebar()
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 6)
-            .padding(.horizontal, 8)
-            .background(Color.gray.opacity(0.05))
-            .cornerRadius(6)
-        }
-        .buttonStyle(PlainButtonStyle())
+        )
     }
 
     // MARK: - Conversation Selection
@@ -173,6 +162,67 @@ struct ConversationList: View {
     }
 }
 
+// MARK: - Conversation Row Button Component
+
+/// Minimal conversation row with hover state and selection indicator
+struct ConversationRowButton: View {
+    let conversation: Conversation
+    let isSelected: Bool
+    let action: () -> Void
+
+    @State private var isPressed = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 0) {
+                // Accent bar for selected state
+                if isSelected {
+                    Rectangle()
+                        .fill(DesignTokens.Colors.accentBar)
+                        .frame(width: 2)
+                } else {
+                    Color.clear
+                        .frame(width: 2)
+                }
+
+                // Content
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.xxsmall) {
+                    Text(conversation.title ?? "Recent conversation")
+                        .font(.subheadline)
+                        .fontWeight(isSelected ? .medium : .regular)
+                        .foregroundColor(conversation.title != nil ? .primary : DesignTokens.Colors.mutedText)
+                        .tracking(DesignTokens.Typography.bodyTracking)
+                        .lineLimit(1)
+
+                    if let preview = conversation.preview {
+                        Text(preview)
+                            .font(.caption)
+                            .foregroundColor(DesignTokens.Colors.mutedText)
+                            .lineLimit(2)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, DesignTokens.Spacing.small)
+                .padding(.horizontal, DesignTokens.Spacing.medium)
+            }
+            .background(backgroundColor)
+            .contentShape(Rectangle())
+            .animation(DesignTokens.Animation.quickTransition, value: isPressed)
+            .animation(DesignTokens.Animation.quickTransition, value: isSelected)
+        }
+        .buttonStyle(GhostButtonStyle(isPressed: $isPressed))
+    }
+
+    private var backgroundColor: Color {
+        if isSelected {
+            return DesignTokens.Colors.activeBackground
+        } else if isPressed {
+            return DesignTokens.Colors.conversationHover
+        }
+        return Color.clear
+    }
+}
+
 // MARK: - Conversation Model Extension
 
 extension Conversation {
@@ -195,7 +245,7 @@ extension Conversation {
                 )
             }
             .padding()
-            .frame(width: 280)
+            .frame(width: DesignTokens.Spacing.sidebarWidth)
         }
     }
 

@@ -65,11 +65,15 @@ struct AvatarView: View {
     }
 
     private var avatarColor: Color {
-        // Generate consistent color based on name
+        // Generate consistent color based on name - using brand blue gradient palette
         let hash = name.hashValue
         let colors: [Color] = [
-            .blue, .green, .orange, .purple, .pink,
-            .indigo, .teal, .cyan, .mint, .brown
+            DesignTokens.Colors.brandBlue,
+            DesignTokens.Colors.brandBlue.opacity(0.8),
+            DesignTokens.Colors.brandBlueDark,
+            DesignTokens.Colors.brandBlueDark.opacity(0.9),
+            Color(hue: 0.65, saturation: 0.5, brightness: 0.8),  // Lighter variant
+            Color(hue: 0.66, saturation: 0.6, brightness: 0.65), // Slightly different hue
         ]
         return colors[abs(hash) % colors.count]
     }
