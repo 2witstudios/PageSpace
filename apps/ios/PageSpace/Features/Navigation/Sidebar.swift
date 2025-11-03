@@ -10,7 +10,7 @@ import SwiftUI
 /// Navigation destinations for sidebar
 enum SidebarDestination: Hashable {
     case agents
-    case channels
+    case messages
 }
 
 /// Left sliding sidebar with ChatGPT/Claude-style navigation
@@ -81,12 +81,12 @@ struct Sidebar: View {
                 }
             )
 
-            // Channels Button
+            // Messages Button
             NavigationButton(
-                icon: "number.circle.fill",
-                title: "Channels",
+                icon: "message.circle.fill",
+                title: "Messages",
                 action: {
-                    onNavigate(.channels)
+                    onNavigate(.messages)
                     withAnimation(.easeInOut(duration: 0.3)) {
                         isOpen = false
                     }

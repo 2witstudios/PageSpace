@@ -52,8 +52,8 @@ struct HomeView: View {
                 switch destination {
                 case .agents:
                     AgentsListView(agentService: agentService)
-                case .channels:
-                    ChannelsListView()
+                case .messages:
+                    MessagesListView()
                 }
             }
         }
