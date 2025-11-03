@@ -41,21 +41,9 @@ struct ConversationList: View {
                     .foregroundColor(DesignTokens.Colors.mutedText)
                     .padding(.vertical, DesignTokens.Spacing.small)
             } else {
-                ForEach(sortedDateGroups, id: \.self) { dateGroup in
-                    if let groupConversations = groupedConversations[dateGroup] {
-                        // Date group header
-                        Text(dateGroup)
-                            .font(.caption2)
-                            .fontWeight(.semibold)
-                            .foregroundColor(DesignTokens.Colors.extraMutedText)
-                            .textCase(.uppercase)
-                            .padding(.top, dateGroup == sortedDateGroups.first ? DesignTokens.Spacing.small : DesignTokens.Spacing.medium)
-
-                        // Conversations in this group
-                        ForEach(groupConversations) { conversation in
-                            conversationRow(conversation)
-                        }
-                    }
+                // Display all conversations in a single list
+                ForEach(conversations) { conversation in
+                    conversationRow(conversation)
                 }
             }
         }
@@ -112,10 +100,10 @@ struct ConversationList: View {
             let conversationService = ConversationService.shared
             try await conversationService.loadConversations()
 
-            // Sort by most recent first
-            conversations = conversationService.conversations.sorted {
-                $0.lastMessageAt > $1.lastMessageAt
-            }
+            // Filter out empty conversations and sort by most recent first
+            conversations = conversationService.conversations
+                .filter { $0.title != nil }
+                .sorted { $0.lastMessageAt > $1.lastMessageAt }
 
             isLoading = false
         } catch {
@@ -125,41 +113,6 @@ struct ConversationList: View {
         }
     }
 
-    // MARK: - Date Grouping
-
-    private var groupedConversations: [String: [Conversation]] {
-        let calendar = Calendar.current
-        let now = Date()
-
-        return Dictionary(grouping: conversations) { conversation in
-            let date = conversation.lastMessageAt
-
-            if calendar.isDateInToday(date) {
-                return "Today"
-            } else if calendar.isDateInYesterday(date) {
-                return "Yesterday"
-            } else if let daysAgo = calendar.dateComponents([.day], from: date, to: now).day,
-                      daysAgo <= 7 {
-                return "Last 7 Days"
-            } else {
-                return "Older"
-            }
-        }
-    }
-
-    /// Sorted date groups in chronological order (Today first, Older last)
-    private var sortedDateGroups: [String] {
-        let groupOrder: [String: Int] = [
-            "Today": 0,
-            "Yesterday": 1,
-            "Last 7 Days": 2,
-            "Older": 3
-        ]
-
-        return groupedConversations.keys.sorted {
-            groupOrder[$0, default: 999] < groupOrder[$1, default: 999]
-        }
-    }
 }
 
 // MARK: - Conversation Row Button Component

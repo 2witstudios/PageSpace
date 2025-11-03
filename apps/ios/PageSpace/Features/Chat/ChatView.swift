@@ -108,18 +108,26 @@ struct ChatView: View {
                             // Show conversation title
                             Text(conversation.displayTitle)
                                 .font(.headline)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
                             // Optionally show agent type in small text
                             Text(agentTypeLabel(conversation.type ?? "global"))
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
                         } else if let agent = agentService.selectedAgent {
                             // New conversation - show agent name
                             Text(agent.title)
                                 .font(.headline)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
                             if let subtitle = agent.subtitle {
                                 Text(subtitle)
                                     .font(.caption)
                                     .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
                             }
                         } else {
                             // Fallback
@@ -127,7 +135,9 @@ struct ChatView: View {
                                 .font(.headline)
                         }
                     }
+                    .frame(maxWidth: 200)
                 }
+                .buttonStyle(.plain)
             }
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack(spacing: 12) {
