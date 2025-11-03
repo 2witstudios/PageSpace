@@ -36,6 +36,10 @@ struct RefreshResponse: Codable {
     let csrfToken: String
 }
 
+struct OAuthExchangeRequest: Codable {
+    let idToken: String
+}
+
 struct AISettings: Codable {
     let currentProvider: String
     let currentModel: String

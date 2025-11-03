@@ -60,6 +60,40 @@ struct LoginView: View {
                     .foregroundColor(.white)
                     .cornerRadius(10)
                     .disabled(viewModel.isLoading || !viewModel.isFormValid)
+
+                    // Divider
+                    HStack {
+                        VStack { Divider() }
+                        Text("OR")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        VStack { Divider() }
+                    }
+                    .padding(.vertical, 8)
+
+                    // Google Sign-In Button
+                    Button {
+                        Task {
+                            await viewModel.signInWithGoogle()
+                        }
+                    } label: {
+                        HStack {
+                            Image(systemName: "g.circle.fill")
+                                .font(.system(size: 20))
+                            Text("Continue with Google")
+                                .fontWeight(.medium)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.white)
+                    .foregroundColor(.primary)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+                    )
+                    .cornerRadius(10)
+                    .disabled(viewModel.isLoading)
                 }
                 .padding(.horizontal, 32)
 
