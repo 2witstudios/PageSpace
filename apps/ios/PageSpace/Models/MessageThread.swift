@@ -7,6 +7,18 @@ enum MessageThreadType: String, Codable, Hashable {
     case channel = "channel"
 }
 
+// MARK: - Channel With Last Message (from /api/messages/threads)
+
+struct ChannelWithLastMessage: Codable {
+    let id: String
+    let title: String
+    let driveId: String
+    let driveName: String
+    let updatedAt: Date
+    let lastMessage: String?
+    let lastMessageAt: Date?
+}
+
 // MARK: - Message Thread
 
 /// Unified model representing either a DM conversation or a Channel in the Messages list
@@ -97,6 +109,26 @@ struct MessageThread: Identifiable, Hashable {
             pageId: channel.pageId,
             driveId: channel.driveId,
             driveName: channel.driveName
+        )
+    }
+
+    /// Create a MessageThread from a ChannelWithLastMessage (from /api/messages/threads)
+    static func from(channelWithMessage: ChannelWithLastMessage) -> MessageThread {
+        return MessageThread(
+            id: channelWithMessage.id,
+            type: .channel,
+            title: channelWithMessage.title,
+            subtitle: channelWithMessage.driveName,
+            lastMessage: channelWithMessage.lastMessage,
+            // Use lastMessageAt if available, otherwise fall back to updatedAt
+            lastMessageAt: channelWithMessage.lastMessageAt ?? channelWithMessage.updatedAt,
+            unreadCount: nil, // Channels don't track unread
+            avatarUrl: nil, // Channels use icon instead
+            otherUserId: nil,
+            otherUser: nil,
+            pageId: channelWithMessage.id,
+            driveId: channelWithMessage.driveId,
+            driveName: channelWithMessage.driveName
         )
     }
 }

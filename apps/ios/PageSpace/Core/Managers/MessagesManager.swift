@@ -46,58 +46,46 @@ class MessagesManager: ObservableObject {
         error = nil
         defer { isLoading = false }
 
-        // Fetch DMs and channels in parallel with graceful failure
-        async let dmResult = fetchDMsWithErrorHandling()
-        async let channelResult = fetchChannelsWithErrorHandling()
-
-        let (dmConversations, channelList) = await (dmResult, channelResult)
-
-        // Check if task was cancelled during fetch
-        guard !Task.isCancelled else {
-            print("⚠️ MessagesManager: Load cancelled during fetch")
-            return
+        // Response structure for /api/messages/threads
+        struct ThreadsResponse: Codable {
+            let dms: [DMConversation]
+            let channels: [ChannelWithLastMessage]
         }
 
-        // Convert to MessageThread models
-        let dmThreads = dmConversations.map { conversation in
-            MessageThread.from(conversation: conversation, currentUserId: currentUserId)
-        }
-
-        let channelThreads = channelList.map { channel in
-            MessageThread.from(channel: channel)
-        }
-
-        // Merge and sort by most recent
-        threads = (dmThreads + channelThreads).sorted(by: MessageThread.sortByRecent)
-
-        print("✅ MessagesManager: Loaded \(dmThreads.count) DMs + \(channelThreads.count) channels = \(threads.count) total threads")
-    }
-
-    /// Fetch DMs with error handling (returns empty array on failure)
-    private func fetchDMsWithErrorHandling() async -> [DMConversation] {
         do {
-            return try await dmService.fetchConversations(refresh: true)
+            // Fetch unified threads from single API endpoint
+            let response: ThreadsResponse = try await APIClient.shared.request(
+                endpoint: "/api/messages/threads",
+                method: .GET
+            )
+
+            // Check if task was cancelled during fetch
+            guard !Task.isCancelled else {
+                print("⚠️ MessagesManager: Load cancelled during fetch")
+                return
+            }
+
+            // Convert to MessageThread models
+            let dmThreads = response.dms.map { conversation in
+                MessageThread.from(conversation: conversation, currentUserId: currentUserId)
+            }
+
+            let channelThreads = response.channels.map { channel in
+                MessageThread.from(channelWithMessage: channel)
+            }
+
+            // Merge and sort by most recent (server already sorted, but re-sort after merge)
+            threads = (dmThreads + channelThreads).sorted(by: MessageThread.sortByRecent)
+
+            print("✅ MessagesManager: Loaded \(dmThreads.count) DMs + \(channelThreads.count) channels = \(threads.count) total threads")
         } catch {
             if Task.isCancelled {
-                print("⚠️ MessagesManager: DM fetch cancelled")
+                print("⚠️ MessagesManager: Load cancelled")
             } else {
-                print("❌ MessagesManager: DM fetch failed: \(error)")
+                self.error = error
+                print("❌ MessagesManager: Failed to load threads: \(error)")
+                throw error
             }
-            return []
-        }
-    }
-
-    /// Fetch channels with error handling (returns empty array on failure)
-    private func fetchChannelsWithErrorHandling() async -> [Channel] {
-        do {
-            return try await channelService.fetchAllChannels()
-        } catch {
-            if Task.isCancelled {
-                print("⚠️ MessagesManager: Channel fetch cancelled")
-            } else {
-                print("❌ MessagesManager: Channel fetch failed: \(error)")
-            }
-            return []
         }
     }
 
