@@ -6,61 +6,59 @@ struct MessagesListView: View {
     @State private var isLoading = false
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                // Search Bar
-                HStack {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundColor(.secondary)
-                    TextField("Search messages", text: $searchQuery)
-                        .textFieldStyle(.plain)
-                    if !searchQuery.isEmpty {
-                        Button(action: { searchQuery = "" }) {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundColor(.secondary)
-                        }
+        VStack(spacing: 0) {
+            // Search Bar
+            HStack {
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(.secondary)
+                TextField("Search messages", text: $searchQuery)
+                    .textFieldStyle(.plain)
+                if !searchQuery.isEmpty {
+                    Button(action: { searchQuery = "" }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.secondary)
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .background(Color(uiColor: .systemGray6))
-                .cornerRadius(10)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(Color(uiColor: .systemGray6))
+            .cornerRadius(10)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
 
-                // Thread List
-                if isLoading && messagesManager.threads.isEmpty {
-                    Spacer()
-                    ProgressView()
-                    Spacer()
-                } else if messagesManager.threads.isEmpty {
-                    emptyState
-                } else {
-                    List {
-                        ForEach(filteredThreads) { thread in
-                            NavigationLink(value: thread) {
-                                MessageThreadRow(thread: thread)
-                            }
+            // Thread List
+            if isLoading && messagesManager.threads.isEmpty {
+                Spacer()
+                ProgressView()
+                Spacer()
+            } else if messagesManager.threads.isEmpty {
+                emptyState
+            } else {
+                List {
+                    ForEach(filteredThreads) { thread in
+                        NavigationLink(value: thread) {
+                            MessageThreadRow(thread: thread)
                         }
                     }
-                    .listStyle(.plain)
-                    .refreshable {
-                        await messagesManager.refreshThreads()
-                    }
+                }
+                .listStyle(.plain)
+                .refreshable {
+                    await messagesManager.refreshThreads()
                 }
             }
-            .navigationTitle("Messages")
-            .navigationBarTitleDisplayMode(.large)
-            .navigationDestination(for: MessageThread.self) { thread in
-                if thread.type == .dm {
-                    DMConversationView(thread: thread)
-                } else {
-                    ChannelChatView(thread: thread)
-                }
+        }
+        .navigationTitle("Messages")
+        .navigationBarTitleDisplayMode(.large)
+        .navigationDestination(for: MessageThread.self) { thread in
+            if thread.type == .dm {
+                DMConversationView(thread: thread)
+            } else {
+                ChannelChatView(thread: thread)
             }
-            .task {
-                await loadThreads()
-            }
+        }
+        .task {
+            await loadThreads()
         }
     }
 

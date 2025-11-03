@@ -46,21 +46,15 @@ class MessagesManager: ObservableObject {
         error = nil
         defer { isLoading = false }
 
-        // Check if task is cancelled before starting
-        guard !Task.isCancelled else {
-            print("⚠️ MessagesManager: Load cancelled before starting")
-            return
-        }
-
         // Fetch DMs and channels in parallel with graceful failure
         async let dmResult = fetchDMsWithErrorHandling()
         async let channelResult = fetchChannelsWithErrorHandling()
 
         let (dmConversations, channelList) = await (dmResult, channelResult)
 
-        // Check again before processing results
+        // Check if task was cancelled during fetch
         guard !Task.isCancelled else {
-            print("⚠️ MessagesManager: Load cancelled after fetching")
+            print("⚠️ MessagesManager: Load cancelled during fetch")
             return
         }
 
