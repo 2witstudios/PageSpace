@@ -31,9 +31,9 @@ export interface Page {
   content: any;
   position: number;
   isTrashed: boolean;
-  createdAt: Date;
-  updatedAt: Date;
-  trashedAt: Date | null;
+  createdAt: string; // ISO8601 date string from API
+  updatedAt: string; // ISO8601 date string from API
+  trashedAt: string | null; // ISO8601 date string from API
   driveId: string;
   parentId: string | null;
   originalParentId: string | null;
@@ -48,7 +48,7 @@ export interface Page {
   // Processing status fields
   processingStatus?: ProcessingStatus;
   processingError?: string;
-  processedAt?: Date;
+  processedAt?: string; // ISO8601 date string from API
   extractionMethod?: ExtractionMethod;
   extractionMetadata?: ExtractionMetadata;
   contentHash?: string;
@@ -60,9 +60,9 @@ export interface Drive {
   slug: string;
   ownerId: string;
   isTrashed: boolean;
-  trashedAt: Date | null;
-  createdAt: Date;
-  updatedAt: Date;
+  trashedAt: string | null; // ISO8601 date string from API
+  createdAt: string; // ISO8601 date string from API
+  updatedAt: string; // ISO8601 date string from API
   isOwned: boolean;
   role?: 'OWNER' | 'ADMIN' | 'MEMBER';
 }

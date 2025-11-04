@@ -249,7 +249,7 @@ class DirectMessagesService: ObservableObject {
 
     private func updateConversationPreview(conversationId: String, message: DirectMessage) {
         if let index = conversations.firstIndex(where: { $0.id == conversationId }) {
-            var updatedConversation = conversations[index]
+            let updatedConversation = conversations[index]
 
             // Update last message preview and timestamp
             conversations[index] = DMConversation(

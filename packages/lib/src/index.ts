@@ -40,6 +40,10 @@ export * from './encryption-utils';
 export * from './rate-limit-utils';
 export * from './verification-utils';
 
+// OAuth utilities (server-only)
+export * from './oauth-utils';
+export * from './oauth-types';
+
 // Logging utilities (server-only)
 export * from './logger';
 export * from './logger-config';

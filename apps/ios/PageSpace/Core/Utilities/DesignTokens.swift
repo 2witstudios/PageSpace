@@ -16,9 +16,9 @@ struct DesignTokens {
 
     struct Colors {
         // MARK: Brand Colors
-        /// Primary brand blue - matches web app's oklch(0.50 0.16 235)
-        static let brandBlue = Color(hue: 0.653, saturation: 0.6, brightness: 0.70)
-        static let brandBlueDark = Color(hue: 0.653, saturation: 0.5, brightness: 0.75)
+        /// Primary brand blue - cyan-tinted blue matching web app
+        static let brandBlue = Color(hue: 0.556, saturation: 0.6, brightness: 0.70)
+        static let brandBlueDark = Color(hue: 0.556, saturation: 0.5, brightness: 0.75)
 
         /// Primary color with light/dark mode support
         static var primary: Color {

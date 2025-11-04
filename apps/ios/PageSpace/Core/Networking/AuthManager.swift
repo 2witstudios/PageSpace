@@ -1,6 +1,24 @@
 import Foundation
 import Combine
 import Security
+import GoogleSignIn
+
+enum KeychainError: Error, LocalizedError {
+    case encodingFailed
+    case saveFailed(status: OSStatus)
+    case loadFailed(status: OSStatus)
+
+    var errorDescription: String? {
+        switch self {
+        case .encodingFailed:
+            return "Failed to encode token for Keychain storage"
+        case .saveFailed(let status):
+            return "Failed to save to Keychain (status: \(status))"
+        case .loadFailed(let status):
+            return "Failed to load from Keychain (status: \(status))"
+        }
+    }
+}
 
 class AuthManager: ObservableObject {
     static let shared = AuthManager()
@@ -14,17 +32,32 @@ class AuthManager: ObservableObject {
     private let refreshTokenKey = "refresh_token"
     private let csrfKey = "csrf_token"
 
+    // Clock skew buffer for JWT expiration validation (in seconds)
+    // Accounts for differences between server and device time
+    private let clockSkewBufferSeconds: TimeInterval = 60
+
     private init() {
         // Load token from Keychain on init
         Task { @MainActor in
-            if loadToken() != nil {
-                // Validate token and load user info
-                do {
-                    try await loadCurrentUser()
-                } catch {
-                    // If token validation fails, logout
-                    print("Failed to load user on init: \(error.localizedDescription)")
-                    logout()
+            if let token = loadToken() {
+                // Check if token is expired before using it
+                if isTokenExpired(token) {
+                    print("Token expired on init - attempting refresh")
+                    do {
+                        try await refreshToken()
+                        try await loadCurrentUser()
+                    } catch {
+                        print("Failed to refresh expired token: \(error.localizedDescription)")
+                        logout()
+                    }
+                } else {
+                    // Token is still valid, load user
+                    do {
+                        try await loadCurrentUser()
+                    } catch {
+                        print("Failed to load user on init: \(error.localizedDescription)")
+                        logout()
+                    }
                 }
             }
         }
@@ -43,17 +76,17 @@ class AuthManager: ObservableObject {
             body: request
         )
 
-        // Save tokens to Keychain
-        saveToken(response.token)
-        saveRefreshToken(response.refreshToken)
-        csrfToken = response.csrfToken
-        saveCSRFToken(response.csrfToken)
+        // Save tokens to Keychain (throws on failure)
+        try saveToken(response.token)
+        try saveRefreshToken(response.refreshToken)
+        try saveCSRFToken(response.csrfToken)
 
         // Update state
+        csrfToken = response.csrfToken
         currentUser = response.user
         isAuthenticated = true
 
-        // Verify token persistence before proceeding
+        // Verify token persistence
         guard getToken() == response.token else {
             throw NSError(
                 domain: "AuthManager",
@@ -81,17 +114,50 @@ class AuthManager: ObservableObject {
             body: request
         )
 
-        // Save tokens to Keychain
-        saveToken(response.token)
-        saveRefreshToken(response.refreshToken)
-        csrfToken = response.csrfToken
-        saveCSRFToken(response.csrfToken)
+        // Save tokens to Keychain (throws on failure)
+        try saveToken(response.token)
+        try saveRefreshToken(response.refreshToken)
+        try saveCSRFToken(response.csrfToken)
 
         // Update state
+        csrfToken = response.csrfToken
         currentUser = response.user
         isAuthenticated = true
 
-        // Verify token persistence before proceeding
+        // Verify token persistence
+        guard getToken() == response.token else {
+            throw NSError(
+                domain: "AuthManager",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to persist authentication token"]
+            )
+        }
+
+        return response.user
+    }
+
+    @MainActor
+    func loginWithGoogle(idToken: String) async throws -> User {
+        let request = OAuthExchangeRequest(idToken: idToken)
+        let endpoint = APIEndpoints.oauthGoogleExchange
+
+        let response: LoginResponse = try await APIClient.shared.request(
+            endpoint: endpoint,
+            method: .POST,
+            body: request
+        )
+
+        // Save tokens to Keychain (throws on failure)
+        try saveToken(response.token)
+        try saveRefreshToken(response.refreshToken)
+        try saveCSRFToken(response.csrfToken)
+
+        // Update state
+        csrfToken = response.csrfToken
+        currentUser = response.user
+        isAuthenticated = true
+
+        // Verify token persistence
         guard getToken() == response.token else {
             throw NSError(
                 domain: "AuthManager",
@@ -118,11 +184,11 @@ class AuthManager: ObservableObject {
             body: request
         )
 
-        // Save new tokens
-        saveToken(response.token)
-        saveRefreshToken(response.refreshToken)
+        // Save new tokens (throws on failure)
+        try saveToken(response.token)
+        try saveRefreshToken(response.refreshToken)
+        try saveCSRFToken(response.csrfToken)
         csrfToken = response.csrfToken
-        saveCSRFToken(response.csrfToken)
     }
 
     @MainActor
@@ -166,10 +232,69 @@ class AuthManager: ObservableObject {
         loadCSRFToken()
     }
 
+    // MARK: - Token Validation
+
+    /// Check if a JWT token is expired
+    /// - Parameter token: The JWT token string
+    /// - Returns: True if expired or invalid, false if still valid
+    nonisolated private func isTokenExpired(_ token: String) -> Bool {
+        let parts = token.split(separator: ".")
+        guard parts.count == 3 else {
+            print("[AuthManager] JWT validation failed: Invalid JWT format (expected 3 parts, got \(parts.count))")
+            return true
+        }
+
+        // Decode the payload (second part of JWT)
+        var payload = String(parts[1])
+
+        // Add base64 padding if needed
+        let remainder = payload.count % 4
+        if remainder > 0 {
+            payload += String(repeating: "=", count: 4 - remainder)
+        }
+
+        // Convert URL-safe base64 to standard base64
+        let base64 = payload
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+
+        // Attempt to decode base64
+        guard let data = Data(base64Encoded: base64) else {
+            print("[AuthManager] JWT validation failed: Invalid base64 encoding in payload")
+            return true
+        }
+
+        // Attempt to parse JSON
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            print("[AuthManager] JWT validation failed: Invalid JSON structure in payload")
+            return true
+        }
+
+        // Check for exp claim
+        guard let exp = json["exp"] as? TimeInterval else {
+            print("[AuthManager] JWT validation failed: Missing or invalid 'exp' claim in payload")
+            return true
+        }
+
+        // Check if token is expired (with buffer for clock skew)
+        let now = Date().timeIntervalSince1970
+        let isExpired = now > (exp - clockSkewBufferSeconds)
+
+        if isExpired {
+            let timeUntilExpiry = exp - now
+            print("[AuthManager] Token expired: now=\(now), exp=\(exp), expired by \(-timeUntilExpiry)s")
+        }
+
+        return isExpired
+    }
+
     // MARK: - Keychain Operations
 
-    nonisolated private func saveToken(_ token: String) {
-        let data = token.data(using: .utf8)!
+    nonisolated private func saveToken(_ token: String) throws {
+        guard let data = token.data(using: .utf8) else {
+            throw KeychainError.encodingFailed
+        }
+
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
@@ -180,8 +305,11 @@ class AuthManager: ObservableObject {
         // Delete existing item first
         SecItemDelete(query as CFDictionary)
 
-        // Add new item
-        SecItemAdd(query as CFDictionary, nil)
+        // Add new item and check status
+        let status = SecItemAdd(query as CFDictionary, nil)
+        guard status == errSecSuccess else {
+            throw KeychainError.saveFailed(status: status)
+        }
     }
 
     nonisolated private func loadToken() -> String? {
@@ -213,8 +341,11 @@ class AuthManager: ObservableObject {
         SecItemDelete(query as CFDictionary)
     }
 
-    nonisolated private func saveCSRFToken(_ token: String) {
-        let data = token.data(using: .utf8)!
+    nonisolated private func saveCSRFToken(_ token: String) throws {
+        guard let data = token.data(using: .utf8) else {
+            throw KeychainError.encodingFailed
+        }
+
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
@@ -223,7 +354,10 @@ class AuthManager: ObservableObject {
         ]
 
         SecItemDelete(query as CFDictionary)
-        SecItemAdd(query as CFDictionary, nil)
+        let status = SecItemAdd(query as CFDictionary, nil)
+        guard status == errSecSuccess else {
+            throw KeychainError.saveFailed(status: status)
+        }
     }
 
     nonisolated private func loadCSRFToken() -> String? {
@@ -255,8 +389,11 @@ class AuthManager: ObservableObject {
         SecItemDelete(query as CFDictionary)
     }
 
-    nonisolated private func saveRefreshToken(_ token: String) {
-        let data = token.data(using: .utf8)!
+    nonisolated private func saveRefreshToken(_ token: String) throws {
+        guard let data = token.data(using: .utf8) else {
+            throw KeychainError.encodingFailed
+        }
+
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
@@ -265,7 +402,10 @@ class AuthManager: ObservableObject {
         ]
 
         SecItemDelete(query as CFDictionary)
-        SecItemAdd(query as CFDictionary, nil)
+        let status = SecItemAdd(query as CFDictionary, nil)
+        guard status == errSecSuccess else {
+            throw KeychainError.saveFailed(status: status)
+        }
     }
 
     nonisolated private func loadRefreshToken() -> String? {

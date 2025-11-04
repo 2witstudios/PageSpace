@@ -8,6 +8,9 @@ enum APIEndpoints {
     static let logout = "/api/auth/logout"
     static let me = "/api/auth/me"
 
+    // MARK: - OAuth
+    static let oauthGoogleExchange = "/api/auth/mobile/oauth/google/exchange"
+
     // MARK: - Conversations (Global AI)
     static let conversations = "/api/ai_conversations"
     static let globalConversation = "/api/ai_conversations/global"

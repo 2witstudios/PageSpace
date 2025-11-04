@@ -98,7 +98,8 @@ xcuserdata/
 ## Swift Package Manager
 .swiftpm/
 .build/
-Packages/
+/Packages/
+!packages/
 # Uncomment to ignore resolved dependencies (optional)
 # Package.resolved
 
@@ -134,5 +135,3 @@ playground.xcworkspace
 
 # Production environment files
 .env.production
-.claude
-.claude/

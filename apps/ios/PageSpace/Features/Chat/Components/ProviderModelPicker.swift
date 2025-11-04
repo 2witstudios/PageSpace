@@ -26,6 +26,11 @@ struct ProviderModelPicker: View {
         getProviderList().filter { conversationManager.isProviderConfigured($0) }
     }
 
+    /// Get user subscription tier from provider settings
+    private var userSubscriptionTier: String? {
+        conversationManager.providerSettings?.userSubscriptionTier
+    }
+
     var body: some View {
         NavigationView {
             Form {
@@ -43,7 +48,22 @@ struct ProviderModelPicker: View {
                     .accessibilityIdentifier("provider-selector")
                     .onChange(of: selectedProvider) { oldValue, newValue in
                         // Update model to default for new provider
-                        selectedModel = getDefaultModel(for: newValue)
+                        let defaultModel = getDefaultModel(for: newValue)
+
+                        // Ensure the default model is accessible to the user
+                        if hasModelAccess(provider: newValue, model: defaultModel, userTier: userSubscriptionTier) {
+                            selectedModel = defaultModel
+                        } else {
+                            // Find first accessible model for this provider
+                            let models = getModelsForProvider(newValue)
+                            if let firstAccessible = models.keys.sorted().first(where: {
+                                hasModelAccess(provider: newValue, model: $0, userTier: userSubscriptionTier)
+                            }) {
+                                selectedModel = firstAccessible
+                            } else {
+                                selectedModel = defaultModel // Fallback
+                            }
+                        }
                     }
 
                     // Model Picker
@@ -53,8 +73,32 @@ struct ProviderModelPicker: View {
 
                         ForEach(sortedKeys, id: \.self) { key in
                             if let displayName = models[key] {
-                                Text(displayName)
-                                    .tag(key)
+                                let hasAccess = hasModelAccess(
+                                    provider: selectedProvider,
+                                    model: key,
+                                    userTier: userSubscriptionTier
+                                )
+                                let needsSubscription = requiresSubscription(
+                                    provider: selectedProvider,
+                                    model: key
+                                )
+
+                                HStack {
+                                    Text(displayName)
+                                        .foregroundColor(hasAccess ? .primary : .secondary)
+
+                                    if needsSubscription && !hasAccess {
+                                        Spacer()
+                                        Text("Pro/Business")
+                                            .font(.caption2)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(Color.orange.opacity(0.2))
+                                            .foregroundColor(.orange)
+                                            .cornerRadius(4)
+                                    }
+                                }
+                                .tag(key)
                             }
                         }
                     }
@@ -64,15 +108,36 @@ struct ProviderModelPicker: View {
                     .accessibilityHint("Select which model variant to use")
                     .accessibilityIdentifier("model-selector")
                     .disabled(getModelsForProvider(selectedProvider).isEmpty)
+                    .onChange(of: selectedModel) { oldValue, newValue in
+                        // Validate that the selected model is accessible
+                        if !hasModelAccess(provider: selectedProvider, model: newValue, userTier: userSubscriptionTier) {
+                            // User selected a restricted model, revert to previous or default
+                            if hasModelAccess(provider: selectedProvider, model: oldValue, userTier: userSubscriptionTier) {
+                                selectedModel = oldValue
+                            } else {
+                                selectedModel = getDefaultModel(for: selectedProvider)
+                            }
+                        }
+                    }
 
                 } header: {
                     Text("AI Configuration")
                 } footer: {
-                    if let agentOverride = conversationManager.agentConfigOverrides,
-                       agentOverride.aiProvider != nil || agentOverride.aiModel != nil {
-                        Text("This conversation uses page-specific AI settings")
-                            .font(.caption)
-                            .foregroundColor(.orange)
+                    VStack(alignment: .leading, spacing: 8) {
+                        if let agentOverride = conversationManager.agentConfigOverrides,
+                           agentOverride.aiProvider != nil || agentOverride.aiModel != nil {
+                            Text("This conversation uses page-specific AI settings")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                        }
+
+                        // Show upgrade notice if viewing PageSpace provider without Pro/Business
+                        if selectedProvider == "pagespace" &&
+                           !hasModelAccess(provider: "pagespace", model: "glm-4.6", userTier: userSubscriptionTier) {
+                            Text("Upgrade to Pro or Business to access advanced models")
+                                .font(.caption)
+                                .foregroundColor(.blue)
+                        }
                     }
                 }
             }
@@ -99,6 +164,7 @@ struct ProviderModelPicker: View {
             print("🔍 ProviderModelPicker.onAppear")
             print("   ConversationManager.selectedProvider: \(conversationManager.selectedProvider)")
             print("   ConversationManager.selectedModel: \(conversationManager.selectedModel)")
+            print("   User subscription tier: \(userSubscriptionTier ?? "nil")")
 
             // Load current values from ConversationManager
             selectedProvider = conversationManager.selectedProvider
@@ -114,6 +180,18 @@ struct ProviderModelPicker: View {
                 let defaultModel = getDefaultModel(for: selectedProvider)
                 print("   ⚠️ Model not found, using default: \(defaultModel)")
                 selectedModel = defaultModel
+            }
+
+            // Validate that user has access to the selected model
+            if !hasModelAccess(provider: selectedProvider, model: selectedModel, userTier: userSubscriptionTier) {
+                print("   ⚠️ User does not have access to \(selectedModel), resetting to accessible model")
+                // Find first accessible model for this provider
+                if let firstAccessible = availableModels.keys.sorted().first(where: {
+                    hasModelAccess(provider: selectedProvider, model: $0, userTier: userSubscriptionTier)
+                }) {
+                    selectedModel = firstAccessible
+                    print("   ✅ Reset to accessible model: \(firstAccessible)")
+                }
             }
         }
     }

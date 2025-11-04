@@ -15,7 +15,7 @@ enum AppEnvironment {
         #if DEBUG
         return URL(string: "http://localhost:3001")!
         #else
-        return URL(string: "wss://pagespace.ai")!
+        return URL(string: "wss://pagespace.ai:3001")!
         #endif
     }()
 

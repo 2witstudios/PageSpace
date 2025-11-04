@@ -12,6 +12,7 @@ import SwiftUI
 enum SidebarDestination: Hashable {
     case agents
     case messages
+    case files
 }
 
 /// Left sliding sidebar with minimal, modern design
@@ -97,12 +98,16 @@ struct Sidebar: View {
                 }
             )
 
-            // Files Button (disabled/placeholder)
+            // Files Button
             GhostNavigationButton(
                 icon: "doc.fill",
                 title: "Files",
-                action: {},
-                isDisabled: true
+                action: {
+                    onNavigate(.files)
+                    withAnimation(DesignTokens.Animation.sidebarSlide) {
+                        isOpen = false
+                    }
+                }
             )
         }
     }

@@ -91,7 +91,26 @@ class ConversationManager: ObservableObject {
             self.providerSettings = settings
             self.selectedProvider = settings.currentProvider
             self.selectedModel = settings.currentModel
-            print("✅ Loaded provider settings: \(settings.currentProvider)/\(settings.currentModel)")
+
+            // Auto-correct if user has restricted model selected without proper tier
+            if selectedProvider == "pagespace" && selectedModel == "glm-4.6" {
+                let userTier = settings.userSubscriptionTier
+                if userTier != "pro" && userTier != "business" {
+                    // Free user has restricted model selected, reset to default
+                    print("⚠️ Free user has Pro model selected, resetting to glm-4.5-air")
+                    self.selectedModel = "glm-4.5-air"
+
+                    // Optionally persist the correction to backend
+                    do {
+                        _ = try await aiService.updateSettings(provider: selectedProvider, model: "glm-4.5-air")
+                        print("✅ Auto-corrected model to glm-4.5-air")
+                    } catch {
+                        print("⚠️ Failed to persist auto-correction: \(error)")
+                    }
+                }
+            }
+
+            print("✅ Loaded provider settings: \(selectedProvider)/\(selectedModel)")
         } catch {
             print("❌ Failed to load provider settings: \(error)")
         }

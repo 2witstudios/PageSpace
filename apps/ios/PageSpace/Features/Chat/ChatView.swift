@@ -6,6 +6,7 @@ struct ChatView: View {
     @EnvironmentObject var conversationManager: ConversationManager
     @EnvironmentObject var agentService: AgentService
     @State private var messageText = ""
+    @FocusState private var isTextFieldFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -33,6 +34,7 @@ struct ChatView: View {
                         }
                         .padding()
                     }
+                    .scrollDismissesKeyboard(.immediately)
                     .onChange(of: conversationManager.messages.count) { oldValue, newValue in
                         // Auto-scroll to bottom when new messages arrive
                         if let lastMessage = conversationManager.messages.last {
@@ -57,6 +59,7 @@ struct ChatView: View {
             // Input Area
             HStack(spacing: 12) {
                 TextField("Message...", text: $messageText, axis: .vertical)
+                    .focused($isTextFieldFocused)
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(1...5)
                     .disabled(conversationManager.isStreaming)
@@ -108,18 +111,26 @@ struct ChatView: View {
                             // Show conversation title
                             Text(conversation.displayTitle)
                                 .font(.headline)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
                             // Optionally show agent type in small text
                             Text(agentTypeLabel(conversation.type ?? "global"))
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
                         } else if let agent = agentService.selectedAgent {
                             // New conversation - show agent name
                             Text(agent.title)
                                 .font(.headline)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
                             if let subtitle = agent.subtitle {
                                 Text(subtitle)
                                     .font(.caption)
                                     .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
                             }
                         } else {
                             // Fallback
@@ -127,7 +138,9 @@ struct ChatView: View {
                                 .font(.headline)
                         }
                     }
+                    .frame(maxWidth: 200)
                 }
+                .buttonStyle(.plain)
             }
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack(spacing: 12) {
@@ -141,6 +154,12 @@ struct ChatView: View {
                         Image(systemName: "plus")
                     }
                 }
+            }
+        }
+        .onChange(of: isSidebarOpen) { oldValue, newValue in
+            if newValue {
+                // Dismiss keyboard when sidebar opens
+                isTextFieldFocused = false
             }
         }
     }
