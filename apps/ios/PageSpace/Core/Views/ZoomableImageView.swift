@@ -14,6 +14,13 @@ import os.log
 struct ZoomableImageView: UIViewRepresentable {
     let url: URL
     let logger: Logger
+    let onImageLoaded: ((Data) -> Void)?
+
+    init(url: URL, logger: Logger, onImageLoaded: ((Data) -> Void)? = nil) {
+        self.url = url
+        self.logger = logger
+        self.onImageLoaded = onImageLoaded
+    }
 
     func makeUIView(context: Context) -> UIScrollView {
         let scrollView = UIScrollView()
@@ -45,15 +52,17 @@ struct ZoomableImageView: UIViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(logger: logger)
+        Coordinator(logger: logger, onImageLoaded: onImageLoaded)
     }
 
     class Coordinator: NSObject, UIScrollViewDelegate {
         let logger: Logger
+        let onImageLoaded: ((Data) -> Void)?
         weak var imageView: UIImageView?
 
-        init(logger: Logger) {
+        init(logger: Logger, onImageLoaded: ((Data) -> Void)?) {
             self.logger = logger
+            self.onImageLoaded = onImageLoaded
         }
 
         func viewForZooming(in scrollView: UIScrollView) -> UIView? {
@@ -136,6 +145,9 @@ struct ZoomableImageView: UIViewRepresentable {
 
                     // Center the image
                     centerImage(in: scrollView)
+
+                    // Notify parent that image data is available for sharing
+                    onImageLoaded?(data)
                 }
 
                 logger.info("Successfully loaded image from \(url.absoluteString)")

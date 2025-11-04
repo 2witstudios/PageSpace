@@ -16,6 +16,8 @@ struct FileViewerView: View {
     let page: Page
 
     private let logger = Logger(subsystem: "com.pagespace.ios", category: "Security.FileViewer")
+    @State private var shareableFile: ShareableFile?
+    @State private var isPreparingShare = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,6 +31,52 @@ struct FileViewerView: View {
         }
         .navigationTitle(page.title)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                shareButton
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var shareButton: some View {
+        if let shareableFile {
+            ShareLink(
+                item: shareableFile,
+                preview: SharePreview(
+                    shareableFile.filename,
+                    image: Image(systemName: "doc")
+                )
+            ) {
+                Label("Share", systemImage: "square.and.arrow.up")
+            }
+        } else {
+            Button(action: {
+                Task {
+                    await prepareFileForSharing()
+                }
+            }) {
+                if isPreparingShare {
+                    ProgressView()
+                } else {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                }
+            }
+            .disabled(isPreparingShare)
+        }
+    }
+
+    private func prepareFileForSharing() async {
+        isPreparingShare = true
+        defer { isPreparingShare = false }
+
+        let downloader = FileDownloader()
+        shareableFile = await downloader.downloadFile(page: page)
+
+        if shareableFile == nil {
+            logger.error("Failed to prepare file for sharing: \(page.id)")
+            // Could show an alert here in future enhancement
+        }
     }
 }
 

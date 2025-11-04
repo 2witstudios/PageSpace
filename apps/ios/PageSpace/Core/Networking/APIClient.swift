@@ -89,14 +89,6 @@ class APIClient {
         decoder.dateDecodingStrategy = .custom { decoder in
             let container = try decoder.singleValueContainer()
 
-            // Handle null for optional dates - this will fail gracefully for optionals
-            if container.decodeNil() {
-                throw DecodingError.dataCorruptedError(
-                    in: container,
-                    debugDescription: "Null date value encountered"
-                )
-            }
-
             let dateString = try container.decode(String.self)
 
             // Try with fractional seconds first (e.g., "2025-11-03T12:34:56.789Z")
