@@ -194,30 +194,17 @@ private struct ImageViewer: View {
     var body: some View {
         ScrollView([.horizontal, .vertical]) {
             Group {
-                if let filePath = page.filePath,
-                   let validURL = validateFileURL(filePath) {
-                    // SECURITY: URL validated, safe to load
-                    AsyncImage(url: validURL) { phase in
-                        switch phase {
-                        case .empty:
-                            ProgressView()
-                        case .success(let image):
-                            image
-                                .resizable()
-                                .scaledToFit()
-                                .scaleEffect(scale)
-                        case .failure:
-                            VStack(spacing: DesignTokens.Spacing.medium) {
-                                Image(systemName: "photo.badge.exclamationmark")
-                                    .font(.system(size: 48))
-                                    .foregroundColor(DesignTokens.Colors.mutedText)
-                                Text("Failed to load image")
-                                    .font(.subheadline)
-                                    .foregroundColor(DesignTokens.Colors.mutedText)
-                            }
-                        @unknown default:
-                            EmptyView()
-                        }
+                // Construct API endpoint URL for file viewing
+                let fileURLString = "\(AppEnvironment.apiBaseURL)/api/files/\(page.id)/view"
+                if let validURL = validateFileURL(fileURLString) {
+                    // SECURITY: URL validated, safe to load with authentication
+                    AuthenticatedAsyncImage(url: validURL) { image in
+                        image
+                            .resizable()
+                            .scaledToFit()
+                            .scaleEffect(scale)
+                    } placeholder: {
+                        ProgressView()
                     }
                 } else {
                     // SECURITY: Invalid or missing URL
@@ -256,8 +243,9 @@ private struct PDFViewer: View {
 
     var body: some View {
         Group {
-            if let filePath = page.filePath,
-               let validURL = validateFileURL(filePath) {
+            // Construct API endpoint URL for file viewing
+            let fileURLString = "\(AppEnvironment.apiBaseURL)/api/files/\(page.id)/view"
+            if let validURL = validateFileURL(fileURLString) {
                 // SECURITY: URL validated, safe to load
                 PDFKitView(url: validURL, logger: logger)
             } else {
@@ -293,12 +281,27 @@ private struct PDFKitView: UIViewRepresentable {
         // Load PDF asynchronously to avoid blocking UI
         Task {
             do {
-                // SECURITY: URLSession with validation
-                let (data, response) = try await URLSession.shared.data(from: url)
+                // SECURITY: Create authenticated URLRequest
+                var request = URLRequest(url: url)
+                request.httpMethod = "GET"
+
+                // Add authentication headers
+                if let token = AuthManager.shared.getToken() {
+                    request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                } else {
+                    logger.warning("No JWT token available for PDF request")
+                }
+
+                if let csrfToken = AuthManager.shared.getCSRFToken() {
+                    request.setValue(csrfToken, forHTTPHeaderField: "X-CSRF-Token")
+                }
+
+                // Make authenticated request
+                let (data, response) = try await URLSession.shared.data(for: request)
 
                 guard let httpResponse = response as? HTTPURLResponse,
                       (200...299).contains(httpResponse.statusCode) else {
-                    logger.error("Failed to load PDF: Invalid HTTP response")
+                    logger.error("Failed to load PDF: Invalid HTTP response (status: \((response as? HTTPURLResponse)?.statusCode ?? -1))")
                     return
                 }
 
