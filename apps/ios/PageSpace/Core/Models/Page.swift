@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Page Models
 
-struct Page: Identifiable, Codable {
+struct Page: Identifiable, Codable, Hashable {
     let id: String
     let driveId: String
     let title: String
@@ -18,6 +18,16 @@ struct Page: Identifiable, Codable {
     var systemPrompt: String?
     var enabledTools: [String]?
 
+    // Content field (for DOCUMENT and CANVAS types)
+    var content: String?
+
+    // File-specific fields (if type == FILE)
+    var fileSize: Int?
+    var mimeType: String?
+    var originalFileName: String?
+    var filePath: String?
+    var processingStatus: String?
+
     // Tree structure support
     var children: [Page]?
 
@@ -25,6 +35,16 @@ struct Page: Identifiable, Codable {
     var path: String {
         // Fallback path based on title if needed
         return "/\(title.lowercased().replacingOccurrences(of: " ", with: "-"))"
+    }
+
+    // MARK: - Custom Hashable Implementation
+    // Only hash by ID to avoid performance issues with recursive children hashing
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+
+    static func == (lhs: Page, rhs: Page) -> Bool {
+        lhs.id == rhs.id
     }
 }
 
@@ -36,6 +56,26 @@ enum PageType: String, Codable {
     case canvas = "CANVAS"
     case file = "FILE"
     case sheet = "SHEET"
+
+    /// Human-readable description for accessibility
+    var accessibilityDescription: String {
+        switch self {
+        case .folder:
+            return "Folder"
+        case .document:
+            return "Document"
+        case .channel:
+            return "Channel"
+        case .aiChat:
+            return "AI Chat"
+        case .canvas:
+            return "Canvas"
+        case .file:
+            return "File"
+        case .sheet:
+            return "Sheet"
+        }
+    }
 }
 
 // MARK: - Page AI Configuration

@@ -135,5 +135,3 @@ playground.xcworkspace
 
 # Production environment files
 .env.production
-.claude
-.claude/

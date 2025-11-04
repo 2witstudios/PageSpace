@@ -54,6 +54,8 @@ struct HomeView: View {
                     AgentsListView(agentService: agentService)
                 case .messages:
                     MessagesListView()
+                case .files:
+                    FilesView()
                 }
             }
         }
