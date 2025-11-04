@@ -189,48 +189,28 @@ private struct ImageViewer: View {
     let page: Page
     let logger: Logger
 
-    @State private var scale: CGFloat = 1.0
-
     var body: some View {
-        ScrollView([.horizontal, .vertical]) {
-            Group {
-                // Construct API endpoint URL for file viewing
-                let fileURLString = "\(AppEnvironment.apiBaseURL)/api/files/\(page.id)/view"
-                if let validURL = validateFileURL(fileURLString) {
-                    // SECURITY: URL validated, safe to load with authentication
-                    AuthenticatedAsyncImage(url: validURL) { image in
-                        image
-                            .resizable()
-                            .scaledToFit()
-                            .scaleEffect(scale)
-                    } placeholder: {
-                        ProgressView()
-                    }
-                } else {
-                    // SECURITY: Invalid or missing URL
-                    VStack(spacing: DesignTokens.Spacing.medium) {
-                        Image(systemName: "exclamationmark.shield.fill")
-                            .font(.system(size: 48))
-                            .foregroundColor(DesignTokens.Colors.error)
-                        Text("Invalid or insecure image URL")
-                            .font(.subheadline)
-                            .foregroundColor(DesignTokens.Colors.mutedText)
-                    }
-                    .onAppear {
-                        logger.error("Invalid image URL for page: \(page.id)")
-                    }
+        Group {
+            // Construct API endpoint URL for file viewing
+            let fileURLString = "\(AppEnvironment.apiBaseURL)/api/files/\(page.id)/view"
+            if let validURL = validateFileURL(fileURLString) {
+                // SECURITY: URL validated, safe to load with authentication
+                // Use UIScrollView-based zoom view (same approach as PDFViewer)
+                ZoomableImageView(url: validURL, logger: logger)
+            } else {
+                // SECURITY: Invalid or missing URL
+                VStack(spacing: DesignTokens.Spacing.medium) {
+                    Image(systemName: "exclamationmark.shield.fill")
+                        .font(.system(size: 48))
+                        .foregroundColor(DesignTokens.Colors.error)
+                    Text("Invalid or insecure image URL")
+                        .font(.subheadline)
+                        .foregroundColor(DesignTokens.Colors.mutedText)
+                }
+                .onAppear {
+                    logger.error("Invalid image URL for page: \(page.id)")
                 }
             }
-        }
-        .gesture(
-            MagnificationGesture()
-                .onChanged { value in
-                    scale = value
-                }
-        )
-        .onDisappear {
-            // Reset zoom when view disappears
-            scale = 1.0
         }
     }
 }
