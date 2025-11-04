@@ -46,8 +46,8 @@ struct DriveRowView: View {
     // MARK: - Drive Color
 
     private var driveColor: Color {
-        // Blue for owned drives, gray for member/admin drives
-        drive.isOwned == true ? .blue : .gray
+        // Brand blue for owned drives, gray for member/admin drives
+        drive.isOwned == true ? DesignTokens.Colors.primary : .gray
     }
 }
 

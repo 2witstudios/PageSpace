@@ -76,7 +76,7 @@ struct ChatView: View {
                     if conversationManager.isStreaming {
                         Image(systemName: "stop.circle.fill")
                             .font(.system(size: 32))
-                            .foregroundColor(.red)
+                            .foregroundColor(DesignTokens.Colors.error)
                     } else {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.system(size: 32))
@@ -98,6 +98,7 @@ struct ChatView: View {
                     }
                 }) {
                     Image(systemName: "line.3.horizontal")
+                        .foregroundColor(DesignTokens.Colors.primary)
                 }
             }
             ToolbarItem(placement: .principal) {
@@ -152,6 +153,7 @@ struct ChatView: View {
                         conversationManager.createNewConversation()
                     }) {
                         Image(systemName: "plus")
+                            .foregroundColor(DesignTokens.Colors.primary)
                     }
                 }
             }

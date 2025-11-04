@@ -29,7 +29,7 @@ struct ChannelChatView: View {
             if let driveName = thread.driveName {
                 HStack {
                     Image(systemName: "number.circle.fill")
-                        .foregroundColor(.blue)
+                        .foregroundColor(DesignTokens.Colors.channel)
                     Text(thread.title)
                         .font(.headline)
                     Text("·")
@@ -48,7 +48,7 @@ struct ChannelChatView: View {
             if !canEdit {
                 HStack {
                     Image(systemName: "lock.fill")
-                        .foregroundColor(.orange)
+                        .foregroundColor(DesignTokens.Colors.warning)
                     Text("You can view messages but cannot send in this channel")
                         .font(.caption)
                         .foregroundColor(.secondary)
@@ -56,7 +56,7 @@ struct ChannelChatView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
-                .background(Color.orange.opacity(0.1))
+                .background(DesignTokens.Colors.warning.opacity(0.1))
             }
 
             // Messages List

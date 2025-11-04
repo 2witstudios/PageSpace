@@ -110,7 +110,7 @@ struct ChannelRow: View {
         HStack(spacing: 12) {
             Image(systemName: "number.circle.fill")
                 .font(.title3)
-                .foregroundColor(.orange)
+                .foregroundColor(DesignTokens.Colors.channel)
                 .frame(width: 32)
 
             VStack(alignment: .leading, spacing: 4) {

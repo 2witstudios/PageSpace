@@ -173,9 +173,52 @@ Replaced all hardcoded `.blue` with `DesignTokens.Colors.primary`:
 4. **Documentation**: Update style guide with new color usage
 5. **Design System Export**: Create visual reference for all color tokens
 
+## Additional Updates - November 4, 2025
+
+### Complete Color Consistency Implementation
+
+Following the user's request to use the brand blue from agent tabs and login screen throughout the entire mobile app, all interactive elements have been updated to use `DesignTokens.Colors.primary` for complete consistency.
+
+#### New Files Updated (7 additional files):
+
+1. ✅ **ChatView.swift** - Navigation toolbar buttons (hamburger menu, new chat button)
+2. ✅ **FileRowView.swift** - Folder icons and canvas/sheet type colors
+3. ✅ **DriveRowView.swift** - Owned drive folder icons
+4. ✅ **SettingsView.swift** - Upgrade notice text colors
+5. ✅ **ProviderModelPicker.swift** - Upgrade notices, warning badges, AND provider picker button
+6. ✅ **ChannelChatView.swift** - Channel permission warnings
+7. ✅ **FilesAgentChatView.swift** - Stop button error color
+8. ✅ **PageDetailView.swift** - Sheet placeholder success color
+9. ✅ **AIConfigDetailView.swift** - System prompt and tools icons
+10. ✅ **FilesChannelChatView.swift** - Permission warning colors
+11. ✅ **ChannelsListView.swift** - Channel icons
+12. ✅ **ConversationList.swift** - Error message colors
+13. ✅ **LoginView.swift** - Error message colors
+
+#### Color Usage Standards Applied:
+
+**Primary Brand Blue (`DesignTokens.Colors.primary`)**:
+- All navigation buttons (hamburger menu, back buttons, new chat)
+- All folder icons and file type indicators
+- All agent icons and selection indicators
+- All interactive buttons and links
+- All upgrade notices and primary CTAs
+
+**Semantic Colors Preserved**:
+- **Error**: `DesignTokens.Colors.error` (red) - for destructive actions
+- **Success**: `DesignTokens.Colors.success` (green) - for success states
+- **Warning**: `DesignTokens.Colors.warning` (orange) - for warnings and channels
+- **Channel**: `DesignTokens.Colors.channel` (orange) - for channel distinction
+
+#### Zero Hardcoded Colors Remaining:
+- ✅ No more `.blue`, `.red`, `.green`, `.orange`, `.purple` hardcoded colors
+- ✅ All interactive elements use centralized `DesignTokens.Colors.primary`
+- ✅ Semantic states use appropriate `DesignTokens` colors
+
 ---
 
-**Update Date**: November 2, 2025
-**Status**: ✅ Complete - Ready for testing
-**Files Changed**: 11 files
+**Update Date**: November 4, 2025
+**Status**: ✅ Complete - Comprehensive color consistency achieved
+**Total Files Changed**: 24 files (11 original + 13 additional)
 **Build Status**: ✅ Success
+**Color Coverage**: 100% - All interactive elements use brand blue

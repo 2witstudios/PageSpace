@@ -93,8 +93,8 @@ struct ProviderModelPicker: View {
                                             .font(.caption2)
                                             .padding(.horizontal, 6)
                                             .padding(.vertical, 2)
-                                            .background(Color.orange.opacity(0.2))
-                                            .foregroundColor(.orange)
+                                            .background(DesignTokens.Colors.warning.opacity(0.2))
+                                            .foregroundColor(DesignTokens.Colors.warning)
                                             .cornerRadius(4)
                                     }
                                 }
@@ -128,7 +128,7 @@ struct ProviderModelPicker: View {
                            agentOverride.aiProvider != nil || agentOverride.aiModel != nil {
                             Text("This conversation uses page-specific AI settings")
                                 .font(.caption)
-                                .foregroundColor(.orange)
+                                .foregroundColor(DesignTokens.Colors.warning)
                         }
 
                         // Show upgrade notice if viewing PageSpace provider without Pro/Business
@@ -136,7 +136,7 @@ struct ProviderModelPicker: View {
                            !hasModelAccess(provider: "pagespace", model: "glm-4.6", userTier: userSubscriptionTier) {
                             Text("Upgrade to Pro or Business to access advanced models")
                                 .font(.caption)
-                                .foregroundColor(.blue)
+                                .foregroundColor(DesignTokens.Colors.primary)
                         }
                     }
                 }
@@ -210,6 +210,7 @@ struct ProviderPickerButton: View {
         } label: {
             Image(systemName: "cpu")
                 .font(.system(size: 17, weight: .medium))
+                .foregroundColor(DesignTokens.Colors.primary)
         }
         .accessibilityLabel("Select AI Provider")
         .accessibilityHint("Choose which AI provider and model to use for conversations")

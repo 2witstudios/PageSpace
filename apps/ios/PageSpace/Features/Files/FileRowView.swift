@@ -120,7 +120,7 @@ struct FileRowView: View {
     private func colorForPageType(_ type: PageType) -> Color {
         switch type {
         case .folder:
-            return .blue
+            return DesignTokens.Colors.primary
         case .document:
             return .primary
         case .channel:
@@ -128,11 +128,11 @@ struct FileRowView: View {
         case .aiChat:
             return DesignTokens.Colors.brandBlue
         case .canvas:
-            return .purple
+            return DesignTokens.Colors.primary
         case .file:
             return .gray
         case .sheet:
-            return .green
+            return DesignTokens.Colors.primary
         }
     }
 }

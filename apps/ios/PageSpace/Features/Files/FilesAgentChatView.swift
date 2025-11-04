@@ -84,7 +84,7 @@ struct FilesAgentChatView: View {
                     if conversationManager.isStreaming {
                         Image(systemName: "stop.circle.fill")
                             .font(.system(size: 32))
-                            .foregroundColor(.red)
+                            .foregroundColor(DesignTokens.Colors.error)
                     } else {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.system(size: 32))

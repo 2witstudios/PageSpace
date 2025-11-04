@@ -142,8 +142,8 @@ struct AISettingsView: View {
                                         .font(.caption2)
                                         .padding(.horizontal, 6)
                                         .padding(.vertical, 2)
-                                        .background(Color.orange.opacity(0.2))
-                                        .foregroundColor(.orange)
+                                        .background(DesignTokens.Colors.warning.opacity(0.2))
+                                        .foregroundColor(DesignTokens.Colors.warning)
                                         .cornerRadius(4)
                                 }
                             }
@@ -179,7 +179,7 @@ struct AISettingsView: View {
                            !hasModelAccess(provider: "pagespace", model: "glm-4.6", userTier: settings.userSubscriptionTier) {
                             Text("Upgrade to Pro or Business to access advanced models")
                                 .font(.caption)
-                                .foregroundColor(.blue)
+                                .foregroundColor(DesignTokens.Colors.primary)
                                 .padding(.top, 4)
                         }
                     }
@@ -323,13 +323,13 @@ struct ProviderStatusRow: View {
             Spacer()
             if isConfigured {
                 Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(.green)
+                    .foregroundColor(DesignTokens.Colors.success)
                 Text("Configured")
                     .font(.caption)
                     .foregroundColor(.secondary)
             } else {
                 Image(systemName: "xmark.circle.fill")
-                    .foregroundColor(.orange)
+                    .foregroundColor(DesignTokens.Colors.warning)
                 Text("Setup Required")
                     .font(.caption)
                     .foregroundColor(.secondary)

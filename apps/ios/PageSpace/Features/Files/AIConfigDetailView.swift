@@ -97,7 +97,7 @@ struct AIConfigDetailView: View {
                 ConfigCard(
                     title: "System Prompt",
                     icon: "text.quote",
-                    iconColor: .purple
+                    iconColor: DesignTokens.Colors.primary
                 ) {
                     Text(systemPrompt)
                         .font(.body)
@@ -111,14 +111,14 @@ struct AIConfigDetailView: View {
                 ConfigCard(
                     title: "Enabled Tools",
                     icon: "wrench.and.screwdriver",
-                    iconColor: .orange
+                    iconColor: DesignTokens.Colors.warning
                 ) {
                     VStack(alignment: .leading, spacing: DesignTokens.Spacing.xsmall) {
                         ForEach(tools, id: \.self) { tool in
                             HStack {
                                 Image(systemName: "checkmark.circle.fill")
                                     .font(.caption)
-                                    .foregroundColor(.green)
+                                    .foregroundColor(DesignTokens.Colors.success)
 
                                 Text(tool)
                                     .font(.body)

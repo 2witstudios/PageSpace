@@ -140,7 +140,7 @@ private struct SheetPlaceholderView: View {
         VStack(spacing: DesignTokens.Spacing.large) {
             Image(systemName: "tablecells.fill")
                 .font(.system(size: 64))
-                .foregroundColor(.green)
+                .foregroundColor(DesignTokens.Colors.success)
 
             Text("Sheet")
                 .font(.title2)

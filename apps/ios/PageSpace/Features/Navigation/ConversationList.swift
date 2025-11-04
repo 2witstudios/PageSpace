@@ -33,7 +33,7 @@ struct ConversationList: View {
             } else if let error = error {
                 Text("Error: \(error)")
                     .font(.caption)
-                    .foregroundColor(.red)
+                    .foregroundColor(DesignTokens.Colors.error)
                     .padding(.vertical, DesignTokens.Spacing.small)
             } else if conversations.isEmpty {
                 Text("No conversations yet")
