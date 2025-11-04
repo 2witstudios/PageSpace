@@ -27,36 +27,16 @@ struct FileTreeView: View {
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 0) {
             ForEach(flattenedPages) { item in
-                if item.page.type == .folder {
-                    // Folders: tap to expand/collapse, no navigation
-                    FileRowView(
-                        page: item.page,
-                        level: item.level,
-                        isExpanded: expandedPageIds.contains(item.id),
-                        onTap: {
-                            toggleExpand(item.page)
-                        },
-                        onToggleExpand: {
-                            toggleExpand(item.page)
-                        },
-                        isNavigable: false // Button wrapper for tap handling
-                    )
-                    .id(item.id)
-                } else {
-                    // Non-folders: navigate to detail view
-                    NavigationLink(value: item.page) {
-                        FileRowView(
-                            page: item.page,
-                            level: item.level,
-                            isExpanded: false,
-                            onTap: { }, // Unused when navigable
-                            onToggleExpand: { }, // Unused when navigable
-                            isNavigable: true // Bare content for NavigationLink
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .id(item.id)
-                }
+                FileRowView(
+                    page: item.page,
+                    level: item.level,
+                    isExpanded: expandedPageIds.contains(item.id),
+                    onToggleExpand: {
+                        toggleExpand(item.page)
+                    },
+                    hasChildren: item.isExpandable
+                )
+                .id(item.id)
             }
         }
     }

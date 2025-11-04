@@ -80,7 +80,7 @@ struct PageDetailView: View {
             SheetPlaceholderView(page: page)
 
         case .folder:
-            FolderPlaceholderView(page: page)
+            FolderDetailView(page: page)
         }
     }
 
@@ -151,34 +151,6 @@ private struct SheetPlaceholderView: View {
                 .foregroundColor(DesignTokens.Colors.mutedText)
 
             Text("Sheet viewing will be supported in a future update.")
-                .font(.body)
-                .foregroundColor(DesignTokens.Colors.mutedText)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, DesignTokens.Spacing.xlarge)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-/// Placeholder for folder pages (shouldn't normally be clicked)
-private struct FolderPlaceholderView: View {
-    let page: Page
-
-    var body: some View {
-        VStack(spacing: DesignTokens.Spacing.large) {
-            Image(systemName: "folder.fill")
-                .font(.system(size: 64))
-                .foregroundColor(.blue)
-
-            Text("Folder")
-                .font(.title2)
-                .fontWeight(.semibold)
-
-            Text(page.title)
-                .font(.headline)
-                .foregroundColor(DesignTokens.Colors.mutedText)
-
-            Text("This is a folder. Expand it in the file tree to see its contents.")
                 .font(.body)
                 .foregroundColor(DesignTokens.Colors.mutedText)
                 .multilineTextAlignment(.center)
