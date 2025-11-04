@@ -7,12 +7,18 @@ struct DMMessageRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            if !isSent, let user = otherUser {
+            if !isSent {
                 // Show avatar for received messages
-                AvatarView(url: user.avatarUrl, name: user.displayName, size: 32)
-            } else if !isSent {
-                // Fallback if no user data
-                AvatarView(url: nil, name: "User", size: 32)
+                if let user = otherUser {
+                    AvatarView(url: user.avatarUrl, name: user.displayName, size: 32)
+                } else {
+                    // Fallback if no user data
+                    AvatarView(url: nil, name: "User", size: 32)
+                }
+            } else {
+                // For sent messages, add invisible spacer to match avatar width
+                Color.clear
+                    .frame(width: 32, height: 32)
             }
 
             VStack(alignment: isSent ? .trailing : .leading, spacing: 4) {
@@ -31,6 +37,7 @@ struct DMMessageRow: View {
                     .background(isSent ? DesignTokens.Colors.primary : Color(uiColor: .systemGray5))
                     .foregroundColor(isSent ? .white : .primary)
                     .cornerRadius(16)
+                    .fixedSize(horizontal: false, vertical: true) // Allow horizontal expansion, but keep vertical fixed
 
                 // Timestamp and status
                 HStack(spacing: 4) {
@@ -51,12 +58,9 @@ struct DMMessageRow: View {
                     }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: isSent ? .trailing : .leading)
 
-            if isSent {
-                Spacer(minLength: 60) // Push sent messages to the right
-            } else {
-                Spacer(minLength: 60) // Push received messages to the left
-            }
+            // Removed conflicting Spacer - let alignment handle positioning
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 4)

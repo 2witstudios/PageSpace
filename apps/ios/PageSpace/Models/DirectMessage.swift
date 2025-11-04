@@ -87,6 +87,14 @@ struct DMConversationResponse: Codable {
     let nextCursor: String?
 }
 
+struct DirectMessagesResponse: Codable {
+    let messages: [DirectMessage]
+}
+
+struct SendMessageResponse: Codable {
+    let message: DirectMessage
+}
+
 // Note: These are different from the AI chat requests in Core/Models/Conversation.swift
 struct SendDMRequest: Codable {
     let content: String

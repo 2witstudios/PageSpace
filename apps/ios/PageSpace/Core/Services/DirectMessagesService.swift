@@ -100,11 +100,12 @@ class DirectMessagesService: ObservableObject {
         }
 
         do {
-            let messages: [DirectMessage] = try await apiClient.request(
+            let response: DirectMessagesResponse = try await apiClient.request(
                 endpoint: "/api/messages/\(conversationId)",
                 method: .GET,
                 queryParams: queryParams
             )
+            let messages = response.messages
 
             if before == nil {
                 // Fresh load - replace current messages
@@ -132,11 +133,12 @@ class DirectMessagesService: ObservableObject {
         let request = SendDMRequest(content: content)
 
         do {
-            let message: DirectMessage = try await apiClient.request(
+            let response: SendMessageResponse = try await apiClient.request(
                 endpoint: "/api/messages/\(conversationId)",
                 method: .POST,
                 body: request
             )
+            let message = response.message
 
             // Add to current messages if this is the active conversation
             if !currentMessages.isEmpty && currentMessages.first?.conversationId == conversationId {
