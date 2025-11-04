@@ -108,46 +108,37 @@ private struct SandboxedCanvasWebView: UIViewRepresentable {
         if context.coordinator.lastContent != htmlContent {
             context.coordinator.lastContent = htmlContent
 
-            // SECURITY: Ultra-strict CSP for canvas pages
+            // SECURITY: Load HTML directly with strict CSP
+            // Similar to web's Shadow DOM approach but adapted for iOS WKWebView
             // - No JavaScript allowed (script-src 'none')
             // - Only inline styles (style-src 'unsafe-inline')
             // - Images from HTTPS only (img-src https: data:)
-            // - Sandboxed iframe with minimal permissions
-            let escapedContent = htmlContent
-                .replacingOccurrences(of: "<", with: "&lt;")
-                .replacingOccurrences(of: ">", with: "&gt;")
-                .replacingOccurrences(of: "\"", with: "&quot;")
-                .replacingOccurrences(of: "'", with: "&#39;")
-
             let html = """
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src https: data:; font-src https:; object-src 'none'; script-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none';">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
-                <style>
-                    :root {
-                        color-scheme: light dark;
-                    }
-                    body {
-                        margin: 0;
-                        padding: 0;
-                        background-color: transparent;
-                    }
-                    iframe {
-                        width: 100%;
-                        min-height: 100vh;
-                        border: none;
-                    }
-                </style>
-            </head>
-            <body>
-                <!-- SECURITY: Sandboxed iframe with minimal permissions -->
-                <!-- No scripts, no forms, no top navigation, no popups -->
-                <iframe sandbox="allow-same-origin" srcdoc="\(escapedContent)"></iframe>
-            </body>
-            </html>
-            """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src https: data:; font-src https:;">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            margin: 0;
+            padding: 16px;
+            background: white;
+            color: black;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+    </style>
+</head>
+<body>
+\(htmlContent)
+</body>
+</html>
+"""
 
             webView.loadHTMLString(html, baseURL: nil)
         }
