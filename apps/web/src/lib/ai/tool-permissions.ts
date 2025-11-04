@@ -188,6 +188,11 @@ export const TOOL_METADATA: Record<string, ToolMetadata> = {
     operation: ToolOperation.READ,
     description: 'Search across multiple drives'
   },
+  web_search: {
+    name: 'web_search',
+    operation: ToolOperation.READ,
+    description: 'Search the web for current information and resources'
+  },
 
   // Task management tools
   create_task_list: {
