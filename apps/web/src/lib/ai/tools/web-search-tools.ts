@@ -40,7 +40,7 @@ async function performWebSearch({
   count?: number;
   searchEngine?: 'search-prime';
   domainFilter?: string;
-  recencyFilter?: 'noLimit' | 'day' | 'week' | 'month' | 'year';
+  recencyFilter?: 'noLimit' | 'oneDay' | 'oneWeek' | 'oneMonth' | 'oneYear';
   userId: string;
 }): Promise<WebSearchResponse> {
   // Get GLM API key - try default PageSpace settings first, then user settings
@@ -83,8 +83,8 @@ async function performWebSearch({
       requestBody.search_domain_filter = domainFilter;
     }
 
-    // Call GLM Web Search API
-    const response = await fetch('https://api.z.ai/api/tools/web-search', {
+    // Call GLM Web Search API - matches OpenAPI spec
+    const response = await fetch('https://api.z.ai/api/paas/v4/web_search', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${glmApiKey}`,
@@ -139,7 +139,7 @@ Returns structured search results with titles, links, summaries, and publication
       query: z.string().describe('Search query - be specific and use natural language (e.g., "latest developments in AI safety 2025", "best practices for React Server Components")'),
       count: z.number().min(1).max(50).optional().default(10).describe('Number of results to return (1-50, default 10)'),
       domainFilter: z.string().optional().describe('Optional: Limit search to specific domain (e.g., "docs.python.org", "github.com")'),
-      recencyFilter: z.enum(['noLimit', 'day', 'week', 'month', 'year']).optional().default('noLimit').describe('Filter by recency: "day" (last 24h), "week", "month", "year", or "noLimit"'),
+      recencyFilter: z.enum(['noLimit', 'oneDay', 'oneWeek', 'oneMonth', 'oneYear']).optional().default('noLimit').describe('Filter by recency: "oneDay" (last 24h), "oneWeek", "oneMonth", "oneYear", or "noLimit"'),
     }),
     execute: async ({ query, count = 10, domainFilter, recencyFilter = 'noLimit' }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
@@ -152,7 +152,7 @@ Returns structured search results with titles, links, summaries, and publication
           query,
           count,
           domainFilter,
-          recencyFilter: recencyFilter as 'noLimit' | 'day' | 'week' | 'month' | 'year',
+          recencyFilter: recencyFilter as 'noLimit' | 'oneDay' | 'oneWeek' | 'oneMonth' | 'oneYear',
           userId,
         });
 

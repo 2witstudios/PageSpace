@@ -149,7 +149,7 @@ For complex changes, use batch_page_operations for all-or-nothing execution`,
 - **Features**:
   - Returns structured results with titles, URLs, summaries, and publication dates
   - Supports domain filtering (e.g., "docs.python.org")
-  - Supports recency filtering ("day", "week", "month", "year")
+  - Supports recency filtering ("oneDay", "oneWeek", "oneMonth", "oneYear", "noLimit")
   - Provides citation references (e.g., [ref_1])
 - **Best for**: Real-time information, current documentation, news, fact-checking
 
@@ -195,7 +195,7 @@ Execute multiple searches simultaneously:
 
     examples: [
       `User: "What are the latest developments in AI safety?"
-      → web_search(query="latest developments in AI safety 2025", count=10, recencyFilter="month")
+      → web_search(query="latest developments in AI safety 2025", count=10, recencyFilter="oneMonth")
       → Synthesize key findings with citations`,
 
       `User: "Find the official React Server Components documentation"

@@ -68,7 +68,7 @@ web_search({
   query: string,           // Search query - be specific and use natural language
   count?: number,          // Number of results (1-50, default 10)
   domainFilter?: string,   // Limit to specific domain (e.g., "docs.python.org")
-  recencyFilter?: enum,    // Time filter: "day", "week", "month", "year", "noLimit" (default)
+  recencyFilter?: enum,    // Time filter: "oneDay", "oneWeek", "oneMonth", "oneYear", "noLimit" (default)
 })
 ```
 
@@ -79,7 +79,7 @@ web_search({
 web_search({
   query: "latest developments in AI safety 2025",
   count: 10,
-  recencyFilter: "month"
+  recencyFilter: "oneMonth"
 })
 
 // Domain-specific search
@@ -93,7 +93,7 @@ web_search({
 web_search({
   query: "climate change policy 2025",
   count: 15,
-  recencyFilter: "week"
+  recencyFilter: "oneWeek"
 })
 ```
 
@@ -118,7 +118,7 @@ web_search({
   ],
   metadata: {
     searchEngine: "search-prime",
-    recencyFilter: "month",
+    recencyFilter: "oneMonth",
     domainFilter: "all domains",
     requestId: "...",
     timestamp: "2025-01-15T10:30:00Z"
