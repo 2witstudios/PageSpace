@@ -9,6 +9,7 @@
 
 import SwiftUI
 import WebKit
+import MarkdownUI
 import os.log
 
 struct DocumentWebView: View {
@@ -32,9 +33,18 @@ struct DocumentWebView: View {
                         Task { await loadContent() }
                     }
                 )
-            } else {
+            } else if isHTML(htmlContent) {
+                // HTML content: Use WKWebView
                 SecureDocumentWebView(htmlContent: htmlContent ?? "")
                     .edgesIgnoringSafeArea(.bottom)
+            } else {
+                // Markdown content: Use MarkdownUI
+                ScrollView {
+                    Markdown(htmlContent ?? "")
+                        .markdownTheme(.pagespace)
+                        .textSelection(.enabled)
+                        .padding()
+                }
             }
         }
         .navigationTitle(page.title)
@@ -50,6 +60,19 @@ struct DocumentWebView: View {
         .refreshable {
             await loadContent()
         }
+    }
+
+    // MARK: - Content Type Detection
+
+    private func isHTML(_ content: String?) -> Bool {
+        guard let content = content else { return true }
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Check if content starts with HTML tags
+        return trimmed.hasPrefix("<!DOCTYPE") ||
+               trimmed.hasPrefix("<html") ||
+               trimmed.hasPrefix("<div") ||
+               trimmed.hasPrefix("<p") ||
+               trimmed.hasPrefix("<span")
     }
 
     private func loadContent() async {
