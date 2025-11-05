@@ -67,9 +67,11 @@ class FileSystemService: ObservableObject {
     // MARK: - Drive Operations
 
     /// Load all drives and their page trees, merging into unified view
-    func loadDrives() async {
+    func loadDrives(isRefresh: Bool = false) async {
         isLoading = true
-        error = nil
+        if !isRefresh {
+            error = nil
+        }
 
         do {
             // Fetch all drives
@@ -114,27 +116,38 @@ class FileSystemService: ObservableObject {
             isLoading = false
         } catch let apiError as APIError {
             isLoading = false
-            switch apiError {
-            case .unauthorized:
-                self.error = .unauthorized
-                logger.error("Failed to load drives: Unauthorized")
-            case .networkError:
-                self.error = .networkError
-                logger.error("Failed to load drives: Network error")
-            default:
-                self.error = .loadFailed("Failed to load drives")
-                logger.error("Failed to load drives: \(apiError.localizedDescription)")
+            let shouldSurfaceError = !isRefresh
+
+            if shouldSurfaceError {
+                switch apiError {
+                case .unauthorized:
+                    self.error = .unauthorized
+                    logger.error("Failed to load drives: Unauthorized")
+                case .networkError:
+                    self.error = .networkError
+                    logger.error("Failed to load drives: Network error")
+                default:
+                    self.error = .loadFailed("Failed to load drives")
+                    logger.error("Failed to load drives: \(apiError.localizedDescription)")
+                }
+            } else {
+                logger.error("Failed to refresh drives (preserving existing data): \(apiError.localizedDescription)")
             }
         } catch {
             isLoading = false
-            self.error = .unknown
-            logger.error("Failed to load drives: \(error.localizedDescription)")
+            let shouldSurfaceError = !isRefresh
+            if shouldSurfaceError {
+                self.error = .unknown
+                logger.error("Failed to load drives: \(error.localizedDescription)")
+            } else {
+                logger.error("Failed to refresh drives with unexpected error (preserving data): \(error.localizedDescription)")
+            }
         }
     }
 
     /// Refresh all drives and their page trees
     func refreshDrives() async {
-        await loadDrives()
+        await loadDrives(isRefresh: true)
     }
 
     /// Get a specific page by ID
