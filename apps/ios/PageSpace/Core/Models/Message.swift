@@ -136,16 +136,18 @@ struct ToolPart: Codable, Equatable {
 // MARK: - AnyCodable (for dynamic JSON)
 
 struct AnyCodable: Codable, Equatable {
-    let value: Any
+    let value: Any?
 
-    init(_ value: Any) {
+    init(_ value: Any?) {
         self.value = value
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
 
-        if let intValue = try? container.decode(Int.self) {
+        if container.decodeNil() {
+            value = nil
+        } else if let intValue = try? container.decode(Int.self) {
             value = intValue
         } else if let doubleValue = try? container.decode(Double.self) {
             value = doubleValue
@@ -169,6 +171,8 @@ struct AnyCodable: Codable, Equatable {
         var container = encoder.singleValueContainer()
 
         switch value {
+        case nil:
+            try container.encodeNil()
         case let intValue as Int:
             try container.encode(intValue)
         case let doubleValue as Double:
@@ -177,13 +181,15 @@ struct AnyCodable: Codable, Equatable {
             try container.encode(stringValue)
         case let boolValue as Bool:
             try container.encode(boolValue)
-        case let arrayValue as [Any]:
-            try container.encode(arrayValue.map { AnyCodable($0) })
-        case let dictValue as [String: Any]:
-            try container.encode(dictValue.mapValues { AnyCodable($0) })
+        case let arrayValue as [Any?]:
+            let encodableArray = arrayValue.map { AnyCodable($0) }
+            try container.encode(encodableArray)
+        case let dictValue as [String: Any?]:
+            let encodableDict = dictValue.mapValues { AnyCodable($0) }
+            try container.encode(encodableDict)
         default:
             throw EncodingError.invalidValue(
-                value,
+                value as Any,
                 EncodingError.Context(
                     codingPath: encoder.codingPath,
                     debugDescription: "Could not encode value"
@@ -193,8 +199,23 @@ struct AnyCodable: Codable, Equatable {
     }
 
     static func == (lhs: AnyCodable, rhs: AnyCodable) -> Bool {
-        // Basic equality - you may need to expand this
-        String(describing: lhs.value) == String(describing: rhs.value)
+        switch (lhs.value, rhs.value) {
+        case (nil, nil):
+            return true
+        case let (lhsArray as [Any?], rhsArray as [Any?]):
+            guard lhsArray.count == rhsArray.count else { return false }
+            return zip(lhsArray, rhsArray).allSatisfy { AnyCodable($0) == AnyCodable($1) }
+        case let (lhsDict as [String: Any?], rhsDict as [String: Any?]):
+            guard lhsDict.count == rhsDict.count else { return false }
+            for (key, lhsValue) in lhsDict {
+                guard let rhsValue = rhsDict[key], AnyCodable(lhsValue) == AnyCodable(rhsValue) else {
+                    return false
+                }
+            }
+            return true
+        default:
+            return String(describing: lhs.value) == String(describing: rhs.value)
+        }
     }
 }
 
