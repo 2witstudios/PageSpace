@@ -8,17 +8,26 @@ struct Message: Identifiable, Codable, Equatable {
     var parts: [MessagePart]
     let createdAt: Date
     let isActive: Bool?  // Optional - backend doesn't send this field (internal database only)
+    var editedAt: Date?
 
     enum CodingKeys: String, CodingKey {
-        case id, role, parts, createdAt, isActive
+        case id, role, parts, createdAt, isActive, editedAt
     }
 
-    init(id: String = UUID().uuidString, role: MessageRole, parts: [MessagePart], createdAt: Date = Date(), isActive: Bool? = nil) {
+    init(
+        id: String = UUID().uuidString,
+        role: MessageRole,
+        parts: [MessagePart],
+        createdAt: Date = Date(),
+        isActive: Bool? = nil,
+        editedAt: Date? = nil
+    ) {
         self.id = id
         self.role = role
         self.parts = parts
         self.createdAt = createdAt
         self.isActive = isActive
+        self.editedAt = editedAt
     }
 }
 

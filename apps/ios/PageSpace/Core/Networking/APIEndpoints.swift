@@ -23,6 +23,10 @@ enum APIEndpoints {
         "/api/ai_conversations/\(id)/messages"
     }
 
+    static func conversationMessage(_ conversationId: String, messageId: String) -> String {
+        "/api/ai_conversations/\(conversationId)/messages/\(messageId)"
+    }
+
     // MARK: - AI Settings
     static let aiSettings = "/api/ai/settings"
 

@@ -3,6 +3,9 @@ import MarkdownUI
 
 struct MessageRow: View {
     let message: Message
+    let onCopy: (() -> Void)?
+    let onEdit: (() -> Void)?
+    let onRetry: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -11,9 +14,44 @@ struct MessageRow: View {
                     MessagePartView(part: part, role: message.role)
                 }
 
-                Text(message.createdAt, style: .time)
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+                HStack(spacing: 6) {
+                    Text(message.createdAt, style: .time)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+
+                    if message.editedAt != nil {
+                        Text("Edited")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    if let onRetry = onRetry {
+                        actionButton(
+                            systemImage: "arrow.clockwise",
+                            accessibilityLabel: "Retry response",
+                            action: onRetry
+                        )
+                    }
+
+                    if let onEdit = onEdit {
+                        actionButton(
+                            systemImage: "square.and.pencil",
+                            accessibilityLabel: "Edit message",
+                            action: onEdit
+                        )
+                    }
+
+                    if let onCopy = onCopy {
+                        actionButton(
+                            systemImage: "doc.on.doc",
+                            accessibilityLabel: "Copy message",
+                            action: onCopy
+                        )
+                    }
+                }
+                .padding(.top, hasActions ? 4 : 0)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
@@ -29,6 +67,23 @@ struct MessageRow: View {
         } else {
             DesignTokens.Colors.assistantMessageBackground
         }
+    }
+
+    private var hasActions: Bool {
+        onCopy != nil || onEdit != nil || onRetry != nil
+    }
+
+    private func actionButton(systemImage: String, accessibilityLabel: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.footnote)
+                .foregroundColor(.secondary)
+                .padding(6)
+                .background(Color(.systemGray5).opacity(0.6))
+                .clipShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
     }
 }
 
@@ -286,15 +341,21 @@ extension Theme {
 
 #Preview {
     VStack(spacing: 0) {
-        MessageRow(message: Message(
-            role: .user,
-            parts: [.text(TextPart(text: "Hello, can you help me with **markdown** formatting? I need to see `inline code` and:\n\n```swift\nlet test = \"code blocks\"\n```"))]
-        ))
+        MessageRow(
+            message: Message(
+                role: .user,
+                parts: [.text(TextPart(text: "Hello, can you help me with **markdown** formatting? I need to see `inline code` and:\n\n```swift\nlet test = \"code blocks\"\n```"))]
+            ),
+            onCopy: nil,
+            onEdit: nil,
+            onRetry: nil
+        )
 
-        MessageRow(message: Message(
-            role: .assistant,
-            parts: [
-                .text(TextPart(text: """
+        MessageRow(
+            message: Message(
+                role: .assistant,
+                parts: [
+                    .text(TextPart(text: """
 I can help you with **markdown** formatting! Here are some examples:
 
 # Heading 1
@@ -323,15 +384,19 @@ And even [links](https://example.com) and tables:
 
 > This is a blockquote with important information.
 """)),
-                .tool(ToolPart(
-                    type: "tool-list_drives",
-                    toolCallId: "call_123",
-                    toolName: "list_drives",
-                    input: ["query": AnyCodable("example")],
-                    output: AnyCodable(["drives": ["Drive 1", "Drive 2"]]),
-                    state: .outputAvailable
-                ))
-            ]
-        ))
+                    .tool(ToolPart(
+                        type: "tool-list_drives",
+                        toolCallId: "call_123",
+                        toolName: "list_drives",
+                        input: ["query": AnyCodable("example")],
+                        output: AnyCodable(["drives": ["Drive 1", "Drive 2"]]),
+                        state: .outputAvailable
+                    ))
+                ]
+            ),
+            onCopy: nil,
+            onEdit: nil,
+            onRetry: nil
+        )
     }
 }

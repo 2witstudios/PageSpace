@@ -75,6 +75,26 @@ class AIService: ObservableObject {
         return response
     }
 
+    // MARK: - Message Mutations
+
+    func editMessage(conversationId: String, messageId: String, content: String) async throws {
+        let request = EditMessageRequest(content: content)
+        let endpoint = APIEndpoints.conversationMessage(conversationId, messageId: messageId)
+        let _: MessageMutationResponse = try await apiClient.request(
+            endpoint: endpoint,
+            method: .PATCH,
+            body: request
+        )
+    }
+
+    func deleteMessage(conversationId: String, messageId: String) async throws {
+        let endpoint = APIEndpoints.conversationMessage(conversationId, messageId: messageId)
+        let _: MessageMutationResponse = try await apiClient.request(
+            endpoint: endpoint,
+            method: .DELETE
+        )
+    }
+
     // MARK: - AI Settings
 
     func getSettings() async throws -> AISettings {
@@ -173,4 +193,15 @@ struct StreamChunk: Codable {
     let providerExecuted: Bool?
     let dynamic: Bool?
     let preliminary: Bool?
+}
+
+// MARK: - Message Mutation Models
+
+private struct EditMessageRequest: Codable {
+    let content: String
+}
+
+private struct MessageMutationResponse: Codable {
+    let success: Bool
+    let message: String?
 }

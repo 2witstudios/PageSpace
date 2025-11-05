@@ -257,115 +257,36 @@ class ConversationManager: ObservableObject {
 
     /// Send a message in the current conversation
     func sendMessage(_ text: String) async {
-        guard !text.isEmpty else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard !isStreaming else {
+            print("⚠️ Ignoring send request while streaming is active")
+            return
+        }
 
-        print("📤 ConversationManager.sendMessage - text: \(text.prefix(50))...")
+        print("📤 ConversationManager.sendMessage - text: \(trimmed.prefix(50))...")
 
         // Create user message
         let userMessage = Message(
             role: .user,
-            parts: [.text(TextPart(text: text))]
+            parts: [.text(TextPart(text: trimmed))]
         )
 
         // Add to UI immediately
         messages.append(userMessage)
 
-        // Create streaming message builder for assistant
-        let assistantMessageId = UUID().uuidString
-        streamingMessageBuilder = StreamingMessage(id: assistantMessageId, role: .assistant)
-
-        isStreaming = true
-        error = nil
-
         do {
-            // Auto-create conversation if needed (for new conversations)
-            var conversationId = currentConversationId
+            // Ensure we have a conversation to stream against
+            let conversationId = try await ensureConversation()
+            let history = messages
 
-            if conversationId == nil {
-                // Use selected agent info to determine conversation type
-                let type = selectedAgentType ?? "global"
-                let contextId = selectedAgentContextId
+            startStreaming(conversationId: conversationId, history: history)
 
-                print("ℹ️ Creating new \(type.uppercased()) conversation with contextId: \(contextId ?? "nil")")
-
-                // Don't set a title - let backend auto-generate from first message
-                let newConversation = try await conversationService.createConversation(
-                    title: nil,
-                    type: type,
-                    contextId: contextId
-                )
-                conversationId = newConversation.id
-                currentConversationId = conversationId
-                currentConversation = newConversation
-                print("✅ Created \(type) conversation: \(conversationId!) with contextId: \(contextId ?? "nil")")
-            }
-
-            guard let finalConversationId = conversationId else {
-                throw NSError(
-                    domain: "ConversationManager",
-                    code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "Failed to get or create conversation ID"]
-                )
-            }
-
-            // Stream message (wrapped in Task for cancellation support)
-            streamTask = Task {
-                do {
-                    // Get active provider/model (considers agent overrides)
-                    let (provider, model) = getActiveProviderModel()
-
-                    let stream = aiService.sendMessage(
-                        conversationId: finalConversationId,
-                        messages: messages,
-                        provider: provider,
-                        model: model
-                    )
-
-                    for try await chunk in stream {
-                        // Check if task was cancelled
-                        if Task.isCancelled {
-                            print("🛑 Stream cancelled by user")
-                            break
-                        }
-                        processStreamChunk(chunk)
-                    }
-
-                    // Flush any pending throttled updates (ensures final UI update)
-                    streamThrottle.flush()
-
-                    // Move streaming message to completed messages
-                    // Use builder (source of truth) instead of streamingMessage (throttled snapshot)
-                    // to ensure we capture all chunks, including any pending in the throttle
-                    if let builder = streamingMessageBuilder {
-                        messages.append(builder.toMessage())
-                    }
-
-                    print("✅ Message sent successfully")
-
-                } catch is CancellationError {
-                    print("🛑 Stream cancelled")
-                } catch {
-                    self.error = "Failed to send message: \(error.localizedDescription)"
-                    print("❌ Failed to send message: \(error)")
-
-                    // Clear incomplete streaming message on error
-                    streamThrottle.cancel()
-                    streamingMessage = nil
-                    streamingMessageBuilder = nil
-                }
-
-                isStreaming = false
-                streamingMessage = nil
-                streamingMessageBuilder = nil
-                streamTask = nil
-            }
-
-            // Wait for task to complete
+            // Wait for stream to finish so callers can await completion
             await streamTask?.value
-
         } catch {
-            self.error = "Failed to create conversation: \(error.localizedDescription)"
-            print("❌ Failed to create conversation: \(error)")
+            self.error = "Failed to send message: \(error.localizedDescription)"
+            print("❌ Failed to send message: \(error)")
 
             isStreaming = false
             streamingMessage = nil
@@ -389,6 +310,197 @@ class ConversationManager: ObservableObject {
         streamingMessage = nil
         streamingMessageBuilder = nil
         isStreaming = false
+    }
+
+    // MARK: - Streaming Helpers
+
+    private func ensureConversation() async throws -> String {
+        if let conversationId = currentConversationId {
+            return conversationId
+        }
+
+        let type = selectedAgentType ?? "global"
+        let contextId = selectedAgentContextId
+
+        print("ℹ️ Creating new \(type.uppercased()) conversation with contextId: \(contextId ?? "nil")")
+
+        let newConversation = try await conversationService.createConversation(
+            title: nil,
+            type: type,
+            contextId: contextId
+        )
+
+        currentConversationId = newConversation.id
+        currentConversation = newConversation
+
+        print("✅ Created \(type) conversation: \(newConversation.id) with contextId: \(contextId ?? "nil")")
+
+        return newConversation.id
+    }
+
+    private func startStreaming(conversationId: String, history: [Message]) {
+        // Cancel any existing stream to avoid overlapping updates
+        streamTask?.cancel()
+        streamTask = nil
+        streamThrottle.cancel()
+        streamingMessage = nil
+        streamingMessageBuilder = nil
+
+        let assistantMessageId = UUID().uuidString
+        streamingMessageBuilder = StreamingMessage(id: assistantMessageId, role: .assistant)
+
+        isStreaming = true
+        error = nil
+
+        streamTask = Task { @MainActor [history] in
+            var wasCancelled = false
+
+            do {
+                let (provider, model) = getActiveProviderModel()
+
+                let stream = aiService.sendMessage(
+                    conversationId: conversationId,
+                    messages: history,
+                    provider: provider,
+                    model: model
+                )
+
+                for try await chunk in stream {
+                    if Task.isCancelled {
+                        print("🛑 Stream cancelled by user")
+                        wasCancelled = true
+                        break
+                    }
+                    processStreamChunk(chunk)
+                }
+
+                streamThrottle.flush()
+
+                if !wasCancelled, let builder = streamingMessageBuilder {
+                    messages.append(builder.toMessage())
+                }
+
+                if !wasCancelled {
+                    print("✅ Message sent successfully")
+                }
+
+            } catch is CancellationError {
+                print("🛑 Stream cancelled")
+            } catch {
+                self.error = "Failed to send message: \(error.localizedDescription)"
+                print("❌ Failed to send message: \(error)")
+
+                // Clear incomplete streaming message on error
+                streamThrottle.cancel()
+                streamingMessage = nil
+                streamingMessageBuilder = nil
+            }
+
+            isStreaming = false
+            streamingMessage = nil
+            streamingMessageBuilder = nil
+            streamTask = nil
+        }
+    }
+
+    // MARK: - Message Mutations
+
+    /// Update existing message content on the backend and in local state
+    func updateMessage(messageId: String, newContent: String) async throws {
+        guard let conversationId = currentConversationId else {
+            throw NSError(
+                domain: "ConversationManager",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "No active conversation to update"]
+            )
+        }
+
+        try await aiService.editMessage(
+            conversationId: conversationId,
+            messageId: messageId,
+            content: newContent
+        )
+
+        if let index = messages.firstIndex(where: { $0.id == messageId }) {
+            var updated = messages[index]
+            updated.parts = [.text(TextPart(text: newContent))]
+            updated.editedAt = Date()
+            messages[index] = updated
+        } else if streamingMessage?.id == messageId {
+            var updated = streamingMessage
+            updated?.parts = [.text(TextPart(text: newContent))]
+            updated?.editedAt = Date()
+            streamingMessage = updated
+        }
+    }
+
+    /// Delete a message from the backend and remove it locally
+    func deleteMessage(messageId: String) async throws {
+        guard let conversationId = currentConversationId else {
+            throw NSError(
+                domain: "ConversationManager",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "No active conversation to delete from"]
+            )
+        }
+
+        try await aiService.deleteMessage(conversationId: conversationId, messageId: messageId)
+
+        messages.removeAll { $0.id == messageId }
+
+        if streamingMessage?.id == messageId {
+            streamingMessage = nil
+        }
+    }
+
+    /// Retry the last assistant response by removing it and re-streaming from the last user message
+    func retryLastAssistantMessage() async {
+        guard !isStreaming else {
+            print("⚠️ Cannot retry while another stream is active")
+            return
+        }
+        guard let conversationId = currentConversationId else {
+            print("⚠️ Cannot retry without an active conversation ID")
+            return
+        }
+        guard let lastUserIndex = messages.lastIndex(where: { $0.role == .user }) else {
+            print("⚠️ Cannot retry without a user message in history")
+            return
+        }
+
+        let assistantMessages = messages.suffix(from: messages.index(after: lastUserIndex))
+            .filter { $0.role == .assistant }
+
+        guard !assistantMessages.isEmpty else {
+            print("ℹ️ No assistant messages after the last user message to retry")
+            return
+        }
+
+        do {
+            for message in assistantMessages {
+                try await aiService.deleteMessage(
+                    conversationId: conversationId,
+                    messageId: message.id
+                )
+            }
+        } catch {
+            self.error = "Failed to retry assistant message: \(error.localizedDescription)"
+            print("❌ Failed to delete assistant message(s) before retry: \(error)")
+            return
+        }
+
+        let assistantIds = Set(assistantMessages.map { $0.id })
+        messages.removeAll { assistantIds.contains($0.id) }
+
+        guard messages.last?.role == .user else {
+            print("⚠️ After cleaning assistant replies, last message is not user. Aborting retry.")
+            return
+        }
+
+        let history = messages
+        error = nil
+        startStreaming(conversationId: conversationId, history: history)
+        await streamTask?.value
     }
 
     // MARK: - Stream Processing

@@ -30,15 +30,25 @@ struct FilesAgentChatView: View {
                         LazyVStack(spacing: 16) {
                             // Completed messages
                             ForEach(conversationManager.messages) { message in
-                                MessageRow(message: message)
-                                    .id(message.id)
+                                MessageRow(
+                                    message: message,
+                                    onCopy: nil,
+                                    onEdit: nil,
+                                    onRetry: nil
+                                )
+                                .id(message.id)
                             }
 
                             // Currently streaming message (separate from completed)
                             if let streamingMessage = conversationManager.streamingMessage {
-                                MessageRow(message: streamingMessage)
-                                    .id(streamingMessage.id)
-                                    .opacity(0.95) // Subtle visual indicator
+                                MessageRow(
+                                    message: streamingMessage,
+                                    onCopy: nil,
+                                    onEdit: nil,
+                                    onRetry: nil
+                                )
+                                .id(streamingMessage.id)
+                                .opacity(0.95) // Subtle visual indicator
                             }
                         }
                         .padding()

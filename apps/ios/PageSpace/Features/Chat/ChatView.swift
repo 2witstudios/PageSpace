@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct ChatView: View {
     @Binding var isSidebarOpen: Bool
@@ -7,6 +8,9 @@ struct ChatView: View {
     @EnvironmentObject var agentService: AgentService
     @State private var messageText = ""
     @FocusState private var isTextFieldFocused: Bool
+    @State private var editingContext: MessageEditContext?
+    @State private var isSavingEdit = false
+    @State private var alertMessage: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -18,18 +22,57 @@ struct ChatView: View {
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
+                        let lastAssistantId = conversationManager.messages.last(where: { $0.role == .assistant })?.id
+
                         LazyVStack(spacing: 16) {
                             // Completed messages
                             ForEach(conversationManager.messages) { message in
-                                MessageRow(message: message)
+                                let isLastAssistant = message.id == lastAssistantId
+                                let hasCopyAction = !plainText(from: message).isEmpty
+                                let canEditMessage = canEdit(message)
+                                let canRetryMessage = message.role == .assistant && isLastAssistant && !conversationManager.isStreaming
+                                if hasCopyAction || canEditMessage || canRetryMessage {
+                                    MessageRow(
+                                        message: message,
+                                        onCopy: hasCopyAction ? { copyMessage(from: message) } : nil,
+                                        onEdit: canEditMessage ? { presentEdit(for: message) } : nil,
+                                        onRetry: canRetryMessage ? {
+                                            Task {
+                                                await conversationManager.retryLastAssistantMessage()
+                                            }
+                                        } : nil
+                                    )
                                     .id(message.id)
+                                    .contextMenu {
+                                        messageContextMenu(
+                                            for: message,
+                                            isLastAssistant: isLastAssistant,
+                                            hasCopyAction: hasCopyAction,
+                                            canEditMessage: canEditMessage,
+                                            canRetryMessage: canRetryMessage
+                                        )
+                                    }
+                                } else {
+                                    MessageRow(
+                                        message: message,
+                                        onCopy: nil,
+                                        onEdit: nil,
+                                        onRetry: nil
+                                    )
+                                    .id(message.id)
+                                }
                             }
 
                             // Currently streaming message (separate from completed)
                             if let streamingMessage = conversationManager.streamingMessage {
-                                MessageRow(message: streamingMessage)
-                                    .id(streamingMessage.id)
-                                    .opacity(0.95) // Subtle visual indicator
+                                MessageRow(
+                                    message: streamingMessage,
+                                    onCopy: nil,
+                                    onEdit: nil,
+                                    onRetry: nil
+                                )
+                                .id(streamingMessage.id)
+                                .opacity(0.95) // Subtle visual indicator
                             }
                         }
                         .padding()
@@ -164,6 +207,33 @@ struct ChatView: View {
                 isTextFieldFocused = false
             }
         }
+        .sheet(item: $editingContext) { context in
+            MessageEditSheet(
+                context: context,
+                isSaving: isSavingEdit,
+                onCancel: { editingContext = nil },
+                onSave: { newText in
+                    handleEditSave(for: context, updatedText: newText)
+                }
+            )
+        }
+        .alert(
+            "Something Went Wrong",
+            isPresented: Binding(
+                get: { alertMessage != nil },
+                set: { newValue in
+                    if !newValue {
+                        alertMessage = nil
+                    }
+                }
+            ),
+            actions: {
+            Button("OK", role: .cancel) {
+                alertMessage = nil
+            }
+        }, message: {
+            Text(alertMessage ?? "")
+        })
     }
 
     // MARK: - Helper Methods
@@ -187,6 +257,166 @@ struct ChatView: View {
 
         messageText = ""
         await conversationManager.sendMessage(text)
+    }
+
+    private func plainText(from message: Message) -> String {
+        message.parts.compactMap { part -> String? in
+            if case .text(let textPart) = part {
+                return textPart.text
+            }
+            return nil
+        }
+        .joined(separator: "\n")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func canEdit(_ message: Message) -> Bool {
+        (message.role == .user || message.role == .assistant) && !plainText(from: message).isEmpty
+    }
+
+    @ViewBuilder
+    private func messageContextMenu(
+        for message: Message,
+        isLastAssistant: Bool,
+        hasCopyAction: Bool,
+        canEditMessage: Bool,
+        canRetryMessage: Bool
+    ) -> some View {
+        if hasCopyAction {
+            Button {
+                copyMessage(from: message)
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
+        }
+
+        if canEditMessage {
+            Button {
+                presentEdit(for: message)
+            } label: {
+                Label("Edit", systemImage: "square.and.pencil")
+            }
+        }
+
+        if canRetryMessage && isLastAssistant {
+            Button {
+                Task {
+                    await conversationManager.retryLastAssistantMessage()
+                }
+            } label: {
+                Label("Retry Response", systemImage: "arrow.clockwise")
+            }
+        }
+    }
+
+    private func copyMessage(from message: Message) {
+        let text = plainText(from: message)
+        guard !text.isEmpty else { return }
+
+        UIPasteboard.general.string = text
+
+        let generator = UINotificationFeedbackGenerator()
+        generator.notificationOccurred(.success)
+    }
+
+    private func presentEdit(for message: Message) {
+        let text = plainText(from: message)
+        guard !text.isEmpty else { return }
+
+        editingContext = MessageEditContext(
+            id: message.id,
+            role: message.role,
+            initialText: text
+        )
+    }
+
+    private func handleEditSave(for context: MessageEditContext, updatedText: String) {
+        let trimmed = updatedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            alertMessage = "Message cannot be empty."
+            return
+        }
+
+        isSavingEdit = true
+
+        Task {
+            do {
+                try await conversationManager.updateMessage(messageId: context.id, newContent: trimmed)
+                await MainActor.run {
+                    editingContext = nil
+                    isSavingEdit = false
+                }
+            } catch {
+                await MainActor.run {
+                    alertMessage = "Failed to update message. \(error.localizedDescription)"
+                    isSavingEdit = false
+                }
+            }
+        }
+    }
+}
+
+private struct MessageEditContext: Identifiable {
+    let id: String
+    let role: MessageRole
+    let initialText: String
+
+    var title: String {
+        role == .user ? "Edit Message" : "Edit Response"
+    }
+}
+
+private struct MessageEditSheet: View {
+    let context: MessageEditContext
+    let isSaving: Bool
+    let onCancel: () -> Void
+    let onSave: (String) -> Void
+
+    @State private var text: String
+
+    init(
+        context: MessageEditContext,
+        isSaving: Bool,
+        onCancel: @escaping () -> Void,
+        onSave: @escaping (String) -> Void
+    ) {
+        self.context = context
+        self.isSaving = isSaving
+        self.onCancel = onCancel
+        self.onSave = onSave
+        _text = State(initialValue: context.initialText)
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack {
+                TextEditor(text: $text)
+                    .scrollContentBackground(.hidden)
+                    .padding()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color(.systemGray4), lineWidth: 1)
+                    )
+                    .padding()
+            }
+            .navigationTitle(context.title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                        .disabled(isSaving)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        onSave(text)
+                    }
+                    .disabled(isSaving || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .interactiveDismissDisabled(isSaving)
     }
 }
 
