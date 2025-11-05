@@ -138,16 +138,31 @@ For complex changes, use batch_page_operations for all-or-nothing execution`,
 
 ## SEARCH TOOL HIERARCHY:
 
-### 1. glob_search - STRUCTURAL DISCOVERY (Start Here!)
-- **Purpose**: Find pages by name/path patterns
+### 1. web_search - EXTERNAL WEB SEARCH (Current Information!)
+- **Purpose**: Search the web for current information, news, documentation, and real-time data
+- **Use when**:
+  - User asks about current events, news, or recent developments
+  - Information needed is time-sensitive or outside your knowledge cutoff
+  - User wants to research a topic with up-to-date web sources
+  - Looking for documentation, guides, or resources that may have been updated
+  - Verifying facts or finding authoritative sources
+- **Features**:
+  - Returns structured results with titles, URLs, summaries, and publication dates
+  - Supports domain filtering (e.g., "docs.python.org")
+  - Supports recency filtering ("oneDay", "oneWeek", "oneMonth", "oneYear", "noLimit")
+  - Provides citation references (e.g., [ref_1])
+- **Best for**: Real-time information, current documentation, news, fact-checking
+
+### 2. glob_search - STRUCTURAL DISCOVERY (PageSpace Content)
+- **Purpose**: Find pages by name/path patterns within PageSpace
 - **Patterns**:
   - "**/README*" - All READMEs in any location
   - "project-*" - All projects at current level
   - "*/meeting-notes/*" - Meeting notes in any folder
-- **Best for**: Finding files by naming conventions
+- **Best for**: Finding files by naming conventions in PageSpace
 
-### 2. regex_search - CONTENT PATTERNS
-- **Purpose**: Search inside document content
+### 3. regex_search - CONTENT PATTERNS (PageSpace Content)
+- **Purpose**: Search inside document content within PageSpace
 - **Patterns**:
   - "TODO.*urgent" - Urgent todos
   - "\\d{4}-\\d{2}-\\d{2}" - Dates (YYYY-MM-DD)
@@ -155,21 +170,22 @@ For complex changes, use batch_page_operations for all-or-nothing execution`,
 - **Options**: Search in content, title, or both
 - **Returns**: Matching lines with line numbers
 
-### 3. search_pages - FUZZY TEXT SEARCH
-- **Purpose**: Natural language search across pages
+### 4. search_pages - FUZZY TEXT SEARCH (PageSpace Content)
+- **Purpose**: Natural language search across pages in PageSpace
 - **Best for**: Finding topics, concepts, general content
 - **Example**: "authentication flow", "meeting notes from January"
 
-### 4. multi_drive_search - CROSS-WORKSPACE
-- **Purpose**: Search across multiple workspaces simultaneously
+### 5. multi_drive_search - CROSS-WORKSPACE (PageSpace Content)
+- **Purpose**: Search across multiple workspaces simultaneously in PageSpace
 - **Use when**: Don't know which workspace contains info
 - **Parallel execution**: Search all drives at once
 
 ## SEARCH WORKFLOW:
-1. Start broad with glob_search for structure
-2. Narrow with regex_search for specific patterns
-3. Use search_pages for conceptual searches
-4. Fall back to multi_drive_search if location unknown
+1. **External information**: Use web_search for current events, news, documentation, or real-time data
+2. **Internal structure**: Start with glob_search for PageSpace page structure
+3. **Internal content**: Use regex_search for specific patterns in PageSpace
+4. **Conceptual search**: Use search_pages for natural language queries in PageSpace
+5. **Cross-workspace**: Fall back to multi_drive_search if location unknown in PageSpace
 
 ## PARALLEL SEARCH PATTERN:
 Execute multiple searches simultaneously:
@@ -178,6 +194,14 @@ Execute multiple searches simultaneously:
 - Multiple search types together`,
 
     examples: [
+      `User: "What are the latest developments in AI safety?"
+      → web_search(query="latest developments in AI safety 2025", count=10, recencyFilter="oneMonth")
+      → Synthesize key findings with citations`,
+
+      `User: "Find the official React Server Components documentation"
+      → web_search(query="React Server Components documentation", domainFilter="react.dev", count=5)
+      → Provide summary with authoritative links`,
+
       `User: "Find all TODO items"
       → regex_search(pattern="TODO", searchIn="content")
       → Group results by page and priority`,
