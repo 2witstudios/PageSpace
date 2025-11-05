@@ -289,6 +289,10 @@ const GlobalAssistantView: React.FC = () => {
     .filter(m => m.role === 'assistant')
     .slice(-1)[0]?.id;
 
+  const lastUserMessageId = globalMessages
+    .filter(m => m.role === 'user')
+    .slice(-1)[0]?.id;
+
   // Register streaming state with editing store (state-based protection)
   // Note: In AI SDK v5, status can be 'ready', 'submitted', 'streaming', or 'error'
   useEffect(() => {
@@ -564,6 +568,7 @@ const GlobalAssistantView: React.FC = () => {
                     onDelete={handleDelete}
                     onRetry={handleRetry}
                     isLastAssistantMessage={message.id === lastAssistantMessageId}
+                    isLastUserMessage={message.id === lastUserMessageId}
                   />
                 ))
               )}

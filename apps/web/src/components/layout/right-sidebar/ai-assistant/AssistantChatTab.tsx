@@ -425,9 +425,13 @@ const AssistantChatTab: React.FC = () => {
     regenerate();
   };
 
-  // Calculate the last assistant message ID for the retry button
+  // Calculate the last assistant/user message IDs for retry buttons
   const lastAssistantMessageId = globalMessages
     .filter(m => m.role === 'assistant')
+    .slice(-1)[0]?.id;
+
+  const lastUserMessageId = globalMessages
+    .filter(m => m.role === 'user')
     .slice(-1)[0]?.id;
 
   // Show loading state until chat is properly initialized
@@ -485,6 +489,7 @@ const AssistantChatTab: React.FC = () => {
                   onDelete={handleDelete}
                   onRetry={handleRetry}
                   isLastAssistantMessage={message.id === lastAssistantMessageId}
+                  isLastUserMessage={message.id === lastUserMessageId}
                 />
               ))
             )}

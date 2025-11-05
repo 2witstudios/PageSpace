@@ -133,6 +133,7 @@ interface MessageRendererProps {
   onDelete?: (messageId: string) => Promise<void>;
   onRetry?: (messageId: string) => void;
   isLastAssistantMessage?: boolean;
+  isLastUserMessage?: boolean;
 }
 
 /**
@@ -144,11 +145,13 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
   onEdit,
   onDelete,
   onRetry,
-  isLastAssistantMessage = false
+  isLastAssistantMessage = false,
+  isLastUserMessage = false
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const canRetry = Boolean(onRetry) && (isLastAssistantMessage || isLastUserMessage);
   const groupedParts = useMemo(() => {
     if (!message.parts || message.parts.length === 0) {
       return [];
@@ -231,7 +234,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
   };
 
   const handleRetry = () => {
-    if (onRetry) {
+    if (onRetry && canRetry) {
       onRetry(message.id);
     }
   };
@@ -255,7 +258,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
                 editedAt={isLastTextBlock ? editedAt : undefined}
                 onEdit={onEdit ? () => setIsEditing(true) : undefined}
                 onDelete={onDelete ? () => setShowDeleteDialog(true) : undefined}
-                onRetry={onRetry && isLastAssistantMessage ? handleRetry : undefined}
+                onRetry={canRetry ? handleRetry : undefined}
                 isEditing={isEditing}
                 onSaveEdit={handleSaveEdit}
                 onCancelEdit={() => setIsEditing(false)}

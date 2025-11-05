@@ -23,6 +23,7 @@ interface CompactConversationMessageRendererProps {
   onDelete?: (messageId: string) => Promise<void>;
   onRetry?: (messageId: string) => void;
   isLastAssistantMessage?: boolean;
+  isLastUserMessage?: boolean;
 }
 
 /**
@@ -34,7 +35,8 @@ export const CompactConversationMessageRenderer: React.FC<CompactConversationMes
   onEdit,
   onDelete,
   onRetry,
-  isLastAssistantMessage = false
+  isLastAssistantMessage = false,
+  isLastUserMessage = false
 }) => {
   const [tasks, setTasks] = useState<Array<{
     id: string;
@@ -194,6 +196,7 @@ export const CompactConversationMessageRenderer: React.FC<CompactConversationMes
       onDelete={onDelete}
       onRetry={onRetry}
       isLastAssistantMessage={isLastAssistantMessage}
+      isLastUserMessage={isLastUserMessage}
     />
   );
 });

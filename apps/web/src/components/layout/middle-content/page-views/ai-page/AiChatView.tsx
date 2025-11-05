@@ -353,9 +353,13 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     }
   }, [page.id, currentConversationId, setMessages, conversationsKey]);
 
-  // Determine last assistant message for retry button visibility
+  // Determine last assistant/user message for retry button visibility
   const lastAssistantMessageId = messages
     .filter(m => m.role === 'assistant')
+    .slice(-1)[0]?.id;
+
+  const lastUserMessageId = messages
+    .filter(m => m.role === 'user')
     .slice(-1)[0]?.id;
 
   // Register streaming state with editing store (state-based protection)
@@ -762,6 +766,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                     onDelete={!isReadOnly ? handleDelete : undefined}
                     onRetry={!isReadOnly ? handleRetry : undefined}
                     isLastAssistantMessage={message.id === lastAssistantMessageId}
+                    isLastUserMessage={message.id === lastUserMessageId}
                   />
                 ))
               )}
