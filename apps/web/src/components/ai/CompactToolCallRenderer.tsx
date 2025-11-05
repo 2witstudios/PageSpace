@@ -225,31 +225,31 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
   // Render compact details when expanded
   const renderExpandedDetails = () => {
     if (!isExpanded) return null;
-    
+
     return (
-      <div className="mt-1 p-1.5 bg-gray-50 dark:bg-gray-800/50 rounded text-[10px] space-y-1">
+      <div className="mt-1 p-1.5 bg-gray-50 dark:bg-gray-800/50 rounded text-[10px] space-y-1 max-w-full overflow-hidden">
         {input ? (
-          <div className="space-y-0.5">
+          <div className="space-y-0.5 max-w-full overflow-hidden">
             <div className="font-medium text-gray-600 dark:text-gray-400">Input:</div>
-            <pre className="text-gray-500 dark:text-gray-500 overflow-x-auto whitespace-pre-wrap break-all">
+            <pre className="text-gray-500 dark:text-gray-500 overflow-x-auto whitespace-pre-wrap break-all max-w-full">
               {JSON.stringify(typeof input === 'string' ? JSON.parse(input) : input, null, 2)}
             </pre>
           </div>
         ) : null}
-        
+
         {output ? (
-          <div className="space-y-0.5">
+          <div className="space-y-0.5 max-w-full overflow-hidden">
             <div className="font-medium text-gray-600 dark:text-gray-400">Output:</div>
-            <pre className="text-gray-500 dark:text-gray-500 overflow-x-auto whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
+            <pre className="text-gray-500 dark:text-gray-500 overflow-x-auto whitespace-pre-wrap break-all max-h-32 overflow-y-auto max-w-full">
               {(() => {
                 try {
                   const result = typeof output === 'string' ? JSON.parse(output) : output;
-                  
+
                   // Special handling for read_page content
                   if (toolName === 'read_page' && result.content) {
                     return result.content.slice(0, 200) + (result.content.length > 200 ? '...' : '');
                   }
-                  
+
                   return JSON.stringify(result, null, 2);
                 } catch {
                   return typeof output === 'string' ? output : JSON.stringify(output, null, 2);
@@ -258,10 +258,10 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
             </pre>
           </div>
         ) : null}
-        
+
         {error ? (
-          <div className="p-1 bg-red-50 dark:bg-red-900/20 rounded">
-            <div className="text-red-600 dark:text-red-400">{error}</div>
+          <div className="p-1 bg-red-50 dark:bg-red-900/20 rounded max-w-full overflow-hidden">
+            <div className="text-red-600 dark:text-red-400 break-words">{error}</div>
           </div>
         ) : null}
       </div>
@@ -269,20 +269,20 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
   };
 
   return (
-    <div className="bg-gray-50 dark:bg-gray-800/30 rounded p-1.5 text-[11px]">
+    <div className="bg-gray-50 dark:bg-gray-800/30 rounded p-1.5 text-[11px] max-w-full overflow-hidden">
       <button
         onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full flex items-center space-x-1.5 text-left hover:bg-gray-100 dark:hover:bg-gray-700/30 rounded p-0.5 transition-colors"
+        className="w-full flex items-center space-x-1.5 text-left hover:bg-gray-100 dark:hover:bg-gray-700/30 rounded p-0.5 transition-colors max-w-full overflow-hidden"
       >
         {isExpanded ? <ChevronDown className="h-3 w-3 flex-shrink-0" /> : <ChevronRight className="h-3 w-3 flex-shrink-0" />}
-        {getToolIcon(toolName)}
+        <div className="flex-shrink-0">{getToolIcon(toolName)}</div>
         <span className="font-medium truncate flex-1 min-w-0">{formatToolName(toolName)}</span>
-        {getStatusIcon()}
+        <div className="flex-shrink-0">{getStatusIcon()}</div>
         <span className="text-gray-500 dark:text-gray-400 truncate max-w-[80px] min-w-0">
           {getCompactSummary()}
         </span>
       </button>
-      
+
       {renderExpandedDetails()}
     </div>
   );

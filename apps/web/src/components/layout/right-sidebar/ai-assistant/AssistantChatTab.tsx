@@ -465,9 +465,9 @@ const AssistantChatTab: React.FC = () => {
       </div>
 
       {/* Messages Area */}
-      <div className="flex-1 min-h-0 overflow-hidden">
-        <ScrollArea className="h-full p-3" ref={scrollAreaRef}>
-          <div className="space-y-3">
+      <div className="flex-1 min-h-0 overflow-hidden max-w-full">
+        <ScrollArea className="h-full p-3 max-w-full" ref={scrollAreaRef}>
+          <div className="space-y-3 max-w-full">
             {globalMessages.length === 0 ? (
               <div className="flex items-center justify-center h-20 text-muted-foreground text-xs text-center">
                 <div>

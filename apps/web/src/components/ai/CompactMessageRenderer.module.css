@@ -1,0 +1,91 @@
+/* Compact Message Renderer - Ensures all content respects sidebar width constraints */
+
+.compactProseContent {
+  /* Force all children to respect container width */
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Override prose defaults for code elements */
+.compactProseContent :is(code, pre, a, span, div, p) {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Inline code elements */
+.compactProseContent :not(pre) > code {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+/* Code blocks */
+.compactProseContent pre {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.compactProseContent pre code {
+  max-width: 100%;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* Links */
+.compactProseContent a {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  display: inline-block;
+}
+
+/* Tables */
+.compactProseContent table {
+  max-width: 100%;
+  display: block;
+  overflow-x: auto;
+  word-break: break-word;
+}
+
+.compactProseContent table td,
+.compactProseContent table th {
+  max-width: 200px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Lists */
+.compactProseContent ul,
+.compactProseContent ol {
+  max-width: 100%;
+}
+
+.compactProseContent li {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Blockquotes */
+.compactProseContent blockquote {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Images */
+.compactProseContent img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Any element with text content */
+.compactProseContent * {
+  max-width: 100%;
+}

@@ -1,6 +1,7 @@
 import { marked } from 'marked';
 import { memo, useMemo, ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
+import type { Components } from 'react-markdown';
 
 function parseMarkdownIntoBlocks(markdown: string): string[] {
   const tokens = marked.lexer(markdown);
@@ -11,6 +12,51 @@ function parseMarkdownIntoBlocks(markdown: string): string[] {
  * Process content to convert @mentions into visual badges
  * Converts @[Label](id:type) format to styled badges
  */
+/**
+ * Custom components for ReactMarkdown to ensure proper overflow handling
+ */
+const customComponents: Components = {
+  // Ensure code blocks are properly constrained
+  code: ({ inline, className, children, ...props }) => {
+    if (inline) {
+      return (
+        <code className={`${className || ''} max-w-full`} {...props}>
+          {children}
+        </code>
+      );
+    }
+    return (
+      <code className={`${className || ''} max-w-full block`} {...props}>
+        {children}
+      </code>
+    );
+  },
+  // Ensure pre blocks are properly constrained
+  pre: ({ children, ...props }) => (
+    <pre className="max-w-full overflow-x-auto" {...props}>
+      {children}
+    </pre>
+  ),
+  // Ensure links don't overflow
+  a: ({ children, ...props }) => (
+    <a className="max-w-full break-words inline-block" {...props}>
+      {children}
+    </a>
+  ),
+  // Ensure paragraphs don't overflow
+  p: ({ children, ...props }) => (
+    <p className="max-w-full break-words" {...props}>
+      {children}
+    </p>
+  ),
+  // Ensure tables are scrollable
+  table: ({ children, ...props }) => (
+    <div className="max-w-full overflow-x-auto">
+      <table {...props}>{children}</table>
+    </div>
+  ),
+};
+
 function processMentions(content: string): ReactNode[] {
   const mentionRegex = /@\[([^\]]+)\]\(([^:]+):([^)]+)\)/g;
   const elements: ReactNode[] = [];
@@ -21,15 +67,15 @@ function processMentions(content: string): ReactNode[] {
   while ((match = mentionRegex.exec(content)) !== null) {
     const [fullMatch, label] = match;
     const precedingText = content.slice(lastIndex, match.index);
-    
+
     if (precedingText) {
       elements.push(
-        <ReactMarkdown key={`text-${keyIndex++}`}>
+        <ReactMarkdown key={`text-${keyIndex++}`} components={customComponents}>
           {precedingText}
         </ReactMarkdown>
       );
     }
-    
+
     elements.push(
       <span
         key={`mention-${keyIndex++}`}
@@ -38,14 +84,14 @@ function processMentions(content: string): ReactNode[] {
         @{label}
       </span>
     );
-    
+
     lastIndex = match.index + fullMatch.length;
   }
 
   const remainingText = content.slice(lastIndex);
   if (remainingText) {
     elements.push(
-      <ReactMarkdown key={`text-${keyIndex++}`}>
+      <ReactMarkdown key={`text-${keyIndex++}`} components={customComponents}>
         {remainingText}
       </ReactMarkdown>
     );
@@ -53,7 +99,7 @@ function processMentions(content: string): ReactNode[] {
 
   // If no mentions found, return the content as-is with ReactMarkdown
   if (elements.length === 0) {
-    return [<ReactMarkdown key="content">{content}</ReactMarkdown>];
+    return [<ReactMarkdown key="content" components={customComponents}>{content}</ReactMarkdown>];
   }
 
   return elements;
