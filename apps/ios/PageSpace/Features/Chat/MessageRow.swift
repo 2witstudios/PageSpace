@@ -6,6 +6,7 @@ struct MessageRow: View {
     let onCopy: (() -> Void)?
     let onEdit: (() -> Void)?
     let onRetry: (() -> Void)?
+    let onDelete: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -32,6 +33,14 @@ struct MessageRow: View {
                             systemImage: "arrow.clockwise",
                             accessibilityLabel: "Retry response",
                             action: onRetry
+                        )
+                    }
+
+                    if let onDelete = onDelete {
+                        actionButton(
+                            systemImage: "trash",
+                            accessibilityLabel: "Delete message",
+                            action: onDelete
                         )
                     }
 
@@ -70,7 +79,7 @@ struct MessageRow: View {
     }
 
     private var hasActions: Bool {
-        onCopy != nil || onEdit != nil || onRetry != nil
+        onCopy != nil || onEdit != nil || onRetry != nil || onDelete != nil
     }
 
     private func actionButton(systemImage: String, accessibilityLabel: String, action: @escaping () -> Void) -> some View {
@@ -348,7 +357,8 @@ extension Theme {
             ),
             onCopy: nil,
             onEdit: nil,
-            onRetry: nil
+            onRetry: nil,
+            onDelete: nil
         )
 
         MessageRow(
@@ -396,7 +406,8 @@ And even [links](https://example.com) and tables:
             ),
             onCopy: nil,
             onEdit: nil,
-            onRetry: nil
+            onRetry: nil,
+            onDelete: nil
         )
     }
 }

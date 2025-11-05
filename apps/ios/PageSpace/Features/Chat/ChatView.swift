@@ -11,96 +11,12 @@ struct ChatView: View {
     @State private var editingContext: MessageEditContext?
     @State private var isSavingEdit = false
     @State private var alertMessage: String?
+    @State private var messagePendingDeletion: Message?
+    @State private var isShowingDeleteConfirmation = false
 
     var body: some View {
         VStack(spacing: 0) {
-            // Messages List
-            if conversationManager.isLoadingConversation {
-                // Show loading state while conversation loads
-                ProgressView("Loading conversation...")
-                    .frame(maxHeight: .infinity)
-            } else {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        let lastAssistantId = conversationManager.messages.last(where: { $0.role == .assistant })?.id
-                        let lastUserId = conversationManager.messages.last(where: { $0.role == .user })?.id
-
-                        LazyVStack(spacing: 16) {
-                            // Completed messages
-                            ForEach(conversationManager.messages) { message in
-                                let isLastAssistant = message.id == lastAssistantId
-                                let hasCopyAction = !plainText(from: message).isEmpty
-                                let canEditMessage = canEdit(message)
-                                let isLastUser = message.id == lastUserId
-                                let canRetryAssistant = message.role == .assistant && isLastAssistant && !conversationManager.isStreaming
-                                let canRetryUser = message.role == .user && isLastUser && !conversationManager.isStreaming
-                                let canRetryMessage = canRetryAssistant || canRetryUser
-                                if hasCopyAction || canEditMessage || canRetryMessage {
-                                    MessageRow(
-                                        message: message,
-                                        onCopy: hasCopyAction ? { copyMessage(from: message) } : nil,
-                                        onEdit: canEditMessage ? { presentEdit(for: message) } : nil,
-                                        onRetry: canRetryMessage ? {
-                                            Task {
-                                                await conversationManager.retryLastTurn()
-                                            }
-                                        } : nil
-                                    )
-                                    .id(message.id)
-                                    .contextMenu {
-                                        messageContextMenu(
-                                            for: message,
-                                            isLastAssistant: isLastAssistant,
-                                            isLastUser: isLastUser,
-                                            hasCopyAction: hasCopyAction,
-                                            canEditMessage: canEditMessage,
-                                            canRetryMessage: canRetryMessage
-                                        )
-                                    }
-                                } else {
-                                    MessageRow(
-                                        message: message,
-                                        onCopy: nil,
-                                        onEdit: nil,
-                                        onRetry: nil
-                                    )
-                                    .id(message.id)
-                                }
-                            }
-
-                            // Currently streaming message (separate from completed)
-                            if let streamingMessage = conversationManager.streamingMessage {
-                                MessageRow(
-                                    message: streamingMessage,
-                                    onCopy: nil,
-                                    onEdit: nil,
-                                    onRetry: nil
-                                )
-                                .id(streamingMessage.id)
-                                .opacity(0.95) // Subtle visual indicator
-                            }
-                        }
-                        .padding()
-                    }
-                    .scrollDismissesKeyboard(.immediately)
-                    .onChange(of: conversationManager.messages.count) { oldValue, newValue in
-                        // Auto-scroll to bottom when new messages arrive
-                        if let lastMessage = conversationManager.messages.last {
-                            withAnimation {
-                                proxy.scrollTo(lastMessage.id, anchor: .bottom)
-                            }
-                        }
-                    }
-                    .onChange(of: conversationManager.streamingMessage?.id) { oldValue, newValue in
-                        // Auto-scroll when streaming message appears or updates
-                        if let streamingId = newValue {
-                            withAnimation {
-                                proxy.scrollTo(streamingId, anchor: .bottom)
-                            }
-                        }
-                    }
-                }
-            }
+            messagesSection
 
             Divider()
 
@@ -239,9 +155,79 @@ struct ChatView: View {
         }, message: {
             Text(alertMessage ?? "")
         })
+        .confirmationDialog(
+            "Delete Message?",
+            isPresented: $isShowingDeleteConfirmation,
+            titleVisibility: .visible,
+            presenting: messagePendingDeletion
+        ) { message in
+            Button("Delete", role: .destructive) {
+                performDelete(for: message)
+            }
+            Button("Cancel", role: .cancel) {
+                messagePendingDeletion = nil
+            }
+        } message: { message in
+            Text("This will permanently remove the selected message from the conversation.")
+        }
     }
 
     // MARK: - Helper Methods
+
+    @ViewBuilder
+    private var messagesSection: some View {
+        if conversationManager.isLoadingConversation {
+            ProgressView("Loading conversation...")
+                .frame(maxHeight: .infinity)
+        } else {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    let lastAssistantId = conversationManager.messages.last(where: { $0.role == .assistant })?.id
+                    let lastUserId = conversationManager.messages.last(where: { $0.role == .user })?.id
+                    let canDeleteMessage = conversationManager.currentConversationId != nil
+
+                    LazyVStack(spacing: 16) {
+                        ForEach(conversationManager.messages) { message in
+                            messageRow(
+                                for: message,
+                                lastAssistantId: lastAssistantId,
+                                lastUserId: lastUserId,
+                                canDeleteMessage: canDeleteMessage
+                            )
+                        }
+
+                        if let streamingMessage = conversationManager.streamingMessage {
+                            MessageRow(
+                                message: streamingMessage,
+                                onCopy: nil,
+                                onEdit: nil,
+                                onRetry: nil,
+                                onDelete: nil
+                            )
+                            .id(streamingMessage.id)
+                            .opacity(0.95)
+                        }
+                    }
+                    .padding()
+                }
+                .scrollDismissesKeyboard(.immediately)
+                .onChange(of: conversationManager.messages.count) { _, _ in
+                    if let lastMessage = conversationManager.messages.last {
+                        withAnimation {
+                            proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                        }
+                    }
+                }
+                .onChange(of: conversationManager.streamingMessage?.id) { _, newValue in
+                    if let streamingId = newValue {
+                        withAnimation {
+                            proxy.scrollTo(streamingId, anchor: .bottom)
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     private func agentTypeLabel(_ type: String) -> String {
         switch type {
@@ -286,7 +272,8 @@ struct ChatView: View {
         isLastUser: Bool,
         hasCopyAction: Bool,
         canEditMessage: Bool,
-        canRetryMessage: Bool
+        canRetryMessage: Bool,
+        canDeleteMessage: Bool
     ) -> some View {
         if hasCopyAction {
             Button {
@@ -311,6 +298,14 @@ struct ChatView: View {
                 }
             } label: {
                 Label("Retry Response", systemImage: "arrow.clockwise")
+            }
+        }
+
+        if canDeleteMessage {
+            Button(role: .destructive) {
+                prepareToDelete(message)
+            } label: {
+                Label("Delete", systemImage: "trash")
             }
         }
     }
@@ -356,6 +351,82 @@ struct ChatView: View {
                 await MainActor.run {
                     alertMessage = "Failed to update message. \(error.localizedDescription)"
                     isSavingEdit = false
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func messageRow(
+        for message: Message,
+        lastAssistantId: String?,
+        lastUserId: String?,
+        canDeleteMessage: Bool
+    ) -> some View {
+        let isLastAssistant = message.id == lastAssistantId
+        let isLastUser = message.id == lastUserId
+        let hasCopyAction = !plainText(from: message).isEmpty
+        let canEditMessage = canEdit(message)
+        let canRetryAssistant = message.role == .assistant && isLastAssistant && !conversationManager.isStreaming
+        let canRetryUser = message.role == .user && isLastUser && !conversationManager.isStreaming
+        let canRetryMessage = canRetryAssistant || canRetryUser
+
+        if hasCopyAction || canEditMessage || canRetryMessage || canDeleteMessage {
+            MessageRow(
+                message: message,
+                onCopy: hasCopyAction ? { copyMessage(from: message) } : nil,
+                onEdit: canEditMessage ? { presentEdit(for: message) } : nil,
+                onRetry: canRetryMessage ? {
+                    Task {
+                        await conversationManager.retryLastTurn()
+                    }
+                } : nil,
+                onDelete: canDeleteMessage ? { prepareToDelete(message) } : nil
+            )
+            .id(message.id)
+            .contextMenu {
+                messageContextMenu(
+                    for: message,
+                    isLastAssistant: isLastAssistant,
+                    isLastUser: isLastUser,
+                    hasCopyAction: hasCopyAction,
+                    canEditMessage: canEditMessage,
+                    canRetryMessage: canRetryMessage,
+                    canDeleteMessage: canDeleteMessage
+                )
+            }
+        } else {
+            MessageRow(
+                message: message,
+                onCopy: nil,
+                onEdit: nil,
+                onRetry: nil,
+                onDelete: nil
+            )
+            .id(message.id)
+        }
+    }
+
+    private func prepareToDelete(_ message: Message) {
+        messagePendingDeletion = message
+        isShowingDeleteConfirmation = true
+    }
+
+    private func performDelete(for message: Message) {
+        isShowingDeleteConfirmation = false
+
+        Task {
+            do {
+                try await conversationManager.deleteMessage(messageId: message.id)
+                await MainActor.run {
+                    if messagePendingDeletion?.id == message.id {
+                        messagePendingDeletion = nil
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    messagePendingDeletion = nil
+                    alertMessage = "Failed to delete message. \(error.localizedDescription)"
                 }
             }
         }

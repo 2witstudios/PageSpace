@@ -19,93 +19,9 @@ struct FilesAgentChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Messages List
-            if conversationManager.isLoadingConversation {
-                // Show loading state while conversation loads
-                ProgressView("Loading conversation...")
-                    .frame(maxHeight: .infinity)
-            } else {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(spacing: 16) {
-                            // Completed messages
-                            ForEach(conversationManager.messages) { message in
-                                MessageRow(
-                                    message: message,
-                                    onCopy: nil,
-                                    onEdit: nil,
-                                    onRetry: nil
-                                )
-                                .id(message.id)
-                            }
-
-                            // Currently streaming message (separate from completed)
-                            if let streamingMessage = conversationManager.streamingMessage {
-                                MessageRow(
-                                    message: streamingMessage,
-                                    onCopy: nil,
-                                    onEdit: nil,
-                                    onRetry: nil
-                                )
-                                .id(streamingMessage.id)
-                                .opacity(0.95) // Subtle visual indicator
-                            }
-                        }
-                        .padding()
-                    }
-                    .scrollDismissesKeyboard(.immediately)
-                    .onChange(of: conversationManager.messages.count) { oldValue, newValue in
-                        // Auto-scroll to bottom when new messages arrive
-                        if let lastMessage = conversationManager.messages.last {
-                            withAnimation {
-                                proxy.scrollTo(lastMessage.id, anchor: .bottom)
-                            }
-                        }
-                    }
-                    .onChange(of: conversationManager.streamingMessage?.id) { oldValue, newValue in
-                        // Auto-scroll when streaming message appears or updates
-                        if let streamingId = newValue {
-                            withAnimation {
-                                proxy.scrollTo(streamingId, anchor: .bottom)
-                            }
-                        }
-                    }
-                }
-            }
-
+            messagesSection
             Divider()
-
-            // Input Area
-            HStack(spacing: 12) {
-                TextField("Message...", text: $messageText, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-                    .lineLimit(1...5)
-                    .disabled(conversationManager.isStreaming)
-
-                Button {
-                    Task {
-                        if conversationManager.isStreaming {
-                            conversationManager.stopStreaming()
-                        } else {
-                            await sendMessage()
-                        }
-                    }
-                } label: {
-                    if conversationManager.isStreaming {
-                        Image(systemName: "stop.circle.fill")
-                            .font(.system(size: 32))
-                            .foregroundColor(DesignTokens.Colors.error)
-                    } else {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.system(size: 32))
-                            .foregroundColor(canSend ? DesignTokens.Colors.primary : .gray)
-                    }
-                }
-                .disabled(!canSend && !conversationManager.isStreaming)
-                .accessibilityLabel(conversationManager.isStreaming ? "Stop generating" : "Send message")
-                .animation(.easeInOut(duration: 0.2), value: conversationManager.isStreaming)
-            }
-            .padding()
+            inputSection
         }
         .navigationTitle(page.title)
         .navigationBarTitleDisplayMode(.inline)
@@ -125,6 +41,103 @@ struct FilesAgentChatView: View {
     }
 
     // MARK: - Helper Methods
+
+    @ViewBuilder
+    private var messagesSection: some View {
+        if conversationManager.isLoadingConversation {
+            ProgressView("Loading conversation...")
+                .frame(maxHeight: .infinity)
+        } else {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    conversationMessageList
+                }
+                .scrollDismissesKeyboard(.immediately)
+                .onChange(of: conversationManager.messages.count) { _, _ in
+                    if let lastMessage = conversationManager.messages.last {
+                        withAnimation {
+                            proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                        }
+                    }
+                }
+                .onChange(of: conversationManager.streamingMessage?.id) { _, newValue in
+                    if let streamingId = newValue {
+                        withAnimation {
+                            proxy.scrollTo(streamingId, anchor: .bottom)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var conversationMessageList: some View {
+        let messages = conversationManager.messages
+        LazyVStack(spacing: 16) {
+            ForEach(messages) { message in
+                messageRow(for: message)
+            }
+
+            if let streamingMessage = conversationManager.streamingMessage {
+                MessageRow(
+                    message: streamingMessage,
+                    onCopy: nil,
+                    onEdit: nil,
+                    onRetry: nil,
+                    onDelete: nil
+                )
+                .id(streamingMessage.id)
+                .opacity(0.95) // Subtle visual indicator
+            }
+        }
+        .padding()
+    }
+
+    @ViewBuilder
+    private func messageRow(for message: Message) -> some View {
+        MessageRow(
+            message: message,
+            onCopy: nil,
+            onEdit: nil,
+            onRetry: nil,
+            onDelete: nil
+        )
+        .id(message.id)
+    }
+
+    private var inputSection: some View {
+        HStack(spacing: 12) {
+            TextField("Message...", text: $messageText, axis: .vertical)
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(1...5)
+                .disabled(conversationManager.isStreaming)
+
+            Button {
+                Task {
+                    if conversationManager.isStreaming {
+                        conversationManager.stopStreaming()
+                    } else {
+                        await sendMessage()
+                    }
+                }
+            } label: {
+                if conversationManager.isStreaming {
+                    Image(systemName: "stop.circle.fill")
+                        .font(.system(size: 32))
+                        .foregroundColor(DesignTokens.Colors.error)
+                } else {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 32))
+                        .foregroundColor(canSend ? DesignTokens.Colors.primary : .gray)
+                }
+            }
+            .disabled(!canSend && !conversationManager.isStreaming)
+            .accessibilityLabel(conversationManager.isStreaming ? "Stop generating" : "Send message")
+            .animation(.easeInOut(duration: 0.2), value: conversationManager.isStreaming)
+        }
+        .padding()
+    }
 
     private var canSend: Bool {
         !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !conversationManager.isStreaming
