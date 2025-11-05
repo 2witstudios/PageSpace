@@ -453,8 +453,8 @@ class ConversationManager: ObservableObject {
         }
     }
 
-    /// Retry the last assistant response by removing it and re-streaming from the last user message
-    func retryLastAssistantMessage() async {
+    /// Retry the last conversational turn by re-running from the most recent user message
+    func retryLastTurn() async {
         guard !isStreaming else {
             print("⚠️ Cannot retry while another stream is active")
             return
@@ -468,29 +468,26 @@ class ConversationManager: ObservableObject {
             return
         }
 
-        let assistantMessages = messages.suffix(from: messages.index(after: lastUserIndex))
-            .filter { $0.role == .assistant }
+        let trailingMessages = messages.suffix(from: messages.index(after: lastUserIndex))
+        let assistantMessages = trailingMessages.filter { $0.role == .assistant }
 
-        guard !assistantMessages.isEmpty else {
-            print("ℹ️ No assistant messages after the last user message to retry")
-            return
-        }
-
-        do {
-            for message in assistantMessages {
-                try await aiService.deleteMessage(
-                    conversationId: conversationId,
-                    messageId: message.id
-                )
+        if !assistantMessages.isEmpty {
+            do {
+                for message in assistantMessages {
+                    try await aiService.deleteMessage(
+                        conversationId: conversationId,
+                        messageId: message.id
+                    )
+                }
+            } catch {
+                self.error = "Failed to retry assistant message: \(error.localizedDescription)"
+                print("❌ Failed to delete assistant message(s) before retry: \(error)")
+                return
             }
-        } catch {
-            self.error = "Failed to retry assistant message: \(error.localizedDescription)"
-            print("❌ Failed to delete assistant message(s) before retry: \(error)")
-            return
-        }
 
-        let assistantIds = Set(assistantMessages.map { $0.id })
-        messages.removeAll { assistantIds.contains($0.id) }
+            let assistantIds = Set(assistantMessages.map { $0.id })
+            messages.removeAll { assistantIds.contains($0.id) }
+        }
 
         guard messages.last?.role == .user else {
             print("⚠️ After cleaning assistant replies, last message is not user. Aborting retry.")

@@ -23,6 +23,7 @@ struct ChatView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         let lastAssistantId = conversationManager.messages.last(where: { $0.role == .assistant })?.id
+                        let lastUserId = conversationManager.messages.last(where: { $0.role == .user })?.id
 
                         LazyVStack(spacing: 16) {
                             // Completed messages
@@ -30,7 +31,10 @@ struct ChatView: View {
                                 let isLastAssistant = message.id == lastAssistantId
                                 let hasCopyAction = !plainText(from: message).isEmpty
                                 let canEditMessage = canEdit(message)
-                                let canRetryMessage = message.role == .assistant && isLastAssistant && !conversationManager.isStreaming
+                                let isLastUser = message.id == lastUserId
+                                let canRetryAssistant = message.role == .assistant && isLastAssistant && !conversationManager.isStreaming
+                                let canRetryUser = message.role == .user && isLastUser && !conversationManager.isStreaming
+                                let canRetryMessage = canRetryAssistant || canRetryUser
                                 if hasCopyAction || canEditMessage || canRetryMessage {
                                     MessageRow(
                                         message: message,
@@ -38,7 +42,7 @@ struct ChatView: View {
                                         onEdit: canEditMessage ? { presentEdit(for: message) } : nil,
                                         onRetry: canRetryMessage ? {
                                             Task {
-                                                await conversationManager.retryLastAssistantMessage()
+                                                await conversationManager.retryLastTurn()
                                             }
                                         } : nil
                                     )
@@ -47,6 +51,7 @@ struct ChatView: View {
                                         messageContextMenu(
                                             for: message,
                                             isLastAssistant: isLastAssistant,
+                                            isLastUser: isLastUser,
                                             hasCopyAction: hasCopyAction,
                                             canEditMessage: canEditMessage,
                                             canRetryMessage: canRetryMessage
@@ -278,6 +283,7 @@ struct ChatView: View {
     private func messageContextMenu(
         for message: Message,
         isLastAssistant: Bool,
+        isLastUser: Bool,
         hasCopyAction: Bool,
         canEditMessage: Bool,
         canRetryMessage: Bool
@@ -298,10 +304,10 @@ struct ChatView: View {
             }
         }
 
-        if canRetryMessage && isLastAssistant {
+        if canRetryMessage && (isLastAssistant || isLastUser) {
             Button {
                 Task {
-                    await conversationManager.retryLastAssistantMessage()
+                    await conversationManager.retryLastTurn()
                 }
             } label: {
                 Label("Retry Response", systemImage: "arrow.clockwise")
