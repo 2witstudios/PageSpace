@@ -47,4 +47,7 @@ enum APIEndpoints {
     static func page(pageId: String) -> String {
         "/api/pages/\(pageId)"
     }
+
+    // MARK: - Search
+    static let search = "/api/search"
 }

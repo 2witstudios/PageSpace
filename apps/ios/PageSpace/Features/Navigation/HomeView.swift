@@ -56,6 +56,14 @@ struct HomeView: View {
                     MessagesListView()
                 case .files:
                     FilesView()
+                case .drive(let driveId):
+                    DriveDetailLoaderView(driveId: driveId)
+                case .page(let pageId):
+                    PageDetailView(pageId: pageId)
+                case .channel(let thread):
+                    ChannelChatView(thread: thread)
+                case .directMessage(let thread):
+                    DMConversationView(thread: thread)
                 }
             }
         }

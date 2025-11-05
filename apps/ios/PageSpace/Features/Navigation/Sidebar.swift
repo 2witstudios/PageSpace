@@ -13,6 +13,10 @@ enum SidebarDestination: Hashable {
     case agents
     case messages
     case files
+    case drive(String)
+    case page(String)
+    case channel(MessageThread)
+    case directMessage(MessageThread)
 }
 
 /// Left sliding sidebar with minimal, modern design
@@ -21,37 +25,58 @@ struct Sidebar: View {
     @Binding var isOpen: Bool
     @ObservedObject var agentService: AgentService
     @EnvironmentObject var authManager: AuthManager
+    @ObservedObject private var searchService = SearchService.shared
 
     // Navigation callback
     var onNavigate: (SidebarDestination) -> Void
 
     @State private var showSettings = false
+    @State private var searchText = ""
+    @State private var searchError: String?
+    @FocusState private var isSearchFieldFocused: Bool
+
+    private var isSearchActive: Bool {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Navigation Buttons Section
-            navigationButtons
+            // Search Field (above navigation)
+            searchField
                 .padding(.horizontal, DesignTokens.Spacing.large)
                 .padding(.top, DesignTokens.Spacing.large)
 
-            // Hairline separator
-            hairlineSeparator
-                .padding(.top, DesignTokens.Spacing.medium)
+            if isSearchActive {
+                searchResultsSection
+            } else {
+                // Hairline separator between search and navigation buttons
+                hairlineSeparator
+                    .padding(.top, DesignTokens.Spacing.medium)
 
-            // Recents Section Header
-            recentsHeader
-                .padding(.horizontal, DesignTokens.Spacing.large)
-                .padding(.top, DesignTokens.Spacing.sectionHeaderTop)
-                .padding(.bottom, DesignTokens.Spacing.sectionHeaderBottom)
+                // Navigation Buttons Section
+                navigationButtons
+                    .padding(.horizontal, DesignTokens.Spacing.large)
+                    .padding(.top, DesignTokens.Spacing.medium)
 
-            // Conversation List
-            ScrollView {
-                ConversationList(agentService: agentService, closeSidebar: {
-                    withAnimation(DesignTokens.Animation.sidebarSlide) {
-                        isOpen = false
-                    }
-                })
-                .padding(.horizontal, DesignTokens.Spacing.large)
+                // Hairline separator
+                hairlineSeparator
+                    .padding(.top, DesignTokens.Spacing.medium)
+
+                // Recents Section Header
+                recentsHeader
+                    .padding(.horizontal, DesignTokens.Spacing.large)
+                    .padding(.top, DesignTokens.Spacing.sectionHeaderTop)
+                    .padding(.bottom, DesignTokens.Spacing.sectionHeaderBottom)
+
+                // Conversation List
+                ScrollView {
+                    ConversationList(agentService: agentService, closeSidebar: {
+                        withAnimation(DesignTokens.Animation.sidebarSlide) {
+                            isOpen = false
+                        }
+                    })
+                    .padding(.horizontal, DesignTokens.Spacing.large)
+                }
             }
 
             // Hairline separator
@@ -66,6 +91,15 @@ struct Sidebar: View {
             // Load agents when sidebar appears
             if agentService.agents.isEmpty {
                 await agentService.loadAllAgents()
+            }
+        }
+        .onChange(of: searchText) { _, newValue in
+            searchError = nil
+            searchService.updateQuery(newValue)
+        }
+        .onChange(of: isOpen) { _, newValue in
+            if !newValue {
+                resetSearch()
             }
         }
     }
@@ -109,6 +143,320 @@ struct Sidebar: View {
                     }
                 }
             )
+        }
+    }
+
+    // MARK: - Search
+
+    private var searchField: some View {
+        HStack(spacing: DesignTokens.Spacing.small) {
+            Image(systemName: "magnifyingglass")
+                .foregroundColor(DesignTokens.Colors.mutedText)
+
+            TextField("Search pages, drives, and users", text: $searchText)
+                .focused($isSearchFieldFocused)
+                .textFieldStyle(.plain)
+                .disableAutocorrection(true)
+                .textInputAutocapitalization(.never)
+                .onSubmit {
+                    searchService.updateQuery(searchText)
+                }
+
+            if !searchText.isEmpty {
+                Button(action: {
+                    resetSearch()
+                }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(DesignTokens.Colors.mutedText)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.vertical, DesignTokens.Spacing.small)
+        .padding(.horizontal, DesignTokens.Spacing.medium)
+        .background(
+            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.large)
+                .fill(Color(uiColor: .systemGray6))
+        )
+    }
+
+    private var searchResultsSection: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                if searchService.isSearching {
+                    searchStatusRow(message: "Searching...", showSpinner: true)
+                } else {
+                    let errorMessage = searchError ?? searchService.errorMessage
+
+                    if let errorMessage {
+                        searchStatusRow(
+                            icon: "exclamationmark.triangle.fill",
+                            message: errorMessage,
+                            color: DesignTokens.Colors.error
+                        )
+                    }
+
+                    if searchService.results.isEmpty {
+                        if errorMessage == nil {
+                            searchStatusRow(icon: "questionmark.circle", message: "No matches found")
+                        }
+                    } else {
+                        ForEach(Array(searchService.results.enumerated()), id: \.element.id) { index, result in
+                            SearchResultRow(
+                                iconName: iconName(for: result),
+                                accentColor: accentColor(for: result),
+                                title: result.title,
+                                subtitle: subtitle(for: result),
+                                badge: badgeLabel(for: result)
+                            ) {
+                                handleSearchSelection(result)
+                            }
+
+                            if index < searchService.results.count - 1 {
+                                Rectangle()
+                                    .fill(DesignTokens.Colors.separator)
+                                    .frame(height: 0.5)
+                                    .padding(.leading, DesignTokens.Spacing.large + DesignTokens.IconSize.large + DesignTokens.Spacing.small)
+                            }
+                        }
+                    }
+                }
+
+                Spacer(minLength: DesignTokens.Spacing.xlarge)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, DesignTokens.Spacing.large)
+            .padding(.top, DesignTokens.Spacing.small)
+            .padding(.bottom, DesignTokens.Spacing.medium)
+        }
+    }
+
+    @ViewBuilder
+    private func searchStatusRow(
+        icon: String? = nil,
+        message: String,
+        color: Color = DesignTokens.Colors.mutedText,
+        showSpinner: Bool = false
+    ) -> some View {
+        HStack(spacing: DesignTokens.Spacing.small) {
+            if showSpinner {
+                ProgressView()
+                    .scaleEffect(0.75)
+            } else if let icon {
+                Image(systemName: icon)
+                    .foregroundColor(color)
+                    .font(.system(size: DesignTokens.IconSize.medium))
+            }
+
+            Text(message)
+                .font(.caption)
+                .foregroundColor(color)
+                .multilineTextAlignment(.leading)
+
+            Spacer()
+        }
+        .padding(.horizontal, DesignTokens.Spacing.large)
+        .padding(.top, DesignTokens.Spacing.small)
+    }
+
+    private func handleSearchSelection(_ result: SearchResult) {
+        switch result.type {
+        case .drive:
+            onNavigate(.drive(result.id))
+            closeSidebarAndReset()
+        case .page:
+            handlePageSelection(result)
+        case .user:
+            handleUserSelection(result)
+        }
+    }
+
+    private func handlePageSelection(_ result: SearchResult) {
+        guard let pageType = result.pageType else {
+            navigateToPageDetail(result.id)
+            return
+        }
+
+        switch pageType {
+        case .aiChat:
+            openAIChat(pageId: result.id)
+        case .channel:
+            openChannel(result)
+        default:
+            navigateToPageDetail(result.id)
+        }
+    }
+
+    private func handleUserSelection(_ result: SearchResult) {
+        searchError = nil
+        Task {
+            await openDirectMessage(for: result)
+        }
+    }
+
+    private func openAIChat(pageId: String) {
+        if let agent = agentService.agents.first(where: { $0.pageId == pageId }) {
+            agentService.selectAgent(agent)
+            closeSidebarAndReset()
+        } else {
+            navigateToPageDetail(pageId)
+        }
+    }
+
+    private func openChannel(_ result: SearchResult) {
+        let thread = MessageThread(
+            id: result.id,
+            type: .channel,
+            title: result.title,
+            subtitle: result.driveName,
+            lastMessage: nil,
+            lastMessageAt: Date(),
+            unreadCount: nil,
+            avatarUrl: nil,
+            otherUserId: nil,
+            otherUser: nil,
+            pageId: result.id,
+            driveId: result.driveId,
+            driveName: result.driveName
+        )
+
+        onNavigate(.channel(thread))
+        closeSidebarAndReset()
+    }
+
+    private func navigateToPageDetail(_ pageId: String) {
+        onNavigate(.page(pageId))
+        closeSidebarAndReset()
+    }
+
+    private func closeSidebarAndReset() {
+        withAnimation(DesignTokens.Animation.sidebarSlide) {
+            isOpen = false
+        }
+        resetSearch()
+    }
+
+    private func resetSearch() {
+        searchText = ""
+        searchError = nil
+        searchService.clearResults()
+        isSearchFieldFocused = false
+    }
+
+    private func iconName(for result: SearchResult) -> String {
+        switch result.type {
+        case .drive:
+            return "externaldrive"
+        case .user:
+            return "person.circle.fill"
+        case .page:
+            guard let pageType = result.pageType else { return "doc.text" }
+            switch pageType {
+            case .document:
+                return "doc.text"
+            case .folder:
+                return "folder"
+            case .channel:
+                return "number"
+            case .aiChat:
+                return "bubble.left.and.text.bubble.right"
+            case .canvas:
+                return "sparkles"
+            case .file:
+                return "doc.richtext"
+            case .sheet:
+                return "tablecells"
+            }
+        }
+    }
+
+    private func accentColor(for result: SearchResult) -> Color {
+        switch result.type {
+        case .drive:
+            return DesignTokens.Colors.brandBlue
+        case .user:
+            return DesignTokens.Colors.mutedText
+        case .page:
+            guard let pageType = result.pageType else {
+                return DesignTokens.Colors.brandBlue
+            }
+            switch pageType {
+            case .channel:
+                return DesignTokens.Colors.channel
+            case .aiChat:
+                return DesignTokens.Colors.brandBlueDark
+            default:
+                return DesignTokens.Colors.brandBlue
+            }
+        }
+    }
+
+    private func badgeLabel(for result: SearchResult) -> String? {
+        switch result.type {
+        case .drive:
+            return "Drive"
+        case .user:
+            return "User"
+        case .page:
+            guard let pageType = result.pageType else { return "Page" }
+            switch pageType {
+            case .document:
+                return "Document"
+            case .folder:
+                return "Folder"
+            case .channel:
+                return "Channel"
+            case .aiChat:
+                return "AI Chat"
+            case .canvas:
+                return "Canvas"
+            case .file:
+                return "File"
+            case .sheet:
+                return "Sheet"
+            }
+        }
+    }
+
+    private func subtitle(for result: SearchResult) -> String? {
+        switch result.type {
+        case .drive:
+            return result.description
+        case .user:
+            return result.description
+        case .page:
+            if let driveName = result.driveName {
+                return driveName
+            }
+            return result.description
+        }
+    }
+
+    private func openDirectMessage(for result: SearchResult) async {
+        let dmService = MessagesManager.shared.directMessagesService
+
+        do {
+            let conversation = try await dmService.createConversation(recipientId: result.id)
+            let currentUserId = authManager.currentUser?.id ?? ""
+            let thread = MessageThread.from(conversation: conversation, currentUserId: currentUserId)
+
+            await MainActor.run {
+                let manager = MessagesManager.shared
+
+                if let existingIndex = manager.threads.firstIndex(where: { $0.id == thread.id }) {
+                    manager.threads[existingIndex] = thread
+                } else {
+                    manager.threads.insert(thread, at: 0)
+                }
+
+                onNavigate(.directMessage(thread))
+                closeSidebarAndReset()
+            }
+        } catch {
+            await MainActor.run {
+                searchError = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            }
         }
     }
 
@@ -225,7 +573,64 @@ struct Sidebar: View {
     }
 }
 
+// MARK: - Search Result Row
+
 // MARK: - Ghost Navigation Button Component
+
+/// Minimal ghost button for sidebar navigation - inspired by Claude Code
+private struct SearchResultRow: View {
+    let iconName: String
+    let accentColor: Color
+    let title: String
+    let subtitle: String?
+    let badge: String?
+    let action: () -> Void
+
+    @State private var isPressed = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: DesignTokens.Spacing.medium) {
+                Image(systemName: iconName)
+                    .font(.system(size: DesignTokens.IconSize.medium))
+                    .foregroundColor(accentColor)
+                    .frame(width: DesignTokens.IconSize.large, alignment: .center)
+
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.xxxsmall) {
+                    Text(title)
+                        .font(.body)
+                        .fontWeight(.medium)
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundColor(DesignTokens.Colors.mutedText)
+                            .lineLimit(1)
+                    }
+                }
+
+                Spacer()
+
+                if let badge {
+                    Text(badge)
+                        .font(.caption2)
+                        .foregroundColor(DesignTokens.Colors.mutedText)
+                        .padding(.horizontal, DesignTokens.Spacing.xxsmall)
+                        .padding(.vertical, DesignTokens.Spacing.xxxsmall)
+                        .background(DesignTokens.Colors.separator.opacity(0.8))
+                        .cornerRadius(DesignTokens.CornerRadius.small)
+                }
+            }
+            .padding(.vertical, DesignTokens.Spacing.small)
+            .padding(.horizontal, DesignTokens.Spacing.sidebarItemHorizontal)
+            .background(isPressed ? DesignTokens.Colors.hoverBackground : Color.clear)
+            .cornerRadius(DesignTokens.CornerRadius.large)
+        }
+        .buttonStyle(GhostButtonStyle(isPressed: $isPressed))
+    }
+}
 
 /// Minimal ghost button for sidebar navigation - inspired by Claude Code
 /// No background by default, subtle hover states, clean typography
