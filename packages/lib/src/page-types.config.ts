@@ -20,14 +20,14 @@ export interface PageTypeConfig {
   type: PageType;
   displayName: string;
   description: string;
-  iconName: 'Folder' | 'FileText' | 'MessageSquare' | 'Sparkles' | 'Palette' | 'FileIcon' | 'Table';
+  iconName: 'Folder' | 'FileText' | 'MessageSquare' | 'Sparkles' | 'Palette' | 'FileIcon' | 'Table' | 'CheckSquare';
   emoji: string;
   capabilities: PageTypeCapabilities;
   defaultContent: () => any;
   allowedChildTypes: PageType[];
   apiValidation?: PageTypeApiValidation;
   uiComponent: string;
-  layoutViewType: 'document' | 'folder' | 'channel' | 'ai' | 'canvas';
+  layoutViewType: 'document' | 'folder' | 'channel' | 'ai' | 'canvas' | 'task';
 }
 
 export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
@@ -167,6 +167,28 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     uiComponent: 'SheetView',
     layoutViewType: 'document',
   },
+  [PageType.TASK]: {
+    type: PageType.TASK,
+    displayName: 'Task',
+    description: 'Track work items with assignments, due dates, and status',
+    iconName: 'CheckSquare',
+    emoji: '✓',
+    capabilities: {
+      canHaveChildren: true,
+      canAcceptUploads: true,
+      canBeConverted: false,
+      supportsRealtime: true,
+      supportsVersioning: false,
+      supportsAI: false,
+    },
+    defaultContent: () => '',
+    allowedChildTypes: [PageType.FILE, PageType.TASK],
+    apiValidation: {
+      optionalFields: ['assigneeId', 'assignerId', 'status', 'priority', 'dueDate', 'startDate', 'estimatedHours', 'labels'],
+    },
+    uiComponent: 'TaskView',
+    layoutViewType: 'task',
+  },
 };
 
 // Helper functions
@@ -260,4 +282,8 @@ export function isChannelPage(type: PageType): boolean {
 
 export function isAIChatPage(type: PageType): boolean {
   return type === PageType.AI_CHAT;
+}
+
+export function isTaskPage(type: PageType): boolean {
+  return type === PageType.TASK;
 }
