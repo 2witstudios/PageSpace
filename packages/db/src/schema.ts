@@ -13,6 +13,7 @@ export * from './schema/social';
 export * from './schema/subscriptions';
 export * from './schema/contact';
 export * from './schema/storage';
+export * from './schema/github';
 
 import * as auth from './schema/auth';
 import * as core from './schema/core';
@@ -29,6 +30,7 @@ import * as social from './schema/social';
 import * as subscriptions from './schema/subscriptions';
 import * as contact from './schema/contact';
 import * as storage from './schema/storage';
+import * as github from './schema/github';
 
 export const schema = {
   ...auth,
@@ -46,4 +48,5 @@ export const schema = {
   ...subscriptions,
   ...contact,
   ...storage,
+  ...github,
 };
