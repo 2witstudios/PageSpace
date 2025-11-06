@@ -1,11 +1,12 @@
 import { NextResponse } from 'next/server';
-import { db, drives, pages, users, and, eq, desc } from '@pagespace/db';
+import { db, drives, pages, users, taskMetadata, and, eq, desc } from '@pagespace/db';
 import {
   validatePageCreation,
   validateAIChatTools,
   getDefaultContent,
   PageType as PageTypeEnum,
   isAIChatPage,
+  isTaskPage,
   isDriveOwnerOrAdmin,
 } from '@pagespace/lib';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
@@ -34,6 +35,14 @@ export async function POST(request: Request) {
       enabledTools,
       aiProvider,
       aiModel,
+      // Task-specific fields
+      assigneeId,
+      status,
+      priority,
+      dueDate,
+      startDate,
+      estimatedHours,
+      labels,
     } = await request.json();
 
     if (!title || !type || !driveId) {
@@ -87,6 +96,24 @@ export async function POST(request: Request) {
       }
     }
 
+    // Validate task assignee if provided
+    if (isTaskPage(type) && assigneeId) {
+      const { driveMembers } = await import('@pagespace/db');
+      const assignee = await db.query.driveMembers.findFirst({
+        where: and(
+          eq(driveMembers.driveId, driveId),
+          eq(driveMembers.userId, assigneeId)
+        ),
+      });
+
+      if (!assignee) {
+        return NextResponse.json(
+          { error: 'Assignee must be a member of the drive' },
+          { status: 400 }
+        );
+      }
+    }
+
     let defaultAiProvider: string | null = null;
     let defaultAiModel: string | null = null;
 
@@ -108,7 +135,7 @@ export async function POST(request: Request) {
     const newPage = await db.transaction(async (tx) => {
       interface APIPageInsertData {
         title: string;
-        type: 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'SHEET';
+        type: 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'SHEET' | 'TASK';
         parentId: string | null;
         driveId: string;
         content: string;
@@ -122,7 +149,7 @@ export async function POST(request: Request) {
 
       const pageData: APIPageInsertData = {
         title,
-        type: type as 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'SHEET',
+        type: type as 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'SHEET' | 'TASK',
         parentId,
         driveId: drive.id,
         content: content || getDefaultContent(type as PageTypeEnum),
@@ -143,6 +170,24 @@ export async function POST(request: Request) {
       }
 
       const [page] = await tx.insert(pages).values(pageData).returning();
+
+      // Create task metadata if this is a TASK page
+      if (isTaskPage(type)) {
+        await tx.insert(taskMetadata).values({
+          pageId: page.id,
+          assigneeId: assigneeId || null,
+          assignerId: userId,
+          status: status || 'pending',
+          priority: priority || 'medium',
+          dueDate: dueDate ? new Date(dueDate) : null,
+          startDate: startDate ? new Date(startDate) : null,
+          estimatedHours: estimatedHours || null,
+          labels: labels || [],
+          customFields: {},
+          updatedAt: new Date(),
+        });
+      }
+
       return page;
     });
 
