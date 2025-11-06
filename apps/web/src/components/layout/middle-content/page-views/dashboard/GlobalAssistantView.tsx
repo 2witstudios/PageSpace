@@ -11,7 +11,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Loader2, Send, Settings, Plus, History, StopCircle, Server } from 'lucide-react';
 import { MessageRenderer } from '@/components/ai/MessageRenderer';
 import { AgentRole, AgentRoleUtils } from '@/lib/ai/agent-roles';
-import { RoleSelector } from '@/components/ai/RoleSelector';
+import { AgentModeSelector } from '@/components/ai/AgentModeSelector';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth, patch, del } from '@/lib/auth-fetch';
@@ -69,6 +69,8 @@ const GlobalAssistantView: React.FC = () => {
     isInitialized,
     createNewConversation,
     refreshConversation,
+    selectedAgent,
+    isAgentMode,
   } = useGlobalChat();
 
   // Local state for component-specific concerns
@@ -519,13 +521,14 @@ const GlobalAssistantView: React.FC = () => {
         </div>
       </div>
 
-      {/* Role Selector Header */}
-      <div className="flex items-center p-4 border-b border-gray-200 dark:border-[var(--separator)]">
-        <RoleSelector
+      {/* Agent Mode Selector Header */}
+      <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-[var(--separator)]">
+        <AgentModeSelector
+          currentMode={isAgentMode ? 'agent' : 'role'}
           currentRole={currentAgentRole}
           onRoleChange={setCurrentAgentRole}
           disabled={status === 'streaming'}
-          size="sm"
+          variant="detailed"
         />
       </div>
 
@@ -556,8 +559,15 @@ const GlobalAssistantView: React.FC = () => {
                   </div>
                 </div>
               ) : globalMessages.length === 0 ? (
-                <div className="flex items-center justify-center h-32 text-muted-foreground">
-                  <p>Welcome to your Global Assistant! Ask me anything about your workspace.</p>
+                <div className="flex flex-col items-center justify-center h-32 text-center text-muted-foreground px-4">
+                  {isAgentMode && selectedAgent ? (
+                    <>
+                      <p className="font-medium">Welcome to {selectedAgent.title || 'your custom agent'}!</p>
+                      <p className="text-sm mt-2">This conversation uses your custom agent's personality and tools.</p>
+                    </>
+                  ) : (
+                    <p>Welcome to your Global Assistant! Ask me anything about your workspace.</p>
+                  )}
                 </div>
               ) : (
                 globalMessages.map(message => (
@@ -576,7 +586,9 @@ const GlobalAssistantView: React.FC = () => {
               {globalIsStreaming && !isLoading && (
                 <div className="mb-4 p-3 rounded-lg bg-gray-50 dark:bg-gray-800/50 mr-8">
                   <div className="text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
-                    Global Assistant
+                    {isAgentMode && selectedAgent
+                      ? selectedAgent.title || 'Custom Agent'
+                      : 'Global Assistant'}
                   </div>
                   <div className="flex items-center space-x-2 text-gray-500">
                     <Loader2 className="h-4 w-4 animate-spin" />

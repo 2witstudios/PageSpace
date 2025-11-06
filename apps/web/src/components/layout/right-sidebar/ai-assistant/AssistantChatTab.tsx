@@ -7,7 +7,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Loader2, Send, Plus, StopCircle } from 'lucide-react';
 import { CompactConversationMessageRenderer } from '@/components/ai/CompactConversationMessageRenderer';
 import { AgentRole, AgentRoleUtils } from '@/lib/ai/agent-roles';
-import { AgentRoleDropdownCompact } from '@/components/ai/AgentRoleDropdown';
+import { AgentModeSelector } from '@/components/ai/AgentModeSelector';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth, patch, del } from '@/lib/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
@@ -58,6 +58,8 @@ const AssistantChatTab: React.FC = () => {
     isInitialized,
     createNewConversation,
     refreshConversation,
+    selectedAgent,
+    isAgentMode,
   } = useGlobalChat();
 
   // Local state for component-specific concerns
@@ -536,12 +538,14 @@ const AssistantChatTab: React.FC = () => {
           </div>
         )}
         
-        {/* Role Selector Row */}
+        {/* Agent Mode Selector Row */}
         <div className="px-1">
-          <AgentRoleDropdownCompact
+          <AgentModeSelector
+            currentMode={isAgentMode ? 'agent' : 'role'}
             currentRole={currentAgentRole}
             onRoleChange={setCurrentAgentRole}
             disabled={status === 'streaming'}
+            variant="compact"
           />
         </div>
         

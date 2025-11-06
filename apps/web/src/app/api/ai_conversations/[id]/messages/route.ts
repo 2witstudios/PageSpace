@@ -462,22 +462,75 @@ export async function POST(
     
     const modelMessages = convertToModelMessages(processedMessages);
 
-    // Build role-aware system prompt with context
-    const contextType = locationContext?.currentPage ? 'page' : 
-                       locationContext?.currentDrive ? 'drive' : 
+    // Check if conversation is linked to a custom agent
+    let agentConfiguration: {
+      systemPrompt: string | null;
+      enabledTools: string[];
+      aiProvider: string;
+      aiModel: string;
+    } | null = null;
+
+    if (conversation.agentPageId) {
+      loggers.api.debug('🤖 Using custom agent configuration', { agentPageId: conversation.agentPageId });
+
+      // Fetch the agent page configuration
+      const { pages: pagesTable } = await import('@pagespace/db');
+      const [agentPage] = await db
+        .select({
+          systemPrompt: pagesTable.systemPrompt,
+          enabledTools: pagesTable.enabledTools,
+          aiProvider: pagesTable.aiProvider,
+          aiModel: pagesTable.aiModel,
+        })
+        .from(pagesTable)
+        .where(and(
+          eq(pagesTable.id, conversation.agentPageId),
+          eq(pagesTable.type, 'AI_CHAT'),
+          eq(pagesTable.isTrashed, false)
+        ));
+
+      if (agentPage) {
+        agentConfiguration = {
+          systemPrompt: agentPage.systemPrompt,
+          enabledTools: Array.isArray(agentPage.enabledTools) ? agentPage.enabledTools : [],
+          aiProvider: agentPage.aiProvider || 'default',
+          aiModel: agentPage.aiModel || 'default',
+        };
+        loggers.api.debug('✅ Loaded agent configuration', {
+          hasSystemPrompt: !!agentConfiguration.systemPrompt,
+          toolCount: agentConfiguration.enabledTools.length
+        });
+      } else {
+        loggers.api.warn('⚠️ Agent page not found or inaccessible', { agentPageId: conversation.agentPageId });
+      }
+    }
+
+    // Build system prompt based on mode (agent or role)
+    const contextType = locationContext?.currentPage ? 'page' :
+                       locationContext?.currentDrive ? 'drive' :
                        'dashboard';
-    
-    const baseSystemPrompt = RolePromptBuilder.buildSystemPrompt(
-      agentRole,
-      contextType,
-      locationContext ? {
-        driveName: locationContext.currentDrive?.name,
-        driveSlug: locationContext.currentDrive?.slug,
-        pagePath: locationContext.currentPage?.path,
-        pageType: locationContext.currentPage?.type,
-        breadcrumbs: locationContext.breadcrumbs,
-      } : undefined
-    );
+
+    let baseSystemPrompt: string;
+
+    if (agentConfiguration && agentConfiguration.systemPrompt) {
+      // Use custom agent's system prompt
+      baseSystemPrompt = agentConfiguration.systemPrompt;
+      loggers.api.debug('📝 Using custom agent system prompt', { length: baseSystemPrompt.length });
+    } else {
+      // Use role-based system prompt
+      baseSystemPrompt = RolePromptBuilder.buildSystemPrompt(
+        agentRole,
+        contextType,
+        locationContext ? {
+          driveName: locationContext.currentDrive?.name,
+          driveSlug: locationContext.currentDrive?.slug,
+          pagePath: locationContext.currentPage?.path,
+          pageType: locationContext.currentPage?.type,
+          breadcrumbs: locationContext.breadcrumbs,
+        } : undefined
+      );
+      loggers.api.debug('📝 Using role-based system prompt', { role: agentRole });
+    }
 
     // Build timestamp system prompt for temporal awareness
     const timestampSystemPrompt = buildTimestampSystemPrompt();
@@ -548,8 +601,30 @@ MENTION PROCESSING:
 • Let mentioned document content inform and enrich your response
 • Don't explicitly mention that you're reading @mentioned docs unless relevant to the conversation`;
 
-    // Filter tools based on agent role permissions
-    let finalTools = ToolPermissionFilter.filterTools(pageSpaceTools, agentRole);
+    // Filter tools based on agent configuration or role permissions
+    let finalTools: Record<string, unknown>;
+
+    if (agentConfiguration && agentConfiguration.enabledTools.length > 0) {
+      // Use custom agent's enabled tools
+      const enabledToolNames = agentConfiguration.enabledTools;
+      finalTools = Object.fromEntries(
+        Object.entries(pageSpaceTools).filter(([toolName]) =>
+          enabledToolNames.includes(toolName)
+        )
+      );
+      loggers.api.debug('🔧 Filtered tools for custom agent', {
+        totalTools: Object.keys(pageSpaceTools).length,
+        enabledTools: Object.keys(finalTools).length,
+        toolNames: Object.keys(finalTools)
+      });
+    } else {
+      // Use role-based tool filtering
+      finalTools = ToolPermissionFilter.filterTools(pageSpaceTools, agentRole);
+      loggers.api.debug('🔧 Filtered tools for role', {
+        role: agentRole,
+        toolCount: Object.keys(finalTools).length
+      });
+    }
 
     // Merge MCP tools if provided
     if (mcpTools && mcpTools.length > 0) {

@@ -5,6 +5,16 @@ import { DefaultChatTransport, UIMessage } from 'ai';
 import { fetchWithAuth } from '@/lib/auth-fetch';
 import { conversationState } from '@/lib/ai/conversation-state';
 
+interface AgentConfig {
+  id: string;
+  title: string | null;
+  systemPrompt: string | null;
+  enabledTools: string[];
+  aiProvider: string;
+  aiModel: string;
+  driveId: string;
+}
+
 interface GlobalChatContextValue {
   // Shared chat configuration for creating Chat instances
   // Each component creates its own Chat instance with this config
@@ -32,6 +42,14 @@ interface GlobalChatContextValue {
   initialMessages: UIMessage[];
   isInitialized: boolean;
 
+  // Agent mode state
+  selectedAgent: AgentConfig | null;
+  isAgentMode: boolean; // true if an agent is selected, false for default modes
+  availableAgents: AgentConfig[];
+  loadSelectedAgent: () => Promise<void>;
+  setSelectedAgent: (agentId: string | null) => Promise<void>;
+  loadAvailableAgents: () => Promise<void>;
+
   // Methods to manage conversation state
   setCurrentConversationId: (id: string | null) => void;
   loadConversation: (id: string) => Promise<void>;
@@ -56,6 +74,78 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
 
   // Global stop function - allows ANY view to stop the active stream
   const [stopStreaming, setStopStreaming] = useState<(() => void) | null>(null);
+
+  // Agent mode state
+  const [selectedAgent, setSelectedAgentState] = useState<AgentConfig | null>(null);
+  const [availableAgents, setAvailableAgents] = useState<AgentConfig[]>([]);
+
+  // Computed: are we in agent mode?
+  const isAgentMode = selectedAgent !== null;
+
+  /**
+   * Load the user's selected global agent from the API
+   */
+  const loadSelectedAgent = useCallback(async () => {
+    try {
+      const response = await fetchWithAuth('/api/user/global-agent');
+      if (response.ok) {
+        const data = await response.json();
+        if (data.selectedAgent) {
+          setSelectedAgentState(data.selectedAgent);
+        } else {
+          setSelectedAgentState(null);
+        }
+      } else {
+        console.error('Failed to load selected agent');
+        setSelectedAgentState(null);
+      }
+    } catch (error) {
+      console.error('Error loading selected agent:', error);
+      setSelectedAgentState(null);
+    }
+  }, []);
+
+  /**
+   * Load all available agents the user has access to
+   */
+  const loadAvailableAgents = useCallback(async () => {
+    try {
+      const response = await fetchWithAuth('/api/user/agents');
+      if (response.ok) {
+        const data = await response.json();
+        setAvailableAgents(data.agents || []);
+      } else {
+        console.error('Failed to load available agents');
+        setAvailableAgents([]);
+      }
+    } catch (error) {
+      console.error('Error loading available agents:', error);
+      setAvailableAgents([]);
+    }
+  }, []);
+
+  /**
+   * Set the user's selected global agent
+   * Pass null to clear the selection
+   */
+  const setSelectedAgent = useCallback(async (agentId: string | null) => {
+    try {
+      const response = await fetchWithAuth('/api/user/global-agent', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setSelectedAgentState(data.selectedAgent);
+      } else {
+        console.error('Failed to set selected agent');
+      }
+    } catch (error) {
+      console.error('Error setting selected agent:', error);
+    }
+  }, []);
 
   /**
    * Load a conversation by ID
@@ -100,6 +190,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     try {
       const newConversation = await conversationState.createAndSetActiveConversation({
         type: 'global',
+        agentPageId: selectedAgent?.id || null, // Link to selected agent if any
       });
 
       if (newConversation && newConversation.id) {
@@ -118,7 +209,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error('Failed to create new conversation:', error);
     }
-  }, []);
+  }, [selectedAgent]);
 
   /**
    * Refresh the current conversation (re-fetch messages)
@@ -135,6 +226,9 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const initializeGlobalChat = async () => {
       try {
+        // Load selected agent first
+        await loadSelectedAgent();
+
         // Check URL for conversation ID
         const urlParams = new URLSearchParams(window.location.search);
         const urlConversationId = urlParams.get('c');
@@ -218,6 +312,12 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     currentConversationId,
     initialMessages,
     isInitialized,
+    selectedAgent,
+    isAgentMode,
+    availableAgents,
+    loadSelectedAgent,
+    setSelectedAgent,
+    loadAvailableAgents,
     setCurrentConversationId,
     loadConversation,
     createNewConversation,
@@ -230,6 +330,12 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     currentConversationId,
     initialMessages,
     isInitialized,
+    selectedAgent,
+    isAgentMode,
+    availableAgents,
+    loadSelectedAgent,
+    setSelectedAgent,
+    loadAvailableAgents,
     loadConversation,
     createNewConversation,
     refreshConversation,
