@@ -65,7 +65,7 @@ struct ConversationList: View {
     private func conversationRow(_ conversation: Conversation) -> some View {
         ConversationRowButton(
             conversation: conversation,
-            isSelected: conversationManager.currentConversation?.id == conversation.id,
+            isSelected: conversationManager.conversationState.currentConversation?.id == conversation.id,
             action: {
                 Task {
                     // Load this conversation in the chat view

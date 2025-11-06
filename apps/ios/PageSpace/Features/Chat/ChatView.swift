@@ -14,6 +14,11 @@ struct ChatView: View {
     @State private var messagePendingDeletion: Message?
     @State private var isShowingDeleteConfirmation = false
 
+    // Scroll tracking state
+    @State private var scrollOffset: CGFloat = 0
+    @State private var contentHeight: CGFloat = 0
+    @State private var visibleHeight: CGFloat = 0
+
     var body: some View {
         VStack(spacing: 0) {
             messagesSection
@@ -26,18 +31,18 @@ struct ChatView: View {
                     .focused($isTextFieldFocused)
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(1...5)
-                    .disabled(conversationManager.isStreaming)
+                    .disabled(conversationManager.streamingState.isStreaming)
 
                 Button {
                     Task {
-                        if conversationManager.isStreaming {
+                        if conversationManager.streamingState.isStreaming {
                             conversationManager.stopStreaming()
                         } else {
                             await sendMessage()
                         }
                     }
                 } label: {
-                    if conversationManager.isStreaming {
+                    if conversationManager.streamingState.isStreaming {
                         Image(systemName: "stop.circle.fill")
                             .font(.system(size: 32))
                             .foregroundColor(DesignTokens.Colors.error)
@@ -47,9 +52,9 @@ struct ChatView: View {
                             .foregroundColor(canSend ? DesignTokens.Colors.primary : .gray)
                     }
                 }
-                .disabled(!canSend && !conversationManager.isStreaming)
-                .accessibilityLabel(conversationManager.isStreaming ? "Stop generating" : "Send message")
-                .animation(.easeInOut(duration: 0.2), value: conversationManager.isStreaming)
+                .disabled(!canSend && !conversationManager.streamingState.isStreaming)
+                .accessibilityLabel(conversationManager.streamingState.isStreaming ? "Stop generating" : "Send message")
+                .animation(.easeInOut(duration: 0.2), value: conversationManager.streamingState.isStreaming)
             }
             .padding()
         }
@@ -72,7 +77,7 @@ struct ChatView: View {
                     }
                 }) {
                     VStack(spacing: 2) {
-                        if let conversation = conversationManager.currentConversation {
+                        if let conversation = conversationManager.conversationState.currentConversation {
                             // Show conversation title
                             Text(conversation.displayTitle)
                                 .font(.headline)
@@ -176,18 +181,49 @@ struct ChatView: View {
 
     @ViewBuilder
     private var messagesSection: some View {
-        if conversationManager.isLoadingConversation {
+        if conversationManager.conversationState.isLoadingConversation {
             ProgressView("Loading conversation...")
                 .frame(maxHeight: .infinity)
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
-                    let lastAssistantId = conversationManager.messages.last(where: { $0.role == .assistant })?.id
-                    let lastUserId = conversationManager.messages.last(where: { $0.role == .user })?.id
-                    let canDeleteMessage = conversationManager.currentConversationId != nil
+                    // Use state objects for accessing data
+                    let messages = conversationManager.messageState.messages
+                    let streamingMessage = conversationManager.streamingState.streamingMessage
+                    let lastAssistantId = messages.last(where: { $0.role == .assistant })?.id
+                    let lastUserId = messages.last(where: { $0.role == .user })?.id
+                    let canDeleteMessage = conversationManager.conversationState.currentConversationId != nil
 
                     LazyVStack(spacing: 16) {
-                        ForEach(conversationManager.messages) { message in
+                        // Top sentinel for pagination
+                        if conversationManager.paginationState.hasMore {
+                            Color.clear
+                                .frame(height: 1)
+                                .id("pagination-sentinel")
+                                .onAppear {
+                                    // Trigger pagination when sentinel appears
+                                    if conversationManager.paginationState.canLoadMore {
+                                        Task {
+                                            await conversationManager.loadMoreMessages()
+                                        }
+                                    }
+                                }
+
+                            // Loading indicator for pagination
+                            if conversationManager.paginationState.isLoadingMore {
+                                HStack {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                    Text("Loading older messages...")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 8)
+                            }
+                        }
+
+                        ForEach(messages) { message in
                             messageRow(
                                 for: message,
                                 lastAssistantId: lastAssistantId,
@@ -196,7 +232,7 @@ struct ChatView: View {
                             )
                         }
 
-                        if let streamingMessage = conversationManager.streamingMessage {
+                        if let streamingMessage = streamingMessage {
                             MessageRow(
                                 message: streamingMessage,
                                 onCopy: nil,
@@ -209,23 +245,73 @@ struct ChatView: View {
                         }
                     }
                     .padding()
+                    .background(
+                        GeometryReader { geometry in
+                            Color.clear.preference(
+                                key: ScrollOffsetPreferenceKey.self,
+                                value: geometry.frame(in: .named("scroll")).minY
+                            )
+                        }
+                    )
                 }
+                .coordinateSpace(name: "scroll")
                 .scrollDismissesKeyboard(.immediately)
-                .onChange(of: conversationManager.messages.count) { _, _ in
-                    if let lastMessage = conversationManager.messages.last {
+                .onPreferenceChange(ScrollOffsetPreferenceKey.self) { value in
+                    scrollOffset = value
+                    // Update scroll state for scroll button visibility
+                    conversationManager.scrollState.updateScrollPosition(
+                        contentHeight: contentHeight,
+                        visibleHeight: visibleHeight,
+                        offset: abs(scrollOffset)
+                    )
+                }
+                // Consolidated onChange handler - replaces duplicate handlers
+                .onChange(of: conversationManager.messageState.count) { oldCount, newCount in
+                    // Only auto-scroll if scroll state allows it
+                    guard conversationManager.scrollState.shouldScrollOnNewContent else { return }
+
+                    if let lastMessage = conversationManager.messageState.lastMessage {
                         withAnimation {
                             proxy.scrollTo(lastMessage.id, anchor: .bottom)
                         }
                     }
                 }
-                .onChange(of: conversationManager.streamingMessage?.id) { _, newValue in
-                    if let streamingId = newValue {
+                .onChange(of: conversationManager.streamingState.streamingMessage?.id) { _, streamingId in
+                    // Only auto-scroll if scroll state allows it
+                    guard conversationManager.scrollState.shouldScrollOnNewContent else { return }
+
+                    if let id = streamingId {
                         withAnimation {
-                            proxy.scrollTo(streamingId, anchor: .bottom)
+                            proxy.scrollTo(id, anchor: .bottom)
+                        }
+                    }
+                }
+                // Scroll-to-bottom button overlay
+                .scrollToBottomButton(
+                    isVisible: conversationManager.scrollState.showScrollButton
+                ) {
+                    // Scroll to bottom when button tapped
+                    if conversationManager.scrollState.requestScrollToBottom() {
+                        let targetId = conversationManager.streamingState.streamingMessage?.id
+                            ?? conversationManager.messageState.lastMessage?.id
+
+                        if let id = targetId {
+                            withAnimation {
+                                proxy.scrollTo(id, anchor: .bottom)
+                            }
                         }
                     }
                 }
             }
+        }
+    }
+
+    // MARK: - Preference Keys
+
+    struct ScrollOffsetPreferenceKey: PreferenceKey {
+        static var defaultValue: CGFloat = 0
+        static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+            value = nextValue()
         }
     }
 
@@ -239,7 +325,7 @@ struct ChatView: View {
     }
 
     private var canSend: Bool {
-        !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !conversationManager.isStreaming
+        !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !conversationManager.streamingState.isStreaming
     }
 
     private func sendMessage() async {
@@ -367,8 +453,8 @@ struct ChatView: View {
         let isLastUser = message.id == lastUserId
         let hasCopyAction = !plainText(from: message).isEmpty
         let canEditMessage = canEdit(message)
-        let canRetryAssistant = message.role == .assistant && isLastAssistant && !conversationManager.isStreaming
-        let canRetryUser = message.role == .user && isLastUser && !conversationManager.isStreaming
+        let canRetryAssistant = message.role == .assistant && isLastAssistant && !conversationManager.streamingState.isStreaming
+        let canRetryUser = message.role == .user && isLastUser && !conversationManager.streamingState.isStreaming
         let canRetryMessage = canRetryAssistant || canRetryUser
 
         if hasCopyAction || canEditMessage || canRetryMessage || canDeleteMessage {

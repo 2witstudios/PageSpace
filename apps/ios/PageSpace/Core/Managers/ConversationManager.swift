@@ -3,6 +3,7 @@
 //  PageSpace
 //
 //  Created on 2025-11-02.
+//  Refactored on 2025-11-05 to use state objects for performance optimization
 //  Central manager for conversation state (similar to web app's GlobalChatContext)
 //
 
@@ -10,54 +11,108 @@ import Foundation
 import Combine
 
 /// Centralized conversation state manager
-/// Single source of truth for current conversation and messages
+/// Delegates to specialized state objects to prevent unnecessary view rebuilds
 /// Matches web app's GlobalChatContext pattern
 @MainActor
 class ConversationManager: ObservableObject {
     static let shared = ConversationManager()
 
-    // MARK: - Published State (Single Source of Truth)
+    // MARK: - State Objects (New Architecture)
 
-    /// Current conversation ID being displayed
-    @Published var currentConversationId: String?
+    /// Message state (completed messages array)
+    let messageState = MessageState()
 
-    /// Track the loaded conversation (for display)
-    @Published var currentConversation: Conversation?
+    /// Streaming state (streaming message and throttle logic)
+    let streamingState = StreamingState()
+
+    /// Conversation state (metadata and loading)
+    let conversationState = ConversationState()
+
+    /// Settings state (AI provider and model configuration)
+    let settingsState = SettingsState()
+
+    /// Pagination state (cursor and pagination metadata)
+    let paginationState = PaginationState()
+
+    /// Scroll state (scroll position tracking)
+    let scrollState = ScrollState()
+
+    // MARK: - Backward Compatibility (Deprecated - Will be removed in Phase 7)
 
     /// Track the AGENT user selected (for creating new conversations)
     /// This is set by AgentService when user picks an agent
     @Published var selectedAgentType: String? = nil  // "global", pageId, or driveId
     @Published var selectedAgentContextId: String? = nil  // nil for global, pageId/driveId otherwise
 
-    /// Completed messages for the current conversation (immutable history)
-    @Published private(set) var messages: [Message] = []
+    /// Deprecated: Use messageState.messages instead
+    @available(*, deprecated, message: "Use messageState.messages instead")
+    var messages: [Message] {
+        get { messageState.messages }
+        set { messageState.setMessages(newValue) }
+    }
 
-    /// Currently streaming message (separate from completed messages)
-    @Published private(set) var streamingMessage: Message?
+    /// Deprecated: Use streamingState.streamingMessage instead
+    @available(*, deprecated, message: "Use streamingState.streamingMessage instead")
+    var streamingMessage: Message? {
+        streamingState.streamingMessage
+    }
 
-    /// Loading state for conversation switching
-    @Published var isLoadingConversation = false
+    /// Deprecated: Use streamingState.isStreaming instead
+    @available(*, deprecated, message: "Use streamingState.isStreaming instead")
+    var isStreaming: Bool {
+        streamingState.isStreaming
+    }
 
-    /// Streaming state for message sending
-    @Published var isStreaming = false
+    /// Deprecated: Use conversationState.currentConversationId instead
+    @available(*, deprecated, message: "Use conversationState.currentConversationId instead")
+    var currentConversationId: String? {
+        get { conversationState.currentConversationId }
+        set { conversationState.setConversationId(newValue) }
+    }
 
-    /// Error message if any
-    @Published var error: String?
+    /// Deprecated: Use conversationState.currentConversation instead
+    @available(*, deprecated, message: "Use conversationState.currentConversation instead")
+    var currentConversation: Conversation? {
+        conversationState.currentConversation
+    }
 
-    // MARK: - AI Provider/Model Selection
+    /// Deprecated: Use conversationState.isLoadingConversation instead
+    @available(*, deprecated, message: "Use conversationState.isLoadingConversation instead")
+    var isLoadingConversation: Bool {
+        conversationState.isLoadingConversation
+    }
 
-    /// Currently selected AI provider (e.g., "pagespace", "openrouter", "google")
-    @Published var selectedProvider: String = "pagespace"
+    /// Deprecated: Use conversationState.error instead
+    @available(*, deprecated, message: "Use conversationState.error instead")
+    var error: String? {
+        conversationState.error
+    }
 
-    /// Currently selected AI model (e.g., "glm-4.5-air", "gpt-4o")
-    @Published var selectedModel: String = "glm-4.5-air"
+    /// Deprecated: Use settingsState.selectedProvider instead
+    @available(*, deprecated, message: "Use settingsState.selectedProvider instead")
+    var selectedProvider: String {
+        get { settingsState.selectedProvider }
+        set { settingsState.setProvider(newValue) }
+    }
 
-    /// Provider settings from backend (configuration status per provider)
-    @Published var providerSettings: AISettings?
+    /// Deprecated: Use settingsState.selectedModel instead
+    @available(*, deprecated, message: "Use settingsState.selectedModel instead")
+    var selectedModel: String {
+        get { settingsState.selectedModel }
+        set { settingsState.setModel(newValue) }
+    }
 
-    /// Agent-specific overrides from page/drive configuration
-    /// When set, these override the user's default provider/model
-    @Published var agentConfigOverrides: AgentConfig?
+    /// Deprecated: Use settingsState.providerSettings instead
+    @available(*, deprecated, message: "Use settingsState.providerSettings instead")
+    var providerSettings: AISettings? {
+        settingsState.providerSettings
+    }
+
+    /// Deprecated: Use settingsState.agentConfigOverrides instead
+    @available(*, deprecated, message: "Use settingsState.agentConfigOverrides instead")
+    var agentConfigOverrides: AgentConfig? {
+        settingsState.agentConfigOverrides
+    }
 
     // MARK: - Services
 
@@ -65,12 +120,6 @@ class ConversationManager: ObservableObject {
     private let aiService = AIService.shared
 
     // MARK: - Internal State (Not Published)
-
-    /// Internal accumulator for building streaming message
-    private var streamingMessageBuilder: StreamingMessage?
-
-    /// Throttle to batch rapid stream updates (prevents SwiftUI frame overload)
-    private let streamThrottle = StreamThrottle(interval: 0.05) // 50ms batching
 
     /// Active streaming task (for cancellation support)
     private var streamTask: Task<Void, Never>?
@@ -88,21 +137,21 @@ class ConversationManager: ObservableObject {
     func loadProviderSettings() async {
         do {
             let settings = try await aiService.getSettings()
-            self.providerSettings = settings
-            self.selectedProvider = settings.currentProvider
-            self.selectedModel = settings.currentModel
+            settingsState.setProviderSettings(settings)
+            settingsState.setProvider(settings.currentProvider)
+            settingsState.setModel(settings.currentModel)
 
             // Auto-correct if user has restricted model selected without proper tier
-            if selectedProvider == "pagespace" && selectedModel == "glm-4.6" {
+            if settingsState.selectedProvider == "pagespace" && settingsState.selectedModel == "glm-4.6" {
                 let userTier = settings.userSubscriptionTier
                 if userTier != "pro" && userTier != "business" {
                     // Free user has restricted model selected, reset to default
                     print("⚠️ Free user has Pro model selected, resetting to glm-4.5-air")
-                    self.selectedModel = "glm-4.5-air"
+                    settingsState.setModel("glm-4.5-air")
 
                     // Optionally persist the correction to backend
                     do {
-                        _ = try await aiService.updateSettings(provider: selectedProvider, model: "glm-4.5-air")
+                        _ = try await aiService.updateSettings(provider: settingsState.selectedProvider, model: "glm-4.5-air")
                         print("✅ Auto-corrected model to glm-4.5-air")
                     } catch {
                         print("⚠️ Failed to persist auto-correction: \(error)")
@@ -110,7 +159,7 @@ class ConversationManager: ObservableObject {
                 }
             }
 
-            print("✅ Loaded provider settings: \(selectedProvider)/\(selectedModel)")
+            print("✅ Loaded provider settings: \(settingsState.selectedProvider)/\(settingsState.selectedModel)")
         } catch {
             print("❌ Failed to load provider settings: \(error)")
         }
@@ -118,8 +167,8 @@ class ConversationManager: ObservableObject {
 
     /// Update provider selection
     func updateProvider(_ provider: String, model: String) async {
-        self.selectedProvider = provider
-        self.selectedModel = model
+        settingsState.setProvider(provider)
+        settingsState.setModel(model)
 
         // Optionally persist to backend
         do {
@@ -134,39 +183,39 @@ class ConversationManager: ObservableObject {
     func loadAgentConfig(contextType: String, contextId: String) async {
         // Only page agents support custom configuration
         guard contextType == "page" else {
-            agentConfigOverrides = nil
+            settingsState.setAgentConfigOverrides(nil)
             return
         }
 
         do {
             let config = try await aiService.getAgentConfig(pageId: contextId)
-            self.agentConfigOverrides = config
+            settingsState.setAgentConfigOverrides(config)
 
             // Apply overrides if present
             if let provider = config.aiProvider {
-                self.selectedProvider = provider
+                settingsState.setProvider(provider)
             }
             if let model = config.aiModel {
-                self.selectedModel = model
+                settingsState.setModel(model)
             }
 
             print("✅ Loaded agent config overrides for page \(contextId)")
         } catch {
             print("⚠️ Failed to load agent config: \(error)")
-            agentConfigOverrides = nil
+            settingsState.setAgentConfigOverrides(nil)
         }
     }
 
     /// Get the active provider/model (considers overrides)
     func getActiveProviderModel() -> (provider: String, model: String) {
-        let provider = agentConfigOverrides?.aiProvider ?? selectedProvider
-        let model = agentConfigOverrides?.aiModel ?? selectedModel
+        let provider = settingsState.agentConfigOverrides?.aiProvider ?? settingsState.selectedProvider
+        let model = settingsState.agentConfigOverrides?.aiModel ?? settingsState.selectedModel
         return (provider, model)
     }
 
     /// Check if a provider is configured and available
     func isProviderConfigured(_ provider: String) -> Bool {
-        guard let settings = providerSettings else { return false }
+        guard let settings = settingsState.providerSettings else { return false }
         return settings.isProviderConfigured(provider)
     }
 
@@ -176,7 +225,7 @@ class ConversationManager: ObservableObject {
     /// This is an atomic operation - old messages are cleared before new ones load
     func loadConversation(_ conversation: Conversation) async {
         // Guard against redundant loads
-        guard conversation.id != currentConversationId else {
+        guard conversation.id != conversationState.currentConversationId else {
             print("ℹ️ Conversation \(conversation.id) already loaded")
             return
         }
@@ -186,13 +235,17 @@ class ConversationManager: ObservableObject {
         // Capture the conversation ID we're loading for race condition protection
         let loadingConversationId = conversation.id
 
-        isLoadingConversation = true
-        error = nil
+        conversationState.setLoading(true)
 
         // CRITICAL: Clear old messages immediately
-        messages = []
-        currentConversation = conversation
-        currentConversationId = conversation.id
+        messageState.clear()
+        conversationState.setConversation(conversation)
+
+        // Reset pagination state for new conversation
+        paginationState.reset()
+
+        // Reset scroll state
+        scrollState.reset()
 
         do {
             // Fetch messages from API
@@ -203,8 +256,16 @@ class ConversationManager: ObservableObject {
             // - User clicks conversation A → loadConversation(A) starts
             // - Before A's API returns, user clicks conversation B → loadConversation(B) starts
             // - If A returns first, we discard it because currentConversationId != A's ID
-            if currentConversationId == loadingConversationId {
-                messages = response.messages
+            if conversationState.currentConversationId == loadingConversationId {
+                messageState.setMessages(response.messages)
+
+                // Update pagination state
+                if let pagination = response.pagination {
+                    paginationState.updatePagination(
+                        cursor: pagination.nextCursor,
+                        hasMore: pagination.hasMore
+                    )
+                }
 
                 // Update selected agent to match loaded conversation
                 selectedAgentType = conversation.type ?? "global"
@@ -215,21 +276,64 @@ class ConversationManager: ObservableObject {
                     await loadAgentConfig(contextType: contextType, contextId: contextId)
                 }
 
-                print("✅ Loaded \(messages.count) messages for conversation: \(conversation.displayTitle)")
+                print("✅ Loaded \(messageState.count) messages for conversation: \(conversation.displayTitle)")
             } else {
                 print("⚠️ Discarding stale response for \(conversation.displayTitle) - user switched to different conversation")
             }
         } catch {
             // Only set error if still on the same conversation
-            if currentConversationId == loadingConversationId {
-                self.error = "Failed to load conversation: \(error.localizedDescription)"
+            if conversationState.currentConversationId == loadingConversationId {
+                conversationState.setError("Failed to load conversation: \(error.localizedDescription)")
                 print("❌ Failed to load conversation \(conversation.id): \(error)")
             } else {
                 print("⚠️ Discarding error for \(conversation.displayTitle) - user switched to different conversation")
             }
         }
 
-        isLoadingConversation = false
+        conversationState.setLoading(false)
+    }
+
+    // MARK: - Pagination
+
+    /// Load more messages (backwards pagination)
+    func loadMoreMessages() async {
+        guard paginationState.canLoadMore else {
+            print("ℹ️ Cannot load more messages: hasMore=\(paginationState.hasMore), isLoading=\(paginationState.isLoadingMore)")
+            return
+        }
+
+        guard let conversationId = conversationState.currentConversationId else {
+            print("⚠️ Cannot load more messages without an active conversation")
+            return
+        }
+
+        print("🔄 Loading more messages with cursor: \(paginationState.cursor ?? "nil")")
+
+        paginationState.setLoading(true)
+
+        do {
+            let response = try await aiService.loadMessages(
+                conversationId: conversationId,
+                limit: paginationState.limit,
+                cursor: paginationState.cursor
+            )
+
+            // Prepend older messages to the beginning
+            messageState.prepend(response.messages)
+
+            // Update pagination state
+            if let pagination = response.pagination {
+                paginationState.updatePagination(
+                    cursor: pagination.nextCursor,
+                    hasMore: pagination.hasMore
+                )
+            }
+
+            print("✅ Loaded \(response.messages.count) more messages (total: \(messageState.count))")
+        } catch {
+            paginationState.setError("Failed to load more messages: \(error.localizedDescription)")
+            print("❌ Failed to load more messages: \(error)")
+        }
     }
 
     // MARK: - Create New Conversation
@@ -237,19 +341,19 @@ class ConversationManager: ObservableObject {
     /// Start a new conversation (clears current state)
     func createNewConversation() {
         print("🆕 ConversationManager.createNewConversation - agent: \(selectedAgentType ?? "unknown")")
-        currentConversationId = nil
-        currentConversation = nil
-        messages = []
-        streamingMessage = nil
-        streamingMessageBuilder = nil
-        streamThrottle.cancel()
-        error = nil
+
+        // Clear all state
+        conversationState.clear()
+        messageState.clear()
+        streamingState.clear()
+        paginationState.reset()
+        scrollState.reset()
 
         // Clear agent overrides and reset to user defaults
-        agentConfigOverrides = nil
-        if let settings = providerSettings {
-            selectedProvider = settings.currentProvider
-            selectedModel = settings.currentModel
+        settingsState.setAgentConfigOverrides(nil)
+        if let settings = settingsState.providerSettings {
+            settingsState.setProvider(settings.currentProvider)
+            settingsState.setModel(settings.currentModel)
         }
     }
 
@@ -259,12 +363,15 @@ class ConversationManager: ObservableObject {
     func sendMessage(_ text: String) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        guard !isStreaming else {
+        guard !streamingState.isStreaming else {
             print("⚠️ Ignoring send request while streaming is active")
             return
         }
 
         print("📤 ConversationManager.sendMessage - text: \(trimmed.prefix(50))...")
+
+        // Enable auto-scroll when sending a message
+        scrollState.enableAutoScroll()
 
         // Create user message
         let userMessage = Message(
@@ -273,24 +380,22 @@ class ConversationManager: ObservableObject {
         )
 
         // Add to UI immediately
-        messages.append(userMessage)
+        messageState.append(userMessage)
 
         do {
             // Ensure we have a conversation to stream against
             let conversationId = try await ensureConversation()
-            let history = messages
+            let history = messageState.messages
 
             startStreaming(conversationId: conversationId, history: history)
 
             // Wait for stream to finish so callers can await completion
             await streamTask?.value
         } catch {
-            self.error = "Failed to send message: \(error.localizedDescription)"
+            conversationState.setError("Failed to send message: \(error.localizedDescription)")
             print("❌ Failed to send message: \(error)")
 
-            isStreaming = false
-            streamingMessage = nil
-            streamingMessageBuilder = nil
+            streamingState.cancelStreaming()
             streamTask = nil
         }
     }
@@ -306,16 +411,13 @@ class ConversationManager: ObservableObject {
         streamTask = nil
 
         // Clean up streaming state
-        streamThrottle.cancel()
-        streamingMessage = nil
-        streamingMessageBuilder = nil
-        isStreaming = false
+        streamingState.cancelStreaming()
     }
 
     // MARK: - Streaming Helpers
 
     private func ensureConversation() async throws -> String {
-        if let conversationId = currentConversationId {
+        if let conversationId = conversationState.currentConversationId {
             return conversationId
         }
 
@@ -330,8 +432,7 @@ class ConversationManager: ObservableObject {
             contextId: contextId
         )
 
-        currentConversationId = newConversation.id
-        currentConversation = newConversation
+        conversationState.setConversation(newConversation)
 
         print("✅ Created \(type) conversation: \(newConversation.id) with contextId: \(contextId ?? "nil")")
 
@@ -342,15 +443,12 @@ class ConversationManager: ObservableObject {
         // Cancel any existing stream to avoid overlapping updates
         streamTask?.cancel()
         streamTask = nil
-        streamThrottle.cancel()
-        streamingMessage = nil
-        streamingMessageBuilder = nil
+        streamingState.clear()
 
         let assistantMessageId = UUID().uuidString
-        streamingMessageBuilder = StreamingMessage(id: assistantMessageId, role: .assistant)
+        streamingState.startStreaming(id: assistantMessageId, role: .assistant)
 
-        isStreaming = true
-        error = nil
+        conversationState.clearError()
 
         streamTask = Task { @MainActor [history] in
             var wasCancelled = false
@@ -374,10 +472,8 @@ class ConversationManager: ObservableObject {
                     processStreamChunk(chunk)
                 }
 
-                streamThrottle.flush()
-
-                if !wasCancelled, let builder = streamingMessageBuilder {
-                    messages.append(builder.toMessage())
+                if !wasCancelled, let completedMessage = streamingState.completeStreaming() {
+                    messageState.append(completedMessage)
                 }
 
                 if !wasCancelled {
@@ -387,18 +483,13 @@ class ConversationManager: ObservableObject {
             } catch is CancellationError {
                 print("🛑 Stream cancelled")
             } catch {
-                self.error = "Failed to send message: \(error.localizedDescription)"
+                conversationState.setError("Failed to send message: \(error.localizedDescription)")
                 print("❌ Failed to send message: \(error)")
 
                 // Clear incomplete streaming message on error
-                streamThrottle.cancel()
-                streamingMessage = nil
-                streamingMessageBuilder = nil
+                streamingState.cancelStreaming()
             }
 
-            isStreaming = false
-            streamingMessage = nil
-            streamingMessageBuilder = nil
             streamTask = nil
         }
     }
@@ -407,7 +498,7 @@ class ConversationManager: ObservableObject {
 
     /// Update existing message content on the backend and in local state
     func updateMessage(messageId: String, newContent: String) async throws {
-        guard let conversationId = currentConversationId else {
+        guard let conversationId = conversationState.currentConversationId else {
             throw NSError(
                 domain: "ConversationManager",
                 code: 2,
@@ -421,22 +512,17 @@ class ConversationManager: ObservableObject {
             content: newContent
         )
 
-        if let index = messages.firstIndex(where: { $0.id == messageId }) {
-            var updated = messages[index]
+        if let message = messageState.getMessage(id: messageId) {
+            var updated = message
             updated.parts = [.text(TextPart(text: newContent))]
             updated.editedAt = Date()
-            messages[index] = updated
-        } else if streamingMessage?.id == messageId {
-            var updated = streamingMessage
-            updated?.parts = [.text(TextPart(text: newContent))]
-            updated?.editedAt = Date()
-            streamingMessage = updated
+            messageState.update(updated)
         }
     }
 
     /// Delete a message from the backend and remove it locally
     func deleteMessage(messageId: String) async throws {
-        guard let conversationId = currentConversationId else {
+        guard let conversationId = conversationState.currentConversationId else {
             throw NSError(
                 domain: "ConversationManager",
                 code: 3,
@@ -446,23 +532,21 @@ class ConversationManager: ObservableObject {
 
         try await aiService.deleteMessage(conversationId: conversationId, messageId: messageId)
 
-        messages.removeAll { $0.id == messageId }
-
-        if streamingMessage?.id == messageId {
-            streamingMessage = nil
-        }
+        messageState.delete(id: messageId)
     }
 
     /// Retry the last conversational turn by re-running from the most recent user message
     func retryLastTurn() async {
-        guard !isStreaming else {
+        guard !streamingState.isStreaming else {
             print("⚠️ Cannot retry while another stream is active")
             return
         }
-        guard let conversationId = currentConversationId else {
+        guard let conversationId = conversationState.currentConversationId else {
             print("⚠️ Cannot retry without an active conversation ID")
             return
         }
+
+        let messages = messageState.messages
         guard let lastUserIndex = messages.lastIndex(where: { $0.role == .user }) else {
             print("⚠️ Cannot retry without a user message in history")
             return
@@ -480,22 +564,26 @@ class ConversationManager: ObservableObject {
                     )
                 }
             } catch {
-                self.error = "Failed to retry assistant message: \(error.localizedDescription)"
+                conversationState.setError("Failed to retry assistant message: \(error.localizedDescription)")
                 print("❌ Failed to delete assistant message(s) before retry: \(error)")
                 return
             }
 
             let assistantIds = Set(assistantMessages.map { $0.id })
-            messages.removeAll { assistantIds.contains($0.id) }
+            messageState.deleteMultiple(ids: assistantIds)
         }
 
-        guard messages.last?.role == .user else {
+        guard messageState.lastMessage?.role == .user else {
             print("⚠️ After cleaning assistant replies, last message is not user. Aborting retry.")
             return
         }
 
-        let history = messages
-        error = nil
+        let history = messageState.messages
+        conversationState.clearError()
+
+        // Enable auto-scroll for retry
+        scrollState.enableAutoScroll()
+
         startStreaming(conversationId: conversationId, history: history)
         await streamTask?.value
     }
@@ -503,23 +591,13 @@ class ConversationManager: ObservableObject {
     // MARK: - Stream Processing
 
     private func processStreamChunk(_ chunk: StreamChunk) {
-        guard var builder = streamingMessageBuilder else { return }
-
-        // Accumulate chunk into internal builder
+        // Accumulate chunk into StreamingState
         switch chunk.type {
         case "text-delta":
             if let text = chunk.delta {
-                let isFirstTextChunk = builder.parts.isEmpty
-                builder.appendText(text)
-                streamingMessageBuilder = builder
-
-                if isFirstTextChunk {
-                    // Bypass throttle for first chunk (instant feedback, prevents empty bubble)
-                    streamingMessage = builder.toMessage()
-                } else {
-                    // Use throttle for subsequent chunks (batching for performance)
-                    scheduleStreamingUpdate()
-                }
+                // Check if this is the first text chunk for immediate feedback
+                let isFirstTextChunk = streamingState.streamingMessage?.parts.isEmpty ?? true
+                streamingState.appendText(text, immediate: isFirstTextChunk)
             }
 
         case let type where type.hasPrefix("tool-"):
@@ -528,7 +606,6 @@ class ConversationManager: ObservableObject {
 
             if let toolCallId = chunk.toolCallId, let toolName = chunk.toolName {
                 // Tool call with input (tool-input-* events)
-                // Use updateOrAddTool to prevent duplicates from multiple events
                 let toolPart = ToolPart(
                     type: chunk.type,
                     toolCallId: toolCallId,
@@ -537,41 +614,22 @@ class ConversationManager: ObservableObject {
                     output: nil,
                     state: .inputAvailable
                 )
-                builder.updateOrAddTool(toolPart)
-                streamingMessageBuilder = builder
-                scheduleStreamingUpdate()
+                streamingState.updateTool(toolPart)
             } else if let toolCallId = chunk.toolCallId, chunk.output != nil {
                 // Tool result (tool-output-available)
-                builder.updateTool(
+                streamingState.updateToolOutput(
                     toolCallId: toolCallId,
                     output: chunk.output,
                     state: chunk.isError == true ? .outputError : .outputAvailable
                 )
-                streamingMessageBuilder = builder
-                scheduleStreamingUpdate()
             }
 
         case "finish":
-            builder.isComplete = true
-            streamingMessageBuilder = builder
-            // Flush immediately on finish to show complete message
-            streamThrottle.flush()
+            // Streaming will be completed in startStreaming after loop exits
+            break
 
         default:
             break
-        }
-    }
-
-    /// Schedules a throttled update of the streaming message in the UI
-    /// Updates are batched at 50ms intervals to prevent SwiftUI frame overload
-    private func scheduleStreamingUpdate() {
-        streamThrottle.execute { [weak self] in
-            guard let self = self else { return }
-
-            // Build complete message from accumulator and publish atomically
-            if let builder = self.streamingMessageBuilder {
-                self.streamingMessage = builder.toMessage()
-            }
         }
     }
 }

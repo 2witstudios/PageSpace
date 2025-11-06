@@ -44,7 +44,7 @@ struct FilesAgentChatView: View {
 
     @ViewBuilder
     private var messagesSection: some View {
-        if conversationManager.isLoadingConversation {
+        if conversationManager.conversationState.isLoadingConversation {
             ProgressView("Loading conversation...")
                 .frame(maxHeight: .infinity)
         } else {
@@ -53,14 +53,14 @@ struct FilesAgentChatView: View {
                     conversationMessageList
                 }
                 .scrollDismissesKeyboard(.immediately)
-                .onChange(of: conversationManager.messages.count) { _, _ in
-                    if let lastMessage = conversationManager.messages.last {
+                .onChange(of: conversationManager.messageState.count) { _, _ in
+                    if let lastMessage = conversationManager.messageState.lastMessage {
                         withAnimation {
                             proxy.scrollTo(lastMessage.id, anchor: .bottom)
                         }
                     }
                 }
-                .onChange(of: conversationManager.streamingMessage?.id) { _, newValue in
+                .onChange(of: conversationManager.streamingState.streamingMessage?.id) { _, newValue in
                     if let streamingId = newValue {
                         withAnimation {
                             proxy.scrollTo(streamingId, anchor: .bottom)
@@ -73,13 +73,13 @@ struct FilesAgentChatView: View {
 
     @ViewBuilder
     private var conversationMessageList: some View {
-        let messages = conversationManager.messages
+        let messages = conversationManager.messageState.messages
         LazyVStack(spacing: 16) {
             ForEach(messages) { message in
                 messageRow(for: message)
             }
 
-            if let streamingMessage = conversationManager.streamingMessage {
+            if let streamingMessage = conversationManager.streamingState.streamingMessage {
                 MessageRow(
                     message: streamingMessage,
                     onCopy: nil,
@@ -111,18 +111,18 @@ struct FilesAgentChatView: View {
             TextField("Message...", text: $messageText, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(1...5)
-                .disabled(conversationManager.isStreaming)
+                .disabled(conversationManager.streamingState.isStreaming)
 
             Button {
                 Task {
-                    if conversationManager.isStreaming {
+                    if conversationManager.streamingState.isStreaming {
                         conversationManager.stopStreaming()
                     } else {
                         await sendMessage()
                     }
                 }
             } label: {
-                if conversationManager.isStreaming {
+                if conversationManager.streamingState.isStreaming {
                     Image(systemName: "stop.circle.fill")
                         .font(.system(size: 32))
                         .foregroundColor(DesignTokens.Colors.error)
@@ -132,15 +132,15 @@ struct FilesAgentChatView: View {
                         .foregroundColor(canSend ? DesignTokens.Colors.primary : .gray)
                 }
             }
-            .disabled(!canSend && !conversationManager.isStreaming)
-            .accessibilityLabel(conversationManager.isStreaming ? "Stop generating" : "Send message")
-            .animation(.easeInOut(duration: 0.2), value: conversationManager.isStreaming)
+            .disabled(!canSend && !conversationManager.streamingState.isStreaming)
+            .accessibilityLabel(conversationManager.streamingState.isStreaming ? "Stop generating" : "Send message")
+            .animation(.easeInOut(duration: 0.2), value: conversationManager.streamingState.isStreaming)
         }
         .padding()
     }
 
     private var canSend: Bool {
-        !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !conversationManager.isStreaming
+        !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !conversationManager.streamingState.isStreaming
     }
 
     private func sendMessage() async {
@@ -157,7 +157,7 @@ struct FilesAgentChatView: View {
         conversationManager.selectedAgentContextId = page.id
 
         // Load or create conversation for this page AI
-        if conversationManager.currentConversation == nil {
+        if conversationManager.conversationState.currentConversation == nil {
             conversationManager.createNewConversation()
         }
     }

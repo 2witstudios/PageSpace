@@ -28,7 +28,7 @@ struct ProviderModelPicker: View {
 
     /// Get user subscription tier from provider settings
     private var userSubscriptionTier: String? {
-        conversationManager.providerSettings?.userSubscriptionTier
+        conversationManager.settingsState.providerSettings?.userSubscriptionTier
     }
 
     var body: some View {
@@ -124,7 +124,7 @@ struct ProviderModelPicker: View {
                     Text("AI Configuration")
                 } footer: {
                     VStack(alignment: .leading, spacing: 8) {
-                        if let agentOverride = conversationManager.agentConfigOverrides,
+                        if let agentOverride = conversationManager.settingsState.agentConfigOverrides,
                            agentOverride.aiProvider != nil || agentOverride.aiModel != nil {
                             Text("This conversation uses page-specific AI settings")
                                 .font(.caption)
@@ -162,13 +162,13 @@ struct ProviderModelPicker: View {
         }
         .onAppear {
             print("🔍 ProviderModelPicker.onAppear")
-            print("   ConversationManager.selectedProvider: \(conversationManager.selectedProvider)")
-            print("   ConversationManager.selectedModel: \(conversationManager.selectedModel)")
+            print("   ConversationManager.selectedProvider: \(conversationManager.settingsState.selectedProvider)")
+            print("   ConversationManager.selectedModel: \(conversationManager.settingsState.selectedModel)")
             print("   User subscription tier: \(userSubscriptionTier ?? "nil")")
 
             // Load current values from ConversationManager
-            selectedProvider = conversationManager.selectedProvider
-            selectedModel = conversationManager.selectedModel
+            selectedProvider = conversationManager.settingsState.selectedProvider
+            selectedModel = conversationManager.settingsState.selectedModel
 
             // Validate that selected model exists for the selected provider
             let availableModels = getModelsForProvider(selectedProvider)
