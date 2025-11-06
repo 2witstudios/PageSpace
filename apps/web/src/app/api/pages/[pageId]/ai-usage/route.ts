@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, aiUsageLogs, pages, eq, and, desc } from '@pagespace/db';
-import { getUserAccessLevel } from '@pagespace/lib/permissions';
-import { loggers } from '@pagespace/lib/server';
+import { getUserAccessLevel, loggers } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
