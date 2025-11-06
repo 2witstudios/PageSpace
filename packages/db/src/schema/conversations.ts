@@ -13,6 +13,7 @@ export const conversations = pgTable('conversations', {
   title: text('title'), // Auto-generated from first message or user-defined
   type: text('type').notNull(), // 'global' | 'page' | 'drive'
   contextId: text('contextId'), // null for global, pageId for page chats, driveId for drive chats
+  agentPageId: text('agentPageId'), // For type='global', references pages.id of AI_CHAT agent used
   lastMessageAt: timestamp('lastMessageAt', { mode: 'date' }),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
@@ -22,6 +23,7 @@ export const conversations = pgTable('conversations', {
   userTypeIdx: index('conversations_user_id_type_idx').on(table.userId, table.type),
   userLastMessageIdx: index('conversations_user_id_last_message_at_idx').on(table.userId, table.lastMessageAt),
   contextIdx: index('conversations_context_id_idx').on(table.contextId),
+  agentPageIdx: index('conversations_agent_page_id_idx').on(table.agentPageId),
 }));
 
 /**

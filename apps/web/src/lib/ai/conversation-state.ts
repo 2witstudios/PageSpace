@@ -54,6 +54,7 @@ export const conversationState = {
     title?: string;
     type?: 'global' | 'page' | 'drive';
     contextId?: string;
+    agentPageId?: string | null;
   } = {}) {
     try {
       const conversation = await post<{
@@ -66,6 +67,7 @@ export const conversationState = {
         title: options.title,
         type: options.type || 'global',
         contextId: options.contextId,
+        agentPageId: options.agentPageId,
       });
 
       this.setActiveConversationId(conversation.id);

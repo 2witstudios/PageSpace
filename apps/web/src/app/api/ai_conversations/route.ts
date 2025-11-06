@@ -53,7 +53,7 @@ export async function POST(request: Request) {
     const userId = auth.userId;
 
     const body = await request.json();
-    const { title, type = 'global', contextId } = body;
+    const { title, type = 'global', contextId, agentPageId } = body;
 
     const conversationId = createId();
     const now = new Date();
@@ -66,6 +66,7 @@ export async function POST(request: Request) {
         title: title || null, // Will be auto-generated from first message if not provided
         type,
         contextId: contextId || null,
+        agentPageId: agentPageId || null, // Link to AI_CHAT agent if provided
         lastMessageAt: now,
         createdAt: now,
         updatedAt: now,
@@ -76,8 +77,8 @@ export async function POST(request: Request) {
     return NextResponse.json(newConversation);
   } catch (error) {
     loggers.api.error('Error creating conversation:', error as Error);
-    return NextResponse.json({ 
-      error: 'Failed to create conversation' 
+    return NextResponse.json({
+      error: 'Failed to create conversation'
     }, { status: 500 });
   }
 }
