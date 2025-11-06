@@ -126,17 +126,38 @@ PATCH /api/tasks/[taskId]
 
 ## Permissions
 
-Tasks inherit PageSpace's standard permission model:
+Tasks inherit PageSpace's standard permission model with page-level access control:
+
+### Permission Levels
 
 - **View**: Can see task details
 - **Edit**: Can update task fields, change status, add comments
 - **Share**: Can assign the task to others
 - **Delete**: Can delete the task
 
-Special cases:
-- Task creators (assigners) always have edit permission
-- Task assignees always have edit permission
-- Only drive owners and admins can create tasks
+### Permission Hierarchy
+
+Tasks follow the same permission model as all pages in PageSpace:
+
+1. **Drive Owners**: Have full access to all tasks in their drive
+2. **Drive Admins**: Have full access to all tasks in their drive
+3. **Regular Members**: Only see tasks with explicit page permissions
+
+This means regular drive members **cannot** see all tasks in a drive by default. They need explicit `page_permissions` records with `canView=true` for each task they should access.
+
+### Querying Tasks with Permissions
+
+When querying tasks via `/api/tasks`, the results are automatically filtered by permissions:
+
+- Drive owners and admins see all tasks in their drives
+- Regular members only see tasks they have explicit view permission for
+- This prevents enumeration of private task information
+
+### Special Cases
+
+- Task creators (assigners) should be granted explicit permissions on tasks they create
+- Task assignees should be granted explicit permissions on tasks assigned to them
+- Only drive owners and admins can create tasks (they have implicit full access)
 
 ## Time Tracking
 

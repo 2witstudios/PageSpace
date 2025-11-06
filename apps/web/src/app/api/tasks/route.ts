@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { db, pages, taskMetadata, users, driveMembers, and, eq, or, gte, lte, inArray, desc } from '@pagespace/db';
+import { db, pages, taskMetadata, users, driveMembers, drives, pagePermissions, and, eq, or, gte, lte, inArray, desc, sql } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 
@@ -7,7 +7,12 @@ const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: false };
 
 /**
  * GET /api/tasks
- * Query tasks with filters
+ * Query tasks with filters - respects page-level permissions
+ *
+ * Permission model:
+ * - Drive owners see all tasks in their drive
+ * - Drive admins see all tasks in their drive
+ * - Regular members only see tasks with explicit page_permissions (canView=true)
  *
  * Query parameters:
  * - driveId: Filter by drive ID
@@ -38,41 +43,38 @@ export async function GET(request: Request) {
     const limit = parseInt(searchParams.get('limit') || '50', 10);
     const offset = parseInt(searchParams.get('offset') || '0', 10);
 
-    // Build where conditions
+    // Get all drives the user is a member of
+    const userMemberships = await db.query.driveMembers.findMany({
+      where: eq(driveMembers.userId, userId),
+    });
+
+    if (userMemberships.length === 0) {
+      return NextResponse.json({ tasks: [], total: 0 });
+    }
+
+    // If driveId is specified, verify user has access
+    if (driveId) {
+      const hasAccess = userMemberships.some(m => m.driveId === driveId);
+      if (!hasAccess) {
+        return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      }
+    }
+
+    // Build base conditions
     const conditions: any[] = [
       eq(pages.type, 'TASK'),
       eq(pages.isTrashed, false),
     ];
 
+    // Filter by drive(s)
     if (driveId) {
-      // Verify user has access to this drive
-      const member = await db.query.driveMembers.findFirst({
-        where: and(
-          eq(driveMembers.driveId, driveId),
-          eq(driveMembers.userId, userId)
-        ),
-      });
-
-      if (!member) {
-        return NextResponse.json({ error: 'Access denied' }, { status: 403 });
-      }
-
       conditions.push(eq(pages.driveId, driveId));
     } else {
-      // If no driveId specified, only return tasks from drives user is a member of
-      const userDrives = await db.query.driveMembers.findMany({
-        where: eq(driveMembers.userId, userId),
-        columns: { driveId: true },
-      });
-
-      const driveIds = userDrives.map(d => d.driveId);
-      if (driveIds.length === 0) {
-        return NextResponse.json({ tasks: [], total: 0 });
-      }
-
+      const driveIds = userMemberships.map(m => m.driveId);
       conditions.push(inArray(pages.driveId, driveIds));
     }
 
+    // Filter by task metadata
     if (assigneeId) {
       conditions.push(eq(taskMetadata.assigneeId, assigneeId));
     }
@@ -92,6 +94,25 @@ export async function GET(request: Request) {
     if (dueAfter) {
       conditions.push(gte(taskMetadata.dueDate, new Date(dueAfter)));
     }
+
+    // Build permission condition using OR:
+    // User can see a task if:
+    // 1. They are the drive owner, OR
+    // 2. They are a drive admin, OR
+    // 3. They have explicit page permission with canView=true
+    const permissionCondition = or(
+      eq(drives.ownerId, userId), // User is drive owner
+      and(
+        eq(driveMembers.userId, userId),
+        eq(driveMembers.role, 'ADMIN')
+      ), // User is drive admin
+      and(
+        eq(pagePermissions.userId, userId),
+        eq(pagePermissions.canView, true)
+      ) // User has explicit page permission
+    );
+
+    conditions.push(permissionCondition);
 
     // Query tasks with metadata and user information
     const tasks = await db
@@ -126,17 +147,35 @@ export async function GET(request: Request) {
       })
       .from(pages)
       .innerJoin(taskMetadata, eq(pages.id, taskMetadata.pageId))
+      .innerJoin(drives, eq(pages.driveId, drives.id))
+      .leftJoin(driveMembers, and(
+        eq(driveMembers.driveId, pages.driveId),
+        eq(driveMembers.userId, userId)
+      ))
+      .leftJoin(pagePermissions, and(
+        eq(pagePermissions.pageId, pages.id),
+        eq(pagePermissions.userId, userId)
+      ))
       .leftJoin(users, eq(taskMetadata.assigneeId, users.id))
       .where(and(...conditions))
       .orderBy(desc(taskMetadata.priority), desc(pages.updatedAt))
       .limit(limit)
       .offset(offset);
 
-    // Get total count
+    // Get total count with same permission filtering
     const [countResult] = await db
-      .select({ count: db.fn.count() })
+      .select({ count: sql<number>`count(distinct ${pages.id})` })
       .from(pages)
       .innerJoin(taskMetadata, eq(pages.id, taskMetadata.pageId))
+      .innerJoin(drives, eq(pages.driveId, drives.id))
+      .leftJoin(driveMembers, and(
+        eq(driveMembers.driveId, pages.driveId),
+        eq(driveMembers.userId, userId)
+      ))
+      .leftJoin(pagePermissions, and(
+        eq(pagePermissions.pageId, pages.id),
+        eq(pagePermissions.userId, userId)
+      ))
       .where(and(...conditions));
 
     return NextResponse.json({
