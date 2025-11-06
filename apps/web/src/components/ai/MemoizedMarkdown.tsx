@@ -17,8 +17,9 @@ function parseMarkdownIntoBlocks(markdown: string): string[] {
  */
 const customComponents: Components = {
   // Ensure code blocks are properly constrained
-  code: ({ inline, className, children, ...props }) => {
-    if (inline) {
+  code: ({ node, className, children, ...props }: any) => {
+    const isInline = !className?.includes('language-');
+    if (isInline) {
       return (
         <code className={`${className || ''} max-w-full`} {...props}>
           {children}
