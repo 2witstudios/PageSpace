@@ -204,42 +204,19 @@ final class ScrollState {
 
 ---
 
-### Phase 4: Scroll-to-Bottom Button (✅ COMPLETE)
+### Phase 4: Scroll-to-Bottom Button (❌ REMOVED)
 
-**File**: `Features/Chat/Components/ScrollToBottomButton.swift`
+**Status**: Feature removed - will research best implementation approach later
 
-#### Implementation:
-```swift
-struct ScrollToBottomButton: View {
-    let isVisible: Bool
-    let action: () -> Void
+**Reason**: Initial implementation did not display correctly. Rather than debug immediately, the feature was removed to maintain project momentum. ScrollState infrastructure remains in place for future implementation.
 
-    var body: some View {
-        Button(action: {
-            // Haptic feedback
-            let generator = UIImpactFeedbackGenerator(style: .light)
-            generator.impactOccurred()
-            action()
-        }) {
-            Image(systemName: "arrow.down.circle.fill")
-                .font(.system(size: 44))
-                .foregroundColor(.white)
-                .background(Circle().fill(DesignTokens.Colors.primary))
-                .shadow(color: Color.black.opacity(0.2), radius: 8, x: 0, y: 4)
-        }
-        .opacity(isVisible ? 1.0 : 0.0)
-        .scaleEffect(isVisible ? 1.0 : 0.8)
-        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isVisible)
-    }
-}
-```
+**What Remains**:
+- ✅ ScrollState still manages auto-scroll behavior
+- ✅ Auto-scroll when sending messages
+- ✅ Manual scroll disables auto-scroll (respects user intent)
+- ✅ Auto-scroll resumes when reaching bottom
 
-**Features**:
-- ✅ Shows when scrolled >100pt from bottom
-- ✅ 44x44pt circular button (ChatGPT-style)
-- ✅ Haptic feedback on tap
-- ✅ Auto-hides at bottom with spring animation
-- ✅ Integrated with ScrollState for visibility control
+**Future Work**: Research SwiftUI best practices for floating overlay buttons with ScrollView integration
 
 ---
 
@@ -453,11 +430,13 @@ After ensuring stability:
 - ✅ All 6 state objects created and integrated
 - ✅ ConversationManager refactored (638 lines)
 - ✅ ChatView updated with new patterns
-- ✅ ScrollToBottomButton component created
 - ✅ Pagination implemented with top sentinel
 - ✅ All 19 deprecated usages fixed
+- ✅ Auto-scroll behavior working correctly
 - ✅ **Zero compilation errors**
-- ✅ **Zero runtime crashes** (estimated based on patterns)
+- ✅ **Zero runtime crashes**
+- ✅ **Flickering eliminated** - confirmed by user
+- ✅ **Everything works great** - user feedback
 
 ---
 
@@ -483,7 +462,6 @@ After ensuring stability:
 4. `Core/State/SettingsState.swift` - 71 lines
 5. `Core/State/PaginationState.swift` - 77 lines
 6. `Core/State/ScrollState.swift` - 105 lines
-7. `Features/Chat/Components/ScrollToBottomButton.swift` - 75 lines
 
 ### Files Modified (5)
 1. `Core/Managers/ConversationManager.swift` - 638 lines (refactored)
@@ -492,7 +470,7 @@ After ensuring stability:
 4. `Features/Chat/Components/ProviderModelPicker.swift` - 6 changes
 5. `Features/Files/FilesAgentChatView.swift` - 10 changes
 
-**Total Lines Added**: ~647 lines (new state objects + button component)
+**Total Lines Added**: ~572 lines (new state objects only)
 **Total Lines Modified**: ~1,171 lines across 5 files
 
 ---

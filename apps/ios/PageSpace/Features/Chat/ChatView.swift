@@ -14,11 +14,6 @@ struct ChatView: View {
     @State private var messagePendingDeletion: Message?
     @State private var isShowingDeleteConfirmation = false
 
-    // Scroll tracking state
-    @State private var scrollOffset: CGFloat = 0
-    @State private var contentHeight: CGFloat = 0
-    @State private var visibleHeight: CGFloat = 0
-
     var body: some View {
         VStack(spacing: 0) {
             messagesSection
@@ -245,26 +240,8 @@ struct ChatView: View {
                         }
                     }
                     .padding()
-                    .background(
-                        GeometryReader { geometry in
-                            Color.clear.preference(
-                                key: ScrollOffsetPreferenceKey.self,
-                                value: geometry.frame(in: .named("scroll")).minY
-                            )
-                        }
-                    )
                 }
-                .coordinateSpace(name: "scroll")
                 .scrollDismissesKeyboard(.immediately)
-                .onPreferenceChange(ScrollOffsetPreferenceKey.self) { value in
-                    scrollOffset = value
-                    // Update scroll state for scroll button visibility
-                    conversationManager.scrollState.updateScrollPosition(
-                        contentHeight: contentHeight,
-                        visibleHeight: visibleHeight,
-                        offset: abs(scrollOffset)
-                    )
-                }
                 // Consolidated onChange handler - replaces duplicate handlers
                 .onChange(of: conversationManager.messageState.count) { oldCount, newCount in
                     // Only auto-scroll if scroll state allows it
@@ -286,32 +263,7 @@ struct ChatView: View {
                         }
                     }
                 }
-                // Scroll-to-bottom button overlay
-                .scrollToBottomButton(
-                    isVisible: conversationManager.scrollState.showScrollButton
-                ) {
-                    // Scroll to bottom when button tapped
-                    if conversationManager.scrollState.requestScrollToBottom() {
-                        let targetId = conversationManager.streamingState.streamingMessage?.id
-                            ?? conversationManager.messageState.lastMessage?.id
-
-                        if let id = targetId {
-                            withAnimation {
-                                proxy.scrollTo(id, anchor: .bottom)
-                            }
-                        }
-                    }
-                }
             }
-        }
-    }
-
-    // MARK: - Preference Keys
-
-    struct ScrollOffsetPreferenceKey: PreferenceKey {
-        static var defaultValue: CGFloat = 0
-        static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-            value = nextValue()
         }
     }
 
