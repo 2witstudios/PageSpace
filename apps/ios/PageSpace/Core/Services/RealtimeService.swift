@@ -27,6 +27,25 @@ class RealtimeService: ObservableObject {
             return
         }
 
+        // Validate token before connecting
+        if AuthManager.shared.isTokenExpired(token) {
+            print("❌ RealtimeService: Cannot connect - token expired")
+            print("🔄 Attempting to refresh token first...")
+            Task {
+                do {
+                    try await AuthManager.shared.refreshToken()
+                    // Retry connection with fresh token
+                    await MainActor.run {
+                        print("✅ Token refreshed - retrying Socket.IO connection")
+                        connect()
+                    }
+                } catch {
+                    print("❌ Failed to refresh token for Socket.IO: \(error)")
+                }
+            }
+            return
+        }
+
         guard manager == nil else {
             print("⚠️ RealtimeService: Already connected or connecting")
             return
