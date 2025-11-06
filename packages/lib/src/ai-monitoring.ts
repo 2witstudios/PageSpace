@@ -60,6 +60,65 @@ export const AI_PRICING = {
 } as const;
 
 /**
+ * Model Context Window Sizes (in tokens)
+ * Maximum context length for each model
+ */
+export const MODEL_CONTEXT_WINDOWS = {
+  // OpenRouter Models
+  'anthropic/claude-3.5-sonnet': 200000,
+  'anthropic/claude-3-haiku': 200000,
+  'anthropic/claude-opus-4.1': 200000,
+  'openai/gpt-4o': 128000,
+  'openai/gpt-4o-mini': 128000,
+  'openai/gpt-5': 200000, // Estimated
+  'openai/gpt-5-mini': 128000, // Estimated
+  'openai/gpt-5-nano': 128000, // Estimated
+  'meta-llama/llama-3.1-405b-instruct': 128000,
+  'mistralai/mistral-medium-3.1': 128000,
+  'mistralai/mistral-small-3.2-24b-instruct': 32000,
+  'mistralai/codestral-2508': 32000,
+  'google/gemini-2.5-pro': 2000000,
+  'google/gemini-2.5-flash': 1000000,
+  'google/gemini-2.5-flash-lite': 1000000,
+
+  // Google AI Direct Models
+  'gemini-2.0-flash-exp': 1000000,
+  'gemini-1.5-flash': 1000000,
+  'gemini-1.5-flash-8b': 1000000,
+  'gemini-1.5-pro': 2000000,
+
+  // OpenAI Direct Models
+  'gpt-4-turbo': 128000,
+  'gpt-4': 8192,
+  'gpt-3.5-turbo': 16385,
+
+  // Anthropic Direct Models
+  'claude-3-5-sonnet-latest': 200000,
+  'claude-3-5-haiku-latest': 200000,
+  'claude-3-opus-latest': 200000,
+
+  // Ollama (local) - context varies by model and configuration
+  'llama3.2': 128000,
+  'llama3.2-vision': 128000,
+  'llama3.1': 128000,
+  'qwen2.5-coder': 32000,
+  'deepseek-r1': 64000,
+  'gemma2': 8192,
+  'mistral': 32000,
+  'phi3': 128000,
+
+  // Default
+  'default': 128000
+} as const;
+
+/**
+ * Get context window size for a model
+ */
+export function getContextWindow(model: string): number {
+  return MODEL_CONTEXT_WINDOWS[model as keyof typeof MODEL_CONTEXT_WINDOWS] || MODEL_CONTEXT_WINDOWS.default;
+}
+
+/**
  * Calculate cost based on tokens and model
  */
 export function calculateCost(
@@ -595,7 +654,9 @@ export const AIMonitoring = {
   getEfficiencyMetrics: getTokenEfficiencyMetrics,
   calculateCost,
   estimateTokens,
+  getContextWindow,
   pricing: AI_PRICING,
+  contextWindows: MODEL_CONTEXT_WINDOWS,
 };
 
 export default AIMonitoring;

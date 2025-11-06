@@ -29,6 +29,7 @@ import { useMCP } from '@/hooks/useMCP';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Server } from 'lucide-react';
+import { AiUsageMonitor } from '@/components/ai/AiUsageMonitor';
 
 interface AiChatViewProps {
     page: TreePage;
@@ -648,7 +649,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     <div className="flex flex-col h-full">
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col h-full">
-        <div className="p-4 border-b border-[var(--separator)]">
+        <div className="p-4 border-b border-[var(--separator)] space-y-3">
           <div className="flex items-center justify-between">
             <TabsList className="grid grid-cols-3 max-w-lg">
               <TabsTrigger value="chat" className="flex items-center space-x-2">
@@ -722,6 +723,14 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
               </Button>
             )}
           </div>
+
+          {/* AI Usage Monitor - Show when chat tab is active and conversation exists */}
+          {activeTab === 'chat' && currentConversationId && (
+            <AiUsageMonitor
+              conversationId={currentConversationId}
+              className="max-w-4xl mx-auto"
+            />
+          )}
         </div>
 
         {/* Chat Tab */}
