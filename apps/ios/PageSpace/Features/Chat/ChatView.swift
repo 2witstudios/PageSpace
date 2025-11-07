@@ -13,6 +13,7 @@ struct ChatView: View {
     @State private var alertMessage: String?
     @State private var messagePendingDeletion: Message?
     @State private var isShowingDeleteConfirmation = false
+    @State private var showTokenBreakdown = false  // Toggle between rate limiting and token breakdown
 
     var body: some View {
         VStack(spacing: 0) {
@@ -67,21 +68,14 @@ struct ChatView: View {
             }
             ToolbarItem(placement: .principal) {
                 Button(action: {
-                    withAnimation(.easeInOut(duration: 0.3)) {
-                        isSidebarOpen.toggle()
-                    }
+                    showTokenBreakdown.toggle()
                 }) {
                     VStack(spacing: 2) {
+                        // LINE 1: Always show title (conversation title or agent name)
                         if let conversation = conversationManager.conversationState.currentConversation {
-                            // Show conversation title
+                            // Existing conversation - show conversation title
                             Text(conversation.displayTitle)
                                 .font(.headline)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                            // Optionally show agent type in small text
-                            Text(agentTypeLabel(conversation.type ?? "global"))
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
                                 .lineLimit(1)
                                 .truncationMode(.tail)
                         } else if let agent = agentService.selectedAgent {
@@ -90,17 +84,34 @@ struct ChatView: View {
                                 .font(.headline)
                                 .lineLimit(1)
                                 .truncationMode(.tail)
-                            if let subtitle = agent.subtitle {
-                                Text(subtitle)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                    .lineLimit(1)
-                                    .truncationMode(.tail)
-                            }
                         } else {
                             // Fallback
                             Text("Chat")
                                 .font(.headline)
+                        }
+
+                        // LINE 2: Toggle between rate limiting and token breakdown
+                        if showTokenBreakdown {
+                            // Show token breakdown
+                            let agentName = conversationManager.conversationState.currentConversation != nil ? agentTypeLabel(conversationManager.conversationState.currentConversation?.type ?? "global") : nil
+                            Text(conversationManager.usageState.getTokenBreakdownDisplay(agentName: agentName))
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        } else {
+                            // Show rate limiting (default)
+                            let agentName = conversationManager.conversationState.currentConversation != nil ? agentTypeLabel(conversationManager.conversationState.currentConversation?.type ?? "global") : nil
+                            Text(conversationManager.usageState.getRateLimitDisplay(
+                                provider: conversationManager.settingsState.selectedProvider,
+                                model: conversationManager.settingsState.selectedModel,
+                                tier: conversationManager.settingsState.providerSettings?.userSubscriptionTier,
+                                agentName: agentName
+                            ))
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                         }
                     }
                     .frame(maxWidth: 200)
@@ -119,6 +130,17 @@ struct ChatView: View {
                         Image(systemName: "plus")
                             .foregroundColor(DesignTokens.Colors.primary)
                     }
+                }
+            }
+        }
+        .onAppear {
+            // Fetch usage data when view appears
+            Task {
+                await conversationManager.usageState.fetchUsage()
+
+                // Fetch AI conversation usage if we have a conversation
+                if let conversationId = conversationManager.conversationState.currentConversationId {
+                    await conversationManager.usageState.fetchAiConversationUsage(conversationId: conversationId)
                 }
             }
         }
@@ -286,6 +308,16 @@ struct ChatView: View {
 
         messageText = ""
         await conversationManager.sendMessage(text)
+
+        // Refresh usage data after message is sent
+        Task {
+            await conversationManager.usageState.fetchUsage()
+
+            // Also fetch AI conversation usage if we have a conversation
+            if let conversationId = conversationManager.conversationState.currentConversationId {
+                await conversationManager.usageState.fetchAiConversationUsage(conversationId: conversationId)
+            }
+        }
     }
 
     private func plainText(from message: Message) -> String {

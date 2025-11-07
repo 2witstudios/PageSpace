@@ -27,8 +27,15 @@ enum APIEndpoints {
         "/api/ai_conversations/\(conversationId)/messages/\(messageId)"
     }
 
+    static func conversationUsage(_ conversationId: String) -> String {
+        "/api/ai_conversations/\(conversationId)/usage"
+    }
+
     // MARK: - AI Settings
     static let aiSettings = "/api/ai/settings"
+
+    // MARK: - Subscriptions & Usage
+    static let subscriptionUsage = "/api/subscriptions/usage"
 
     // MARK: - Page AI (CHAT_AI)
     static let pageAI = "/api/ai/chat"

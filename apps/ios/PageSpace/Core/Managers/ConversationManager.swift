@@ -37,6 +37,9 @@ class ConversationManager: ObservableObject {
     /// Scroll state (scroll position tracking)
     let scrollState = ScrollState()
 
+    /// Usage state (AI usage and rate limiting)
+    let usageState = UsageState()
+
     // MARK: - Backward Compatibility (Deprecated - Will be removed in Phase 7)
 
     /// Track the AGENT user selected (for creating new conversations)
