@@ -29,6 +29,7 @@ import { useMCP } from '@/hooks/useMCP';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Server } from 'lucide-react';
+import { AiUsageMonitor } from '@/components/ai/AiUsageMonitor';
 
 interface AiChatViewProps {
     page: TreePage;
@@ -286,7 +287,12 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     }
 
     // Now regenerate with a clean slate
-    regenerate();
+    regenerate({
+      body: {
+        chatId: page.id,
+        conversationId: currentConversationId,
+      }
+    });
   };
 
   // Conversation management functions (wrapped in useCallback for stable references)
@@ -648,7 +654,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     <div className="flex flex-col h-full">
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col h-full">
-        <div className="p-4 border-b border-[var(--separator)]">
+        <div className="p-4 border-b border-[var(--separator)] space-y-3">
           <div className="flex items-center justify-between">
             <TabsList className="grid grid-cols-3 max-w-lg">
               <TabsTrigger value="chat" className="flex items-center space-x-2">
@@ -668,6 +674,12 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             {/* Chat tab actions */}
             {activeTab === 'chat' && (
               <div className="flex items-center gap-3">
+                {/* AI Usage Monitor - Compact mode inline */}
+                <AiUsageMonitor
+                  pageId={page.id}
+                  compact
+                />
+
                 {/* MCP Toggle (Desktop only, enabled by default per-chat) */}
                 {mcp.isDesktop && (
                   <div className="flex items-center gap-2 border border-[var(--separator)] rounded-lg px-3 py-1.5">

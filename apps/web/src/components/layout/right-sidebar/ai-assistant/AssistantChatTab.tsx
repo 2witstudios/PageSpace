@@ -13,6 +13,7 @@ import { fetchWithAuth, patch, del } from '@/lib/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
 import { toast } from 'sonner';
+import { AiUsageMonitor } from '@/components/ai/AiUsageMonitor';
 
 
 interface ProviderSettings {
@@ -451,17 +452,29 @@ const AssistantChatTab: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header with New Chat button */}
-      <div className="flex items-center justify-between p-2 border-b border-gray-200 dark:border-[var(--separator)] bg-card">
-        <span className="text-sm font-medium text-muted-foreground">Chat</span>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={handleNewConversation}
-          className="h-7 px-2"
-        >
-          <Plus className="h-3 w-3" />
-        </Button>
+      {/* Header with New Chat button and Usage Monitor */}
+      <div className="flex flex-col border-b border-gray-200 dark:border-[var(--separator)] bg-card">
+        <div className="flex items-center justify-between p-2">
+          <span className="text-sm font-medium text-muted-foreground">Chat</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleNewConversation}
+            className="h-7 px-2"
+          >
+            <Plus className="h-3 w-3" />
+          </Button>
+        </div>
+
+        {/* AI Usage Monitor - Compact mode in sidebar */}
+        {currentConversationId && (
+          <div className="px-2 pb-2">
+            <AiUsageMonitor
+              conversationId={currentConversationId}
+              compact
+            />
+          </div>
+        )}
       </div>
 
       {/* Messages Area */}
