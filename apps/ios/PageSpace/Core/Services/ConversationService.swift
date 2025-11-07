@@ -86,7 +86,3 @@ class ConversationService: ObservableObject {
         try await apiClient.request(endpoint: APIEndpoints.conversation(id))
     }
 }
-
-// MARK: - Empty Response
-
-struct EmptyResponse: Codable {}

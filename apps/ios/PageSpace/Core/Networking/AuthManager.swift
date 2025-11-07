@@ -24,6 +24,7 @@ class AuthManager: ObservableObject {
     static let shared = AuthManager()
 
     @MainActor @Published var isAuthenticated = false
+    @MainActor @Published var isCheckingAuth = true
     @MainActor @Published var currentUser: User?
     @MainActor @Published var csrfToken: String?
 
@@ -36,9 +37,15 @@ class AuthManager: ObservableObject {
     // Accounts for differences between server and device time
     private let clockSkewBufferSeconds: TimeInterval = 60
 
+    // Token refresh configuration
+    private var tokenRefreshTask: Task<Void, Never>?
+    private let refreshBufferSeconds: TimeInterval = 120 // Refresh 2 minutes before expiry
+
     private init() {
         // Load token from Keychain on init
         Task { @MainActor in
+            isCheckingAuth = true
+
             if let token = loadToken() {
                 // Check if token is expired before using it
                 if isTokenExpired(token) {
@@ -46,6 +53,7 @@ class AuthManager: ObservableObject {
                     do {
                         try await refreshToken()
                         try await loadCurrentUser()
+                        scheduleTokenRefresh()
                     } catch {
                         print("Failed to refresh expired token: \(error.localizedDescription)")
                         logout()
@@ -54,12 +62,15 @@ class AuthManager: ObservableObject {
                     // Token is still valid, load user
                     do {
                         try await loadCurrentUser()
+                        scheduleTokenRefresh()
                     } catch {
                         print("Failed to load user on init: \(error.localizedDescription)")
                         logout()
                     }
                 }
             }
+
+            isCheckingAuth = false
         }
     }
 
@@ -94,6 +105,9 @@ class AuthManager: ObservableObject {
                 userInfo: [NSLocalizedDescriptionKey: "Failed to persist authentication token"]
             )
         }
+
+        // Schedule proactive token refresh
+        scheduleTokenRefresh()
 
         return response.user
     }
@@ -133,6 +147,9 @@ class AuthManager: ObservableObject {
             )
         }
 
+        // Schedule proactive token refresh
+        scheduleTokenRefresh()
+
         return response.user
     }
 
@@ -166,6 +183,9 @@ class AuthManager: ObservableObject {
             )
         }
 
+        // Schedule proactive token refresh
+        scheduleTokenRefresh()
+
         return response.user
     }
 
@@ -189,6 +209,9 @@ class AuthManager: ObservableObject {
         try saveRefreshToken(response.refreshToken)
         try saveCSRFToken(response.csrfToken)
         csrfToken = response.csrfToken
+
+        // Schedule next refresh after successful token refresh
+        scheduleTokenRefresh()
     }
 
     @MainActor
@@ -216,12 +239,17 @@ class AuthManager: ObservableObject {
 
     @MainActor
     func logout() {
+        // Cancel any scheduled token refresh
+        tokenRefreshTask?.cancel()
+        tokenRefreshTask = nil
+
         deleteToken()
         deleteRefreshToken()
         deleteCSRFToken()
         currentUser = nil
         csrfToken = nil
         isAuthenticated = false
+        isCheckingAuth = false
     }
 
     nonisolated func getToken() -> String? {
@@ -237,7 +265,7 @@ class AuthManager: ObservableObject {
     /// Check if a JWT token is expired
     /// - Parameter token: The JWT token string
     /// - Returns: True if expired or invalid, false if still valid
-    nonisolated private func isTokenExpired(_ token: String) -> Bool {
+    nonisolated func isTokenExpired(_ token: String) -> Bool {
         let parts = token.split(separator: ".")
         guard parts.count == 3 else {
             print("[AuthManager] JWT validation failed: Invalid JWT format (expected 3 parts, got \(parts.count))")
@@ -286,6 +314,116 @@ class AuthManager: ObservableObject {
         }
 
         return isExpired
+    }
+
+    /// Check if a JWT token is expiring soon (within buffer period)
+    /// - Parameters:
+    ///   - token: The JWT token string
+    ///   - bufferSeconds: Time buffer in seconds (default 300 = 5 minutes)
+    /// - Returns: True if token expires within buffer period
+    nonisolated func isTokenExpiringSoon(_ token: String, bufferSeconds: TimeInterval = 300) -> Bool {
+        let parts = token.split(separator: ".")
+        guard parts.count == 3 else { return true }
+
+        var payload = String(parts[1])
+        let remainder = payload.count % 4
+        if remainder > 0 {
+            payload += String(repeating: "=", count: 4 - remainder)
+        }
+
+        let base64 = payload
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+
+        guard let data = Data(base64Encoded: base64),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let exp = json["exp"] as? TimeInterval else {
+            return true
+        }
+
+        let now = Date().timeIntervalSince1970
+        return now > (exp - bufferSeconds)
+    }
+
+    // MARK: - Proactive Token Refresh
+
+    /// Extract expiry timestamp from JWT token
+    /// - Parameter token: The JWT token string
+    /// - Returns: Expiry timestamp as TimeInterval, or 0 if invalid
+    nonisolated private func getTokenExpiryTime(_ token: String) -> TimeInterval {
+        let parts = token.split(separator: ".")
+        guard parts.count == 3 else { return 0 }
+
+        var payload = String(parts[1])
+        let remainder = payload.count % 4
+        if remainder > 0 {
+            payload += String(repeating: "=", count: 4 - remainder)
+        }
+
+        let base64 = payload
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+
+        guard let data = Data(base64Encoded: base64),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let exp = json["exp"] as? TimeInterval else {
+            return 0
+        }
+
+        return exp
+    }
+
+    /// Schedule proactive token refresh before expiration
+    @MainActor
+    private func scheduleTokenRefresh() {
+        // Cancel existing task
+        tokenRefreshTask?.cancel()
+
+        guard let token = getToken() else {
+            print("[AuthManager] Cannot schedule refresh: no token")
+            return
+        }
+
+        // Calculate time until refresh needed
+        let expiryTime = getTokenExpiryTime(token)
+        let refreshTime = expiryTime - refreshBufferSeconds
+        let now = Date().timeIntervalSince1970
+        let timeUntilRefresh = refreshTime - now
+
+        if timeUntilRefresh <= 0 {
+            // Token expires soon - refresh immediately
+            print("[AuthManager] 🔐 Token expires soon - refreshing immediately")
+            Task {
+                do {
+                    try await refreshToken()
+                } catch {
+                    print("[AuthManager] Failed to proactively refresh token: \(error)")
+                    logout()
+                }
+            }
+        } else {
+            // Schedule refresh for later using Task.sleep
+            let expiryDate = Date(timeIntervalSince1970: expiryTime)
+            let refreshDate = Date(timeIntervalSince1970: refreshTime)
+            print("[AuthManager] 🔐 Token refresh scheduled:")
+            print("  - Expires at: \(expiryDate)")
+            print("  - Will refresh at: \(refreshDate)")
+            print("  - Time until refresh: \(Int(timeUntilRefresh))s")
+
+            tokenRefreshTask = Task {
+                try? await Task.sleep(nanoseconds: UInt64(timeUntilRefresh * 1_000_000_000))
+
+                guard !Task.isCancelled else { return }
+
+                print("[AuthManager] 🔐 Executing scheduled token refresh")
+                do {
+                    try await refreshToken()
+                } catch {
+                    print("[AuthManager] Scheduled token refresh failed: \(error)")
+                    logout()
+                }
+            }
+        }
     }
 
     // MARK: - Keychain Operations

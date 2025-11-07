@@ -160,8 +160,6 @@ class DirectMessagesService: ObservableObject {
 
     /// Mark all messages in a conversation as read
     func markAsRead(conversationId: String) async throws {
-        struct EmptyResponse: Codable {}
-
         do {
             let _: EmptyResponse = try await apiClient.request(
                 endpoint: "/api/messages/\(conversationId)",
