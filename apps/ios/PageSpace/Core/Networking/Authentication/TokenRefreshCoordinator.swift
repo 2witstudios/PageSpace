@@ -2,50 +2,51 @@ import Foundation
 
 /// Thread-safe coordinator for JWT token refresh operations
 /// Prevents multiple simultaneous refresh attempts and coordinates retry logic
+/// Uses continuations to ensure waiting requests receive the refresh result
 actor TokenRefreshCoordinator {
     static let shared = TokenRefreshCoordinator()
 
     private var isRefreshing = false
+    private var waitingContinuations: [CheckedContinuation<Bool, Error>] = []
 
     private init() {}
 
     // MARK: - Public Interface
 
     /// Attempt to refresh the authentication token if needed
-    /// Returns true if refresh succeeded, false otherwise
+    /// Returns true if refresh succeeded and token is valid, false otherwise
+    /// If another refresh is in progress, suspends until that refresh completes
     func refreshTokenIfNeeded() async throws -> Bool {
-        // Check if another request is already refreshing
+        // If already refreshing, wait for that refresh to complete
         if isRefreshing {
-            // Wait a bit for the other refresh to complete
-            try await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
-            // Return true if token is now available (refresh succeeded)
-            return AuthManager.shared.getToken() != nil
+            return try await withCheckedThrowingContinuation { continuation in
+                waitingContinuations.append(continuation)
+            }
         }
 
-        // Try to begin refresh
-        guard beginRefresh() else {
-            // Another task started refreshing between check and begin
-            try await Task.sleep(nanoseconds: 500_000_000)
-            return AuthManager.shared.getToken() != nil
-        }
+        // Begin refresh
+        isRefreshing = true
 
         defer {
-            endRefresh()
+            isRefreshing = false
         }
 
         do {
             // Attempt to refresh the token (returns Void, throws on error)
             try await AuthManager.shared.refreshToken()
 
-            // Check if we now have a valid token
-            if AuthManager.shared.getToken() != nil {
-                print("✅ Token refresh successful")
+            // Verify we have a VALID (not expired) token
+            if let token = AuthManager.shared.getToken(),
+               !AuthManager.shared.isTokenExpired(token) {
+                print("✅ Token refresh successful - token is valid")
+                resumeWaitingRequests(with: true)
                 return true
             } else {
-                print("❌ Token refresh failed - no token after refresh")
+                print("❌ Token refresh failed - no valid token after refresh")
                 await MainActor.run {
                     AuthManager.shared.logout()
                 }
+                resumeWaitingRequests(with: false)
                 return false
             }
         } catch {
@@ -54,24 +55,22 @@ actor TokenRefreshCoordinator {
             await MainActor.run {
                 AuthManager.shared.logout()
             }
+            resumeWaitingRequests(with: false)
             return false
         }
     }
 
     // MARK: - Private Coordination
 
-    private func beginRefresh() -> Bool {
-        if isRefreshing {
-            return false // Already refreshing
+    /// Resume all waiting requests with the refresh result
+    private func resumeWaitingRequests(with result: Bool) {
+        for continuation in waitingContinuations {
+            continuation.resume(returning: result)
         }
-        isRefreshing = true
-        return true
+        waitingContinuations.removeAll()
     }
 
-    private func endRefresh() {
-        isRefreshing = false
-    }
-
+    /// Check if a refresh is currently in progress (for debugging/testing)
     func isCurrentlyRefreshing() -> Bool {
         return isRefreshing
     }

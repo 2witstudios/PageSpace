@@ -99,10 +99,29 @@ SSEStreamHandler.shared.streamRequest(...)
 TokenRefreshCoordinator.shared.refreshTokenIfNeeded()
 ```
 
-#### 2.2 Build Verification ✅
+#### 2.2 TokenRefreshCoordinator Race Condition Fix ✅
+
+**Problem Identified**:
+When multiple requests received 401s simultaneously, waiting requests would wake up after 0.5s and check if a token exists. However, the expired token was still present during the refresh, causing immediate false positives and duplicate 401 errors.
+
+**Solution Implemented**:
+- Added `waitingContinuations` array to track suspended requests
+- Replaced arbitrary sleep with proper Swift Continuation suspension
+- Added token validity check using `AuthManager.shared.isTokenExpired()`
+- All waiting requests now receive the same refresh result atomically
+
+**Benefits**:
+- ✅ Eliminates race condition
+- ✅ Validates token freshness before returning success
+- ✅ Efficient coordination without arbitrary delays
+- ✅ All concurrent requests get consistent results
+- ✅ Thread-safe with Actor isolation
+
+#### 2.3 Build Verification ✅
 - All files compile successfully
 - No runtime errors introduced
 - Backward compatibility maintained
+- Race condition fixed
 - BUILD SUCCEEDED
 
 ## Metrics
