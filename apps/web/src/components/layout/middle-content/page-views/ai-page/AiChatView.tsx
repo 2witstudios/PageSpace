@@ -287,7 +287,12 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     }
 
     // Now regenerate with a clean slate
-    regenerate();
+    regenerate({
+      body: {
+        chatId: page.id,
+        conversationId: currentConversationId,
+      }
+    });
   };
 
   // Conversation management functions (wrapped in useCallback for stable references)

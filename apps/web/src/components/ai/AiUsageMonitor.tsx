@@ -1,10 +1,12 @@
 'use client';
 
+import { useEffect } from 'react';
 import { useAiUsage, usePageAiUsage } from '@/hooks/useAiUsage';
 import { Progress } from '@/components/ui/progress';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Activity, DollarSign, Database, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useSocketStore } from '@/stores/socketStore';
 
 interface AiUsageMonitorProps {
   conversationId?: string | null | undefined;
@@ -24,17 +26,42 @@ interface AiUsageMonitorProps {
  * - For Page AI: pass both `conversationId` and `pageId` (will prioritize conversationId)
  */
 export function AiUsageMonitor({ conversationId, pageId, className, compact = false }: AiUsageMonitorProps) {
+  const { connect, getSocket } = useSocketStore();
+
   // Use conversation-based tracking for Global Assistant
-  const { usage: conversationUsage, isLoading: conversationLoading, isError: conversationError } = useAiUsage(
+  const { usage: conversationUsage, isLoading: conversationLoading, isError: conversationError, mutate: mutateConversation } = useAiUsage(
     conversationId,
     15000
   );
 
   // Use page-based tracking for Page AI (fallback)
-  const { usage: pageUsage, isLoading: pageLoading, isError: pageError } = usePageAiUsage(
+  const { usage: pageUsage, isLoading: pageLoading, isError: pageError, mutate: mutatePage } = usePageAiUsage(
     !conversationId ? pageId : null, // Only query if no conversationId
     15000
   );
+
+  // Socket.IO listener for real-time usage updates
+  useEffect(() => {
+    connect();
+    const socket = getSocket();
+
+    if (socket) {
+      const handleUsageUpdated = () => {
+        // Trigger refetch when usage updates
+        if (conversationId) {
+          mutateConversation();
+        } else if (pageId) {
+          mutatePage();
+        }
+      };
+
+      socket.on('usage:updated', handleUsageUpdated);
+
+      return () => {
+        socket.off('usage:updated', handleUsageUpdated);
+      };
+    }
+  }, [connect, getSocket, conversationId, pageId, mutateConversation, mutatePage]);
 
   // Determine which data to use
   const usage = conversationId ? conversationUsage : pageUsage;
