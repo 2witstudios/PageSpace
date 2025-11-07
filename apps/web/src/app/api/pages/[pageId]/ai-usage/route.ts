@@ -3,7 +3,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, aiUsageLogs, pages, eq, desc } from '@pagespace/db';
 import { getUserAccessLevel, loggers } from '@pagespace/lib/server';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['jwt'] as const };
 
 /**
  * GET - Get AI usage statistics for a specific page (across all conversations)
