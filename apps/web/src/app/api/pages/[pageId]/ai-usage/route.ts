@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db, aiUsageLogs, pages, eq, and, desc } from '@pagespace/db';
+import { db, aiUsageLogs, pages, eq, desc } from '@pagespace/db';
 import { getUserAccessLevel, loggers } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
@@ -33,7 +33,7 @@ export async function GET(
 
     // Check permissions
     const accessLevel = await getUserAccessLevel(userId, pageId);
-    if (!accessLevel || accessLevel === 'none') {
+    if (!accessLevel || !accessLevel.canView) {
       return NextResponse.json({
         error: 'Access denied'
       }, { status: 403 });

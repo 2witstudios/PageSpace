@@ -20,6 +20,7 @@ import { useGlobalChat } from '@/contexts/GlobalChatContext';
 import { useMCPStore } from '@/stores/useMCPStore';
 import { useMCP } from '@/hooks/useMCP';
 import { toast } from 'sonner';
+import { AiUsageMonitor } from '@/components/ai/AiUsageMonitor';
 
 
 interface ProviderSettings {
@@ -520,13 +521,21 @@ const GlobalAssistantView: React.FC = () => {
       </div>
 
       {/* Role Selector Header */}
-      <div className="flex items-center p-4 border-b border-gray-200 dark:border-[var(--separator)]">
+      <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-[var(--separator)]">
         <RoleSelector
           currentRole={currentAgentRole}
           onRoleChange={setCurrentAgentRole}
           disabled={status === 'streaming'}
           size="sm"
         />
+
+        {/* AI Usage Monitor - Compact mode inline */}
+        {currentConversationId && (
+          <AiUsageMonitor
+            conversationId={currentConversationId}
+            compact
+          />
+        )}
       </div>
 
       {/* Messages Area */}

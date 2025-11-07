@@ -1,6 +1,7 @@
 import useSWR from 'swr';
 import { fetchWithAuth } from '@/lib/auth-fetch';
 import { getContextWindow } from '@pagespace/lib/ai-monitoring';
+import { useEditingStore } from '@/stores/useEditingStore';
 
 /**
  * AI Usage data structure
@@ -58,17 +59,20 @@ const fetcher = async (url: string) => {
  * Hook for fetching AI usage data for a specific conversation
  *
  * @param conversationId - The conversation ID to fetch usage for
- * @param refreshInterval - Optional refresh interval in milliseconds (default: 5000ms)
+ * @param refreshInterval - Optional refresh interval in milliseconds (default: 15000ms)
  */
-export function useAiUsage(conversationId: string | null | undefined, refreshInterval = 5000) {
+export function useAiUsage(conversationId: string | null | undefined, refreshInterval = 15000) {
+  const isAnyActive = useEditingStore(state => state.isAnyActive());
+
   const swrKey = conversationId
     ? `/api/ai_conversations/${encodeURIComponent(conversationId)}/usage`
     : null;
 
-  const { data, error, mutate, isLoading } = useSWR<AiUsageResponse>(
+  const { data, error, mutate } = useSWR<AiUsageResponse>(
     swrKey,
     fetcher,
     {
+      isPaused: () => isAnyActive,
       refreshInterval,
       revalidateOnFocus: false,
       dedupingInterval: 2000,
@@ -103,15 +107,18 @@ export function useAiUsage(conversationId: string | null | undefined, refreshInt
 /**
  * Hook for fetching AI usage data for a specific page (across all conversations)
  */
-export function usePageAiUsage(pageId: string | null | undefined, refreshInterval = 5000) {
+export function usePageAiUsage(pageId: string | null | undefined, refreshInterval = 15000) {
+  const isAnyActive = useEditingStore(state => state.isAnyActive());
+
   const swrKey = pageId
     ? `/api/pages/${encodeURIComponent(pageId)}/ai-usage`
     : null;
 
-  const { data, error, mutate, isLoading } = useSWR<AiUsageResponse>(
+  const { data, error, mutate } = useSWR<AiUsageResponse>(
     swrKey,
     fetcher,
     {
+      isPaused: () => isAnyActive,
       refreshInterval,
       revalidateOnFocus: false,
       dedupingInterval: 2000,

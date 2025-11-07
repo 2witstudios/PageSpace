@@ -72,6 +72,7 @@ export async function POST(request: Request) {
   const startTime = Date.now();
   let userId: string | undefined;
   let chatId: string | undefined;
+  let conversationId: string | undefined;
   let selectedProvider: string | undefined;
   let selectedModel: string | undefined;
   let usagePromise: Promise<LanguageModelUsage | undefined> | undefined;
@@ -235,7 +236,7 @@ export async function POST(request: Request) {
     });
 
     // Auto-generate conversationId if not provided (seamless UX)
-    const conversationId = requestConversationId || createId();
+    conversationId = requestConversationId || createId();
     loggers.ai.debug('AI Chat API: Conversation session', {
       conversationId,
       isNewConversation: !requestConversationId
@@ -859,7 +860,7 @@ MENTION PROCESSING:
               await saveMessageToDatabase({
                 messageId,
                 pageId: chatId,
-                conversationId, // Group messages into conversation sessions
+                conversationId: conversationId!, // Group messages into conversation sessions
                 userId: null, // AI message
                 role: 'assistant',
                 content: messageContent,
@@ -972,7 +973,7 @@ MENTION PROCESSING:
                 prompt: userPromptContent?.substring(0, 1000),
                 completion: messageContent?.substring(0, 1000),
                 duration,
-                conversationId: chatId,
+                conversationId, // Use actual conversation ID instead of pageId
                 messageId,
                 pageId: chatId,
                 driveId: pageContext?.driveId,
@@ -997,7 +998,7 @@ MENTION PROCESSING:
                     toolName: toolCall.toolName,
                     toolId: toolCall.toolCallId,
                     args: undefined,
-                    conversationId: chatId,
+                    conversationId, // Use actual conversation ID instead of pageId
                     pageId: chatId,
                     success: true
                   });
@@ -1046,6 +1047,7 @@ MENTION PROCESSING:
     const usage = usagePromise ? await usagePromise : undefined;
 
     // Track AI usage even for errors using enhanced monitoring
+    // Note: conversationId might not be available in error path, use chatId as fallback
     await AIMonitoring.trackUsage({
       userId: userId || 'unknown',
       provider: selectedProvider || 'unknown',
@@ -1056,7 +1058,7 @@ MENTION PROCESSING:
         usage?.totalTokens ??
         ((usage?.inputTokens || 0) + (usage?.outputTokens || 0) || undefined),
       duration: Date.now() - startTime,
-      conversationId: chatId,
+      conversationId: conversationId || chatId, // Use conversationId if available, fallback to chatId
       pageId: chatId,
       driveId: undefined,
       success: false,

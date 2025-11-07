@@ -33,6 +33,7 @@ import { getMCPBridge } from '@/lib/mcp-bridge';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 import type { MCPTool } from '@/types/mcp';
+import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
 
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
@@ -168,6 +169,7 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ id: string }> }
 ) {
+  const startTime = Date.now();
   try {
     const usageLogger = loggers.api.child({ module: 'global-assistant-usage' });
     loggers.api.debug('🚀 Global Assistant Chat API: Starting request processing', {});
@@ -680,6 +682,54 @@ MENTION PROCESSING:
               .where(eq(conversations.id, conversationId));
 
             loggers.api.debug('✅ Global Assistant Chat API: AI response message saved to database', {});
+
+            // Track detailed AI usage (tokens, cost, etc.)
+            try {
+              // Only attempt to get usage if the stream completed successfully
+              const usage = await result.usage;
+
+              // Only track if we actually have usage data
+              if (usage && usage.totalTokens && usage.totalTokens > 0) {
+                const duration = Date.now() - startTime;
+
+                await AIMonitoring.trackUsage({
+                  userId: userId!,
+                  provider: currentProvider,
+                  model: currentModel,
+                  inputTokens: usage.inputTokens,
+                  outputTokens: usage.outputTokens,
+                  totalTokens: usage.totalTokens,
+                  duration,
+                  conversationId,
+                  messageId,
+                  success: true,
+                  metadata: {
+                    toolCallsCount: extractedToolCalls.length,
+                    toolResultsCount: extractedToolResults.length,
+                    agentRole: agentRole || 'PARTNER',
+                  }
+                });
+
+                loggers.api.debug('✅ Global Assistant: AI usage tracked', {
+                  conversationId: maskIdentifier(conversationId),
+                  messageId: maskIdentifier(messageId),
+                  tokens: usage.totalTokens,
+                });
+              } else {
+                loggers.api.debug('ℹ️ Global Assistant: No usage data available (stream may have been aborted)', {
+                  conversationId: maskIdentifier(conversationId),
+                  messageId: maskIdentifier(messageId),
+                });
+              }
+            } catch (trackingError) {
+              // Log as debug, not error - this is expected when stream is aborted
+              loggers.api.debug('ℹ️ Global Assistant: Could not track AI usage (stream aborted or failed)', {
+                conversationId: maskIdentifier(conversationId),
+                messageId: maskIdentifier(messageId),
+                error: trackingError instanceof Error ? trackingError.message : 'Unknown error',
+              });
+              // Don't fail the request if tracking fails
+            }
 
             // Track usage for PageSpace providers only (rate limiting/quota tracking)
             const isPageSpaceProvider = currentProvider === 'pagespace';

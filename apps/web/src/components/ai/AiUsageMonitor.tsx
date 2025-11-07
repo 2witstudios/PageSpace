@@ -1,13 +1,14 @@
 'use client';
 
-import { useAiUsage } from '@/hooks/useAiUsage';
+import { useAiUsage, usePageAiUsage } from '@/hooks/useAiUsage';
 import { Progress } from '@/components/ui/progress';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { Activity, DollarSign, Database } from 'lucide-react';
+import { Activity, DollarSign, Database, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface AiUsageMonitorProps {
-  conversationId: string | null | undefined;
+  conversationId?: string | null | undefined;
+  pageId?: string | null | undefined;
   className?: string;
   compact?: boolean;
 }
@@ -17,12 +18,41 @@ interface AiUsageMonitorProps {
  *
  * Displays real-time token usage, context window visualization, and cost estimation
  * for active AI conversations in PageSpace.
+ *
+ * Usage:
+ * - For Global Assistant: pass `conversationId`
+ * - For Page AI: pass both `conversationId` and `pageId` (will prioritize conversationId)
  */
-export function AiUsageMonitor({ conversationId, className, compact = false }: AiUsageMonitorProps) {
-  const { usage, isLoading } = useAiUsage(conversationId, 5000);
+export function AiUsageMonitor({ conversationId, pageId, className, compact = false }: AiUsageMonitorProps) {
+  // Use conversation-based tracking for Global Assistant
+  const { usage: conversationUsage, isLoading: conversationLoading, isError: conversationError } = useAiUsage(
+    conversationId,
+    15000
+  );
 
-  // Don't render if no conversation or loading
-  if (!conversationId || isLoading || !usage) {
+  // Use page-based tracking for Page AI (fallback)
+  const { usage: pageUsage, isLoading: pageLoading, isError: pageError } = usePageAiUsage(
+    !conversationId ? pageId : null, // Only query if no conversationId
+    15000
+  );
+
+  // Determine which data to use
+  const usage = conversationId ? conversationUsage : pageUsage;
+  const isLoading = conversationId ? conversationLoading : pageLoading;
+  const isError = conversationId ? conversationError : pageError;
+
+  // Handle error state
+  if (isError) {
+    return (
+      <div className={cn('text-xs text-destructive flex items-center gap-1', className)}>
+        <AlertCircle className="h-3 w-3" />
+        <span>Failed to load usage data</span>
+      </div>
+    );
+  }
+
+  // Don't render if no conversation/page or loading or no usage data
+  if ((!conversationId && !pageId) || isLoading || !usage) {
     return null;
   }
 

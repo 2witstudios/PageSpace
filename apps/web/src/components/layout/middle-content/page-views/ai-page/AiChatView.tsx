@@ -669,6 +669,12 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             {/* Chat tab actions */}
             {activeTab === 'chat' && (
               <div className="flex items-center gap-3">
+                {/* AI Usage Monitor - Compact mode inline */}
+                <AiUsageMonitor
+                  pageId={page.id}
+                  compact
+                />
+
                 {/* MCP Toggle (Desktop only, enabled by default per-chat) */}
                 {mcp.isDesktop && (
                   <div className="flex items-center gap-2 border border-[var(--separator)] rounded-lg px-3 py-1.5">
@@ -723,14 +729,6 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
               </Button>
             )}
           </div>
-
-          {/* AI Usage Monitor - Show when chat tab is active and conversation exists */}
-          {activeTab === 'chat' && currentConversationId && (
-            <AiUsageMonitor
-              conversationId={currentConversationId}
-              className="max-w-4xl mx-auto"
-            />
-          )}
         </div>
 
         {/* Chat Tab */}
