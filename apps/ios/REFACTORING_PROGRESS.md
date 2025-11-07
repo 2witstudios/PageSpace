@@ -117,11 +117,54 @@ When multiple requests received 401s simultaneously, waiting requests would wake
 - ✅ All concurrent requests get consistent results
 - ✅ Thread-safe with Actor isolation
 
-#### 2.3 Build Verification ✅
+#### 2.3 Token Refresh Deadlock Fix ✅
+
+**Problem Identified**:
+Circular dependency deadlock when refresh endpoint returns 401:
+```
+HTTPClient catches 401
+  → TokenRefreshCoordinator.refreshTokenIfNeeded()
+    → AuthManager.refreshToken()
+      → HTTPClient.request("/api/auth/mobile/refresh")
+        → Server returns 401
+        → HTTPClient catches 401
+          → TokenRefreshCoordinator.refreshTokenIfNeeded()
+            → Already refreshing, suspends on continuation
+            → 💥 DEADLOCK: Waiting for itself to complete
+```
+
+**Solution Implemented**:
+- Added endpoint check in HTTPClient and SSEStreamHandler
+- Skip auto-refresh when the failing request IS the refresh endpoint
+- Refresh endpoint returning 401 now throws immediately → triggers logout
+- Prevents infinite loop and deadlock
+
+**Code Changes**:
+```swift
+catch APIError.unauthorized {
+    // Prevent deadlock: Don't attempt refresh if this IS the refresh endpoint
+    if endpoint == APIEndpoints.refresh {
+        print("❌ Refresh endpoint returned 401 - refresh token is invalid")
+        throw APIError.unauthorized
+    }
+
+    // Normal refresh logic for other endpoints...
+}
+```
+
+**Benefits**:
+- ✅ Prevents circular dependency deadlock
+- ✅ Clear error messages for debugging
+- ✅ Proper logout on invalid refresh token
+- ✅ Minimal code changes (2 files, ~10 lines total)
+- ✅ Self-contained fix where problem occurs
+
+#### 2.4 Build Verification ✅
 - All files compile successfully
 - No runtime errors introduced
 - Backward compatibility maintained
 - Race condition fixed
+- Deadlock prevented
 - BUILD SUCCEEDED
 
 ## Metrics

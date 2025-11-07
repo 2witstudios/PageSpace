@@ -93,6 +93,13 @@ class HTTPClient {
             let decoded = try decoder.decode(T.self, from: data)
             return decoded
         } catch APIError.unauthorized {
+            // Prevent deadlock: Don't attempt refresh if this IS the refresh endpoint
+            // The refresh endpoint returning 401 means the refresh token itself is invalid
+            if endpoint == APIEndpoints.refresh {
+                print("❌ Refresh endpoint returned 401 - refresh token is invalid")
+                throw APIError.unauthorized
+            }
+
             // Token might be expired - try to refresh and retry (only once)
             if retryCount == 0 {
                 print("⚠️ Got 401 unauthorized - attempting token refresh...")
