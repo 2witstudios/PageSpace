@@ -28,32 +28,45 @@ let AI_PROVIDERS: [String: AIProvider] = [
     "openrouter": AIProvider(
         name: "OpenRouter (Paid)",
         models: [
+            // Anthropic Models (2025)
+            "anthropic/claude-sonnet-4.5": "Claude Sonnet 4.5",
+            "anthropic/claude-haiku-4.5": "Claude Haiku 4.5",
             "anthropic/claude-3.5-sonnet": "Claude 3.5 Sonnet",
             "anthropic/claude-3.5-sonnet:beta": "Claude 3.5 Sonnet (Beta)",
-            "anthropic/claude-sonnet-4-20250514": "Claude Sonnet 4",
             "anthropic/claude-3.5-haiku": "Claude 3.5 Haiku",
             "anthropic/claude-3-opus": "Claude 3 Opus",
+            // OpenAI Models (2025)
             "openai/gpt-4o": "GPT-4o",
             "openai/gpt-4o-mini": "GPT-4o Mini",
+            "openai/o3-deep-research": "o3 Deep Research",
+            "openai/o4-mini-deep-research": "o4 Mini Deep Research",
             "openai/o1": "OpenAI o1",
             "openai/o1-mini": "OpenAI o1-mini",
             "openai/o1-preview": "OpenAI o1-preview",
-            "google/gemini-2.0-flash-exp:free": "Gemini 2.0 Flash",
-            "google/gemini-exp-1206:free": "Gemini Exp 1206",
-            "google/gemini-2.0-flash-thinking-exp:free": "Gemini 2.0 Flash Thinking",
+            // Google Models
             "google/gemini-pro-1.5": "Gemini Pro 1.5",
             "google/gemini-flash-1.5": "Gemini Flash 1.5",
+            // xAI Models (2025)
+            "x-ai/grok-4-fast": "Grok 4 Fast (2M context)",
             "x-ai/grok-2-1212": "Grok 2 1212",
             "x-ai/grok-beta": "Grok Beta",
             "x-ai/grok-2-vision-1212": "Grok 2 Vision",
+            // Meta Models
             "meta-llama/llama-3.3-70b-instruct": "Llama 3.3 70B",
             "meta-llama/llama-3.2-90b-vision-instruct": "Llama 3.2 90B Vision",
+            // Qwen Models (2025)
+            "qwen/qwen3-max": "Qwen3 Max",
+            "qwen/qwen3-coder-plus": "Qwen3 Coder Plus",
             "qwen/qwen-2.5-coder-32b-instruct": "Qwen 2.5 Coder 32B",
             "qwen/qwq-32b-preview": "QwQ 32B Preview",
+            // DeepSeek Models (2025)
+            "deepseek/deepseek-v3.1-terminus": "DeepSeek V3.1 Terminus",
             "deepseek/deepseek-chat": "DeepSeek Chat",
             "deepseek/deepseek-r1": "DeepSeek R1",
+            // Mistral Models
             "mistralai/mistral-large": "Mistral Large",
             "mistralai/mistral-small": "Mistral Small",
+            // Other Models
             "cohere/command-r-plus": "Command R+",
             "perplexity/llama-3.1-sonar-large-128k-online": "Perplexity Sonar Large"
         ]
@@ -62,14 +75,25 @@ let AI_PROVIDERS: [String: AIProvider] = [
     "openrouter_free": AIProvider(
         name: "OpenRouter (Free)",
         models: [
+            // Google Models
             "google/gemini-2.0-flash-exp:free": "Gemini 2.0 Flash",
             "google/gemini-exp-1206:free": "Gemini Exp 1206",
             "google/gemini-2.0-flash-thinking-exp:free": "Gemini 2.0 Flash Thinking",
+            // Meta Models
             "meta-llama/llama-3.3-70b-instruct:free": "Llama 3.3 70B",
             "meta-llama/llama-3.2-90b-vision-instruct:free": "Llama 3.2 90B Vision",
+            // Qwen Models
             "qwen/qwen-2.5-coder-32b-instruct:free": "Qwen 2.5 Coder 32B",
             "qwen/qwq-32b-preview:free": "QwQ 32B Preview",
+            // DeepSeek Models (2025)
             "deepseek/deepseek-r1:free": "DeepSeek R1",
+            "deepseek/deepseek-r1-distill-llama-70b:free": "DeepSeek R1 Distill Llama 70B",
+            "deepseek/deepseek-r1-distill-qwen-32b:free": "DeepSeek R1 Distill Qwen 32B",
+            // Other Models (2025)
+            "minimax/minimax-m2:free": "MiniMax M2",
+            "nvidia/nemotron-nano-12b-v2-vl:free": "Nemotron Nano 12B VL",
+            "alibaba/tongyi-deepresearch-30b-a3b:free": "Tongyi DeepResearch 30B",
+            "openrouter/polaris-alpha:free": "Polaris Alpha",
             "mistralai/mistral-7b-instruct:free": "Mistral 7B",
             "microsoft/phi-3.5-mini-128k-instruct:free": "Phi 3.5 Mini"
         ]
@@ -210,7 +234,7 @@ func getDefaultModel(for provider: String) -> String {
     case "pagespace":
         return "glm-4.5-air"
     case "openrouter":
-        return "anthropic/claude-sonnet-4-20250514"
+        return "anthropic/claude-sonnet-4.5"
     case "openrouter_free":
         return "google/gemini-2.0-flash-exp:free"
     case "google":

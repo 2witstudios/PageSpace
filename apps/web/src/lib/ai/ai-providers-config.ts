@@ -14,53 +14,63 @@ export const AI_PROVIDERS = {
   openrouter: {
     name: 'OpenRouter (Paid)',
     models: {
-      // Anthropic Models
+      // Anthropic Models (2025)
+      'anthropic/claude-sonnet-4.5': 'Claude Sonnet 4.5',
+      'anthropic/claude-haiku-4.5': 'Claude Haiku 4.5',
       'anthropic/claude-3.5-sonnet': 'Claude 3.5 Sonnet',
       'anthropic/claude-3-haiku': 'Claude 3 Haiku',
-      'anthropic/claude-opus-4.1': 'Claude Opus 4.1',
-      
-      // OpenAI Models
+
+      // OpenAI Models (2025)
       'openai/gpt-4o': 'GPT-4o',
       'openai/gpt-4o-mini': 'GPT-4o Mini',
+      'openai/o3-deep-research': 'o3 Deep Research',
+      'openai/o4-mini-deep-research': 'o4 Mini Deep Research',
       'openai/gpt-5': 'GPT-5',
       'openai/gpt-5-mini': 'GPT-5 Mini',
       'openai/gpt-5-nano': 'GPT-5 Nano',
       'openai/gpt-oss-120b': 'GPT OSS 120B',
       'openai/gpt-oss-20b': 'GPT OSS 20B',
-      
+
       // Meta Models
       'meta-llama/llama-3.1-405b-instruct': 'Llama 3.1 405B',
-      
+
       // Mistral Models
       'mistralai/mistral-medium-3.1': 'Mistral Medium 3.1',
       'mistralai/mistral-small-3.2-24b-instruct': 'Mistral Small 3.2 24B',
       'mistralai/codestral-2508': 'Codestral 2508',
       'mistralai/devstral-medium': 'Devstral Medium',
       'mistralai/devstral-small': 'Devstral Small',
-      
-      // Chinese/Asian Models
+
+      // Chinese/Asian Models (2025)
       'z-ai/glm-4.5v': 'GLM 4.5V',
       'z-ai/glm-4.5': 'GLM 4.5',
       'z-ai/glm-4.5-air': 'GLM 4.5 Air',
       'z-ai/glm-4-32b': 'GLM 4 32B',
+      'qwen/qwen3-max': 'Qwen3 Max',
       'qwen/qwen3-235b-a22b-thinking-2507': 'Qwen3 235B Thinking',
       'qwen/qwen3-235b-a22b-2507': 'Qwen3 235B 2507',
       'qwen/qwen3-coder': 'Qwen3 Coder',
       'moonshotai/kimi-k2': 'Kimi K2',
       'minimax/minimax-m1': 'MiniMax M1',
-      
+
+      // DeepSeek Models (2025)
+      'deepseek/deepseek-v3.1-terminus': 'DeepSeek V3.1 Terminus',
+
       // Google Models (via OpenRouter)
       'google/gemini-2.5-pro': 'Gemini 2.5 Pro',
       'google/gemini-2.5-flash': 'Gemini 2.5 Flash',
       'google/gemini-2.5-flash-lite': 'Gemini 2.5 Flash Lite',
       'google/gemini-2.5-flash-lite-preview-06-17': 'Gemini 2.5 Flash Lite Preview',
-      
+
       // AI21 Models
       'ai21/jamba-mini-1.7': 'Jamba Mini 1.7',
       'ai21/jamba-large-1.7': 'Jamba Large 1.7',
-      
-      // Other Models
+
+      // xAI Models (2025)
+      'x-ai/grok-4-fast': 'Grok 4 Fast (2M context)',
       'x-ai/grok-4': 'Grok 4',
+
+      // Other Models
       'inception/mercury': 'Mercury',
     },
   },
@@ -69,8 +79,8 @@ export const AI_PROVIDERS = {
     models: {
       // Free Models - OpenAI
       'openai/gpt-oss-20b:free': 'GPT OSS 20B',
-      
-      // Free Models - Chinese/Asian
+
+      // Free Models - Chinese/Asian (2025)
       'z-ai/glm-4.5-air:free': 'GLM 4.5 Air',
       'qwen/qwen3-coder:free': 'Qwen3 Coder',
       'qwen/qwen3-4b:free': 'Qwen3 4B',
@@ -82,23 +92,29 @@ export const AI_PROVIDERS = {
       'moonshotai/kimi-dev-72b:free': 'Kimi Dev 72B',
       'tencent/hunyuan-a13b-instruct:free': 'Hunyuan A13B',
       'sarvamai/sarvam-m:free': 'Sarvam M',
-      
-      // Free Models - DeepSeek
+      'alibaba/tongyi-deepresearch-30b-a3b:free': 'Tongyi DeepResearch 30B',
+
+      // Free Models - DeepSeek (2025)
       'deepseek/deepseek-r1-0528:free': 'DeepSeek R1',
       'deepseek/deepseek-r1-0528-qwen3-8b:free': 'DeepSeek R1 Qwen3 8B',
+      'deepseek/deepseek-r1-distill-llama-70b:free': 'DeepSeek R1 Distill Llama 70B',
+      'deepseek/deepseek-r1-distill-qwen-32b:free': 'DeepSeek R1 Distill Qwen 32B',
       'tngtech/deepseek-r1t-chimera:free': 'DeepSeek R1T Chimera',
       'tngtech/deepseek-r1t2-chimera:free': 'DeepSeek R1T2 Chimera',
-      
+
       // Free Models - Google
       'google/gemma-3n-e2b-it:free': 'Gemma 3N E2B',
       'google/gemma-3n-e4b-it:free': 'Gemma 3N E4B',
-      
+
       // Free Models - Mistral
       'mistralai/mistral-small-3.2-24b-instruct:free': 'Mistral Small 3.2 24B',
       'mistralai/devstral-small-2505:free': 'Devstral Small',
       'cognitivecomputations/dolphin-mistral-24b-venice-edition:free': 'Dolphin Mistral 24B',
-      
-      // Free Models - Other
+
+      // Free Models - Other (2025)
+      'minimax/minimax-m2:free': 'MiniMax M2',
+      'nvidia/nemotron-nano-12b-v2-vl:free': 'Nemotron Nano 12B VL',
+      'openrouter/polaris-alpha:free': 'Polaris Alpha',
       'microsoft/mai-ds-r1:free': 'Microsoft MAI DS R1',
       'shisa-ai/shisa-v2-llama3.3-70b:free': 'Shisa v2 Llama 3.3 70B',
       'arliai/qwq-32b-arliai-rpr-v1:free': 'QwQ 32B ArliAI',
