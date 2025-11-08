@@ -133,15 +133,13 @@ struct ChatView: View {
                 }
             }
         }
-        .onAppear {
-            // Fetch usage data when view appears
-            Task {
-                await conversationManager.usageState.fetchUsage()
+        .task(id: conversationManager.conversationState.currentConversationId) {
+            // Fetch usage data when conversation ID changes (includes switching between chats)
+            await conversationManager.usageState.fetchUsage()
 
-                // Fetch AI conversation usage if we have a conversation
-                if let conversationId = conversationManager.conversationState.currentConversationId {
-                    await conversationManager.usageState.fetchAiConversationUsage(conversationId: conversationId)
-                }
+            // Fetch AI conversation usage if we have a conversation
+            if let conversationId = conversationManager.conversationState.currentConversationId {
+                await conversationManager.usageState.fetchAiConversationUsage(conversationId: conversationId)
             }
         }
         .onChange(of: isSidebarOpen) { oldValue, newValue in
