@@ -16,6 +16,10 @@ final class UsageState {
     var isLoading: Bool = false
     var error: String?
 
+    // Separate state for AI conversation usage
+    var isLoadingAiUsage: Bool = false
+    var aiUsageError: String?
+
     /// Fetches current usage data from the API
     func fetchUsage() async {
         isLoading = true
@@ -34,12 +38,30 @@ final class UsageState {
 
     /// Fetches AI conversation usage (tokens, context, cost)
     func fetchAiConversationUsage(conversationId: String) async {
+        isLoadingAiUsage = true
+        aiUsageError = nil
+
+        print("📊 Fetching AI conversation usage for conversation: \(conversationId)")
+
         do {
             let data = try await UsageService.shared.fetchAiConversationUsage(conversationId: conversationId)
             aiUsageData = data
+            aiUsageError = nil
+            print("✅ Successfully fetched AI usage data:")
+            print("   - Model: \(data.model)")
+            print("   - Provider: \(data.provider)")
+            print("   - Total Tokens: \(data.totalTokens)")
+            print("   - Context Usage: \(data.contextUsagePercent)%")
+            print("   - Cost: $\(data.cost)")
         } catch {
-            print("Error fetching AI conversation usage: \(error)")
+            self.aiUsageError = error.localizedDescription
+            self.aiUsageData = nil
+            print("❌ Error fetching AI conversation usage: \(error)")
+            print("   Conversation ID: \(conversationId)")
+            print("   Error details: \(error.localizedDescription)")
         }
+
+        isLoadingAiUsage = false
     }
 
     /// Returns a formatted rate limit display string based on provider, model, and subscription tier
@@ -93,6 +115,18 @@ final class UsageState {
     /// - Parameter agentName: Optional agent name (only included for existing conversations)
     /// - Returns: Formatted string with optional agent name, context %, total tokens, and cost (if > 0)
     func getTokenBreakdownDisplay(agentName: String? = nil) -> String {
+        // Handle loading state
+        if isLoadingAiUsage {
+            return "Loading..."
+        }
+
+        // Handle error state
+        if let error = aiUsageError {
+            print("⚠️ Displaying error state: \(error)")
+            return "Usage unavailable"
+        }
+
+        // Handle no data state
         guard let aiUsage = aiUsageData else {
             return "No usage data"
         }
