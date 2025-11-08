@@ -108,38 +108,45 @@ export const AI_PROVIDERS = {
   google: {
     name: 'Google AI',
     models: {
+      // Gemini 2.5 Series (2025)
       'gemini-2.5-pro': 'Gemini 2.5 Pro',
       'gemini-2.5-flash': 'Gemini 2.5 Flash',
       'gemini-2.5-flash-lite': 'Gemini 2.5 Flash-Lite',
-      'gemini-2.0-flash-exp': 'Gemini 2.0 Flash',
-      'gemini-1.5-pro': 'Gemini 1.5 Pro',
-      'gemini-1.5-flash': 'Gemini 1.5 Flash',
+      // Gemini 2.0 Series (2025)
+      'gemini-2.0-pro-exp': 'Gemini 2.0 Pro (Experimental)',
+      'gemini-2.0-flash': 'Gemini 2.0 Flash',
+      'gemini-2.0-flash-lite': 'Gemini 2.0 Flash-Lite',
     },
   },
   openai: {
     name: 'OpenAI',
     models: {
-      // GPT-5 Models
+      // GPT-5 Models (2025)
       'gpt-5': 'GPT-5',
       'gpt-5-mini': 'GPT-5 Mini',
       'gpt-5-nano': 'GPT-5 Nano',
-      
+
+      // GPT-4.1 Models (2025)
+      'gpt-4.1-2025-04-14': 'GPT-4.1',
+      'gpt-4.1-mini-2025-04-14': 'GPT-4.1 Mini',
+      'gpt-4.1-nano-2025-04-14': 'GPT-4.1 Nano',
+
       // GPT-4o Models
       'gpt-4o': 'GPT-4o',
       'gpt-4o-mini': 'GPT-4o Mini',
       'gpt-4o-audio-preview': 'GPT-4o Audio Preview',
-      
+
       // GPT-4 Models
       'gpt-4-turbo': 'GPT-4 Turbo',
       'gpt-4': 'GPT-4',
-      
+
       // GPT-3.5 Models
       'gpt-3.5-turbo': 'GPT-3.5 Turbo',
-      
+
       // Reasoning Models
+      'o4-mini-2025-04-16': 'O4 Mini',
       'o3': 'O3',
       'o3-mini': 'O3 Mini',
-      'o4-mini': 'O4 Mini',
       'o1': 'O1',
       'o1-mini': 'O1 Mini',
       'o1-preview': 'O1 Preview',
@@ -148,18 +155,22 @@ export const AI_PROVIDERS = {
   anthropic: {
     name: 'Anthropic',
     models: {
+      // Claude 4.5 Models (2025)
+      'claude-sonnet-4-5-20250929': 'Claude Sonnet 4.5',
+      'claude-haiku-4-5-20251001': 'Claude Haiku 4.5',
+
       // Claude 4.1 Models
       'claude-opus-4-1-20250805': 'Claude Opus 4.1',
       'claude-sonnet-4-1-20250805': 'Claude Sonnet 4.1',
-      
+
       // Claude 3.7 Models
       'claude-3-7-sonnet-20250219': 'Claude 3.7 Sonnet',
-      
+
       // Claude 3.5 Models
       'claude-3-5-sonnet-20241022': 'Claude 3.5 Sonnet',
       'claude-3-5-sonnet-20240620': 'Claude 3.5 Sonnet (June)',
       'claude-3-5-haiku-20241022': 'Claude 3.5 Haiku',
-      
+
       // Claude 3 Models
       'claude-3-opus-20240229': 'Claude 3 Opus',
       'claude-3-sonnet-20240229': 'Claude 3 Sonnet',
@@ -169,8 +180,11 @@ export const AI_PROVIDERS = {
   xai: {
     name: 'xAI (Grok)',
     models: {
-      // Grok 4 Models
+      // Grok 4 Models (2025)
       'grok-4': 'Grok 4',
+      'grok-4-fast-reasoning': 'Grok 4 Fast (Reasoning)',
+      'grok-4-fast-non-reasoning': 'Grok 4 Fast (Non-Reasoning)',
+      'grok-code-fast-1': 'Grok Code Fast 1',
 
       // Grok 3 Models
       'grok-3': 'Grok 3',

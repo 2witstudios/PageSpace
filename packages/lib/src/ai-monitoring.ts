@@ -62,40 +62,69 @@ export const AI_PRICING = {
 /**
  * Model Context Window Sizes (in tokens)
  * Maximum context length for each model
+ * Updated November 2025
  */
 export const MODEL_CONTEXT_WINDOWS = {
-  // OpenRouter Models
+  // OpenRouter Models - Anthropic
+  'anthropic/claude-sonnet-4.5': 200000, // Claude Sonnet 4.5 (2025)
   'anthropic/claude-3.5-sonnet': 200000,
   'anthropic/claude-3-haiku': 200000,
   'anthropic/claude-opus-4.1': 200000,
+
+  // OpenRouter Models - OpenAI
   'openai/gpt-4o': 128000,
   'openai/gpt-4o-mini': 128000,
-  'openai/gpt-5': 200000, // Estimated
-  'openai/gpt-5-mini': 128000, // Estimated
-  'openai/gpt-5-nano': 128000, // Estimated
+  'openai/gpt-5': 272000, // GPT-5 main model (2025)
+  'openai/gpt-5-mini': 128000,
+  'openai/gpt-5-nano': 128000,
+
+  // OpenRouter Models - Other
   'meta-llama/llama-3.1-405b-instruct': 128000,
   'mistralai/mistral-medium-3.1': 128000,
   'mistralai/mistral-small-3.2-24b-instruct': 32000,
   'mistralai/codestral-2508': 32000,
+
+  // OpenRouter Models - Google
   'google/gemini-2.5-pro': 2000000,
   'google/gemini-2.5-flash': 1000000,
   'google/gemini-2.5-flash-lite': 1000000,
+  'google/gemini-2.0-pro': 2000000,
+  'google/gemini-2.0-flash': 1000000,
 
   // Google AI Direct Models
+  'gemini-2.5-pro': 2000000,
+  'gemini-2.5-flash': 1000000,
+  'gemini-2.0-pro-exp': 2000000,
   'gemini-2.0-flash-exp': 1000000,
   'gemini-1.5-flash': 1000000,
   'gemini-1.5-flash-8b': 1000000,
   'gemini-1.5-pro': 2000000,
 
   // OpenAI Direct Models
+  'gpt-5': 272000, // GPT-5 (2025)
+  'gpt-5-mini': 128000,
+  'gpt-5-nano': 128000,
   'gpt-4-turbo': 128000,
   'gpt-4': 8192,
   'gpt-3.5-turbo': 16385,
 
   // Anthropic Direct Models
+  'claude-sonnet-4-5': 200000, // Claude Sonnet 4.5 (2025)
+  'claude-sonnet-4-5-20250929': 200000,
   'claude-3-5-sonnet-latest': 200000,
   'claude-3-5-haiku-latest': 200000,
   'claude-3-opus-latest': 200000,
+
+  // xAI Models
+  'grok-4-fast': 2000000, // Grok 4 Fast (2025)
+  'grok-4': 128000,
+  'grok-3': 128000,
+  'grok-3-mini': 128000,
+
+  // PageSpace/GLM Models
+  'glm-4.6': 200000, // GLM 4.6 (Sept 2025)
+  'glm-4.5': 128000,
+  'glm-4.5-air': 128000,
 
   // Ollama (local) - context varies by model and configuration
   'llama3.2': 128000,
@@ -108,7 +137,7 @@ export const MODEL_CONTEXT_WINDOWS = {
   'phi3': 128000,
 
   // Default
-  'default': 128000
+  'default': 200000 // Updated default for newer models
 } as const;
 
 /**

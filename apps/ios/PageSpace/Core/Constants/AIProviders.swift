@@ -78,24 +78,41 @@ let AI_PROVIDERS: [String: AIProvider] = [
     "google": AIProvider(
         name: "Google AI",
         models: [
-            "gemini-2.0-flash-exp": "Gemini 2.0 Flash",
-            "gemini-exp-1206": "Gemini Exp 1206",
-            "gemini-2.0-flash-thinking-exp-01-21": "Gemini 2.0 Flash Thinking",
-            "gemini-1.5-pro": "Gemini 1.5 Pro",
-            "gemini-1.5-flash": "Gemini 1.5 Flash",
-            "gemini-1.5-flash-8b": "Gemini 1.5 Flash-8B"
+            // Gemini 2.5 Series (2025)
+            "gemini-2.5-pro": "Gemini 2.5 Pro",
+            "gemini-2.5-flash": "Gemini 2.5 Flash",
+            "gemini-2.5-flash-lite": "Gemini 2.5 Flash-Lite",
+            // Gemini 2.0 Series (2025)
+            "gemini-2.0-pro-exp": "Gemini 2.0 Pro (Experimental)",
+            "gemini-2.0-flash": "Gemini 2.0 Flash",
+            "gemini-2.0-flash-lite": "Gemini 2.0 Flash-Lite"
         ]
     ),
 
     "openai": AIProvider(
         name: "OpenAI",
         models: [
+            // GPT-5 Series (2025)
+            "gpt-5": "GPT-5",
+            "gpt-5-mini": "GPT-5 Mini",
+            "gpt-5-nano": "GPT-5 Nano",
+            // GPT-4.1 Series (2025)
+            "gpt-4.1-2025-04-14": "GPT-4.1",
+            "gpt-4.1-mini-2025-04-14": "GPT-4.1 Mini",
+            "gpt-4.1-nano-2025-04-14": "GPT-4.1 Nano",
+            // GPT-4o Series
             "gpt-4o": "GPT-4o",
             "gpt-4o-mini": "GPT-4o Mini",
+            // Reasoning Models
+            "o4-mini-2025-04-16": "o4-mini",
+            "o3": "o3",
+            "o3-mini": "o3-mini",
             "o1": "o1",
             "o1-mini": "o1-mini",
             "o1-preview": "o1-preview",
+            // Legacy Models
             "gpt-4-turbo": "GPT-4 Turbo",
+            "gpt-4": "GPT-4",
             "gpt-3.5-turbo": "GPT-3.5 Turbo"
         ]
     ),
@@ -103,19 +120,47 @@ let AI_PROVIDERS: [String: AIProvider] = [
     "anthropic": AIProvider(
         name: "Anthropic",
         models: [
+            // Claude 4.5 Series (2025)
+            "claude-sonnet-4-5-20250929": "Claude Sonnet 4.5",
+            "claude-haiku-4-5-20251001": "Claude Haiku 4.5",
+            // Claude 4.1 Series (2025)
+            "claude-opus-4-1-20250805": "Claude Opus 4.1",
+            "claude-sonnet-4-1-20250805": "Claude Sonnet 4.1",
+            // Claude 4 Series
             "claude-sonnet-4-20250514": "Claude Sonnet 4",
-            "claude-3-5-sonnet-20241022": "Claude 3.5 Sonnet",
+            // Claude 3.7 Series
+            "claude-3-7-sonnet-20250219": "Claude 3.7 Sonnet",
+            // Claude 3.5 Series
+            "claude-3-5-sonnet-20241022": "Claude 3.5 Sonnet (Oct)",
+            "claude-3-5-sonnet-20240620": "Claude 3.5 Sonnet (June)",
             "claude-3-5-haiku-20241022": "Claude 3.5 Haiku",
-            "claude-3-opus-20240229": "Claude 3 Opus"
+            // Claude 3 Series
+            "claude-3-opus-20240229": "Claude 3 Opus",
+            "claude-3-sonnet-20240229": "Claude 3 Sonnet",
+            "claude-3-haiku-20240307": "Claude 3 Haiku"
         ]
     ),
 
     "xai": AIProvider(
         name: "xAI",
         models: [
+            // Grok 4 Series (2025)
+            "grok-4": "Grok 4",
+            "grok-4-fast-reasoning": "Grok 4 Fast (Reasoning)",
+            "grok-4-fast-non-reasoning": "Grok 4 Fast (Non-Reasoning)",
+            "grok-code-fast-1": "Grok Code Fast 1",
+            // Grok 3 Series
+            "grok-3": "Grok 3",
+            "grok-3-fast": "Grok 3 Fast",
+            "grok-3-mini": "Grok 3 Mini",
+            "grok-3-mini-fast": "Grok 3 Mini Fast",
+            // Grok 2 Series
+            "grok-2": "Grok 2",
             "grok-2-1212": "Grok 2 1212",
-            "grok-beta": "Grok Beta",
-            "grok-2-vision-1212": "Grok 2 Vision"
+            "grok-2-vision": "Grok 2 Vision",
+            "grok-2-vision-1212": "Grok 2 Vision 1212",
+            // Beta
+            "grok-beta": "Grok Beta"
         ]
     ),
 
@@ -159,22 +204,23 @@ func getBackendProvider(_ uiProvider: String) -> String {
 }
 
 /// Gets the default model for a given provider
+/// Updated November 2025 with latest flagship models
 func getDefaultModel(for provider: String) -> String {
     switch provider {
     case "pagespace":
         return "glm-4.5-air"
     case "openrouter":
-        return "anthropic/claude-3.5-sonnet"
+        return "anthropic/claude-sonnet-4-20250514"
     case "openrouter_free":
         return "google/gemini-2.0-flash-exp:free"
     case "google":
-        return "gemini-2.0-flash-exp"
+        return "gemini-2.5-flash" // Updated to 2.5 Flash (2025)
     case "openai":
-        return "gpt-4o"
+        return "gpt-5" // Updated to GPT-5 (2025)
     case "anthropic":
-        return "claude-3-5-sonnet-20241022"
+        return "claude-sonnet-4-5-20250929" // Updated to Claude Sonnet 4.5 (2025)
     case "xai":
-        return "grok-2-1212"
+        return "grok-4" // Updated to Grok 4 (2025)
     case "glm":
         return "glm-4-plus"
     case "ollama":
