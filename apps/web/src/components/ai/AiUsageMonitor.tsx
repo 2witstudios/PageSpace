@@ -83,7 +83,7 @@ export function AiUsageMonitor({ conversationId, pageId, className, compact = fa
     return null;
   }
 
-  // Determine color based on context usage
+  // Determine color based on REAL context usage (not billing tokens)
   const getContextColor = (percent: number) => {
     if (percent < 50) return 'text-green-600 dark:text-green-400';
     if (percent < 75) return 'text-yellow-600 dark:text-yellow-400';
@@ -97,6 +97,13 @@ export function AiUsageMonitor({ conversationId, pageId, className, compact = fa
     if (percent < 90) return 'bg-orange-500';
     return 'bg-red-500';
   };
+
+  // Extract context and billing data
+  const contextUsagePercent = usage.context.usagePercent;
+  const contextSize = usage.context.currentSize;
+  const contextWindow = usage.context.windowSize;
+  const messagesInContext = usage.context.messagesInContext;
+  const wasTruncated = usage.context.wasTruncated;
 
   const formatNumber = (num: number) => {
     if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
@@ -114,43 +121,37 @@ export function AiUsageMonitor({ conversationId, pageId, className, compact = fa
     return (
       <TooltipProvider>
         <div className={cn('flex items-center gap-2 text-xs', className)}>
+          {/* Context Window Usage - Show tokens/window instead of percentage */}
           <Tooltip>
             <TooltipTrigger asChild>
               <div className="flex items-center gap-1">
                 <Database className="h-3 w-3 text-muted-foreground" />
-                <span className={cn('font-mono', getContextColor(usage.contextUsagePercent))}>
-                  {usage.contextUsagePercent}%
+                <span className={cn('font-mono', getContextColor(contextUsagePercent))}>
+                  {formatNumber(contextSize)}/{formatNumber(contextWindow)}
                 </span>
               </div>
             </TooltipTrigger>
             <TooltipContent>
-              <p>Context: {formatNumber(usage.totalTokens)} / {formatNumber(usage.contextWindowSize)} tokens</p>
+              <p>Context: {formatNumber(contextSize)} / {formatNumber(contextWindow)} tokens ({contextUsagePercent}%)</p>
+              <p className="text-xs text-muted-foreground">{messagesInContext} messages in context</p>
+              {wasTruncated && (
+                <p className="text-xs text-amber-500">⚠️ Context truncated</p>
+              )}
             </TooltipContent>
           </Tooltip>
 
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div className="flex items-center gap-1">
-                <Activity className="h-3 w-3 text-muted-foreground" />
-                <span className="font-mono text-muted-foreground">{formatNumber(usage.totalTokens)}</span>
-              </div>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p>Input: {formatNumber(usage.inputTokens)} tokens</p>
-              <p>Output: {formatNumber(usage.outputTokens)} tokens</p>
-            </TooltipContent>
-          </Tooltip>
-
-          {usage.cost > 0 && (
+          {/* Session Cost */}
+          {usage.billing.cost > 0 && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <div className="flex items-center gap-1">
                   <DollarSign className="h-3 w-3 text-muted-foreground" />
-                  <span className="font-mono text-muted-foreground">{formatCost(usage.cost)}</span>
+                  <span className="font-mono text-muted-foreground">{formatCost(usage.billing.cost)}</span>
                 </div>
               </TooltipTrigger>
               <TooltipContent>
-                <p>Total cost for this conversation</p>
+                <p>Session cost: {formatCost(usage.billing.cost)}</p>
+                <p className="text-xs text-muted-foreground">Total tokens billed: {formatNumber(usage.billing.totalTokens)}</p>
                 <p className="text-xs text-muted-foreground">Model: {usage.model}</p>
               </TooltipContent>
             </Tooltip>
@@ -169,75 +170,81 @@ export function AiUsageMonitor({ conversationId, pageId, className, compact = fa
           <span className="font-mono">{usage.model}</span>
         </div>
 
-        {/* Context Window Progress */}
+        {/* Context Window (Real Usage) - Show tokens/window instead of percentage */}
         <div className="space-y-1">
           <div className="flex items-center justify-between text-xs">
             <span className="text-muted-foreground">Context Window</span>
-            <span className={cn('font-mono font-medium', getContextColor(usage.contextUsagePercent))}>
-              {usage.contextUsagePercent}%
+            <span className={cn('font-mono font-medium', getContextColor(contextUsagePercent))}>
+              {formatNumber(contextSize)} / {formatNumber(contextWindow)}
             </span>
           </div>
           <div className="relative">
             <Progress
-              value={usage.contextUsagePercent}
+              value={contextUsagePercent}
               className="h-2"
-              indicatorClassName={getProgressColor(usage.contextUsagePercent)}
+              indicatorClassName={getProgressColor(contextUsagePercent)}
             />
           </div>
           <div className="flex items-center justify-between text-xs text-muted-foreground">
-            <span className="font-mono">{formatNumber(usage.totalTokens)}</span>
-            <span className="font-mono">{formatNumber(usage.contextWindowSize)}</span>
+            <span className="font-mono">{contextUsagePercent}% used</span>
+            <span className="font-mono">{messagesInContext} messages</span>
           </div>
+          {wasTruncated && (
+            <p className="text-xs text-amber-500">⚠️ Older messages truncated</p>
+          )}
         </div>
 
-        {/* Token Breakdown */}
-        <div className="grid grid-cols-2 gap-2 pt-1 border-t">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div className="flex items-center gap-1.5 text-xs">
-                <Activity className="h-3.5 w-3.5 text-blue-500" />
-                <div className="flex flex-col">
-                  <span className="text-muted-foreground">Input</span>
-                  <span className="font-mono font-medium">{formatNumber(usage.inputTokens)}</span>
+        {/* Session Billing */}
+        <div className="pt-2 border-t space-y-1">
+          <div className="text-xs text-muted-foreground mb-1">Session Billing</div>
+          <div className="grid grid-cols-2 gap-2">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="flex items-center gap-1.5 text-xs">
+                  <Activity className="h-3.5 w-3.5 text-blue-500" />
+                  <div className="flex flex-col">
+                    <span className="text-muted-foreground">Input</span>
+                    <span className="font-mono font-medium">{formatNumber(usage.billing.inputTokens)}</span>
+                  </div>
                 </div>
-              </div>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p>Tokens used for input (prompts + context)</p>
-            </TooltipContent>
-          </Tooltip>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Total input tokens billed across all API calls</p>
+              </TooltipContent>
+            </Tooltip>
 
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div className="flex items-center gap-1.5 text-xs">
-                <Activity className="h-3.5 w-3.5 text-purple-500" />
-                <div className="flex flex-col">
-                  <span className="text-muted-foreground">Output</span>
-                  <span className="font-mono font-medium">{formatNumber(usage.outputTokens)}</span>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="flex items-center gap-1.5 text-xs">
+                  <Activity className="h-3.5 w-3.5 text-purple-500" />
+                  <div className="flex flex-col">
+                    <span className="text-muted-foreground">Output</span>
+                    <span className="font-mono font-medium">{formatNumber(usage.billing.outputTokens)}</span>
+                  </div>
                 </div>
-              </div>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p>Tokens used for AI responses</p>
-            </TooltipContent>
-          </Tooltip>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Total output tokens billed across all API calls</p>
+              </TooltipContent>
+            </Tooltip>
+          </div>
+
+          {/* Cost (if applicable) */}
+          {usage.billing.cost > 0 && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="flex items-center justify-between pt-1 text-xs">
+                  <span className="text-muted-foreground">Total Cost</span>
+                  <span className="font-mono font-medium">{formatCost(usage.billing.cost)}</span>
+                </div>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Total cost for this conversation</p>
+                <p className="text-xs text-muted-foreground">Provider: {usage.provider}</p>
+              </TooltipContent>
+            </Tooltip>
+          )}
         </div>
-
-        {/* Cost (if applicable) */}
-        {usage.cost > 0 && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div className="flex items-center justify-between pt-1 border-t text-xs">
-                <span className="text-muted-foreground">Cost</span>
-                <span className="font-mono font-medium">{formatCost(usage.cost)}</span>
-              </div>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p>Total cost for this conversation</p>
-              <p className="text-xs text-muted-foreground">Provider: {usage.provider}</p>
-            </TooltipContent>
-          </Tooltip>
-        )}
       </div>
     </TooltipProvider>
   );

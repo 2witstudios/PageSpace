@@ -43,6 +43,13 @@
       "when": 1761955168070,
       "tag": "0005_strange_dorian_gray",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1762655409273,
+      "tag": "0006_steep_tarantula",
+      "breakpoints": true
     }
   ]
 }

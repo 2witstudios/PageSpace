@@ -176,6 +176,16 @@ export async function writeAiUsage(usage: {
   success?: boolean;
   error?: string;
   metadata?: any;
+
+  // Context tracking
+  contextMessages?: string[];
+  contextSize?: number;
+  systemPromptTokens?: number;
+  toolDefinitionTokens?: number;
+  conversationTokens?: number;
+  messageCount?: number;
+  wasTruncated?: boolean;
+  truncationStrategy?: string;
 }): Promise<void> {
   try {
     await db.insert(aiUsageLogs).values({
@@ -196,6 +206,16 @@ export async function writeAiUsage(usage: {
       success: usage.success,
       error: usage.error,
       metadata: usage.metadata,
+
+      // Context tracking
+      contextMessages: usage.contextMessages,
+      contextSize: usage.contextSize,
+      systemPromptTokens: usage.systemPromptTokens,
+      toolDefinitionTokens: usage.toolDefinitionTokens,
+      conversationTokens: usage.conversationTokens,
+      messageCount: usage.messageCount,
+      wasTruncated: usage.wasTruncated,
+      truncationStrategy: usage.truncationStrategy,
     });
   } catch (error) {
     console.error('[Logger] Failed to write AI usage:', error);

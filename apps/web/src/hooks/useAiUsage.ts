@@ -4,17 +4,28 @@ import { getContextWindow } from '@pagespace/lib/ai-monitoring';
 import { useEditingStore } from '@/stores/useEditingStore';
 
 /**
- * AI Usage data structure
+ * AI Usage data structure - separates billing from context metrics
  */
 export interface AiUsageData {
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-  cost: number;
+  // Billing metrics (cumulative)
+  billing: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    cost: number;
+  };
+
+  // Context metrics (current state)
+  context: {
+    currentSize: number;
+    messagesInContext: number;
+    windowSize: number;
+    usagePercent: number;
+    wasTruncated: boolean;
+  };
+
   model: string;
   provider: string;
-  contextWindowSize: number;
-  contextUsagePercent: number;
 }
 
 interface AiUsageLog {
@@ -38,10 +49,19 @@ interface AiUsageLog {
 interface AiUsageResponse {
   logs: AiUsageLog[];
   summary: {
-    totalInputTokens: number;
-    totalOutputTokens: number;
-    totalTokens: number;
-    totalCost: number;
+    billing: {
+      totalInputTokens: number;
+      totalOutputTokens: number;
+      totalTokens: number;
+      totalCost: number;
+    };
+    context: {
+      currentContextSize: number;
+      messagesInContext: number;
+      contextWindowSize: number;
+      contextUsagePercent: number;
+      wasTruncated: boolean;
+    } | null;
     mostRecentModel: string | null;
     mostRecentProvider: string | null;
   };
@@ -79,20 +99,34 @@ export function useAiUsage(conversationId: string | null | undefined, refreshInt
     }
   );
 
-  // Calculate aggregated usage data
+  // Map API response to usage data structure
   const usageData: AiUsageData | null = data?.summary ? {
-    inputTokens: data.summary.totalInputTokens,
-    outputTokens: data.summary.totalOutputTokens,
-    totalTokens: data.summary.totalTokens,
-    cost: data.summary.totalCost,
+    billing: {
+      inputTokens: data.summary.billing.totalInputTokens,
+      outputTokens: data.summary.billing.totalOutputTokens,
+      totalTokens: data.summary.billing.totalTokens,
+      cost: data.summary.billing.totalCost,
+    },
+    context: data.summary.context ? {
+      currentSize: data.summary.context.currentContextSize,
+      messagesInContext: data.summary.context.messagesInContext,
+      windowSize: data.summary.context.contextWindowSize,
+      usagePercent: data.summary.context.contextUsagePercent,
+      wasTruncated: data.summary.context.wasTruncated,
+    } : {
+      // Legacy fallback for old data without context tracking
+      currentSize: data.summary.billing.totalInputTokens,
+      messagesInContext: 0,
+      windowSize: data.summary.mostRecentModel
+        ? getContextWindow(data.summary.mostRecentModel)
+        : 200000,
+      usagePercent: data.summary.mostRecentModel
+        ? Math.round((data.summary.billing.totalInputTokens / getContextWindow(data.summary.mostRecentModel)) * 100)
+        : 0,
+      wasTruncated: false,
+    },
     model: data.summary.mostRecentModel || 'unknown',
     provider: data.summary.mostRecentProvider || 'unknown',
-    contextWindowSize: data.summary.mostRecentModel
-      ? getContextWindow(data.summary.mostRecentModel)
-      : 128000,
-    contextUsagePercent: data.summary.mostRecentModel
-      ? Math.round((data.summary.totalTokens / getContextWindow(data.summary.mostRecentModel)) * 100)
-      : 0,
   } : null;
 
   return {
@@ -125,20 +159,34 @@ export function usePageAiUsage(pageId: string | null | undefined, refreshInterva
     }
   );
 
-  // Calculate aggregated usage data
+  // Map API response to usage data structure
   const usageData: AiUsageData | null = data?.summary ? {
-    inputTokens: data.summary.totalInputTokens,
-    outputTokens: data.summary.totalOutputTokens,
-    totalTokens: data.summary.totalTokens,
-    cost: data.summary.totalCost,
+    billing: {
+      inputTokens: data.summary.billing.totalInputTokens,
+      outputTokens: data.summary.billing.totalOutputTokens,
+      totalTokens: data.summary.billing.totalTokens,
+      cost: data.summary.billing.totalCost,
+    },
+    context: data.summary.context ? {
+      currentSize: data.summary.context.currentContextSize,
+      messagesInContext: data.summary.context.messagesInContext,
+      windowSize: data.summary.context.contextWindowSize,
+      usagePercent: data.summary.context.contextUsagePercent,
+      wasTruncated: data.summary.context.wasTruncated,
+    } : {
+      // Legacy fallback for old data without context tracking
+      currentSize: data.summary.billing.totalInputTokens,
+      messagesInContext: 0,
+      windowSize: data.summary.mostRecentModel
+        ? getContextWindow(data.summary.mostRecentModel)
+        : 200000,
+      usagePercent: data.summary.mostRecentModel
+        ? Math.round((data.summary.billing.totalInputTokens / getContextWindow(data.summary.mostRecentModel)) * 100)
+        : 0,
+      wasTruncated: false,
+    },
     model: data.summary.mostRecentModel || 'unknown',
     provider: data.summary.mostRecentProvider || 'unknown',
-    contextWindowSize: data.summary.mostRecentModel
-      ? getContextWindow(data.summary.mostRecentModel)
-      : 128000,
-    contextUsagePercent: data.summary.mostRecentModel
-      ? Math.round((data.summary.totalTokens / getContextWindow(data.summary.mostRecentModel)) * 100)
-      : 0,
   } : null;
 
   return {

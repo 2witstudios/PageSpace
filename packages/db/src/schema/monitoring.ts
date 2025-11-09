@@ -180,12 +180,24 @@ export const aiUsageLogs = pgTable('ai_usage_logs', {
   
   // Metadata
   metadata: jsonb('metadata'),
+
+  // Context tracking - track actual conversation context vs billing tokens
+  contextMessages: jsonb('context_messages'), // Array of message IDs included in this call's context
+  contextSize: integer('context_size'), // Actual tokens in context (input + system prompt + tools)
+  systemPromptTokens: integer('system_prompt_tokens'), // Tokens used by system prompt
+  toolDefinitionTokens: integer('tool_definition_tokens'), // Tokens used by tool schemas
+  conversationTokens: integer('conversation_tokens'), // Tokens from actual messages
+  messageCount: integer('message_count'), // Number of messages in context
+  wasTruncated: boolean('was_truncated').default(false), // Whether context was truncated
+  truncationStrategy: text('truncation_strategy'), // 'none' | 'oldest_first' | 'smart'
 }, (table) => ({
   timestampIdx: index('idx_ai_usage_timestamp').on(table.timestamp),
   userIdIdx: index('idx_ai_usage_user_id').on(table.userId, table.timestamp),
   providerIdx: index('idx_ai_usage_provider').on(table.provider, table.model, table.timestamp),
   costIdx: index('idx_ai_usage_cost').on(table.cost),
   conversationIdx: index('idx_ai_usage_conversation').on(table.conversationId),
+  conversationContextIdx: index('idx_ai_usage_context').on(table.conversationId, table.timestamp),
+  contextSizeIdx: index('idx_ai_usage_context_size').on(table.contextSize),
 }));
 
 /**

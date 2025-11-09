@@ -50,9 +50,9 @@ final class UsageState {
             print("✅ Successfully fetched AI usage data:")
             print("   - Model: \(data.model)")
             print("   - Provider: \(data.provider)")
-            print("   - Total Tokens: \(data.totalTokens)")
-            print("   - Context Usage: \(data.contextUsagePercent)%")
-            print("   - Cost: $\(data.cost)")
+            print("   - Total Tokens (billing): \(data.billing.totalTokens)")
+            print("   - Context Usage: \(data.context.currentSize)/\(data.context.windowSize) (\(data.context.usagePercent)%)")
+            print("   - Cost: $\(data.billing.cost)")
         } catch {
             self.aiUsageError = error.localizedDescription
             self.aiUsageData = nil
@@ -110,10 +110,10 @@ final class UsageState {
     }
 
     /// Returns a formatted token breakdown display string
-    /// Format: "45% • 2.5K • $0.01" for new conversations
-    /// Format: "Global Assistant • 45% • 2.5K • $0.01" for existing conversations
+    /// Format: "15K/200K • $0.01" for new conversations
+    /// Format: "Global Assistant • 15K/200K • $0.01" for existing conversations
     /// - Parameter agentName: Optional agent name (only included for existing conversations)
-    /// - Returns: Formatted string with optional agent name, context %, total tokens, and cost (if > 0)
+    /// - Returns: Formatted string with optional agent name, context tokens/window, and cost (if > 0)
     func getTokenBreakdownDisplay(agentName: String? = nil) -> String {
         // Handle loading state
         if isLoadingAiUsage {
@@ -131,8 +131,8 @@ final class UsageState {
             return "No usage data"
         }
 
-        let contextPercent = "\(aiUsage.contextUsagePercent)%"
-        let totalTokens = formatNumber(aiUsage.totalTokens)
+        // Format: currentSize/windowSize (e.g., "15K/200K")
+        let contextDisplay = "\(formatNumber(aiUsage.context.currentSize))/\(formatNumber(aiUsage.context.windowSize))"
 
         var parts: [String] = []
 
@@ -141,12 +141,11 @@ final class UsageState {
             parts.append(agentName)
         }
 
-        parts.append(contextPercent)
-        parts.append(totalTokens)
+        parts.append(contextDisplay)
 
         // Only show cost if greater than 0
-        if aiUsage.cost > 0 {
-            parts.append(formatCost(aiUsage.cost))
+        if aiUsage.billing.cost > 0 {
+            parts.append(formatCost(aiUsage.billing.cost))
         }
 
         return parts.joined(separator: " • ")
@@ -169,6 +168,26 @@ final class UsageState {
             return String(format: "$%.4f", cost)
         } else {
             return String(format: "$%.2f", cost)
+        }
+    }
+
+    /// Get color for context usage based on percentage
+    /// Returns semantic colors: green (<50%), yellow (50-75%), orange (75-90%), red (90%+)
+    func getContextUsageColor() -> String {
+        guard let aiUsage = aiUsageData else {
+            return "secondary" // Default color
+        }
+
+        let percent = aiUsage.context.usagePercent
+
+        if percent < 50 {
+            return "green"
+        } else if percent < 75 {
+            return "yellow"
+        } else if percent < 90 {
+            return "orange"
+        } else {
+            return "red"
         }
     }
 }

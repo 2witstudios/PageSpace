@@ -57,6 +57,11 @@
       "import": "./dist/ai-monitoring.js",
       "require": "./dist/ai-monitoring.js"
     },
+    "./ai-context-calculator": {
+      "types": "./dist/ai-context-calculator.d.ts",
+      "import": "./dist/ai-context-calculator.js",
+      "require": "./dist/ai-context-calculator.js"
+    },
     "./auth-utils": {
       "types": "./dist/auth-utils.d.ts",
       "import": "./dist/auth-utils.js",
@@ -168,6 +173,9 @@
       ],
       "ai-monitoring": [
         "./dist/ai-monitoring.d.ts"
+      ],
+      "ai-context-calculator": [
+        "./dist/ai-context-calculator.d.ts"
       ],
       "auth-utils": [
         "./dist/auth-utils.d.ts"

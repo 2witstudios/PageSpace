@@ -92,11 +92,12 @@ struct ChatView: View {
 
                         // LINE 2: Toggle between rate limiting and token breakdown
                         if showTokenBreakdown {
-                            // Show token breakdown
+                            // Show token breakdown with color coding based on context usage
                             let agentName = conversationManager.conversationState.currentConversation != nil ? agentTypeLabel(conversationManager.conversationState.currentConversation?.type ?? "global") : nil
+                            let colorName = conversationManager.usageState.getContextUsageColor()
                             Text(conversationManager.usageState.getTokenBreakdownDisplay(agentName: agentName))
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(colorForName(colorName))
                                 .lineLimit(1)
                                 .truncationMode(.tail)
                         } else {
@@ -293,6 +294,17 @@ struct ChatView: View {
         case "page": return "Page AI"
         case "drive": return "Drive AI"
         default: return ""
+        }
+    }
+
+    /// Map color name string to SwiftUI Color
+    private func colorForName(_ name: String) -> Color {
+        switch name {
+        case "green": return .green
+        case "yellow": return .yellow
+        case "orange": return .orange
+        case "red": return .red
+        default: return .secondary
         }
     }
 

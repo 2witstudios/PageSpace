@@ -23,14 +23,25 @@ struct UsageData: Codable {
 
 /// AI conversation usage data (transformed from API response)
 struct AiConversationUsageData: Codable {
-    let inputTokens: Int
-    let outputTokens: Int
-    let totalTokens: Int
-    let cost: Double
+    let billing: BillingMetrics
+    let context: ContextMetrics
     let model: String
     let provider: String
-    let contextWindowSize: Int
-    let contextUsagePercent: Int
+
+    struct BillingMetrics: Codable {
+        let inputTokens: Int
+        let outputTokens: Int
+        let totalTokens: Int
+        let cost: Double
+    }
+
+    struct ContextMetrics: Codable {
+        let currentSize: Int
+        let messagesInContext: Int
+        let windowSize: Int
+        let usagePercent: Int
+        let wasTruncated: Bool
+    }
 }
 
 /// API response structure from /api/ai_conversations/{id}/usage
@@ -38,35 +49,69 @@ struct AiConversationUsageApiResponse: Codable {
     let summary: UsageSummary
 
     struct UsageSummary: Codable {
-        let totalInputTokens: Int
-        let totalOutputTokens: Int
-        let totalTokens: Int
-        let totalCost: Double
+        let billing: BillingData
+        let context: ContextData?
         let mostRecentModel: String?
         let mostRecentProvider: String?
+
+        struct BillingData: Codable {
+            let totalInputTokens: Int
+            let totalOutputTokens: Int
+            let totalTokens: Int
+            let totalCost: Double
+        }
+
+        struct ContextData: Codable {
+            let currentContextSize: Int
+            let messagesInContext: Int
+            let contextWindowSize: Int
+            let contextUsagePercent: Int
+            let wasTruncated: Bool
+        }
     }
 
-    /// Transform API response to app model with calculated fields
+    /// Transform API response to app model
     func toUsageData() -> AiConversationUsageData? {
         guard let model = summary.mostRecentModel,
               let provider = summary.mostRecentProvider else {
             return nil
         }
 
-        let contextWindow = getContextWindow(model: model, provider: provider)
-        let contextPercent = contextWindow > 0
-            ? Int((Double(summary.totalTokens) / Double(contextWindow)) * 100)
-            : 0
+        // Use context data from API if available, otherwise fallback to legacy calculation
+        let contextMetrics: AiConversationUsageData.ContextMetrics
+        if let context = summary.context {
+            contextMetrics = AiConversationUsageData.ContextMetrics(
+                currentSize: context.currentContextSize,
+                messagesInContext: context.messagesInContext,
+                windowSize: context.contextWindowSize,
+                usagePercent: context.contextUsagePercent,
+                wasTruncated: context.wasTruncated
+            )
+        } else {
+            // Legacy fallback for old data without context tracking
+            let contextWindow = getContextWindow(model: model, provider: provider)
+            let contextPercent = contextWindow > 0
+                ? Int((Double(summary.billing.totalInputTokens) / Double(contextWindow)) * 100)
+                : 0
+            contextMetrics = AiConversationUsageData.ContextMetrics(
+                currentSize: summary.billing.totalInputTokens,
+                messagesInContext: 0,
+                windowSize: contextWindow,
+                usagePercent: min(contextPercent, 100),
+                wasTruncated: false
+            )
+        }
 
         return AiConversationUsageData(
-            inputTokens: summary.totalInputTokens,
-            outputTokens: summary.totalOutputTokens,
-            totalTokens: summary.totalTokens,
-            cost: summary.totalCost,
+            billing: AiConversationUsageData.BillingMetrics(
+                inputTokens: summary.billing.totalInputTokens,
+                outputTokens: summary.billing.totalOutputTokens,
+                totalTokens: summary.billing.totalTokens,
+                cost: summary.billing.totalCost
+            ),
+            context: contextMetrics,
             model: model,
-            provider: provider,
-            contextWindowSize: contextWindow,
-            contextUsagePercent: min(contextPercent, 100) // Cap at 100%
+            provider: provider
         )
     }
 

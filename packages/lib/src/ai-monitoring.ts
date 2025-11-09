@@ -194,6 +194,16 @@ export interface AIUsageData {
   success?: boolean;
   error?: string;
   metadata?: any;
+
+  // Context tracking - track actual conversation context vs billing tokens
+  contextMessages?: string[]; // Array of message IDs included in this call's context
+  contextSize?: number; // Actual tokens in context (input + system prompt + tools)
+  systemPromptTokens?: number; // Tokens used by system prompt
+  toolDefinitionTokens?: number; // Tokens used by tool schemas
+  conversationTokens?: number; // Tokens from actual messages
+  messageCount?: number; // Number of messages in context
+  wasTruncated?: boolean; // Whether context was truncated
+  truncationStrategy?: string; // 'none' | 'oldest_first' | 'smart'
 }
 
 /**
@@ -236,6 +246,17 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
       driveId: data.driveId,
       success: data.success !== false,
       error: data.error,
+
+      // Context tracking
+      contextMessages: data.contextMessages,
+      contextSize: data.contextSize,
+      systemPromptTokens: data.systemPromptTokens,
+      toolDefinitionTokens: data.toolDefinitionTokens,
+      conversationTokens: data.conversationTokens,
+      messageCount: data.messageCount,
+      wasTruncated: data.wasTruncated,
+      truncationStrategy: data.truncationStrategy,
+
       metadata: {
         ...data.metadata,
         streamingDuration: data.streamingDuration,
@@ -243,10 +264,10 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
         completion: data.completion?.substring(0, 1000)
       },
     }).catch((error) => {
-      loggers.ai.debug('AI usage tracking failed', { 
+      loggers.ai.debug('AI usage tracking failed', {
         error: (error as Error).message,
         model: data.model,
-        provider: data.provider 
+        provider: data.provider
       });
     });
   } catch (error) {

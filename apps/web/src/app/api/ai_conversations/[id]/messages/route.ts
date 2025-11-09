@@ -34,6 +34,7 @@ import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 import type { MCPTool } from '@/types/mcp';
 import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
+import { calculateTotalContextSize } from '@pagespace/lib/ai-context-calculator';
 
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
@@ -617,6 +618,23 @@ MENTION PROCESSING:
 
     loggers.api.debug('🔄 Global Assistant Chat API: Starting streamText', { model: currentModel, agentRole });
 
+    // Calculate context size BEFORE streaming (for real context window tracking)
+    const contextCalculation = calculateTotalContextSize({
+      systemPrompt,
+      messages: processedMessages, // Use UIMessage array (not model messages)
+      tools: finalTools,
+      model: currentModel,
+      provider: currentProvider,
+    });
+
+    loggers.api.debug('📊 Context calculation', {
+      contextSize: contextCalculation.totalTokens,
+      messageCount: contextCalculation.messageCount,
+      systemPromptTokens: contextCalculation.systemPromptTokens,
+      toolTokens: contextCalculation.toolDefinitionTokens,
+      wasTruncated: contextCalculation.wasTruncated,
+    });
+
     const result = streamText({
       model,
       system: systemPrompt,
@@ -703,6 +721,17 @@ MENTION PROCESSING:
                   conversationId,
                   messageId,
                   success: true,
+
+                  // Context tracking - actual conversation context vs billing tokens
+                  contextMessages: contextCalculation.messageIds,
+                  contextSize: contextCalculation.totalTokens,
+                  systemPromptTokens: contextCalculation.systemPromptTokens,
+                  toolDefinitionTokens: contextCalculation.toolDefinitionTokens,
+                  conversationTokens: contextCalculation.conversationTokens,
+                  messageCount: contextCalculation.messageCount,
+                  wasTruncated: contextCalculation.wasTruncated,
+                  truncationStrategy: contextCalculation.truncationStrategy,
+
                   metadata: {
                     toolCallsCount: extractedToolCalls.length,
                     toolResultsCount: extractedToolResults.length,

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, aiUsageLogs, conversations, eq, and, desc } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
+import { getContextWindow } from '@pagespace/lib/ai-monitoring';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const };
 
@@ -53,6 +54,10 @@ export async function GET(
         driveId: aiUsageLogs.driveId,
         success: aiUsageLogs.success,
         error: aiUsageLogs.error,
+        // Context tracking fields
+        contextSize: aiUsageLogs.contextSize,
+        messageCount: aiUsageLogs.messageCount,
+        wasTruncated: aiUsageLogs.wasTruncated,
       })
       .from(aiUsageLogs)
       .where(eq(aiUsageLogs.conversationId, id))
@@ -79,13 +84,35 @@ export async function GET(
       mostRecentProvider = logs[0].provider;
     }
 
+    // Get context metrics from most recent log (current conversation state)
+    const mostRecentLog = logs[0];
+    const contextWindowSize = mostRecentModel ? getContextWindow(mostRecentModel) : 200000;
+    const currentContextSize = mostRecentLog?.contextSize || 0;
+    const contextUsagePercent = currentContextSize > 0 && contextWindowSize > 0
+      ? Math.round((currentContextSize / contextWindowSize) * 100)
+      : 0;
+
     return NextResponse.json({
       logs,
       summary: {
-        totalInputTokens,
-        totalOutputTokens,
-        totalTokens,
-        totalCost: Number(totalCost.toFixed(6)),
+        // Billing metrics (cumulative across all calls)
+        billing: {
+          totalInputTokens,
+          totalOutputTokens,
+          totalTokens,
+          totalCost: Number(totalCost.toFixed(6)),
+        },
+
+        // Context metrics (current conversation state)
+        context: mostRecentLog ? {
+          currentContextSize: currentContextSize,
+          messagesInContext: mostRecentLog.messageCount || 0,
+          contextWindowSize,
+          contextUsagePercent,
+          wasTruncated: mostRecentLog.wasTruncated || false,
+        } : null,
+
+        // Model info
         mostRecentModel,
         mostRecentProvider,
       },
