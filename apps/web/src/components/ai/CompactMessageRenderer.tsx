@@ -5,6 +5,7 @@ import { MemoizedMarkdown } from './MemoizedMarkdown';
 import { MessageActionButtons } from './MessageActionButtons';
 import { MessageEditor } from './MessageEditor';
 import { DeleteMessageDialog } from './DeleteMessageDialog';
+import styles from './CompactMessageRenderer.module.css';
 
 interface TextPart {
   type: 'text';
@@ -108,10 +109,8 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = ({
         </div>
       ) : (
         <>
-          <div className="text-gray-900 dark:text-gray-100 prose prose-xs dark:prose-invert max-w-full overflow-hidden">
-            <div className="break-words overflow-wrap-anywhere">
-              <MemoizedMarkdown content={content} id={`${messageId}-text`} />
-            </div>
+          <div className={`text-gray-900 dark:text-gray-100 prose prose-xs dark:prose-invert max-w-full overflow-hidden ${styles.compactProseContent}`}>
+            <MemoizedMarkdown content={content} id={`${messageId}-text`} />
           </div>
           {createdAt && (
             <div className="text-[10px] text-gray-500 mt-1">
