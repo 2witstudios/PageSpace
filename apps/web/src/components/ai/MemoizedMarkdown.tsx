@@ -12,12 +12,19 @@ function parseMarkdownIntoBlocks(markdown: string): string[] {
  * Process content to convert @mentions into visual badges
  * Converts @[Label](id:type) format to styled badges
  */
+
 /**
- * Custom components for ReactMarkdown to ensure proper overflow handling
+ * Custom ReactMarkdown components for width-constrained rendering
+ *
+ * These components override ReactMarkdown's default element renderers to add
+ * defensive width constraints and overflow handling. This prevents AI-generated
+ * content (long URLs, code blocks, base64 data) from breaking the sidebar layout.
+ *
+ * Used in conjunction with CompactMessageRenderer.module.css for defense-in-depth.
  */
 const customComponents: Components = {
   // Ensure code blocks are properly constrained
-  code: ({ node, className, children, ...props }: any) => {
+  code: ({ className, children, ...props }) => {
     const isInline = !className?.includes('language-');
     if (isInline) {
       return (

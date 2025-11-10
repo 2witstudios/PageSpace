@@ -1,91 +1,90 @@
-/* Compact Message Renderer - Ensures all content respects sidebar width constraints */
+/**
+ * Compact Message Renderer - Defensive width constraints for sidebar AI chat
+ *
+ * PURPOSE: Prevents ReactMarkdown-rendered content from breaking sidebar width.
+ * ROOT CAUSE: AI streaming can generate long unbreakable strings (URLs, code, base64)
+ *             that expand beyond the 320px sidebar width, causing layout overflow.
+ *
+ * STRATEGY: Apply max-width and word-breaking to all ReactMarkdown output elements
+ *           because dynamically rendered HTML doesn't inherit Tailwind utilities.
+ */
 
 .compactProseContent {
-  /* Force all children to respect container width */
+  /* Base constraint - all content must respect container width */
   max-width: 100%;
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  overflow-wrap: anywhere;  /* Break words only when necessary */
+  word-break: break-word;   /* Fallback for browsers without overflow-wrap support */
 }
 
-/* Override prose defaults for code elements */
-.compactProseContent :is(code, pre, a, span, div, p) {
-  max-width: 100%;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
-/* Inline code elements */
-.compactProseContent :not(pre) > code {
-  max-width: 100%;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-  white-space: pre-wrap;
-}
-
-/* Code blocks */
+/**
+ * Code blocks - Most common width-breaking culprit
+ * Long single-line code, base64 data, file paths trigger this
+ */
 .compactProseContent pre {
   max-width: 100%;
-  overflow-x: auto;
+  overflow-x: auto;         /* Horizontal scroll for very long lines */
   overflow-y: hidden;
-  white-space: pre-wrap;
-  word-break: break-all;
+  white-space: pre-wrap;    /* Wrap long lines instead of horizontal scroll */
+  word-break: break-all;    /* Break anywhere in long tokens (URLs, hashes) */
 }
 
 .compactProseContent pre code {
-  max-width: 100%;
-  white-space: pre-wrap;
+  white-space: pre-wrap;    /* Inherit wrapping from pre */
   word-break: break-all;
 }
 
-/* Links */
+/**
+ * Inline code - URLs, file paths, JSON keys
+ * Need aggressive breaking to prevent inline overflow
+ */
+.compactProseContent :not(pre) > code {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;    /* Allow wrapping within inline code */
+}
+
+/**
+ * Links - Long URLs are the #1 cause of width breaking in markdown
+ * display: inline-block allows width constraints to work on inline elements
+ */
 .compactProseContent a {
   max-width: 100%;
   overflow-wrap: anywhere;
   word-break: break-word;
-  display: inline-block;
+  display: inline-block;    /* Required for max-width to apply */
 }
 
-/* Tables */
+/**
+ * Tables - Can overflow with wide columns or many columns
+ * display: block + overflow-x creates a scrollable table container
+ */
 .compactProseContent table {
   max-width: 100%;
   display: block;
   overflow-x: auto;
-  word-break: break-word;
 }
 
 .compactProseContent table td,
 .compactProseContent table th {
-  max-width: 200px;
+  max-width: min(200px, 50vw);  /* Responsive: smaller on narrow screens */
   overflow-wrap: anywhere;
   word-break: break-word;
 }
 
-/* Lists */
-.compactProseContent ul,
-.compactProseContent ol {
-  max-width: 100%;
-}
-
-.compactProseContent li {
-  max-width: 100%;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
-/* Blockquotes */
+/**
+ * Text containers - Paragraphs, list items, blockquotes
+ * These inherit base rules but need explicit max-width for ReactMarkdown elements
+ */
+.compactProseContent p,
+.compactProseContent li,
 .compactProseContent blockquote {
   max-width: 100%;
-  overflow-wrap: anywhere;
-  word-break: break-word;
 }
 
-/* Images */
+/**
+ * Images - Prevent oversized images from breaking layout
+ */
 .compactProseContent img {
   max-width: 100%;
   height: auto;
-}
-
-/* Any element with text content */
-.compactProseContent * {
-  max-width: 100%;
 }
