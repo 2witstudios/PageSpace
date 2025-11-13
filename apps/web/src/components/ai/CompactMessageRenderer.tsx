@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { UIMessage } from 'ai';
 import { CompactToolCallRenderer } from './CompactToolCallRenderer';
+import { CompactGroupedToolCallsRenderer } from './CompactGroupedToolCallsRenderer';
 import { MemoizedMarkdown } from './MemoizedMarkdown';
 import { MessageActionButtons } from './MessageActionButtons';
 import { MessageEditor } from './MessageEditor';
@@ -35,7 +36,12 @@ interface ToolGroupPart {
   state: 'input-streaming' | 'input-available' | 'output-available' | 'output-error' | 'done' | 'streaming';
 }
 
-type GroupedPart = TextGroupPart | ToolGroupPart;
+interface ToolCallsGroupPart {
+  type: 'tool-calls-group';
+  tools: ToolGroupPart[];
+}
+
+type GroupedPart = TextGroupPart | ToolGroupPart | ToolCallsGroupPart;
 
 interface CompactTextBlockProps {
   parts: TextPart[];
@@ -159,25 +165,40 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = ({
 
     const groups: GroupedPart[] = [];
     let currentTextGroup: TextPart[] = [];
+    let currentToolGroup: ToolGroupPart[] = [];
 
     message.parts.forEach((part) => {
       if (part.type === 'text') {
+        // If we have accumulated tool parts, add them as a group
+        if (currentToolGroup.length > 0) {
+          if (currentToolGroup.length >= 2) {
+            groups.push({
+              type: 'tool-calls-group',
+              tools: currentToolGroup
+            });
+          } else {
+            // Single tool call, add individually
+            groups.push(currentToolGroup[0]);
+          }
+          currentToolGroup = [];
+        }
+
         currentTextGroup.push(part as TextPart);
       } else if (part.type.startsWith('tool-')) {
         // If we have accumulated text parts, add them as a group
         if (currentTextGroup.length > 0) {
-          groups.push({ 
-            type: 'text-group', 
-            parts: currentTextGroup 
+          groups.push({
+            type: 'text-group',
+            parts: currentTextGroup
           });
           currentTextGroup = [];
         }
-        
+
         // Type guard and safe property access for tool parts
         const toolPart = part as ToolPart & Record<string, unknown>;
         const toolCallId = typeof toolPart.toolCallId === 'string' ? toolPart.toolCallId : '';
         const toolName = typeof toolPart.toolName === 'string' ? toolPart.toolName : part.type.replace('tool-', '');
-        
+
         // Ensure state is one of the valid values with proper type checking
         const validStates = ['input-streaming', 'input-available', 'output-available', 'output-error', 'done', 'streaming'] as const;
         type ValidState = typeof validStates[number];
@@ -185,9 +206,9 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = ({
           return typeof value === 'string' && (validStates as readonly string[]).includes(value);
         };
         const state: ValidState = isValidState(toolPart.state) ? toolPart.state : 'input-available';
-        
-        // Add the tool part
-        groups.push({
+
+        // Add the tool part to current group
+        currentToolGroup.push({
           type: part.type,
           toolCallId,
           toolName,
@@ -200,10 +221,23 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = ({
 
     // Add any remaining text parts
     if (currentTextGroup.length > 0) {
-      groups.push({ 
-        type: 'text-group', 
-        parts: currentTextGroup 
+      groups.push({
+        type: 'text-group',
+        parts: currentTextGroup
       });
+    }
+
+    // Add any remaining tool parts
+    if (currentToolGroup.length > 0) {
+      if (currentToolGroup.length >= 2) {
+        groups.push({
+          type: 'tool-calls-group',
+          tools: currentToolGroup
+        });
+      } else {
+        // Single tool call, add individually
+        groups.push(currentToolGroup[0]);
+      }
     }
 
     return groups;
@@ -263,6 +297,23 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = ({
                 onSaveEdit={handleSaveEdit}
                 onCancelEdit={() => setIsEditing(false)}
               />
+            );
+          } else if (group.type === 'tool-calls-group') {
+            // Type narrowing: we know this is a ToolCallsGroupPart
+            const toolCallsGroup = group as ToolCallsGroupPart;
+            return (
+              <div key={`${message.id}-toolgroup-${index}`} className="mt-1">
+                <CompactGroupedToolCallsRenderer
+                  toolCalls={toolCallsGroup.tools.map(tool => ({
+                    type: tool.type,
+                    toolName: tool.toolName,
+                    toolCallId: tool.toolCallId,
+                    input: tool.input,
+                    output: tool.output,
+                    state: tool.state,
+                  }))}
+                />
+              </div>
             );
           } else if (group.type.startsWith('tool-')) {
             // Type narrowing: we know this is a ToolGroupPart
