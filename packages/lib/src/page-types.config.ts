@@ -1,5 +1,35 @@
 import { PageType } from './enums';
-import { createEmptySheet, serializeSheetContent } from './sheet';
+import { createEmptySheet, serializeSheetContent, SheetData } from './sheet';
+
+/**
+ * Creates a template sheet with example data to help AI understand the format
+ */
+function createTemplateSheet(): SheetData {
+  const sheet = createEmptySheet(20, 10);
+
+  // Add column headers
+  sheet.cells.A1 = 'Item';
+  sheet.cells.B1 = 'Quantity';
+  sheet.cells.C1 = 'Price';
+  sheet.cells.D1 = 'Total';
+
+  // Add sample data rows
+  sheet.cells.A2 = 'Product A';
+  sheet.cells.B2 = '10';
+  sheet.cells.C2 = '25.50';
+  sheet.cells.D2 = '=B2*C2';
+
+  sheet.cells.A3 = 'Product B';
+  sheet.cells.B3 = '5';
+  sheet.cells.C3 = '42.00';
+  sheet.cells.D3 = '=B3*C3';
+
+  // Add a sum formula
+  sheet.cells.A5 = 'Total';
+  sheet.cells.D5 = '=SUM(D2:D3)';
+
+  return sheet;
+}
 
 export interface PageTypeCapabilities {
   canHaveChildren: boolean;
@@ -162,7 +192,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsVersioning: true,
       supportsAI: true,
     },
-    defaultContent: () => serializeSheetContent(createEmptySheet()),
+    defaultContent: () => serializeSheetContent(createTemplateSheet()),
     allowedChildTypes: [],
     uiComponent: 'SheetView',
     layoutViewType: 'document',
