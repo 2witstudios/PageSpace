@@ -10,6 +10,11 @@ struct User: Identifiable, Codable {
 struct LoginRequest: Codable {
     let email: String
     let password: String
+    let deviceId: String
+    let platform: String
+    let deviceName: String?
+    let appVersion: String?
+    let deviceToken: String?
 }
 
 struct SignupRequest: Codable {
@@ -17,6 +22,10 @@ struct SignupRequest: Codable {
     let email: String
     let password: String
     let confirmPassword: String
+    let deviceId: String
+    let platform: String
+    let deviceName: String?
+    let appVersion: String?
 }
 
 struct LoginResponse: Codable {
@@ -24,20 +33,37 @@ struct LoginResponse: Codable {
     let token: String
     let refreshToken: String
     let csrfToken: String
+    let deviceToken: String?
 }
 
 struct RefreshRequest: Codable {
     let refreshToken: String
+    let deviceToken: String?
+    let deviceId: String
+    let platform: String
 }
 
 struct RefreshResponse: Codable {
     let token: String
     let refreshToken: String
     let csrfToken: String
+    let deviceToken: String?
 }
 
 struct OAuthExchangeRequest: Codable {
     let idToken: String
+    let deviceId: String
+    let platform: String
+    let deviceName: String?
+    let appVersion: String?
+    let deviceToken: String?
+}
+
+struct DeviceRefreshRequest: Codable {
+    let deviceToken: String
+    let deviceId: String
+    let userAgent: String?
+    let appVersion: String?
 }
 
 struct AISettings: Codable {

@@ -1,5 +1,6 @@
 // All exports including Node.js-only utilities
 export * from './auth-utils';
+export * from './device-auth-utils';
 export * from './csrf-utils';
 export * from './encryption-utils';
 export * from './page-content-parser';
