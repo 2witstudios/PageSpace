@@ -168,18 +168,19 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = ({
     let currentToolGroup: ToolGroupPart[] = [];
 
     message.parts.forEach((part) => {
+      // Skip step-start and reasoning parts - they shouldn't break up tool groups
+      if (part.type === 'step-start' || part.type === 'reasoning') {
+        return;
+      }
+
       if (part.type === 'text') {
         // If we have accumulated tool parts, add them as a group
         if (currentToolGroup.length > 0) {
-          if (currentToolGroup.length >= 2) {
-            groups.push({
-              type: 'tool-calls-group',
-              tools: currentToolGroup
-            });
-          } else {
-            // Single tool call, add individually
-            groups.push(currentToolGroup[0]);
-          }
+          // Always create a group for tool calls, even single ones
+          groups.push({
+            type: 'tool-calls-group',
+            tools: currentToolGroup
+          });
           currentToolGroup = [];
         }
 
@@ -229,15 +230,11 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = ({
 
     // Add any remaining tool parts
     if (currentToolGroup.length > 0) {
-      if (currentToolGroup.length >= 2) {
-        groups.push({
-          type: 'tool-calls-group',
-          tools: currentToolGroup
-        });
-      } else {
-        // Single tool call, add individually
-        groups.push(currentToolGroup[0]);
-      }
+      // Always create a group for tool calls, even single ones
+      groups.push({
+        type: 'tool-calls-group',
+        tools: currentToolGroup
+      });
     }
 
     return groups;

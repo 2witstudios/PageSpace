@@ -139,15 +139,6 @@ export function GroupedToolCallsRenderer({ toolCalls, className }: GroupedToolCa
     return 'completed';
   }, [summary]);
 
-  // If only one tool call, render directly without grouping
-  if (toolCalls.length === 1) {
-    return (
-      <div className={className}>
-        <ToolCallRenderer part={toolCalls[0]} />
-      </div>
-    );
-  }
-
   return (
     <div className={cn('my-2', className)}>
       <Collapsible open={isOpen} onOpenChange={setIsOpen}>

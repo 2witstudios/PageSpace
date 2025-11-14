@@ -135,15 +135,6 @@ export function CompactGroupedToolCallsRenderer({ toolCalls, className }: Compac
     return 'completed';
   }, [summary]);
 
-  // If only one tool call, render directly without grouping
-  if (toolCalls.length === 1) {
-    return (
-      <div className={className}>
-        <CompactToolCallRenderer part={toolCalls[0]} />
-      </div>
-    );
-  }
-
   return (
     <div className={cn('my-1.5', className)}>
       <div className="bg-gray-50 dark:bg-gray-800/30 rounded border border-gray-200 dark:border-gray-700">
