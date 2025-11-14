@@ -247,6 +247,12 @@ class AuthFetch {
   }
 
   private async doRefresh(): Promise<boolean> {
+    const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
+
+    if (isDesktop) {
+      return this.refreshDesktopSession();
+    }
+
     try {
       const response = await fetch('/api/auth/refresh', {
         method: 'POST',
@@ -284,6 +290,83 @@ class AuthFetch {
       return false;
     } catch (error) {
       this.logger.error('Token refresh request threw an error', {
+        error: error instanceof Error ? error : String(error),
+      });
+      return false;
+    }
+  }
+
+  private async refreshDesktopSession(): Promise<boolean> {
+    if (!window.electron) {
+      return false;
+    }
+
+    try {
+      const session = await window.electron.auth.getSession();
+      const deviceInfo = await window.electron.auth.getDeviceInfo();
+
+      const refreshToken = session?.refreshToken;
+      const deviceToken = session?.deviceToken ?? null;
+
+      let response: Response | null = null;
+
+      if (refreshToken) {
+        response = await fetch('/api/auth/mobile/refresh', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            refreshToken,
+            deviceToken,
+            deviceId: deviceInfo.deviceId,
+            platform: 'desktop',
+          }),
+        });
+
+        if (response.ok) {
+          this.logger.debug('Desktop: Refresh token exchange succeeded');
+        }
+      }
+
+      if (!response || response.status === 401) {
+        if (!deviceToken) {
+          this.logger.warn('Desktop: Cannot refresh session - no device token available');
+          return false;
+        }
+
+        response = await fetch('/api/auth/device/refresh', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            deviceToken,
+            deviceId: deviceInfo.deviceId,
+            userAgent: deviceInfo.userAgent,
+            appVersion: deviceInfo.appVersion,
+          }),
+        });
+      }
+
+      if (!response || !response.ok) {
+        this.logger.error('Desktop: Token refresh request failed', {
+          status: response?.status,
+        });
+        return false;
+      }
+
+      const data = await response.json();
+
+      await window.electron.auth.storeSession({
+        accessToken: data.token,
+        refreshToken: data.refreshToken,
+        csrfToken: data.csrfToken,
+        deviceToken: data.deviceToken,
+      });
+
+      this.clearJWTCache();
+      this.logger.info('Desktop: Session refreshed successfully via secure storage');
+      return true;
+    } catch (error) {
+      this.logger.error('Desktop: Token refresh request threw an error', {
         error: error instanceof Error ? error : String(error),
       });
       return false;

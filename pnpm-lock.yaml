@@ -93,6 +93,9 @@ importers:
       electron-updater:
         specifier: ^6.6.2
         version: 6.6.2
+      node-machine-id:
+        specifier: ^1.1.12
+        version: 1.1.12
       ws:
         specifier: ^8.18.3
         version: 8.18.3
@@ -7846,6 +7849,9 @@ packages:
   node-html-parser@7.0.1:
     resolution: {integrity: sha512-KGtmPY2kS0thCWGK0VuPyOS+pBKhhe8gXztzA2ilAOhbUbxa9homF1bOyKvhGzMLXUoRds9IOmr/v5lr/lqNmA==}
 
+  node-machine-id@1.1.12:
+    resolution: {integrity: sha512-QNABxbrPa3qEIfrE6GOJ7BYIuignnJw7iQ2YPbc3Nla1HzRJjXzZOiikfF8m7eAMfichLt3M4VgLOetqgDmgGQ==}
+
   node-plop@0.26.3:
     resolution: {integrity: sha512-Cov028YhBZ5aB7MdMWJEmwyBig43aGL5WT4vdoB28Oitau1zZAcHUn8Sgfk9HM33TqhtLJ9PlM/O0Mv+QpV/4Q==}
     engines: {node: '>=8.9.4'}
@@ -13462,7 +13468,7 @@ snapshots:
     dependencies:
       '@types/node': 20.19.17
       tapable: 2.2.3
-      webpack: 5.101.3(esbuild@0.19.12)
+      webpack: 5.101.3(esbuild@0.25.0)
     transitivePeerDependencies:
       - '@swc/core'
       - esbuild
@@ -17534,7 +17540,7 @@ snapshots:
     dependencies:
       loader-utils: 2.0.4
       monaco-editor: 0.52.2
-      webpack: 5.101.3(esbuild@0.19.12)
+      webpack: 5.101.3(esbuild@0.25.0)
 
   monaco-editor@0.52.2: {}
 
@@ -17724,6 +17730,8 @@ snapshots:
     dependencies:
       css-select: 5.2.2
       he: 1.2.0
+
+  node-machine-id@1.1.12: {}
 
   node-plop@0.26.3:
     dependencies:
@@ -19470,16 +19478,16 @@ snapshots:
       mkdirp: 0.5.6
       rimraf: 2.6.3
 
-  terser-webpack-plugin@5.3.14(esbuild@0.19.12)(webpack@5.101.3(esbuild@0.25.0)):
+  terser-webpack-plugin@5.3.14(esbuild@0.25.0)(webpack@5.101.3(esbuild@0.19.12)):
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
       jest-worker: 27.5.1
       schema-utils: 4.3.2
       serialize-javascript: 6.0.2
       terser: 5.44.0
-      webpack: 5.101.3(esbuild@0.19.12)
+      webpack: 5.101.3(esbuild@0.25.0)
     optionalDependencies:
-      esbuild: 0.19.12
+      esbuild: 0.25.0
 
   terser@5.44.0:
     dependencies:
@@ -20101,7 +20109,7 @@ snapshots:
 
   webpack-sources@3.3.3: {}
 
-  webpack@5.101.3(esbuild@0.19.12):
+  webpack@5.101.3(esbuild@0.25.0):
     dependencies:
       '@types/eslint-scope': 3.7.7
       '@types/estree': 1.0.8
@@ -20125,7 +20133,7 @@ snapshots:
       neo-async: 2.6.2
       schema-utils: 4.3.2
       tapable: 2.2.3
-      terser-webpack-plugin: 5.3.14(esbuild@0.19.12)(webpack@5.101.3(esbuild@0.25.0))
+      terser-webpack-plugin: 5.3.14(esbuild@0.25.0)(webpack@5.101.3(esbuild@0.19.12))
       watchpack: 2.4.4
       webpack-sources: 3.3.3
     transitivePeerDependencies:

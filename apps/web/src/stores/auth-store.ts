@@ -226,8 +226,19 @@ export const useAuthStore = create<AuthState>()(
         // Create new auth promise
         const authPromise = (async () => {
           try {
+            const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
+            const headers: Record<string, string> = {};
+
+            if (isDesktop && window.electron) {
+              const jwt = await window.electron.auth.getJWT();
+              if (jwt) {
+                headers['Authorization'] = `Bearer ${jwt}`;
+              }
+            }
+
             const response = await fetch('/api/auth/me', {
               credentials: 'include',
+              headers,
             });
 
             if (response.ok) {

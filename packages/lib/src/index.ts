@@ -22,6 +22,7 @@ export * from './sheet';
 
 // Auth and security utilities (server-only)
 export * from './auth-utils';
+export * from './device-auth-utils';
 export {
   createServiceToken as createServiceTokenV2,
   verifyServiceToken as verifyServiceTokenV2,

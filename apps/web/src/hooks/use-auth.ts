@@ -4,7 +4,7 @@ import { useEffect, useCallback, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore, authStoreHelpers } from '@/stores/auth-store';
 import { useTokenRefresh } from './use-token-refresh';
-import { post } from '@/lib/auth-fetch';
+import { post, clearJWTCache } from '@/lib/auth-fetch';
 
 interface User {
   id: string;
@@ -62,6 +62,51 @@ export function useAuth(): {
   const login = useCallback(async (email: string, password: string) => {
     setLoading(true);
     try {
+      const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
+
+      if (isDesktop && window.electron) {
+        const [deviceInfo, existingSession] = await Promise.all([
+          window.electron.auth.getDeviceInfo(),
+          window.electron.auth.getSession(),
+        ]);
+
+        const response = await fetch('/api/auth/mobile/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email,
+            password,
+            deviceId: deviceInfo.deviceId,
+            platform: 'desktop',
+            deviceName: deviceInfo.deviceName,
+            appVersion: deviceInfo.appVersion,
+            deviceToken: existingSession?.deviceToken ?? null,
+          }),
+        });
+
+        if (response.ok) {
+          const userData = await response.json();
+
+          await window.electron.auth.storeSession({
+            accessToken: userData.token,
+            refreshToken: userData.refreshToken,
+            csrfToken: userData.csrfToken,
+            deviceToken: userData.deviceToken,
+          });
+
+          clearJWTCache();
+          setUser(userData.user);
+          startSession();
+          return { success: true };
+        }
+
+        const errorData = await response.json().catch(() => ({}));
+        return {
+          success: false,
+          error: errorData.error || 'Login failed',
+        };
+      }
+
       const response = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -76,16 +121,16 @@ export function useAuth(): {
         return { success: true };
       } else {
         const errorData = await response.json();
-        return { 
-          success: false, 
-          error: errorData.error || 'Login failed' 
+        return {
+          success: false,
+          error: errorData.error || 'Login failed'
         };
       }
     } catch (error) {
       console.error('Login error:', error);
-      return { 
-        success: false, 
-        error: 'Network error. Please try again.' 
+      return {
+        success: false,
+        error: 'Network error. Please try again.'
       };
     } finally {
       setLoading(false);
@@ -99,6 +144,14 @@ export function useAuth(): {
     } catch (error) {
       console.error('Logout error:', error);
     } finally {
+      if (typeof window !== 'undefined' && window.electron?.isDesktop) {
+        try {
+          await window.electron.auth.clearAuth();
+        } catch (err) {
+          console.error('Failed to clear desktop auth session', err);
+        }
+        clearJWTCache();
+      }
       // Reset token refresh state
       tokenRefreshActiveRef.current = false;
       endSession();
