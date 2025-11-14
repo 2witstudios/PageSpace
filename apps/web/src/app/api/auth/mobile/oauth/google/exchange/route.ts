@@ -60,6 +60,7 @@ import {
   createDeviceTokenRecord,
   validateDeviceToken,
   updateDeviceTokenActivity,
+  revokeDeviceToken,
 } from '@pagespace/lib/server';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
@@ -247,8 +248,12 @@ export async function POST(req: Request) {
         !storedDeviceToken ||
         storedDeviceToken.userId !== user.id ||
         storedDeviceToken.deviceId !== deviceId ||
-        storedDeviceToken.platform !== platform
+        storedDeviceToken.platform !== platform ||
+        storedDeviceToken.payload.tokenVersion !== user.tokenVersion
       ) {
+        if (storedDeviceToken && storedDeviceToken.payload.tokenVersion !== user.tokenVersion) {
+          await revokeDeviceToken(storedDeviceToken.id, 'token_version_change');
+        }
         deviceTokenValue = null;
       } else {
         deviceTokenRecordId = storedDeviceToken.id;

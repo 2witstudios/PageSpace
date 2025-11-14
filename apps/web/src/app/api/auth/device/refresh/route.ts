@@ -11,6 +11,7 @@ import {
   getRefreshTokenMaxAge,
   generateCSRFToken,
   getSessionIdFromJWT,
+  revokeDeviceToken,
 } from '@pagespace/lib/server';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
@@ -58,6 +59,17 @@ export async function POST(req: Request) {
 
     if (!user) {
       return Response.json({ error: 'User not found for device token.' }, { status: 404 });
+    }
+
+    if (deviceRecord.payload.tokenVersion !== user.tokenVersion) {
+      await revokeDeviceToken(deviceRecord.id, 'token_version_change');
+      loggers.auth.warn('Device token rejected due to token version mismatch', {
+        deviceId,
+        userId: user.id,
+        deviceTokenVersion: deviceRecord.payload.tokenVersion,
+        userTokenVersion: user.tokenVersion,
+      });
+      return Response.json({ error: 'Device session is no longer valid.' }, { status: 401 });
     }
 
     // Rotate device token if it is within 30 days of expiration

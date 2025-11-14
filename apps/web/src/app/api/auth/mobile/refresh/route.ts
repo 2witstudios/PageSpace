@@ -10,6 +10,7 @@ import {
   validateDeviceToken,
   createDeviceTokenRecord,
   updateDeviceTokenActivity,
+  revokeDeviceToken,
 } from '@pagespace/lib/server';
 import { generateCSRFToken, getSessionIdFromJWT } from '@pagespace/lib/server';
 import { z } from 'zod/v4';
@@ -124,8 +125,12 @@ export async function POST(req: Request) {
         !storedDeviceToken ||
         storedDeviceToken.userId !== user.id ||
         storedDeviceToken.deviceId !== deviceId ||
-        storedDeviceToken.platform !== platform
+        storedDeviceToken.platform !== platform ||
+        storedDeviceToken.payload.tokenVersion !== user.tokenVersion
       ) {
+        if (storedDeviceToken && storedDeviceToken.payload.tokenVersion !== user.tokenVersion) {
+          await revokeDeviceToken(storedDeviceToken.id, 'token_version_change');
+        }
         deviceTokenValue = null;
       } else {
         deviceTokenRecordId = storedDeviceToken.id;

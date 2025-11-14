@@ -29,6 +29,7 @@ export interface DeviceTokenPayload extends jose.JWTPayload {
 }
 
 export type DeviceToken = InferSelectModel<typeof deviceTokens>;
+export type ValidatedDeviceToken = DeviceToken & { payload: DeviceTokenPayload };
 
 /**
  * Token lifetime configurations
@@ -144,7 +145,7 @@ export async function createDeviceTokenRecord(
 /**
  * Validate device token against database
  */
-export async function validateDeviceToken(token: string): Promise<DeviceToken | null> {
+export async function validateDeviceToken(token: string): Promise<ValidatedDeviceToken | null> {
   try {
     // First decode the JWT
     const payload = await decodeDeviceToken(token);
@@ -174,7 +175,7 @@ export async function validateDeviceToken(token: string): Promise<DeviceToken | 
       return null;
     }
 
-    return deviceToken;
+    return { ...deviceToken, payload };
   } catch (error) {
     console.error('Device token validation error:', error);
     return null;
@@ -263,6 +264,11 @@ export async function rotateDeviceToken(
     // Validate old token
     const oldDeviceToken = await validateDeviceToken(oldToken);
     if (!oldDeviceToken) {
+      return null;
+    }
+
+    if (oldDeviceToken.payload.tokenVersion !== tokenVersion) {
+      await revokeDeviceToken(oldDeviceToken.id, 'token_version_change');
       return null;
     }
 
