@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { ChevronDown, Loader2, CheckCircle2, XCircle, Clock } from 'lucide-react';
 import { ToolCallRenderer } from './ToolCallRenderer';
@@ -87,12 +87,22 @@ export function GroupedToolCallsRenderer({ toolCalls, className }: GroupedToolCa
     return stats;
   }, [toolCallsWithStatus, toolCalls.length]);
 
-  // Determine if group should be expanded by default
+  // Determine if group should be expanded
   const shouldExpand = useMemo(() => {
     return toolCallsWithStatus.some(tool =>
       tool.status === 'in_progress' || tool.status === 'error'
     );
   }, [toolCallsWithStatus]);
+
+  // Controlled open state - starts with shouldExpand value
+  const [isOpen, setIsOpen] = useState(shouldExpand);
+
+  // Auto-expand when shouldExpand becomes true
+  useEffect(() => {
+    if (shouldExpand) {
+      setIsOpen(true);
+    }
+  }, [shouldExpand]);
 
   // Find the current active tool (first in_progress or error)
   const activeToolIndex = useMemo(() => {
@@ -140,7 +150,7 @@ export function GroupedToolCallsRenderer({ toolCalls, className }: GroupedToolCa
 
   return (
     <div className={cn('my-2', className)}>
-      <Collapsible defaultOpen={shouldExpand}>
+      <Collapsible open={isOpen} onOpenChange={setIsOpen}>
         <div className="border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900">
           <CollapsibleTrigger className="w-full flex items-center justify-between p-3 text-left hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors group">
             <div className="flex items-center space-x-3 flex-1 min-w-0">

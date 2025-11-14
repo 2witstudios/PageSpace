@@ -60,8 +60,6 @@ function getStatusIcon(status: ToolStatus, size = 'h-3 w-3') {
 }
 
 export function CompactGroupedToolCallsRenderer({ toolCalls, className }: CompactGroupedToolCallsRendererProps) {
-  const [isExpanded, setIsExpanded] = useState(false);
-
   // Process tool calls with status
   const toolCallsWithStatus = useMemo<ToolCallWithStatus[]>(() => {
     return toolCalls.map((tool, index) => ({
@@ -88,19 +86,22 @@ export function CompactGroupedToolCallsRenderer({ toolCalls, className }: Compac
     return stats;
   }, [toolCallsWithStatus, toolCalls.length]);
 
-  // Auto-expand if any tool is in progress or has errors
+  // Determine if group should be expanded
   const shouldAutoExpand = useMemo(() => {
     return toolCallsWithStatus.some(tool =>
       tool.status === 'in_progress' || tool.status === 'error'
     );
   }, [toolCallsWithStatus]);
 
-  // Update expanded state if should auto-expand
+  // Controlled expanded state - starts with shouldAutoExpand value
+  const [isExpanded, setIsExpanded] = useState(shouldAutoExpand);
+
+  // Auto-expand when shouldAutoExpand becomes true
   React.useEffect(() => {
-    if (shouldAutoExpand && !isExpanded) {
+    if (shouldAutoExpand) {
       setIsExpanded(true);
     }
-  }, [shouldAutoExpand, isExpanded]);
+  }, [shouldAutoExpand]);
 
   // Find the current active tool (first in_progress or error)
   const activeToolIndex = useMemo(() => {
