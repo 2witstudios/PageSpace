@@ -14,10 +14,15 @@ interface QueuedRequest {
   options?: FetchOptions;
 }
 
+export interface SessionRefreshResult {
+  success: boolean;
+  shouldLogout: boolean;
+}
+
 class AuthFetch {
   private isRefreshing = false;
   private refreshQueue: QueuedRequest[] = [];
-  private refreshPromise: Promise<boolean> | null = null;
+  private refreshPromise: Promise<SessionRefreshResult> | null = null;
   private logger = createClientLogger({ namespace: 'auth', component: 'auth-fetch' });
   private csrfToken: string | null = null;
   private csrfTokenPromise: Promise<string | null> | null = null;
@@ -184,14 +189,15 @@ class AuthFetch {
   private async refreshToken(): Promise<boolean> {
     // If we're already refreshing, wait for that to complete
     if (this.refreshPromise) {
-      return this.refreshPromise;
+      const result = await this.refreshPromise;
+      return result.success;
     }
 
     this.isRefreshing = true;
     this.refreshPromise = this.doRefresh();
 
     try {
-      const success = await this.refreshPromise;
+      const { success, shouldLogout } = await this.refreshPromise;
 
       // Process queued requests
       const queue = [...this.refreshQueue];
@@ -239,6 +245,10 @@ class AuthFetch {
         });
       }
 
+      if (shouldLogout && typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('auth:expired'));
+      }
+
       return success;
     } finally {
       this.isRefreshing = false;
@@ -246,7 +256,7 @@ class AuthFetch {
     }
   }
 
-  private async doRefresh(): Promise<boolean> {
+  private async doRefresh(): Promise<SessionRefreshResult> {
     const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
 
     if (isDesktop) {
@@ -264,7 +274,7 @@ class AuthFetch {
         if (typeof window !== 'undefined' && window.dispatchEvent) {
           window.dispatchEvent(new CustomEvent('auth:refreshed'));
         }
-        return true;
+        return { success: true, shouldLogout: false };
       }
 
       if (response.status === 401) {
@@ -272,7 +282,7 @@ class AuthFetch {
         if (typeof window !== 'undefined' && window.dispatchEvent) {
           window.dispatchEvent(new CustomEvent('auth:expired'));
         }
-        return false;
+        return { success: false, shouldLogout: true };
       }
 
       if (response.status === 429 || response.status >= 500) {
@@ -280,25 +290,25 @@ class AuthFetch {
         this.logger.warn('Token refresh request returned retryable status', {
           status: response.status,
         });
-        return false;
+        return { success: false, shouldLogout: false };
       }
 
       // For other client errors, don't logout
       this.logger.error('Token refresh request failed with non-retryable status', {
         status: response.status,
       });
-      return false;
+      return { success: false, shouldLogout: false };
     } catch (error) {
       this.logger.error('Token refresh request threw an error', {
         error: error instanceof Error ? error : String(error),
       });
-      return false;
+      return { success: false, shouldLogout: false };
     }
   }
 
-  private async refreshDesktopSession(): Promise<boolean> {
+  private async refreshDesktopSession(): Promise<SessionRefreshResult> {
     if (!window.electron) {
-      return false;
+      return { success: false, shouldLogout: false };
     }
 
     try {
@@ -309,6 +319,7 @@ class AuthFetch {
       const deviceToken = session?.deviceToken ?? null;
 
       let response: Response | null = null;
+      let shouldLogout = false;
 
       if (refreshToken) {
         response = await fetch('/api/auth/mobile/refresh', {
@@ -331,7 +342,7 @@ class AuthFetch {
       if (!response || response.status === 401) {
         if (!deviceToken) {
           this.logger.warn('Desktop: Cannot refresh session - no device token available');
-          return false;
+          return { success: false, shouldLogout: true };
         }
 
         response = await fetch('/api/auth/device/refresh', {
@@ -344,13 +355,19 @@ class AuthFetch {
             appVersion: deviceInfo.appVersion,
           }),
         });
+
+        if (response.status === 401) {
+          shouldLogout = true;
+        }
+      } else if (response?.status === 401) {
+        shouldLogout = !deviceToken;
       }
 
       if (!response || !response.ok) {
         this.logger.error('Desktop: Token refresh request failed', {
           status: response?.status,
         });
-        return false;
+        return { success: false, shouldLogout };
       }
 
       const data = await response.json();
@@ -364,13 +381,20 @@ class AuthFetch {
 
       this.clearJWTCache();
       this.logger.info('Desktop: Session refreshed successfully via secure storage');
-      return true;
+      if (typeof window !== 'undefined' && window.dispatchEvent) {
+        window.dispatchEvent(new CustomEvent('auth:refreshed'));
+      }
+      return { success: true, shouldLogout: false };
     } catch (error) {
       this.logger.error('Desktop: Token refresh request threw an error', {
         error: error instanceof Error ? error : String(error),
       });
-      return false;
+      return { success: false, shouldLogout: false };
     }
+  }
+
+  async refreshAuthSession(): Promise<SessionRefreshResult> {
+    return this.doRefresh();
   }
 
   /**
@@ -559,3 +583,4 @@ export const del = authFetch.delete.bind(authFetch);
 export const patch = authFetch.patch.bind(authFetch);
 export const clearCSRFToken = authFetch.clearCSRFToken.bind(authFetch);
 export const clearJWTCache = authFetch.clearJWTCache.bind(authFetch);
+export const refreshAuthSession = authFetch.refreshAuthSession.bind(authFetch);
