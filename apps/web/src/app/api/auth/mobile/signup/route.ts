@@ -1,7 +1,18 @@
 import { users, drives, userAiSettings, refreshTokens, db, eq } from '@pagespace/db';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod/v4';
-import { slugify, generateAccessToken, generateRefreshToken, checkRateLimit, resetRateLimit, RATE_LIMIT_CONFIGS, createNotification, decodeToken } from '@pagespace/lib/server';
+import {
+  slugify,
+  generateAccessToken,
+  generateRefreshToken,
+  getRefreshTokenMaxAge,
+  checkRateLimit,
+  resetRateLimit,
+  RATE_LIMIT_CONFIGS,
+  createNotification,
+  decodeToken,
+  createDeviceTokenRecord,
+} from '@pagespace/lib/server';
 import { generateCSRFToken, getSessionIdFromJWT } from '@pagespace/lib/server';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
@@ -22,6 +33,10 @@ const signupSchema = z.object({
     .regex(/[a-z]/, { message: "Password must contain at least one lowercase letter" })
     .regex(/[0-9]/, { message: "Password must contain at least one number" }),
   confirmPassword: z.string().min(1, { message: "Please confirm your password" }),
+  deviceId: z.string().min(1, { message: 'Device identifier is required' }),
+  platform: z.enum(['ios', 'android', 'desktop']).default('ios'),
+  deviceName: z.string().optional(),
+  appVersion: z.string().optional(),
 }).refine((data) => data.password === data.confirmPassword, {
   message: "Passwords do not match",
   path: ["confirmPassword"],
@@ -42,7 +57,15 @@ export async function POST(req: Request) {
       return Response.json({ errors: validation.error.flatten().fieldErrors }, { status: 400 });
     }
 
-    const { name, email: validatedEmail, password } = validation.data;
+    const {
+      name,
+      email: validatedEmail,
+      password,
+      deviceId,
+      platform,
+      deviceName,
+      appVersion,
+    } = validation.data;
     email = validatedEmail;
 
     // Rate limiting by IP address and email (prevent spam and email enumeration)
@@ -123,7 +146,7 @@ export async function POST(req: Request) {
 
     // Log successful signup
     logAuthEvent('signup', user.id, email, clientIP);
-    loggers.auth.info('New user created via mobile', { userId: user.id, email, name });
+    loggers.auth.info('New user created via mobile', { userId: user.id, email, name, platform });
 
     // Reset rate limits on successful signup
     resetRateLimit(clientIP);
@@ -135,7 +158,8 @@ export async function POST(req: Request) {
       name,
       ip: clientIP,
       userAgent: req.headers.get('user-agent'),
-      platform: 'mobile'
+      platform,
+      appVersion,
     });
 
     // Send verification email (don't block signup)
@@ -176,13 +200,36 @@ export async function POST(req: Request) {
     const accessToken = await generateAccessToken(user.id, user.tokenVersion, user.role);
     const refreshToken = await generateRefreshToken(user.id, user.tokenVersion, user.role);
 
+    const refreshTokenPayload = await decodeToken(refreshToken);
+    const refreshTokenExpiresAt = refreshTokenPayload?.exp
+      ? new Date(refreshTokenPayload.exp * 1000)
+      : new Date(Date.now() + getRefreshTokenMaxAge() * 1000);
+
+    const { id: deviceTokenId, token: deviceToken } = await createDeviceTokenRecord(
+      user.id,
+      deviceId,
+      platform,
+      user.tokenVersion,
+      {
+        deviceName: deviceName || undefined,
+        userAgent: req.headers.get('user-agent') || undefined,
+        ipAddress: clientIP === 'unknown' ? undefined : clientIP,
+        location: undefined,
+      }
+    );
+
     // Save refresh token
     await db.insert(refreshTokens).values({
       id: createId(),
       token: refreshToken,
       userId: user.id,
       device: req.headers.get('user-agent'),
+      userAgent: req.headers.get('user-agent'),
       ip: clientIP,
+      lastUsedAt: new Date(),
+      platform,
+      deviceTokenId,
+      expiresAt: refreshTokenExpiresAt,
     });
 
     // Generate CSRF token for mobile client
@@ -211,6 +258,7 @@ export async function POST(req: Request) {
       token: accessToken,
       refreshToken: refreshToken,
       csrfToken: csrfToken,
+      deviceToken,
     }, { status: 201 });
   } catch (error) {
     loggers.auth.error('Mobile signup error', error as Error, { email, clientIP });
