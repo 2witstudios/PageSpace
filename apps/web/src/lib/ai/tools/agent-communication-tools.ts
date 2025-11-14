@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { generateText, convertToModelMessages, UIMessage } from 'ai';
 import { db, pages, chatMessages, drives, eq, and, sql } from '@pagespace/db';
 import { canUserViewPage } from '@pagespace/lib/server';
-import { sanitizeMessagesForModel } from '@/lib/ai/assistant-utils';
+import { sanitizeMessagesForModel, saveMessageToDatabase, convertDbMessageToUIMessage } from '@/lib/ai/assistant-utils';
+import { createId } from '@paralleldrive/cuid2';
 import { driveTools } from './drive-tools';
 import { pageReadTools } from './page-read-tools';
 import { pageWriteTools } from './page-write-tools';
@@ -366,14 +367,15 @@ export const agentCommunicationTools = {
    * Consult another AI agent in the workspace for specialized knowledge or assistance
    */
   ask_agent: tool({
-    description: 'Consult another AI agent in the workspace for specialized knowledge or assistance. This tool provides STATELESS consultations - each call is independent with no conversation memory. The target agent will not see previous consultation history. Provide sufficient context in your question since the agent won\'t have conversation history.',
+    description: 'Consult another AI agent in the workspace for specialized knowledge or assistance. This tool supports PERSISTENT conversations - you can continue previous conversations by providing a conversationId, or start a new conversation. The conversationId is returned in the response so you can continue the conversation in subsequent calls.',
     inputSchema: z.object({
       agentPath: z.string().describe('Semantic path to the agent (e.g., "/finance/Budget Analyst", "/dev/Code Assistant") for context and user readability'),
-      agentId: z.string().describe('Unique ID of the AI agent page to consult'), 
+      agentId: z.string().describe('Unique ID of the AI agent page to consult'),
       question: z.string().describe('Question or request for the target agent. Be specific and provide context.'),
-      context: z.string().optional().describe('Additional context about why you\'re asking this question or what you need the response for')
+      context: z.string().optional().describe('Additional context about why you\'re asking this question or what you need the response for'),
+      conversationId: z.string().optional().describe('Optional conversation ID to continue a previous conversation. If not provided, a new conversation will be created. Use the conversationId returned in previous responses to continue the same conversation.')
     }),
-    execute: async ({ agentPath, agentId, question, context }, { experimental_context }) => {
+    execute: async ({ agentPath, agentId, question, context, conversationId }, { experimental_context }) => {
       const executionContext = experimental_context as ToolExecutionContext;
       const userId = executionContext?.userId;
       
@@ -425,21 +427,59 @@ export const agentCommunicationTools = {
           throw new Error(`Insufficient permissions to consult agent "${targetAgent.title}"`);
         }
 
-        // 3. Build message for stateless consultation (no conversation history)
-        // Each ask_agent call is completely independent
+        // 3. Create or use existing conversation
+        const activeConversationId = conversationId || createId();
+
+        // 4. Load conversation history if continuing an existing conversation
+        let messages: UIMessage[] = [];
+        if (conversationId) {
+          // Load existing conversation history
+          const dbMessages = await db
+            .select()
+            .from(chatMessages)
+            .where(and(
+              eq(chatMessages.pageId, agentId),
+              eq(chatMessages.conversationId, conversationId),
+              eq(chatMessages.isActive, true)
+            ))
+            .orderBy(chatMessages.createdAt);
+
+          messages = dbMessages.map(convertDbMessageToUIMessage);
+
+          loggers.ai.debug('Loaded conversation history for ask_agent:', {
+            conversationId,
+            messageCount: messages.length,
+            agentId
+          });
+        }
+
+        // 5. Build and save the user's question message
+        const userMessageId = createId();
+        const userMessageContent = `${context ? `Context: ${context}\n\n` : ''}${question}`;
         const userMessage: UIMessage = {
-          id: `temp-${Date.now()}`,
+          id: userMessageId,
           role: 'user' as const,
           parts: [{
             type: 'text',
-            text: `${context ? `Context: ${context}\n\n` : ''}${question}`
+            text: userMessageContent
           }]
         };
 
-        // Stateless consultation - only the current question, no history
-        const messages: UIMessage[] = [userMessage];
+        // Save user message to database
+        await saveMessageToDatabase({
+          messageId: userMessageId,
+          pageId: agentId,
+          conversationId: activeConversationId,
+          userId: userId, // Track which user (via calling agent) asked the question
+          role: 'user',
+          content: userMessageContent,
+          agentRole: executionContext?.locationContext?.currentPage?.title, // Track the calling agent
+        });
 
-        // 4. Sanitize messages for AI model
+        // Add user message to conversation
+        messages.push(userMessage);
+
+        // 6. Sanitize messages for AI model
         const sanitizedMessages = sanitizeMessagesForModel(messages);
         
         // 7. Build system prompt with agent configuration
@@ -468,7 +508,7 @@ export const agentCommunicationTools = {
         }
 
         // Add cross-agent context
-        systemPrompt += `\n\nYou are being consulted by another agent or user. Respond helpfully based on your expertise and conversation history.`;
+        systemPrompt += `\n\nYou are being consulted by another agent or user${executionContext?.locationContext?.currentPage?.title ? ` (${executionContext.locationContext.currentPage.title})` : ''}. This is a persistent conversation - you have access to the full conversation history. Respond helpfully based on your expertise and the conversation context.`;
         
         // 8. Get configured model for agent
         const model = await getConfiguredModel(userId, {
@@ -529,8 +569,28 @@ export const agentCommunicationTools = {
             errors: toolErrors,
           });
         }
-        
-        // 13. Log successful interaction
+
+        // 13. Save assistant's response to database
+        const assistantMessageId = createId();
+        await saveMessageToDatabase({
+          messageId: assistantMessageId,
+          pageId: agentId,
+          conversationId: activeConversationId,
+          userId: null, // Assistant message, not from a user
+          role: 'assistant',
+          content: agentResponse,
+          agentRole: targetAgent.title,
+        });
+
+        loggers.ai.debug('Saved ask_agent conversation:', {
+          conversationId: activeConversationId,
+          agentId,
+          questionLength: question.length,
+          responseLength: agentResponse.length,
+          isNewConversation: !conversationId
+        });
+
+        // 14. Log successful interaction
         await logAgentInteraction({
           requestingUserId: userId,
           requestingAgent: executionContext?.locationContext?.currentPage?.id,
@@ -539,9 +599,9 @@ export const agentCommunicationTools = {
           success: true
         });
         
-        // 14. Return structured response
+        // 15. Return structured response
         const processingTime = Date.now() - startTime;
-        
+
         return {
           success: true,
           agent: targetAgent.title,
@@ -549,10 +609,12 @@ export const agentCommunicationTools = {
           question: question,
           response: agentResponse,
           context: context,
+          conversationId: activeConversationId, // Return conversationId for continuation
           metadata: {
             agentId: targetAgent.id,
             processingTime,
-            stateless: true, // Indicate this was a stateless consultation
+            persistent: true, // Indicate this conversation is persistent
+            isNewConversation: !conversationId, // Flag if this started a new conversation
             callDepth: callDepth + 1,
             // Use display names from AI_PROVIDERS config
             provider: targetAgent.aiProvider
