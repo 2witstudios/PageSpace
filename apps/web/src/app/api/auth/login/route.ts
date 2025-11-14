@@ -2,7 +2,15 @@ import { users, refreshTokens } from '@pagespace/db';
 import { db, eq } from '@pagespace/db';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod/v4';
-import { generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, checkRateLimit, resetRateLimit, RATE_LIMIT_CONFIGS } from '@pagespace/lib/server';
+import {
+  generateAccessToken,
+  generateRefreshToken,
+  getRefreshTokenMaxAge,
+  checkRateLimit,
+  resetRateLimit,
+  RATE_LIMIT_CONFIGS,
+  decodeToken,
+} from '@pagespace/lib/server';
 import { serialize } from 'cookie';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
@@ -83,12 +91,21 @@ export async function POST(req: Request) {
     const accessToken = await generateAccessToken(user.id, user.tokenVersion, user.role);
     const refreshToken = await generateRefreshToken(user.id, user.tokenVersion, user.role);
 
+    const refreshPayload = await decodeToken(refreshToken);
+    const refreshExpiresAt = refreshPayload?.exp
+      ? new Date(refreshPayload.exp * 1000)
+      : new Date(Date.now() + getRefreshTokenMaxAge() * 1000);
+
     await db.insert(refreshTokens).values({
       id: createId(),
       token: refreshToken,
       userId: user.id,
       device: req.headers.get('user-agent'),
+      userAgent: req.headers.get('user-agent'),
       ip: clientIP,
+      lastUsedAt: new Date(),
+      platform: 'web',
+      expiresAt: refreshExpiresAt,
     });
 
     // Reset rate limits on successful login

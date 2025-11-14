@@ -256,7 +256,8 @@ export async function rotateDeviceToken(
   metadata: {
     userAgent?: string;
     ipAddress?: string;
-  }
+  },
+  tokenVersion: number = 0
 ): Promise<{ token: string; deviceToken: DeviceToken } | null> {
   try {
     // Validate old token
@@ -273,7 +274,7 @@ export async function rotateDeviceToken(
       oldDeviceToken.userId,
       oldDeviceToken.deviceId,
       oldDeviceToken.platform,
-      0, // Token version from user will be checked separately
+      tokenVersion,
       {
         deviceName: oldDeviceToken.deviceName || undefined,
         userAgent: metadata.userAgent || oldDeviceToken.userAgent || undefined,
