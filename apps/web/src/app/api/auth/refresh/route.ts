@@ -1,6 +1,6 @@
 import { users, refreshTokens } from '@pagespace/db';
 import { db, eq, sql } from '@pagespace/db';
-import { decodeToken, generateAccessToken, generateRefreshToken, checkRateLimit, RATE_LIMIT_CONFIGS } from '@pagespace/lib/server';
+import { decodeToken, generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, checkRateLimit, RATE_LIMIT_CONFIGS } from '@pagespace/lib/server';
 import { serialize } from 'cookie';
 import { parse } from 'cookie';
 import { createId } from '@paralleldrive/cuid2';
@@ -109,7 +109,7 @@ export async function POST(req: Request) {
     secure: isProduction,
     sameSite: 'strict',
     path: '/',
-    maxAge: 7 * 24 * 60 * 60, // 7 days
+    maxAge: getRefreshTokenMaxAge(), // Configurable via REFRESH_TOKEN_TTL env var (default: 30d)
     ...(isProduction && { domain: process.env.COOKIE_DOMAIN })
   });
 

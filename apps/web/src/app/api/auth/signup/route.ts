@@ -1,7 +1,7 @@
 import { users, drives, userAiSettings, refreshTokens, db, eq } from '@pagespace/db';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod/v4';
-import { slugify, generateAccessToken, generateRefreshToken, checkRateLimit, resetRateLimit, RATE_LIMIT_CONFIGS, createNotification } from '@pagespace/lib/server';
+import { slugify, generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, checkRateLimit, resetRateLimit, RATE_LIMIT_CONFIGS, createNotification } from '@pagespace/lib/server';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
@@ -213,7 +213,7 @@ export async function POST(req: Request) {
       secure: isProduction,
       sameSite: 'strict',
       path: '/',
-      maxAge: 7 * 24 * 60 * 60, // 7 days
+      maxAge: getRefreshTokenMaxAge(), // Configurable via REFRESH_TOKEN_TTL env var (default: 30d)
       ...(isProduction && { domain: process.env.COOKIE_DOMAIN })
     });
 
