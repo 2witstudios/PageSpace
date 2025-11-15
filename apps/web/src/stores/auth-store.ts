@@ -226,8 +226,19 @@ export const useAuthStore = create<AuthState>()(
         // Create new auth promise
         const authPromise = (async () => {
           try {
+            const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
+            const headers: Record<string, string> = {};
+
+            if (isDesktop && window.electron) {
+              const jwt = await window.electron.auth.getJWT();
+              if (jwt) {
+                headers['Authorization'] = `Bearer ${jwt}`;
+              }
+            }
+
             const response = await fetch('/api/auth/me', {
               credentials: 'include',
+              headers,
             });
 
             if (response.ok) {
@@ -459,6 +470,22 @@ export const authStoreHelpers = {
 
     const handleAuthExpired = async () => {
       console.log('[AUTH_STORE] Token expired - logging out');
+
+      if (typeof window !== 'undefined' && window.electron?.isDesktop) {
+        try {
+          await window.electron.auth.clearAuth();
+        } catch (error) {
+          console.error('[AUTH_STORE] Failed to clear desktop auth session on expiry', error);
+        }
+
+        try {
+          const { clearJWTCache } = await import('@/lib/auth-fetch');
+          clearJWTCache();
+        } catch (error) {
+          console.error('[AUTH_STORE] Failed to clear JWT cache on expiry', error);
+        }
+      }
+
       // Token expired and couldn't be refreshed, clear session
       const state = useAuthStore.getState();
       state.endSession();

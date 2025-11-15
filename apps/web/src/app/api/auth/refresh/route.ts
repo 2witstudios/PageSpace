@@ -84,13 +84,22 @@ export async function POST(req: Request) {
   const newAccessToken = await generateAccessToken(user.id, user.tokenVersion, user.role);
   const newRefreshToken = await generateRefreshToken(user.id, user.tokenVersion, user.role);
 
+  const refreshPayload = await decodeToken(newRefreshToken);
+  const refreshExpiresAt = refreshPayload?.exp
+    ? new Date(refreshPayload.exp * 1000)
+    : new Date(Date.now() + getRefreshTokenMaxAge() * 1000);
+
   // Store the new refresh token
   await db.insert(refreshTokens).values({
     id: createId(),
     token: newRefreshToken,
     userId: user.id,
     device: req.headers.get('user-agent'),
+    userAgent: req.headers.get('user-agent'),
     ip: clientIP,
+    lastUsedAt: new Date(),
+    platform: 'web',
+    expiresAt: refreshExpiresAt,
   });
 
   const isProduction = process.env.NODE_ENV === 'production';

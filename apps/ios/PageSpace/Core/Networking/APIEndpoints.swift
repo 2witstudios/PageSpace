@@ -5,6 +5,7 @@ enum APIEndpoints {
     static let login = "/api/auth/mobile/login"
     static let signup = "/api/auth/mobile/signup"
     static let refresh = "/api/auth/mobile/refresh"
+    static let deviceRefresh = "/api/auth/device/refresh"
     static let logout = "/api/auth/logout"
     static let me = "/api/auth/me"
 
