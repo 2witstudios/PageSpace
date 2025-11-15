@@ -316,32 +316,22 @@ class AuthFetch {
       const deviceInfo = await window.electron.auth.getDeviceInfo();
 
       const refreshToken = session?.refreshToken;
-      const deviceToken = session?.deviceToken ?? undefined;
+      const deviceToken = session?.deviceToken ?? null;
 
       let response: Response | null = null;
       let shouldLogout = false;
 
       if (refreshToken) {
-        const refreshPayload: {
-          refreshToken: string;
-          deviceId: string;
-          platform: 'desktop';
-          deviceToken?: string;
-        } = {
-          refreshToken,
-          deviceId: deviceInfo.deviceId,
-          platform: 'desktop',
-        };
-
-        if (deviceToken) {
-          refreshPayload.deviceToken = deviceToken;
-        }
-
         response = await fetch('/api/auth/mobile/refresh', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
-          body: JSON.stringify(refreshPayload),
+          body: JSON.stringify({
+            refreshToken,
+            deviceToken,
+            deviceId: deviceInfo.deviceId,
+            platform: 'desktop',
+          }),
         });
 
         if (response.ok) {

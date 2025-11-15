@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { mutate } from 'swr';
 import { useRouter } from 'next/navigation';
-import { post, fetchWithAuth, refreshAuthSession } from '@/lib/auth-fetch';
+import { post, fetchWithAuth, refreshAuthSession, clearJWTCache } from '@/lib/auth-fetch';
 
 interface TokenRefreshOptions {
   refreshBeforeExpiryMs?: number; // How long before expiry to refresh (default: 2 minutes)
@@ -41,10 +41,17 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
     try {
       await post('/api/auth/logout');
       await mutate('/api/auth/me', null, false);
-      router.push('/auth/signin');
     } catch (error) {
       console.error('Logout error:', error);
-      // Force redirect even if logout fails
+    } finally {
+      if (typeof window !== 'undefined' && window.electron?.isDesktop) {
+        try {
+          await window.electron.auth.clearAuth();
+        } catch (error) {
+          console.error('Desktop logout: failed to clear secure session', error);
+        }
+        clearJWTCache();
+      }
       router.push('/auth/signin');
     }
   };
