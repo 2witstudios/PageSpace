@@ -8,6 +8,7 @@ import { ModelCapabilities } from './model-capabilities';
 export interface ToolExecutionContext {
   userId: string;
   conversationId?: string;
+  aiOperationId?: string; // Link to AI operation for audit tracking
   locationContext?: {
     currentPage?: {
       id: string;

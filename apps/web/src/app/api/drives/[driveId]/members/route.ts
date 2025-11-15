@@ -3,6 +3,7 @@ import { db, eq, and, sql } from '@pagespace/db';
 import { driveMembers, drives, users, userProfiles } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
+import { createAuditEvent, extractAuditContext } from '@pagespace/lib/audit';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -160,6 +161,30 @@ export async function POST(
         acceptedAt: new Date(), // Auto-accept for now
       })
       .returning();
+
+    // Audit trail: Log member addition (fire and forget)
+    const auditContext = extractAuditContext(request, userId);
+    createAuditEvent({
+      actionType: 'DRIVE_MEMBER_ADD',
+      entityType: 'DRIVE_MEMBER',
+      entityId: driveId,
+      userId,
+      driveId,
+      afterState: {
+        memberId: newMember[0].id,
+        userId: invitedUserId,
+        role,
+      },
+      description: `Added member with ${role} role to drive`,
+      reason: 'User added drive member',
+      metadata: {
+        targetUserId: invitedUserId,
+        role,
+      },
+      ...auditContext,
+    }).catch(error => {
+      loggers.api.error('Failed to audit member addition:', error as Error);
+    });
 
     return NextResponse.json({ member: newMember[0] });
   } catch (error) {

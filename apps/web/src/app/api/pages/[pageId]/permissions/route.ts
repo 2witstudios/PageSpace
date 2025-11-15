@@ -6,6 +6,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { z } from 'zod/v4';
 import { createPermissionNotification } from '@pagespace/lib';
 import { loggers } from '@pagespace/lib/server';
+import { createAuditEvent, extractAuditContext } from '@pagespace/lib/audit';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -167,7 +168,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         .set({ canView, canEdit, canShare, canDelete })
         .where(eq(pagePermissions.id, existing.id))
         .returning();
-      
+
       // Send notification for permission update
       await createPermissionNotification(
         userId,
@@ -176,7 +177,39 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         { canView, canEdit, canShare, canDelete },
         currentUserId
       );
-      
+
+      // Audit trail: Log permission update (fire and forget)
+      const auditContext = extractAuditContext(req, currentUserId);
+      createAuditEvent({
+        actionType: 'PERMISSION_UPDATE',
+        entityType: 'PAGE_PERMISSION',
+        entityId: pageId,
+        userId: currentUserId,
+        driveId: page?.drive?.id,
+        beforeState: {
+          canView: existing.canView,
+          canEdit: existing.canEdit,
+          canShare: existing.canShare,
+          canDelete: existing.canDelete,
+        },
+        afterState: { canView, canEdit, canShare, canDelete },
+        changes: {
+          canView: { before: existing.canView, after: canView },
+          canEdit: { before: existing.canEdit, after: canEdit },
+          canShare: { before: existing.canShare, after: canShare },
+          canDelete: { before: existing.canDelete, after: canDelete },
+        },
+        description: `Updated permissions for user ${userId} on page ${pageId}`,
+        reason: 'User updated page permissions',
+        metadata: {
+          targetUserId: userId,
+          pageId,
+        },
+        ...auditContext,
+      }).catch(error => {
+        loggers.api.error('Failed to audit permission update:', error as Error);
+      });
+
       return NextResponse.json(updated[0]);
     }
 
@@ -201,6 +234,26 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       { canView, canEdit, canShare, canDelete },
       currentUserId
     );
+
+    // Audit trail: Log permission grant (fire and forget)
+    const auditContext = extractAuditContext(req, currentUserId);
+    createAuditEvent({
+      actionType: 'PERMISSION_GRANT',
+      entityType: 'PAGE_PERMISSION',
+      entityId: pageId,
+      userId: currentUserId,
+      driveId: page?.drive?.id,
+      afterState: { canView, canEdit, canShare, canDelete },
+      description: `Granted permissions to user ${userId} on page ${pageId}`,
+      reason: 'User granted page permissions',
+      metadata: {
+        targetUserId: userId,
+        pageId,
+      },
+      ...auditContext,
+    }).catch(error => {
+      loggers.api.error('Failed to audit permission grant:', error as Error);
+    });
 
     return NextResponse.json(newPermission[0], { status: 201 });
   } catch (error) {
@@ -257,6 +310,14 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
       }
     }
 
+    // Get existing permission before deletion for audit
+    const existingPermission = await db.query.pagePermissions.findFirst({
+      where: and(
+        eq(pagePermissions.pageId, pageId),
+        eq(pagePermissions.userId, userId)
+      )
+    });
+
     // Delete the permission
     await db.delete(pagePermissions)
       .where(and(
@@ -272,6 +333,39 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
       {},
       currentUserId
     );
+
+    // Audit trail: Log permission revocation (fire and forget)
+    if (existingPermission) {
+      const auditContext = extractAuditContext(req, currentUserId);
+      createAuditEvent({
+        actionType: 'PERMISSION_REVOKE',
+        entityType: 'PAGE_PERMISSION',
+        entityId: pageId,
+        userId: currentUserId,
+        driveId: page?.drive?.id,
+        beforeState: {
+          canView: existingPermission.canView,
+          canEdit: existingPermission.canEdit,
+          canShare: existingPermission.canShare,
+          canDelete: existingPermission.canDelete,
+        },
+        changes: {
+          canView: { before: existingPermission.canView, after: false },
+          canEdit: { before: existingPermission.canEdit, after: false },
+          canShare: { before: existingPermission.canShare, after: false },
+          canDelete: { before: existingPermission.canDelete, after: false },
+        },
+        description: `Revoked permissions from user ${userId} on page ${pageId}`,
+        reason: 'User revoked page permissions',
+        metadata: {
+          targetUserId: userId,
+          pageId,
+        },
+        ...auditContext,
+      }).catch(error => {
+        loggers.api.error('Failed to audit permission revocation:', error as Error);
+      });
+    }
 
     return NextResponse.json({ success: true });
   } catch (error) {

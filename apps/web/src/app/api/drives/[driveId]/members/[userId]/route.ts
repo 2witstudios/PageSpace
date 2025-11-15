@@ -5,6 +5,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 import { createDriveNotification } from '@pagespace/lib';
 import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/socket-utils';
+import { createAuditEvent, extractAuditContext } from '@pagespace/lib/audit';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -211,6 +212,29 @@ export async function PATCH(
             driveName: drive[0].name
           })
         );
+
+        // Audit trail: Log role change (fire and forget)
+        const auditContext = extractAuditContext(request, currentUserId);
+        createAuditEvent({
+          actionType: 'DRIVE_MEMBER_ROLE_CHANGE',
+          entityType: 'DRIVE_MEMBER',
+          entityId: driveId,
+          userId: currentUserId,
+          driveId,
+          beforeState: { role: oldRole },
+          afterState: { role },
+          changes: {
+            role: { before: oldRole, after: role },
+          },
+          description: `Changed member role from ${oldRole} to ${role}`,
+          reason: 'User updated member role',
+          metadata: {
+            targetUserId: userId,
+          },
+          ...auditContext,
+        }).catch(error => {
+          loggers.api.error('Failed to audit role change:', error as Error);
+        });
       }
     }
 

@@ -317,26 +317,26 @@ export const dailyAggregates = pgTable('daily_aggregates', {
 export const alertHistory = pgTable('alert_history', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   timestamp: timestamp('timestamp', { mode: 'date' }).defaultNow().notNull(),
-  
+
   // Alert details
   type: text('type').notNull(), // error_rate, performance, ai_cost, security
   severity: text('severity').notNull(), // info, warning, error, critical
   message: text('message').notNull(),
-  
+
   // Thresholds
   threshold: real('threshold'),
   actualValue: real('actual_value'),
-  
+
   // Notification
   notified: boolean('notified').default(false),
   notifiedAt: timestamp('notified_at', { mode: 'date' }),
   notificationChannel: text('notification_channel'), // email, webhook, slack
-  
+
   // Resolution
   acknowledged: boolean('acknowledged').default(false),
   acknowledgedAt: timestamp('acknowledged_at', { mode: 'date' }),
   acknowledgedBy: text('acknowledged_by'),
-  
+
   // Metadata
   metadata: jsonb('metadata'),
 }, (table) => ({
@@ -344,4 +344,89 @@ export const alertHistory = pgTable('alert_history', {
   typeIdx: index('idx_alerts_type').on(table.type, table.timestamp),
   severityIdx: index('idx_alerts_severity').on(table.severity),
   acknowledgedIdx: index('idx_alerts_acknowledged').on(table.acknowledged),
+}));
+
+/**
+ * Audit logs - enterprise compliance audit trail
+ * GDPR-compliant: supports user data anonymization while preserving audit integrity
+ */
+export const auditActionEnum = pgEnum('audit_action', [
+  // Page operations
+  'PAGE_CREATED', 'PAGE_UPDATED', 'PAGE_DELETED', 'PAGE_MOVED', 'PAGE_RESTORED', 'PAGE_DUPLICATED',
+  // Permission operations
+  'PERMISSION_GRANTED', 'PERMISSION_REVOKED', 'PERMISSION_UPDATED',
+  // AI operations
+  'AI_TOOL_CALLED', 'AI_CONTENT_GENERATED', 'AI_CONVERSATION_STARTED',
+  // File operations
+  'FILE_UPLOADED', 'FILE_DELETED', 'FILE_DOWNLOADED', 'FILE_MOVED',
+  // Drive operations
+  'DRIVE_CREATED', 'DRIVE_UPDATED', 'DRIVE_DELETED',
+  'DRIVE_MEMBER_ADDED', 'DRIVE_MEMBER_REMOVED', 'DRIVE_MEMBER_ROLE_CHANGED',
+  // Authentication
+  'USER_LOGIN', 'USER_LOGOUT', 'USER_SIGNUP', 'USER_PASSWORD_CHANGED',
+  // Settings
+  'SETTINGS_UPDATED', 'INTEGRATION_CONNECTED', 'INTEGRATION_DISCONNECTED',
+  // Real-time
+  'REALTIME_CONNECTED', 'REALTIME_DISCONNECTED',
+  // Background jobs
+  'JOB_STARTED', 'JOB_COMPLETED', 'JOB_FAILED'
+]);
+
+export const auditLogs = pgTable('audit_logs', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  timestamp: timestamp('timestamp', { mode: 'date' }).defaultNow().notNull(),
+
+  // Action details
+  action: auditActionEnum('action').notNull(),
+  category: text('category').notNull(), // page, permission, ai, file, drive, auth, etc.
+
+  // Actor (who performed the action)
+  userId: text('user_id'), // Can be null for system actions
+  userEmail: text('user_email'), // Hashed or anonymized for GDPR
+  actorType: text('actor_type').notNull().default('user'), // user, system, api, background_job
+
+  // Target (what was affected)
+  resourceType: text('resource_type'), // page, drive, file, permission, etc.
+  resourceId: text('resource_id'),
+  resourceName: text('resource_name'), // Snapshot of name at time of action
+
+  // Context
+  driveId: text('drive_id'),
+  pageId: text('page_id'),
+  sessionId: text('session_id'),
+  requestId: text('request_id'),
+
+  // Request context (for tracking origin)
+  ip: text('ip'), // Can be anonymized for GDPR
+  userAgent: text('user_agent'),
+  endpoint: text('endpoint'), // API endpoint used
+
+  // Change details
+  changes: jsonb('changes'), // { before: {}, after: {} } for updates
+  metadata: jsonb('metadata'), // Additional action-specific data
+
+  // Result
+  success: boolean('success').default(true),
+  errorMessage: text('error_message'),
+
+  // GDPR compliance
+  anonymized: boolean('anonymized').default(false), // Tracks if user data was anonymized
+  retentionDate: timestamp('retention_date', { mode: 'date' }), // Auto-delete after this date
+
+  // Service tracking (for multi-service architecture)
+  service: text('service').default('web'), // web, realtime, processor
+  version: text('version'),
+}, (table) => ({
+  timestampIdx: index('idx_audit_timestamp').on(table.timestamp),
+  actionIdx: index('idx_audit_action').on(table.action, table.timestamp),
+  categoryIdx: index('idx_audit_category').on(table.category),
+  userIdIdx: index('idx_audit_user_id').on(table.userId, table.timestamp),
+  resourceIdx: index('idx_audit_resource').on(table.resourceType, table.resourceId),
+  driveIdIdx: index('idx_audit_drive_id').on(table.driveId, table.timestamp),
+  pageIdIdx: index('idx_audit_page_id').on(table.pageId, table.timestamp),
+  sessionIdx: index('idx_audit_session').on(table.sessionId),
+  requestIdx: index('idx_audit_request').on(table.requestId),
+  anonymizedIdx: index('idx_audit_anonymized').on(table.anonymized),
+  retentionIdx: index('idx_audit_retention').on(table.retentionDate),
+  successIdx: index('idx_audit_success').on(table.success, table.timestamp),
 }));

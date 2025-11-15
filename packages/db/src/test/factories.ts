@@ -1,6 +1,6 @@
 import { faker } from '@faker-js/faker'
 import { createId } from '@paralleldrive/cuid2'
-import { users, drives, pages, chatMessages, pagePermissions, driveMembers } from '../schema'
+import { users, drives, pages, chatMessages, pagePermissions, driveMembers, auditEvents, pageVersions, aiOperations } from '../schema'
 import { db } from '../index'
 import bcrypt from 'bcryptjs'
 
@@ -119,6 +119,61 @@ export const factories = {
     }
 
     const [created] = await db.insert(driveMembers).values(member).returning()
+    return created
+  },
+
+  async createAuditEvent(overrides?: Partial<typeof auditEvents.$inferInsert>) {
+    const auditEvent = {
+      id: createId(),
+      actionType: 'PAGE_UPDATE' as const,
+      entityType: 'PAGE' as const,
+      entityId: createId(),
+      userId: createId(),
+      isAiAction: false,
+      description: faker.lorem.sentence(),
+      createdAt: new Date(),
+      ...overrides,
+    }
+
+    const [created] = await db.insert(auditEvents).values(auditEvent).returning()
+    return created
+  },
+
+  async createPageVersion(
+    pageId: string,
+    overrides?: Partial<typeof pageVersions.$inferInsert>
+  ) {
+    const version = {
+      id: createId(),
+      pageId,
+      versionNumber: 1,
+      content: { content: faker.lorem.paragraphs(2) },
+      title: faker.lorem.words(3),
+      pageType: 'DOCUMENT',
+      isAiGenerated: false,
+      createdAt: new Date(),
+      ...overrides,
+    }
+
+    const [created] = await db.insert(pageVersions).values(version).returning()
+    return created
+  },
+
+  async createAiOperation(userId: string, overrides?: Partial<typeof aiOperations.$inferInsert>) {
+    const operation = {
+      id: createId(),
+      userId,
+      agentType: 'ASSISTANT' as const,
+      provider: 'openai',
+      model: 'gpt-4',
+      operationType: 'edit',
+      prompt: faker.lorem.sentence(),
+      status: 'completed',
+      createdAt: new Date(),
+      ...overrides,
+    }
+
+    const [created] = await db.insert(aiOperations).values(operation).returning()
     return created
   },
 }

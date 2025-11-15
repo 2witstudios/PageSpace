@@ -9,6 +9,7 @@ import { loggers } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/api-utils';
+import { auditPageUpdate, auditPageDeletion, extractAuditContext } from '@pagespace/lib/audit';
 
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 
@@ -202,7 +203,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
     // Check if user has edit permission
     const canEdit = await canUserEditPage(userId, pageId);
     if (!canEdit) {
-      return NextResponse.json({ 
+      return NextResponse.json({
         error: 'You need edit permission to modify this page',
         details: 'Contact the page owner to request edit access'
       }, { status: 403 });
@@ -224,18 +225,57 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
       }
     }
 
+    // Get current page state before update (for audit)
+    const currentPage = await db.query.pages.findFirst({
+      where: eq(pages.id, pageId),
+    });
+
+    if (!currentPage) {
+      return NextResponse.json({ error: 'Page not found' }, { status: 404 });
+    }
+
+    const beforeState: Record<string, any> = {};
+    const afterState: Record<string, any> = {};
+
+    // Track only the fields being updated
+    if (safeBody.title !== undefined) {
+      beforeState.title = currentPage.title;
+      afterState.title = safeBody.title;
+    }
+    if (safeBody.content !== undefined) {
+      beforeState.content = currentPage.content;
+      afterState.content = safeBody.content;
+    }
+    if (safeBody.parentId !== undefined) {
+      beforeState.parentId = currentPage.parentId;
+      afterState.parentId = safeBody.parentId;
+    }
+    if (safeBody.aiProvider !== undefined) {
+      beforeState.aiProvider = currentPage.aiProvider;
+      afterState.aiProvider = safeBody.aiProvider;
+    }
+    if (safeBody.aiModel !== undefined) {
+      beforeState.aiModel = currentPage.aiModel;
+      afterState.aiModel = safeBody.aiModel;
+    }
+    if (safeBody.isPaginated !== undefined) {
+      beforeState.isPaginated = currentPage.isPaginated;
+      afterState.isPaginated = safeBody.isPaginated;
+    }
+
     await db.transaction(async (tx) => {
       // Sanitize content before saving to remove empty TipTap default structures
       const updatedBody = { ...safeBody };
       if (updatedBody.content) {
         const originalContent = updatedBody.content;
         updatedBody.content = sanitizeEmptyContent(updatedBody.content);
-        loggers.api.debug('Content sanitized:', { 
+        afterState.content = updatedBody.content; // Update with sanitized content
+        loggers.api.debug('Content sanitized:', {
           original: originalContent.substring(0, 100) + (originalContent.length > 100 ? '...' : ''),
           sanitized: updatedBody.content.substring(0, 100) + (updatedBody.content.length > 100 ? '...' : '')
         });
       }
-      
+
       await tx.update(pages).set({ ...updatedBody }).where(eq(pages.id, pageId));
       loggers.api.debug('Database Update Successful');
 
@@ -245,15 +285,21 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
       }
     });
 
+    // Audit trail: Log page update with automatic versioning (fire and forget)
+    const auditContext = extractAuditContext(req, userId);
+    auditPageUpdate(pageId, beforeState, afterState, auditContext).catch(error => {
+      loggers.api.error('Failed to audit page update:', error as Error);
+    });
+
     // Refetch the page with all details to ensure the client gets the full object
     const [updatedPage, children, messages] = await Promise.all([
       db.query.pages.findFirst({
         where: eq(pages.id, pageId),
       }),
-      db.query.pages.findMany({ 
-        where: eq(pages.parentId, pageId) 
+      db.query.pages.findMany({
+        where: eq(pages.parentId, pageId)
       }),
-      db.query.chatMessages.findMany({ 
+      db.query.chatMessages.findMany({
         where: and(eq(chatMessages.pageId, pageId), eq(chatMessages.isActive, true)),
         with: { user: true },
         orderBy: (messages, { asc }) => [asc(messages.createdAt)],
@@ -328,7 +374,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
     // Check if user has delete permission
     const canDelete = await canUserDeletePage(userId, pageId);
     if (!canDelete) {
-      return NextResponse.json({ 
+      return NextResponse.json({
         error: 'You need delete permission to remove this page',
         details: 'Contact the page owner to request delete access'
       }, { status: 403 });
@@ -346,6 +392,10 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
         }
       }
     });
+
+    if (!pageInfo) {
+      return NextResponse.json({ error: 'Page not found' }, { status: 404 });
+    }
 
     await db.transaction(async (tx) => {
       if (trashChildren) {
@@ -376,6 +426,12 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
       trashChildren: trashChildren,
       pageTitle: pageInfo?.title,
       pageType: pageInfo?.type
+    });
+
+    // Audit trail: Log page deletion (fire and forget)
+    const auditContext = extractAuditContext(req, userId);
+    auditPageDeletion(pageId, auditContext, trashChildren).catch(error => {
+      loggers.api.error('Failed to audit page deletion:', error as Error);
     });
 
     return NextResponse.json({ message: 'Page moved to trash successfully.' });

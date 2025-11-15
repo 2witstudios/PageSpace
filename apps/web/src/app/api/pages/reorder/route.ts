@@ -5,6 +5,7 @@ import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
+import { auditPageMove, extractAuditContext } from '@pagespace/lib/audit';
 
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 
@@ -35,6 +36,7 @@ export async function PATCH(request: Request) {
 
     let driveId: string | null = null;
     let pageTitle: string | null = null;
+    let oldParentId: string | null = null;
 
     await db.transaction(async (tx) => {
       // First, get the page and its drive
@@ -43,6 +45,7 @@ export async function PATCH(request: Request) {
           driveId: pages.driveId,
           title: pages.title,
           ownerId: drives.ownerId,
+          parentId: pages.parentId,
         })
         .from(pages)
         .leftJoin(drives, eq(pages.driveId, drives.id))
@@ -55,6 +58,7 @@ export async function PATCH(request: Request) {
 
       driveId = pageInfo.driveId;
       pageTitle = pageInfo.title;
+      oldParentId = pageInfo.parentId;
 
       // Check if user is owner or admin
       const isOwner = pageInfo.ownerId === auth.userId;
@@ -109,6 +113,14 @@ export async function PATCH(request: Request) {
           title: pageTitle || undefined,
         }),
       );
+    }
+
+    // Audit trail: Log page move (fire and forget)
+    if (oldParentId !== newParentId) {
+      const auditContext = extractAuditContext(request, auth.userId);
+      auditPageMove(pageId, oldParentId, newParentId, auditContext).catch(error => {
+        loggers.api.error('Failed to audit page move:', error as Error);
+      });
     }
 
     return NextResponse.json({ message: 'Page reordered successfully' });

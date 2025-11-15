@@ -6,6 +6,7 @@ import { db, pages, eq } from '@pagespace/db';
 import { canUserEditPage } from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
 import { loggers } from '@pagespace/lib/server';
+import { auditBulkPageOperation, extractAuditContext } from '@pagespace/lib/audit';
 
 /**
  * POST /api/pages/bulk/update-content
@@ -43,7 +44,14 @@ export async function POST(request: Request) {
       }
     }
 
-    const updatedPages: Array<{ id: string; title: string; operation: string; driveId: string }> = [];
+    const updatedPages: Array<{
+      id: string;
+      title: string;
+      operation: string;
+      driveId: string;
+      oldContent: string;
+      newContent: string;
+    }> = [];
 
     await db.transaction(async (tx) => {
       for (const update of updates) {
@@ -93,6 +101,8 @@ export async function POST(request: Request) {
           title: currentPage.title,
           operation,
           driveId: currentPage.driveId,
+          oldContent: currentPage.content,
+          newContent,
         });
       }
     });
@@ -105,6 +115,20 @@ export async function POST(request: Request) {
         })
       );
     }
+
+    // Audit trail: Log bulk page updates with versioning (fire and forget)
+    const auditContext = extractAuditContext(request, userId);
+    auditBulkPageOperation(
+      updatedPages.map(page => ({
+        pageId: page.id,
+        beforeState: { content: page.oldContent },
+        afterState: { content: page.newContent },
+      })),
+      auditContext,
+      'PAGE_UPDATE'
+    ).catch(error => {
+      loggers.api.error('Failed to audit bulk page updates:', error as Error);
+    });
 
     loggers.api.info('Bulk update content completed', {
       updateCount: updates.length,

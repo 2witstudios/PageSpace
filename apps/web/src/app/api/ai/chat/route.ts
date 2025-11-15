@@ -57,6 +57,7 @@ import { getModelCapabilities } from '@/lib/ai/model-capabilities';
 import { convertMCPToolsToAISDKSchemas, parseMCPToolName } from '@/lib/ai/mcp-tool-converter';
 import type { MCPTool } from '@/types/mcp';
 import { getMCPBridge } from '@/lib/mcp-bridge';
+import { trackAiOperation } from '@pagespace/lib/audit';
 
 
 // Allow streaming responses up to 5 minutes for complex AI agent interactions
@@ -76,6 +77,7 @@ export async function POST(request: Request) {
   let selectedProvider: string | undefined;
   let selectedModel: string | undefined;
   let usagePromise: Promise<LanguageModelUsage | undefined> | undefined;
+  let aiOperation: Awaited<ReturnType<typeof trackAiOperation>> | undefined;
   const usageLogger = loggers.ai.child({ module: 'page-ai-usage' });
   const permissionLogger = loggers.ai.child({ module: 'page-ai-permissions' });
 
@@ -395,6 +397,37 @@ export async function POST(request: Request) {
         pageId: chatId
       });
     }
+
+    // Create AI operation for audit tracking
+    // This tracks the entire AI chat interaction including all tool calls and results
+    aiOperation = await trackAiOperation({
+      userId,
+      agentType: 'ASSISTANT', // Page AI uses ASSISTANT agent type
+      provider: currentProvider,
+      model: currentModel,
+      operationType: 'conversation',
+      prompt: userPromptContent,
+      systemPrompt: customSystemPrompt || undefined,
+      conversationId,
+      messageId: undefined, // Will be set in onFinish when we have the response message ID
+      driveId: pageContext?.driveId,
+      pageId: chatId,
+      toolsCalled: undefined, // Will be populated in onFinish
+      toolResults: undefined, // Will be populated in onFinish
+      metadata: {
+        pageTitle: page.title,
+        pageType: page.type,
+        agentRole: page.title || 'Page AI',
+        enabledToolsCount: enabledTools?.length || 0,
+        hasMentions: mentionedPageIds.length > 0,
+      },
+    });
+
+    loggers.ai.debug('AI Chat API: AI operation created for tracking', {
+      operationId: aiOperation.id,
+      userId: maskIdentifier(userId),
+      pageId: chatId,
+    });
 
     // Filter tools based on custom enabled tools or use all tools if not configured
     let filteredTools;
@@ -764,6 +797,8 @@ MENTION PROCESSING:
             abortSignal: request.signal, // Enable stop/abort functionality from client
             experimental_context: {
               userId,
+              conversationId,
+              aiOperationId: aiOperation?.id, // Pass AI operation ID for audit tracking
               locationContext: pageContext ? {
                 currentPage: {
                   id: pageContext.pageId,
@@ -779,15 +814,27 @@ MENTION PROCESSING:
                 breadcrumbs: pageContext.breadcrumbs,
               } : undefined,
               modelCapabilities: getModelCapabilities(currentModel, currentProvider)
-            }, // Pass userId, location context, and model capabilities to tools
+            }, // Pass userId, conversation ID, AI operation ID, location context, and model capabilities to tools
             maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
-            onAbort: () => {
+            onAbort: async () => {
               loggers.ai.info('🛑 AI Chat API: Stream aborted by user', {
                 userId: maskIdentifier(userId!),
                 pageId: chatId,
                 model: currentModel,
                 provider: currentProvider
               });
+
+              // Cancel AI operation if it exists
+              if (aiOperation) {
+                try {
+                  await aiOperation.cancel();
+                  loggers.ai.debug('AI Chat API: AI operation cancelled', {
+                    operationId: aiOperation.id,
+                  });
+                } catch (cancelError) {
+                  loggers.ai.error('AI Chat API: Failed to cancel AI operation', cancelError as Error);
+                }
+              }
             },
           });
 
@@ -1003,13 +1050,74 @@ MENTION PROCESSING:
                     success: true
                   });
                 }
-                
+
                 // Also track feature usage
                 trackFeature(userId!, 'ai_tools_used', {
                   toolCount: extractedToolCalls.length,
                   provider: currentProvider,
                   model: currentModel
                 });
+              }
+
+              // Complete AI operation with full results
+              if (aiOperation) {
+                try {
+                  // Extract page IDs from tool results to track what pages were modified
+                  const affectedPageIds = new Set<string>();
+                  const affectedDriveIds = new Set<string>();
+
+                  extractedToolResults.forEach((toolResult) => {
+                    const result = toolResult.result;
+                    if (!result) return;
+
+                    // Extract page IDs from various result formats
+                    if (result.id && typeof result.id === 'string') affectedPageIds.add(result.id);
+                    if (result.pageId && typeof result.pageId === 'string') affectedPageIds.add(result.pageId);
+                    if (result.driveId && typeof result.driveId === 'string') affectedDriveIds.add(result.driveId);
+
+                    // Batch operation results
+                    if (result.successful && Array.isArray(result.successful)) {
+                      result.successful.forEach((item: any) => {
+                        if (item.pageId) affectedPageIds.add(item.pageId);
+                        if (item.id) affectedPageIds.add(item.id);
+                      });
+                    }
+
+                    // Multiple page IDs in result
+                    if (result.pageIds && Array.isArray(result.pageIds)) {
+                      result.pageIds.forEach((id: string) => affectedPageIds.add(id));
+                    }
+                  });
+
+                  await aiOperation.complete({
+                    completion: messageContent,
+                    actionsPerformed: {
+                      messageId,
+                      toolCallsCount: extractedToolCalls.length,
+                      toolResultsCount: extractedToolResults.length,
+                      toolsUsed: extractedToolCalls.map(tc => tc.toolName),
+                      affectedPages: Array.from(affectedPageIds),
+                      affectedDrives: Array.from(affectedDriveIds),
+                    },
+                    tokens: {
+                      input: inputTokens || 0,
+                      output: outputTokens || 0,
+                      cost: 0, // Cost calculation can be added later based on provider pricing
+                    },
+                  });
+
+                  loggers.ai.debug('AI Chat API: AI operation completed successfully', {
+                    operationId: aiOperation.id,
+                    messageId,
+                    toolCallsCount: extractedToolCalls.length,
+                    affectedPagesCount: affectedPageIds.size,
+                  });
+                } catch (opError) {
+                  loggers.ai.error('AI Chat API: Failed to complete AI operation', opError as Error, {
+                    operationId: aiOperation.id,
+                  });
+                  // Don't fail the request - operation tracking errors shouldn't break the chat
+                }
               }
             } catch (error) {
               loggers.ai.error('AI Chat API: Failed to save AI response message', error as Error);
@@ -1043,6 +1151,18 @@ MENTION PROCESSING:
       model: selectedModel,
       responseTime: Date.now() - startTime
     });
+
+    // Fail AI operation if it exists
+    if (aiOperation) {
+      try {
+        await aiOperation.fail(error instanceof Error ? error.message : 'Unknown error');
+        loggers.ai.debug('AI Chat API: AI operation marked as failed', {
+          operationId: aiOperation.id,
+        });
+      } catch (failError) {
+        loggers.ai.error('AI Chat API: Failed to mark AI operation as failed', failError as Error);
+      }
+    }
 
     const usage = usagePromise ? await usagePromise : undefined;
 

@@ -12,6 +12,7 @@ import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
 import { loggers } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { auditPageCreation, extractAuditContext } from '@pagespace/lib/audit';
 
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 
@@ -160,6 +161,10 @@ export async function POST(request: Request) {
       driveId: drive.id,
       parentId,
     });
+
+    // Audit trail: Log page creation with version snapshot
+    const auditContext = extractAuditContext(request, userId);
+    await auditPageCreation(newPage.id, auditContext);
 
     return NextResponse.json(newPage, { status: 201 });
   } catch (error) {

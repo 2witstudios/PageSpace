@@ -53,6 +53,15 @@ export * from './logger-database';
 export * from './ai-monitoring';
 export * from './activity-tracker';
 
+// Audit logging utilities (server-only)
+export * from './audit-logger';
+export * from './audit-logger-database';
+export * from './audit-logger-gdpr';
+export * from './audit-logger-middleware';
+
+// Audit trail and versioning utilities (server-only)
+export * from './audit';
+
 // Rate limiting and caching services (server-only)
 export { rateLimitCache } from './services/rate-limit-cache';
 export type { ProviderType, UsageTrackingResult } from './services/rate-limit-cache';

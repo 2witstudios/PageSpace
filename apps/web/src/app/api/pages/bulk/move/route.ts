@@ -7,6 +7,7 @@ import { canUserEditPage, getUserDriveAccess } from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
 import { loggers } from '@pagespace/lib/server';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
+import { auditBulkPageOperation, extractAuditContext } from '@pagespace/lib/audit';
 
 /**
  * POST /api/pages/bulk/move
@@ -99,6 +100,8 @@ export async function POST(request: Request) {
 
     // Move all pages
     const movedPages: Array<{ id: string; title: string; parentId: string | null; position: number; type: string }> = [];
+    const auditOperations: Array<{ pageId: string; beforeState: Record<string, any>; afterState: Record<string, any> }> = [];
+
     await db.transaction(async (tx) => {
       for (const page of sourcePages) {
         // Validate each move to prevent circular references
@@ -106,6 +109,14 @@ export async function POST(request: Request) {
         if (!validation.valid) {
           throw new Error(`Cannot move page ${page.title}: ${validation.error}`);
         }
+
+        // Track before state for audit
+        const fullPage = await tx.query.pages.findFirst({ where: eq(pages.id, page.id) });
+        const beforeState = {
+          parentId: page.parentId,
+          driveId: fullPage?.driveId,
+          position: page.position,
+        };
 
         const [moved] = await tx
           .update(pages)
@@ -119,7 +130,24 @@ export async function POST(request: Request) {
           .returning();
 
         movedPages.push(moved);
+
+        // Track after state for audit
+        auditOperations.push({
+          pageId: page.id,
+          beforeState,
+          afterState: {
+            parentId: targetParentId,
+            driveId: targetDriveId,
+            position: moved.position,
+          },
+        });
       }
+    });
+
+    // Audit trail: Log bulk move operation (fire and forget)
+    const auditContext = extractAuditContext(request, userId);
+    auditBulkPageOperation(auditOperations, auditContext, 'PAGE_MOVE').catch(error => {
+      loggers.api.error('Failed to audit bulk move:', error as Error);
     });
 
     // Broadcast events
