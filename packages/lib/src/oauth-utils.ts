@@ -10,6 +10,7 @@ import { users, drives, refreshTokens } from '@pagespace/db';
 import { db, eq, or, count } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { slugify } from '@pagespace/lib/server';
+import { decodeToken, getRefreshTokenMaxAge } from './auth-utils';
 import { OAuthProvider, type OAuthUserInfo, type OAuthVerificationResult } from './oauth-types';
 
 /**
@@ -218,14 +219,37 @@ export async function createOrLinkOAuthUser(userInfo: OAuthUserInfo) {
 export async function saveRefreshToken(
   token: string,
   userId: string,
-  device: string | null,
-  ip: string
+  options: {
+    device?: string | null;
+    ip?: string | null;
+    userAgent?: string | null;
+    platform?: 'web' | 'desktop' | 'ios' | 'android' | null;
+    deviceTokenId?: string | null;
+    expiresAt?: Date | null;
+    lastUsedAt?: Date | null;
+  } = {}
 ) {
+  let expiresAt = options.expiresAt ?? null;
+
+  if (!expiresAt) {
+    const payload = await decodeToken(token);
+    expiresAt = payload?.exp
+      ? new Date(payload.exp * 1000)
+      : new Date(Date.now() + getRefreshTokenMaxAge() * 1000);
+  }
+
+  const lastUsedAt = options.lastUsedAt ?? new Date();
+
   await db.insert(refreshTokens).values({
     id: createId(),
     token,
     userId,
-    device,
-    ip,
+    device: options.device ?? null,
+    userAgent: options.userAgent ?? options.device ?? null,
+    ip: options.ip ?? null,
+    platform: options.platform ?? null,
+    deviceTokenId: options.deviceTokenId ?? null,
+    expiresAt,
+    lastUsedAt,
   });
 }

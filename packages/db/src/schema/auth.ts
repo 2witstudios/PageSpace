@@ -5,6 +5,7 @@ import { chatMessages } from './core';
 
 export const userRole = pgEnum('UserRole', ['user', 'admin']);
 export const authProvider = pgEnum('AuthProvider', ['email', 'google', 'both']);
+export const platformType = pgEnum('PlatformType', ['web', 'desktop', 'ios', 'android']);
 
 export const users = pgTable('users', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
@@ -38,10 +39,50 @@ export const refreshTokens = pgTable('refresh_tokens', {
   device: text('device'),
   ip: text('ip'),
   userAgent: text('userAgent'),
+  expiresAt: timestamp('expiresAt', { mode: 'date' }).notNull(),
+  lastUsedAt: timestamp('lastUsedAt', { mode: 'date' }),
+  platform: platformType('platform'),
+  deviceTokenId: text('deviceTokenId'),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
 }, (table) => {
   return {
     userIdx: index('refresh_tokens_user_id_idx').on(table.userId),
+  };
+});
+
+export const deviceTokens = pgTable('device_tokens', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+
+  // Token information
+  token: text('token').unique().notNull(),
+  expiresAt: timestamp('expiresAt', { mode: 'date' }).notNull(),
+  lastUsedAt: timestamp('lastUsedAt', { mode: 'date' }),
+
+  // Device identification (fingerprinting)
+  deviceId: text('deviceId').notNull(),
+  platform: platformType('platform').notNull(),
+  deviceName: text('deviceName'),
+
+  // Security tracking
+  userAgent: text('userAgent'),
+  ipAddress: text('ipAddress'),
+  lastIpAddress: text('lastIpAddress'),
+  location: text('location'),
+
+  // Risk scoring
+  trustScore: real('trustScore').default(1.0).notNull(),
+  suspiciousActivityCount: integer('suspiciousActivityCount').default(0).notNull(),
+
+  // Metadata
+  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+  revokedAt: timestamp('revokedAt', { mode: 'date' }),
+  revokedReason: text('revokedReason'),
+}, (table) => {
+  return {
+    userIdx: index('device_tokens_user_id_idx').on(table.userId),
+    tokenIdx: index('device_tokens_token_idx').on(table.token),
+    deviceIdx: index('device_tokens_device_id_idx').on(table.deviceId),
   };
 });
 
@@ -81,6 +122,7 @@ import { subscriptions } from './subscriptions';
 
 export const usersRelations = relations(users, ({ many }) => ({
   refreshTokens: many(refreshTokens),
+  deviceTokens: many(deviceTokens),
   chatMessages: many(chatMessages),
   aiSettings: many(userAiSettings),
   mcpTokens: many(mcpTokens),
@@ -91,6 +133,13 @@ export const usersRelations = relations(users, ({ many }) => ({
 export const refreshTokensRelations = relations(refreshTokens, ({ one }) => ({
   user: one(users, {
     fields: [refreshTokens.userId],
+    references: [users.id],
+  }),
+}));
+
+export const deviceTokensRelations = relations(deviceTokens, ({ one }) => ({
+  user: one(users, {
+    fields: [deviceTokens.userId],
     references: [users.id],
   }),
 }));

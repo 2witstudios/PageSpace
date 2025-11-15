@@ -39,7 +39,15 @@ contextBridge.exposeInMainWorld('electron', {
   // Authentication
   auth: {
     getJWT: () => ipcRenderer.invoke('auth:get-jwt'),
+    getSession: () => ipcRenderer.invoke('auth:get-session'),
+    storeSession: (session: {
+      accessToken: string;
+      refreshToken: string;
+      csrfToken?: string | null;
+      deviceToken?: string | null;
+    }) => ipcRenderer.invoke('auth:store-session', session),
     clearAuth: () => ipcRenderer.invoke('auth:clear-auth'),
+    getDeviceInfo: () => ipcRenderer.invoke('auth:get-device-info'),
   },
 
   // MCP Server Management
@@ -81,7 +89,26 @@ export interface ElectronAPI {
   version: string;
   auth: {
     getJWT: () => Promise<string | null>;
+    getSession: () => Promise<{
+      accessToken: string;
+      refreshToken: string;
+      csrfToken?: string | null;
+      deviceToken?: string | null;
+    } | null>;
+    storeSession: (session: {
+      accessToken: string;
+      refreshToken: string;
+      csrfToken?: string | null;
+      deviceToken?: string | null;
+    }) => Promise<{ success: boolean }>;
     clearAuth: () => Promise<void>;
+    getDeviceInfo: () => Promise<{
+      deviceId: string;
+      deviceName: string;
+      platform: NodeJS.Platform;
+      appVersion: string;
+      userAgent: string;
+    }>;
   };
   mcp: {
     getConfig: () => Promise<MCPConfig>;

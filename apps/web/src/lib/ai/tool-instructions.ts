@@ -42,15 +42,19 @@ You operate in a hierarchical workspace system: Workspaces (Drives) → Folders 
 - Drive owners have full access, members have limited access`,
 
     examples: [
-      `User: "What's in my marketing workspace?"
-      → list_drives() to find "marketing" drive
-      → list_pages(driveId="clq2n3...", driveSlug="marketing")
-      → Present hierarchical structure with emojis`,
+      [
+        'User: "What\'s in my marketing workspace?"',
+        '→ list_drives() to find "marketing" drive',
+        '→ list_pages(driveId="clq2n3...", driveSlug="marketing")',
+        '→ Present hierarchical structure with emojis',
+      ].join('\n'),
 
-      `User: "Show me all my project documents"
-      → list_drives() in parallel for all workspaces
-      → list_pages() for each drive (parallel execution)
-      → Filter for document types (📄)`,
+      [
+        'User: "Show me all my project documents"',
+        '→ list_drives() in parallel for all workspaces',
+        '→ list_pages() for each drive (parallel execution)',
+        '→ Filter for document types (📄)',
+      ].join('\n'),
     ],
 
     errorPatterns: [
@@ -104,20 +108,26 @@ You operate in a hierarchical workspace system: Workspaces (Drives) → Folders 
 For complex changes, use batch_page_operations for all-or-nothing execution`,
 
     examples: [
-      `User: "Add a summary to the top of my report"
-      → read_page(pageId, path) - Get current content
-      → prepend_to_page(pageId, "## Executive Summary\\n...")`,
+      [
+        'User: "Add a summary to the top of my report"',
+        '→ read_page(pageId, path) - Get current content',
+        '→ prepend_to_page(pageId, "## Executive Summary\\\\n...")',
+      ].join('\n'),
 
-      `User: "Fix the typo on line 15"
-      → read_page(pageId, path) - Verify content
-      → replace_lines(pageId, startLine=15, endLine=15, "corrected text")`,
+      [
+        'User: "Fix the typo on line 15"',
+        '→ read_page(pageId, path) - Verify content',
+        '→ replace_lines(pageId, startLine=15, endLine=15, "corrected text")',
+      ].join('\n'),
 
-      `User: "Create a project structure"
-      → batch_page_operations([
-          {type: "create", tempId: "t1", title: "Project Alpha", pageType: "FOLDER"},
-          {type: "create", tempId: "t2", title: "README", pageType: "DOCUMENT", parentId: "t1"},
-          {type: "create", tempId: "t3", title: "Tasks", pageType: "DOCUMENT", parentId: "t1"}
-        ])`,
+      [
+        'User: "Create a project structure"',
+        '→ batch_page_operations([',
+        '{type: "create", tempId: "t1", title: "Project Alpha", pageType: "FOLDER"},',
+        '{type: "create", tempId: "t2", title: "README", pageType: "DOCUMENT", parentId: "t1"},',
+        '{type: "create", tempId: "t3", title: "Tasks", pageType: "DOCUMENT", parentId: "t1"}',
+        '])',
+      ].join('\n'),
     ],
 
     errorPatterns: [
@@ -194,31 +204,43 @@ Execute multiple searches simultaneously:
 - Multiple search types together`,
 
     examples: [
-      `User: "What are the latest developments in AI safety?"
-      → web_search(query="latest developments in AI safety 2025", count=10, recencyFilter="oneMonth")
-      → Synthesize key findings with citations`,
+      [
+        'User: "What are the latest developments in AI safety?"',
+        '→ web_search(query="latest developments in AI safety 2025", count=10, recencyFilter="oneMonth")',
+        '→ Synthesize key findings with citations',
+      ].join('\n'),
 
-      `User: "Find the official React Server Components documentation"
-      → web_search(query="React Server Components documentation", domainFilter="react.dev", count=5)
-      → Provide summary with authoritative links`,
+      [
+        'User: "Find the official React Server Components documentation"',
+        '→ web_search(query="React Server Components documentation", domainFilter="react.dev", count=5)',
+        '→ Provide summary with authoritative links',
+      ].join('\n'),
 
-      `User: "Find all TODO items"
-      → regex_search(pattern="TODO", searchIn="content")
-      → Group results by page and priority`,
+      [
+        'User: "Find all TODO items"',
+        '→ regex_search(pattern="TODO", searchIn="content")',
+        '→ Group results by page and priority',
+      ].join('\n'),
 
-      `User: "Where are my Python files?"
-      → glob_search(pattern="**/*.py")
-      → List with full paths`,
+      [
+        'User: "Where are my Python files?"',
+        '→ glob_search(pattern="**/*.py")',
+        '→ List with full paths',
+      ].join('\n'),
 
-      `User: "Find discussions about pricing"
-      → search_pages(query="pricing discussion")
-      → Read top matches for context`,
+      [
+        'User: "Find discussions about pricing"',
+        '→ search_pages(query="pricing discussion")',
+        '→ Read top matches for context',
+      ].join('\n'),
 
-      `User: "Find all meeting notes from this month"
-      PARALLEL:
-      → glob_search(pattern="**/meeting*")
-      → regex_search(pattern="2024-01", searchIn="content")
-      → search_pages(query="meeting January 2024")`,
+      [
+        'User: "Find all meeting notes from this month"',
+        'PARALLEL:',
+        '→ glob_search(pattern="**/meeting*")',
+        '→ regex_search(pattern="2024-01", searchIn="content")',
+        '→ search_pages(query="meeting January 2024")',
+      ].join('\n'),
     ],
 
     errorPatterns: [
@@ -267,23 +289,27 @@ Execute multiple searches simultaneously:
 Task lists persist across AI conversations - great for long-term projects`,
 
     examples: [
-      `User: "Reorganize my documentation"
-      → create_task_list(
-          title="Documentation Reorganization",
-          tasks=[
-            {title: "Audit current structure", priority: "high"},
-            {title: "Create new folder hierarchy", priority: "high"},
-            {title: "Move API docs", priority: "medium"},
-            {title: "Update README links", priority: "medium"},
-            {title: "Archive old docs", priority: "low"}
-          ]
-        )
-      → update_task_status as each completes`,
+      [
+        'User: "Reorganize my documentation"',
+        '→ create_task_list(',
+        'title="Documentation Reorganization",',
+        'tasks=[',
+        '{title: "Audit current structure", priority: "high"},',
+        '{title: "Create new folder hierarchy", priority: "high"},',
+        '{title: "Move API docs", priority: "medium"},',
+        '{title: "Update README links", priority: "medium"},',
+        '{title: "Archive old docs", priority: "low"}',
+        ']',
+        ')',
+        '→ update_task_status as each completes',
+      ].join('\n'),
 
-      `User: "What's left on my task list?"
-      → get_task_list()
-      → Show pending/in_progress tasks
-      → Calculate completion percentage`,
+      [
+        'User: "What\'s left on my task list?"',
+        '→ get_task_list()',
+        '→ Show pending/in_progress tasks',
+        '→ Calculate completion percentage',
+      ].join('\n'),
     ],
 
     errorPatterns: [
@@ -332,31 +358,37 @@ For hierarchical creation, define nested objects with title, type, content, and 
 For bulk operations, provide arrays of page IDs and operation parameters.`,
 
     examples: [
-      `User: "Create a new project structure"
-      → create_folder_structure({
-          structure: [
-            {title: "New Project", type: "FOLDER", children: [
-              {title: "Documentation", type: "FOLDER", children: [
-                {title: "README", type: "DOCUMENT", content: "# Project Name"}
-              ]},
-              {title: "Source", type: "FOLDER"},
-              {title: "AI Assistant", type: "AI_CHAT"}
-            ]}
-          ]
-        })`,
+      [
+        'User: "Create a new project structure"',
+        '→ create_folder_structure({',
+        'structure: [',
+        '{title: "New Project", type: "FOLDER", children: [',
+        '{title: "Documentation", type: "FOLDER", children: [',
+        '{title: "README", type: "DOCUMENT", content: "# Project Name"}',
+        ']},',
+        '{title: "Source", type: "FOLDER"},',
+        '{title: "AI Assistant", type: "AI_CHAT"}',
+        ']}',
+        ']',
+        '})',
+      ].join('\n'),
 
-      `User: "Move these files to archive folder"
-      → bulk_move_pages({
-          pageIds: ["page1", "page2", "page3"],
-          targetParentId: "archiveFolder",
-          targetDriveId: "drive123"
-        })`,
+      [
+        'User: "Move these files to archive folder"',
+        '→ bulk_move_pages({',
+        'pageIds: ["page1", "page2", "page3"],',
+        'targetParentId: "archiveFolder",',
+        'targetDriveId: "drive123"',
+        '})',
+      ].join('\n'),
 
-      `User: "Rename all docs to have 'v2' prefix"
-      → bulk_rename_pages({
-          pageIds: ["doc1", "doc2", "doc3"],
-          renamePattern: {type: "prefix", prefix: "v2 "}
-        })`,
+      [
+        'User: "Rename all docs to have \'v2\' prefix"',
+        '→ bulk_rename_pages({',
+        'pageIds: ["doc1", "doc2", "doc3"],',
+        'renamePattern: {type: "prefix", prefix: "v2 "}',
+        '})',
+      ].join('\n'),
     ],
 
     errorPatterns: [
@@ -410,21 +442,25 @@ Structure agent prompts with:
 - Powerful models for complex reasoning`,
 
     examples: [
-      `User: "Create a code review assistant"
-      → create_agent(
-          title="Code Reviewer",
-          systemPrompt="You are an expert code reviewer. Focus on: clean code, performance, security, best practices...",
-          enabledTools=["read_page", "regex_search", "create_task_list", "append_to_page"],
-          aiModel="gpt-4"
-        )`,
+      [
+        'User: "Create a code review assistant"',
+        '→ create_agent(',
+        'title="Code Reviewer",',
+        'systemPrompt="You are an expert code reviewer. Focus on: clean code, performance, security, best practices...",',
+        'enabledTools=["read_page", "regex_search", "create_task_list", "append_to_page"],',
+        'aiModel="gpt-4"',
+        ')',
+      ].join('\n'),
 
-      `User: "Set up a project manager AI"
-      → create_agent(
-          title="Project Manager",
-          systemPrompt="You manage projects efficiently. Track tasks, organize documents, maintain timelines...",
-          enabledTools=["create_task_list", "update_task_status", "batch_page_operations", "list_pages"],
-          parentId="projectFolder"
-        )`,
+      [
+        'User: "Set up a project manager AI"',
+        '→ create_agent(',
+        'title="Project Manager",',
+        'systemPrompt="You manage projects efficiently. Track tasks, organize documents, maintain timelines...",',
+        'enabledTools=["create_task_list", "update_task_status", "batch_page_operations", "list_pages"],',
+        'parentId="projectFolder"',
+        ')',
+      ].join('\n'),
     ],
 
     errorPatterns: [
@@ -491,19 +527,23 @@ PARALLEL:
 - Group by operation type when possible`,
 
     examples: [
-      `User: "Summarize my three reports"
-      PARALLEL:
-      → read_page("report1")
-      → read_page("report2")
-      → read_page("report3")
-      Then synthesize results`,
+      [
+        'User: "Summarize my three reports"',
+        'PARALLEL:',
+        '→ read_page("report1")',
+        '→ read_page("report2")',
+        '→ read_page("report3")',
+        'Then synthesize results',
+      ].join('\n'),
 
-      `User: "Find all documentation"
-      PARALLEL:
-      → glob_search("**/README*")
-      → glob_search("**/docs/*")
-      → search_pages("documentation")
-      → search_pages("guide")`,
+      [
+        'User: "Find all documentation"',
+        'PARALLEL:',
+        '→ glob_search("**/README*")',
+        '→ glob_search("**/docs/*")',
+        '→ search_pages("documentation")',
+        '→ search_pages("guide")',
+      ].join('\n'),
     ],
 
     errorPatterns: [
@@ -558,19 +598,25 @@ PARALLEL:
 - Can't batch? → Individual operations`,
 
     examples: [
-      `ERROR: "Cannot access drive"
-      → list_drives() to see available
-      → Suggest: "You don't have access to that workspace. Here are your available workspaces..."`,
+      [
+        'ERROR: "Cannot access drive"',
+        '→ list_drives() to see available',
+        '→ Suggest: "You don\'t have access to that workspace. Here are your available workspaces..."',
+      ].join('\n'),
 
-      `ERROR: "Page processing"
-      → Wait 2 seconds
-      → Retry read_page()
-      → If still processing: "File is being processed, please try again in a moment"`,
+      [
+        'ERROR: "Page processing"',
+        '→ Wait 2 seconds',
+        '→ Retry read_page()',
+        '→ If still processing: "File is being processed, please try again in a moment"',
+      ].join('\n'),
 
-      `ERROR: "Line 50 doesn't exist"
-      → read_page() to check current content
-      → Adjust line numbers based on actual content
-      → Retry operation`,
+      [
+        'ERROR: "Line 50 doesn\'t exist"',
+        '→ read_page() to check current content',
+        '→ Adjust line numbers based on actual content',
+        '→ Retry operation',
+      ].join('\n'),
     ],
 
     errorPatterns: [

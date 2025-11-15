@@ -20,10 +20,38 @@ export interface ElectronAPI {
      */
     getJWT: () => Promise<string | null>;
     /**
+     * Retrieves the full stored session, including refresh and device tokens.
+     */
+    getSession: () => Promise<{
+      accessToken: string;
+      refreshToken: string;
+      csrfToken?: string | null;
+      deviceToken?: string | null;
+    } | null>;
+    /**
+     * Persists the current authentication session in the native secure storage.
+     */
+    storeSession: (session: {
+      accessToken: string;
+      refreshToken: string;
+      csrfToken?: string | null;
+      deviceToken?: string | null;
+    }) => Promise<{ success: boolean }>;
+    /**
      * Clears authentication data (JWT cookies) from Electron session.
      * Called during logout.
      */
     clearAuth: () => Promise<void>;
+    /**
+     * Returns device metadata used for device token authentication.
+     */
+    getDeviceInfo: () => Promise<{
+      deviceId: string;
+      deviceName: string;
+      platform: NodeJS.Platform;
+      appVersion: string;
+      userAgent: string;
+    }>;
   };
   mcp: {
     getConfig: () => Promise<MCPConfig>;

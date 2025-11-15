@@ -1,6 +1,6 @@
 import { users, refreshTokens } from '@pagespace/db';
 import { db, eq, sql } from '@pagespace/db';
-import { decodeToken, generateAccessToken, generateRefreshToken, checkRateLimit, RATE_LIMIT_CONFIGS } from '@pagespace/lib/server';
+import { decodeToken, generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, checkRateLimit, RATE_LIMIT_CONFIGS } from '@pagespace/lib/server';
 import { serialize } from 'cookie';
 import { parse } from 'cookie';
 import { createId } from '@paralleldrive/cuid2';
@@ -84,13 +84,22 @@ export async function POST(req: Request) {
   const newAccessToken = await generateAccessToken(user.id, user.tokenVersion, user.role);
   const newRefreshToken = await generateRefreshToken(user.id, user.tokenVersion, user.role);
 
+  const refreshPayload = await decodeToken(newRefreshToken);
+  const refreshExpiresAt = refreshPayload?.exp
+    ? new Date(refreshPayload.exp * 1000)
+    : new Date(Date.now() + getRefreshTokenMaxAge() * 1000);
+
   // Store the new refresh token
   await db.insert(refreshTokens).values({
     id: createId(),
     token: newRefreshToken,
     userId: user.id,
     device: req.headers.get('user-agent'),
+    userAgent: req.headers.get('user-agent'),
     ip: clientIP,
+    lastUsedAt: new Date(),
+    platform: 'web',
+    expiresAt: refreshExpiresAt,
   });
 
   const isProduction = process.env.NODE_ENV === 'production';
@@ -109,7 +118,7 @@ export async function POST(req: Request) {
     secure: isProduction,
     sameSite: 'strict',
     path: '/',
-    maxAge: 7 * 24 * 60 * 60, // 7 days
+    maxAge: getRefreshTokenMaxAge(), // Configurable via REFRESH_TOKEN_TTL env var (default: 30d)
     ...(isProduction && { domain: process.env.COOKIE_DOMAIN })
   });
 

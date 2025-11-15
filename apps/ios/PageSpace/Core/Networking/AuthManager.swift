@@ -2,6 +2,7 @@ import Foundation
 import Combine
 import Security
 import GoogleSignIn
+import UIKit
 
 enum KeychainError: Error, LocalizedError {
     case encodingFailed
@@ -32,6 +33,8 @@ class AuthManager: ObservableObject {
     private let tokenKey = "jwt_token"
     private let refreshTokenKey = "refresh_token"
     private let csrfKey = "csrf_token"
+    private let deviceTokenKey = "device_token"
+    private let deviceIdKey = "device_id"
 
     // Clock skew buffer for JWT expiration validation (in seconds)
     // Accounts for differences between server and device time
@@ -40,6 +43,7 @@ class AuthManager: ObservableObject {
     // Token refresh configuration
     private var tokenRefreshTask: Task<Void, Never>?
     private let refreshBufferSeconds: TimeInterval = 120 // Refresh 2 minutes before expiry
+    private let platformIdentifier = "ios"
 
     private init() {
         // Load token from Keychain on init
@@ -68,17 +72,64 @@ class AuthManager: ObservableObject {
                         logout()
                     }
                 }
+            } else if let storedDeviceToken = loadDeviceToken() {
+                print("[AuthManager] No access token found - attempting device token authentication")
+                do {
+                    try await authenticateWithDeviceToken(storedDeviceToken)
+                    try await loadCurrentUser()
+                    scheduleTokenRefresh()
+                } catch {
+                    print("[AuthManager] Device token authentication failed: \(error.localizedDescription)")
+                    logout()
+                }
             }
 
             isCheckingAuth = false
         }
     }
 
+    // MARK: - Device Metadata Helpers
+
+    nonisolated private func ensureDeviceIdentifier() -> String {
+        if let stored = loadDeviceIdentifier() {
+            return stored
+        }
+
+        let identifier = UIDevice.current.identifierForVendor?.uuidString ?? UUID().uuidString
+        do {
+            try saveDeviceIdentifier(identifier)
+        } catch {
+            print("[AuthManager] Failed to persist device identifier: \(error.localizedDescription)")
+        }
+        return identifier
+    }
+
+    nonisolated private func currentDeviceName() -> String {
+        UIDevice.current.name
+    }
+
+    nonisolated private func currentUserAgent() -> String {
+        let device = UIDevice.current
+        return "\(device.model)/\(device.systemName) \(device.systemVersion)"
+    }
+
+    nonisolated private func currentAppVersion() -> String? {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+    }
+
     // MARK: - Authentication
 
     @MainActor
     func login(email: String, password: String) async throws -> User {
-        let request = LoginRequest(email: email, password: password)
+        let request = LoginRequest(
+            email: email,
+            password: password,
+            deviceId: ensureDeviceIdentifier(),
+            platform: platformIdentifier,
+            deviceName: currentDeviceName(),
+            appVersion: currentAppVersion(),
+            deviceToken: loadDeviceToken()
+        )
         let endpoint = APIEndpoints.login
 
         let response: LoginResponse = try await APIClient.shared.request(
@@ -91,6 +142,9 @@ class AuthManager: ObservableObject {
         try saveToken(response.token)
         try saveRefreshToken(response.refreshToken)
         try saveCSRFToken(response.csrfToken)
+        if let responseDeviceToken = response.deviceToken {
+            try saveDeviceToken(responseDeviceToken)
+        }
 
         // Update state
         csrfToken = response.csrfToken
@@ -118,7 +172,11 @@ class AuthManager: ObservableObject {
             name: name,
             email: email,
             password: password,
-            confirmPassword: confirmPassword
+            confirmPassword: confirmPassword,
+            deviceId: ensureDeviceIdentifier(),
+            platform: platformIdentifier,
+            deviceName: currentDeviceName(),
+            appVersion: currentAppVersion()
         )
         let endpoint = APIEndpoints.signup
 
@@ -132,6 +190,9 @@ class AuthManager: ObservableObject {
         try saveToken(response.token)
         try saveRefreshToken(response.refreshToken)
         try saveCSRFToken(response.csrfToken)
+        if let responseDeviceToken = response.deviceToken {
+            try saveDeviceToken(responseDeviceToken)
+        }
 
         // Update state
         csrfToken = response.csrfToken
@@ -155,7 +216,14 @@ class AuthManager: ObservableObject {
 
     @MainActor
     func loginWithGoogle(idToken: String) async throws -> User {
-        let request = OAuthExchangeRequest(idToken: idToken)
+        let request = OAuthExchangeRequest(
+            idToken: idToken,
+            deviceId: ensureDeviceIdentifier(),
+            platform: platformIdentifier,
+            deviceName: currentDeviceName(),
+            appVersion: currentAppVersion(),
+            deviceToken: loadDeviceToken()
+        )
         let endpoint = APIEndpoints.oauthGoogleExchange
 
         let response: LoginResponse = try await APIClient.shared.request(
@@ -168,6 +236,9 @@ class AuthManager: ObservableObject {
         try saveToken(response.token)
         try saveRefreshToken(response.refreshToken)
         try saveCSRFToken(response.csrfToken)
+        if let responseDeviceToken = response.deviceToken {
+            try saveDeviceToken(responseDeviceToken)
+        }
 
         // Update state
         csrfToken = response.csrfToken
@@ -195,7 +266,12 @@ class AuthManager: ObservableObject {
             throw APIError.unauthorized
         }
 
-        let request = RefreshRequest(refreshToken: refreshToken)
+        let request = RefreshRequest(
+            refreshToken: refreshToken,
+            deviceToken: loadDeviceToken(),
+            deviceId: ensureDeviceIdentifier(),
+            platform: platformIdentifier
+        )
         let endpoint = APIEndpoints.refresh
 
         let response: RefreshResponse = try await APIClient.shared.request(
@@ -208,10 +284,38 @@ class AuthManager: ObservableObject {
         try saveToken(response.token)
         try saveRefreshToken(response.refreshToken)
         try saveCSRFToken(response.csrfToken)
+        if let responseDeviceToken = response.deviceToken {
+            try saveDeviceToken(responseDeviceToken)
+        }
         csrfToken = response.csrfToken
 
         // Schedule next refresh after successful token refresh
         scheduleTokenRefresh()
+    }
+
+    @MainActor
+    private func authenticateWithDeviceToken(_ deviceToken: String) async throws {
+        let request = DeviceRefreshRequest(
+            deviceToken: deviceToken,
+            deviceId: ensureDeviceIdentifier(),
+            userAgent: currentUserAgent(),
+            appVersion: currentAppVersion()
+        )
+
+        let response: RefreshResponse = try await APIClient.shared.request(
+            endpoint: APIEndpoints.deviceRefresh,
+            method: .POST,
+            body: request
+        )
+
+        try saveToken(response.token)
+        try saveRefreshToken(response.refreshToken)
+        try saveCSRFToken(response.csrfToken)
+        if let responseDeviceToken = response.deviceToken {
+            try saveDeviceToken(responseDeviceToken)
+        }
+        csrfToken = response.csrfToken
+        isAuthenticated = true
     }
 
     @MainActor
@@ -246,6 +350,7 @@ class AuthManager: ObservableObject {
         deleteToken()
         deleteRefreshToken()
         deleteCSRFToken()
+        deleteDeviceToken()
         currentUser = nil
         csrfToken = nil
         isAuthenticated = false
@@ -573,5 +678,92 @@ class AuthManager: ObservableObject {
             kSecAttrAccount as String: refreshTokenKey
         ]
         SecItemDelete(query as CFDictionary)
+    }
+
+    nonisolated private func saveDeviceToken(_ token: String) throws {
+        guard let data = token.data(using: .utf8) else {
+            throw KeychainError.encodingFailed
+        }
+
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: deviceTokenKey,
+            kSecValueData as String: data
+        ]
+
+        SecItemDelete(query as CFDictionary)
+        let status = SecItemAdd(query as CFDictionary, nil)
+        guard status == errSecSuccess else {
+            throw KeychainError.saveFailed(status: status)
+        }
+    }
+
+    nonisolated private func loadDeviceToken() -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: deviceTokenKey,
+            kSecReturnData as String: true
+        ]
+
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+
+        guard status == errSecSuccess,
+              let data = result as? Data,
+              let token = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+
+        return token
+    }
+
+    nonisolated private func deleteDeviceToken() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: deviceTokenKey
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+
+    nonisolated private func saveDeviceIdentifier(_ identifier: String) throws {
+        guard let data = identifier.data(using: .utf8) else {
+            throw KeychainError.encodingFailed
+        }
+
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: deviceIdKey,
+            kSecValueData as String: data
+        ]
+
+        SecItemDelete(query as CFDictionary)
+        let status = SecItemAdd(query as CFDictionary, nil)
+        guard status == errSecSuccess else {
+            throw KeychainError.saveFailed(status: status)
+        }
+    }
+
+    nonisolated private func loadDeviceIdentifier() -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: deviceIdKey,
+            kSecReturnData as String: true
+        ]
+
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+
+        guard status == errSecSuccess,
+              let data = result as? Data,
+              let identifier = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+
+        return identifier
     }
 }

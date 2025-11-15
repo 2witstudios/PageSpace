@@ -1,18 +1,38 @@
 import { users, refreshTokens } from '@pagespace/db';
 import { db, eq, sql } from '@pagespace/db';
-import { decodeToken, generateAccessToken, generateRefreshToken, checkRateLimit, RATE_LIMIT_CONFIGS } from '@pagespace/lib/server';
+import {
+  decodeToken,
+  generateAccessToken,
+  generateRefreshToken,
+  getRefreshTokenMaxAge,
+  checkRateLimit,
+  RATE_LIMIT_CONFIGS,
+  validateDeviceToken,
+  createDeviceTokenRecord,
+  updateDeviceTokenActivity,
+} from '@pagespace/lib/server';
 import { generateCSRFToken, getSessionIdFromJWT } from '@pagespace/lib/server';
+import { z } from 'zod/v4';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers } from '@pagespace/lib/server';
+
+const refreshSchema = z.object({
+  refreshToken: z.string().min(1, { message: 'Refresh token is required.' }),
+  deviceId: z.string().min(1, { message: 'Device identifier is required' }),
+  platform: z.enum(['ios', 'android', 'desktop']).default('ios'),
+  deviceToken: z.string().optional(),
+});
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const refreshTokenValue = body.refreshToken;
+    const validation = refreshSchema.safeParse(body);
 
-    if (!refreshTokenValue) {
-      return Response.json({ error: 'Refresh token is required.' }, { status: 400 });
+    if (!validation.success) {
+      return Response.json({ errors: validation.error.flatten().fieldErrors }, { status: 400 });
     }
+
+    const { refreshToken: refreshTokenValue, deviceId, platform, deviceToken: providedDeviceToken } = validation.data;
 
     // Rate limiting by IP address for refresh attempts
     const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] ||
@@ -90,13 +110,59 @@ export async function POST(req: Request) {
     const newAccessToken = await generateAccessToken(user.id, user.tokenVersion, user.role);
     const newRefreshToken = await generateRefreshToken(user.id, user.tokenVersion, user.role);
 
+    const refreshTokenPayload = await decodeToken(newRefreshToken);
+    const refreshTokenExpiresAt = refreshTokenPayload?.exp
+      ? new Date(refreshTokenPayload.exp * 1000)
+      : new Date(Date.now() + getRefreshTokenMaxAge() * 1000);
+
+    let deviceTokenValue = providedDeviceToken ?? null;
+    let deviceTokenRecordId: string | null = null;
+
+    if (deviceTokenValue) {
+      const storedDeviceToken = await validateDeviceToken(deviceTokenValue);
+      if (
+        !storedDeviceToken ||
+        storedDeviceToken.userId !== user.id ||
+        storedDeviceToken.deviceId !== deviceId ||
+        storedDeviceToken.platform !== platform
+      ) {
+        deviceTokenValue = null;
+      } else {
+        deviceTokenRecordId = storedDeviceToken.id;
+        await updateDeviceTokenActivity(storedDeviceToken.id, clientIP);
+      }
+    }
+
+    if (!deviceTokenValue) {
+      const { id: newDeviceTokenId, token: newDeviceToken } = await createDeviceTokenRecord(
+        user.id,
+        deviceId,
+        platform,
+        user.tokenVersion,
+        {
+          deviceName: existingToken.device,
+          userAgent: req.headers.get('user-agent') || undefined,
+          ipAddress: clientIP === 'unknown' ? undefined : clientIP,
+          location: undefined,
+        }
+      );
+
+      deviceTokenValue = newDeviceToken;
+      deviceTokenRecordId = newDeviceTokenId;
+    }
+
     // Store the new refresh token
     await db.insert(refreshTokens).values({
       id: createId(),
       token: newRefreshToken,
       userId: user.id,
       device: req.headers.get('user-agent'),
+      userAgent: req.headers.get('user-agent'),
       ip: clientIP,
+      lastUsedAt: new Date(),
+      platform,
+      deviceTokenId: deviceTokenRecordId,
+      expiresAt: refreshTokenExpiresAt,
     });
 
     // Generate new CSRF token for mobile client
@@ -119,6 +185,7 @@ export async function POST(req: Request) {
       token: newAccessToken,
       refreshToken: newRefreshToken,
       csrfToken: csrfToken,
+      deviceToken: deviceTokenValue,
     }, { status: 200 });
 
   } catch (error) {

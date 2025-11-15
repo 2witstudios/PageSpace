@@ -22,6 +22,7 @@
     "ai": "^5.0.81",
     "electron-store": "^10.0.0",
     "electron-updater": "^6.6.2",
+    "node-machine-id": "^1.1.12",
     "ws": "^8.18.3",
     "zod": "^4.0.16"
   },

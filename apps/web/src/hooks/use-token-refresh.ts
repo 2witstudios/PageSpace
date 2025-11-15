@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { mutate } from 'swr';
 import { useRouter } from 'next/navigation';
-import { post } from '@/lib/auth-fetch';
+import { post, fetchWithAuth, refreshAuthSession, clearJWTCache } from '@/lib/auth-fetch';
 
 interface TokenRefreshOptions {
   refreshBeforeExpiryMs?: number; // How long before expiry to refresh (default: 2 minutes)
@@ -41,10 +41,17 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
     try {
       await post('/api/auth/logout');
       await mutate('/api/auth/me', null, false);
-      router.push('/auth/signin');
     } catch (error) {
       console.error('Logout error:', error);
-      // Force redirect even if logout fails
+    } finally {
+      if (typeof window !== 'undefined' && window.electron?.isDesktop) {
+        try {
+          await window.electron.auth.clearAuth();
+        } catch (error) {
+          console.error('Desktop logout: failed to clear secure session', error);
+        }
+        clearJWTCache();
+      }
       router.push('/auth/signin');
     }
   };
@@ -62,17 +69,12 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
     globalRefreshPromise = (async () => {
       try {
         setIsRefreshing(true);
-        const response = await fetch('/api/auth/refresh', {
-          method: 'POST',
-          credentials: 'include',
-        });
+        const { success, shouldLogout } = await refreshAuthSession();
 
-        if (response.ok) {
+        if (success) {
           // Token refreshed successfully, fetch fresh user data
           try {
-            const userResponse = await fetch('/api/auth/me', {
-              credentials: 'include',
-            });
+            const userResponse = await fetchWithAuth('/api/auth/me');
 
             if (userResponse.ok) {
               const userData = await userResponse.json();
@@ -95,28 +97,21 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
           }
 
           return true;
-        } else if (response.status === 401) {
-          // Refresh token is invalid or expired
-          console.log('Refresh token expired, logging out');
-          
-          // Dispatch custom event for other components
+        }
+
+        if (shouldLogout) {
+          console.log('Refresh token expired or revoked, logging out');
+
           if (typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('auth:expired'));
           }
-          
+
           await logout();
           return false;
-        } else if (response.status === 429) {
-          // Rate limited - don't logout, just retry later
-          console.log('Token refresh rate limited');
-          return false;
-        } else if (response.status >= 500) {
-          // Server error - don't logout, retry later
-          console.log('Server error during refresh, will retry');
-          return false;
-        } else {
-          throw new Error(`Refresh failed with status ${response.status}`);
         }
+
+        // Retryable failure (network/server)
+        return false;
       } catch (error) {
         console.error('Token refresh error:', error);
         return false;

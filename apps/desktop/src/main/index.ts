@@ -1,12 +1,15 @@
-import { app, BrowserWindow, Menu, shell, ipcMain, Tray, nativeImage, dialog, session } from 'electron';
+import { app, BrowserWindow, Menu, shell, ipcMain, Tray, nativeImage, dialog, session, safeStorage } from 'electron';
 import electronUpdaterPkg from 'electron-updater';
 const { autoUpdater } = electronUpdaterPkg;
 import * as path from 'path';
+import { promises as fs } from 'node:fs';
 import Store from 'electron-store';
 import { getMCPManager } from './mcp-manager';
 import { initializeWSClient, shutdownWSClient, getWSClient } from './ws-client';
 import type { MCPConfig } from '../shared/mcp-types';
 import { logger } from './logger';
+import { machineIdSync } from 'node-machine-id';
+import * as os from 'node:os';
 
 // Configuration store for user preferences
 interface StoreSchema {
@@ -25,6 +28,93 @@ const store = new Store<StoreSchema>({
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false; // Track if app is quitting (used to distinguish close from minimize to tray)
+
+interface StoredAuthSession {
+  accessToken: string;
+  refreshToken: string;
+  csrfToken?: string | null;
+  deviceToken?: string | null;
+}
+
+let authSessionPath: string | null = null;
+let cachedMachineId: string | null = null;
+
+function ensureAuthSessionPath(): string {
+  if (!authSessionPath) {
+    if (!app.isReady()) {
+      throw new Error('Application not ready to resolve userData path');
+    }
+    authSessionPath = path.join(app.getPath('userData'), 'auth-session.bin');
+  }
+  return authSessionPath;
+}
+
+async function saveAuthSession(sessionData: StoredAuthSession): Promise<void> {
+  try {
+    const payload = JSON.stringify(sessionData);
+    const encrypted = safeStorage.isEncryptionAvailable()
+      ? safeStorage.encryptString(payload)
+      : Buffer.from(payload, 'utf8');
+
+    await fs.writeFile(ensureAuthSessionPath(), encrypted);
+    logger.info('[Auth] Session stored securely', {});
+  } catch (error) {
+    logger.error('[Auth] Failed to persist session', { error });
+    throw error;
+  }
+}
+
+async function loadAuthSession(): Promise<StoredAuthSession | null> {
+  try {
+    const filePath = ensureAuthSessionPath();
+    const raw = await fs.readFile(filePath);
+
+    let decoded: string;
+    if (safeStorage.isEncryptionAvailable()) {
+      try {
+        decoded = safeStorage.decryptString(raw);
+      } catch (error) {
+        logger.warn('[Auth] Failed to decrypt stored session, attempting plain text parse', { error });
+        decoded = raw.toString('utf8');
+      }
+    } else {
+      decoded = raw.toString('utf8');
+    }
+
+    return JSON.parse(decoded) as StoredAuthSession;
+  } catch (error: any) {
+    if (error?.code === 'ENOENT') {
+      return null;
+    }
+    logger.error('[Auth] Failed to load session', { error });
+    return null;
+  }
+}
+
+async function clearAuthSession(): Promise<void> {
+  try {
+    await fs.unlink(ensureAuthSessionPath());
+  } catch (error: any) {
+    if (error?.code !== 'ENOENT') {
+      logger.error('[Auth] Failed to clear stored session', { error });
+    }
+  }
+}
+
+function getMachineIdentifier(): string {
+  if (cachedMachineId) {
+    return cachedMachineId;
+  }
+
+  try {
+    cachedMachineId = machineIdSync({ original: true });
+  } catch (error) {
+    logger.warn('[Auth] Failed to read machine identifier, falling back to hostname', { error });
+    cachedMachineId = `${os.hostname()}-${process.platform}-${process.arch}`;
+  }
+
+  return cachedMachineId;
+}
 
 // Get the app URL based on environment
 function getAppUrl(): string {
@@ -455,38 +545,30 @@ ipcMain.handle('retry-connection', () => {
 
 // Auth IPC handlers
 /**
- * Retrieves JWT token from Electron's secure cookie storage.
- * Used for Bearer token authentication in Desktop app.
+ * Retrieves the current access token from secure storage.
  * @returns JWT string or null if not authenticated
  */
 ipcMain.handle('auth:get-jwt', async () => {
-  try {
-    // Debug: List all cookies to see what's available
-    const allCookies = await session.defaultSession.cookies.get({});
-    console.log('[Auth IPC] Total cookies in session:', allCookies.length);
-    console.log('[Auth IPC] Cookie names:', allCookies.map(c => `${c.name} (domain: ${c.domain}, path: ${c.path})`));
+  const storedSession = await loadAuthSession();
+  return storedSession?.accessToken ?? null;
+});
 
-    // Get JWT from Electron's session cookies (stored as 'accessToken')
-    const cookies = await session.defaultSession.cookies.get({ name: 'accessToken' });
-    if (cookies.length > 0) {
-      console.log('[Auth IPC] JWT token retrieved from cookies (accessToken)');
-      return cookies[0].value;
-    }
-    console.log('[Auth IPC] No JWT token found in cookies (accessToken)');
-    return null;
-  } catch (error) {
-    console.error('[Auth IPC] Failed to get JWT token:', error);
-    return null;
-  }
+ipcMain.handle('auth:get-session', async () => {
+  return loadAuthSession();
+});
+
+ipcMain.handle('auth:store-session', async (_event, sessionData: StoredAuthSession) => {
+  await saveAuthSession(sessionData);
+  return { success: true };
 });
 
 /**
- * Clears authentication data (JWT cookies) from Electron session.
+ * Clears authentication data from secure storage and cookies.
  * Called during logout to ensure clean state.
  */
 ipcMain.handle('auth:clear-auth', async () => {
   try {
-    // Clear all cookies (including JWT)
+    await clearAuthSession();
     await session.defaultSession.clearStorageData({
       storages: ['cookies'],
     });
@@ -494,6 +576,16 @@ ipcMain.handle('auth:clear-auth', async () => {
   } catch (error) {
     console.error('[Auth IPC] Failed to clear auth data:', error);
   }
+});
+
+ipcMain.handle('auth:get-device-info', async () => {
+  return {
+    deviceId: getMachineIdentifier(),
+    deviceName: os.hostname(),
+    platform: process.platform,
+    appVersion: app.getVersion(),
+    userAgent: `${os.type()} ${os.release()} (${process.arch})`,
+  };
 });
 
 // MCP IPC handlers
@@ -626,6 +718,7 @@ ipcMain.handle('ws:get-status', () => {
 
 // App lifecycle
 app.whenReady().then(async () => {
+  authSessionPath = path.join(app.getPath('userData'), 'auth-session.bin');
   // Initialize MCP manager
   try {
     const mcpManager = getMCPManager();

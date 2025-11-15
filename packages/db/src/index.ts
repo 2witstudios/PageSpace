@@ -28,10 +28,13 @@ export {
   usersRelations,
   refreshTokens,
   refreshTokensRelations,
+  deviceTokens,
+  deviceTokensRelations,
   mcpTokens,
   mcpTokensRelations,
   verificationTokens,
   verificationTokensRelations,
   userRole,
   authProvider,
+  platformType,
 } from './schema/auth';
