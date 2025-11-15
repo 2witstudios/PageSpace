@@ -208,6 +208,15 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
         };
         const state: ValidState = isValidState(toolPart.state) ? toolPart.state : 'input-available';
 
+        // Check if tool type changed - flush current group if different type
+        if (currentToolGroup.length > 0 && currentToolGroup[0].type !== part.type) {
+          groups.push({
+            type: 'tool-calls-group',
+            tools: currentToolGroup
+          });
+          currentToolGroup = [];
+        }
+
         // Add the tool part to current group
         currentToolGroup.push({
           type: part.type,

@@ -4,6 +4,7 @@ import React, { useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, Loader2, CheckCircle2, XCircle, Clock } from 'lucide-react';
 import { CompactToolCallRenderer } from './CompactToolCallRenderer';
 import { cn } from '@/lib/utils';
+import { toTitleCase } from '@/lib/formatters';
 
 interface ToolCallPart {
   type: string;
@@ -86,22 +87,8 @@ export function CompactGroupedToolCallsRenderer({ toolCalls, className }: Compac
     return stats;
   }, [toolCallsWithStatus, toolCalls.length]);
 
-  // Determine if group should be expanded
-  const shouldAutoExpand = useMemo(() => {
-    return toolCallsWithStatus.some(tool =>
-      tool.status === 'in_progress' || tool.status === 'error'
-    );
-  }, [toolCallsWithStatus]);
-
-  // Controlled expanded state - starts with shouldAutoExpand value
-  const [isExpanded, setIsExpanded] = useState(shouldAutoExpand);
-
-  // Auto-expand when shouldAutoExpand becomes true
-  React.useEffect(() => {
-    if (shouldAutoExpand) {
-      setIsExpanded(true);
-    }
-  }, [shouldAutoExpand]);
+  // Controlled expanded state - always starts closed
+  const [isExpanded, setIsExpanded] = useState(false);
 
   // Find the current active tool (first in_progress or error)
   const activeToolIndex = useMemo(() => {
@@ -135,6 +122,13 @@ export function CompactGroupedToolCallsRenderer({ toolCalls, className }: Compac
     return 'completed';
   }, [summary]);
 
+  // Get tool name for display
+  const toolDisplayName = useMemo(() => {
+    if (toolCalls.length === 0) return 'tool';
+    const toolName = toolCalls[0].toolName || toolCalls[0].type.replace('tool-', '');
+    return toTitleCase(toolName);
+  }, [toolCalls]);
+
   return (
     <div className={cn('my-1.5', className)}>
       <div className="bg-gray-50 dark:bg-gray-800/30 rounded border border-gray-200 dark:border-gray-700">
@@ -155,7 +149,7 @@ export function CompactGroupedToolCallsRenderer({ toolCalls, className }: Compac
           </div>
           <div className="flex-1 min-w-0">
             <span className="font-medium text-[11px] text-gray-900 dark:text-gray-100">
-              {summary.total} tool{summary.total !== 1 ? 's' : ''}
+              {summary.total} {toolDisplayName}{summary.total !== 1 ? 's' : ''}
             </span>
           </div>
           <div className="flex-shrink-0">
