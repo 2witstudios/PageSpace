@@ -68,10 +68,13 @@ export const pageWriteTools = {
           throw new Error(`Invalid line range: ${startLine}-${endLine}. Document has ${lines.length} lines.`);
         }
 
+        const isDeletion = content.length === 0;
+
         // Replace lines (convert to 0-based indexing)
+        const replacementSegment = isDeletion ? [] : [content];
         const newLines = [
           ...lines.slice(0, startLine - 1),
-          content,
+          ...replacementSegment,
           ...lines.slice(endLine),
         ];
 
@@ -99,12 +102,16 @@ export const pageWriteTools = {
           title: page.title,
           linesReplaced: endLine - startLine + 1,
           newLineCount: newLines.length,
-          message: `Successfully replaced lines ${startLine}-${endLine}`,
-          summary: `Updated "${page.title}" by replacing ${endLine - startLine + 1} line${endLine - startLine + 1 === 1 ? '' : 's'}`,
+          message: isDeletion
+            ? `Successfully removed lines ${startLine}-${endLine}`
+            : `Successfully replaced lines ${startLine}-${endLine}`,
+          summary: isDeletion
+            ? `Removed ${endLine - startLine + 1} line${endLine - startLine + 1 === 1 ? '' : 's'} from "${page.title}"`
+            : `Updated "${page.title}" by replacing ${endLine - startLine + 1} line${endLine - startLine + 1 === 1 ? '' : 's'}`,
           stats: {
             linesChanged: endLine - startLine + 1,
             totalLines: newLines.length,
-            changeType: 'replacement'
+            changeType: isDeletion ? 'deletion' : 'replacement'
           },
           nextSteps: [
             'Review the updated content to ensure it meets requirements',
