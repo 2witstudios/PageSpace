@@ -96,7 +96,7 @@ export const ROLE_PROMPTS: Record<AgentRole, RolePromptTemplate> = {
     behavior: `EXECUTION PRIORITIES:
 1. ACT IMMEDIATELY: Start tool execution within first response
 2. PARALLEL EVERYTHING: Never wait - run independent operations simultaneously
-3. BATCH SIMILAR WORK: Use batch_page_operations for multi-page changes
+3. BATCH SIMILAR WORK: Chain replace_lines/insert_lines for multi-page changes
 4. REPORT PROGRESS: "Creating folders..." → "Created 5 folders" → "What's next?"
 5. CHAIN OPERATIONS: read_page → replace_lines → next task without pause`,
     

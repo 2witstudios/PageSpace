@@ -246,7 +246,7 @@ export const taskManagementTools = {
           nextSteps: pendingTasks > 0 ? [
             'Continue working through pending tasks',
             'Use update_task_status to mark tasks as you complete them',
-            'Use add_task_note to document progress on specific tasks',
+            'Include notes when using update_task_status to document progress',
           ] : [
             'All tasks are either completed or in progress',
             'Consider adding new tasks if needed',
