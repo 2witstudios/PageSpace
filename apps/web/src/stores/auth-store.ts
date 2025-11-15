@@ -470,6 +470,22 @@ export const authStoreHelpers = {
 
     const handleAuthExpired = async () => {
       console.log('[AUTH_STORE] Token expired - logging out');
+
+      if (typeof window !== 'undefined' && window.electron?.isDesktop) {
+        try {
+          await window.electron.auth.clearAuth();
+        } catch (error) {
+          console.error('[AUTH_STORE] Failed to clear desktop auth session on expiry', error);
+        }
+
+        try {
+          const { clearJWTCache } = await import('@/lib/auth-fetch');
+          clearJWTCache();
+        } catch (error) {
+          console.error('[AUTH_STORE] Failed to clear JWT cache on expiry', error);
+        }
+      }
+
       // Token expired and couldn't be refreshed, clear session
       const state = useAuthStore.getState();
       state.endSession();
