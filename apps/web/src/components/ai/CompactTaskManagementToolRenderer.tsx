@@ -1,5 +1,5 @@
 import React from 'react';
-import { CheckCircle, ListTodo, Plus, List, RotateCcw, FileText, Loader2, AlertCircle } from 'lucide-react';
+import { CheckCircle, ListTodo, Plus, List, RotateCcw, Loader2, AlertCircle } from 'lucide-react';
 import { CompactTodoListMessage } from './CompactTodoListMessage';
 
 interface Task {

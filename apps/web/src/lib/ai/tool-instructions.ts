@@ -93,7 +93,7 @@ You operate in a hierarchical workspace system: Workspaces (Drives) → Folders 
 ## FILE TYPE AWARENESS:
 - **FILE pages are READ-ONLY** - These are uploads (PDFs, images, etc.)
 - To "edit" a FILE: Create a new DOCUMENT page with modifications
-- Visual files require vision-capable models to process
+- Visual files require vision-capable models to process`,
 
     examples: [
       `User: "Add a summary to the top of my report"

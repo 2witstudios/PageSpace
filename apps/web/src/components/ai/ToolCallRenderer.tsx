@@ -12,8 +12,6 @@ import {
   Move,
   RotateCcw,
   FilePlus,
-  FileUp,
-  FileDown,
   Bot
 } from 'lucide-react';
 import { Task, TaskTrigger, TaskContent, TaskItem, TaskItemFile, TaskStatus } from '@/components/ai/task';

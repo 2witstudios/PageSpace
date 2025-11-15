@@ -324,13 +324,9 @@ Core tools available to AI agents:
 - `read_page` - Read page content
 - `create_page` - Create new page (FOLDER, DOCUMENT, AI_CHAT, CHANNEL, CANVAS)
 - `rename_page` - Rename page
-- `replace_lines` - Replace content lines
-- `insert_lines` - Insert content
-- `delete_lines` - Delete content lines
-- `append_to_page` - Append content
-- `prepend_to_page` - Prepend content
-- `trash_page` - Delete page
-- `trash_page_with_children` - Delete page recursively
+- `replace_lines` - Replace content lines (use empty content to delete)
+- `insert_lines` - Insert content (use lineNumber 1 to prepend, lineCount+1 to append)
+- `trash_page` - Delete page (use withChildren: true for recursive deletion)
 - `restore_page` - Restore from trash
 - `move_page` - Move/reorder pages
 - `list_trash` - List trashed pages

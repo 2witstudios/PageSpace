@@ -10,8 +10,6 @@ import {
   Move,
   RotateCcw,
   FilePlus,
-  FileUp,
-  FileDown,
   ChevronRight,
   ChevronDown,
   CheckCircle,
