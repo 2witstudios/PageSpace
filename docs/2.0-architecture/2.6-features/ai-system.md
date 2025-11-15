@@ -259,8 +259,7 @@ const coreTools = {
   read_page,             // Read document content with metadata
   create_page,           // Create new pages (DOCUMENT, FOLDER, AI_CHAT, CHANNEL, CANVAS)
   rename_page,           // Rename existing pages
-  trash_page,            // Delete individual pages
-  trash_page_with_children, // Delete page and all children recursively
+  trash_page,            // Delete pages (withChildren: true for recursive deletion)
   restore_page,          // Restore from trash
   move_page,             // Move/reorder pages in hierarchy
   list_trash,            // View trashed items
@@ -270,10 +269,8 @@ const coreTools = {
 #### Content Editing Tools
 ```typescript
 const editingTools = {
-  replace_lines,         // Precise line-based editing
-  insert_lines,          // Insert content at specific positions
-  append_to_page,        // Add content to end of page
-  prepend_to_page,       // Add content to beginning of page
+  replace_lines,         // Precise line-based editing (use empty content to delete lines)
+  insert_lines,          // Insert content at specific positions (lineNumber 1 for prepend, lineCount+1 for append)
 };
 ```
 
@@ -291,21 +288,9 @@ const searchTools = {
 const taskTools = {
   create_task_list,      // Persistent task tracking across AI conversations
   get_task_list,         // Progress monitoring with completion tracking
-  update_task_status,    // Status management (pending/in_progress/completed/blocked)
+  update_task_status,    // Status management (pending/in_progress/completed/blocked) with note parameter for progress updates
   add_task,              // Dynamic task list expansion
-  add_task_note,         // Progress documentation and context preservation
   resume_task_list,      // Cross-session task continuity
-};
-```
-
-#### Batch Operations
-```typescript
-const batchTools = {
-  bulk_delete_pages,     // Delete multiple pages atomically
-  bulk_update_content,   // Update content in multiple pages
-  bulk_move_pages,       // Mass page relocation with order preservation
-  bulk_rename_pages,     // Pattern-based bulk renaming
-  create_folder_structure, // Complex nested hierarchy creation
 };
 ```
 

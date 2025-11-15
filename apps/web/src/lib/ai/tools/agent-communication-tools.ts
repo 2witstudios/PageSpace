@@ -10,7 +10,6 @@ import { pageReadTools } from './page-read-tools';
 import { pageWriteTools } from './page-write-tools';
 import { searchTools } from './search-tools';
 import { taskManagementTools } from './task-management-tools';
-import { batchOperationsTools } from './batch-operations-tools';
 import { agentTools } from './agent-tools';
 import {
   createAIProvider,
@@ -65,7 +64,6 @@ function filterToolsForAgent(enabledTools: string[] | null): Record<string, unkn
     ...pageWriteTools,
     ...searchTools,
     ...taskManagementTools,
-    ...batchOperationsTools,
     ...agentTools,
     // Note: Not including agentCommunicationTools to prevent infinite recursion
   };

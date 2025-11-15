@@ -1,5 +1,5 @@
 import React from 'react';
-import { CheckCircle, ListTodo, Plus, List, RotateCcw, FileText, Loader2, AlertCircle } from 'lucide-react';
+import { CheckCircle, ListTodo, Plus, List, RotateCcw, Loader2, AlertCircle } from 'lucide-react';
 import { CompactTodoListMessage } from './CompactTodoListMessage';
 
 interface Task {
@@ -84,8 +84,6 @@ export const CompactTaskManagementToolRenderer: React.FC<CompactTaskManagementTo
         return <List className={iconClass} />;
       case 'resume_task_list':
         return <RotateCcw className={iconClass} />;
-      case 'add_task_note':
-        return <FileText className={iconClass} />;
       default:
         return <ListTodo className={iconClass} />;
     }
@@ -105,8 +103,6 @@ export const CompactTaskManagementToolRenderer: React.FC<CompactTaskManagementTo
         return 'Get Task List';
       case 'resume_task_list':
         return 'Resume Task List';
-      case 'add_task_note':
-        return 'Add Task Note';
       default:
         return 'Task Management';
     }

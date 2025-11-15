@@ -3,7 +3,6 @@ import { pageReadTools } from './tools/page-read-tools';
 import { pageWriteTools } from './tools/page-write-tools';
 import { searchTools } from './tools/search-tools';
 import { taskManagementTools } from './tools/task-management-tools';
-import { batchOperationsTools } from './tools/batch-operations-tools';
 import { agentTools } from './tools/agent-tools';
 import { agentCommunicationTools } from './tools/agent-communication-tools';
 import { webSearchTools } from './tools/web-search-tools';
@@ -19,7 +18,6 @@ export const pageSpaceTools = {
   ...pageWriteTools,
   ...searchTools,
   ...taskManagementTools,
-  ...batchOperationsTools,
   ...agentTools,
   ...agentCommunicationTools,
   ...webSearchTools,
