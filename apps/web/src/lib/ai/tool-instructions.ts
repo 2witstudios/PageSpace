@@ -74,50 +74,43 @@ You operate in a hierarchical workspace system: Workspaces (Drives) → Folders 
 
 ## TOOL SELECTION MATRIX:
 
-### LINE-BASED EDITING (Precision Operations):
-- **replace_lines**: Surgical edits to specific lines (1-based indexing)
-  - Use when: Updating specific sections, fixing errors, replacing paragraphs
+### LINE-BASED EDITING:
+- **replace_lines**: Edit specific lines (1-based indexing)
+  - Use when: Updating sections, fixing errors, replacing paragraphs, deleting content
   - Example: replace_lines(startLine=5, endLine=7, content="new content")
+  - To delete lines: Use replace_lines with empty content
 
 - **insert_lines**: Add content at exact positions
   - Use when: Adding new sections, inserting between existing content
   - Example: insert_lines(lineNumber=10, content="inserted text")
-
-### BULK OPERATIONS (Speed & Convenience):
-- **append_to_page**: Add to end of document
-  - Use when: Adding notes, logs, new sections at end
-  - Faster than reading line count + insert_lines
-
-- **prepend_to_page**: Add to beginning
-  - Use when: Adding headers, summaries, timestamps
+  - To append: insert_lines at line count + 1
+  - To prepend: insert_lines at line 1
 
 - **create_page**: Start fresh documents
   - Use when: New content, specific page types needed
-  - Supports: DOCUMENT, FOLDER, AI_CHAT, CHANNEL, CANVAS
+  - Supports: DOCUMENT, FOLDER, AI_CHAT, CHANNEL, CANVAS, SHEET
 
 ## FILE TYPE AWARENESS:
 - **FILE pages are READ-ONLY** - These are uploads (PDFs, images, etc.)
 - To "edit" a FILE: Create a new DOCUMENT page with modifications
 - Visual files require vision-capable models to process
 
-## ATOMIC OPERATIONS:
-For complex changes, use batch_page_operations for all-or-nothing execution`,
-
     examples: [
       `User: "Add a summary to the top of my report"
       → read_page(pageId, path) - Get current content
-      → prepend_to_page(pageId, "## Executive Summary\\n...")`,
+      → insert_lines(pageId, lineNumber=1, content="## Executive Summary\\n...")`,
 
       `User: "Fix the typo on line 15"
       → read_page(pageId, path) - Verify content
-      → replace_lines(pageId, startLine=15, endLine=15, "corrected text")`,
+      → replace_lines(pageId, startLine=15, endLine=15, content="corrected text")`,
 
-      `User: "Create a project structure"
-      → batch_page_operations([
-          {type: "create", tempId: "t1", title: "Project Alpha", pageType: "FOLDER"},
-          {type: "create", tempId: "t2", title: "README", pageType: "DOCUMENT", parentId: "t1"},
-          {type: "create", tempId: "t3", title: "Tasks", pageType: "DOCUMENT", parentId: "t1"}
-        ])`,
+      `User: "Delete lines 10-15"
+      → read_page(pageId, path) - Verify content
+      → replace_lines(pageId, startLine=10, endLine=15, content="")`,
+
+      `User: "Add notes to the end"
+      → read_page(pageId, path) - Get line count
+      → insert_lines(pageId, lineNumber=lineCount+1, content="## Notes\\n...")`,
     ],
 
     errorPatterns: [
@@ -261,7 +254,6 @@ Execute multiple searches simultaneously:
 - Update status immediately after completion
 - Add time estimates for planning
 - Link tasks to specific pages/drives
-- Use task notes for important context
 
 ## PERSISTENCE:
 Task lists persist across AI conversations - great for long-term projects`,
@@ -290,79 +282,6 @@ Task lists persist across AI conversations - great for long-term projects`,
       'ERROR: "Task not found" → Use get_task_list to see current tasks',
       'ERROR: "Invalid status transition" → Can\'t move completed back to pending',
       'ERROR: "Parent task not found" → Ensure taskListId is correct',
-    ],
-  },
-
-  // ==========================================
-  // BULK OPERATIONS
-  // ==========================================
-  bulk_operations: {
-    category: 'Simple Bulk Operations',
-    priority: 5,
-    instructions: `
-# BULK OPERATIONS - Simple and Atomic
-
-## PURPOSE:
-Execute single-purpose operations on multiple pages atomically.
-Each tool has a clear, specific purpose - no confusion about when to use what.
-
-## AVAILABLE TOOLS:
-- **create_folder_structure**: Create hierarchical structures (folders, docs, chats)
-- **bulk_move_pages**: Move multiple pages to new location
-- **bulk_rename_pages**: Rename multiple pages with patterns
-- **bulk_delete_pages**: Delete multiple pages (with/without children)
-- **bulk_update_content**: Update content in multiple pages
-
-## KEY BENEFITS:
-- **No tempId confusion** - eliminated entirely
-- **Single purpose per tool** - crystal clear usage
-- **Atomic execution** - all succeed or all fail
-- **Simple error handling** - easier to debug
-- **Better AI compatibility** - obvious tool selection
-
-## WHEN TO USE WHICH TOOL:
-- **Need hierarchical structure?** → create_folder_structure
-- **Need to move pages?** → bulk_move_pages
-- **Need to rename pages?** → bulk_rename_pages
-- **Need to delete pages?** → bulk_delete_pages
-- **Need to update content?** → bulk_update_content
-
-## STRUCTURE PATTERNS:
-For hierarchical creation, define nested objects with title, type, content, and children.
-For bulk operations, provide arrays of page IDs and operation parameters.`,
-
-    examples: [
-      `User: "Create a new project structure"
-      → create_folder_structure({
-          structure: [
-            {title: "New Project", type: "FOLDER", children: [
-              {title: "Documentation", type: "FOLDER", children: [
-                {title: "README", type: "DOCUMENT", content: "# Project Name"}
-              ]},
-              {title: "Source", type: "FOLDER"},
-              {title: "AI Assistant", type: "AI_CHAT"}
-            ]}
-          ]
-        })`,
-
-      `User: "Move these files to archive folder"
-      → bulk_move_pages({
-          pageIds: ["page1", "page2", "page3"],
-          targetParentId: "archiveFolder",
-          targetDriveId: "drive123"
-        })`,
-
-      `User: "Rename all docs to have 'v2' prefix"
-      → bulk_rename_pages({
-          pageIds: ["doc1", "doc2", "doc3"],
-          renamePattern: {type: "prefix", prefix: "v2 "}
-        })`,
-    ],
-
-    errorPatterns: [
-      'ERROR: "No permission to move page X" → Check individual page permissions',
-      'ERROR: "Page not found" → Verify page IDs are correct',
-      'ERROR: "Pattern requires X field" → Check required fields for rename pattern type',
     ],
   },
 
@@ -414,7 +333,7 @@ Structure agent prompts with:
       → create_agent(
           title="Code Reviewer",
           systemPrompt="You are an expert code reviewer. Focus on: clean code, performance, security, best practices...",
-          enabledTools=["read_page", "regex_search", "create_task_list", "append_to_page"],
+          enabledTools=["read_page", "regex_search", "create_task_list", "replace_lines", "insert_lines"],
           aiModel="gpt-4"
         )`,
 
@@ -422,7 +341,7 @@ Structure agent prompts with:
       → create_agent(
           title="Project Manager",
           systemPrompt="You manage projects efficiently. Track tasks, organize documents, maintain timelines...",
-          enabledTools=["create_task_list", "update_task_status", "batch_page_operations", "list_pages"],
+          enabledTools=["create_task_list", "update_task_status", "list_pages", "create_page", "move_page"],
           parentId="projectFolder"
         )`,
     ],
@@ -642,7 +561,6 @@ export function getRoleSpecificInstructions(role: 'PARTNER' | 'PLANNER' | 'WRITE
       return getToolInstructions([
         'Core Navigation',
         'Content Management',
-        'Simple Bulk Operations',
         'Performance Optimization',
       ]);
 

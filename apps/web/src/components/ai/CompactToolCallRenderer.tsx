@@ -60,11 +60,10 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
   // Task management tools - render with CompactTodoListMessage components
   const taskManagementTools = [
     'create_task_list',
-    'update_task_status', 
+    'update_task_status',
     'add_task',
     'get_task_list',
-    'resume_task_list',
-    'add_task_note'
+    'resume_task_list'
   ];
 
   if (taskManagementTools.includes(toolName)) {
@@ -97,18 +96,12 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
         return <Eye className={iconClass} />;
       case 'replace_lines':
       case 'insert_lines':
-      case 'delete_lines':
         return <Edit className={iconClass} />;
-      case 'append_to_page':
-        return <FileDown className={iconClass} />;
-      case 'prepend_to_page':
-        return <FileUp className={iconClass} />;
       case 'create_page':
         return <Plus className={iconClass} />;
       case 'rename_page':
         return <FilePlus className={iconClass} />;
       case 'trash_page':
-      case 'trash_page_with_children':
         return <Trash className={iconClass} />;
       case 'restore_page':
         return <RotateCcw className={iconClass} />;
@@ -147,13 +140,9 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
       'read_page': 'Read',
       'replace_lines': 'Replace',
       'insert_lines': 'Insert',
-      'delete_lines': 'Delete',
-      'append_to_page': 'Append',
-      'prepend_to_page': 'Prepend',
       'create_page': 'Create',
       'rename_page': 'Rename',
       'trash_page': 'Trash',
-      'trash_page_with_children': 'Trash All',
       'restore_page': 'Restore',
       'move_page': 'Move',
       'list_trash': 'List Trash'

@@ -63,11 +63,10 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
   // Task management tools - render with TodoListMessage components
   const taskManagementTools = [
     'create_task_list',
-    'update_task_status', 
+    'update_task_status',
     'add_task',
     'get_task_list',
-    'resume_task_list',
-    'add_task_note'
+    'resume_task_list'
   ];
 
   if (taskManagementTools.includes(toolName)) {
@@ -120,18 +119,12 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
         return <Eye className="h-4 w-4" />;
       case 'replace_lines':
       case 'insert_lines':
-      case 'delete_lines':
         return <Edit className="h-4 w-4" />;
-      case 'append_to_page':
-        return <FileDown className="h-4 w-4" />;
-      case 'prepend_to_page':
-        return <FileUp className="h-4 w-4" />;
       case 'create_page':
         return <Plus className="h-4 w-4" />;
       case 'rename_page':
         return <FilePlus className="h-4 w-4" />;
       case 'trash_page':
-      case 'trash_page_with_children':
         return <Trash className="h-4 w-4" />;
       case 'restore_page':
         return <RotateCcw className="h-4 w-4" />;
@@ -153,13 +146,9 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
       'read_page': 'Read Page',
       'replace_lines': 'Replace Lines',
       'insert_lines': 'Insert Lines',
-      'delete_lines': 'Delete Lines',
-      'append_to_page': 'Append to Page',
-      'prepend_to_page': 'Prepend to Page',
       'create_page': 'Create Page',
       'rename_page': 'Rename Page',
       'trash_page': 'Trash Page',
-      'trash_page_with_children': 'Trash Page & Children',
       'restore_page': 'Restore Page',
       'move_page': 'Move Page',
       'list_trash': 'List Trash'
@@ -230,7 +219,7 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
         }
         
         // For trash operations
-        if (['trash_page', 'trash_page_with_children'].includes(toolName) && result.title) {
+        if (toolName === 'trash_page' && result.title) {
           return `${baseTitle}: Moved "${result.title}" to trash`;
         }
         
@@ -332,7 +321,7 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
         );
       }
 
-      if (['replace_lines', 'insert_lines', 'delete_lines', 'append_to_page', 'prepend_to_page'].includes(toolName)) {
+      if (['replace_lines', 'insert_lines'].includes(toolName)) {
         return (
           <TaskItem status="completed">
             {result.message || `Successfully completed ${formatToolName(toolName).toLowerCase()}`}
@@ -343,7 +332,7 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
         );
       }
 
-      if (['create_page', 'rename_page', 'trash_page', 'trash_page_with_children', 'restore_page', 'move_page'].includes(toolName)) {
+      if (['create_page', 'rename_page', 'trash_page', 'restore_page', 'move_page'].includes(toolName)) {
         return (
           <TaskItem status="completed">
             {result.message || `Successfully completed ${formatToolName(toolName).toLowerCase()}`}
