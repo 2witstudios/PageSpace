@@ -39,7 +39,7 @@ export const refreshTokens = pgTable('refresh_tokens', {
   device: text('device'),
   ip: text('ip'),
   userAgent: text('userAgent'),
-  expiresAt: timestamp('expiresAt', { mode: 'date' }).notNull(),
+  expiresAt: timestamp('expiresAt', { mode: 'date' }),
   lastUsedAt: timestamp('lastUsedAt', { mode: 'date' }),
   platform: platformType('platform'),
   deviceTokenId: text('deviceTokenId'),

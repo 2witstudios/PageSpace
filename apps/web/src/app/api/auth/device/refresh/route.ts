@@ -120,7 +120,7 @@ export async function POST(req: Request) {
     const csrfToken = generateCSRFToken(sessionId);
 
     logAuthEvent('login', user.id, user.email, normalizedIP ?? 'unknown', 'Device token refresh');
-    trackAuthEvent(user.id, 'device_refresh', {
+    trackAuthEvent(user.id, 'refresh', {
       platform: deviceRecord.platform,
       ip: normalizedIP ?? 'unknown',
       userAgent: userAgent ?? req.headers.get('user-agent'),

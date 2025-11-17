@@ -1,7 +1,6 @@
 import * as jose from 'jose';
 import { createId } from '@paralleldrive/cuid2';
-import { db, deviceTokens, eq, and, isNull, gt } from '@pagespace/db';
-import type { InferSelectModel } from 'drizzle-orm';
+import { db, deviceTokens, eq, and, isNull, lt, gt } from '@pagespace/db';
 
 const JWT_ALGORITHM = 'HS256';
 
@@ -28,7 +27,7 @@ export interface DeviceTokenPayload extends jose.JWTPayload {
   tokenVersion: number;
 }
 
-export type DeviceToken = InferSelectModel<typeof deviceTokens>;
+export type DeviceToken = typeof deviceTokens.$inferSelect;
 
 /**
  * Token lifetime configurations
@@ -188,7 +187,10 @@ export async function updateDeviceTokenActivity(
   tokenId: string,
   ipAddress?: string
 ): Promise<void> {
-  const updateData: any = {
+  const updateData: {
+    lastUsedAt: Date;
+    lastIpAddress?: string;
+  } = {
     lastUsedAt: new Date(),
   };
 
@@ -313,9 +315,87 @@ export async function cleanupExpiredDeviceTokens(): Promise<number> {
     })
     .where(and(
       isNull(deviceTokens.revokedAt),
-      gt(new Date(), deviceTokens.expiresAt)
+      lt(deviceTokens.expiresAt, new Date())
     ))
     .returning({ id: deviceTokens.id });
 
   return result.length;
+}
+
+/**
+ * Validate existing device token or create a new one
+ * This is a common pattern used across all mobile auth routes
+ */
+export async function validateOrCreateDeviceToken(params: {
+  providedDeviceToken: string | null | undefined;
+  userId: string;
+  deviceId: string;
+  platform: 'web' | 'desktop' | 'ios' | 'android';
+  tokenVersion: number;
+  deviceName?: string;
+  userAgent?: string;
+  ipAddress?: string;
+}): Promise<{
+  deviceToken: string;
+  deviceTokenRecordId: string;
+  isNew: boolean;
+}> {
+  const {
+    providedDeviceToken,
+    userId,
+    deviceId,
+    platform,
+    tokenVersion,
+    deviceName,
+    userAgent,
+    ipAddress,
+  } = params;
+
+  let deviceTokenValue = providedDeviceToken ?? null;
+  let deviceTokenRecordId: string | null = null;
+  let isNew = false;
+
+  // Try to validate existing device token
+  if (deviceTokenValue) {
+    const storedDeviceToken = await validateDeviceToken(deviceTokenValue);
+    if (
+      !storedDeviceToken ||
+      storedDeviceToken.userId !== userId ||
+      storedDeviceToken.deviceId !== deviceId ||
+      storedDeviceToken.platform !== platform
+    ) {
+      // Invalid or mismatched device token, will create new one
+      deviceTokenValue = null;
+    } else {
+      // Valid device token, update activity
+      deviceTokenRecordId = storedDeviceToken.id;
+      await updateDeviceTokenActivity(storedDeviceToken.id, ipAddress);
+    }
+  }
+
+  // Create new device token if needed
+  if (!deviceTokenValue) {
+    const { id: newDeviceTokenId, token: newDeviceToken } = await createDeviceTokenRecord(
+      userId,
+      deviceId,
+      platform,
+      tokenVersion,
+      {
+        deviceName: deviceName || undefined,
+        userAgent: userAgent || undefined,
+        ipAddress: ipAddress === 'unknown' ? undefined : ipAddress,
+        location: undefined,
+      }
+    );
+
+    deviceTokenValue = newDeviceToken;
+    deviceTokenRecordId = newDeviceTokenId;
+    isNew = true;
+  }
+
+  return {
+    deviceToken: deviceTokenValue,
+    deviceTokenRecordId: deviceTokenRecordId!,
+    isNew,
+  };
 }

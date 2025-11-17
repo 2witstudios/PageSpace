@@ -7,9 +7,7 @@ import {
   getRefreshTokenMaxAge,
   checkRateLimit,
   RATE_LIMIT_CONFIGS,
-  validateDeviceToken,
-  createDeviceTokenRecord,
-  updateDeviceTokenActivity,
+  validateOrCreateDeviceToken,
 } from '@pagespace/lib/server';
 import { generateCSRFToken, getSessionIdFromJWT } from '@pagespace/lib/server';
 import { z } from 'zod/v4';
@@ -115,41 +113,16 @@ export async function POST(req: Request) {
       ? new Date(refreshTokenPayload.exp * 1000)
       : new Date(Date.now() + getRefreshTokenMaxAge() * 1000);
 
-    let deviceTokenValue = providedDeviceToken ?? null;
-    let deviceTokenRecordId: string | null = null;
-
-    if (deviceTokenValue) {
-      const storedDeviceToken = await validateDeviceToken(deviceTokenValue);
-      if (
-        !storedDeviceToken ||
-        storedDeviceToken.userId !== user.id ||
-        storedDeviceToken.deviceId !== deviceId ||
-        storedDeviceToken.platform !== platform
-      ) {
-        deviceTokenValue = null;
-      } else {
-        deviceTokenRecordId = storedDeviceToken.id;
-        await updateDeviceTokenActivity(storedDeviceToken.id, clientIP);
-      }
-    }
-
-    if (!deviceTokenValue) {
-      const { id: newDeviceTokenId, token: newDeviceToken } = await createDeviceTokenRecord(
-        user.id,
-        deviceId,
-        platform,
-        user.tokenVersion,
-        {
-          deviceName: existingToken.device,
-          userAgent: req.headers.get('user-agent') || undefined,
-          ipAddress: clientIP === 'unknown' ? undefined : clientIP,
-          location: undefined,
-        }
-      );
-
-      deviceTokenValue = newDeviceToken;
-      deviceTokenRecordId = newDeviceTokenId;
-    }
+    const { deviceToken: deviceTokenValue, deviceTokenRecordId } = await validateOrCreateDeviceToken({
+      providedDeviceToken,
+      userId: user.id,
+      deviceId,
+      platform,
+      tokenVersion: user.tokenVersion,
+      deviceName: existingToken.device || undefined,
+      userAgent: req.headers.get('user-agent') || undefined,
+      ipAddress: clientIP,
+    });
 
     // Store the new refresh token
     await db.insert(refreshTokens).values({

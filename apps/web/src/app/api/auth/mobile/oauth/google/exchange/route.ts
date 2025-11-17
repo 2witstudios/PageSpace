@@ -57,9 +57,7 @@ import {
   decodeToken,
   generateCSRFToken,
   getSessionIdFromJWT,
-  createDeviceTokenRecord,
-  validateDeviceToken,
-  updateDeviceTokenActivity,
+  validateOrCreateDeviceToken,
 } from '@pagespace/lib/server';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
@@ -238,41 +236,16 @@ export async function POST(req: Request) {
       ? new Date(refreshTokenPayload.exp * 1000)
       : new Date(Date.now() + getRefreshTokenMaxAge() * 1000);
 
-    let deviceTokenValue = providedDeviceToken ?? null;
-    let deviceTokenRecordId: string | null = null;
-
-    if (deviceTokenValue) {
-      const storedDeviceToken = await validateDeviceToken(deviceTokenValue);
-      if (
-        !storedDeviceToken ||
-        storedDeviceToken.userId !== user.id ||
-        storedDeviceToken.deviceId !== deviceId ||
-        storedDeviceToken.platform !== platform
-      ) {
-        deviceTokenValue = null;
-      } else {
-        deviceTokenRecordId = storedDeviceToken.id;
-        await updateDeviceTokenActivity(storedDeviceToken.id, clientIP);
-      }
-    }
-
-    if (!deviceTokenValue) {
-      const { id: newDeviceTokenId, token: newDeviceToken } = await createDeviceTokenRecord(
-        user.id,
-        deviceId,
-        platform,
-        user.tokenVersion,
-        {
-          deviceName: deviceName || undefined,
-          userAgent: req.headers.get('user-agent') || undefined,
-          ipAddress: clientIP === 'unknown' ? undefined : clientIP,
-          location: undefined,
-        }
-      );
-
-      deviceTokenValue = newDeviceToken;
-      deviceTokenRecordId = newDeviceTokenId;
-    }
+    const { deviceTokenRecordId } = await validateOrCreateDeviceToken({
+      providedDeviceToken,
+      userId: user.id,
+      deviceId,
+      platform,
+      tokenVersion: user.tokenVersion,
+      deviceName: deviceName || undefined,
+      userAgent: req.headers.get('user-agent') || undefined,
+      ipAddress: clientIP,
+    });
 
     await saveRefreshToken(refreshToken, user.id, {
       device: req.headers.get('user-agent'),

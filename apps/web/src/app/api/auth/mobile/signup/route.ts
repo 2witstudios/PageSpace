@@ -11,7 +11,7 @@ import {
   RATE_LIMIT_CONFIGS,
   createNotification,
   decodeToken,
-  createDeviceTokenRecord,
+  validateOrCreateDeviceToken,
 } from '@pagespace/lib/server';
 import { generateCSRFToken, getSessionIdFromJWT } from '@pagespace/lib/server';
 import { createId } from '@paralleldrive/cuid2';
@@ -205,18 +205,16 @@ export async function POST(req: Request) {
       ? new Date(refreshTokenPayload.exp * 1000)
       : new Date(Date.now() + getRefreshTokenMaxAge() * 1000);
 
-    const { id: deviceTokenId, token: deviceToken } = await createDeviceTokenRecord(
-      user.id,
+    const { deviceToken, deviceTokenRecordId: deviceTokenId } = await validateOrCreateDeviceToken({
+      providedDeviceToken: null,
+      userId: user.id,
       deviceId,
       platform,
-      user.tokenVersion,
-      {
-        deviceName: deviceName || undefined,
-        userAgent: req.headers.get('user-agent') || undefined,
-        ipAddress: clientIP === 'unknown' ? undefined : clientIP,
-        location: undefined,
-      }
-    );
+      tokenVersion: user.tokenVersion,
+      deviceName: deviceName || undefined,
+      userAgent: req.headers.get('user-agent') || undefined,
+      ipAddress: clientIP,
+    });
 
     // Save refresh token
     await db.insert(refreshTokens).values({

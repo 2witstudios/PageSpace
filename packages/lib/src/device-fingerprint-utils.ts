@@ -5,6 +5,45 @@ import { createHash } from 'crypto';
  * and generating stable device identifiers
  */
 
+/**
+ * Parse User-Agent to extract browser family and OS
+ * Returns a normalized object for comparison
+ */
+function parseUserAgent(userAgent: string): { browser: string; os: string } {
+  const ua = userAgent.toLowerCase();
+
+  // Extract browser family
+  let browser = 'unknown';
+  if (ua.includes('firefox')) browser = 'firefox';
+  else if (ua.includes('edg')) browser = 'edge';
+  else if (ua.includes('chrome')) browser = 'chrome';
+  else if (ua.includes('safari')) browser = 'safari';
+  else if (ua.includes('opera') || ua.includes('opr')) browser = 'opera';
+
+  // Extract OS
+  let os = 'unknown';
+  if (ua.includes('windows')) os = 'windows';
+  else if (ua.includes('mac os x') || ua.includes('macos')) os = 'macos';
+  else if (ua.includes('linux')) os = 'linux';
+  else if (ua.includes('android')) os = 'android';
+  else if (ua.includes('ios') || ua.includes('iphone') || ua.includes('ipad')) os = 'ios';
+
+  return { browser, os };
+}
+
+/**
+ * Compare two User-Agent strings based on browser family and OS
+ * More lenient than exact string matching to handle browser updates
+ */
+function compareUserAgents(ua1: string, ua2: string): boolean {
+  if (!ua1 || !ua2) return false;
+
+  const parsed1 = parseUserAgent(ua1);
+  const parsed2 = parseUserAgent(ua2);
+
+  return parsed1.browser === parsed2.browser && parsed1.os === parsed2.os;
+}
+
 export interface DeviceFingerprint {
   deviceId: string;
   userAgent: string;
@@ -96,8 +135,8 @@ export function validateDeviceFingerprint(
   let userAgentMatch = true;
   let ipMatch = true;
 
-  // Check User-Agent match
-  if (storedUserAgent && currentUserAgent !== storedUserAgent) {
+  // Check User-Agent match (compare browser family and OS, not exact string)
+  if (storedUserAgent && currentUserAgent && !compareUserAgents(storedUserAgent, currentUserAgent)) {
     userAgentMatch = false;
     suspiciousFactors.push('user_agent_mismatch');
   }

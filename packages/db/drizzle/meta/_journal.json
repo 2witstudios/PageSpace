@@ -50,6 +50,13 @@
       "when": 1762655409273,
       "tag": "0006_steep_tarantula",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1763350268751,
+      "tag": "0007_huge_storm",
+      "breakpoints": true
     }
   ]
 }
