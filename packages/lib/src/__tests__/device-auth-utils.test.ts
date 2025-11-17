@@ -322,6 +322,16 @@ describe('device-auth-utils', () => {
         testTokenVersion
       );
 
+      // Create the different user that we're testing with
+      const { users } = await import('@pagespace/db');
+      await db.insert(users).values({
+        id: 'different_user',
+        name: 'Different User',
+        email: 'different@example.com',
+        tokenVersion: 0,
+        role: 'user',
+      });
+
       const result = await validateOrCreateDeviceToken({
         providedDeviceToken: existingToken,
         userId: 'different_user',
@@ -332,6 +342,9 @@ describe('device-auth-utils', () => {
 
       expect(result.deviceToken).not.toBe(existingToken);
       expect(result.isNew).toBe(true);
+
+      // Clean up the different user
+      await db.delete(users).where(eq(users.id, 'different_user'));
     });
 
     it('creates new token when deviceId mismatch', async () => {
