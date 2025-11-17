@@ -1,7 +1,7 @@
 import { users, db, eq, deviceTokens, sql, and, isNull } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { getUserDeviceTokens, revokeAllUserDeviceTokens, rotateDeviceToken } from '@pagespace/lib/device-auth-utils';
+import { getUserDeviceTokens, revokeAllUserDeviceTokens, decodeDeviceToken, createDeviceTokenRecord } from '@pagespace/lib/device-auth-utils';
 import bcrypt from 'bcryptjs';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
@@ -105,6 +105,27 @@ export async function DELETE(req: Request) {
     // Get current device token to preserve it
     const currentDeviceToken = req.headers.get('x-device-token');
 
+    // Extract device info from current token BEFORE incrementing tokenVersion
+    // This is critical: we need to decode the token while it's still valid
+    let currentDeviceInfo: { deviceId: string; platform: 'web' | 'desktop' | 'ios' | 'android'; deviceName: string | null } | null = null;
+    if (currentDeviceToken) {
+      const payload = await decodeDeviceToken(currentDeviceToken);
+      if (payload) {
+        // Get device metadata from database
+        const oldDeviceRecord = await db.query.deviceTokens.findFirst({
+          where: eq(deviceTokens.token, currentDeviceToken),
+          columns: { deviceId: true, platform: true, deviceName: true },
+        });
+        if (oldDeviceRecord) {
+          currentDeviceInfo = {
+            deviceId: oldDeviceRecord.deviceId,
+            platform: oldDeviceRecord.platform,
+            deviceName: oldDeviceRecord.deviceName,
+          };
+        }
+      }
+    }
+
     // Get the new tokenVersion value
     const newTokenVersion = user.tokenVersion + 1;
 
@@ -116,22 +137,33 @@ export async function DELETE(req: Request) {
       })
       .where(eq(users.id, userId));
 
-    // Rotate current device token with new tokenVersion (if exists)
+    // Create new device token with incremented tokenVersion (if current device was valid)
     let newDeviceToken: string | undefined;
-    if (currentDeviceToken) {
-      const rotated = await rotateDeviceToken(
-        currentDeviceToken,
+    if (currentDeviceInfo) {
+      // Revoke the old device token
+      await db
+        .update(deviceTokens)
+        .set({
+          revokedAt: new Date(),
+          revokedReason: 'user_action',
+        })
+        .where(eq(deviceTokens.token, currentDeviceToken!));
+
+      // Create new token with the incremented tokenVersion
+      const newTokenData = await createDeviceTokenRecord(
+        userId,
+        currentDeviceInfo.deviceId,
+        currentDeviceInfo.platform,
+        newTokenVersion,
         {
+          deviceName: currentDeviceInfo.deviceName || undefined,
           userAgent: req.headers.get('user-agent') ?? undefined,
           ipAddress: req.headers.get('x-forwarded-for')?.split(',')[0] || req.headers.get('x-real-ip') || undefined,
-        },
-        newTokenVersion
+        }
       );
 
-      if (rotated) {
-        newDeviceToken = rotated.token;
-        loggers.auth.info(`Rotated current device token for user ${userId} with new tokenVersion ${newTokenVersion}`);
-      }
+      newDeviceToken = newTokenData.token;
+      loggers.auth.info(`Created new device token for user ${userId} with new tokenVersion ${newTokenVersion}`);
     }
 
     // Revoke all device tokens except the current one (which was already rotated)
