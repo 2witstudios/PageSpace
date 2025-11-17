@@ -1,4 +1,4 @@
-import { users, db, eq, deviceTokens } from '@pagespace/db';
+import { users, db, eq, deviceTokens, refreshTokens } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { revokeDeviceToken } from '@pagespace/lib/device-auth-utils';
@@ -70,10 +70,17 @@ export async function DELETE(
     // Revoke the device token
     await revokeDeviceToken(deviceId, 'user_action');
 
+    // SECURITY: Delete all refresh tokens associated with this device
+    // This prevents revoked devices from continuing to access the account via refresh tokens
+    const deletedTokens = await db.delete(refreshTokens)
+      .where(eq(refreshTokens.deviceTokenId, deviceId))
+      .returning({ id: refreshTokens.id });
+
     loggers.auth.info(`User ${userId} revoked device ${deviceId}`, {
       platform: device.platform,
       deviceName: device.deviceName,
       isCurrentDevice,
+      refreshTokensDeleted: deletedTokens.length,
     });
 
     return Response.json({

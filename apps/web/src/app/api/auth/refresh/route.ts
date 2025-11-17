@@ -1,6 +1,7 @@
 import { users, refreshTokens, deviceTokens } from '@pagespace/db';
 import { db, eq, sql, and, isNull } from '@pagespace/db';
 import { decodeToken, generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, checkRateLimit, RATE_LIMIT_CONFIGS } from '@pagespace/lib/server';
+import { validateDeviceToken } from '@pagespace/lib/device-auth-utils';
 import { serialize } from 'cookie';
 import { parse } from 'cookie';
 import { createId } from '@paralleldrive/cuid2';
@@ -23,17 +24,35 @@ export async function POST(req: Request) {
   
   if (!rateLimit.allowed) {
     return Response.json(
-      { 
+      {
         error: 'Too many refresh attempts. Please try again later.',
-        retryAfter: rateLimit.retryAfter 
-      }, 
-      { 
+        retryAfter: rateLimit.retryAfter
+      },
+      {
         status: 429,
         headers: {
           'Retry-After': rateLimit.retryAfter?.toString() || '300'
         }
       }
     );
+  }
+
+  // SECURITY: Validate device token if provided
+  // This prevents revoked devices from continuing to access the account via refresh tokens
+  const deviceTokenHeader = req.headers.get('x-device-token');
+  let validatedDeviceTokenId: string | undefined;
+  if (deviceTokenHeader) {
+    const validDevice = await validateDeviceToken(deviceTokenHeader);
+    if (!validDevice) {
+      // Device token is revoked, expired, or invalid
+      // Reject the refresh request to enforce device revocation
+      return Response.json(
+        { error: 'Device token is invalid or has been revoked.' },
+        { status: 401 }
+      );
+    }
+    // Store the device token ID to link with the new refresh token
+    validatedDeviceTokenId = validDevice.id;
   }
 
   // Use database transaction to prevent race conditions
@@ -112,6 +131,8 @@ export async function POST(req: Request) {
     lastUsedAt: new Date(),
     platform: 'web',
     expiresAt: refreshExpiresAt,
+    // Link to device token if validated (enables device-based revocation)
+    deviceTokenId: validatedDeviceTokenId,
   });
 
   const isProduction = process.env.NODE_ENV === 'production';
