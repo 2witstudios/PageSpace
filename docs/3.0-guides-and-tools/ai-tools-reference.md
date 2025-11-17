@@ -10,10 +10,9 @@ PageSpace AI assistants have access to 13+ powerful tools for workspace automati
 2. [Content Editing Tools](#content-editing-tools)
 3. [Advanced Search & Discovery](#advanced-search--discovery)
 4. [Task Management System](#task-management-system)
-5. [Batch Operations](#batch-operations)
-6. [Agent Management](#agent-management)
-7. [Tool Permissions](#tool-permissions)
-8. [Usage Examples](#usage-examples)
+5. [Agent Management](#agent-management)
+6. [Tool Permissions](#tool-permissions)
+7. [Usage Examples](#usage-examples)
 
 ---
 
@@ -162,7 +161,7 @@ create_page({
 
   // AI Agent Configuration (for AI_CHAT pages only)
   systemPrompt?: "You are a marketing assistant...",
-  enabledTools?: ["create_page", "read_page", "bulk_update_content"],
+  enabledTools?: ["create_page", "read_page", "replace_lines", "insert_lines"],
   aiProvider?: "anthropic",
   aiModel?: "claude-3-5-sonnet-20241022"
 })
@@ -214,7 +213,7 @@ rename_page({
 
 ---
 
-### trash_page / trash_page_with_children
+### trash_page
 
 **Purpose:** Move pages to trash (soft delete)
 **Permission Level:** Delete
@@ -227,8 +226,9 @@ trash_page({
 })
 
 // Delete page and all children recursively
-trash_page_with_children({
-  pageId: "page-123"
+trash_page({
+  pageId: "page-123",
+  withChildren: true
 })
 ```
 
@@ -287,35 +287,32 @@ replace_lines({
 
 **Purpose:** Insert content at specific line positions
 **Permission Level:** Edit
-**Use Cases:** Adding content mid-document
+**Use Cases:** Adding content mid-document, prepending, appending
 
 ```typescript
+// Insert at specific line
 insert_lines({
   pageId: "page-123",
   lineNumber: 10,
   content: "New content inserted at line 10"
 })
-```
 
----
-
-### append_to_page / prepend_to_page
-
-**Purpose:** Add content to beginning or end of pages
-**Permission Level:** Edit
-**Use Cases:** Quick content addition
-
-```typescript
-append_to_page({
+// Prepend to beginning (line 1)
+insert_lines({
   pageId: "page-123",
-  content: "\n\n## Additional Section\nNew content here..."
-})
-
-prepend_to_page({
-  pageId: "page-123",
+  lineNumber: 1,
   content: "# Executive Summary\nOverview content...\n\n"
 })
+
+// Append to end (use line count + 1)
+insert_lines({
+  pageId: "page-123",
+  lineNumber: 101, // If document has 100 lines
+  content: "\n\n## Additional Section\nNew content here..."
+})
 ```
+
+**Note:** Use `lineNumber: 1` for prepend, `lineNumber: lineCount + 1` for append
 
 ---
 
@@ -556,21 +553,7 @@ add_task({
 })
 ```
 
----
-
-### add_task_note
-
-**Purpose:** Add progress notes to tasks
-**Permission Level:** Edit
-**Use Cases:** Documentation, context preservation
-
-```typescript
-add_task_note({
-  taskId: "task-789",
-  note: "Found great inspiration from competitor site layouts",
-  type: "progress" // progress, issue, solution, resource
-})
-```
+**Note:** To add notes or progress updates to tasks, use the `note` parameter in `update_task_status`.
 
 ---
 
@@ -588,155 +571,6 @@ resume_task_list({
     priority: "high"
   },
   limit?: 5
-})
-```
-
----
-
-## Batch Operations
-
-### bulk_delete_pages
-
-**Purpose:** Delete multiple pages atomically
-**Permission Level:** Delete
-**Use Cases:** Content cleanup, project archival
-
-```typescript
-bulk_delete_pages({
-  pageIds: ["page-123", "page-456", "page-789"],
-  deleteChildren?: false, // Optional: delete child pages too
-  skipTrash?: false // Optional: permanent deletion
-})
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "deletedPages": 3,
-  "skippedPages": 0,
-  "deletedChildren": 0,
-  "results": [
-    {
-      "pageId": "page-123",
-      "success": true,
-      "title": "Old Document"
-    }
-  ]
-}
-```
-
----
-
-### bulk_update_content
-
-**Purpose:** Update content across multiple pages
-**Permission Level:** Edit
-**Use Cases:** Mass content updates, standardization
-
-```typescript
-bulk_update_content({
-  updates: [
-    {
-      pageId: "page-123",
-      operation: "replace", // replace, append, prepend
-      content: "Updated content...",
-      startLine?: 1, // For replace operation
-      endLine?: 5
-    },
-    {
-      pageId: "page-456",
-      operation: "append",
-      content: "\n\n## Updated Section"
-    }
-  ]
-})
-```
-
----
-
-### bulk_move_pages
-
-**Purpose:** Move multiple pages to new locations
-**Permission Level:** Edit
-**Use Cases:** Structure reorganization, project consolidation
-
-```typescript
-bulk_move_pages({
-  moves: [
-    {
-      pageId: "page-123",
-      newParentId: "page-456",
-      position: 1
-    },
-    {
-      pageId: "page-789",
-      newParentId: "page-456",
-      position: 2
-    }
-  ]
-})
-```
-
----
-
-### bulk_rename_pages
-
-**Purpose:** Rename multiple pages using patterns
-**Permission Level:** Edit
-**Use Cases:** Standardization, organization
-
-```typescript
-bulk_rename_pages({
-  pageIds: ["page-123", "page-456"],
-  pattern: {
-    type: "prefix", // prefix, suffix, find_replace, template
-    value: "[UPDATED] "
-  }
-})
-
-// Template example
-bulk_rename_pages({
-  pageIds: ["page-123"],
-  pattern: {
-    type: "template",
-    value: "{original} - Q1 2024"
-  }
-})
-```
-
----
-
-### create_folder_structure
-
-**Purpose:** Create complex nested folder hierarchies
-**Permission Level:** Write
-**Use Cases:** Project setup, organizational templates
-
-```typescript
-create_folder_structure({
-  driveId: "drive-123",
-  parentId?: "page-456",
-  structure: {
-    "Project Alpha": {
-      type: "FOLDER",
-      children: {
-        "Research": {
-          type: "FOLDER",
-          children: {
-            "Market Analysis": { type: "DOCUMENT", content: "# Market Analysis" },
-            "User Research": { type: "DOCUMENT" }
-          }
-        },
-        "Development": { type: "FOLDER" },
-        "Project AI Assistant": {
-          type: "AI_CHAT",
-          systemPrompt: "You are a project management assistant...",
-          enabledTools: ["create_page", "read_page", "create_task_list"]
-        }
-      }
-    }
-  }
 })
 ```
 
@@ -791,7 +625,7 @@ multi_drive_list_agents({
           "id": "page-ai-123",
           "title": "Content Strategy AI",
           "path": "/marketing/Content Strategy AI",
-          "enabledTools": ["create_page", "bulk_update_content"],
+          "enabledTools": ["create_page", "replace_lines", "insert_lines"],
           "aiProvider": "anthropic",
           "aiModel": "claude-3-5-sonnet-20241022",
           "hasConversationHistory": true
@@ -859,7 +693,8 @@ create_agent({
   enabledTools: [
     "create_page",
     "read_page",
-    "bulk_update_content",
+    "replace_lines",
+    "insert_lines",
     "create_task_list",
     "regex_search"
   ],
@@ -897,7 +732,7 @@ AI tools are filtered based on agent roles:
 
 **PARTNER** (Full Capabilities):
 - All read/write/delete operations
-- Batch operations and agent management
+- Agent management
 - Cross-workspace access
 
 **PLANNER** (Read-Only Strategic):
@@ -920,7 +755,7 @@ enabledTools: [
   "read_page",
   "create_page",
   "replace_lines",
-  "bulk_update_content"
+  "insert_lines"
 ]
 
 // Example: Analysis-focused agent
@@ -935,7 +770,7 @@ enabledTools: [
 enabledTools: [
   "create_task_list",
   "update_task_status",
-  "create_folder_structure",
+  "add_task",
   "ask_agent"
 ]
 ```
@@ -947,26 +782,39 @@ enabledTools: [
 ### 1. Complex Project Setup
 
 ```typescript
-// Step 1: Create project structure
-await create_folder_structure({
+// Step 1: Create parent folder
+const parentFolder = await create_page({
   driveId: "drive-123",
-  structure: {
-    "Q1 Campaign": {
-      type: "FOLDER",
-      children: {
-        "Research": { type: "FOLDER" },
-        "Creative Assets": { type: "FOLDER" },
-        "Campaign AI": {
-          type: "AI_CHAT",
-          systemPrompt: "Marketing campaign specialist...",
-          enabledTools: ["create_page", "bulk_update_content", "create_task_list"]
-        }
-      }
-    }
-  }
+  title: "Q1 Campaign",
+  type: "FOLDER"
 });
 
-// Step 2: Create task list for campaign
+// Step 2: Create sub-folders
+await create_page({
+  driveId: "drive-123",
+  title: "Research",
+  type: "FOLDER",
+  parentId: parentFolder.id
+});
+
+await create_page({
+  driveId: "drive-123",
+  title: "Creative Assets",
+  type: "FOLDER",
+  parentId: parentFolder.id
+});
+
+// Step 3: Create Campaign AI agent
+await create_page({
+  driveId: "drive-123",
+  title: "Campaign AI",
+  type: "AI_CHAT",
+  systemPrompt: "Marketing campaign specialist...",
+  enabledTools: ["create_page", "replace_lines", "insert_lines", "create_task_list"],
+  parentId: parentFolder.id
+});
+
+// Step 4: Create task list for campaign
 await create_task_list({
   title: "Q1 Campaign Launch",
   tasks: [
@@ -974,14 +822,6 @@ await create_task_list({
     { title: "Creative development", priority: "medium" },
     { title: "Campaign execution", priority: "high" }
   ]
-});
-
-// Step 3: Set up research documents
-await create_page({
-  driveId: "drive-123",
-  title: "Competitor Analysis",
-  type: "DOCUMENT",
-  content: "# Competitor Analysis\n\n## Key Competitors\n\nTBD"
 });
 ```
 
@@ -994,24 +834,28 @@ const searchResults = await regex_search({
   pageTypes: ["DOCUMENT"]
 });
 
-// Step 2: Bulk update content
-const updates = searchResults.matches.map(match => ({
-  pageId: match.pageId,
-  operation: "replace",
-  content: "[UPDATED_FORMAT]",
-  // Find specific lines containing the pattern
-}));
+// Step 2: Update each document individually
+for (const match of searchResults.matches) {
+  // Read current content
+  const page = await read_page({ pageId: match.pageId });
 
-await bulk_update_content({ updates });
+  // Replace old format with new
+  const updatedContent = page.content.replace(/\[OLD_FORMAT\]/g, "[UPDATED_FORMAT]");
 
-// Step 3: Rename pages with new convention
-await bulk_rename_pages({
-  pageIds: searchResults.matches.map(m => m.pageId),
-  pattern: {
-    type: "prefix",
-    value: "[2024] "
-  }
-});
+  // Update the page
+  await replace_lines({
+    pageId: match.pageId,
+    startLine: 1,
+    endLine: page.lineCount,
+    content: updatedContent
+  });
+
+  // Rename with new convention
+  await rename_page({
+    pageId: match.pageId,
+    title: `[2024] ${page.title}`
+  });
+}
 ```
 
 ### 3. Cross-Agent Collaboration
@@ -1074,17 +918,17 @@ await create_task_list({
   }))
 });
 
-// Step 3: Bulk archive old files
+// Step 3: Archive old files individually
 const oldFiles = await glob_search({
   pattern: "**/archive/**"
 });
 
-await bulk_move_pages({
-  moves: oldFiles.matches.map(file => ({
+for (const file of oldFiles.matches) {
+  await move_page({
     pageId: file.pageId,
     newParentId: "archive-folder-id"
-  }))
-});
+  });
+}
 ```
 
 ## Best Practices
@@ -1092,8 +936,8 @@ await bulk_move_pages({
 ### 1. Always Start with Discovery
 Begin operations with `list_pages` to understand structure before making changes.
 
-### 2. Use Atomic Operations
-Prefer batch operations for multiple related changes to maintain data consistency.
+### 2. Read Before Writing
+Always use `read_page` before editing to get current content and line counts.
 
 ### 3. Implement Error Handling
 Check tool responses for errors and implement retry logic for critical operations.

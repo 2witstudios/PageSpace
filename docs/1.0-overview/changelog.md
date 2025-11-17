@@ -369,10 +369,9 @@ Implemented comprehensive security fixes addressing authentication, authorizatio
   - **Error Handling**: Comprehensive error responses with detailed validation messages
   - **Provider Integration**: Robust AI provider configuration with fallback handling
 
-- **Complete MCP Tool Ecosystem**: All 13 MCP tools now have functional backend endpoints
-  - **Search APIs**: regex_search, glob_search, multi_drive_search (3/3 complete)
-  - **Batch Operations**: bulk_move_pages, bulk_rename_pages, bulk_delete_pages, bulk_update_content, create_folder_structure (5/5 complete)
-  - **Agent Management**: create_agent, update_agent_config, list_agents, multi_drive_list_agents, ask_agent (5/5 complete)
+- **Complete MCP Tool Ecosystem**: All MCP tools now have functional backend endpoints
+  - **Search APIs**: regex_search, glob_search, multi_drive_search (3 complete)
+  - **Agent Management**: create_agent, update_agent_config, list_agents, multi_drive_list_agents, ask_agent (5 complete)
 
 ### Technical Implementation
 
@@ -440,27 +439,20 @@ Implemented comprehensive security fixes addressing authentication, authorizatio
 - Updated the rate-limiting error message for advanced AI models to correctly mention that both "Pro" and "Business" tiers have access.
 - Renamed the "Extra Thinking (Pro Only)" AI model to "Advanced (Pro/Business)" to accurately reflect its availability across the new subscription tiers.
 - Verified that all subscription and rate-limiting logic now correctly supports the "Business" tier.
-- **AI Tool Simplification**: Simplified batch operations for better AI compatibility
+- **AI Tool Consolidation**: Simplified and consolidated tools for better AI compatibility
   - **REMOVED**: Complex `batch_page_operations` tool with confusing `tempId` system
     - **Issue**: AI assistants struggled with `tempId` scoping and parameter requirements
     - **Problem**: Overlapping tool capabilities created confusion about when to use what
-  - **ADDED**: Simple `bulk_delete_pages` tool for atomic page deletions
-    - **Features**: Delete multiple pages with optional child deletion in one transaction
-    - **Clear Purpose**: Single-function tool with obvious parameters
-  - **ADDED**: Simple `bulk_update_content` tool for atomic content updates
-    - **Features**: Replace, append, or prepend content in multiple pages atomically
-    - **Easy Usage**: No complex parameter validation or cross-referencing
+  - **REMOVED**: Redundant helper tools that overlapped with core functionality
+    - `append_to_page` / `prepend_to_page` → Use `insert_lines` with lineNumber 1 or lineCount+1
+    - `delete_lines` → Use `replace_lines` with empty content
+    - `trash_page_with_children` → Use `trash_page` with `withChildren: true` parameter
+    - `add_task_note` → Use `update_task_status` with `note` parameter
+    - Batch operations tools → Use individual operations in sequence for better transparency
   - **IMPROVED**: Tool documentation and examples to be more AI-friendly
     - **Updated**: `apps/web/src/lib/ai/tool-instructions.ts` with clearer guidance
-    - **Renamed**: "Batch Operations" to "Simple Bulk Operations"
-    - **Benefits**: Each tool has single, obvious purpose
-  - **RESULT**: Eliminates `tempId` confusion that was causing AI assistant errors
-  - **MIGRATION**: Use purpose-built tools instead of complex batch operations:
-    - Create hierarchies → `create_folder_structure`
-    - Move pages → `bulk_move_pages`
-    - Rename pages → `bulk_rename_pages`
-    - Delete pages → `bulk_delete_pages`
-    - Update content → `bulk_update_content`
+    - **Benefits**: Each tool has single, obvious purpose with no overlapping functionality
+  - **RESULT**: Eliminates cognitive overhead and confusion in tool selection
 
 ### 2025-01-16
 
@@ -672,15 +664,10 @@ Implemented comprehensive security fixes addressing authentication, authorizatio
   - **Added**: `apps/web/src/lib/ai/tools/task-management-tools.ts` - Persistent task tracking system
     - **create_task_list**: Create task lists that persist across AI conversations
     - **get_task_list**: Monitor task progress with completion tracking
-    - **update_task_status**: Manage task status with automatic progression
+    - **update_task_status**: Manage task status with automatic progression (note parameter for progress updates)
     - **add_task**: Dynamically expand task lists
-    - **add_task_note**: Document progress and preserve context
     - **resume_task_list**: Continue tasks across different AI sessions
-  - **Added**: `apps/web/src/lib/ai/tools/batch-operations-tools.ts` - Atomic multi-operation transactions
-    - **batch_page_operations**: Execute multiple operations atomically with rollback support
-    - **bulk_move_pages**: Mass page relocation while preserving order
-    - **bulk_rename_pages**: Pattern-based bulk renaming (find/replace, prefix, suffix, template)
-    - **create_folder_structure**: Create complex nested hierarchies in single operations
+  - **Note**: Some batch operation tools and helper tools from this release were later removed in 2025-09-21 consolidation effort (see above)
   - **Added**: `ai_tasks` table in database schema for persistent task management
   - **Added**: Task event broadcasting via Socket.IO for real-time task updates
   - **Enhanced**: AI tools now consistently return both pageId (for operations) and semantic paths (for human understanding)

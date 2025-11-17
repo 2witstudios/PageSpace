@@ -68,10 +68,13 @@ export const pageWriteTools = {
           throw new Error(`Invalid line range: ${startLine}-${endLine}. Document has ${lines.length} lines.`);
         }
 
+        const isDeletion = content.length === 0;
+
         // Replace lines (convert to 0-based indexing)
+        const replacementSegment = isDeletion ? [] : [content];
         const newLines = [
           ...lines.slice(0, startLine - 1),
-          content,
+          ...replacementSegment,
           ...lines.slice(endLine),
         ];
 
@@ -99,12 +102,16 @@ export const pageWriteTools = {
           title: page.title,
           linesReplaced: endLine - startLine + 1,
           newLineCount: newLines.length,
-          message: `Successfully replaced lines ${startLine}-${endLine}`,
-          summary: `Updated "${page.title}" by replacing ${endLine - startLine + 1} line${endLine - startLine + 1 === 1 ? '' : 's'}`,
+          message: isDeletion
+            ? `Successfully removed lines ${startLine}-${endLine}`
+            : `Successfully replaced lines ${startLine}-${endLine}`,
+          summary: isDeletion
+            ? `Removed ${endLine - startLine + 1} line${endLine - startLine + 1 === 1 ? '' : 's'} from "${page.title}"`
+            : `Updated "${page.title}" by replacing ${endLine - startLine + 1} line${endLine - startLine + 1 === 1 ? '' : 's'}`,
           stats: {
             linesChanged: endLine - startLine + 1,
             totalLines: newLines.length,
-            changeType: 'replacement'
+            changeType: isDeletion ? 'deletion' : 'replacement'
           },
           nextSteps: [
             'Review the updated content to ensure it meets requirements',
@@ -224,105 +231,6 @@ export const pageWriteTools = {
       } catch (error) {
         console.error('Error inserting at line:', error);
         throw new Error(`Failed to insert content in ${path}: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    },
-  }),
-
-  /**
-   * Delete specific line(s) from a document
-   */
-  delete_lines: tool({
-    description: 'Delete one or more lines from a document. Specify start and end line numbers (1-based indexing).',
-    inputSchema: z.object({
-      path: z.string().describe('The document path using titles like "/driveSlug/Folder Name/Document Title" for semantic context'),
-      pageId: z.string().describe('The unique ID of the page to edit'),
-      startLine: z.number().describe('Starting line number to delete (1-based)'),
-      endLine: z.number().optional().describe('Ending line number to delete (1-based, optional, defaults to startLine)'),
-    }),
-    execute: async ({ path, pageId, startLine, endLine = startLine }, { experimental_context: context }) => {
-      const userId = (context as ToolExecutionContext)?.userId;
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
-
-      try {
-        // Get the page directly by ID
-        const page = await db.query.pages.findFirst({
-          where: and(
-            eq(pages.id, pageId),
-            eq(pages.isTrashed, false)
-          ),
-        });
-
-        if (!page) {
-          throw new Error(`Page with ID "${pageId}" not found`);
-        }
-
-        // Check if this is a FILE type page - these are read-only
-        if (page.type === 'FILE') {
-          return {
-            success: false,
-            error: 'Cannot edit FILE pages',
-            message: 'This is an uploaded file. File content is read-only and managed by the system.',
-            suggestion: 'To modify content, create a new document page instead of editing the uploaded file.',
-            pageInfo: {
-              pageId: page.id,
-              title: page.title,
-              type: page.type,
-              mimeType: page.mimeType
-            }
-          };
-        }
-
-        // Check user permissions
-        const canEdit = await canUserEditPage(userId, page.id);
-        if (!canEdit) {
-          throw new Error('Insufficient permissions to edit this document');
-        }
-
-        // Split content into lines
-        const lines = page.content.split('\n');
-        
-        // Validate line numbers
-        if (startLine < 1 || startLine > lines.length || endLine < startLine || endLine > lines.length) {
-          throw new Error(`Invalid line range: ${startLine}-${endLine}. Document has ${lines.length} lines.`);
-        }
-
-        // Delete lines (convert to 0-based indexing)
-        const newLines = [
-          ...lines.slice(0, startLine - 1),
-          ...lines.slice(endLine),
-        ];
-
-        const newContent = newLines.join('\n');
-
-        // Update the page content
-        await db
-          .update(pages)
-          .set({
-            content: newContent,
-            updatedAt: new Date(),
-          })
-          .where(eq(pages.id, page.id));
-
-        // Broadcast content update event
-        await broadcastPageEvent(
-          createPageEventPayload(page.driveId, page.id, 'content-updated', {
-            title: page.title
-          })
-        );
-
-        return {
-          success: true,
-          path,
-          title: page.title,
-          linesDeleted: endLine - startLine + 1,
-          newLineCount: newLines.length,
-          message: `Successfully deleted lines ${startLine}-${endLine}`,
-        };
-      } catch (error) {
-        console.error('Error deleting lines:', error);
-        throw new Error(`Failed to delete lines from ${path}: ${error instanceof Error ? error.message : String(error)}`);
       }
     },
   }),
@@ -630,266 +538,13 @@ export const pageWriteTools = {
    * Move a page to trash (soft delete)
    */
   trash_page: tool({
-    description: 'Move a single page to trash. Children pages remain in place unless explicitly trashed separately.',
+    description: 'Move a page to trash. Optionally trash all children recursively.',
     inputSchema: z.object({
       path: z.string().describe('The page path using titles like "/driveSlug/Folder Name/Page Title" for semantic context'),
       pageId: z.string().describe('The unique ID of the page to trash'),
+      withChildren: z.boolean().default(false).describe('Whether to trash all children recursively'),
     }),
-    execute: async ({ path, pageId }, { experimental_context: context }) => {
-      const userId = (context as ToolExecutionContext)?.userId;
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
-
-      try {
-        // Get the page directly by ID
-        const page = await db.query.pages.findFirst({
-          where: and(
-            eq(pages.id, pageId),
-            eq(pages.isTrashed, false)
-          ),
-        });
-
-        if (!page) {
-          throw new Error(`Page with ID "${pageId}" not found`);
-        }
-
-        // Check permissions
-        const canEdit = await canUserEditPage(userId, page.id);
-        if (!canEdit) {
-          throw new Error('Insufficient permissions to trash this page');
-        }
-
-        // Move to trash
-        const [trashedPage] = await db
-          .update(pages)
-          .set({
-            isTrashed: true,
-            trashedAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(eq(pages.id, page.id))
-          .returning({ id: pages.id, title: pages.title, type: pages.type, parentId: pages.parentId });
-
-        // Broadcast page deletion event
-        await broadcastPageEvent(
-          createPageEventPayload(page.driveId, trashedPage.id, 'trashed', {
-            title: trashedPage.title,
-            parentId: trashedPage.parentId
-          })
-        );
-
-        return {
-          success: true,
-          path,
-          id: trashedPage.id,
-          title: trashedPage.title,
-          type: trashedPage.type,
-          message: `Successfully moved "${trashedPage.title}" to trash`,
-        };
-      } catch (error) {
-        console.error('Error trashing page:', error);
-        throw new Error(`Failed to trash page at ${path}: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    },
-  }),
-
-  /**
-   * Append content to the end of a page
-   */
-  append_to_page: tool({
-    description: 'Append content to the end of an existing page. New content is added after all existing content.',
-    inputSchema: z.object({
-      path: z.string().describe('The page path using titles like "/driveSlug/Folder Name/Page Title" for semantic context'),
-      pageId: z.string().describe('The unique ID of the page to edit'),
-      content: z.string().describe('Content to append to the end of the page'),
-    }),
-    execute: async ({ path, pageId, content }, { experimental_context: context }) => {
-      const userId = (context as ToolExecutionContext)?.userId;
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
-
-      try {
-        // Get the page directly by ID
-        const page = await db.query.pages.findFirst({
-          where: and(
-            eq(pages.id, pageId),
-            eq(pages.isTrashed, false)
-          ),
-        });
-
-        if (!page) {
-          throw new Error(`Page with ID "${pageId}" not found`);
-        }
-
-        // Check if this is a FILE type page - these are read-only
-        if (page.type === 'FILE') {
-          return {
-            success: false,
-            error: 'Cannot edit FILE pages',
-            message: 'This is an uploaded file. File content is read-only and managed by the system.',
-            suggestion: 'To modify content, create a new document page instead of editing the uploaded file.',
-            pageInfo: {
-              pageId: page.id,
-              title: page.title,
-              type: page.type,
-              mimeType: page.mimeType
-            }
-          };
-        }
-
-        // Check permissions
-        const canEdit = await canUserEditPage(userId, page.id);
-        if (!canEdit) {
-          throw new Error('Insufficient permissions to edit this page');
-        }
-
-        // Append content to existing content
-        const newContent = page.content + '\n' + content;
-
-        // Update the page content
-        await db
-          .update(pages)
-          .set({
-            content: newContent,
-            updatedAt: new Date(),
-          })
-          .where(eq(pages.id, page.id));
-
-        // Broadcast content update event
-        await broadcastPageEvent(
-          createPageEventPayload(page.driveId, page.id, 'content-updated', {
-            title: page.title
-          })
-        );
-
-        return {
-          success: true,
-          path,
-          title: page.title,
-          message: `Successfully appended content to "${page.title}"`,
-          newLineCount: newContent.split('\n').length,
-          summary: `Added new content to the end of "${page.title}"`,
-          stats: {
-            totalLines: newContent.split('\n').length,
-            changeType: 'append'
-          },
-          nextSteps: [
-            'Review the document to ensure the new content flows well',
-            'Consider organizing or formatting the appended content'
-          ]
-        };
-      } catch (error) {
-        console.error('Error appending to page:', error);
-        throw new Error(`Failed to append content to ${path}: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    },
-  }),
-
-  /**
-   * Prepend content to the beginning of a page
-   */
-  prepend_to_page: tool({
-    description: 'Prepend content to the beginning of an existing page. New content is added before all existing content.',
-    inputSchema: z.object({
-      path: z.string().describe('The page path using titles like "/driveSlug/Folder Name/Page Title" for semantic context'),
-      pageId: z.string().describe('The unique ID of the page to edit'),
-      content: z.string().describe('Content to prepend to the beginning of the page'),
-    }),
-    execute: async ({ path, pageId, content }, { experimental_context: context }) => {
-      const userId = (context as ToolExecutionContext)?.userId;
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
-
-      try {
-        // Get the page directly by ID
-        const page = await db.query.pages.findFirst({
-          where: and(
-            eq(pages.id, pageId),
-            eq(pages.isTrashed, false)
-          ),
-        });
-
-        if (!page) {
-          throw new Error(`Page with ID "${pageId}" not found`);
-        }
-
-        // Check if this is a FILE type page - these are read-only
-        if (page.type === 'FILE') {
-          return {
-            success: false,
-            error: 'Cannot edit FILE pages',
-            message: 'This is an uploaded file. File content is read-only and managed by the system.',
-            suggestion: 'To modify content, create a new document page instead of editing the uploaded file.',
-            pageInfo: {
-              pageId: page.id,
-              title: page.title,
-              type: page.type,
-              mimeType: page.mimeType
-            }
-          };
-        }
-
-        // Check permissions
-        const canEdit = await canUserEditPage(userId, page.id);
-        if (!canEdit) {
-          throw new Error('Insufficient permissions to edit this page');
-        }
-
-        // Prepend content to existing content
-        const newContent = content + '\n' + page.content;
-
-        // Update the page content
-        await db
-          .update(pages)
-          .set({
-            content: newContent,
-            updatedAt: new Date(),
-          })
-          .where(eq(pages.id, page.id));
-
-        // Broadcast content update event
-        await broadcastPageEvent(
-          createPageEventPayload(page.driveId, page.id, 'content-updated', {
-            title: page.title
-          })
-        );
-
-        return {
-          success: true,
-          path,
-          title: page.title,
-          message: `Successfully prepended content to "${page.title}"`,
-          newLineCount: newContent.split('\n').length,
-          summary: `Added new content to the beginning of "${page.title}"`,
-          stats: {
-            totalLines: newContent.split('\n').length,
-            changeType: 'prepend'
-          },
-          nextSteps: [
-            'Review the document to ensure the new content provides good context',
-            'Consider adjusting the structure or formatting'
-          ]
-        };
-      } catch (error) {
-        console.error('Error prepending to page:', error);
-        throw new Error(`Failed to prepend content to ${path}: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    },
-  }),
-
-  /**
-   * Move a page and all its children to trash recursively
-   */
-  trash_page_with_children: tool({
-    description: 'Move a page and all its children to trash recursively. Completely removes a folder and all nested content.',
-    inputSchema: z.object({
-      path: z.string().describe('The page path using titles like "/driveSlug/Folder Name/Page Title" for semantic context'),
-      pageId: z.string().describe('The unique ID of the page to trash'),
-    }),
-    execute: async ({ path, pageId }, { experimental_context: context }) => {
+    execute: async ({ path, pageId, withChildren = false }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -909,65 +564,95 @@ export const pageWriteTools = {
         }
 
         // Check permissions (need DELETE access for recursive trash)
-        const canDelete = await canUserDeletePage(userId, page.id);
-        if (!canDelete) {
-          throw new Error('Insufficient permissions to trash this page and its children');
+        if (withChildren) {
+          const canDelete = await canUserDeletePage(userId, page.id);
+          if (!canDelete) {
+            throw new Error('Insufficient permissions to trash this page and its children');
+          }
+        } else {
+          const canEdit = await canUserEditPage(userId, page.id);
+          if (!canEdit) {
+            throw new Error('Insufficient permissions to trash this page');
+          }
         }
 
         const driveId = page.driveId;
+        let childrenCount = 0;
 
-        // Recursively find all child pages
-        const getAllChildPages = async (parentId: string): Promise<string[]> => {
-          const children = await db
-            .select({ id: pages.id })
-            .from(pages)
+        if (withChildren) {
+          // Recursively find all child pages
+          const getAllChildPages = async (parentId: string): Promise<string[]> => {
+            const children = await db
+              .select({ id: pages.id })
+              .from(pages)
+              .where(and(
+                eq(pages.driveId, driveId),
+                eq(pages.parentId, parentId),
+                eq(pages.isTrashed, false)
+              ));
+
+            const childIds = children.map(child => child.id);
+
+            // Recursively get grandchildren
+            const grandChildIds = [];
+            for (const child of children) {
+              const grandChildren = await getAllChildPages(child.id);
+              grandChildIds.push(...grandChildren);
+            }
+
+            return [...childIds, ...grandChildIds];
+          };
+
+          const childPageIds = await getAllChildPages(page.id);
+          childrenCount = childPageIds.length;
+          const allPageIds = [page.id, ...childPageIds];
+
+          // Trash all pages (parent and children)
+          await db
+            .update(pages)
+            .set({
+              isTrashed: true,
+              trashedAt: new Date(),
+              updatedAt: new Date(),
+            })
             .where(and(
               eq(pages.driveId, driveId),
-              eq(pages.parentId, parentId),
-              eq(pages.isTrashed, false)
+              inArray(pages.id, allPageIds)
             ));
+        } else {
+          // Move single page to trash
+          await db
+            .update(pages)
+            .set({
+              isTrashed: true,
+              trashedAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .where(eq(pages.id, page.id));
+        }
 
-          const childIds = children.map(child => child.id);
-          
-          // Recursively get grandchildren
-          const grandChildIds = [];
-          for (const child of children) {
-            const grandChildren = await getAllChildPages(child.id);
-            grandChildIds.push(...grandChildren);
-          }
-          
-          return [...childIds, ...grandChildIds];
-        };
-
-        const childPageIds = await getAllChildPages(page.id);
-        const allPageIds = [page.id, ...childPageIds];
-
-        // Trash all pages (parent and children)
-        const [trashedPage] = await db
-          .update(pages)
-          .set({
-            isTrashed: true,
-            trashedAt: new Date(),
-            updatedAt: new Date(),
+        // Broadcast page deletion event
+        await broadcastPageEvent(
+          createPageEventPayload(page.driveId, page.id, 'trashed', {
+            title: page.title,
+            parentId: page.parentId
           })
-          .where(and(
-            eq(pages.driveId, driveId),
-            inArray(pages.id, allPageIds)
-          ))
-          .returning({ id: pages.id, title: pages.title, type: pages.type });
+        );
 
         return {
           success: true,
           path,
-          id: trashedPage.id,
-          title: trashedPage.title,
-          type: trashedPage.type,
-          childrenCount: childPageIds.length,
-          message: `Successfully moved "${trashedPage.title}" and ${childPageIds.length} children to trash`,
+          id: page.id,
+          title: page.title,
+          type: page.type,
+          childrenCount: withChildren ? childrenCount : undefined,
+          message: withChildren
+            ? `Successfully moved "${page.title}" and ${childrenCount} children to trash`
+            : `Successfully moved "${page.title}" to trash`,
         };
       } catch (error) {
-        console.error('Error trashing page with children:', error);
-        throw new Error(`Failed to trash page with children at ${path}: ${error instanceof Error ? error.message : String(error)}`);
+        console.error('Error trashing page:', error);
+        throw new Error(`Failed to trash page at ${path}: ${error instanceof Error ? error.message : String(error)}`);
       }
     },
   }),

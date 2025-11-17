@@ -110,9 +110,8 @@ if (enabledTools && enabledTools.length > 0) {
 - **trash_page/restore_page**: Manage page lifecycle
 
 ### 2. Content Editing Tools
-- **replace_lines**: Precise line-based editing
-- **insert_lines**: Add content at specific positions
-- **append_to_page/prepend_to_page**: Content addition
+- **replace_lines**: Precise line-based editing (use empty content to delete lines)
+- **insert_lines**: Add content at specific positions (lineNumber 1 for prepend, lineCount+1 for append)
 - **move_page**: Reorganize page structure
 
 ### 3. Advanced Search & Discovery
@@ -122,18 +121,11 @@ if (enabledTools && enabledTools.length > 0) {
 
 ### 4. Task Management System
 - **create_task_list**: Persistent task tracking
-- **get_task_list/update_task_status**: Progress management
-- **add_task/add_task_note**: Dynamic task expansion
+- **get_task_list/update_task_status**: Progress management (note parameter in update_task_status for progress updates)
+- **add_task**: Dynamic task expansion
 - **resume_task_list**: Cross-session continuity
 
-### 5. Batch Operations
-- **bulk_delete_pages**: Mass page deletion
-- **bulk_update_content**: Atomic content updates
-- **bulk_move_pages**: Mass reorganization
-- **bulk_rename_pages**: Pattern-based renaming
-- **create_folder_structure**: Complex hierarchy creation
-
-### 6. Agent Management
+### 5. Agent Management
 - **list_agents/multi_drive_list_agents**: Discover AI agents
 - **ask_agent**: Agent-to-agent communication
 - **create_agent**: Configure new AI assistants
@@ -286,7 +278,7 @@ const agents = await multi_drive_list_agents({
         {
           title: "Content Strategy AI",
           path: "/marketing/Content Strategy AI",
-          enabledTools: ["create_page", "read_page", "bulk_update_content"],
+          enabledTools: ["create_page", "read_page", "replace_lines", "insert_lines"],
           hasConversationHistory: true
         }
       ]

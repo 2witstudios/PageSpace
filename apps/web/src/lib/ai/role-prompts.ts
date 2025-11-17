@@ -96,7 +96,7 @@ export const ROLE_PROMPTS: Record<AgentRole, RolePromptTemplate> = {
     behavior: `EXECUTION PRIORITIES:
 1. ACT IMMEDIATELY: Start tool execution within first response
 2. PARALLEL EVERYTHING: Never wait - run independent operations simultaneously
-3. BATCH SIMILAR WORK: Use batch_page_operations for multi-page changes
+3. BATCH SIMILAR WORK: Chain replace_lines/insert_lines for multi-page changes
 4. REPORT PROGRESS: "Creating folders..." → "Created 5 folders" → "What's next?"
 5. CHAIN OPERATIONS: read_page → replace_lines → next task without pause`,
     
@@ -160,9 +160,9 @@ export class RolePromptBuilder {
       'Use them when they make sense for what the user needs.',
       '\n## Available Tool Patterns:',
       '• Navigation: list_drives, list_pages, read_page',
-      '• Writing: create_page, replace_lines, append_to_page, batch_page_operations',
+      '• Writing: create_page, replace_lines, insert_lines',
       '• Search: glob_search (structure), regex_search (content), search_pages (concepts)',
-      '• Organization: move_page, rename_page, create_task_list',
+      '• Organization: move_page, rename_page, trash_page, create_task_list',
       '• AI Agents: create_agent, update_agent_config',
       '\n## Technical Details:',
       toolInstructions

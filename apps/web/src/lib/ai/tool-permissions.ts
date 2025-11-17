@@ -72,32 +72,10 @@ export const TOOL_METADATA: Record<string, ToolMetadata> = {
     operation: ToolOperation.WRITE,
     description: 'Insert new content at a specific line number'
   },
-  delete_lines: {
-    name: 'delete_lines',
-    operation: ToolOperation.WRITE,
-    description: 'Delete specific lines from a document'
-  },
-  append_to_page: {
-    name: 'append_to_page',
-    operation: ToolOperation.WRITE,
-    description: 'Add content to the end of a page'
-  },
-  prepend_to_page: {
-    name: 'prepend_to_page',
-    operation: ToolOperation.WRITE,
-    description: 'Add content to the beginning of a page'
-  },
   trash_page: {
     name: 'trash_page',
     operation: ToolOperation.DELETE,
-    description: 'Delete individual pages',
-    requiresConfirmation: true,
-    destructive: true
-  },
-  trash_page_with_children: {
-    name: 'trash_page_with_children',
-    operation: ToolOperation.DELETE,
-    description: 'Delete a page and all its children recursively',
+    description: 'Delete pages (optionally with all children recursively)',
     requiresConfirmation: true,
     destructive: true
   },
@@ -215,56 +193,10 @@ export const TOOL_METADATA: Record<string, ToolMetadata> = {
     operation: ToolOperation.WRITE,
     description: 'Add a new task'
   },
-  add_task_note: {
-    name: 'add_task_note',
-    operation: ToolOperation.WRITE,
-    description: 'Add note to a task'
-  },
   resume_task_list: {
     name: 'resume_task_list',
     operation: ToolOperation.WRITE,
     description: 'Resume task list processing'
-  },
-
-  // Batch operation tools
-  batch_page_operations: {
-    name: 'batch_page_operations',
-    operation: ToolOperation.WRITE,
-    description: 'Perform batch operations on pages'
-  },
-  bulk_move_pages: {
-    name: 'bulk_move_pages',
-    operation: ToolOperation.ORGANIZE,
-    description: 'Move multiple pages at once'
-  },
-  bulk_rename_pages: {
-    name: 'bulk_rename_pages',
-    operation: ToolOperation.WRITE,
-    description: 'Rename multiple pages'
-  },
-  create_folder_structure: {
-    name: 'create_folder_structure',
-    operation: ToolOperation.CREATE,
-    description: 'Create a folder hierarchy'
-  },
-  bulk_delete_pages: {
-    name: 'bulk_delete_pages',
-    operation: ToolOperation.DELETE,
-    description: 'Delete multiple pages at once',
-    requiresConfirmation: true,
-    destructive: true
-  },
-  bulk_update_content: {
-    name: 'bulk_update_content',
-    operation: ToolOperation.WRITE,
-    description: 'Update content in multiple pages'
-  },
-
-  // Page read tools
-  read_current_page: {
-    name: 'read_current_page',
-    operation: ToolOperation.READ,
-    description: 'Read the current page content'
   }
 };
 
