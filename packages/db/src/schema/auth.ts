@@ -1,5 +1,5 @@
-import { pgTable, text, timestamp, integer, index, pgEnum, real } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { pgTable, text, timestamp, integer, index, uniqueIndex, pgEnum, real } from 'drizzle-orm/pg-core';
+import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { chatMessages } from './core';
 
@@ -83,6 +83,12 @@ export const deviceTokens = pgTable('device_tokens', {
     userIdx: index('device_tokens_user_id_idx').on(table.userId),
     tokenIdx: index('device_tokens_token_idx').on(table.token),
     deviceIdx: index('device_tokens_device_id_idx').on(table.deviceId),
+    expiresIdx: index('device_tokens_expires_at_idx').on(table.expiresAt),
+    // Partial unique index: only enforce uniqueness for non-revoked tokens
+    // This prevents duplicate active device tokens for the same user+device+platform
+    activeDeviceIdx: uniqueIndex('device_tokens_active_device_idx')
+      .on(table.userId, table.deviceId, table.platform)
+      .where(sql`${table.revokedAt} IS NULL`),
   };
 });
 

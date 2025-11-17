@@ -65,6 +65,16 @@ class AuthFetch {
       }
     } else {
       // Web: Use cookie-based authentication with CSRF protection
+      // Include device token for device tracking and "Revoke All Others" functionality
+      const deviceToken = typeof localStorage !== 'undefined' ? localStorage.getItem('deviceToken') : null;
+      if (deviceToken) {
+        headers = {
+          ...headers,
+          'X-Device-Token': deviceToken,
+        };
+        this.logger.debug('Web: Using device token for authentication', { url });
+      }
+
       const needsCSRF = this.requiresCSRFToken(url, fetchOptions.method);
       if (needsCSRF) {
         const token = await this.getCSRFToken();
@@ -127,7 +137,15 @@ class AuthFetch {
             });
           }
         } else {
-          // Web: Get fresh CSRF token if needed
+          // Web: Re-add device token and get fresh CSRF token if needed
+          const deviceToken = typeof localStorage !== 'undefined' ? localStorage.getItem('deviceToken') : null;
+          if (deviceToken) {
+            headers = {
+              ...headers,
+              'X-Device-Token': deviceToken,
+            };
+          }
+
           const needsCSRF = this.requiresCSRFToken(url, fetchOptions.method);
           if (needsCSRF) {
             const token = await this.getCSRFToken(true);

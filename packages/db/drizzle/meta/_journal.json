@@ -57,6 +57,13 @@
       "when": 1763350268751,
       "tag": "0007_huge_storm",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1763394841416,
+      "tag": "0008_right_valkyrie",
+      "breakpoints": true
     }
   ]
 }

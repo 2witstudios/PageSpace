@@ -10,6 +10,7 @@ import {
   resetRateLimit,
   RATE_LIMIT_CONFIGS,
   decodeToken,
+  validateOrCreateDeviceToken,
 } from '@pagespace/lib/server';
 import { serialize } from 'cookie';
 import { createId } from '@paralleldrive/cuid2';
@@ -20,7 +21,11 @@ const loginSchema = z.object({
   email: z.email(),
   password: z.string().min(1, {
       error: "Password is required"
-}),
+  }),
+  // Optional device information for device token creation
+  deviceId: z.string().optional(),
+  deviceName: z.string().optional(),
+  deviceToken: z.string().optional(),
 });
 
 export async function POST(req: Request) {
@@ -32,7 +37,7 @@ export async function POST(req: Request) {
       return Response.json({ errors: validation.error.flatten().fieldErrors }, { status: 400 });
     }
 
-    const { email, password } = validation.data;
+    const { email, password, deviceId, deviceName, deviceToken: existingDeviceToken } = validation.data;
 
     // Rate limiting by IP address and email
     const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] || 
@@ -96,6 +101,22 @@ export async function POST(req: Request) {
       ? new Date(refreshPayload.exp * 1000)
       : new Date(Date.now() + getRefreshTokenMaxAge() * 1000);
 
+    // Create or validate device token for web platform
+    let deviceTokenValue: string | undefined;
+    if (deviceId) {
+      const { deviceToken: createdDeviceToken } = await validateOrCreateDeviceToken({
+        providedDeviceToken: existingDeviceToken,
+        userId: user.id,
+        deviceId,
+        platform: 'web',
+        tokenVersion: user.tokenVersion,
+        deviceName,
+        userAgent: req.headers.get('user-agent') ?? undefined,
+        ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
+      });
+      deviceTokenValue = createdDeviceToken;
+    }
+
     await db.insert(refreshTokens).values({
       id: createId(),
       token: refreshToken,
@@ -150,6 +171,7 @@ export async function POST(req: Request) {
       id: user.id,
       name: user.name,
       email: user.email,
+      ...(deviceTokenValue && { deviceToken: deviceTokenValue }),
     }, { status: 200, headers });
 
   } catch (error) {

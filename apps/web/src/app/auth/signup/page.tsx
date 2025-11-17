@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { getOrCreateDeviceId, getDeviceName } from "@/lib/device-fingerprint";
 
 export default function SignUp() {
   const [name, setName] = useState("");
@@ -50,6 +51,11 @@ export default function SignUp() {
     setLoadingMessage("Creating account...");
 
     try {
+      // Get device information for device token creation
+      const deviceId = getOrCreateDeviceId();
+      const deviceName = getDeviceName();
+      const existingDeviceToken = typeof localStorage !== 'undefined' ? localStorage.getItem('deviceToken') : null;
+
       const signupResponse = await fetch("/api/auth/signup", {
         method: "POST",
         headers: {
@@ -61,6 +67,9 @@ export default function SignUp() {
           password,
           confirmPassword,
           acceptedTos,
+          deviceId,
+          deviceName,
+          ...(existingDeviceToken && { deviceToken: existingDeviceToken }),
         }),
         credentials: 'include',
         redirect: 'manual', // Don't auto-follow redirects, we'll handle them
