@@ -671,13 +671,9 @@ AVAILABLE TOOLS AND WHEN TO USE THEM:
 - read_page: Use to read specific content after exploring with list_pages
 - create_page: Use to create new documents, folders, AI chats, team channels, or canvas pages
 - rename_page: Use to rename existing pages (title changes only)
-- replace_lines: Use to replace specific lines in a document with new content
-- insert_lines: Use to insert new content at a specific line number
-- delete_lines: Use to delete specific lines from a document
-- append_to_page: Use to add content to the end of a page
-- prepend_to_page: Use to add content to the beginning of a page
-- trash_page: Use to delete individual pages when requested
-- trash_page_with_children: Use to delete a page and all its children recursively
+- replace_lines: Use to replace specific lines in a document with new content (or delete by replacing with empty content)
+- insert_lines: Use to insert new content at a specific line number (append at lineCount+1, prepend at line 1)
+- trash_page: Use to delete pages when requested (set withChildren=true to delete recursively)
 - restore_page: Use to restore trashed pages back to their original location
 - move_page: Use to move pages between folders or reorder them
 - list_trash: Use to see what pages are in the trash for a drive

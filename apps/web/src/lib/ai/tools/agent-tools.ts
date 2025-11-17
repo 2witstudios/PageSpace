@@ -21,7 +21,7 @@ export const agentTools = {
       parentId: z.string().optional().describe('The unique ID of the parent page - REQUIRED when creating inside any page (folder, document, etc). Only omit for root-level agents.'),
       title: z.string().describe('The name/title of the AI agent (e.g., "Content Writer", "Code Assistant", "Research Helper")'),
       systemPrompt: z.string().describe('System prompt defining the agent\'s behavior, personality, expertise, and instructions. This controls how the agent responds and what role it plays.'),
-      enabledTools: z.array(z.string()).optional().describe('Array of tool names to enable for this agent. Available tools include: regex_search, glob_search, multi_drive_search, read_page, create_page, rename_page, append_to_page, replace_lines, create_task_list, batch_page_operations, and more. Leave empty for a chat-only agent.'),
+      enabledTools: z.array(z.string()).optional().describe('Array of tool names to enable for this agent. Available tools include: regex_search, glob_search, multi_drive_search, read_page, create_page, rename_page, replace_lines, insert_lines, create_task_list, move_page, trash_page, and more. Leave empty for a chat-only agent.'),
       aiProvider: z.string().optional().describe('AI provider for this agent (e.g., "openrouter", "google", "anthropic"). Overrides user default.'),
       aiModel: z.string().optional().describe('AI model for this agent (e.g., "gpt-4", "claude-3-sonnet"). Overrides user default.'),
       welcomeMessage: z.string().optional().describe('Optional welcome message shown when users first interact with the agent.'),

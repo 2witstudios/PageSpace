@@ -190,8 +190,6 @@ function getToolDisplayName(toolName: string): string {
       return 'Get Task List';
     case 'resume_task_list':
       return 'Resume Task List';
-    case 'add_task_note':
-      return 'Add Task Note';
     default:
       return 'Task Management';
   }
