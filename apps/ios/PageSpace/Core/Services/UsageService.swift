@@ -39,8 +39,8 @@ class UsageService: ObservableObject {
         )
 
         print("📦 Raw API Response:")
-        print("   - Total Tokens: \(apiResponse.summary.totalTokens)")
-        print("   - Total Cost: \(apiResponse.summary.totalCost)")
+        print("   - Total Tokens: \(apiResponse.summary.billing.totalTokens)")
+        print("   - Total Cost: \(apiResponse.summary.billing.totalCost)")
         print("   - Model: \(apiResponse.summary.mostRecentModel ?? "nil")")
         print("   - Provider: \(apiResponse.summary.mostRecentProvider ?? "nil")")
 
@@ -55,8 +55,8 @@ class UsageService: ObservableObject {
         }
 
         print("✅ Transformation successful:")
-        print("   - Context Window: \(usage.contextWindowSize)")
-        print("   - Context Usage %: \(usage.contextUsagePercent)%")
+        print("   - Context Window: \(usage.context.windowSize)")
+        print("   - Context Usage %: \(usage.context.usagePercent)%")
 
         return usage
     }

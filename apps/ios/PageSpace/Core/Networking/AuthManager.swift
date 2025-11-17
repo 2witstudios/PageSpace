@@ -393,7 +393,7 @@ class AuthManager: ObservableObject {
         if timeUntilRefresh <= 0 {
             // Token expires soon - refresh immediately
             print("[AuthManager] 🔐 Token expires soon - refreshing immediately")
-            Task {
+            Task { @MainActor in
                 do {
                     try await refreshToken()
                 } catch {
@@ -410,7 +410,7 @@ class AuthManager: ObservableObject {
             print("  - Will refresh at: \(refreshDate)")
             print("  - Time until refresh: \(Int(timeUntilRefresh))s")
 
-            tokenRefreshTask = Task {
+            tokenRefreshTask = Task { @MainActor in
                 try? await Task.sleep(nanoseconds: UInt64(timeUntilRefresh * 1_000_000_000))
 
                 guard !Task.isCancelled else { return }
