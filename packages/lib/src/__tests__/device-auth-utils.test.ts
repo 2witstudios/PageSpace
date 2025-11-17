@@ -17,9 +17,24 @@ describe('device-auth-utils', () => {
   const testPlatform = 'ios' as const;
   const testTokenVersion = 0;
 
+  // Create test user before each test (required for foreign key constraint)
+  beforeEach(async () => {
+    const { users } = await import('@pagespace/db');
+    await db.insert(users).values({
+      id: testUserId,
+      name: 'Test User',
+      email: 'test@example.com',
+      tokenVersion: 0,
+      role: 'user',
+    });
+  });
+
   // Clean up test data after each test
   afterEach(async () => {
     await db.delete(deviceTokens).where(eq(deviceTokens.userId, testUserId));
+    // Also clean up test user
+    const { users } = await import('@pagespace/db');
+    await db.delete(users).where(eq(users.id, testUserId));
   });
 
   describe('generateDeviceToken', () => {
@@ -166,13 +181,14 @@ describe('device-auth-utils', () => {
       );
 
       // Revoke the token
-      await revokeDeviceToken(id, 'test_revocation');
+      await revokeDeviceToken(id, 'user_action');
 
       const validated = await validateDeviceToken(token);
       expect(validated).toBeNull();
     });
 
-    it('rejects token with mismatched token version', async () => {
+    it('rejects token when user tokenVersion has been bumped', async () => {
+      // Create a device token with tokenVersion 0 (user already created in beforeEach)
       const { token } = await createDeviceTokenRecord(
         testUserId,
         testDeviceId,
@@ -180,21 +196,22 @@ describe('device-auth-utils', () => {
         0 // version 0
       );
 
-      // Simulate token version bump (user logged out all devices)
-      const decoded = await decodeDeviceToken(token);
-      const newToken = await generateDeviceToken(
-        testUserId,
-        testDeviceId,
-        testPlatform,
-        5 // bumped version
-      );
+      // Initially should validate successfully
+      const initialValidation = await validateDeviceToken(token);
+      expect(initialValidation).toBeTruthy();
+      expect(initialValidation?.userId).toBe(testUserId);
 
-      // Original token should be rejected
-      const validated = await validateDeviceToken(token);
-      expect(validated?.tokenVersion).toBe(0);
+      // Simulate user's tokenVersion being bumped to 1
+      // (e.g., after password change or refresh token reuse detection)
+      const { users } = await import('@pagespace/db');
+      await db
+        .update(users)
+        .set({ tokenVersion: 1 })
+        .where(eq(users.id, testUserId));
 
-      // But we should be able to detect version mismatch in practice
-      // (This would be caught by getUserAccessLevel in practice)
+      // Now the device token should be rejected due to tokenVersion mismatch
+      const validationAfterBump = await validateDeviceToken(token);
+      expect(validationAfterBump).toBeNull();
     });
 
     it('rejects malformed token', async () => {
@@ -396,7 +413,7 @@ describe('device-auth-utils', () => {
         testTokenVersion
       );
 
-      await revokeDeviceToken(id, 'user_logout');
+      await revokeDeviceToken(id, 'user_action');
 
       const records = await db
         .select()
@@ -404,7 +421,7 @@ describe('device-auth-utils', () => {
         .where(eq(deviceTokens.id, id));
 
       expect(records[0].revokedAt).toBeTruthy();
-      expect(records[0].revokedReason).toBe('user_logout');
+      expect(records[0].revokedReason).toBe('user_action');
     });
 
     it('prevents further validation after revocation', async () => {
@@ -415,7 +432,7 @@ describe('device-auth-utils', () => {
         testTokenVersion
       );
 
-      await revokeDeviceToken(id, 'test');
+      await revokeDeviceToken(id, 'user_action');
 
       const validated = await validateDeviceToken(token);
       expect(validated).toBeNull();

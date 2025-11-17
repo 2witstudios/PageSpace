@@ -92,8 +92,8 @@ describe('device-fingerprint-utils', () => {
       const result = validateDeviceFingerprint(
         'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)',
         '192.168.1.1',
-        undefined,
-        undefined
+        null,
+        null
       );
 
       // Should be valid when there's no stored data to compare against

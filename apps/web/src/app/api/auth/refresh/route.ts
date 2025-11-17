@@ -1,5 +1,5 @@
-import { users, refreshTokens } from '@pagespace/db';
-import { db, eq, sql } from '@pagespace/db';
+import { users, refreshTokens, deviceTokens } from '@pagespace/db';
+import { db, eq, sql, and, isNull } from '@pagespace/db';
 import { decodeToken, generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, checkRateLimit, RATE_LIMIT_CONFIGS } from '@pagespace/lib/server';
 import { serialize } from 'cookie';
 import { parse } from 'cookie';
@@ -57,6 +57,18 @@ export async function POST(req: Request) {
         await trx.update(users)
           .set({ tokenVersion: sql`${users.tokenVersion} + 1` })
           .where(eq(users.id, decoded.userId));
+
+        // SECURITY: Also revoke all device tokens for this user
+        // This prevents device tokens from bypassing the tokenVersion bump
+        await trx.update(deviceTokens)
+          .set({
+            revokedAt: new Date(),
+            revokedReason: 'token_version_bump_refresh_reuse'
+          })
+          .where(and(
+            eq(deviceTokens.userId, decoded.userId),
+            isNull(deviceTokens.revokedAt)
+          ));
       }
       return { error: 'Invalid refresh token.' };
     }

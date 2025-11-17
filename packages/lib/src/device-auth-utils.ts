@@ -109,7 +109,7 @@ export async function createDeviceTokenRecord(
     userAgent?: string;
     ipAddress?: string;
     location?: string;
-  }
+  } = {}
 ): Promise<{ id: string; token: string }> {
   // Generate the JWT token
   const token = await generateDeviceToken(userId, deviceId, platform, tokenVersion);
@@ -142,6 +142,7 @@ export async function createDeviceTokenRecord(
 
 /**
  * Validate device token against database
+ * SECURITY: Also validates tokenVersion to prevent use after tokenVersion bump
  */
 export async function validateDeviceToken(token: string): Promise<DeviceToken | null> {
   try {
@@ -169,6 +170,24 @@ export async function validateDeviceToken(token: string): Promise<DeviceToken | 
       console.error('Device token mismatch:', {
         storedDeviceId: deviceToken.deviceId,
         payloadDeviceId: payload.deviceId,
+      });
+      return null;
+    }
+
+    // SECURITY: Validate tokenVersion against current user
+    // This ensures device tokens are invalidated when user's tokenVersion is bumped
+    // (e.g., after refresh token reuse detection or manual "logout all devices")
+    const { users } = await import('@pagespace/db');
+    const user = await db.query.users.findFirst({
+      where: eq(users.id, payload.userId),
+      columns: { tokenVersion: true },
+    });
+
+    if (!user || user.tokenVersion !== payload.tokenVersion) {
+      console.warn('Device token invalidated due to tokenVersion mismatch', {
+        userId: payload.userId,
+        tokenVersion: payload.tokenVersion,
+        currentVersion: user?.tokenVersion,
       });
       return null;
     }

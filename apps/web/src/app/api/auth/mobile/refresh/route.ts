@@ -1,5 +1,5 @@
-import { users, refreshTokens } from '@pagespace/db';
-import { db, eq, sql } from '@pagespace/db';
+import { users, refreshTokens, deviceTokens } from '@pagespace/db';
+import { db, eq, sql, and, isNull } from '@pagespace/db';
 import {
   decodeToken,
   generateAccessToken,
@@ -75,6 +75,18 @@ export async function POST(req: Request) {
           await trx.update(users)
             .set({ tokenVersion: sql`${users.tokenVersion} + 1` })
             .where(eq(users.id, decoded.userId));
+
+          // SECURITY: Also revoke all device tokens for this user
+          // This prevents device tokens from bypassing the tokenVersion bump
+          await trx.update(deviceTokens)
+            .set({
+              revokedAt: new Date(),
+              revokedReason: 'token_version_bump_refresh_reuse'
+            })
+            .where(and(
+              eq(deviceTokens.userId, decoded.userId),
+              isNull(deviceTokens.revokedAt)
+            ));
 
           loggers.auth.warn('Refresh token reuse detected - invalidating all sessions', {
             userId: decoded.userId,

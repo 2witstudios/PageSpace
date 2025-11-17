@@ -1,4 +1,4 @@
-import { users, db, eq } from '@pagespace/db';
+import { users, deviceTokens, db, eq, and, isNull } from '@pagespace/db';
 import bcrypt from 'bcryptjs';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
@@ -63,8 +63,24 @@ export async function POST(req: Request) {
       })
       .where(eq(users.id, userId));
 
-    return Response.json({ 
-      message: 'Password changed successfully. Please log in again with your new password.' 
+    // SECURITY: Also revoke all device tokens for this user
+    // This prevents device tokens from bypassing the tokenVersion bump
+    await db.update(deviceTokens)
+      .set({
+        revokedAt: new Date(),
+        revokedReason: 'token_version_bump_password_change'
+      })
+      .where(and(
+        eq(deviceTokens.userId, userId),
+        isNull(deviceTokens.revokedAt)
+      ));
+
+    loggers.auth.info('Password changed - invalidated all sessions and device tokens', {
+      userId,
+    });
+
+    return Response.json({
+      message: 'Password changed successfully. Please log in again with your new password.'
     });
   } catch (error) {
     loggers.auth.error('Password change error:', error as Error);
