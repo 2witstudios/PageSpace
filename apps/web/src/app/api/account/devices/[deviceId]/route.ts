@@ -1,8 +1,7 @@
-import { users, db, eq, deviceTokens, refreshTokens } from '@pagespace/db';
+import { db, eq, deviceTokens, refreshTokens } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { revokeDeviceToken } from '@pagespace/lib/device-auth-utils';
-import bcrypt from 'bcryptjs';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -18,37 +17,6 @@ export async function DELETE(
   const { deviceId } = await context.params;
 
   try {
-    const body = await req.json();
-    const { password } = body;
-
-    // Validate password is provided
-    if (!password) {
-      return Response.json({ error: 'Password is required' }, { status: 400 });
-    }
-
-    // Get user to verify password
-    const user = await db.query.users.findFirst({
-      where: eq(users.id, userId),
-      columns: {
-        id: true,
-        password: true,
-      },
-    });
-
-    if (!user) {
-      return Response.json({ error: 'User not found' }, { status: 404 });
-    }
-
-    if (!user.password) {
-      return Response.json({ error: 'No password set for this account' }, { status: 400 });
-    }
-
-    // Verify password
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    if (!isPasswordValid) {
-      return Response.json({ error: 'Invalid password' }, { status: 401 });
-    }
-
     // Get the device token to revoke
     const device = await db.query.deviceTokens.findFirst({
       where: eq(deviceTokens.id, deviceId),

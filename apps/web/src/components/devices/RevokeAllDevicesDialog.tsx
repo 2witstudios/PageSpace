@@ -11,8 +11,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { AlertTriangle } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/auth-fetch';
@@ -31,22 +29,15 @@ export function RevokeAllDevicesDialog({
   onSuccess,
   deviceCount,
 }: RevokeAllDevicesDialogProps) {
-  const [password, setPassword] = useState('');
   const [isRevoking, setIsRevoking] = useState(false);
 
   const handleClose = () => {
     if (!isRevoking) {
-      setPassword('');
       onOpenChange(false);
     }
   };
 
   const handleRevokeAll = async () => {
-    if (!password.trim()) {
-      toast.error('Please enter your password');
-      return;
-    }
-
     setIsRevoking(true);
 
     try {
@@ -55,7 +46,6 @@ export function RevokeAllDevicesDialog({
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ password }),
       });
 
       if (!response.ok) {
@@ -71,7 +61,6 @@ export function RevokeAllDevicesDialog({
       }
 
       toast.success('All other devices have been logged out');
-      setPassword('');
       onSuccess();
     } catch (error) {
       console.error('Failed to revoke all devices:', error);
@@ -93,40 +82,20 @@ export function RevokeAllDevicesDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
 
-        <div className="space-y-4">
-          <Alert variant="destructive">
-            <AlertTriangle className="h-4 w-4" />
-            <AlertDescription>
-              <p className="font-semibold mb-2">Warning:</p>
-              <ul className="list-disc list-inside text-sm space-y-1 ml-2">
-                <li>
-                  {otherDevicesCount} other {otherDevicesCount === 1 ? 'device' : 'devices'} will be
-                  immediately logged out
-                </li>
-                <li>Those devices will need to sign in again</li>
-                <li>All active sessions on other devices will be terminated</li>
-              </ul>
-            </AlertDescription>
-          </Alert>
-
-          <div className="space-y-2">
-            <Label htmlFor="password">Enter your password to confirm:</Label>
-            <Input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && password.trim()) {
-                  handleRevokeAll();
-                }
-              }}
-              placeholder="Your password"
-              disabled={isRevoking}
-              autoComplete="current-password"
-            />
-          </div>
-        </div>
+        <Alert variant="destructive">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertDescription>
+            <p className="font-semibold mb-2">Warning:</p>
+            <ul className="list-disc list-inside text-sm space-y-1 ml-2">
+              <li>
+                {otherDevicesCount} other {otherDevicesCount === 1 ? 'device' : 'devices'} will be
+                immediately logged out
+              </li>
+              <li>Those devices will need to sign in again</li>
+              <li>All active sessions on other devices will be terminated</li>
+            </ul>
+          </AlertDescription>
+        </Alert>
 
         <AlertDialogFooter>
           <AlertDialogCancel disabled={isRevoking} onClick={handleClose}>
@@ -134,7 +103,7 @@ export function RevokeAllDevicesDialog({
           </AlertDialogCancel>
           <AlertDialogAction
             onClick={handleRevokeAll}
-            disabled={isRevoking || !password.trim()}
+            disabled={isRevoking}
             className="bg-destructive hover:bg-destructive/90"
           >
             {isRevoking ? 'Revoking...' : 'Revoke All Other Devices'}

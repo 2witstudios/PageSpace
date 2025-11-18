@@ -11,8 +11,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { AlertTriangle } from 'lucide-react';
 import type { Device } from '@/hooks/useDevices';
@@ -33,23 +31,16 @@ export function RevokeDeviceDialog({
   onOpenChange,
   onSuccess,
 }: RevokeDeviceDialogProps) {
-  const [password, setPassword] = useState('');
   const [isRevoking, setIsRevoking] = useState(false);
   const { actions } = useAuth();
 
   const handleClose = () => {
     if (!isRevoking) {
-      setPassword('');
       onOpenChange(false);
     }
   };
 
   const handleRevoke = async () => {
-    if (!password.trim()) {
-      toast.error('Please enter your password');
-      return;
-    }
-
     setIsRevoking(true);
 
     try {
@@ -58,7 +49,6 @@ export function RevokeDeviceDialog({
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ password }),
       });
 
       if (!response.ok) {
@@ -76,7 +66,6 @@ export function RevokeDeviceDialog({
       }
 
       toast.success('Device access revoked successfully');
-      setPassword('');
       onSuccess();
     } catch (error) {
       console.error('Failed to revoke device:', error);
@@ -117,24 +106,6 @@ export function RevokeDeviceDialog({
               Last used: {new Date(device.lastUsedAt).toLocaleString()}
             </p>
           </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="password">Enter your password to confirm:</Label>
-            <Input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && password.trim()) {
-                  handleRevoke();
-                }
-              }}
-              placeholder="Your password"
-              disabled={isRevoking}
-              autoComplete="current-password"
-            />
-          </div>
         </div>
 
         <AlertDialogFooter>
@@ -143,7 +114,7 @@ export function RevokeDeviceDialog({
           </AlertDialogCancel>
           <AlertDialogAction
             onClick={handleRevoke}
-            disabled={isRevoking || !password.trim()}
+            disabled={isRevoking}
             className="bg-destructive hover:bg-destructive/90"
           >
             {isRevoking ? 'Revoking...' : 'Revoke Access'}

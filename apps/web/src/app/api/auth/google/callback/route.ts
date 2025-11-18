@@ -244,7 +244,7 @@ export async function GET(req: Request) {
     // DESKTOP PLATFORM: Pass tokens through redirect URL
     if (platform === 'desktop') {
       // Generate device token for desktop
-      const { deviceToken: deviceTokenValue, deviceTokenRecordId } = await validateOrCreateDeviceToken({
+      const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
         providedDeviceToken: undefined, // No existing token for OAuth
         userId: user.id,
         deviceId: deviceId || 'unknown', // Should always have deviceId from state
