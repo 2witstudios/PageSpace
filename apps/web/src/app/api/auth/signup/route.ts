@@ -192,8 +192,9 @@ export async function POST(req: Request) {
 
     // Create or validate device token for web platform
     let deviceTokenValue: string | undefined;
+    let deviceTokenRecordId: string | undefined;
     if (deviceId) {
-      const { deviceToken: createdDeviceToken } = await validateOrCreateDeviceToken({
+      const { deviceToken: createdDeviceToken, deviceTokenRecordId: recordId } = await validateOrCreateDeviceToken({
         providedDeviceToken: existingDeviceToken,
         userId: user.id,
         deviceId,
@@ -204,6 +205,7 @@ export async function POST(req: Request) {
         ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
       });
       deviceTokenValue = createdDeviceToken;
+      deviceTokenRecordId = recordId;
     }
 
     // Save refresh token
@@ -217,6 +219,7 @@ export async function POST(req: Request) {
       lastUsedAt: new Date(),
       platform: 'web',
       expiresAt: refreshExpiresAt,
+      deviceTokenId: deviceTokenRecordId,  // Link refresh token to device token for revocation
     });
 
     const isProduction = process.env.NODE_ENV === 'production';
