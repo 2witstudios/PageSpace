@@ -33,7 +33,7 @@ const fetcher = async (url: string) => {
 };
 
 export default function UserDropdown() {
-  const { isAuthenticated, user, isLoading, logout } = useAuth();
+  const { isAuthenticated, user, isLoading, actions } = useAuth();
   const router = useRouter();
   const { setTheme } = useTheme();
 
@@ -64,7 +64,7 @@ export default function UserDropdown() {
 
   const handleSignOut = async () => {
     try {
-      await logout();
+      await actions.logout();
     } catch (error) {
       console.error('Logout failed:', error);
       // Still redirect to signin even if logout fails
