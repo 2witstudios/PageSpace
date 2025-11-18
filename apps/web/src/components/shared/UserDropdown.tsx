@@ -3,7 +3,7 @@
 import { useAuth } from "@/hooks/use-auth";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { post, fetchWithAuth } from '@/lib/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth-fetch';
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -33,7 +33,7 @@ const fetcher = async (url: string) => {
 };
 
 export default function UserDropdown() {
-  const { isAuthenticated, user, isLoading } = useAuth();
+  const { isAuthenticated, user, isLoading, logout } = useAuth();
   const router = useRouter();
   const { setTheme } = useTheme();
 
@@ -63,9 +63,13 @@ export default function UserDropdown() {
   );
 
   const handleSignOut = async () => {
-    await post('/api/auth/logout');
-    router.push('/auth/signin');
-    router.refresh();
+    try {
+      await logout();
+    } catch (error) {
+      console.error('Logout failed:', error);
+      // Still redirect to signin even if logout fails
+      router.push('/auth/signin');
+    }
   };
 
   if (isLoading) {
