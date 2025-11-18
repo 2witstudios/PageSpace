@@ -1,5 +1,5 @@
 import { z } from 'zod/v4';
-import { users, refreshTokens } from '@pagespace/db';
+import { users, refreshTokens, deviceTokens } from '@pagespace/db';
 import { db, eq } from '@pagespace/db';
 import {
   validateDeviceToken,
@@ -46,11 +46,50 @@ export async function POST(req: Request) {
     }
 
     if (deviceRecord.deviceId !== deviceId) {
-      loggers.auth.warn('Device token mismatch detected', {
-        tokenDeviceId: deviceRecord.deviceId,
-        providedDeviceId: deviceId,
-      });
-      return Response.json({ error: 'Device token does not match this device.' }, { status: 401 });
+      // Check if this is a legacy device from OAuth with 'unknown' deviceId
+      // Allow one-time correction if the device token is otherwise valid
+      if (deviceRecord.deviceId === 'unknown' || !deviceRecord.deviceId) {
+        loggers.auth.warn('Correcting device token deviceId from OAuth migration', {
+          deviceTokenId: deviceRecord.id,
+          oldDeviceId: deviceRecord.deviceId,
+          newDeviceId: deviceId,
+          userId: deviceRecord.userId,
+        });
+
+        // Update device record with correct deviceId (one-time migration)
+        try {
+          const [updatedDevice] = await db
+            .update(deviceTokens)
+            .set({
+              deviceId: deviceId,
+            })
+            .where(eq(deviceTokens.id, deviceRecord.id))
+            .returning();
+
+          if (!updatedDevice) {
+            loggers.auth.error('Failed to update device token deviceId', {
+              deviceTokenId: deviceRecord.id,
+            });
+            return Response.json({ error: 'Failed to update device.' }, { status: 500 });
+          }
+
+          // Update local deviceRecord for continued processing
+          deviceRecord.deviceId = deviceId;
+        } catch (error) {
+          loggers.auth.error('Error correcting device token deviceId', { error: error as Error });
+          return Response.json({ error: 'Failed to update device.' }, { status: 500 });
+        }
+
+        // Continue with refresh using corrected device
+      } else {
+        // Strict mismatch - different device attempting to use this token
+        loggers.auth.warn('Device token mismatch detected - possible stolen token', {
+          tokenDeviceId: deviceRecord.deviceId,
+          providedDeviceId: deviceId,
+          userId: deviceRecord.userId,
+        });
+        return Response.json({ error: 'Device token does not match this device.' }, { status: 401 });
+      }
     }
 
     const user = await db.query.users.findFirst({

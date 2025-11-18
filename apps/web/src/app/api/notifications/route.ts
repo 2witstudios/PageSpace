@@ -1,22 +1,16 @@
 import { NextResponse } from 'next/server';
-import { parse } from 'cookie';
-import { decodeToken } from '@pagespace/lib/server';
 import { getUserNotifications, getUnreadNotificationCount } from '@pagespace/lib';
 import { loggers } from '@pagespace/lib/server';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: false };
 
 export async function GET(req: Request) {
-  const cookieHeader = req.headers.get('cookie');
-  const cookies = parse(cookieHeader || '');
-  const accessToken = cookies.accessToken;
-
-  if (!accessToken) {
-    return new NextResponse("Unauthorized", { status: 401 });
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  if (isAuthError(auth)) {
+    return auth.error;
   }
-
-  const decoded = await decodeToken(accessToken);
-  if (!decoded || !decoded.userId) {
-    return new NextResponse("Unauthorized", { status: 401 });
-  }
+  const userId = auth.userId;
 
   try {
     const { searchParams } = new URL(req.url);
@@ -24,12 +18,12 @@ export async function GET(req: Request) {
     const countOnly = searchParams.get('countOnly') === 'true';
 
     if (countOnly) {
-      const count = await getUnreadNotificationCount(decoded.userId);
+      const count = await getUnreadNotificationCount(userId);
       return NextResponse.json({ count });
     }
 
-    const notifications = await getUserNotifications(decoded.userId, limit);
-    const unreadCount = await getUnreadNotificationCount(decoded.userId);
+    const notifications = await getUserNotifications(userId, limit);
+    const unreadCount = await getUnreadNotificationCount(userId);
 
     return NextResponse.json({
       notifications,

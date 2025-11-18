@@ -243,11 +243,23 @@ export async function GET(req: Request) {
 
     // DESKTOP PLATFORM: Pass tokens through redirect URL
     if (platform === 'desktop') {
+      // Validate that we have a deviceId for desktop OAuth
+      if (!deviceId) {
+        loggers.auth.error('Desktop OAuth missing deviceId from state', {
+          userId: user.id,
+          email: user.email,
+          hasStateParam: !!stateParam,
+          platform: platform,
+        });
+        const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
+        return NextResponse.redirect(new URL('/auth/signin?error=invalid_device', baseUrl));
+      }
+
       // Generate device token for desktop
       const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
         providedDeviceToken: undefined, // No existing token for OAuth
         userId: user.id,
-        deviceId: deviceId || 'unknown', // Should always have deviceId from state
+        deviceId: deviceId, // Required for desktop
         platform: 'desktop',
         tokenVersion: user.tokenVersion,
         deviceName: req.headers.get('user-agent') || 'Desktop App',

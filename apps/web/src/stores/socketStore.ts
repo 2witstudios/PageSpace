@@ -15,9 +15,9 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
   connectionStatus: 'disconnected',
   isInitialized: false,
 
-  connect: (forceReconnect = false) => {
+  connect: async (forceReconnect = false) => {
     const { socket } = get();
-    
+
     // If already connected and not forcing reconnect, return existing socket
     if (socket?.connected && !forceReconnect) {
       return;
@@ -34,9 +34,24 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
 
       const socketUrl = process.env.NEXT_PUBLIC_REALTIME_URL;
 
-      // Extract access token from cookies for authentication
+      // Extract access token - different sources for desktop vs web
       let accessToken: string | undefined;
-      if (typeof document !== 'undefined') {
+
+      // Check if running in Electron (desktop app)
+      const isDesktop = typeof window !== 'undefined' &&
+                       window.electron &&
+                       typeof window.electron.auth?.getJWT === 'function';
+
+      if (isDesktop) {
+        // Desktop: Get token from Electron secure storage
+        try {
+          accessToken = await window.electron?.auth.getJWT() ?? undefined;
+          console.log('🔌 Desktop: Retrieved token from Electron storage for Socket.IO');
+        } catch (error) {
+          console.error('🚨 Failed to get JWT from Electron for Socket.IO:', error);
+        }
+      } else if (typeof document !== 'undefined') {
+        // Web: Extract from cookies
         accessToken = document.cookie
           .split('; ')
           .find(row => row.startsWith('accessToken='))
@@ -78,12 +93,40 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
           // Attempt token refresh after a delay
           setTimeout(async () => {
             try {
-              // Try to refresh by making a request to our token refresh endpoint
-              const response = await fetch('/api/auth/refresh', {
+              // Re-check desktop status inside setTimeout to avoid closure issue
+              const isDesktopNow = typeof window !== 'undefined' &&
+                                   window.electron &&
+                                   typeof window.electron.auth?.getJWT === 'function';
+
+              // Desktop uses different refresh endpoint than web
+              const refreshEndpoint = isDesktopNow ? '/api/auth/device/refresh' : '/api/auth/refresh';
+
+              let refreshPayload: RequestInit = {
                 method: 'POST',
-                credentials: 'include'
-              });
-              
+                credentials: 'include',
+              };
+
+              // Desktop needs to provide device info for device token refresh
+              if (isDesktopNow && window.electron?.auth?.getDeviceInfo) {
+                const deviceInfo = await window.electron.auth.getDeviceInfo();
+                const session = await window.electron.auth.getSession();
+
+                refreshPayload = {
+                  ...refreshPayload,
+                  headers: {
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({
+                    deviceToken: session?.deviceToken,
+                    deviceId: deviceInfo.deviceId,
+                    userAgent: navigator.userAgent,
+                  }),
+                };
+              }
+
+              // Try to refresh by making a request to our token refresh endpoint
+              const response = await fetch(refreshEndpoint, refreshPayload);
+
               if (response.ok) {
                 console.log('🔄 Token refreshed, reconnecting socket...');
                 // Re-enable reconnection and connect
