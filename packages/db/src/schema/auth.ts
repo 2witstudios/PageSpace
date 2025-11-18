@@ -84,11 +84,11 @@ export const deviceTokens = pgTable('device_tokens', {
     tokenIdx: index('device_tokens_token_idx').on(table.token),
     deviceIdx: index('device_tokens_device_id_idx').on(table.deviceId),
     expiresIdx: index('device_tokens_expires_at_idx').on(table.expiresAt),
-    // Partial unique index: only enforce uniqueness for non-revoked tokens
+    // Partial unique index: only enforce uniqueness for non-revoked AND non-expired tokens
     // This prevents duplicate active device tokens for the same user+device+platform
     activeDeviceIdx: uniqueIndex('device_tokens_active_device_idx')
       .on(table.userId, table.deviceId, table.platform)
-      .where(sql`${table.revokedAt} IS NULL`),
+      .where(sql`${table.revokedAt} IS NULL AND ${table.expiresAt} > NOW()`),
   };
 });
 

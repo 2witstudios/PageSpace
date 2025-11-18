@@ -64,6 +64,13 @@
       "when": 1763394841416,
       "tag": "0008_right_valkyrie",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1763432065136,
+      "tag": "0009_burly_silverclaw",
+      "breakpoints": true
     }
   ]
 }
