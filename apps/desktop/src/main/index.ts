@@ -8,7 +8,8 @@ import { getMCPManager } from './mcp-manager';
 import { initializeWSClient, shutdownWSClient, getWSClient } from './ws-client';
 import type { MCPConfig } from '../shared/mcp-types';
 import { logger } from './logger';
-import { machineIdSync } from 'node-machine-id';
+import nodeMachineId from 'node-machine-id';
+const { machineIdSync } = nodeMachineId;
 import * as os from 'node:os';
 
 // Configuration store for user preferences

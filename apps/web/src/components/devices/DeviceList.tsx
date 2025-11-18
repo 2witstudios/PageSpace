@@ -1,7 +1,7 @@
 'use client';
 
 import { useDevices, type Device } from '@/hooks/useDevices';
-import { DeviceCard } from './DeviceCard';
+import { DeviceRow } from './DeviceRow';
 import { RevokeDeviceDialog } from './RevokeDeviceDialog';
 import { useState, useEffect } from 'react';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -89,13 +89,16 @@ export function DeviceList() {
 
   return (
     <>
-      <div className="grid gap-4 sm:grid-cols-1 md:grid-cols-2">
+      {/* Header */}
+      <div className="mb-4">
+        <h3 className="text-lg font-semibold">Saved Devices ({devices.length})</h3>
+        <p className="text-sm text-muted-foreground">Devices with access to your account</p>
+      </div>
+
+      {/* Device list */}
+      <div className="border border-border rounded-lg divide-y divide-border bg-card">
         {devices.map((device) => (
-          <DeviceCard
-            key={device.id}
-            device={device}
-            onRevoke={(device) => setDeviceToRevoke(device)}
-          />
+          <DeviceRow key={device.id} device={device} onRevoke={(device) => setDeviceToRevoke(device)} />
         ))}
       </div>
 
