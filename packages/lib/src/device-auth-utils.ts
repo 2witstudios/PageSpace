@@ -401,7 +401,8 @@ export async function validateOrCreateDeviceToken(params: {
         eq(deviceTokens.userId, userId),
         eq(deviceTokens.deviceId, deviceId),
         eq(deviceTokens.platform, platform),
-        isNull(deviceTokens.revokedAt)
+        isNull(deviceTokens.revokedAt),
+        gt(deviceTokens.expiresAt, new Date())  // Only reuse non-expired tokens
       ),
     });
 
