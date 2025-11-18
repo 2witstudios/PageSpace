@@ -394,22 +394,51 @@ export async function validateOrCreateDeviceToken(params: {
 
   // Create new device token if needed
   if (!deviceTokenValue) {
-    const { id: newDeviceTokenId, token: newDeviceToken } = await createDeviceTokenRecord(
-      userId,
-      deviceId,
-      platform,
-      tokenVersion,
-      {
-        deviceName: deviceName || undefined,
-        userAgent: userAgent || undefined,
-        ipAddress: ipAddress === 'unknown' ? undefined : ipAddress,
-        location: undefined,
-      }
-    );
+    // SECURITY: Check if an active device token already exists for this user/device/platform
+    // This prevents unique constraint violations when users clear storage or reinstall the app
+    const existingActiveToken = await db.query.deviceTokens.findFirst({
+      where: and(
+        eq(deviceTokens.userId, userId),
+        eq(deviceTokens.deviceId, deviceId),
+        eq(deviceTokens.platform, platform),
+        isNull(deviceTokens.revokedAt)
+      ),
+    });
 
-    deviceTokenValue = newDeviceToken;
-    deviceTokenRecordId = newDeviceTokenId;
-    isNew = true;
+    if (existingActiveToken) {
+      // Reuse existing active token instead of creating a duplicate
+      deviceTokenValue = existingActiveToken.token;
+      deviceTokenRecordId = existingActiveToken.id;
+      isNew = false;
+
+      // Update activity tracking for the reused token
+      await updateDeviceTokenActivity(existingActiveToken.id, ipAddress);
+
+      console.info('Reused existing active device token', {
+        userId,
+        deviceId,
+        platform,
+        tokenId: existingActiveToken.id,
+      });
+    } else {
+      // No existing active token, safe to create a new one
+      const { id: newDeviceTokenId, token: newDeviceToken } = await createDeviceTokenRecord(
+        userId,
+        deviceId,
+        platform,
+        tokenVersion,
+        {
+          deviceName: deviceName || undefined,
+          userAgent: userAgent || undefined,
+          ipAddress: ipAddress === 'unknown' ? undefined : ipAddress,
+          location: undefined,
+        }
+      );
+
+      deviceTokenValue = newDeviceToken;
+      deviceTokenRecordId = newDeviceTokenId;
+      isNew = true;
+    }
   }
 
   return {
