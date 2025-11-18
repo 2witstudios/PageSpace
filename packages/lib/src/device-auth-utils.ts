@@ -1,6 +1,6 @@
 import * as jose from 'jose';
 import { createId } from '@paralleldrive/cuid2';
-import { db, deviceTokens, eq, and, isNull, lt, gt } from '@pagespace/db';
+import { db, deviceTokens, eq, and, isNull, lt, gt, sql } from '@pagespace/db';
 
 const JWT_ALGORITHM = 'HS256';
 
