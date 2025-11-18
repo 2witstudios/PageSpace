@@ -1,7 +1,7 @@
 import { users, db, eq, deviceTokens, sql, and, isNull } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { getUserDeviceTokens, revokeAllUserDeviceTokens, decodeDeviceToken, createDeviceTokenRecord } from '@pagespace/lib/device-auth-utils';
+import { getUserDeviceTokens, revokeAllUserDeviceTokens, decodeDeviceToken, createDeviceTokenRecord, revokeExpiredDeviceTokens } from '@pagespace/lib/device-auth-utils';
 import bcrypt from 'bcryptjs';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
@@ -148,6 +148,9 @@ export async function DELETE(req: Request) {
           revokedReason: 'user_action',
         })
         .where(eq(deviceTokens.token, currentDeviceToken!));
+
+      // Revoke any expired tokens that would block creation
+      await revokeExpiredDeviceTokens(userId, currentDeviceInfo.deviceId, currentDeviceInfo.platform);
 
       // Create new token with the incremented tokenVersion
       const newTokenData = await createDeviceTokenRecord(

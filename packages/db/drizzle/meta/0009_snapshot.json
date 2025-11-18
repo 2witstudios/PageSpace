@@ -1,6 +1,6 @@
 {
-  "id": "ff68f601-a845-44ea-ab9a-b7e0132243ef",
-  "prevId": "7eafc0f7-1510-4234-9851-688a598cca8f",
+  "id": "a2eec5ba-ceb3-4c50-a465-3954c39272a5",
+  "prevId": "a0dd26aa-215a-497e-9b20-851744339253",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -199,7 +199,7 @@
             }
           ],
           "isUnique": true,
-          "where": "\"device_tokens\".\"revokedAt\" IS NULL AND \"device_tokens\".\"expiresAt\" > NOW()",
+          "where": "\"device_tokens\".\"revokedAt\" IS NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}

@@ -141,6 +141,53 @@ export async function createDeviceTokenRecord(
 }
 
 /**
+ * Revoke expired device tokens for a specific user+device+platform combination
+ * This prevents unique constraint violations when creating new tokens
+ *
+ * @param userId - User ID
+ * @param deviceId - Device fingerprint
+ * @param platform - Device platform
+ * @returns Number of tokens revoked
+ */
+export async function revokeExpiredDeviceTokens(
+  userId: string,
+  deviceId: string,
+  platform: 'web' | 'desktop' | 'ios' | 'android'
+): Promise<number> {
+  const now = new Date();
+
+  const result = await db
+    .update(deviceTokens)
+    .set({
+      revokedAt: now,
+      revokedReason: 'expired',
+    })
+    .where(
+      and(
+        eq(deviceTokens.userId, userId),
+        eq(deviceTokens.deviceId, deviceId),
+        eq(deviceTokens.platform, platform),
+        isNull(deviceTokens.revokedAt),
+        sql`${deviceTokens.expiresAt} <= ${now}` // Only revoke expired tokens
+      )
+    );
+
+  // Extract rowCount from result if available
+  const rowCount = (result as any).rowCount ?? 0;
+
+  if (rowCount > 0) {
+    console.info('Auto-revoked expired device tokens', {
+      userId,
+      deviceId,
+      platform,
+      count: rowCount,
+    });
+  }
+
+  return rowCount;
+}
+
+/**
  * Validate device token against database
  * SECURITY: Also validates tokenVersion to prevent use after tokenVersion bump
  */
@@ -422,6 +469,9 @@ export async function validateOrCreateDeviceToken(params: {
         tokenId: existingActiveToken.id,
       });
     } else {
+      // Revoke any expired tokens that would block creation
+      await revokeExpiredDeviceTokens(userId, deviceId, platform);
+
       // No existing active token, safe to create a new one
       const { id: newDeviceTokenId, token: newDeviceToken } = await createDeviceTokenRecord(
         userId,
