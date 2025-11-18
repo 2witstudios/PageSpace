@@ -1,6 +1,7 @@
-import { users, refreshTokens } from '@pagespace/db';
-import { db, eq, sql } from '@pagespace/db';
-import { decodeToken, generateAccessToken, generateRefreshToken, checkRateLimit, RATE_LIMIT_CONFIGS } from '@pagespace/lib/server';
+import { users, refreshTokens, deviceTokens } from '@pagespace/db';
+import { db, eq, sql, and, isNull } from '@pagespace/db';
+import { decodeToken, generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, checkRateLimit, RATE_LIMIT_CONFIGS } from '@pagespace/lib/server';
+import { validateDeviceToken } from '@pagespace/lib/device-auth-utils';
 import { serialize } from 'cookie';
 import { parse } from 'cookie';
 import { createId } from '@paralleldrive/cuid2';
@@ -23,17 +24,35 @@ export async function POST(req: Request) {
   
   if (!rateLimit.allowed) {
     return Response.json(
-      { 
+      {
         error: 'Too many refresh attempts. Please try again later.',
-        retryAfter: rateLimit.retryAfter 
-      }, 
-      { 
+        retryAfter: rateLimit.retryAfter
+      },
+      {
         status: 429,
         headers: {
           'Retry-After': rateLimit.retryAfter?.toString() || '300'
         }
       }
     );
+  }
+
+  // SECURITY: Validate device token if provided
+  // This prevents revoked devices from continuing to access the account via refresh tokens
+  const deviceTokenHeader = req.headers.get('x-device-token');
+  let validatedDeviceTokenId: string | undefined;
+  if (deviceTokenHeader) {
+    const validDevice = await validateDeviceToken(deviceTokenHeader);
+    if (!validDevice) {
+      // Device token is revoked, expired, or invalid
+      // Reject the refresh request to enforce device revocation
+      return Response.json(
+        { error: 'Device token is invalid or has been revoked.' },
+        { status: 401 }
+      );
+    }
+    // Store the device token ID to link with the new refresh token
+    validatedDeviceTokenId = validDevice.id;
   }
 
   // Use database transaction to prevent race conditions
@@ -57,6 +76,18 @@ export async function POST(req: Request) {
         await trx.update(users)
           .set({ tokenVersion: sql`${users.tokenVersion} + 1` })
           .where(eq(users.id, decoded.userId));
+
+        // SECURITY: Also revoke all device tokens for this user
+        // This prevents device tokens from bypassing the tokenVersion bump
+        await trx.update(deviceTokens)
+          .set({
+            revokedAt: new Date(),
+            revokedReason: 'token_version_bump_refresh_reuse'
+          })
+          .where(and(
+            eq(deviceTokens.userId, decoded.userId),
+            isNull(deviceTokens.revokedAt)
+          ));
       }
       return { error: 'Invalid refresh token.' };
     }
@@ -84,13 +115,24 @@ export async function POST(req: Request) {
   const newAccessToken = await generateAccessToken(user.id, user.tokenVersion, user.role);
   const newRefreshToken = await generateRefreshToken(user.id, user.tokenVersion, user.role);
 
+  const refreshPayload = await decodeToken(newRefreshToken);
+  const refreshExpiresAt = refreshPayload?.exp
+    ? new Date(refreshPayload.exp * 1000)
+    : new Date(Date.now() + getRefreshTokenMaxAge() * 1000);
+
   // Store the new refresh token
   await db.insert(refreshTokens).values({
     id: createId(),
     token: newRefreshToken,
     userId: user.id,
     device: req.headers.get('user-agent'),
+    userAgent: req.headers.get('user-agent'),
     ip: clientIP,
+    lastUsedAt: new Date(),
+    platform: 'web',
+    expiresAt: refreshExpiresAt,
+    // Link to device token if validated (enables device-based revocation)
+    deviceTokenId: validatedDeviceTokenId,
   });
 
   const isProduction = process.env.NODE_ENV === 'production';
@@ -109,7 +151,7 @@ export async function POST(req: Request) {
     secure: isProduction,
     sameSite: 'strict',
     path: '/',
-    maxAge: 7 * 24 * 60 * 60, // 7 days
+    maxAge: getRefreshTokenMaxAge(), // Configurable via REFRESH_TOKEN_TTL env var (default: 30d)
     ...(isProduction && { domain: process.env.COOKIE_DOMAIN })
   });
 

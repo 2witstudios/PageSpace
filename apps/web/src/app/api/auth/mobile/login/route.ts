@@ -2,7 +2,16 @@ import { users, refreshTokens } from '@pagespace/db';
 import { db, eq } from '@pagespace/db';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod/v4';
-import { generateAccessToken, generateRefreshToken, checkRateLimit, resetRateLimit, RATE_LIMIT_CONFIGS, decodeToken } from '@pagespace/lib/server';
+import {
+  generateAccessToken,
+  generateRefreshToken,
+  getRefreshTokenMaxAge,
+  checkRateLimit,
+  resetRateLimit,
+  RATE_LIMIT_CONFIGS,
+  decodeToken,
+  validateOrCreateDeviceToken,
+} from '@pagespace/lib/server';
 import { generateCSRFToken, getSessionIdFromJWT } from '@pagespace/lib/server';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
@@ -11,8 +20,13 @@ import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 const loginSchema = z.object({
   email: z.email(),
   password: z.string().min(1, {
-      error: "Password is required"
+    error: 'Password is required',
   }),
+  deviceId: z.string().min(1, { message: 'Device identifier is required' }),
+  platform: z.enum(['ios', 'android', 'desktop']).default('ios'),
+  deviceName: z.string().optional(),
+  appVersion: z.string().optional(),
+  deviceToken: z.string().optional(),
 });
 
 export async function POST(req: Request) {
@@ -24,7 +38,7 @@ export async function POST(req: Request) {
       return Response.json({ errors: validation.error.flatten().fieldErrors }, { status: 400 });
     }
 
-    const { email, password } = validation.data;
+    const { email, password, deviceId, platform, deviceName, appVersion, deviceToken: existingDeviceToken } = validation.data;
 
     // Rate limiting by IP address and email
     const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] ||
@@ -83,12 +97,33 @@ export async function POST(req: Request) {
     const accessToken = await generateAccessToken(user.id, user.tokenVersion, user.role);
     const refreshToken = await generateRefreshToken(user.id, user.tokenVersion, user.role);
 
+    const refreshTokenPayload = await decodeToken(refreshToken);
+    const refreshTokenExpiresAt = refreshTokenPayload?.exp
+      ? new Date(refreshTokenPayload.exp * 1000)
+      : new Date(Date.now() + getRefreshTokenMaxAge() * 1000);
+
+    const { deviceToken: deviceTokenValue, deviceTokenRecordId } = await validateOrCreateDeviceToken({
+      providedDeviceToken: existingDeviceToken,
+      userId: user.id,
+      deviceId,
+      platform,
+      tokenVersion: user.tokenVersion,
+      deviceName: deviceName || undefined,
+      userAgent: req.headers.get('user-agent') || undefined,
+      ipAddress: clientIP,
+    });
+
     await db.insert(refreshTokens).values({
       id: createId(),
       token: refreshToken,
       userId: user.id,
       device: req.headers.get('user-agent'),
+      userAgent: req.headers.get('user-agent'),
       ip: clientIP,
+      lastUsedAt: new Date(),
+      platform,
+      deviceTokenId: deviceTokenRecordId,
+      expiresAt: refreshTokenExpiresAt,
     });
 
     // Reset rate limits on successful login
@@ -103,7 +138,8 @@ export async function POST(req: Request) {
       email,
       ip: clientIP,
       userAgent: req.headers.get('user-agent'),
-      platform: 'mobile'
+      platform,
+      appVersion,
     });
 
     // Generate CSRF token for mobile client
@@ -132,6 +168,7 @@ export async function POST(req: Request) {
       token: accessToken,
       refreshToken: refreshToken,
       csrfToken: csrfToken,
+      deviceToken: deviceTokenValue,
     }, { status: 200 });
 
   } catch (error) {

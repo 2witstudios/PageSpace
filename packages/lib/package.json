@@ -67,6 +67,16 @@
       "import": "./dist/auth-utils.js",
       "require": "./dist/auth-utils.js"
     },
+    "./device-auth-utils": {
+      "types": "./dist/device-auth-utils.d.ts",
+      "import": "./dist/device-auth-utils.js",
+      "require": "./dist/device-auth-utils.js"
+    },
+    "./device-fingerprint-utils": {
+      "types": "./dist/device-fingerprint-utils.d.ts",
+      "import": "./dist/device-fingerprint-utils.js",
+      "require": "./dist/device-fingerprint-utils.js"
+    },
     "./api-utils": {
       "types": "./dist/api-utils.d.ts",
       "import": "./dist/api-utils.js",
@@ -179,6 +189,12 @@
       ],
       "auth-utils": [
         "./dist/auth-utils.d.ts"
+      ],
+      "device-auth-utils": [
+        "./dist/device-auth-utils.d.ts"
+      ],
+      "device-fingerprint-utils": [
+        "./dist/device-fingerprint-utils.d.ts"
       ],
       "api-utils": [
         "./dist/api-utils.d.ts"

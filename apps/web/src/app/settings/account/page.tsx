@@ -16,6 +16,10 @@ import { Badge } from "@/components/ui/badge";
 import { patch, post, del, fetchWithAuth } from '@/lib/auth-fetch';
 import { DeleteAccountDialog } from "@/components/dialogs/DeleteAccountDialog";
 import { DriveOwnershipDialog } from "@/components/dialogs/DriveOwnershipDialog";
+import { DeviceList } from "@/components/devices/DeviceList";
+import { RevokeAllDevicesDialog } from "@/components/devices/RevokeAllDevicesDialog";
+import { useDevices } from "@/hooks/useDevices";
+import { Smartphone } from "lucide-react";
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -74,6 +78,10 @@ export default function AccountPage() {
   const [isOwnershipDialogOpen, setIsOwnershipDialogOpen] = useState(false);
   const [multiMemberDrives, setMultiMemberDrives] = useState<MultiMemberDrive[]>([]);
   const [soloDrivesCount, setSoloDrivesCount] = useState(0);
+
+  // Devices state
+  const { devices, refetch: refetchDevices } = useDevices();
+  const [isRevokeAllDialogOpen, setIsRevokeAllDialogOpen] = useState(false);
 
   // Load user data into form
   useEffect(() => {
@@ -569,6 +577,35 @@ export default function AccountPage() {
         </CardContent>
       </Card>
 
+      {/* Connected Devices Section */}
+      <Card className="mb-6">
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <Smartphone className="h-5 w-5" />
+                Connected Devices
+              </CardTitle>
+              <CardDescription>
+                Manage devices with access to your account. Devices are automatically logged out after 90 days.
+              </CardDescription>
+            </div>
+            {devices && devices.length > 1 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setIsRevokeAllDialogOpen(true)}
+              >
+                Revoke All Others
+              </Button>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent>
+          <DeviceList />
+        </CardContent>
+      </Card>
+
       {/* Account Info */}
       <Card className="mb-6">
         <CardHeader>
@@ -629,6 +666,17 @@ export default function AccountPage() {
         userEmail={user.email || ""}
         isDeleting={isDeletingAccount}
         soloDrivesCount={soloDrivesCount}
+      />
+
+      {/* Revoke All Devices Dialog */}
+      <RevokeAllDevicesDialog
+        open={isRevokeAllDialogOpen}
+        onOpenChange={setIsRevokeAllDialogOpen}
+        onSuccess={() => {
+          refetchDevices();
+          setIsRevokeAllDialogOpen(false);
+        }}
+        deviceCount={devices?.length || 0}
       />
     </div>
   );

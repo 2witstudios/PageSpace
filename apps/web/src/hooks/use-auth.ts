@@ -4,7 +4,8 @@ import { useEffect, useCallback, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore, authStoreHelpers } from '@/stores/auth-store';
 import { useTokenRefresh } from './use-token-refresh';
-import { post } from '@/lib/auth-fetch';
+import { post, clearJWTCache } from '@/lib/auth-fetch';
+import { getOrCreateDeviceId, getDeviceName } from '@/lib/device-fingerprint';
 
 interface User {
   id: string;
@@ -62,30 +63,105 @@ export function useAuth(): {
   const login = useCallback(async (email: string, password: string) => {
     setLoading(true);
     try {
+      const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
+
+      if (isDesktop && window.electron) {
+        const [deviceInfo, existingSession] = await Promise.all([
+          window.electron.auth.getDeviceInfo(),
+          window.electron.auth.getSession(),
+        ]);
+
+        const desktopLoginPayload: {
+          email: string;
+          password: string;
+          deviceId: string;
+          platform: 'desktop';
+          deviceName: string;
+          appVersion: string;
+          deviceToken?: string;
+        } = {
+          email,
+          password,
+          deviceId: deviceInfo.deviceId,
+          platform: 'desktop',
+          deviceName: deviceInfo.deviceName,
+          appVersion: deviceInfo.appVersion,
+        };
+
+        if (existingSession?.deviceToken) {
+          desktopLoginPayload.deviceToken = existingSession.deviceToken;
+        }
+
+        const response = await fetch('/api/auth/mobile/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(desktopLoginPayload),
+        });
+
+        if (response.ok) {
+          const userData = await response.json();
+
+          await window.electron.auth.storeSession({
+            accessToken: userData.token,
+            refreshToken: userData.refreshToken,
+            csrfToken: userData.csrfToken,
+            deviceToken: userData.deviceToken,
+          });
+
+          clearJWTCache();
+          setUser(userData.user);
+          startSession();
+          return { success: true };
+        }
+
+        const errorData = await response.json().catch(() => ({}));
+        return {
+          success: false,
+          error: errorData.error || 'Login failed',
+        };
+      }
+
+      // Get device information for device token creation
+      const deviceId = getOrCreateDeviceId();
+      const deviceName = getDeviceName();
+      const existingDeviceToken = typeof localStorage !== 'undefined' ? localStorage.getItem('deviceToken') : null;
+
       const response = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({
+          email,
+          password,
+          deviceId,
+          deviceName,
+          ...(existingDeviceToken && { deviceToken: existingDeviceToken }),
+        }),
         credentials: 'include',
       });
 
       if (response.ok) {
         const userData = await response.json();
+
+        // Store device token if returned
+        if (userData.deviceToken && typeof localStorage !== 'undefined') {
+          localStorage.setItem('deviceToken', userData.deviceToken);
+        }
+
         setUser(userData);
         startSession();
         return { success: true };
       } else {
         const errorData = await response.json();
-        return { 
-          success: false, 
-          error: errorData.error || 'Login failed' 
+        return {
+          success: false,
+          error: errorData.error || 'Login failed'
         };
       }
     } catch (error) {
       console.error('Login error:', error);
-      return { 
-        success: false, 
-        error: 'Network error. Please try again.' 
+      return {
+        success: false,
+        error: 'Network error. Please try again.'
       };
     } finally {
       setLoading(false);
@@ -99,6 +175,24 @@ export function useAuth(): {
     } catch (error) {
       console.error('Logout error:', error);
     } finally {
+      if (typeof window !== 'undefined' && window.electron?.isDesktop) {
+        try {
+          await window.electron.auth.clearAuth();
+        } catch (err) {
+          console.error('Failed to clear desktop auth session', err);
+        }
+        clearJWTCache();
+      }
+
+      // Clear device token from localStorage (web platform)
+      if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+        try {
+          localStorage.removeItem('deviceToken');
+        } catch (err) {
+          console.error('Failed to clear device token from localStorage', err);
+        }
+      }
+
       // Reset token refresh state
       tokenRefreshActiveRef.current = false;
       endSession();
@@ -157,11 +251,28 @@ export function useAuth(): {
     }
   }, [hasHydrated, setHydrated]);
 
-  // Check for OAuth success parameter (from Google callback)
+  // Check for OAuth success parameter (from Google callback) and device token
   const [isOAuthSuccess, setIsOAuthSuccess] = useState(() => {
     if (typeof window === 'undefined') return false;
     return new URLSearchParams(window.location.search).get('auth') === 'success';
   });
+
+  // Capture device token from URL (signup redirect) and store in localStorage
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const params = new URLSearchParams(window.location.search);
+    const deviceTokenParam = params.get('deviceToken');
+
+    if (deviceTokenParam) {
+      localStorage.setItem('deviceToken', deviceTokenParam);
+      // Clean up URL
+      params.delete('deviceToken');
+      const newUrl = new URL(window.location.href);
+      newUrl.search = params.toString();
+      window.history.replaceState({}, '', newUrl.toString());
+    }
+  }, []);
 
   // Initial auth check - simplified with store-level deduplication
   useEffect(() => {

@@ -1,7 +1,7 @@
 import { users, drives, userAiSettings, refreshTokens, db, eq } from '@pagespace/db';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod/v4';
-import { slugify, generateAccessToken, generateRefreshToken, checkRateLimit, resetRateLimit, RATE_LIMIT_CONFIGS, createNotification } from '@pagespace/lib/server';
+import { slugify, generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, checkRateLimit, resetRateLimit, RATE_LIMIT_CONFIGS, createNotification, decodeToken, validateOrCreateDeviceToken } from '@pagespace/lib/server';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
@@ -16,7 +16,7 @@ import { NextResponse } from 'next/server';
 const signupSchema = z.object({
   name: z.string().min(1, {
       error: "Name is required"
-}),
+  }),
   email: z.email(),
   password: z.string()
     .min(12, { message: "Password must be at least 12 characters long" })
@@ -27,6 +27,10 @@ const signupSchema = z.object({
   acceptedTos: z.boolean().refine((val) => val === true, {
     message: "You must accept the Terms of Service and Privacy Policy",
   }),
+  // Optional device information for device token creation
+  deviceId: z.string().optional(),
+  deviceName: z.string().optional(),
+  deviceToken: z.string().optional(),
 }).refine((data) => data.password === data.confirmPassword, {
   message: "Passwords do not match",
   path: ["confirmPassword"],
@@ -47,7 +51,7 @@ export async function POST(req: Request) {
       return Response.json({ errors: validation.error.flatten().fieldErrors }, { status: 400 });
     }
 
-    const { name, email: validatedEmail, password } = validation.data;
+    const { name, email: validatedEmail, password, deviceId, deviceName, deviceToken: existingDeviceToken } = validation.data;
     email = validatedEmail;
 
     // Rate limiting by IP address and email (prevent spam and email enumeration)
@@ -181,13 +185,41 @@ export async function POST(req: Request) {
     const accessToken = await generateAccessToken(user.id, user.tokenVersion, user.role);
     const refreshToken = await generateRefreshToken(user.id, user.tokenVersion, user.role);
 
+    const refreshPayload = await decodeToken(refreshToken);
+    const refreshExpiresAt = refreshPayload?.exp
+      ? new Date(refreshPayload.exp * 1000)
+      : new Date(Date.now() + getRefreshTokenMaxAge() * 1000);
+
+    // Create or validate device token for web platform
+    let deviceTokenValue: string | undefined;
+    let deviceTokenRecordId: string | undefined;
+    if (deviceId) {
+      const { deviceToken: createdDeviceToken, deviceTokenRecordId: recordId } = await validateOrCreateDeviceToken({
+        providedDeviceToken: existingDeviceToken,
+        userId: user.id,
+        deviceId,
+        platform: 'web',
+        tokenVersion: user.tokenVersion,
+        deviceName,
+        userAgent: req.headers.get('user-agent') ?? undefined,
+        ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
+      });
+      deviceTokenValue = createdDeviceToken;
+      deviceTokenRecordId = recordId;
+    }
+
     // Save refresh token
     await db.insert(refreshTokens).values({
       id: createId(),
       token: refreshToken,
       userId: user.id,
       device: req.headers.get('user-agent'),
+      userAgent: req.headers.get('user-agent'),
       ip: clientIP,
+      lastUsedAt: new Date(),
+      platform: 'web',
+      expiresAt: refreshExpiresAt,
+      deviceTokenId: deviceTokenRecordId,  // Link refresh token to device token for revocation
     });
 
     const isProduction = process.env.NODE_ENV === 'production';
@@ -198,6 +230,11 @@ export async function POST(req: Request) {
 
     // Add auth success parameter to trigger auth state refresh
     redirectUrl.searchParams.set('auth', 'success');
+
+    // Add device token to URL if created (will be stored in localStorage by client)
+    if (deviceTokenValue) {
+      redirectUrl.searchParams.set('deviceToken', deviceTokenValue);
+    }
 
     const accessTokenCookie = serialize('accessToken', accessToken, {
       httpOnly: true,
@@ -213,7 +250,7 @@ export async function POST(req: Request) {
       secure: isProduction,
       sameSite: 'strict',
       path: '/',
-      maxAge: 7 * 24 * 60 * 60, // 7 days
+      maxAge: getRefreshTokenMaxAge(), // Configurable via REFRESH_TOKEN_TTL env var (default: 30d)
       ...(isProduction && { domain: process.env.COOKIE_DOMAIN })
     });
 

@@ -12,7 +12,7 @@ export default defineConfig({
         output: {
           format: 'es',
         },
-        external: ['bufferutil', 'utf-8-validate', 'zod'],
+        external: ['bufferutil', 'utf-8-validate', 'zod', 'node-machine-id'],
       },
     },
   },

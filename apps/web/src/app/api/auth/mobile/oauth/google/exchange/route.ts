@@ -50,12 +50,14 @@ import { z } from 'zod/v4';
 import {
   generateAccessToken,
   generateRefreshToken,
+  getRefreshTokenMaxAge,
   checkRateLimit,
   resetRateLimit,
   RATE_LIMIT_CONFIGS,
   decodeToken,
   generateCSRFToken,
   getSessionIdFromJWT,
+  validateOrCreateDeviceToken,
 } from '@pagespace/lib/server';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
@@ -64,11 +66,18 @@ import type { MobileOAuthResponse } from '@pagespace/lib/server';
 
 const oauthExchangeSchema = z.object({
   idToken: z.string().min(1, 'ID token is required'),
+  deviceId: z.string().min(1, { message: 'Device identifier is required' }),
+  platform: z.enum(['ios', 'android', 'desktop']).default('ios'),
+  deviceName: z.string().optional(),
+  appVersion: z.string().optional(),
+  deviceToken: z.string().optional(),
   // Note: state parameter not needed for ID token flow
   // CSRF protection provided via returned CSRF token
 });
 
 export async function POST(req: Request) {
+  let platform: 'ios' | 'android' | 'desktop' = 'ios';
+
   try {
     const body = await req.json();
     const validation = oauthExchangeSchema.safeParse(body);
@@ -81,7 +90,15 @@ export async function POST(req: Request) {
       );
     }
 
-    const { idToken } = validation.data;
+    const {
+      idToken,
+      deviceId,
+      platform: requestPlatform,
+      deviceName,
+      appVersion,
+      deviceToken: providedDeviceToken,
+    } = validation.data;
+    platform = requestPlatform;
 
     // Rate limiting by IP address
     const clientIP =
@@ -119,7 +136,7 @@ export async function POST(req: Request) {
       trackAuthEvent(undefined, 'failed_oauth', {
         reason: 'rate_limit_verification',
         ip: clientIP,
-        platform: 'mobile',
+        platform,
       });
       return Response.json(
         {
@@ -152,7 +169,7 @@ export async function POST(req: Request) {
         provider: 'google',
         reason: verificationResult.error,
         ip: clientIP,
-        platform: 'mobile',
+        platform,
       });
 
       return Response.json(
@@ -214,12 +231,31 @@ export async function POST(req: Request) {
     );
 
     // Save refresh token to database
-    await saveRefreshToken(
-      refreshToken,
-      user.id,
-      req.headers.get('user-agent'),
-      clientIP
-    );
+    const refreshTokenPayload = await decodeToken(refreshToken);
+    const refreshTokenExpiresAt = refreshTokenPayload?.exp
+      ? new Date(refreshTokenPayload.exp * 1000)
+      : new Date(Date.now() + getRefreshTokenMaxAge() * 1000);
+
+    const { deviceTokenRecordId } = await validateOrCreateDeviceToken({
+      providedDeviceToken,
+      userId: user.id,
+      deviceId,
+      platform,
+      tokenVersion: user.tokenVersion,
+      deviceName: deviceName || undefined,
+      userAgent: req.headers.get('user-agent') || undefined,
+      ipAddress: clientIP,
+    });
+
+    await saveRefreshToken(refreshToken, user.id, {
+      device: req.headers.get('user-agent'),
+      userAgent: req.headers.get('user-agent'),
+      ip: clientIP,
+      platform,
+      deviceTokenId: deviceTokenRecordId,
+      expiresAt: refreshTokenExpiresAt,
+      lastUsedAt: new Date(),
+    });
 
     // Reset rate limits on successful authentication
     resetRateLimit(clientIP);
@@ -235,7 +271,8 @@ export async function POST(req: Request) {
       ip: clientIP,
       provider: 'google',
       userAgent: req.headers.get('user-agent'),
-      platform: 'mobile',
+      platform,
+      appVersion,
     });
 
     // Generate CSRF token for mobile client
@@ -283,7 +320,7 @@ export async function POST(req: Request) {
     trackAuthEvent(undefined, 'failed_oauth', {
       provider: 'google',
       error: error instanceof Error ? error.message : 'Unknown error',
-      platform: 'mobile',
+      platform,
     });
 
     return Response.json(

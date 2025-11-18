@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS "device_tokens_active_device_idx";--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "device_tokens_active_device_idx" ON "device_tokens" USING btree ("userId","deviceId","platform") WHERE "device_tokens"."revokedAt" IS NULL;

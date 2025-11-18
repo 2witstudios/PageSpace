@@ -42,15 +42,19 @@ You operate in a hierarchical workspace system: Workspaces (Drives) → Folders 
 - Drive owners have full access, members have limited access`,
 
     examples: [
-      `User: "What's in my marketing workspace?"
-      → list_drives() to find "marketing" drive
-      → list_pages(driveId="clq2n3...", driveSlug="marketing")
-      → Present hierarchical structure with emojis`,
+      [
+        'User: "What\'s in my marketing workspace?"',
+        '→ list_drives() to find "marketing" drive',
+        '→ list_pages(driveId="clq2n3...", driveSlug="marketing")',
+        '→ Present hierarchical structure with emojis',
+      ].join('\n'),
 
-      `User: "Show me all my project documents"
-      → list_drives() in parallel for all workspaces
-      → list_pages() for each drive (parallel execution)
-      → Filter for document types (📄)`,
+      [
+        'User: "Show me all my project documents"',
+        '→ list_drives() in parallel for all workspaces',
+        '→ list_pages() for each drive (parallel execution)',
+        '→ Filter for document types (📄)',
+      ].join('\n'),
     ],
 
     errorPatterns: [
@@ -187,31 +191,43 @@ Execute multiple searches simultaneously:
 - Multiple search types together`,
 
     examples: [
-      `User: "What are the latest developments in AI safety?"
-      → web_search(query="latest developments in AI safety 2025", count=10, recencyFilter="oneMonth")
-      → Synthesize key findings with citations`,
+      [
+        'User: "What are the latest developments in AI safety?"',
+        '→ web_search(query="latest developments in AI safety 2025", count=10, recencyFilter="oneMonth")',
+        '→ Synthesize key findings with citations',
+      ].join('\n'),
 
-      `User: "Find the official React Server Components documentation"
-      → web_search(query="React Server Components documentation", domainFilter="react.dev", count=5)
-      → Provide summary with authoritative links`,
+      [
+        'User: "Find the official React Server Components documentation"',
+        '→ web_search(query="React Server Components documentation", domainFilter="react.dev", count=5)',
+        '→ Provide summary with authoritative links',
+      ].join('\n'),
 
-      `User: "Find all TODO items"
-      → regex_search(pattern="TODO", searchIn="content")
-      → Group results by page and priority`,
+      [
+        'User: "Find all TODO items"',
+        '→ regex_search(pattern="TODO", searchIn="content")',
+        '→ Group results by page and priority',
+      ].join('\n'),
 
-      `User: "Where are my Python files?"
-      → glob_search(pattern="**/*.py")
-      → List with full paths`,
+      [
+        'User: "Where are my Python files?"',
+        '→ glob_search(pattern="**/*.py")',
+        '→ List with full paths',
+      ].join('\n'),
 
-      `User: "Find discussions about pricing"
-      → search_pages(query="pricing discussion")
-      → Read top matches for context`,
+      [
+        'User: "Find discussions about pricing"',
+        '→ search_pages(query="pricing discussion")',
+        '→ Read top matches for context',
+      ].join('\n'),
 
-      `User: "Find all meeting notes from this month"
-      PARALLEL:
-      → glob_search(pattern="**/meeting*")
-      → regex_search(pattern="2024-01", searchIn="content")
-      → search_pages(query="meeting January 2024")`,
+      [
+        'User: "Find all meeting notes from this month"',
+        'PARALLEL:',
+        '→ glob_search(pattern="**/meeting*")',
+        '→ regex_search(pattern="2024-01", searchIn="content")',
+        '→ search_pages(query="meeting January 2024")',
+      ].join('\n'),
     ],
 
     errorPatterns: [
@@ -259,23 +275,27 @@ Execute multiple searches simultaneously:
 Task lists persist across AI conversations - great for long-term projects`,
 
     examples: [
-      `User: "Reorganize my documentation"
-      → create_task_list(
-          title="Documentation Reorganization",
-          tasks=[
-            {title: "Audit current structure", priority: "high"},
-            {title: "Create new folder hierarchy", priority: "high"},
-            {title: "Move API docs", priority: "medium"},
-            {title: "Update README links", priority: "medium"},
-            {title: "Archive old docs", priority: "low"}
-          ]
-        )
-      → update_task_status as each completes`,
+      [
+        'User: "Reorganize my documentation"',
+        '→ create_task_list(',
+        'title="Documentation Reorganization",',
+        'tasks=[',
+        '{title: "Audit current structure", priority: "high"},',
+        '{title: "Create new folder hierarchy", priority: "high"},',
+        '{title: "Move API docs", priority: "medium"},',
+        '{title: "Update README links", priority: "medium"},',
+        '{title: "Archive old docs", priority: "low"}',
+        ']',
+        ')',
+        '→ update_task_status as each completes',
+      ].join('\n'),
 
-      `User: "What's left on my task list?"
-      → get_task_list()
-      → Show pending/in_progress tasks
-      → Calculate completion percentage`,
+      [
+        'User: "What\'s left on my task list?"',
+        '→ get_task_list()',
+        '→ Show pending/in_progress tasks',
+        '→ Calculate completion percentage',
+      ].join('\n'),
     ],
 
     errorPatterns: [
@@ -410,19 +430,23 @@ PARALLEL:
 - Group by operation type when possible`,
 
     examples: [
-      `User: "Summarize my three reports"
-      PARALLEL:
-      → read_page("report1")
-      → read_page("report2")
-      → read_page("report3")
-      Then synthesize results`,
+      [
+        'User: "Summarize my three reports"',
+        'PARALLEL:',
+        '→ read_page("report1")',
+        '→ read_page("report2")',
+        '→ read_page("report3")',
+        'Then synthesize results',
+      ].join('\n'),
 
-      `User: "Find all documentation"
-      PARALLEL:
-      → glob_search("**/README*")
-      → glob_search("**/docs/*")
-      → search_pages("documentation")
-      → search_pages("guide")`,
+      [
+        'User: "Find all documentation"',
+        'PARALLEL:',
+        '→ glob_search("**/README*")',
+        '→ glob_search("**/docs/*")',
+        '→ search_pages("documentation")',
+        '→ search_pages("guide")',
+      ].join('\n'),
     ],
 
     errorPatterns: [
@@ -477,19 +501,25 @@ PARALLEL:
 - Can't batch? → Individual operations`,
 
     examples: [
-      `ERROR: "Cannot access drive"
-      → list_drives() to see available
-      → Suggest: "You don't have access to that workspace. Here are your available workspaces..."`,
+      [
+        'ERROR: "Cannot access drive"',
+        '→ list_drives() to see available',
+        '→ Suggest: "You don\'t have access to that workspace. Here are your available workspaces..."',
+      ].join('\n'),
 
-      `ERROR: "Page processing"
-      → Wait 2 seconds
-      → Retry read_page()
-      → If still processing: "File is being processed, please try again in a moment"`,
+      [
+        'ERROR: "Page processing"',
+        '→ Wait 2 seconds',
+        '→ Retry read_page()',
+        '→ If still processing: "File is being processed, please try again in a moment"',
+      ].join('\n'),
 
-      `ERROR: "Line 50 doesn't exist"
-      → read_page() to check current content
-      → Adjust line numbers based on actual content
-      → Retry operation`,
+      [
+        'ERROR: "Line 50 doesn\'t exist"',
+        '→ read_page() to check current content',
+        '→ Adjust line numbers based on actual content',
+        '→ Retry operation',
+      ].join('\n'),
     ],
 
     errorPatterns: [
