@@ -6,6 +6,15 @@ import { useAuthStore, authStoreHelpers } from '@/stores/auth-store';
 import { useTokenRefresh } from './use-token-refresh';
 import { post, clearJWTCache } from '@/lib/auth-fetch';
 import { getOrCreateDeviceId, getDeviceName } from '@/lib/device-fingerprint';
+import { z } from 'zod/v4';
+
+// Schema for validating desktop OAuth tokens from URL
+const desktopOAuthTokensSchema = z.object({
+  token: z.string().min(1, "Access token is required"),
+  refreshToken: z.string().min(1, "Refresh token is required"),
+  csrfToken: z.string(),
+  deviceToken: z.string(),
+});
 
 interface User {
   id: string;
@@ -109,6 +118,18 @@ export function useAuth(): {
           });
 
           clearJWTCache();
+
+          // CRITICAL FIX: Verify token is actually retrievable before proceeding
+          // This prevents race condition where loadSession is triggered before storage completes
+          const storedJWT = await window.electron.auth.getJWT();
+          if (!storedJWT) {
+            console.error('[Desktop Login] Token storage verification failed');
+            return {
+              success: false,
+              error: 'Failed to save login session. Please try again.'
+            };
+          }
+
           setUser(userData.user);
           startSession();
           return { success: true };
@@ -257,6 +278,9 @@ export function useAuth(): {
     return new URLSearchParams(window.location.search).get('auth') === 'success';
   });
 
+  // Track OAuth token storage in progress to prevent race condition
+  const [isStoringOAuthTokens, setIsStoringOAuthTokens] = useState(false);
+
   // Capture device token from URL (signup redirect) and store in localStorage
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -274,9 +298,93 @@ export function useAuth(): {
     }
   }, []);
 
+  // DESKTOP OAUTH: Handle tokens passed through URL from OAuth callback
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!window.electron?.isDesktop) return;
+
+    const params = new URLSearchParams(window.location.search);
+    const isDesktopOAuth = params.get('desktop') === 'true';
+    const tokensParam = params.get('tokens');
+
+    if (isDesktopOAuth && tokensParam) {
+      console.log('[AUTH_HOOK] Desktop OAuth tokens detected, storing in Electron...');
+
+      // Mark storage in progress
+      setIsStoringOAuthTokens(true);
+
+      (async () => {
+        try {
+          // Decode tokens from URL (using browser-native atob)
+          const decodedData = JSON.parse(atob(tokensParam));
+
+          // Validate token structure with Zod
+          const tokensData = desktopOAuthTokensSchema.parse(decodedData);
+
+          // Store in Electron encrypted storage
+          if (!window.electron) {
+            console.error('[AUTH_HOOK] Electron API not available');
+            return;
+          }
+          await window.electron.auth.storeSession({
+            accessToken: tokensData.token,
+            refreshToken: tokensData.refreshToken,
+            csrfToken: tokensData.csrfToken,
+            deviceToken: tokensData.deviceToken,
+          });
+
+          // Store device token in localStorage
+          if (tokensData.deviceToken) {
+            localStorage.setItem('deviceToken', tokensData.deviceToken);
+          }
+
+          clearJWTCache();
+
+          // Verify token is retrievable
+          const storedJWT = await window.electron.auth.getJWT();
+          if (!storedJWT) {
+            console.error('[AUTH_HOOK] Desktop OAuth token storage verification failed');
+            return;
+          }
+
+          console.log('[AUTH_HOOK] Desktop OAuth tokens stored successfully');
+
+          // Clean up URL
+          params.delete('desktop');
+          params.delete('tokens');
+          const newUrl = new URL(window.location.href);
+          newUrl.search = params.toString();
+          window.history.replaceState({}, '', newUrl.toString());
+
+          // Trigger auth state refresh
+          setIsOAuthSuccess(true);
+        } catch (error) {
+          if (error instanceof z.ZodError) {
+            console.error('[AUTH_HOOK] Invalid OAuth token structure:', error.issues);
+          } else {
+            console.error('[AUTH_HOOK] Failed to store desktop OAuth tokens:', error);
+          }
+
+          // Redirect to signin with error
+          window.location.href = '/auth/signin?error=oauth_error';
+        } finally {
+          // Mark storage complete (success or failure)
+          setIsStoringOAuthTokens(false);
+        }
+      })();
+    }
+  }, []);
+
   // Initial auth check - simplified with store-level deduplication
   useEffect(() => {
+    // Wait for hydration
     if (!hasHydrated) return;
+
+    // Wait for OAuth token storage to complete
+    if (isStoringOAuthTokens) {
+      console.log('[AUTH_HOOK] Waiting for OAuth token storage to complete...');
+      return;
+    }
 
     // Use store helper to determine if session load is needed
     const shouldLoad = authStoreHelpers.shouldLoadSession() || isOAuthSuccess;
@@ -296,7 +404,7 @@ export function useAuth(): {
         setIsOAuthSuccess(false); // Clear the flag to exit loading state
       }
     }
-  }, [hasHydrated, isOAuthSuccess]);
+  }, [hasHydrated, isOAuthSuccess, isStoringOAuthTokens]);
 
   // Initialize auth event listeners once (moved to store level for deduplication)
   useEffect(() => {
@@ -330,7 +438,7 @@ export function useAuth(): {
 
   return {
     user,
-    isLoading: isLoading || !hasHydrated || isOAuthSuccess, // Treat OAuth callback as loading to prevent premature redirect
+    isLoading: isLoading || !hasHydrated || isOAuthSuccess || isStoringOAuthTokens, // Block rendering during OAuth token storage
     isAuthenticated,
     isRefreshing,
     sessionDuration: authStoreHelpers.getSessionDuration(),

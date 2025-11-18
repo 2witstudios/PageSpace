@@ -1,9 +1,12 @@
 import { z } from 'zod/v4';
 import { checkRateLimit, RATE_LIMIT_CONFIGS } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
+import crypto from 'crypto';
 
 const googleSigninSchema = z.object({
   returnUrl: z.string().optional(),
+  platform: z.enum(['web', 'desktop']).optional(),
+  deviceId: z.string().optional(), // For desktop platform
 });
 
 export async function POST(req: Request) {
@@ -36,7 +39,28 @@ export async function POST(req: Request) {
       );
     }
 
-    const { returnUrl } = validation.data;
+    const { returnUrl, platform, deviceId } = validation.data;
+
+    // Create state object to preserve platform and deviceId through OAuth redirect
+    const stateData = {
+      returnUrl: returnUrl || '/dashboard',
+      platform: platform || 'web',
+      ...(deviceId && { deviceId }),
+    };
+
+    // Sign state parameter with HMAC-SHA256 to prevent tampering
+    const statePayload = JSON.stringify(stateData);
+    const signature = crypto
+      .createHmac('sha256', process.env.OAUTH_STATE_SECRET!)
+      .update(statePayload)
+      .digest('hex');
+
+    const stateWithSignature = JSON.stringify({
+      data: stateData,
+      sig: signature,
+    });
+
+    const stateParam = Buffer.from(stateWithSignature).toString('base64');
 
     // Generate OAuth URL
     const params = new URLSearchParams({
@@ -46,7 +70,7 @@ export async function POST(req: Request) {
       scope: 'openid email profile',
       access_type: 'offline',
       prompt: 'consent',
-      ...(returnUrl && { state: returnUrl }),
+      state: stateParam,
     });
 
     const oauthUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;

@@ -28,6 +28,7 @@ class AuthFetch {
   private csrfTokenPromise: Promise<string | null> | null = null;
   private jwtCache: { token: string | null; timestamp: number } | null = null;
   private readonly JWT_CACHE_TTL = 5000; // 5 seconds
+  private readonly JWT_RETRY_DELAY_MS = 100; // 100ms retry delay for async storage
 
   async fetch(url: string, options?: FetchOptions): Promise<Response> {
     const { skipAuth = false, maxRetries = 1, ...fetchOptions } = options || {};
@@ -526,8 +527,22 @@ class AuthFetch {
       return this.jwtCache.token;
     }
 
+    if (!window.electron) return null;
+
     // Fetch fresh token from Electron
-    const token = window.electron ? await window.electron.auth.getJWT() : null;
+    let token = await window.electron.auth.getJWT();
+
+    // DEFENSIVE FIX: If null, retry once after brief delay
+    // This handles async timing issues where storage hasn't completed yet
+    if (!token) {
+      await new Promise(resolve => setTimeout(resolve, this.JWT_RETRY_DELAY_MS));
+      token = await window.electron.auth.getJWT();
+
+      if (token) {
+        this.logger.info(`JWT retrieval succeeded on retry after ${this.JWT_RETRY_DELAY_MS}ms delay`);
+      }
+    }
+
     this.jwtCache = { token, timestamp: now };
     return token;
   }

@@ -1,13 +1,14 @@
 import { users, refreshTokens, drives } from '@pagespace/db';
 import { db, eq, or, count } from '@pagespace/db';
 import { z } from 'zod/v4';
-import { generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, checkRateLimit, resetRateLimit, RATE_LIMIT_CONFIGS, slugify, decodeToken } from '@pagespace/lib/server';
+import { generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, checkRateLimit, resetRateLimit, RATE_LIMIT_CONFIGS, slugify, decodeToken, generateCSRFToken, getSessionIdFromJWT, validateOrCreateDeviceToken } from '@pagespace/lib/server';
 import { serialize } from 'cookie';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { OAuth2Client } from 'google-auth-library';
 import { NextResponse } from 'next/server';
+import crypto from 'crypto';
 
 const googleCallbackSchema = z.object({
   code: z.string().min(1, "Authorization code is required"),
@@ -47,7 +48,49 @@ export async function GET(req: Request) {
       return NextResponse.redirect(new URL('/auth/signin?error=invalid_request', baseUrl));
     }
 
-    const { code: authCode } = validation.data;
+    const { code: authCode, state: stateParam } = validation.data;
+
+    // Parse and verify state parameter signature
+    let platform: 'web' | 'desktop' = 'web';
+    let deviceId: string | undefined;
+    let returnUrl = '/dashboard';
+
+    if (stateParam) {
+      try {
+        const stateWithSignature = JSON.parse(
+          Buffer.from(stateParam, 'base64').toString('utf-8')
+        );
+
+        // Check if this is a signed state parameter (new format)
+        if (stateWithSignature.data && stateWithSignature.sig) {
+          // Verify HMAC signature
+          const { data, sig } = stateWithSignature;
+          const expectedSignature = crypto
+            .createHmac('sha256', process.env.OAUTH_STATE_SECRET!)
+            .update(JSON.stringify(data))
+            .digest('hex');
+
+          if (sig !== expectedSignature) {
+            loggers.auth.warn('OAuth state signature mismatch', { stateParam });
+            const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
+            return NextResponse.redirect(new URL('/auth/signin?error=invalid_request', baseUrl));
+          }
+
+          // Signature valid, trust the data
+          platform = data.platform || 'web';
+          deviceId = data.deviceId;
+          returnUrl = data.returnUrl || '/dashboard';
+        } else {
+          // Legacy format: unsigned state (backward compatibility)
+          platform = stateWithSignature.platform || 'web';
+          deviceId = stateWithSignature.deviceId;
+          returnUrl = stateWithSignature.returnUrl || '/dashboard';
+        }
+      } catch {
+        // Legacy fallback: state might be just a return URL string
+        returnUrl = stateParam;
+      }
+    }
 
     // Rate limiting by IP address
     const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] || 
@@ -179,17 +222,17 @@ export async function GET(req: Request) {
       userAgent: req.headers.get('user-agent'),
       ip: clientIP,
       lastUsedAt: new Date(),
-      platform: 'web',
+      platform: platform,
       expiresAt: refreshExpiresAt,
     });
 
     // Reset rate limits on successful login
     resetRateLimit(clientIP);
     resetRateLimit(email.toLowerCase());
-    
+
     // Log successful login
     logAuthEvent('login', user.id, email, clientIP, 'Google OAuth');
-    
+
     // Track login event
     trackAuthEvent(user.id, 'login', {
       email,
@@ -198,15 +241,62 @@ export async function GET(req: Request) {
       userAgent: req.headers.get('user-agent')
     });
 
+    // DESKTOP PLATFORM: Pass tokens through redirect URL
+    if (platform === 'desktop') {
+      // Generate device token for desktop
+      const { deviceToken: deviceTokenValue, deviceTokenRecordId } = await validateOrCreateDeviceToken({
+        providedDeviceToken: undefined, // No existing token for OAuth
+        userId: user.id,
+        deviceId: deviceId || 'unknown', // Should always have deviceId from state
+        platform: 'desktop',
+        tokenVersion: user.tokenVersion,
+        deviceName: req.headers.get('user-agent') || 'Desktop App',
+        userAgent: req.headers.get('user-agent') || undefined,
+        ipAddress: clientIP,
+      });
+
+      // Generate CSRF token for desktop
+      const decoded = await decodeToken(accessToken);
+      if (!decoded) {
+        loggers.auth.error('Failed to decode access token for desktop OAuth');
+        const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
+        return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
+      }
+      const sessionId = getSessionIdFromJWT({
+        userId: user.id,
+        tokenVersion: user.tokenVersion,
+        iat: decoded.iat,
+      });
+      const csrfToken = generateCSRFToken(sessionId);
+
+      // Redirect to dashboard with tokens in URL (will be handled by desktop OAuth handler)
+      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
+      const redirectUrl = new URL('/dashboard', baseUrl);
+      redirectUrl.searchParams.set('auth', 'success');
+      redirectUrl.searchParams.set('desktop', 'true');
+
+      // Encode tokens as base64 to pass through URL (desktop will intercept and store)
+      const tokensData = {
+        token: accessToken,
+        refreshToken: refreshToken,
+        csrfToken: csrfToken,
+        deviceToken: deviceTokenValue,
+      };
+      const tokensEncoded = Buffer.from(JSON.stringify(tokensData)).toString('base64');
+      redirectUrl.searchParams.set('tokens', tokensEncoded);
+
+      return NextResponse.redirect(redirectUrl);
+    }
+
+    // WEB PLATFORM: Set cookies and redirect to dashboard
     const isProduction = process.env.NODE_ENV === 'production';
-    
-    // Set cookies and redirect to dashboard
+
     const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
-    const redirectUrl = new URL('/dashboard', baseUrl);
-    
+    const redirectUrl = new URL(returnUrl, baseUrl);
+
     // Add a parameter to trigger auth state refresh after OAuth
     redirectUrl.searchParams.set('auth', 'success');
-    
+
     const accessTokenCookie = serialize('accessToken', accessToken, {
       httpOnly: true,
       secure: isProduction,

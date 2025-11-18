@@ -85,17 +85,29 @@ function SignInForm() {
 
   const handleGoogleSignIn = async () => {
     if (isGoogleLoading) return;
-    
+
     setIsGoogleLoading(true);
     setError(null);
 
     try {
+      // Detect if desktop and get deviceId
+      const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
+      let deviceId: string | undefined;
+
+      if (isDesktop && window.electron) {
+        const deviceInfo = await window.electron.auth.getDeviceInfo();
+        deviceId = deviceInfo.deviceId;
+      }
+
       const response = await fetch('/api/auth/google/signin', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({}),
+        body: JSON.stringify({
+          platform: isDesktop ? 'desktop' : 'web',
+          ...(deviceId && { deviceId }),
+        }),
       });
 
       if (response.ok) {
