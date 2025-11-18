@@ -282,25 +282,69 @@ class AuthFetch {
     }
 
     try {
-      const response = await fetch('/api/auth/refresh', {
+      // Try refresh token first
+      let response = await fetch('/api/auth/refresh', {
         method: 'POST',
         credentials: 'include',
       });
 
       if (response.ok) {
-        // Optionally trigger auth state update
+        // Refresh token succeeded
         if (typeof window !== 'undefined' && window.dispatchEvent) {
           window.dispatchEvent(new CustomEvent('auth:refreshed'));
         }
         return { success: true, shouldLogout: false };
       }
 
+      // If refresh token fails with 401, try device token fallback
       if (response.status === 401) {
-        // Refresh token is invalid, trigger logout
-        if (typeof window !== 'undefined' && window.dispatchEvent) {
-          window.dispatchEvent(new CustomEvent('auth:expired'));
+        const deviceToken = typeof localStorage !== 'undefined'
+          ? localStorage.getItem('deviceToken')
+          : null;
+
+        if (deviceToken) {
+          this.logger.debug('Refresh token failed, attempting device token fallback');
+
+          // Dynamically import device fingerprint utilities
+          const { getOrCreateDeviceId } = await import('@/lib/device-fingerprint');
+          const deviceId = getOrCreateDeviceId();
+
+          // Try device token refresh as fallback
+          response = await fetch('/api/auth/device/refresh', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              deviceToken,
+              deviceId,
+              userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown',
+            }),
+          });
+
+          if (response.ok) {
+            // Device token refresh succeeded
+            this.logger.info('Session recovered via device token fallback');
+            if (typeof window !== 'undefined' && window.dispatchEvent) {
+              window.dispatchEvent(new CustomEvent('auth:refreshed'));
+            }
+            return { success: true, shouldLogout: false };
+          }
+
+          // Device token also failed with 401 - must logout
+          if (response.status === 401) {
+            this.logger.warn('Both refresh token and device token failed - logging out');
+            if (typeof window !== 'undefined' && window.dispatchEvent) {
+              window.dispatchEvent(new CustomEvent('auth:expired'));
+            }
+            return { success: false, shouldLogout: true };
+          }
+        } else {
+          // No device token available, must logout
+          this.logger.warn('Refresh token invalid and no device token available - logging out');
+          if (typeof window !== 'undefined' && window.dispatchEvent) {
+            window.dispatchEvent(new CustomEvent('auth:expired'));
+          }
+          return { success: false, shouldLogout: true };
         }
-        return { success: false, shouldLogout: true };
       }
 
       if (response.status === 429 || response.status >= 500) {

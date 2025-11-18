@@ -15,6 +15,7 @@ import {
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
+import { serialize } from 'cookie';
 
 const deviceRefreshSchema = z.object({
   deviceToken: z.string().min(1, { message: 'Device token is required' }),
@@ -127,6 +128,46 @@ export async function POST(req: Request) {
       appVersion,
     });
 
+    // For web platform, set httpOnly cookies instead of returning tokens in JSON
+    // Detect web by platform === 'web' in device record
+    const isWebPlatform = deviceRecord.platform === 'web';
+
+    if (isWebPlatform) {
+      const isProduction = process.env.NODE_ENV === 'production';
+
+      const accessTokenCookie = serialize('accessToken', accessToken, {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: 'strict',
+        path: '/',
+        maxAge: 15 * 60, // 15 minutes
+        ...(isProduction && { domain: process.env.COOKIE_DOMAIN })
+      });
+
+      const refreshTokenCookie = serialize('refreshToken', refreshToken, {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: 'strict',
+        path: '/',
+        maxAge: getRefreshTokenMaxAge(),
+        ...(isProduction && { domain: process.env.COOKIE_DOMAIN })
+      });
+
+      const headers = new Headers();
+      headers.append('Set-Cookie', accessTokenCookie);
+      headers.append('Set-Cookie', refreshTokenCookie);
+
+      return Response.json(
+        {
+          message: 'Session refreshed successfully',
+          csrfToken,
+          deviceToken: activeDeviceToken,
+        },
+        { status: 200, headers }
+      );
+    }
+
+    // For mobile/desktop, return tokens in JSON (existing behavior)
     return Response.json({
       token: accessToken,
       refreshToken,
