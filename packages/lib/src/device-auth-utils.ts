@@ -274,7 +274,7 @@ export async function updateDeviceTokenActivity(
  */
 export async function revokeDeviceToken(
   tokenId: string,
-  reason: 'user_action' | 'suspicious_activity' | 'expired' | 'token_version_change'
+  reason: 'user_action' | 'suspicious_activity' | 'expired' | 'token_version_change' | 'logout'
 ): Promise<void> {
   await db.update(deviceTokens)
     .set({
@@ -282,6 +282,51 @@ export async function revokeDeviceToken(
       revokedReason: reason,
     })
     .where(eq(deviceTokens.id, tokenId));
+}
+
+/**
+ * Revoke a device token by its token value (used during logout)
+ */
+export async function revokeDeviceTokenByValue(
+  token: string,
+  reason: 'logout' | 'user_action' = 'logout'
+): Promise<boolean> {
+  const result = await db.update(deviceTokens)
+    .set({
+      revokedAt: new Date(),
+      revokedReason: reason,
+    })
+    .where(and(
+      eq(deviceTokens.token, token),
+      isNull(deviceTokens.revokedAt)
+    ));
+
+  const rowCount = (result as any).rowCount ?? 0;
+  return rowCount > 0;
+}
+
+/**
+ * Revoke device tokens by device identifier (used for desktop logout)
+ */
+export async function revokeDeviceTokensByDevice(
+  userId: string,
+  deviceId: string,
+  platform: 'web' | 'desktop' | 'ios' | 'android',
+  reason: 'logout' | 'user_action' = 'logout'
+): Promise<number> {
+  const result = await db.update(deviceTokens)
+    .set({
+      revokedAt: new Date(),
+      revokedReason: reason,
+    })
+    .where(and(
+      eq(deviceTokens.userId, userId),
+      eq(deviceTokens.deviceId, deviceId),
+      eq(deviceTokens.platform, platform),
+      isNull(deviceTokens.revokedAt)
+    ));
+
+  return (result as any).rowCount ?? 0;
 }
 
 /**

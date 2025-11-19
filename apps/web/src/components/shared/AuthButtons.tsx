@@ -11,7 +11,18 @@ export default function AuthButtons() {
   const router = useRouter();
 
   const handleSignOut = async () => {
-    await post('/api/auth/logout');
+    const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
+    let body = {};
+
+    if (isDesktop && window.electron) {
+      const deviceInfo = await window.electron.auth.getDeviceInfo();
+      body = {
+        deviceId: deviceInfo.deviceId,
+        platform: 'desktop' as const,
+      };
+    }
+
+    await post('/api/auth/logout', body);
     router.push('/auth/signin');
   };
 
