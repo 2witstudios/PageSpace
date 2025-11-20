@@ -1,31 +1,23 @@
 import { NextResponse } from 'next/server';
-import { getUserAccessLevel } from '@pagespace/lib/server';
-import { parse } from 'cookie';
-import { decodeToken } from '@pagespace/lib/server';
-import { loggers } from '@pagespace/lib/server';
+import { getUserAccessLevel, loggers } from '@pagespace/lib/server';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: false } as const;
 
 export async function GET(
   req: Request,
   { params }: { params: Promise<{ pageId: string }> }
 ) {
   const { pageId } = await params;
-  
-  // Get user ID from cookie
-  const cookieHeader = req.headers.get('cookie');
-  const cookies = parse(cookieHeader || '');
-  const accessToken = cookies.accessToken;
 
-  if (!accessToken) {
-    return new NextResponse("Unauthorized", { status: 401 });
-  }
-
-  const decoded = await decodeToken(accessToken);
-  if (!decoded || !decoded.userId) {
-    return new NextResponse("Unauthorized", { status: 401 });
+  // Support both Bearer tokens (desktop) and cookies (web)
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  if (isAuthError(auth)) {
+    return auth.error;
   }
 
   try {
-    const permissions = await getUserAccessLevel(decoded.userId, pageId);
+    const permissions = await getUserAccessLevel(auth.userId, pageId);
     
     if (!permissions) {
       return NextResponse.json({

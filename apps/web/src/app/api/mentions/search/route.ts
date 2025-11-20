@@ -1,9 +1,8 @@
 import { NextResponse } from 'next/server';
-import { decodeToken, getUserAccessLevel } from '@pagespace/lib/server';
-import { parse } from 'cookie';
+import { getUserAccessLevel, loggers } from '@pagespace/lib/server';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { pages, users, db, and, eq, ilike, drives, inArray } from '@pagespace/db';
 import { MentionSuggestion, MentionType } from '@/types/mentions';
-import { loggers } from '@pagespace/lib/server';
 
 // Helper function to get all drives a user has access to
 async function getUserAccessibleDrives(userId: string): Promise<Array<{id: string, name: string, slug: string}>> {
@@ -26,24 +25,19 @@ async function getUserAccessibleDrives(userId: string): Promise<Array<{id: strin
   }
 }
 
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: false } as const;
+
 export async function GET(request: Request) {
   loggers.api.debug('[API] /api/mentions/search - Request received', {});
-  
-  const cookieHeader = request.headers.get('cookie');
-  const cookies = parse(cookieHeader || '');
-  const accessToken = cookies.accessToken;
 
-  if (!accessToken) {
-    loggers.api.debug('[API] No access token found', {});
-    return new NextResponse("Unauthorized", { status: 401 });
+  // Support both Bearer tokens (desktop) and cookies (web)
+  const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+  if (isAuthError(auth)) {
+    loggers.api.debug('[API] Authentication failed', {});
+    return auth.error;
   }
 
-  const decoded = await decodeToken(accessToken);
-  if (!decoded) {
-    loggers.api.debug('[API] Failed to decode token', {});
-    return new NextResponse("Unauthorized", { status: 401 });
-  }
-  const userId = decoded.userId;
+  const userId = auth.userId;
 
   const { searchParams } = new URL(request.url);
   const query = searchParams.get('q') || '';

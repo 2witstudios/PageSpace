@@ -27,7 +27,7 @@ class AuthFetch {
   private csrfToken: string | null = null;
   private csrfTokenPromise: Promise<string | null> | null = null;
   private jwtCache: { token: string | null; timestamp: number } | null = null;
-  private readonly JWT_CACHE_TTL = 5000; // 5 seconds
+  private readonly JWT_CACHE_TTL = 60000; // 60 seconds - reduced Electron IPC overhead
   private readonly JWT_RETRY_DELAY_MS = 100; // 100ms retry delay for async storage
 
   async fetch(url: string, options?: FetchOptions): Promise<Response> {
@@ -212,6 +212,16 @@ class AuthFetch {
       return result.success;
     }
 
+    // CRITICAL FIX: Clear JWT cache IMMEDIATELY before refresh starts
+    // This prevents the race condition where:
+    // 1. doRefresh() completes and stores new JWT
+    // 2. Original request retries with getJWTFromElectron()
+    // 3. Cache still contains OLD JWT (60s TTL)
+    // 4. Retry uses stale JWT → 401 → infinite loop
+    // By clearing cache here, retry will read fresh JWT from storage
+    this.clearJWTCache();
+    this.logger.debug('JWT cache cleared BEFORE token refresh to prevent stale retry');
+
     this.isRefreshing = true;
     this.refreshPromise = this.doRefresh();
 
@@ -223,10 +233,10 @@ class AuthFetch {
       this.refreshQueue = [];
 
       if (success) {
-        // Clear JWT cache so all retries (original + queued) get fresh token
-        // This must happen BEFORE retrying any requests
+        // Defensive: Clear JWT cache again for queued requests
+        // (Already cleared before doRefresh, but clear again in case queue accumulated during refresh)
         this.clearJWTCache();
-        this.logger.debug('JWT cache cleared after successful token refresh');
+        this.logger.debug('JWT cache cleared after successful token refresh (for queued requests)');
 
         // Retry all queued requests using this.fetch to preserve auth logic
         this.logger.info('Token refresh successful, retrying queued requests', {
@@ -384,7 +394,32 @@ class AuthFetch {
       let response: Response | null = null;
       let shouldLogout = false;
 
-      if (refreshToken) {
+      // PRIORITY 1: Try device token FIRST (90-day validity)
+      // This ensures desktop sessions last the full 90 days as intended
+      if (deviceToken) {
+        response = await fetch('/api/auth/device/refresh', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            deviceToken,
+            deviceId: deviceInfo.deviceId,
+            userAgent: deviceInfo.userAgent,
+            appVersion: deviceInfo.appVersion,
+          }),
+        });
+
+        if (response.ok) {
+          this.logger.debug('Desktop: Device token refresh succeeded');
+        }
+      }
+
+      // PRIORITY 2: Fall back to refresh token if device token fails or is unavailable
+      if (!response || response.status === 401) {
+        if (!refreshToken) {
+          this.logger.warn('Desktop: Cannot refresh session - no refresh token available');
+          return { success: false, shouldLogout: true };
+        }
+
         response = await fetch('/api/auth/mobile/refresh', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -397,33 +432,11 @@ class AuthFetch {
           }),
         });
 
-        if (response.ok) {
-          this.logger.debug('Desktop: Refresh token exchange succeeded');
-        }
-      }
-
-      if (!response || response.status === 401) {
-        if (!deviceToken) {
-          this.logger.warn('Desktop: Cannot refresh session - no device token available');
-          return { success: false, shouldLogout: true };
-        }
-
-        response = await fetch('/api/auth/device/refresh', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            deviceToken,
-            deviceId: deviceInfo.deviceId,
-            userAgent: deviceInfo.userAgent,
-            appVersion: deviceInfo.appVersion,
-          }),
-        });
-
         if (response.status === 401) {
           shouldLogout = true;
         }
       } else if (response?.status === 401) {
-        shouldLogout = !deviceToken;
+        shouldLogout = !refreshToken;
       }
 
       if (!response || !response.ok) {

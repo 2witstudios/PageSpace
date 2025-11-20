@@ -1,21 +1,15 @@
 import { NextResponse } from 'next/server';
-import { decodeToken } from '@pagespace/lib/server';
-import { parse } from 'cookie';
-import { users, db, eq } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { users, db, eq } from '@pagespace/db';
+
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: false } as const;
 
 export async function GET(request: Request) {
-  const cookieHeader = request.headers.get('cookie');
-  const cookies = parse(cookieHeader || '');
-  const accessToken = cookies.accessToken;
-
-  if (!accessToken) {
-    return new NextResponse("Unauthorized", { status: 401 });
-  }
-
-  const decoded = await decodeToken(accessToken);
-  if (!decoded?.userId) {
-    return new NextResponse("Unauthorized", { status: 401 });
+  // Support both Bearer tokens (desktop) and cookies (web)
+  const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+  if (isAuthError(auth)) {
+    return auth.error;
   }
 
   const { searchParams } = new URL(request.url);

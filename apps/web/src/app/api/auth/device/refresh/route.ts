@@ -100,12 +100,13 @@ export async function POST(req: Request) {
       return Response.json({ error: 'User not found for device token.' }, { status: 404 });
     }
 
-    // Rotate device token if it is within 30 days of expiration
+    // Rotate device token if it is within 60 days of expiration
+    // Increased from 30 to 60 days to ensure proactive rotation with overlap
     let activeDeviceToken = deviceToken;
     let activeDeviceTokenId = deviceRecord.id;
-    const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+    const sixtyDaysMs = 60 * 24 * 60 * 60 * 1000;
 
-    if (deviceRecord.expiresAt && deviceRecord.expiresAt.getTime() - Date.now() < thirtyDaysMs) {
+    if (deviceRecord.expiresAt && deviceRecord.expiresAt.getTime() - Date.now() < sixtyDaysMs) {
       const rotated = await rotateDeviceToken(
         deviceToken,
         {

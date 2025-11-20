@@ -1,26 +1,21 @@
 import { NextResponse } from 'next/server';
 import { pages, db, and, eq, asc } from '@pagespace/db';
-import { decodeToken, canUserViewPage } from '@pagespace/lib/server';
-import { parse } from 'cookie';
-import { loggers } from '@pagespace/lib/server';
+import { canUserViewPage, loggers } from '@pagespace/lib/server';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/api-utils';
+
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: false } as const;
 
 export async function GET(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
   const { pageId } = await params;
-  const cookieHeader = req.headers.get('cookie');
-  const cookies = parse(cookieHeader || '');
-  const accessToken = cookies.accessToken;
 
-  if (!accessToken) {
-    return new NextResponse("Unauthorized", { status: 401 });
+  // Support both Bearer tokens (desktop) and cookies (web)
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  if (isAuthError(auth)) {
+    return auth.error;
   }
 
-  const decoded = await decodeToken(accessToken);
-  if (!decoded?.userId) {
-    return new NextResponse("Unauthorized", { status: 401 });
-  }
-
-  const canView = await canUserViewPage(decoded.userId, pageId);
+  const canView = await canUserViewPage(auth.userId, pageId);
   if (!canView) {
     return new NextResponse("Forbidden", { status: 403 });
   }

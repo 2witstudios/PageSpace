@@ -274,6 +274,23 @@ export const useAuthStore = create<AuthState>()(
               // Update activity for new session
               get().updateActivity();
             } else if (response.status === 401) {
+              // For desktop: token might have expired during load, trigger refresh before logging out
+              if (isDesktop && window.electron) {
+                console.log('[AUTH_STORE] Desktop token validation failed, attempting refresh before logout');
+
+                // Import refreshAuthSession dynamically to avoid circular dependency
+                const { refreshAuthSession } = await import('@/lib/auth-fetch');
+                const refreshResult = await refreshAuthSession();
+
+                if (refreshResult.success) {
+                  console.log('[AUTH_STORE] Token refresh succeeded, retrying session load');
+                  // Retry loading session after successful refresh
+                  return get().loadSession(true);
+                }
+
+                console.log('[AUTH_STORE] Token refresh failed, proceeding with logout');
+              }
+
               // Unauthorized - clear user and record failure
               set({
                 user: null,
@@ -447,24 +464,20 @@ export const authStoreHelpers = {
           return;
         }
 
-        console.log('[AUTH_STORE] Token refreshed successfully - triggering SWR cache revalidation');
+        console.log('[AUTH_STORE] Token refreshed successfully');
 
         // Store was already updated directly by use-token-refresh hook
-        // Now trigger SWR cache revalidation for endpoints that may have failed with 401
-        import('swr').then(({ mutate }) => {
-          // Revalidate all API endpoints that might have failed during token expiration
-          // This ensures the UI displays fresh data after token refresh
-          mutate((key) => {
-            // Revalidate all API keys (string keys starting with /api/)
-            if (typeof key === 'string' && key.startsWith('/api/')) {
-              console.log('[AUTH_STORE] Revalidating SWR cache for:', key);
-              return true;
-            }
-            return false;
-          }).catch((error) => {
-            console.error('[AUTH_STORE] SWR cache revalidation error:', error);
-          });
-        });
+        // SWR will revalidate endpoints naturally based on their individual configurations:
+        // - Per-hook refresh intervals (15s-5min)
+        // - On window focus (where enabled)
+        // - On reconnect (default SWR behavior)
+        // - Manual mutations after operations
+        // - Socket.IO real-time updates for messages/usage
+        //
+        // Removed aggressive "revalidate all /api/*" logic that caused infinite loop:
+        // - 80+ simultaneous requests exceeded browser connection limits
+        // - ERR_INSUFFICIENT_RESOURCES → 401 errors → more refreshes → infinite loop
+        // - Production apps (Notion, Google Docs) don't revalidate all endpoints after token refresh
       });
     };
 

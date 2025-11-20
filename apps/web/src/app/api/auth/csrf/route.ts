@@ -1,23 +1,43 @@
-import { generateCSRFToken, getSessionIdFromJWT, decodeToken } from '@pagespace/lib/server';
+import { generateCSRFToken, getSessionIdFromJWT, loggers, decodeToken } from '@pagespace/lib/server';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { parse } from 'cookie';
-import { loggers } from '@pagespace/lib/server';
+
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: false } as const;
 
 export async function GET(req: Request) {
   try {
-    const cookieHeader = req.headers.get('cookie');
-    const cookies = parse(cookieHeader || '');
-    const accessToken = cookies.accessToken;
-
-    if (!accessToken) {
-      return Response.json({ error: 'No session found' }, { status: 401 });
+    // Support both Bearer tokens (desktop) and cookies (web)
+    const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+    if (isAuthError(auth)) {
+      return auth.error;
     }
 
-    const decoded = await decodeToken(accessToken);
-    if (!decoded) {
-      return Response.json({ error: 'Invalid session' }, { status: 401 });
+    // Get the JWT token to extract the iat claim
+    const authHeader = req.headers.get('authorization');
+    const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+
+    const jwtToken = bearerToken || (() => {
+      const cookieHeader = req.headers.get('cookie');
+      const cookies = parse(cookieHeader || '');
+      return cookies.accessToken || null;
+    })();
+
+    if (!jwtToken) {
+      return Response.json({ error: 'No JWT token found' }, { status: 401 });
     }
 
-    const sessionId = getSessionIdFromJWT(decoded);
+    // Decode the JWT to get the iat claim
+    const decoded = await decodeToken(jwtToken);
+    if (!decoded?.iat) {
+      return Response.json({ error: 'Invalid JWT token' }, { status: 401 });
+    }
+
+    // Get session ID from JWT claims
+    const sessionId = getSessionIdFromJWT({
+      userId: auth.userId,
+      tokenVersion: auth.tokenVersion,
+      iat: decoded.iat,
+    });
     const csrfToken = generateCSRFToken(sessionId);
 
     return Response.json({ csrfToken });
