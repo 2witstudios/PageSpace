@@ -13,6 +13,7 @@ export default function AdminLayoutClient({
   const pathname = usePathname();
   const currentTab = pathname.includes('/monitoring') ? 'monitoring' :
                      pathname.includes('/tables') ? 'tables' :
+                     pathname.includes('/global-prompt') ? 'global-prompt' :
                      pathname.includes('/support') ? 'support' : 'users';
 
   return (
@@ -22,7 +23,7 @@ export default function AdminLayoutClient({
           <CardHeader>
             <CardTitle>Admin Dashboard</CardTitle>
             <CardDescription>
-              Monitor system performance, manage users, view support requests, and visualize database schema
+              Monitor system performance, manage users, view support requests, visualize database schema, and inspect AI system prompts
             </CardDescription>
           </CardHeader>
         </Card>
@@ -34,6 +35,9 @@ export default function AdminLayoutClient({
             </TabsTrigger>
             <TabsTrigger value="tables" asChild>
               <Link href="/admin/tables">Database Tables</Link>
+            </TabsTrigger>
+            <TabsTrigger value="global-prompt" asChild>
+              <Link href="/admin/global-prompt">Global Prompt</Link>
             </TabsTrigger>
             <TabsTrigger value="users" asChild>
               <Link href="/admin/users">User Management</Link>
