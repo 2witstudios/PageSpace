@@ -12,6 +12,8 @@ import { createId } from '@paralleldrive/cuid2';
 import { slugify } from '@pagespace/lib/server';
 import { decodeToken, getRefreshTokenMaxAge } from './auth-utils';
 import { OAuthProvider, type OAuthUserInfo, type OAuthVerificationResult } from './oauth-types';
+import { createWelcomeDocs } from './welcome-docs';
+import { loggers } from './logger';
 
 /**
  * Verify Google ID token and extract user information
@@ -202,12 +204,21 @@ export async function createOrLinkOAuthUser(userInfo: OAuthUserInfo) {
     const driveName = `${user.name || userName}'s Drive`;
     const driveSlug = slugify(driveName);
 
-    await db.insert(drives).values({
+    const drive = await db.insert(drives).values({
       name: driveName,
       slug: driveSlug,
       ownerId: user.id,
       updatedAt: new Date(),
-    });
+    }).returning().then(res => res[0]);
+
+    // Create welcome documentation in the new drive
+    try {
+      await createWelcomeDocs(drive.id);
+      loggers.auth.info('Welcome docs created for new OAuth user', { userId: user.id, driveId: drive.id, provider });
+    } catch (error) {
+      // Don't fail signup if welcome docs creation fails
+      loggers.auth.error('Failed to create welcome docs', error as Error, { userId: user.id, driveId: drive.id });
+    }
   }
 
   return user;

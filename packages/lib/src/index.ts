@@ -68,5 +68,8 @@ export * from './export-utils';
 // Real-time and broadcasting utilities (server-only)
 export * from './broadcast-auth';
 
+// Welcome documentation utilities (server-only)
+export * from './welcome-docs';
+
 // Note: This index includes server-side dependencies and should NOT be imported
 // from client-side components. Use '@pagespace/lib/client-safe' for client-side imports.

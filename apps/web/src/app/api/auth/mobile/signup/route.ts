@@ -12,6 +12,7 @@ import {
   createNotification,
   decodeToken,
   validateOrCreateDeviceToken,
+  createWelcomeDocs,
 } from '@pagespace/lib/server';
 import { generateCSRFToken, getSessionIdFromJWT } from '@pagespace/lib/server';
 import { createId } from '@paralleldrive/cuid2';
@@ -128,12 +129,21 @@ export async function POST(req: Request) {
     // Create a personal drive for the new user
     const driveName = `${user.name}'s Drive`;
     const driveSlug = slugify(driveName);
-    await db.insert(drives).values({
+    const drive = await db.insert(drives).values({
       name: driveName,
       slug: driveSlug,
       ownerId: user.id,
       updatedAt: new Date(),
-    });
+    }).returning().then(res => res[0]);
+
+    // Create welcome documentation in the new drive
+    try {
+      await createWelcomeDocs(drive.id);
+      loggers.auth.info('Welcome docs created for new mobile user', { userId: user.id, driveId: drive.id, platform });
+    } catch (error) {
+      // Don't fail signup if welcome docs creation fails
+      loggers.auth.error('Failed to create welcome docs', error as Error, { userId: user.id, driveId: drive.id });
+    }
 
     // Add default 'ollama' provider for the new user with Docker-compatible URL
     // This enables local AI models via Ollama for users with local deployments

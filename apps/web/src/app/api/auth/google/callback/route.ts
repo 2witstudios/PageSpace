@@ -1,7 +1,7 @@
 import { users, refreshTokens, drives } from '@pagespace/db';
 import { db, eq, or, count } from '@pagespace/db';
 import { z } from 'zod/v4';
-import { generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, checkRateLimit, resetRateLimit, RATE_LIMIT_CONFIGS, slugify, decodeToken, generateCSRFToken, getSessionIdFromJWT, validateOrCreateDeviceToken } from '@pagespace/lib/server';
+import { generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, checkRateLimit, resetRateLimit, RATE_LIMIT_CONFIGS, slugify, decodeToken, generateCSRFToken, getSessionIdFromJWT, validateOrCreateDeviceToken, createWelcomeDocs } from '@pagespace/lib/server';
 import { serialize } from 'cookie';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
@@ -195,12 +195,21 @@ export async function GET(req: Request) {
       const driveName = `${user.name || userName}'s Drive`;
       const driveSlug = slugify(driveName);
       console.log(`[GOOGLE_AUTH] Creating drive: ${driveName} (${driveSlug})`);
-      await db.insert(drives).values({
+      const drive = await db.insert(drives).values({
         name: driveName,
         slug: driveSlug,
         ownerId: user.id,
         updatedAt: new Date(),
-      });
+      }).returning().then(res => res[0]);
+
+      // Create welcome documentation in the new drive
+      try {
+        await createWelcomeDocs(drive.id);
+        loggers.auth.info('Welcome docs created for new Google OAuth user', { userId: user.id, driveId: drive.id });
+      } catch (error) {
+        // Don't fail signup if welcome docs creation fails
+        loggers.auth.error('Failed to create welcome docs', error as Error, { userId: user.id, driveId: drive.id });
+      }
     }
 
     // Generate JWT tokens
