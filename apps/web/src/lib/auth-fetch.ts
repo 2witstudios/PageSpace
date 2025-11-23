@@ -403,7 +403,7 @@ class AuthFetch {
       const deviceInfo = await window.electron.auth.getDeviceInfo();
 
       const refreshToken = session?.refreshToken;
-      const deviceToken = session?.deviceToken ?? null;
+      const deviceToken = session?.deviceToken;
 
       let response: Response | null = null;
       let shouldLogout = false;
@@ -440,7 +440,7 @@ class AuthFetch {
           credentials: 'include',
           body: JSON.stringify({
             refreshToken,
-            deviceToken,
+            ...(deviceToken && { deviceToken }),
             deviceId: deviceInfo.deviceId,
             platform: 'desktop',
           }),
