@@ -21,17 +21,17 @@ enum KeychainError: Error, LocalizedError {
     }
 }
 
+@MainActor
 class AuthManager: ObservableObject {
     static let shared = AuthManager()
 
-    @MainActor @Published var isAuthenticated = false
-    @MainActor @Published var isCheckingAuth = true
-    @MainActor @Published var currentUser: User?
-    @MainActor @Published var csrfToken: String?
+    @Published var isAuthenticated = false
+    @Published var isCheckingAuth = true
+    @Published var currentUser: User?
+    @Published var csrfToken: String?
 
     private let keychainService = "com.pagespace.mobile"
     private let tokenKey = "jwt_token"
-    private let refreshTokenKey = "refresh_token"
     private let csrfKey = "csrf_token"
     private let deviceTokenKey = "device_token"
     private let deviceIdKey = "device_id"
@@ -40,24 +40,20 @@ class AuthManager: ObservableObject {
     // Accounts for differences between server and device time
     private let clockSkewBufferSeconds: TimeInterval = 60
 
-    // Token refresh configuration
-    private var tokenRefreshTask: Task<Void, Never>?
-    private let refreshBufferSeconds: TimeInterval = 120 // Refresh 2 minutes before expiry
     private let platformIdentifier = "ios"
 
     private init() {
         // Load token from Keychain on init
-        Task { @MainActor in
+        Task {
             isCheckingAuth = true
 
             if let token = loadToken() {
                 // Check if token is expired before using it
                 if isTokenExpired(token) {
-                    print("Token expired on init - attempting refresh")
+                    print("Token expired on init - attempting device token refresh")
                     do {
                         try await refreshToken()
                         try await loadCurrentUser()
-                        scheduleTokenRefresh()
                     } catch {
                         print("Failed to refresh expired token: \(error.localizedDescription)")
                         logout()
@@ -66,7 +62,6 @@ class AuthManager: ObservableObject {
                     // Token is still valid, load user
                     do {
                         try await loadCurrentUser()
-                        scheduleTokenRefresh()
                     } catch {
                         print("Failed to load user on init: \(error.localizedDescription)")
                         logout()
@@ -77,7 +72,6 @@ class AuthManager: ObservableObject {
                 do {
                     try await authenticateWithDeviceToken(storedDeviceToken)
                     try await loadCurrentUser()
-                    scheduleTokenRefresh()
                 } catch {
                     print("[AuthManager] Device token authentication failed: \(error.localizedDescription)")
                     logout()
@@ -119,7 +113,6 @@ class AuthManager: ObservableObject {
 
     // MARK: - Authentication
 
-    @MainActor
     func login(email: String, password: String) async throws -> User {
         let request = LoginRequest(
             email: email,
@@ -138,13 +131,10 @@ class AuthManager: ObservableObject {
             body: request
         )
 
-        // Save tokens to Keychain (throws on failure)
+        // Save tokens to Keychain (device-token-only pattern)
         try saveToken(response.token)
-        try saveRefreshToken(response.refreshToken)
         try saveCSRFToken(response.csrfToken)
-        if let responseDeviceToken = response.deviceToken {
-            try saveDeviceToken(responseDeviceToken)
-        }
+        try saveDeviceToken(response.deviceToken)
 
         // Update state
         csrfToken = response.csrfToken
@@ -160,13 +150,9 @@ class AuthManager: ObservableObject {
             )
         }
 
-        // Schedule proactive token refresh
-        scheduleTokenRefresh()
-
         return response.user
     }
 
-    @MainActor
     func signup(name: String, email: String, password: String, confirmPassword: String) async throws -> User {
         let request = SignupRequest(
             name: name,
@@ -186,13 +172,10 @@ class AuthManager: ObservableObject {
             body: request
         )
 
-        // Save tokens to Keychain (throws on failure)
+        // Save tokens to Keychain (device-token-only pattern)
         try saveToken(response.token)
-        try saveRefreshToken(response.refreshToken)
         try saveCSRFToken(response.csrfToken)
-        if let responseDeviceToken = response.deviceToken {
-            try saveDeviceToken(responseDeviceToken)
-        }
+        try saveDeviceToken(response.deviceToken)
 
         // Update state
         csrfToken = response.csrfToken
@@ -208,13 +191,9 @@ class AuthManager: ObservableObject {
             )
         }
 
-        // Schedule proactive token refresh
-        scheduleTokenRefresh()
-
         return response.user
     }
 
-    @MainActor
     func loginWithGoogle(idToken: String) async throws -> User {
         let request = OAuthExchangeRequest(
             idToken: idToken,
@@ -232,13 +211,10 @@ class AuthManager: ObservableObject {
             body: request
         )
 
-        // Save tokens to Keychain (throws on failure)
+        // Save tokens to Keychain (device-token-only pattern)
         try saveToken(response.token)
-        try saveRefreshToken(response.refreshToken)
         try saveCSRFToken(response.csrfToken)
-        if let responseDeviceToken = response.deviceToken {
-            try saveDeviceToken(responseDeviceToken)
-        }
+        try saveDeviceToken(response.deviceToken)
 
         // Update state
         csrfToken = response.csrfToken
@@ -254,46 +230,34 @@ class AuthManager: ObservableObject {
             )
         }
 
-        // Schedule proactive token refresh
-        scheduleTokenRefresh()
-
         return response.user
     }
 
-    @MainActor
     func refreshToken() async throws {
-        guard let refreshToken = loadRefreshToken() else {
+        // Device-token-only pattern: Use device token for refresh (90-day sessions)
+        guard let deviceToken = loadDeviceToken() else {
             throw APIError.unauthorized
         }
 
         let request = RefreshRequest(
-            refreshToken: refreshToken,
-            deviceToken: loadDeviceToken(),
+            deviceToken: deviceToken,
             deviceId: ensureDeviceIdentifier(),
             platform: platformIdentifier
         )
-        let endpoint = APIEndpoints.refresh
 
         let response: RefreshResponse = try await APIClient.shared.request(
-            endpoint: endpoint,
+            endpoint: APIEndpoints.refresh,
             method: .POST,
             body: request
         )
 
-        // Save new tokens (throws on failure)
+        // Save new tokens (no refresh token in response anymore)
         try saveToken(response.token)
-        try saveRefreshToken(response.refreshToken)
         try saveCSRFToken(response.csrfToken)
-        if let responseDeviceToken = response.deviceToken {
-            try saveDeviceToken(responseDeviceToken)
-        }
+        try saveDeviceToken(response.deviceToken)
         csrfToken = response.csrfToken
-
-        // Schedule next refresh after successful token refresh
-        scheduleTokenRefresh()
     }
 
-    @MainActor
     private func authenticateWithDeviceToken(_ deviceToken: String) async throws {
         let request = DeviceRefreshRequest(
             deviceToken: deviceToken,
@@ -309,11 +273,8 @@ class AuthManager: ObservableObject {
         )
 
         try saveToken(response.token)
-        try saveRefreshToken(response.refreshToken)
         try saveCSRFToken(response.csrfToken)
-        if let responseDeviceToken = response.deviceToken {
-            try saveDeviceToken(responseDeviceToken)
-        }
+        try saveDeviceToken(response.deviceToken)
         csrfToken = response.csrfToken
         isAuthenticated = true
     }
@@ -341,14 +302,8 @@ class AuthManager: ObservableObject {
         }
     }
 
-    @MainActor
     func logout() {
-        // Cancel any scheduled token refresh
-        tokenRefreshTask?.cancel()
-        tokenRefreshTask = nil
-
         deleteToken()
-        deleteRefreshToken()
         deleteCSRFToken()
         deleteDeviceToken()
         currentUser = nil
@@ -478,59 +433,6 @@ class AuthManager: ObservableObject {
         return exp
     }
 
-    /// Schedule proactive token refresh before expiration
-    @MainActor
-    private func scheduleTokenRefresh() {
-        // Cancel existing task
-        tokenRefreshTask?.cancel()
-
-        guard let token = getToken() else {
-            print("[AuthManager] Cannot schedule refresh: no token")
-            return
-        }
-
-        // Calculate time until refresh needed
-        let expiryTime = getTokenExpiryTime(token)
-        let refreshTime = expiryTime - refreshBufferSeconds
-        let now = Date().timeIntervalSince1970
-        let timeUntilRefresh = refreshTime - now
-
-        if timeUntilRefresh <= 0 {
-            // Token expires soon - refresh immediately
-            print("[AuthManager] 🔐 Token expires soon - refreshing immediately")
-            Task { @MainActor in
-                do {
-                    try await refreshToken()
-                } catch {
-                    print("[AuthManager] Failed to proactively refresh token: \(error)")
-                    logout()
-                }
-            }
-        } else {
-            // Schedule refresh for later using Task.sleep
-            let expiryDate = Date(timeIntervalSince1970: expiryTime)
-            let refreshDate = Date(timeIntervalSince1970: refreshTime)
-            print("[AuthManager] 🔐 Token refresh scheduled:")
-            print("  - Expires at: \(expiryDate)")
-            print("  - Will refresh at: \(refreshDate)")
-            print("  - Time until refresh: \(Int(timeUntilRefresh))s")
-
-            tokenRefreshTask = Task { @MainActor in
-                try? await Task.sleep(nanoseconds: UInt64(timeUntilRefresh * 1_000_000_000))
-
-                guard !Task.isCancelled else { return }
-
-                print("[AuthManager] 🔐 Executing scheduled token refresh")
-                do {
-                    try await refreshToken()
-                } catch {
-                    print("[AuthManager] Scheduled token refresh failed: \(error)")
-                    logout()
-                }
-            }
-        }
-    }
-
     // MARK: - Keychain Operations
 
     nonisolated private func saveToken(_ token: String) throws {
@@ -628,54 +530,6 @@ class AuthManager: ObservableObject {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
             kSecAttrAccount as String: csrfKey
-        ]
-        SecItemDelete(query as CFDictionary)
-    }
-
-    nonisolated private func saveRefreshToken(_ token: String) throws {
-        guard let data = token.data(using: .utf8) else {
-            throw KeychainError.encodingFailed
-        }
-
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecAttrAccount as String: refreshTokenKey,
-            kSecValueData as String: data
-        ]
-
-        SecItemDelete(query as CFDictionary)
-        let status = SecItemAdd(query as CFDictionary, nil)
-        guard status == errSecSuccess else {
-            throw KeychainError.saveFailed(status: status)
-        }
-    }
-
-    nonisolated private func loadRefreshToken() -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecAttrAccount as String: refreshTokenKey,
-            kSecReturnData as String: true
-        ]
-
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-
-        guard status == errSecSuccess,
-              let data = result as? Data,
-              let token = String(data: data, encoding: .utf8) else {
-            return nil
-        }
-
-        return token
-    }
-
-    nonisolated private func deleteRefreshToken() {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecAttrAccount as String: refreshTokenKey
         ]
         SecItemDelete(query as CFDictionary)
     }

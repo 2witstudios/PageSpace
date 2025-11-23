@@ -1,11 +1,9 @@
-import { users, refreshTokens } from '@pagespace/db';
+import { users } from '@pagespace/db';
 import { db, eq } from '@pagespace/db';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod/v4';
 import {
   generateAccessToken,
-  generateRefreshToken,
-  getRefreshTokenMaxAge,
   checkRateLimit,
   resetRateLimit,
   RATE_LIMIT_CONFIGS,
@@ -13,7 +11,6 @@ import {
   validateOrCreateDeviceToken,
 } from '@pagespace/lib/server';
 import { generateCSRFToken, getSessionIdFromJWT } from '@pagespace/lib/server';
-import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 
@@ -95,14 +92,9 @@ export async function POST(req: Request) {
     }
 
     const accessToken = await generateAccessToken(user.id, user.tokenVersion, user.role);
-    const refreshToken = await generateRefreshToken(user.id, user.tokenVersion, user.role);
 
-    const refreshTokenPayload = await decodeToken(refreshToken);
-    const refreshTokenExpiresAt = refreshTokenPayload?.exp
-      ? new Date(refreshTokenPayload.exp * 1000)
-      : new Date(Date.now() + getRefreshTokenMaxAge() * 1000);
-
-    const { deviceToken: deviceTokenValue, deviceTokenRecordId } = await validateOrCreateDeviceToken({
+    // Device token only - no refresh token needed for mobile (90-day sessions)
+    const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
       providedDeviceToken: existingDeviceToken,
       userId: user.id,
       deviceId,
@@ -111,19 +103,6 @@ export async function POST(req: Request) {
       deviceName: deviceName || undefined,
       userAgent: req.headers.get('user-agent') || undefined,
       ipAddress: clientIP,
-    });
-
-    await db.insert(refreshTokens).values({
-      id: createId(),
-      token: refreshToken,
-      userId: user.id,
-      device: req.headers.get('user-agent'),
-      userAgent: req.headers.get('user-agent'),
-      ip: clientIP,
-      lastUsedAt: new Date(),
-      platform,
-      deviceTokenId: deviceTokenRecordId,
-      expiresAt: refreshTokenExpiresAt,
     });
 
     // Reset rate limits on successful login
@@ -157,7 +136,7 @@ export async function POST(req: Request) {
     });
     const csrfToken = generateCSRFToken(sessionId);
 
-    // Return tokens in JSON body for mobile clients
+    // Return tokens in JSON body for mobile clients (device-token-only pattern)
     return Response.json({
       user: {
         id: user.id,
@@ -166,7 +145,6 @@ export async function POST(req: Request) {
         image: user.image,
       },
       token: accessToken,
-      refreshToken: refreshToken,
       csrfToken: csrfToken,
       deviceToken: deviceTokenValue,
     }, { status: 200 });

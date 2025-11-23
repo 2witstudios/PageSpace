@@ -1,11 +1,9 @@
-import { users, drives, userAiSettings, refreshTokens, db, eq } from '@pagespace/db';
+import { users, drives, userAiSettings, db, eq } from '@pagespace/db';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod/v4';
 import {
   slugify,
   generateAccessToken,
-  generateRefreshToken,
-  getRefreshTokenMaxAge,
   checkRateLimit,
   resetRateLimit,
   RATE_LIMIT_CONFIGS,
@@ -198,14 +196,9 @@ export async function POST(req: Request) {
 
     // Generate JWT tokens for automatic authentication
     const accessToken = await generateAccessToken(user.id, user.tokenVersion, user.role);
-    const refreshToken = await generateRefreshToken(user.id, user.tokenVersion, user.role);
 
-    const refreshTokenPayload = await decodeToken(refreshToken);
-    const refreshTokenExpiresAt = refreshTokenPayload?.exp
-      ? new Date(refreshTokenPayload.exp * 1000)
-      : new Date(Date.now() + getRefreshTokenMaxAge() * 1000);
-
-    const { deviceToken, deviceTokenRecordId: deviceTokenId } = await validateOrCreateDeviceToken({
+    // Device token only - no refresh token needed for mobile (90-day sessions)
+    const { deviceToken } = await validateOrCreateDeviceToken({
       providedDeviceToken: null,
       userId: user.id,
       deviceId,
@@ -214,20 +207,6 @@ export async function POST(req: Request) {
       deviceName: deviceName || undefined,
       userAgent: req.headers.get('user-agent') || undefined,
       ipAddress: clientIP,
-    });
-
-    // Save refresh token
-    await db.insert(refreshTokens).values({
-      id: createId(),
-      token: refreshToken,
-      userId: user.id,
-      device: req.headers.get('user-agent'),
-      userAgent: req.headers.get('user-agent'),
-      ip: clientIP,
-      lastUsedAt: new Date(),
-      platform,
-      deviceTokenId,
-      expiresAt: refreshTokenExpiresAt,
     });
 
     // Generate CSRF token for mobile client
@@ -245,7 +224,7 @@ export async function POST(req: Request) {
     });
     const csrfToken = generateCSRFToken(sessionId);
 
-    // Return tokens in JSON body for mobile clients (no redirect)
+    // Return tokens in JSON body for mobile clients (device-token-only pattern)
     return Response.json({
       user: {
         id: user.id,
@@ -254,7 +233,6 @@ export async function POST(req: Request) {
         image: user.image,
       },
       token: accessToken,
-      refreshToken: refreshToken,
       csrfToken: csrfToken,
       deviceToken,
     }, { status: 201 });

@@ -31,23 +31,21 @@ struct SignupRequest: Codable {
 struct LoginResponse: Codable {
     let user: User
     let token: String
-    let refreshToken: String
     let csrfToken: String
-    let deviceToken: String?
+    let deviceToken: String
 }
 
+// Device token refresh is now the primary pattern (no more refresh tokens for mobile)
 struct RefreshRequest: Codable {
-    let refreshToken: String
-    let deviceToken: String?
+    let deviceToken: String
     let deviceId: String
     let platform: String
 }
 
 struct RefreshResponse: Codable {
     let token: String
-    let refreshToken: String
     let csrfToken: String
-    let deviceToken: String?
+    let deviceToken: String
 }
 
 struct OAuthExchangeRequest: Codable {

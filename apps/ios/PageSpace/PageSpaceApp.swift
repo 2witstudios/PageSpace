@@ -2,8 +2,8 @@ import SwiftUI
 
 @main
 struct PageSpaceApp: App {
-    @StateObject private var authManager = AuthManager.shared
-    @StateObject private var realtimeService = RealtimeService.shared
+    @ObservedObject private var authManager = AuthManager.shared
+    @ObservedObject private var realtimeService = RealtimeService.shared
     @Environment(\.scenePhase) var scenePhase
 
     var body: some Scene {
@@ -28,16 +28,17 @@ struct PageSpaceApp: App {
         switch newPhase {
         case .active:
             print("📱 App became active")
-            // Validate token and refresh if needed
-            Task { @MainActor in
+            // Device-token-only pattern: Only refresh if access token is actually expired
+            // No need for proactive refresh with 90-day device tokens
+            Task {
                 guard authManager.isAuthenticated,
                       let token = authManager.getToken() else {
                     return
                 }
 
-                // Check if token is expired or expiring soon (within 5 minutes)
-                if authManager.isTokenExpiringSoon(token, bufferSeconds: 300) {
-                    print("🔐 Token expiring soon - refreshing proactively on foreground")
+                // Only refresh if token is expired (not proactively)
+                if authManager.isTokenExpired(token) {
+                    print("🔐 Access token expired - refreshing with device token")
                     do {
                         try await authManager.refreshToken()
 
