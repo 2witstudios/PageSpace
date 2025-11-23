@@ -21,12 +21,13 @@ let isRefreshScheduled = false;
 export function useTokenRefresh(options: TokenRefreshOptions = {}) {
   const {
     refreshBeforeExpiryMs = 3 * 60 * 1000, // 3 minutes (more buffer)
-    retryAttempts = 2, // Fewer retries to avoid conflicts
-    retryDelayMs = 2000 // Longer delay between retries
+    retryAttempts = 5, // More retries for better network resilience
+    retryDelayMs = 1000 // Base delay (will use exponential backoff)
   } = options;
 
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
   const retryCountRef = useRef(0);
+  const lastRefreshTimeRef = useRef<number>(Date.now());
   const [isRefreshing, setIsRefreshing] = useState(false);
   const router = useRouter();
 
@@ -90,6 +91,7 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
           }
 
           retryCountRef.current = 0;
+          lastRefreshTimeRef.current = Date.now(); // Track last successful refresh
 
           // Dispatch custom event for editing protection check
           if (typeof window !== 'undefined') {
@@ -153,14 +155,16 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
         console.log('✅ Token refresh successful, scheduling next refresh');
         scheduleTokenRefresh();
       } else {
-        // Retry logic
+        // Retry logic with exponential backoff
         if (retryCountRef.current < retryAttempts) {
           retryCountRef.current++;
-          console.log(`❌ Token refresh failed, retrying in ${retryDelayMs}ms (attempt ${retryCountRef.current}/${retryAttempts})`);
+          // Exponential backoff: 1s, 2s, 4s, 8s, 16s
+          const backoffDelay = retryDelayMs * Math.pow(2, retryCountRef.current - 1);
+          console.log(`❌ Token refresh failed, retrying in ${backoffDelay}ms (attempt ${retryCountRef.current}/${retryAttempts})`);
 
           setTimeout(() => {
             scheduleTokenRefresh();
-          }, retryDelayMs);
+          }, backoffDelay);
         } else {
           console.log('💀 Max retry attempts reached, logging out');
           await logout();
@@ -187,6 +191,32 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
     }
     retryCountRef.current = 0;
   };
+
+  // Wake detection - check token expiry when app becomes visible
+  useEffect(() => {
+    const handleVisibilityChange = async () => {
+      if (document.visibilityState === 'visible') {
+        console.log('🌅 App became visible, checking token expiry');
+
+        // Check if we're close to or past the scheduled refresh time
+        // by checking if it's been more than 12 minutes since last refresh
+        const timeSinceLastRefresh = Date.now() - (lastRefreshTimeRef.current || 0);
+        const shouldRefreshImmediately = timeSinceLastRefresh > (12 * 60 * 1000);
+
+        if (shouldRefreshImmediately) {
+          console.log('⏰ Token might be expired after background, triggering immediate refresh');
+          await refreshToken();
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // refreshToken is stable and doesn't need to be in deps
 
   // Cleanup on unmount
   useEffect(() => {

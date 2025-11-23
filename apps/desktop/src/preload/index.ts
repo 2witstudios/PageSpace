@@ -30,6 +30,11 @@ contextBridge.exposeInMainWorld('electron', {
   // Retry connection when offline
   retryConnection: () => ipcRenderer.invoke('retry-connection'),
 
+  // Generic event listener for IPC messages
+  on: (channel: string, callback: (...args: unknown[]) => void) => {
+    ipcRenderer.on(channel, (_event, ...args) => callback(...args));
+  },
+
   // Platform information
   platform: process.platform,
 
@@ -85,6 +90,7 @@ export interface ElectronAPI {
   onDeepLink: (callback: (url: string) => void) => void;
   onOpenPreferences: (callback: () => void) => void;
   retryConnection: () => Promise<void>;
+  on: (channel: string, callback: (...args: unknown[]) => void) => void;
   platform: NodeJS.Platform;
   version: string;
   auth: {

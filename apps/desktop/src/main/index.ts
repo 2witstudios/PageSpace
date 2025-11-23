@@ -11,6 +11,7 @@ import { logger } from './logger';
 import nodeMachineId from 'node-machine-id';
 const { machineIdSync } = nodeMachineId;
 import * as os from 'node:os';
+import { decodeJwt } from 'jose';
 
 // Configuration store for user preferences
 interface StoreSchema {
@@ -82,7 +83,28 @@ async function loadAuthSession(): Promise<StoredAuthSession | null> {
       decoded = raw.toString('utf8');
     }
 
-    return JSON.parse(decoded) as StoredAuthSession;
+    const session = JSON.parse(decoded) as StoredAuthSession;
+
+    // Validate token expiry before returning
+    if (session.accessToken) {
+      try {
+        const payload = decodeJwt(session.accessToken);
+        const now = Math.floor(Date.now() / 1000);
+
+        // Check if access token is expired (with 30 second buffer)
+        if (payload.exp && payload.exp < now + 30) {
+          logger.info('[Auth] Access token expired or expiring soon, session will auto-refresh');
+          // Don't return null - let the app load and auto-refresh will handle it
+          // This prevents unnecessary logouts when tokens just need refreshing
+        }
+      } catch (error) {
+        logger.warn('[Auth] Failed to decode access token', { error });
+        // Token might be malformed, but let the app try to use it
+        // The server will reject it if invalid, triggering refresh
+      }
+    }
+
+    return session;
   } catch (error: any) {
     if (error?.code === 'ENOENT') {
       return null;
@@ -573,6 +595,12 @@ ipcMain.handle('auth:clear-auth', async () => {
     await session.defaultSession.clearStorageData({
       storages: ['cookies'],
     });
+
+    // Notify renderer to clear JWT cache and auth state
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('auth:cleared');
+    }
+
     console.log('[Auth IPC] Auth data cleared successfully');
   } catch (error) {
     console.error('[Auth IPC] Failed to clear auth data:', error);
