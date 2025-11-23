@@ -61,6 +61,8 @@ export interface MobileOAuthResponse {
   refreshToken: string;
   /** CSRF token for additional security */
   csrfToken: string;
+  /** Device token for 90-day persistent authentication */
+  deviceToken: string;
 }
 
 /**

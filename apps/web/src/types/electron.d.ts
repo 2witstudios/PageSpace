@@ -10,6 +10,7 @@ export interface ElectronAPI {
   onDeepLink: (callback: (url: string) => void) => void;
   onOpenPreferences: (callback: () => void) => void;
   retryConnection: () => Promise<void>;
+  on?: (channel: string, callback: (...args: unknown[]) => void) => void;
   platform: NodeJS.Platform;
   version: string;
   auth: {

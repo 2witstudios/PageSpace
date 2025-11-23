@@ -27,8 +27,19 @@ class AuthFetch {
   private csrfToken: string | null = null;
   private csrfTokenPromise: Promise<string | null> | null = null;
   private jwtCache: { token: string | null; timestamp: number } | null = null;
-  private readonly JWT_CACHE_TTL = 60000; // 60 seconds - reduced Electron IPC overhead
+  private readonly JWT_CACHE_TTL = 30000; // 30 seconds - balance between IPC overhead and staleness
   private readonly JWT_RETRY_DELAY_MS = 100; // 100ms retry delay for async storage
+
+  constructor() {
+    // Listen for desktop logout event to clear cache
+    if (typeof window !== 'undefined' && window.electron) {
+      window.electron.on?.('auth:cleared', () => {
+        this.logger.info('Desktop auth cleared event received, clearing JWT cache');
+        this.clearJWTCache();
+        this.csrfToken = null;
+      });
+    }
+  }
 
   async fetch(url: string, options?: FetchOptions): Promise<Response> {
     const { skipAuth = false, maxRetries = 1, ...fetchOptions } = options || {};
@@ -206,8 +217,10 @@ class AuthFetch {
   }
 
   private async refreshToken(): Promise<boolean> {
-    // If we're already refreshing, wait for that to complete
+    // Atomic check-and-set to prevent race condition where multiple threads
+    // check null simultaneously before either sets the promise
     if (this.refreshPromise) {
+      this.logger.debug('Refresh already in progress, joining queue');
       const result = await this.refreshPromise;
       return result.success;
     }
@@ -222,6 +235,7 @@ class AuthFetch {
     this.clearJWTCache();
     this.logger.debug('JWT cache cleared BEFORE token refresh to prevent stale retry');
 
+    // Set flags and promise IMMEDIATELY (atomic operation)
     this.isRefreshing = true;
     this.refreshPromise = this.doRefresh();
 
@@ -658,19 +672,47 @@ class AuthFetch {
   }
 }
 
-// Create a singleton instance (internal use only for binding)
-const authFetch = new AuthFetch();
+// Create a true global singleton using Symbol.for to ensure single instance
+// across different import paths and bundler contexts (critical for mobile apps)
+const AUTHFETCH_KEY = Symbol.for('pagespace.authfetch.singleton');
+
+function getAuthFetch(): AuthFetch {
+  const globalObj = globalThis as typeof globalThis & { [key: symbol]: AuthFetch };
+  if (!globalObj[AUTHFETCH_KEY]) {
+    globalObj[AUTHFETCH_KEY] = new AuthFetch();
+    console.log('[AUTH_FETCH] Created global singleton instance');
+  }
+  return globalObj[AUTHFETCH_KEY];
+}
 
 // Export the class for extensibility if needed
 export { AuthFetch };
 
-// Export convenience functions (preferred API)
-export const fetchWithAuth = authFetch.fetch.bind(authFetch);
-export const fetchJSON = authFetch.fetchJSON.bind(authFetch);
-export const post = authFetch.post.bind(authFetch);
-export const put = authFetch.put.bind(authFetch);
-export const del = authFetch.delete.bind(authFetch);
-export const patch = authFetch.patch.bind(authFetch);
-export const clearCSRFToken = authFetch.clearCSRFToken.bind(authFetch);
-export const clearJWTCache = authFetch.clearJWTCache.bind(authFetch);
-export const refreshAuthSession = authFetch.refreshAuthSession.bind(authFetch);
+// Export convenience functions using guaranteed singleton
+// This ensures all imports reference the same AuthFetch instance
+export const fetchWithAuth = (...args: Parameters<AuthFetch['fetch']>) =>
+  getAuthFetch().fetch(...args);
+
+export const fetchJSON = <T = unknown>(...args: Parameters<AuthFetch['fetchJSON']>) =>
+  getAuthFetch().fetchJSON<T>(...args);
+
+export const post = <T = unknown>(url: string, body?: unknown, options?: FetchOptions) =>
+  getAuthFetch().post<T>(url, body, options);
+
+export const put = <T = unknown>(url: string, body?: unknown, options?: FetchOptions) =>
+  getAuthFetch().put<T>(url, body, options);
+
+export const del = <T = unknown>(url: string, body?: unknown, options?: FetchOptions) =>
+  getAuthFetch().delete<T>(url, body, options);
+
+export const patch = <T = unknown>(url: string, body?: unknown, options?: FetchOptions) =>
+  getAuthFetch().patch<T>(url, body, options);
+
+export const clearCSRFToken = () =>
+  getAuthFetch().clearCSRFToken();
+
+export const clearJWTCache = () =>
+  getAuthFetch().clearJWTCache();
+
+export const refreshAuthSession = () =>
+  getAuthFetch().refreshAuthSession();

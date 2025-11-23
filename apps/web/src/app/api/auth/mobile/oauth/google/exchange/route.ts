@@ -236,7 +236,7 @@ export async function POST(req: Request) {
       ? new Date(refreshTokenPayload.exp * 1000)
       : new Date(Date.now() + getRefreshTokenMaxAge() * 1000);
 
-    const { deviceTokenRecordId } = await validateOrCreateDeviceToken({
+    const { deviceToken: deviceTokenValue, deviceTokenRecordId } = await validateOrCreateDeviceToken({
       providedDeviceToken,
       userId: user.id,
       deviceId,
@@ -305,6 +305,7 @@ export async function POST(req: Request) {
       token: accessToken,
       refreshToken: refreshToken,
       csrfToken: csrfToken,
+      deviceToken: deviceTokenValue,
     };
 
     loggers.auth.info('Mobile OAuth successful', {

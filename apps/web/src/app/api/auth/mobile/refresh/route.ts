@@ -1,5 +1,5 @@
-import { users, refreshTokens, deviceTokens } from '@pagespace/db';
-import { db, eq, sql, and, isNull } from '@pagespace/db';
+import { users, refreshTokens } from '@pagespace/db';
+import { db, eq, sql } from '@pagespace/db';
 import {
   decodeToken,
   generateAccessToken,
@@ -54,53 +54,72 @@ export async function POST(req: Request) {
       );
     }
 
-    // Use database transaction to prevent race conditions
+    // Use database transaction with row-level locking to prevent race conditions
     const result = await db.transaction(async (trx) => {
-      // Check if the token exists and delete it atomically
-      const existingToken = await trx.query.refreshTokens.findFirst({
-        where: eq(refreshTokens.token, refreshTokenValue),
-        with: {
-          user: true,
-        },
-      });
+      // Use SELECT FOR UPDATE to lock the row and prevent concurrent transactions
+      // from reading the same token (prevents false positive reuse detection)
+      const rows = await trx.execute<{
+        id: string;
+        token: string;
+        user_id: string;
+        device: string | null;
+        ip: string | null;
+        user_agent: string | null;
+        expires_at: Date | null;
+        last_used_at: Date | null;
+        platform: 'ios' | 'android' | 'desktop' | null;
+        device_token_id: string | null;
+        created_at: Date;
+      }>(sql`
+        SELECT rt.*
+        FROM refresh_tokens rt
+        WHERE rt.token = ${refreshTokenValue}
+        FOR UPDATE
+        LIMIT 1
+      `);
+
+      const existingToken = rows.rows[0] || null;
+
+      // Fetch user data if token exists
+      let user: { id: string; tokenVersion: number; role: "user" | "admin"; email: string; name: string | null } | null = null;
+      if (existingToken) {
+        user = await trx.query.users.findFirst({
+          where: eq(users.id, existingToken.user_id),
+        }) || null;
+      }
 
       // If token doesn't exist, it might have been stolen and used.
       // For added security, we check if the decoded token is valid and if so,
-      // invalidate all sessions for that user.
-      if (!existingToken) {
+      // invalidate ONLY the affected device session (not all devices).
+      if (!existingToken || !user) {
         const decoded = await decodeToken(refreshTokenValue);
         if (decoded) {
           // This is a critical security event. A refresh token that is not in the DB was used.
-          // It could be a stolen, already-used token. Invalidate all user sessions.
-          await trx.update(users)
-            .set({ tokenVersion: sql`${users.tokenVersion} + 1` })
-            .where(eq(users.id, decoded.userId));
+          // It could be a stolen, already-used token. Invalidate ONLY this device, not all sessions.
 
-          // SECURITY: Also revoke all device tokens for this user
-          // This prevents device tokens from bypassing the tokenVersion bump
-          await trx.update(deviceTokens)
-            .set({
-              revokedAt: new Date(),
-              revokedReason: 'token_version_bump_refresh_reuse'
-            })
-            .where(and(
-              eq(deviceTokens.userId, decoded.userId),
-              isNull(deviceTokens.revokedAt)
-            ));
+          // IMPORTANT: We don't bump tokenVersion here because that would log out ALL devices.
+          // Instead, we only revoke device tokens if we can identify the specific device.
+          // Since the refresh token is missing, we can't identify which device to revoke,
+          // so we just log the security event and return error (the client will logout).
 
-          loggers.auth.warn('Refresh token reuse detected - invalidating all sessions', {
+          loggers.auth.warn('Refresh token reuse detected - token missing from database', {
             userId: decoded.userId,
             ip: clientIP,
-            platform: 'mobile'
+            platform: 'mobile',
+            note: 'Not revoking other devices - only affecting this request'
           });
         }
         return { error: 'Invalid refresh token.' };
       }
 
       // Delete the token atomically to prevent double-use
-      await trx.delete(refreshTokens).where(eq(refreshTokens.id, existingToken.id));
+      // The FOR UPDATE lock ensures no other transaction can read this row
+      await trx.execute(sql`
+        DELETE FROM refresh_tokens
+        WHERE id = ${existingToken.id}
+      `);
 
-      return { existingToken };
+      return { existingToken: { ...existingToken, user } };
     });
 
     if (result.error || !result.existingToken) {
