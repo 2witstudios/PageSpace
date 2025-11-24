@@ -337,6 +337,7 @@ export async function createWelcomeDocs(driveId: string): Promise<string[]> {
       parentId: null,
       isTrashed: false,
       processingStatus: 'completed',
+      updatedAt: new Date(),
     }).returning().then(res => res[0]);
 
     pageIds.push(gettingStartedFolder.id);
@@ -352,6 +353,7 @@ export async function createWelcomeDocs(driveId: string): Promise<string[]> {
       parentId: gettingStartedFolder.id,
       isTrashed: false,
       processingStatus: 'completed',
+      updatedAt: new Date(),
     }).returning().then(res => res[0]);
 
     pageIds.push(welcomeDoc.id);
@@ -367,6 +369,7 @@ export async function createWelcomeDocs(driveId: string): Promise<string[]> {
       parentId: gettingStartedFolder.id,
       isTrashed: false,
       processingStatus: 'completed',
+      updatedAt: new Date(),
     }).returning().then(res => res[0]);
 
     pageIds.push(quickStartDoc.id);
@@ -388,6 +391,7 @@ export async function createWelcomeDocs(driveId: string): Promise<string[]> {
       aiModel: null,
       // Enable all tools for the help agent
       enabledTools: null, // null means all tools are enabled
+      updatedAt: new Date(),
     }).returning().then(res => res[0]);
 
     pageIds.push(helpAgent.id);
