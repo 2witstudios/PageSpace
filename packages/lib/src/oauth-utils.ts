@@ -13,7 +13,7 @@ import { slugify } from '@pagespace/lib/server';
 import { decodeToken, getRefreshTokenMaxAge } from './auth-utils';
 import { OAuthProvider, type OAuthUserInfo, type OAuthVerificationResult } from './oauth-types';
 import { createWelcomeDocs } from './welcome-docs';
-import { loggers } from './logger';
+import { loggers } from './logger-config';
 
 /**
  * Verify Google ID token and extract user information
