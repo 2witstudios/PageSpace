@@ -1,17 +1,22 @@
 /**
  * Admin API Route: Global Prompt Viewer
  *
- * Returns the complete system prompt sent to the Global Assistant
- * with detailed annotations showing source files and line numbers.
+ * Returns the COMPLETE context window sent to the AI, exactly as the LLM receives it.
+ * Includes:
+ * - Full system prompt with all inline instructions
+ * - Tool definitions with JSON schemas
+ * - Experimental context
+ * - Token estimates
  */
 
 import { verifyAdminAuth } from '@/lib/auth';
 import { AgentRole, ROLE_PERMISSIONS } from '@/lib/ai/agent-roles';
-import { RolePromptBuilder, ROLE_PROMPTS } from '@/lib/ai/role-prompts';
+import { ROLE_PROMPTS } from '@/lib/ai/role-prompts';
 import { ToolPermissionFilter } from '@/lib/ai/tool-permissions';
-import { buildTimestampSystemPrompt } from '@/lib/ai/timestamp-utils';
-import { buildMentionSystemPrompt } from '@/lib/ai/mention-processor';
-import { db, driveMembers, eq } from '@pagespace/db';
+import { buildCompleteRequest, type CompletePayloadResult, type LocationContext } from '@/lib/ai/complete-request-builder';
+import { pageSpaceTools } from '@/lib/ai/ai-tools';
+import { extractToolSchemas, calculateTotalToolTokens } from '@/lib/ai/schema-introspection';
+import { db, driveMembers, drives, pages, eq, and, asc } from '@pagespace/db';
 import { estimateSystemPromptTokens } from '@pagespace/lib/ai-context-calculator';
 
 interface PromptSection {
@@ -30,6 +35,8 @@ interface RolePromptData {
   toolsAllowed: string[];
   toolsDenied: string[];
   permissions: typeof ROLE_PERMISSIONS[AgentRole];
+  // New: Complete payload for this role
+  completePayload: CompletePayloadResult;
 }
 
 export async function GET(request: Request) {
@@ -40,25 +47,121 @@ export async function GET(request: Request) {
   }
 
   try {
-    // Get the admin user's default drive for real context
-    const userDriveResult = await db
-      .select()
+    // Parse query params for context selection
+    const { searchParams } = new URL(request.url);
+    const selectedDriveId = searchParams.get('driveId'); // null = dashboard context
+    const selectedPageId = searchParams.get('pageId'); // null = drive or dashboard context
+
+    // Get all drives the user has access to (for the picker)
+    const userDriveResults = await db
+      .select({
+        driveId: driveMembers.driveId,
+        role: driveMembers.role,
+        driveName: drives.name,
+        driveSlug: drives.slug,
+      })
       .from(driveMembers)
-      .where(eq(driveMembers.userId, adminUser.id))
-      .limit(1);
+      .leftJoin(drives, eq(driveMembers.driveId, drives.id))
+      .where(eq(driveMembers.userId, adminUser.id));
 
-    let locationContext = undefined;
+    const availableDrives = userDriveResults
+      .filter(d => d.driveName !== null)
+      .map(d => ({
+        id: d.driveId,
+        name: d.driveName!,
+        slug: d.driveSlug!,
+        role: d.role,
+      }));
 
-    if (userDriveResult.length > 0) {
-      const drive = userDriveResult[0];
-      locationContext = {
-        currentDrive: {
-          id: drive.driveId,
-          name: drive.driveId, // We'll get the actual name in a moment
-          slug: drive.driveId,
-        },
-      };
+    // Get pages for the selected drive (for the page picker)
+    let availablePages: Array<{ id: string; title: string; type: string; parentId: string | null }> = [];
+    if (selectedDriveId) {
+      const drivePages = await db
+        .select({
+          id: pages.id,
+          title: pages.title,
+          type: pages.type,
+          parentId: pages.parentId,
+        })
+        .from(pages)
+        .where(and(
+          eq(pages.driveId, selectedDriveId),
+          eq(pages.isTrashed, false)
+        ))
+        .orderBy(asc(pages.title));
+      availablePages = drivePages;
     }
+
+    // Helper function to build breadcrumbs for a page
+    async function buildBreadcrumbs(pageId: string): Promise<Array<{ id: string; title: string }>> {
+      const breadcrumbs: Array<{ id: string; title: string }> = [];
+      let currentId: string | null = pageId;
+
+      while (currentId) {
+        const page = await db
+          .select({ id: pages.id, title: pages.title, parentId: pages.parentId })
+          .from(pages)
+          .where(eq(pages.id, currentId))
+          .limit(1);
+
+        if (page.length === 0) break;
+
+        breadcrumbs.unshift({ id: page[0].id, title: page[0].title });
+        currentId = page[0].parentId;
+      }
+
+      return breadcrumbs;
+    }
+
+    // Helper function to build page path from breadcrumbs
+    function buildPagePath(breadcrumbs: Array<{ id: string; title: string }>): string {
+      return '/' + breadcrumbs.map(b => b.title).join('/');
+    }
+
+    // Build location context based on selection
+    let locationContext: LocationContext | undefined = undefined;
+    let contextType: 'dashboard' | 'drive' | 'page' = 'dashboard';
+
+    if (selectedPageId && selectedDriveId) {
+      // User selected a specific page - build full page context
+      const selectedDrive = availableDrives.find(d => d.id === selectedDriveId);
+      const selectedPage = availablePages.find(p => p.id === selectedPageId);
+
+      if (selectedDrive && selectedPage) {
+        const breadcrumbs = await buildBreadcrumbs(selectedPageId);
+        const pagePath = buildPagePath(breadcrumbs);
+
+        locationContext = {
+          currentDrive: {
+            id: selectedDrive.id,
+            name: selectedDrive.name,
+            slug: selectedDrive.slug,
+          },
+          currentPage: {
+            id: selectedPage.id,
+            title: selectedPage.title,
+            type: selectedPage.type,
+            path: pagePath,
+          },
+          breadcrumbs,
+        };
+        contextType = 'page';
+      }
+    } else if (selectedDriveId) {
+      // User selected a specific drive (no page)
+      const selectedDrive = availableDrives.find(d => d.id === selectedDriveId);
+      if (selectedDrive) {
+        locationContext = {
+          currentDrive: {
+            id: selectedDrive.id,
+            name: selectedDrive.name,
+            slug: selectedDrive.slug,
+          },
+        };
+        contextType = 'drive';
+      }
+    }
+    // If no drive selected (or invalid), locationContext remains undefined (dashboard context)
 
     // Build prompt data for all three roles
     const roles = [AgentRole.PARTNER, AgentRole.PLANNER, AgentRole.WRITER];
@@ -67,96 +170,15 @@ export async function GET(request: Request) {
     for (const role of roles) {
       const rolePrompt = ROLE_PROMPTS[role];
 
-      // Build the base system prompt (same as used in actual conversations)
-      const contextType = 'dashboard'; // Admin viewing from dashboard context
-      const baseSystemPrompt = RolePromptBuilder.buildSystemPrompt(
+      // Build complete payload using shared module (EXACT match with chat route)
+      const completePayload = buildCompleteRequest({
         role,
         contextType,
-        locationContext ? {
-          driveName: locationContext.currentDrive?.name,
-          driveSlug: locationContext.currentDrive?.slug,
-          driveId: locationContext.currentDrive?.id,
-        } : undefined
-      );
+        locationContext,
+        includeExampleMessage: true,
+      });
 
-      // Build additional prompt sections
-      const timestampSystemPrompt = buildTimestampSystemPrompt();
-      const mentionSystemPrompt = buildMentionSystemPrompt([
-        { id: 'example-page-id', label: 'Example Document', type: 'page' }
-      ]);
-
-      // Build the complete global assistant prompt (matching actual implementation)
-      const globalAssistantAdditions = `
-
-You are the Global Assistant for PageSpace - accessible from both the dashboard and sidebar.
-
-TASK MANAGEMENT:
-• Use create_task_list for any multi-step work (3+ actions) - this creates interactive UI components in the conversation
-• Break complex requests into trackable tasks immediately upon receiving them
-• Update task status as you progress through work - users see real-time updates
-• Task lists persist across conversations and appear as conversation messages
-
-CRITICAL NESTING PRINCIPLE:
-• NO RESTRICTIONS on what can contain what - organize based on logical user needs
-• Documents can contain AI chats, channels, folders, and canvas pages
-• AI chats can contain documents, other AI chats, folders, and any page type
-• Channels can contain any page type for organized discussion threads
-• Canvas pages can contain any page type for custom navigation structures
-• Think creatively about nesting - optimize for user workflow, not type conventions
-
-${locationContext ? `
-CONTEXT-AWARE BEHAVIOR:
-• You are currently in: ${locationContext.currentDrive?.name || 'dashboard'}
-• Default scope: Operations should focus on this location unless user indicates otherwise
-• When user says "here" or "this", they mean the current location
-• Only explore other drives/areas when explicitly mentioned or necessary for the task
-• Start from current context, not from list_drives
-` : `
-DASHBOARD CONTEXT:
-• You are in the dashboard view - focus on cross-workspace tasks and overview
-• Use list_drives when you need to work across multiple workspaces
-• Help with personal productivity and workspace organization
-• create_drive: Use when user explicitly requests new workspace OR when their project clearly doesn't fit existing drives
-• Always check existing drives first via list_drives before suggesting new drive creation
-• Ask for confirmation unless user is explicit about creating new workspace
-`}
-
-SMART EXPLORATION RULES:
-1. When in a drive context - ALWAYS explore it first:
-   - If locationContext includes a drive, ALWAYS use list_pages on that drive when:
-     • User asks about the drive, its contents, or what's available
-     • User wants to create, write, or modify ANYTHING
-     • User mentions something that MAY exist in the drive
-     • User asks general questions about content or organization
-     • You need to understand the workspace structure
-   - Start with list_pages(driveId: '${locationContext?.currentDrive?.id || 'current-drive-id'}') BEFORE other actions
-2. Context-first approach:
-   - Default scope: Current drive/location is your primary workspace
-   - Only explore OTHER drives when explicitly mentioned
-   - When user says "here" or "this", they mean current context
-3. Efficient exploration pattern:
-   - FIRST: list_pages with driveId on current drive (if in a drive)
-   - THEN: read specific pages as needed
-   - ONLY IF NEEDED: explore other drives/workspaces
-4. Proactive assistance:
-   - Don't ask "what's in your drive" - use list_pages to discover
-   - Suggest creating AI_CHAT and CHANNEL pages for organization
-   - Be autonomous within current context
-
-CONVERSATION TYPE: GLOBAL (Context: Dashboard or Current Drive)
-
-MENTION PROCESSING:
-• When users @mention documents using @[Label](id:type) format, you MUST read those documents first
-• Use the read_page tool for each mentioned document before providing your main response
-• Let mentioned document content inform and enrich your response
-• Don't explicitly mention that you're reading @mentioned docs unless relevant to the conversation`;
-
-      const fullPrompt = baseSystemPrompt + mentionSystemPrompt + timestampSystemPrompt + globalAssistantAdditions;
-
-      // Calculate token estimates
-      const totalTokens = estimateSystemPromptTokens(fullPrompt);
-
-      // Build detailed sections with source annotations
+      // Build detailed sections with source annotations for the breakdown view
       const sections: PromptSection[] = [
         {
           name: 'Role Core Identity',
@@ -194,25 +216,11 @@ MENTION PROCESSING:
           tokens: estimateSystemPromptTokens(rolePrompt.postToolExecution),
         },
         {
-          name: 'Timestamp Context',
-          content: timestampSystemPrompt,
-          source: 'apps/web/src/lib/ai/timestamp-utils.ts',
-          lines: '10-23',
-          tokens: estimateSystemPromptTokens(timestampSystemPrompt),
-        },
-        {
-          name: 'Mention Processing (Example)',
-          content: mentionSystemPrompt,
-          source: 'apps/web/src/lib/ai/mention-processor.ts',
-          lines: '80-101',
-          tokens: estimateSystemPromptTokens(mentionSystemPrompt),
-        },
-        {
-          name: 'Global Assistant Instructions',
-          content: globalAssistantAdditions,
-          source: 'apps/web/src/app/api/ai_conversations/[id]/messages/route.ts',
-          lines: '489-552',
-          tokens: estimateSystemPromptTokens(globalAssistantAdditions),
+          name: 'Inline Instructions (Page Context)',
+          content: '(See complete payload for full instructions)',
+          source: 'apps/web/src/lib/ai/inline-instructions.ts',
+          lines: '24-158',
+          tokens: 0, // Already counted in complete payload
         },
       ];
 
@@ -221,17 +229,56 @@ MENTION PROCESSING:
 
       promptData[role] = {
         role,
-        fullPrompt,
+        fullPrompt: completePayload.request.system,
         sections,
-        totalTokens,
+        totalTokens: completePayload.tokenEstimates.total,
         toolsAllowed: toolsSummary.allowed,
         toolsDenied: toolsSummary.denied,
         permissions: ROLE_PERMISSIONS[role],
+        completePayload,
       };
     }
 
+    // Extract full tool schemas for display (all tools, not filtered by role)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const toolsForExtraction: Record<string, { description?: string; parameters?: any }> = {};
+    for (const [name, tool] of Object.entries(pageSpaceTools)) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const toolAny = tool as any;
+      toolsForExtraction[name] = {
+        description: toolAny.description,
+        parameters: toolAny.parameters,
+      };
+    }
+    const allToolSchemas = extractToolSchemas(toolsForExtraction);
+    const totalToolTokens = calculateTotalToolTokens(allToolSchemas);
+
+    // Build experimental context (what gets passed to tool execute functions)
+    const experimentalContext = {
+      userId: adminUser.id,
+      chatId: '[chat-id-placeholder]',
+      modelCapabilities: {
+        supportsStreaming: true,
+        supportsToolCalling: true,
+        hasVision: false, // Varies by model
+        maxTokens: 128000, // Example value
+      },
+      locationContext: locationContext || null,
+    };
+
     return Response.json({
       promptData,
+      toolSchemas: allToolSchemas,
+      totalToolTokens,
+      experimentalContext,
+      availableDrives,
+      availablePages: availablePages.map(p => ({
+        id: p.id,
+        title: p.title,
+        type: p.type,
+        path: '', // Path computed on demand
+        parentId: p.parentId,
+      })),
       metadata: {
         generatedAt: new Date().toISOString(),
         adminUser: {
@@ -239,6 +286,9 @@ MENTION PROCESSING:
           role: adminUser.role,
         },
         locationContext,
+        selectedDriveId,
+        selectedPageId,
+        contextType,
       },
     });
 

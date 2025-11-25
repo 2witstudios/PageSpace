@@ -3,9 +3,10 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMCP } from "@/hooks/useMCP";
+import { useAuth } from "@/hooks/use-auth";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Settings, User, Plug2, Key, ArrowLeft, CreditCard, Bell } from "lucide-react";
+import { Settings, User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield } from "lucide-react";
 
 interface SettingsCategory {
   title: string;
@@ -19,7 +20,9 @@ interface SettingsCategory {
 export default function SettingsPage() {
   const router = useRouter();
   const mcp = useMCP();
+  const { user } = useAuth();
   const isDesktop = mcp.isDesktop;
+  const isAdmin = user?.role === 'admin';
 
   const settingsCategories: SettingsCategory[] = [
     {
@@ -72,6 +75,14 @@ export default function SettingsPage() {
       href: "/settings/ai",
       available: true,
     },
+    // Admin category (only shown to admin users)
+    ...(isAdmin ? [{
+      title: "Admin",
+      description: "System administration and debugging tools",
+      icon: Shield,
+      href: "/admin",
+      available: true,
+    }] : []),
   ].filter((category: SettingsCategory) => {
     // Filter out desktop-only features if not on desktop
     if (category.desktopOnly && !isDesktop) {

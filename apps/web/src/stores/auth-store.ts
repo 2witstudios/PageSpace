@@ -9,6 +9,7 @@ interface User {
   email: string | null;
   image?: string | null;
   emailVerified?: Date | null;
+  role?: 'user' | 'admin';
 }
 
 interface AuthState {

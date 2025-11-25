@@ -1,79 +1,97 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { MessageSquare, AlertCircle } from "lucide-react";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { MessageSquare, AlertCircle, LayoutDashboard, FolderOpen, FileText } from "lucide-react";
 import { fetchWithAuth } from "@/lib/auth-fetch";
 import GlobalPromptClient from "./GlobalPromptClient";
-
-interface PromptSection {
-  name: string;
-  content: string;
-  source: string;
-  lines?: string;
-  tokens: number;
-}
-
-interface RolePromptData {
-  role: string;
-  fullPrompt: string;
-  sections: PromptSection[];
-  totalTokens: number;
-  toolsAllowed: string[];
-  toolsDenied: string[];
-  permissions: {
-    canRead: boolean;
-    canWrite: boolean;
-    canDelete: boolean;
-    requiresConfirmation: boolean;
-  };
-}
-
-interface GlobalPromptResponse {
-  promptData: Record<string, RolePromptData>;
-  metadata: {
-    generatedAt: string;
-    adminUser: {
-      id: string;
-      role: 'user' | 'admin';
-    };
-    locationContext?: {
-      currentDrive?: {
-        id: string;
-        name: string;
-        slug: string;
-      };
-    };
-  };
-}
+import type { GlobalPromptResponse } from "@/lib/ai/types/global-prompt";
 
 export default function AdminGlobalPromptPage() {
   const [data, setData] = useState<GlobalPromptResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [contextType, setContextType] = useState<'dashboard' | 'drive' | 'page'>('dashboard');
+  const [selectedDriveId, setSelectedDriveId] = useState<string | null>(null);
+  const [selectedPageId, setSelectedPageId] = useState<string | null>(null);
 
-  useEffect(() => {
-    async function fetchPromptData() {
-      try {
-        const response = await fetchWithAuth('/api/admin/global-prompt');
-        if (!response.ok) {
-          throw new Error('Failed to fetch global prompt data');
-        }
-        const promptData = await response.json();
-        setData(promptData);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'An error occurred');
-      } finally {
-        setLoading(false);
+  const fetchPromptData = useCallback(async (driveId: string | null, pageId: string | null = null) => {
+    try {
+      setLoading(true);
+      const params = new URLSearchParams();
+      if (driveId) params.set('driveId', driveId);
+      if (pageId) params.set('pageId', pageId);
+      const url = params.toString()
+        ? `/api/admin/global-prompt?${params.toString()}`
+        : '/api/admin/global-prompt';
+      const response = await fetchWithAuth(url);
+      if (!response.ok) {
+        throw new Error('Failed to fetch global prompt data');
       }
+      const promptData = await response.json();
+      setData(promptData);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'An error occurred');
+    } finally {
+      setLoading(false);
     }
-
-    fetchPromptData();
   }, []);
 
-  if (loading) {
+  // Initial load
+  useEffect(() => {
+    fetchPromptData(null);
+  }, [fetchPromptData]);
+
+  // Handle context type change
+  const handleContextTypeChange = (value: string) => {
+    const newContextType = value as 'dashboard' | 'drive' | 'page';
+    setContextType(newContextType);
+
+    if (newContextType === 'dashboard') {
+      setSelectedDriveId(null);
+      setSelectedPageId(null);
+      fetchPromptData(null);
+    } else if (newContextType === 'drive' && data?.availableDrives?.length) {
+      // Auto-select first drive when switching to drive context
+      const firstDrive = data.availableDrives[0];
+      setSelectedDriveId(firstDrive.id);
+      setSelectedPageId(null);
+      fetchPromptData(firstDrive.id);
+    } else if (newContextType === 'page' && data?.availableDrives?.length) {
+      // Auto-select first drive, then will need to select a page
+      const firstDrive = data.availableDrives[0];
+      setSelectedDriveId(firstDrive.id);
+      setSelectedPageId(null);
+      // Fetch with drive to get pages, then user selects a page
+      fetchPromptData(firstDrive.id);
+    }
+  };
+
+  // Handle drive selection change
+  const handleDriveChange = (driveId: string) => {
+    setSelectedDriveId(driveId);
+    setSelectedPageId(null);
+    if (contextType === 'page') {
+      // Fetch to get pages for this drive
+      fetchPromptData(driveId);
+    } else {
+      fetchPromptData(driveId);
+    }
+  };
+
+  // Handle page selection change
+  const handlePageChange = (pageId: string) => {
+    setSelectedPageId(pageId);
+    fetchPromptData(selectedDriveId, pageId);
+  };
+
+  if (loading && !data) {
     return (
       <div className="space-y-4">
         <Card>
@@ -102,13 +120,22 @@ export default function AdminGlobalPromptPage() {
     );
   }
 
-  if (error || !data) {
+  if (error && !data) {
     return (
       <Alert variant="destructive">
         <AlertCircle className="h-4 w-4" />
         <AlertDescription>
-          Error loading global prompt data: {error || 'No data received'}
+          Error loading global prompt data: {error}
         </AlertDescription>
+      </Alert>
+    );
+  }
+
+  if (!data) {
+    return (
+      <Alert variant="destructive">
+        <AlertCircle className="h-4 w-4" />
+        <AlertDescription>No data received</AlertDescription>
       </Alert>
     );
   }
@@ -129,12 +156,113 @@ export default function AdminGlobalPromptPage() {
           </CardTitle>
           <CardDescription>
             View the complete system prompt sent to the Global Assistant with detailed annotations
-            showing where each section is constructed from. This shows the actual prompt used for
-            conversations in your current context.
+            showing where each section is constructed from. Select a context to see how the prompt changes.
           </CardDescription>
         </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+        <CardContent className="space-y-6">
+          {/* Context Picker */}
+          <div className="flex flex-col gap-4 p-4 bg-muted/50 rounded-lg">
+            <Label className="text-sm font-medium">Context Type</Label>
+            <div className="flex flex-wrap items-center gap-4">
+              <Tabs
+                value={contextType}
+                onValueChange={handleContextTypeChange}
+                className="w-auto"
+              >
+                <TabsList>
+                  <TabsTrigger value="dashboard" className="gap-2">
+                    <LayoutDashboard className="h-4 w-4" />
+                    Dashboard
+                  </TabsTrigger>
+                  <TabsTrigger value="drive" className="gap-2">
+                    <FolderOpen className="h-4 w-4" />
+                    Drive
+                  </TabsTrigger>
+                  <TabsTrigger value="page" className="gap-2">
+                    <FileText className="h-4 w-4" />
+                    Page (AI Chat)
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
+
+              {loading && (
+                <span className="text-sm text-muted-foreground">Loading...</span>
+              )}
+            </div>
+
+            {/* Drive and Page Selectors */}
+            {(contextType === 'drive' || contextType === 'page') && (data.availableDrives?.length ?? 0) > 0 && (
+              <div className="flex flex-wrap items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <Label className="text-sm text-muted-foreground">Drive:</Label>
+                  <Select
+                    value={selectedDriveId || ''}
+                    onValueChange={handleDriveChange}
+                  >
+                    <SelectTrigger className="w-[200px]">
+                      <SelectValue placeholder="Select a drive" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {data.availableDrives?.map((drive) => (
+                        <SelectItem key={drive.id} value={drive.id}>
+                          {drive.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {contextType === 'page' && selectedDriveId && (data.availablePages?.length ?? 0) > 0 && (
+                  <div className="flex items-center gap-2">
+                    <Label className="text-sm text-muted-foreground">Page:</Label>
+                    <Select
+                      value={selectedPageId || ''}
+                      onValueChange={handlePageChange}
+                    >
+                      <SelectTrigger className="w-[250px]">
+                        <SelectValue placeholder="Select a page" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {data.availablePages?.map((page) => (
+                          <SelectItem key={page.id} value={page.id}>
+                            <span className="flex items-center gap-2">
+                              <span className="text-xs text-muted-foreground uppercase">{page.type}</span>
+                              {page.title}
+                            </span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+
+                {contextType === 'page' && selectedDriveId && (data.availablePages?.length ?? 0) === 0 && (
+                  <span className="text-sm text-muted-foreground italic">No pages in this drive</span>
+                )}
+              </div>
+            )}
+
+            {/* Context Badge */}
+            {data.metadata.contextType && (
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground">Active context:</span>
+                <span className={`text-xs px-2 py-1 rounded-full font-medium ${
+                  data.metadata.contextType === 'page'
+                    ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100'
+                    : data.metadata.contextType === 'drive'
+                    ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-100'
+                    : 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-100'
+                }`}>
+                  {data.metadata.contextType === 'page' && '📄 Page Context (same as AI Chat)'}
+                  {data.metadata.contextType === 'drive' && '📁 Drive Context'}
+                  {data.metadata.contextType === 'dashboard' && '🏠 Dashboard Context'}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Stats */}
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
             <div className="text-center">
               <div className="text-2xl font-bold text-primary">{roles.length}</div>
               <div className="text-muted-foreground">Agent Roles</div>
@@ -145,15 +273,30 @@ export default function AdminGlobalPromptPage() {
             </div>
             <div className="text-center">
               <div className="text-2xl font-bold text-primary">
-                {Object.values(data.promptData)[0]?.toolsAllowed.length || 0}
+                {data.toolSchemas?.length || Object.values(data.promptData)[0]?.toolsAllowed.length || 0}
               </div>
               <div className="text-muted-foreground">Total Tools</div>
             </div>
             <div className="text-center">
               <div className="text-2xl font-bold text-primary">
-                {data.metadata.locationContext?.currentDrive ? 'Drive' : 'Dashboard'}
+                {data.totalToolTokens?.toLocaleString() || '—'}
               </div>
-              <div className="text-muted-foreground">Context</div>
+              <div className="text-muted-foreground">Tool Tokens</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold text-primary truncate max-w-[150px]" title={
+                data.metadata.locationContext?.currentPage?.title ||
+                data.metadata.locationContext?.currentDrive?.name ||
+                'Dashboard'
+              }>
+                {data.metadata.locationContext?.currentPage?.title ||
+                 data.metadata.locationContext?.currentDrive?.name ||
+                 'Dashboard'}
+              </div>
+              <div className="text-muted-foreground">
+                {data.metadata.locationContext?.currentPage ? 'Page' :
+                 data.metadata.locationContext?.currentDrive ? 'Drive' : 'Context'}
+              </div>
             </div>
           </div>
         </CardContent>
