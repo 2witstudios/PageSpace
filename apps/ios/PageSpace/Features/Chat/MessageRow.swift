@@ -217,12 +217,13 @@ struct GroupedToolCallsView: View {
 
     private var summaryText: String {
         let stats = summary
-        if stats.inProgress > 0 {
+        // Priority order matches groupStatus: error > inProgress > pending > completed
+        if stats.error > 0 {
+            return "\(stats.error) failed"
+        } else if stats.inProgress > 0 {
             return "\(stats.inProgress) active"
         } else if stats.completed == stats.total {
             return "all done"
-        } else if stats.error > 0 {
-            return "\(stats.error) failed"
         } else {
             return "\(stats.completed)/\(stats.total)"
         }
