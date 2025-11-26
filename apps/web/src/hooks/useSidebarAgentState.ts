@@ -1,4 +1,6 @@
-import { useReducer, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useEffect, useRef } from 'react';
+import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import { UIMessage } from 'ai';
 import { fetchWithAuth } from '@/lib/auth-fetch';
 import { toast } from 'sonner';
@@ -35,127 +37,134 @@ function isValidAgentInfo(data: unknown): data is SidebarAgentInfo {
 }
 
 // ============================================
-// State and Actions
+// Zustand Store
 // ============================================
 
-interface AgentConversationState {
+interface SidebarAgentStoreState {
+  // Agent selection
+  selectedAgent: SidebarAgentInfo | null;
+
+  // Conversation state
   conversationId: string | null;
   initialMessages: UIMessage[];
   isInitialized: boolean;
-  /** Tracks which agent the current conversation belongs to */
   agentIdForConversation: string | null;
+
+  // Internal state for race condition protection (not persisted)
+  _loadingAgentId: string | null;
+
+  // Actions
+  selectAgent: (agent: SidebarAgentInfo | null) => void;
+  setConversationLoading: () => void;
+  setConversationLoaded: (conversationId: string, messages: UIMessage[], agentId: string) => void;
+  setConversationCreated: (conversationId: string, agentId: string) => void;
+  setConversationError: (agentId: string) => void;
+  updateMessages: (messages: UIMessage[]) => void;
+  setLoadingAgentId: (agentId: string | null) => void;
 }
 
-interface SidebarAgentFullState {
-  selectedAgent: SidebarAgentInfo | null;
-  conversation: AgentConversationState;
-}
+export const useSidebarAgentStore = create<SidebarAgentStoreState>()(
+  persist(
+    (set) => ({
+      // Initial state
+      selectedAgent: null,
+      conversationId: null,
+      initialMessages: [],
+      isInitialized: false,
+      agentIdForConversation: null,
+      _loadingAgentId: null,
 
-type AgentStateAction =
-  | { type: 'SELECT_AGENT'; agent: SidebarAgentInfo | null }
-  | { type: 'CONVERSATION_LOADING' }
-  | { type: 'CONVERSATION_LOADED'; conversationId: string; messages: UIMessage[]; agentId: string }
-  | { type: 'CONVERSATION_CREATED'; conversationId: string; agentId: string }
-  | { type: 'CONVERSATION_ERROR'; agentId: string }
-  | { type: 'RESET_CONVERSATION' }
-  | { type: 'UPDATE_MESSAGES'; messages: UIMessage[] };
+      // Actions
+      selectAgent: (agent) => {
+        set((state) => {
+          // When selecting a new agent (or null for global), reset conversation state
+          if (agent?.id !== state.selectedAgent?.id) {
+            return {
+              selectedAgent: agent,
+              conversationId: null,
+              initialMessages: [],
+              isInitialized: false,
+              agentIdForConversation: null,
+            };
+          }
+          return { selectedAgent: agent };
+        });
+      },
 
-const initialConversationState: AgentConversationState = {
-  conversationId: null,
-  initialMessages: [],
-  isInitialized: false,
-  agentIdForConversation: null,
-};
+      setConversationLoading: () => {
+        set({ isInitialized: false });
+      },
 
-const initialState: SidebarAgentFullState = {
-  selectedAgent: null,
-  conversation: initialConversationState,
-};
-
-function agentStateReducer(
-  state: SidebarAgentFullState,
-  action: AgentStateAction
-): SidebarAgentFullState {
-  switch (action.type) {
-    case 'SELECT_AGENT':
-      // When selecting a new agent (or null for global), reset conversation state
-      if (action.agent?.id !== state.selectedAgent?.id) {
-        return {
-          selectedAgent: action.agent,
-          conversation: initialConversationState,
-        };
-      }
-      return { ...state, selectedAgent: action.agent };
-
-    case 'CONVERSATION_LOADING':
-      return {
-        ...state,
-        conversation: {
-          ...state.conversation,
-          isInitialized: false,
-        },
-      };
-
-    case 'CONVERSATION_LOADED':
-      return {
-        ...state,
-        conversation: {
-          conversationId: action.conversationId,
-          initialMessages: action.messages,
+      setConversationLoaded: (conversationId, messages, agentId) => {
+        set({
+          conversationId,
+          initialMessages: messages,
           isInitialized: true,
-          agentIdForConversation: action.agentId,
-        },
-      };
+          agentIdForConversation: agentId,
+        });
+      },
 
-    case 'CONVERSATION_CREATED':
-      return {
-        ...state,
-        conversation: {
-          conversationId: action.conversationId,
+      setConversationCreated: (conversationId, agentId) => {
+        set({
+          conversationId,
           initialMessages: [],
           isInitialized: true,
-          agentIdForConversation: action.agentId,
-        },
-      };
+          agentIdForConversation: agentId,
+        });
+      },
 
-    case 'CONVERSATION_ERROR':
-      return {
-        ...state,
-        conversation: {
-          ...state.conversation,
+      setConversationError: (agentId) => {
+        set({
           isInitialized: true, // Allow UI to recover
-          agentIdForConversation: action.agentId,
+          agentIdForConversation: agentId,
+        });
+      },
+
+      updateMessages: (messages) => {
+        set({ initialMessages: messages });
+      },
+
+      setLoadingAgentId: (agentId) => {
+        set({ _loadingAgentId: agentId });
+      },
+    }),
+    {
+      name: 'pagespace:sidebar:selectedAgentData',
+      // Only persist the agent selection, not conversation state
+      partialize: (state) => ({
+        selectedAgent: state.selectedAgent,
+      }),
+      // Custom storage to handle validation on restore
+      storage: {
+        getItem: (name) => {
+          const str = localStorage.getItem(name);
+          if (!str) return null;
+          try {
+            const parsed = JSON.parse(str);
+            // Validate the stored agent data
+            if (parsed?.state?.selectedAgent && !isValidAgentInfo(parsed.state.selectedAgent)) {
+              localStorage.removeItem(name);
+              return null;
+            }
+            return parsed;
+          } catch {
+            localStorage.removeItem(name);
+            return null;
+          }
         },
-      };
-
-    case 'RESET_CONVERSATION':
-      return {
-        ...state,
-        conversation: initialConversationState,
-      };
-
-    case 'UPDATE_MESSAGES':
-      return {
-        ...state,
-        conversation: {
-          ...state.conversation,
-          initialMessages: action.messages,
+        setItem: (name, value) => {
+          localStorage.setItem(name, JSON.stringify(value));
         },
-      };
-
-    default:
-      return state;
-  }
-}
-
-// ============================================
-// localStorage Keys
-// ============================================
-
-const STORAGE_KEY_AGENT_DATA = 'pagespace:sidebar:selectedAgentData';
+        removeItem: (name) => {
+          localStorage.removeItem(name);
+        },
+      },
+    }
+  )
+);
 
 // ============================================
-// Hook
+// Hook Interface (for backward compatibility)
 // ============================================
 
 export interface UseSidebarAgentStateReturn {
@@ -177,50 +186,22 @@ export interface UseSidebarAgentStateReturn {
   updateMessages: (messages: UIMessage[]) => void;
 }
 
+/**
+ * Hook for managing sidebar agent selection state.
+ * Uses Zustand store internally for shared state across components.
+ */
 export function useSidebarAgentState(): UseSidebarAgentStateReturn {
-  const [state, dispatch] = useReducer(agentStateReducer, initialState);
+  const store = useSidebarAgentStore();
 
-  // Ref to track which agent we're currently loading conversation for (race condition protection)
+  // Ref to track which agent we're currently loading (for race condition protection)
   const loadingAgentIdRef = useRef<string | null>(null);
-
-  // ============================================
-  // Restore from localStorage on mount
-  // ============================================
-  useEffect(() => {
-    try {
-      const savedData = localStorage.getItem(STORAGE_KEY_AGENT_DATA);
-      if (savedData) {
-        const parsed = JSON.parse(savedData);
-        if (isValidAgentInfo(parsed)) {
-          dispatch({ type: 'SELECT_AGENT', agent: parsed });
-        } else {
-          // Invalid data, clean up
-          localStorage.removeItem(STORAGE_KEY_AGENT_DATA);
-        }
-      }
-    } catch {
-      // Parse error, clean up
-      localStorage.removeItem(STORAGE_KEY_AGENT_DATA);
-    }
-  }, []);
-
-  // ============================================
-  // Persist to localStorage when agent changes
-  // ============================================
-  useEffect(() => {
-    if (state.selectedAgent) {
-      localStorage.setItem(STORAGE_KEY_AGENT_DATA, JSON.stringify(state.selectedAgent));
-    } else {
-      localStorage.removeItem(STORAGE_KEY_AGENT_DATA);
-    }
-  }, [state.selectedAgent]);
 
   // ============================================
   // Load/create conversation when agent is selected
   // ============================================
   useEffect(() => {
     const loadOrCreateConversation = async () => {
-      const agent = state.selectedAgent;
+      const agent = store.selectedAgent;
 
       if (!agent) {
         // No agent selected (global mode) - nothing to load
@@ -229,10 +210,7 @@ export function useSidebarAgentState(): UseSidebarAgentStateReturn {
       }
 
       // If already initialized for this agent, skip
-      if (
-        state.conversation.isInitialized &&
-        state.conversation.agentIdForConversation === agent.id
-      ) {
+      if (store.isInitialized && store.agentIdForConversation === agent.id) {
         return;
       }
 
@@ -240,7 +218,7 @@ export function useSidebarAgentState(): UseSidebarAgentStateReturn {
       const currentAgentId = agent.id;
       loadingAgentIdRef.current = currentAgentId;
 
-      dispatch({ type: 'CONVERSATION_LOADING' });
+      store.setConversationLoading();
 
       // Try to load most recent conversation
       try {
@@ -265,12 +243,11 @@ export function useSidebarAgentState(): UseSidebarAgentStateReturn {
 
             if (messagesResponse.ok) {
               const messagesData = await messagesResponse.json();
-              dispatch({
-                type: 'CONVERSATION_LOADED',
-                conversationId: mostRecent.id,
-                messages: messagesData.messages || [],
-                agentId: agent.id,
-              });
+              store.setConversationLoaded(
+                mostRecent.id,
+                messagesData.messages || [],
+                agent.id
+              );
               return;
             }
           }
@@ -301,11 +278,7 @@ export function useSidebarAgentState(): UseSidebarAgentStateReturn {
         if (response.ok) {
           const data = await response.json();
           const newConversationId = data.conversationId || data.id;
-          dispatch({
-            type: 'CONVERSATION_CREATED',
-            conversationId: newConversationId,
-            agentId: agent.id,
-          });
+          store.setConversationCreated(newConversationId, agent.id);
         } else {
           throw new Error('Failed to create conversation');
         }
@@ -314,23 +287,18 @@ export function useSidebarAgentState(): UseSidebarAgentStateReturn {
         if (loadingAgentIdRef.current !== currentAgentId) return;
         console.error('Failed to create new agent conversation:', error);
         toast.error('Failed to initialize agent conversation');
-        dispatch({ type: 'CONVERSATION_ERROR', agentId: agent.id });
+        store.setConversationError(agent.id);
       }
     };
 
     loadOrCreateConversation();
-  }, [state.selectedAgent, state.conversation.isInitialized, state.conversation.agentIdForConversation]);
+  }, [store.selectedAgent, store.isInitialized, store.agentIdForConversation]);
 
   // ============================================
-  // Actions
+  // Action: Create New Conversation
   // ============================================
-
-  const selectAgent = useCallback((agent: SidebarAgentInfo | null) => {
-    dispatch({ type: 'SELECT_AGENT', agent });
-  }, []);
-
-  const createNewConversation = useCallback(async (): Promise<string | null> => {
-    const agent = state.selectedAgent;
+  const createNewConversation = async (): Promise<string | null> => {
+    const agent = store.selectedAgent;
     if (!agent) return null;
 
     try {
@@ -345,11 +313,7 @@ export function useSidebarAgentState(): UseSidebarAgentStateReturn {
       if (response.ok) {
         const data = await response.json();
         const newConversationId = data.conversationId || data.id;
-        dispatch({
-          type: 'CONVERSATION_CREATED',
-          conversationId: newConversationId,
-          agentId: agent.id,
-        });
+        store.setConversationCreated(newConversationId, agent.id);
         return newConversationId;
       }
     } catch (error) {
@@ -357,11 +321,14 @@ export function useSidebarAgentState(): UseSidebarAgentStateReturn {
       toast.error('Failed to create new conversation');
     }
     return null;
-  }, [state.selectedAgent]);
+  };
 
-  const refreshConversation = useCallback(async () => {
-    const agent = state.selectedAgent;
-    const conversationId = state.conversation.conversationId;
+  // ============================================
+  // Action: Refresh Conversation
+  // ============================================
+  const refreshConversation = async (): Promise<void> => {
+    const agent = store.selectedAgent;
+    const conversationId = store.conversationId;
     if (!agent || !conversationId) return;
 
     try {
@@ -370,38 +337,24 @@ export function useSidebarAgentState(): UseSidebarAgentStateReturn {
       );
       if (response.ok) {
         const data = await response.json();
-        dispatch({ type: 'UPDATE_MESSAGES', messages: data.messages || [] });
+        store.updateMessages(data.messages || []);
       }
     } catch (error) {
       console.error('Failed to refresh agent conversation:', error);
     }
-  }, [state.selectedAgent, state.conversation.conversationId]);
-
-  const updateMessages = useCallback((messages: UIMessage[]) => {
-    dispatch({ type: 'UPDATE_MESSAGES', messages });
-  }, []);
+  };
 
   // ============================================
-  // Return
+  // Return hook interface
   // ============================================
-
-  return useMemo(() => ({
-    selectedAgent: state.selectedAgent,
-    conversationId: state.conversation.conversationId,
-    initialMessages: state.conversation.initialMessages,
-    isInitialized: state.conversation.isInitialized,
-    selectAgent,
+  return {
+    selectedAgent: store.selectedAgent,
+    conversationId: store.conversationId,
+    initialMessages: store.initialMessages,
+    isInitialized: store.isInitialized,
+    selectAgent: store.selectAgent,
     createNewConversation,
     refreshConversation,
-    updateMessages,
-  }), [
-    state.selectedAgent,
-    state.conversation.conversationId,
-    state.conversation.initialMessages,
-    state.conversation.isInitialized,
-    selectAgent,
-    createNewConversation,
-    refreshConversation,
-    updateMessages,
-  ]);
+    updateMessages: store.updateMessages,
+  };
 }
