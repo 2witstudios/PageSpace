@@ -518,6 +518,23 @@ export async function POST(request: Request) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         filteredTools = { ...filteredTools, ...mcpToolsWithExecute } as any;
 
+        // Sanitize tool names for Gemini - it doesn't allow multiple colons in function names
+        // Convert mcp:servername:toolname to mcp__servername__toolname format
+        // The parseMCPToolName function already supports both formats, so execute still works
+        if (currentProvider === 'google' && filteredTools) {
+          const sanitizedTools: Record<string, unknown> = {};
+          for (const [originalName, tool] of Object.entries(filteredTools)) {
+            const sanitizedName = originalName.replace(/:/g, '__');
+            sanitizedTools[sanitizedName] = tool;
+          }
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          filteredTools = sanitizedTools as any;
+          loggers.ai.debug('AI Chat API: Sanitized tool names for Gemini compatibility', {
+            originalCount: Object.keys(mcpToolSchemas).length,
+            example: Object.keys(sanitizedTools)[0]
+          });
+        }
+
         loggers.ai.info('AI Chat API: Successfully merged MCP tools', {
           totalTools: Object.keys(filteredTools).length,
           mcpTools: Object.keys(mcpToolSchemas).length,

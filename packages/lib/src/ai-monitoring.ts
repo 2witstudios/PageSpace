@@ -12,15 +12,26 @@ import { loggers } from './logger-config';
  * Prices in USD as of 2025-01
  */
 export const AI_PRICING = {
-  // OpenRouter Paid Models
+  // OpenRouter Paid Models - Anthropic
+  'anthropic/claude-opus-4.5': { input: 15.00, output: 75.00 },
+  'anthropic/claude-sonnet-4.5': { input: 3.00, output: 15.00 },
+  'anthropic/claude-haiku-4.5': { input: 0.80, output: 4.00 },
   'anthropic/claude-3.5-sonnet': { input: 3.00, output: 15.00 },
   'anthropic/claude-3-haiku': { input: 0.25, output: 1.25 },
   'anthropic/claude-opus-4.1': { input: 15.00, output: 75.00 },
+
+  // OpenRouter Paid Models - OpenAI
+  'openai/gpt-5.1': { input: 10.00, output: 40.00 },
+  'openai/gpt-5.1-codex': { input: 10.00, output: 40.00 },
+  'openai/gpt-5.1-codex-mini': { input: 5.00, output: 20.00 },
   'openai/gpt-4o': { input: 2.50, output: 10.00 },
   'openai/gpt-4o-mini': { input: 0.15, output: 0.60 },
-  'openai/gpt-5': { input: 10.00, output: 40.00 }, // Estimated
-  'openai/gpt-5-mini': { input: 1.00, output: 4.00 }, // Estimated
-  'openai/gpt-5-nano': { input: 0.10, output: 0.40 }, // Estimated
+  'openai/gpt-5': { input: 10.00, output: 40.00 },
+  'openai/gpt-5-mini': { input: 1.00, output: 4.00 },
+  'openai/gpt-5-nano': { input: 0.10, output: 0.40 },
+
+  // OpenRouter Paid Models - Google
+  'google/gemini-3-pro-preview': { input: 1.25, output: 5.00 },
   'meta-llama/llama-3.1-405b-instruct': { input: 3.00, output: 3.00 },
   'mistralai/mistral-medium-3.1': { input: 2.70, output: 8.10 },
   'mistralai/mistral-small-3.2-24b-instruct': { input: 0.20, output: 0.60 },
@@ -30,17 +41,23 @@ export const AI_PRICING = {
   'google/gemini-2.5-flash-lite': { input: 0.02, output: 0.08 },
   
   // Google AI Direct Models
+  'gemini-3-pro': { input: 1.25, output: 5.00 },
   'gemini-2.0-flash-exp': { input: 0.00, output: 0.00 }, // Free during preview
   'gemini-1.5-flash': { input: 0.075, output: 0.30 },
   'gemini-1.5-flash-8b': { input: 0.0375, output: 0.15 },
   'gemini-1.5-pro': { input: 1.25, output: 5.00 },
-  
-  // OpenAI Direct Models  
+
+  // OpenAI Direct Models
+  'gpt-5.1': { input: 10.00, output: 40.00 },
+  'gpt-5.1-codex': { input: 10.00, output: 40.00 },
   'gpt-4-turbo': { input: 10.00, output: 30.00 },
   'gpt-4': { input: 30.00, output: 60.00 },
   'gpt-3.5-turbo': { input: 0.50, output: 1.50 },
-  
+
   // Anthropic Direct Models
+  'claude-opus-4-5-20251124': { input: 15.00, output: 75.00 },
+  'claude-sonnet-4-5-20250929': { input: 3.00, output: 15.00 },
+  'claude-haiku-4-5-20251001': { input: 0.80, output: 4.00 },
   'claude-3-5-sonnet-latest': { input: 3.00, output: 15.00 },
   'claude-3-5-haiku-latest': { input: 0.80, output: 4.00 },
   'claude-3-opus-latest': { input: 15.00, output: 75.00 },
@@ -66,15 +83,20 @@ export const AI_PRICING = {
  */
 export const MODEL_CONTEXT_WINDOWS = {
   // OpenRouter Models - Anthropic
-  'anthropic/claude-sonnet-4.5': 200000, // Claude Sonnet 4.5 (2025)
+  'anthropic/claude-opus-4.5': 200000,
+  'anthropic/claude-sonnet-4.5': 200000,
+  'anthropic/claude-haiku-4.5': 200000,
   'anthropic/claude-3.5-sonnet': 200000,
   'anthropic/claude-3-haiku': 200000,
   'anthropic/claude-opus-4.1': 200000,
 
   // OpenRouter Models - OpenAI
+  'openai/gpt-5.1': 400000,
+  'openai/gpt-5.1-codex': 400000,
+  'openai/gpt-5.1-codex-mini': 400000,
   'openai/gpt-4o': 128000,
   'openai/gpt-4o-mini': 128000,
-  'openai/gpt-5': 272000, // GPT-5 main model (2025)
+  'openai/gpt-5': 272000,
   'openai/gpt-5-mini': 128000,
   'openai/gpt-5-nano': 128000,
 
@@ -85,6 +107,7 @@ export const MODEL_CONTEXT_WINDOWS = {
   'mistralai/codestral-2508': 32000,
 
   // OpenRouter Models - Google
+  'google/gemini-3-pro-preview': 1048576,
   'google/gemini-2.5-pro': 2000000,
   'google/gemini-2.5-flash': 1000000,
   'google/gemini-2.5-flash-lite': 1000000,
@@ -92,6 +115,7 @@ export const MODEL_CONTEXT_WINDOWS = {
   'google/gemini-2.0-flash': 1000000,
 
   // Google AI Direct Models
+  'gemini-3-pro': 1048576,
   'gemini-2.5-pro': 2000000,
   'gemini-2.5-flash': 1000000,
   'gemini-2.0-pro-exp': 2000000,
@@ -101,7 +125,9 @@ export const MODEL_CONTEXT_WINDOWS = {
   'gemini-1.5-pro': 2000000,
 
   // OpenAI Direct Models
-  'gpt-5': 272000, // GPT-5 (2025)
+  'gpt-5.1': 400000,
+  'gpt-5.1-codex': 400000,
+  'gpt-5': 272000,
   'gpt-5-mini': 128000,
   'gpt-5-nano': 128000,
   'gpt-4-turbo': 128000,
@@ -109,8 +135,10 @@ export const MODEL_CONTEXT_WINDOWS = {
   'gpt-3.5-turbo': 16385,
 
   // Anthropic Direct Models
-  'claude-sonnet-4-5': 200000, // Claude Sonnet 4.5 (2025)
+  'claude-opus-4-5-20251124': 200000,
+  'claude-sonnet-4-5': 200000,
   'claude-sonnet-4-5-20250929': 200000,
+  'claude-haiku-4-5-20251001': 200000,
   'claude-3-5-sonnet-latest': 200000,
   'claude-3-5-haiku-latest': 200000,
   'claude-3-opus-latest': 200000,

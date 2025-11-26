@@ -15,12 +15,16 @@ export const AI_PROVIDERS = {
     name: 'OpenRouter (Paid)',
     models: {
       // Anthropic Models (2025)
+      'anthropic/claude-opus-4.5': 'Claude Opus 4.5',
       'anthropic/claude-sonnet-4.5': 'Claude Sonnet 4.5',
       'anthropic/claude-haiku-4.5': 'Claude Haiku 4.5',
       'anthropic/claude-3.5-sonnet': 'Claude 3.5 Sonnet',
       'anthropic/claude-3-haiku': 'Claude 3 Haiku',
 
       // OpenAI Models (2025)
+      'openai/gpt-5.1': 'GPT-5.1',
+      'openai/gpt-5.1-codex': 'GPT-5.1 Codex',
+      'openai/gpt-5.1-codex-mini': 'GPT-5.1 Codex Mini',
       'openai/gpt-4o': 'GPT-4o',
       'openai/gpt-4o-mini': 'GPT-4o Mini',
       'openai/o3-deep-research': 'o3 Deep Research',
@@ -57,6 +61,7 @@ export const AI_PROVIDERS = {
       'deepseek/deepseek-v3.1-terminus': 'DeepSeek V3.1 Terminus',
 
       // Google Models (via OpenRouter)
+      'google/gemini-3-pro-preview': 'Gemini 3 Pro',
       'google/gemini-2.5-pro': 'Gemini 2.5 Pro',
       'google/gemini-2.5-flash': 'Gemini 2.5 Flash',
       'google/gemini-2.5-flash-lite': 'Gemini 2.5 Flash Lite',
@@ -124,6 +129,8 @@ export const AI_PROVIDERS = {
   google: {
     name: 'Google AI',
     models: {
+      // Gemini 3 Series (2025)
+      'gemini-3-pro': 'Gemini 3 Pro',
       // Gemini 2.5 Series (2025)
       'gemini-2.5-pro': 'Gemini 2.5 Pro',
       'gemini-2.5-flash': 'Gemini 2.5 Flash',
@@ -137,6 +144,10 @@ export const AI_PROVIDERS = {
   openai: {
     name: 'OpenAI',
     models: {
+      // GPT-5.1 Models (2025)
+      'gpt-5.1': 'GPT-5.1',
+      'gpt-5.1-codex': 'GPT-5.1 Codex',
+
       // GPT-5 Models (2025)
       'gpt-5': 'GPT-5',
       'gpt-5-mini': 'GPT-5 Mini',
@@ -172,6 +183,7 @@ export const AI_PROVIDERS = {
     name: 'Anthropic',
     models: {
       // Claude 4.5 Models (2025)
+      'claude-opus-4-5-20251124': 'Claude Opus 4.5',
       'claude-sonnet-4-5-20250929': 'Claude Sonnet 4.5',
       'claude-haiku-4-5-20251001': 'Claude Haiku 4.5',
 
