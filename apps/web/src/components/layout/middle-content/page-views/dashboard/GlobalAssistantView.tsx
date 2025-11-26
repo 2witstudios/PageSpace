@@ -397,7 +397,7 @@ const GlobalAssistantView: React.FC = () => {
       id: agentConversationId,
       messages: agentInitialMessages,
       transport: new DefaultChatTransport({
-        api: `/api/agents/${selectedAgent.id}/conversations/${agentConversationId}/messages`,
+        api: '/api/ai/chat',
         fetch: (url, options) => {
           const urlString = url instanceof Request ? url.url : url.toString();
           return fetchWithAuth(urlString, options);
