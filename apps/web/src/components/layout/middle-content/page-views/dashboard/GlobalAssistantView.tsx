@@ -1000,7 +1000,6 @@ const GlobalAssistantView: React.FC = () => {
           <AgentSelector
             selectedAgent={selectedAgent}
             onSelectAgent={selectAgent}
-            driveId={locationContext?.currentDrive?.id}
             disabled={status === 'streaming'}
           />
         </div>
