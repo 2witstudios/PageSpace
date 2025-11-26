@@ -68,12 +68,12 @@ PageSpace's AI system implements a **database-first, message-as-row architecture
 **Enhanced Database Operations:**
 ```sql
 -- User message with mention processing
-INSERT INTO chat_messages (id, pageId, userId, role, content, toolCalls, toolResults, createdAt, isActive, agentRole)
-VALUES (?, ?, ?, 'user', ?, NULL, NULL, NOW(), true, ?);
+INSERT INTO chat_messages (id, pageId, userId, role, content, toolCalls, toolResults, createdAt, isActive)
+VALUES (?, ?, ?, 'user', ?, NULL, NULL, NOW(), true);
 
 -- AI response with tool calls and results
-INSERT INTO chat_messages (id, pageId, userId, role, content, toolCalls, toolResults, createdAt, isActive, agentRole)
-VALUES (?, ?, NULL, 'assistant', ?, ?, ?, NOW(), true, ?);
+INSERT INTO chat_messages (id, pageId, userId, role, content, toolCalls, toolResults, createdAt, isActive)
+VALUES (?, ?, NULL, 'assistant', ?, ?, ?, NOW(), true);
 ```
 
 **Tool Call Storage:**

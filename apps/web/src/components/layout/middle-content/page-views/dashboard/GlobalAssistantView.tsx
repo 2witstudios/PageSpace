@@ -10,8 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Loader2, Send, Settings, Plus, History, StopCircle, Server } from 'lucide-react';
 import { MessageRenderer } from '@/components/ai/MessageRenderer';
-import { AgentRole, AgentRoleUtils } from '@/lib/ai/agent-roles';
-import { RoleSelector } from '@/components/ai/RoleSelector';
+import { ReadOnlyToggle } from '@/components/ai/ReadOnlyToggle';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth, patch, del } from '@/lib/auth-fetch';
@@ -76,7 +75,7 @@ const GlobalAssistantView: React.FC = () => {
   const [providerSettings, setProviderSettings] = useState<ProviderSettings | null>(null);
   const [showApiKeyInput, setShowApiKeyInput] = useState<boolean>(false);
   const [input, setInput] = useState<string>('');
-  const [currentAgentRole, setCurrentAgentRole] = useState<AgentRole>(AgentRoleUtils.getDefaultRole());
+  const [isReadOnly, setIsReadOnly] = useState<boolean>(false);
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
 
@@ -406,7 +405,7 @@ const GlobalAssistantView: React.FC = () => {
       { text: input },
       {
         body: {
-          agentRole: currentAgentRole,
+          isReadOnly,
           locationContext: locationContext || undefined,
           mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
         }
@@ -520,11 +519,11 @@ const GlobalAssistantView: React.FC = () => {
         </div>
       </div>
 
-      {/* Role Selector Header */}
+      {/* Read-Only Toggle Header */}
       <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-[var(--separator)]">
-        <RoleSelector
-          currentRole={currentAgentRole}
-          onRoleChange={setCurrentAgentRole}
+        <ReadOnlyToggle
+          isReadOnly={isReadOnly}
+          onToggle={setIsReadOnly}
           disabled={status === 'streaming'}
           size="sm"
         />

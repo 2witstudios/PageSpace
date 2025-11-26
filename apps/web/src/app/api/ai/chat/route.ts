@@ -47,9 +47,8 @@ import {
 import { processMentionsInMessage, buildMentionSystemPrompt } from '@/lib/ai/mention-processor';
 import { buildTimestampSystemPrompt } from '@/lib/ai/timestamp-utils';
 import { buildInlineInstructions } from '@/lib/ai/inline-instructions';
-import { RolePromptBuilder } from '@/lib/ai/role-prompts';
-import { ToolPermissionFilter } from '@/lib/ai/tool-permissions';
-import { AgentRole } from '@/lib/ai/agent-roles';
+import { buildSystemPrompt } from '@/lib/ai/system-prompt';
+import { filterToolsForReadOnly } from '@/lib/ai/tool-filtering';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { trackFeature } from '@pagespace/lib/activity-tracker';
@@ -118,7 +117,7 @@ export async function POST(request: Request) {
       glmApiKey,
       pageContext,
       mcpTools, // MCP tool schemas from desktop client (optional)
-      // Note: agentRole no longer needed - handled server-side via page configuration
+      isReadOnly, // Optional read-only mode toggle
     }: {
       messages: UIMessage[],
       chatId?: string,
@@ -133,6 +132,7 @@ export async function POST(request: Request) {
       ollamaBaseUrl?: string,
       glmApiKey?: string,
       mcpTools?: MCPTool[], // MCP tool schemas from desktop (client-side execution)
+      isReadOnly?: boolean, // Optional read-only mode toggle
       pageContext?: {
         pageId: string,
         pageTitle: string,
@@ -281,7 +281,6 @@ export async function POST(request: Request) {
           toolResults: null,
           createdAt: new Date(),
           isActive: true,
-          agentRole: page.title || 'Page AI', // Use page title as agent role
         });
         
         loggers.ai.debug('AI Chat API: User message saved to database');
@@ -397,6 +396,10 @@ export async function POST(request: Request) {
       });
     }
 
+    // Parse read-only mode (defaults to false for full access)
+    const readOnlyMode = isReadOnly === true;
+    loggers.ai.debug('AI Page Chat API: Read-only mode', { isReadOnly: readOnlyMode });
+
     // Filter tools based on custom enabled tools or use all tools if not configured
     let filteredTools;
     if (enabledTools && enabledTools.length > 0) {
@@ -410,17 +413,19 @@ export async function POST(request: Request) {
           filtered[toolName] = (pageSpaceTools as any)[toolName];
         }
       }
-      filteredTools = filtered;
+      // Apply read-only filtering on top of enabled tools
+      filteredTools = filterToolsForReadOnly(filtered, readOnlyMode);
 
       loggers.ai.debug('AI Page Chat API: Filtered tools based on page configuration', {
         totalTools: Object.keys(pageSpaceTools).length,
         enabledTools: enabledTools.length,
-        filteredTools: Object.keys(filteredTools).length
+        filteredTools: Object.keys(filteredTools).length,
+        isReadOnly: readOnlyMode
       });
     } else {
-      // No tool restrictions configured, use default role-based filtering for compatibility
-      filteredTools = ToolPermissionFilter.filterTools(pageSpaceTools, AgentRole.PARTNER);
-      loggers.ai.debug('AI Page Chat API: Using default tool filtering (PARTNER role)');
+      // No tool restrictions configured, use read-only filtering on all tools
+      filteredTools = filterToolsForReadOnly(pageSpaceTools, readOnlyMode);
+      loggers.ai.debug('AI Page Chat API: Using default tool filtering', { isReadOnly: readOnlyMode });
     }
 
     // DESKTOP MCP INTEGRATION: Merge MCP tools from client if provided
@@ -591,10 +596,13 @@ export async function POST(request: Request) {
       if (pageContext) {
         systemPrompt += `\n\nYou are operating within the page "${pageContext.pageTitle}" in the "${pageContext.driveName}" drive. Your current location: ${pageContext.pagePath}`;
       }
+      // Add read-only constraint if applicable
+      if (readOnlyMode) {
+        systemPrompt += `\n\nREAD-ONLY MODE:\n• You cannot modify, create, or delete any content\n• Focus on exploring, analyzing, and planning\n• Create actionable plans for the user to execute later`;
+      }
     } else {
-      // Fallback to default PageSpace system prompt for compatibility
-      systemPrompt = RolePromptBuilder.buildSystemPrompt(
-        AgentRole.PARTNER, // Default fallback role for pages without custom configuration
+      // Fallback to default PageSpace system prompt with read-only mode
+      systemPrompt = buildSystemPrompt(
         'page',
         pageContext ? {
           driveName: pageContext.driveName,
@@ -603,7 +611,8 @@ export async function POST(request: Request) {
           pagePath: pageContext.pagePath,
           pageType: pageContext.pageType,
           breadcrumbs: pageContext.breadcrumbs,
-        } : undefined
+        } : undefined,
+        readOnlyMode
       );
     }
     
@@ -738,8 +747,7 @@ export async function POST(request: Request) {
                 content: messageContent,
                 toolCalls: extractedToolCalls.length > 0 ? extractedToolCalls : undefined,
                 toolResults: extractedToolResults.length > 0 ? extractedToolResults : undefined,
-                uiMessage: responseMessage, // NEW: Pass complete UIMessage to preserve part ordering
-                agentRole: page.title || 'Page AI', // Use page title as agent role
+                uiMessage: responseMessage, // Pass complete UIMessage to preserve part ordering
               });
               
               loggers.ai.debug('AI Chat API: AI response message saved to database with tools');

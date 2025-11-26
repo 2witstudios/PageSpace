@@ -24,9 +24,8 @@ import {
 } from '@/lib/ai/assistant-utils';
 import { processMentionsInMessage, buildMentionSystemPrompt } from '@/lib/ai/mention-processor';
 import { buildTimestampSystemPrompt } from '@/lib/ai/timestamp-utils';
-import { AgentRoleUtils } from '@/lib/ai/agent-roles';
-import { RolePromptBuilder } from '@/lib/ai/role-prompts';
-import { ToolPermissionFilter } from '@/lib/ai/tool-permissions';
+import { buildSystemPrompt } from '@/lib/ai/system-prompt';
+import { filterToolsForReadOnly } from '@/lib/ai/tool-filtering';
 import { getModelCapabilities } from '@/lib/ai/model-capabilities';
 import { convertMCPToolsToAISDKSchemas, parseMCPToolName } from '@/lib/ai/mcp-tool-converter';
 import { getMCPBridge } from '@/lib/mcp-bridge';
@@ -131,7 +130,6 @@ export async function GET(
         toolResults: msg.toolResults,
         createdAt: msg.createdAt,
         isActive: msg.isActive,
-        agentRole: msg.agentRole,
         editedAt: msg.editedAt,
       })
     );
@@ -223,7 +221,7 @@ export async function POST(
       ollamaBaseUrl,
       glmApiKey,
       locationContext,
-      agentRole: roleString,
+      isReadOnly,
       mcpTools
     } = requestBody;
 
@@ -234,7 +232,10 @@ export async function POST(
     }
     
     loggers.api.debug('✅ Global Assistant Chat API: Validation passed', { messageCount: requestMessages.length, conversationId });
-    
+
+    // Parse read-only mode early (needed for message saving)
+    const readOnlyMode = isReadOnly === true;
+
     // Process @mentions in the user's message
     let mentionSystemPrompt = '';
     let mentionedPageIds: string[] = [];
@@ -269,7 +270,6 @@ export async function POST(
           toolCalls: undefined,
           toolResults: undefined,
           uiMessage: userMessage, // Pass UIMessage to preserve part ordering
-          agentRole: 'PARTNER',
         });
 
         // Update conversation lastMessageAt and auto-generate title if needed
@@ -366,9 +366,7 @@ export async function POST(
       });
     }
 
-    // Get agent role with fallback to default
-    const agentRole = AgentRoleUtils.getRoleFromString(roleString);
-    loggers.api.debug('🤖 Global Assistant Chat API: Using agent role', { agentRole });
+    loggers.api.debug('🤖 Global Assistant Chat API: Read-only mode', { isReadOnly: readOnlyMode });
 
     // DATABASE-FIRST ARCHITECTURE:
     // PageSpace uses database as the single source of truth for all messages.
@@ -401,7 +399,6 @@ export async function POST(
         toolResults: msg.toolResults,
         createdAt: msg.createdAt,
         isActive: msg.isActive,
-        agentRole: msg.agentRole,
         editedAt: msg.editedAt,
       })
     );
@@ -465,21 +462,22 @@ export async function POST(
     
     const modelMessages = convertToModelMessages(processedMessages);
 
-    // Build role-aware system prompt with context
-    const contextType = locationContext?.currentPage ? 'page' : 
-                       locationContext?.currentDrive ? 'drive' : 
+    // Build system prompt with context
+    const contextType = locationContext?.currentPage ? 'page' :
+                       locationContext?.currentDrive ? 'drive' :
                        'dashboard';
-    
-    const baseSystemPrompt = RolePromptBuilder.buildSystemPrompt(
-      agentRole,
+
+    const baseSystemPrompt = buildSystemPrompt(
       contextType,
       locationContext ? {
         driveName: locationContext.currentDrive?.name,
         driveSlug: locationContext.currentDrive?.slug,
+        driveId: locationContext.currentDrive?.id,
         pagePath: locationContext.currentPage?.path,
         pageType: locationContext.currentPage?.type,
         breadcrumbs: locationContext.breadcrumbs,
-      } : undefined
+      } : undefined,
+      readOnlyMode
     );
 
     // Build timestamp system prompt for temporal awareness
@@ -551,8 +549,9 @@ MENTION PROCESSING:
 • Let mentioned document content inform and enrich your response
 • Don't explicitly mention that you're reading @mentioned docs unless relevant to the conversation`;
 
-    // Filter tools based on agent role permissions
-    let finalTools = ToolPermissionFilter.filterTools(pageSpaceTools, agentRole);
+    // Filter tools based on read-only mode
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let finalTools: Record<string, any> = filterToolsForReadOnly(pageSpaceTools, readOnlyMode);
 
     // Merge MCP tools if provided
     if (mcpTools && mcpTools.length > 0) {
@@ -595,7 +594,7 @@ MENTION PROCESSING:
         }
 
         // Merge MCP tools with PageSpace tools
-        finalTools = { ...finalTools, ...mcpToolsWithExecute } as Record<string, unknown>;
+        finalTools = { ...finalTools, ...mcpToolsWithExecute };
 
         loggers.api.info('Global Assistant Chat API: Successfully merged MCP tools', {
           totalTools: Object.keys(finalTools).length,
@@ -616,7 +615,7 @@ MENTION PROCESSING:
       });
     }
 
-    loggers.api.debug('🔄 Global Assistant Chat API: Starting streamText', { model: currentModel, agentRole });
+    loggers.api.debug('🔄 Global Assistant Chat API: Starting streamText', { model: currentModel, isReadOnly: readOnlyMode });
 
     // Calculate context size BEFORE streaming (for real context window tracking)
     const contextCalculation = calculateTotalContextSize({
@@ -687,7 +686,6 @@ MENTION PROCESSING:
               toolCalls: extractedToolCalls.length > 0 ? extractedToolCalls : undefined,
               toolResults: extractedToolResults.length > 0 ? extractedToolResults : undefined,
               uiMessage: responseMessage, // Pass complete UIMessage to preserve part ordering
-              agentRole,
             });
 
             // Update conversation lastMessageAt
@@ -735,7 +733,7 @@ MENTION PROCESSING:
                   metadata: {
                     toolCallsCount: extractedToolCalls.length,
                     toolResultsCount: extractedToolResults.length,
-                    agentRole: agentRole || 'PARTNER',
+                    isReadOnly: readOnlyMode,
                   }
                 });
 

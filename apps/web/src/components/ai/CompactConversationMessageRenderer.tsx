@@ -11,7 +11,6 @@ interface ConversationMessage extends UIMessage {
   messageType?: 'standard' | 'todo_list';
   conversationId?: string;
   isActive?: boolean;
-  agentRole?: string;
   editedAt?: Date;
   createdAt?: Date;
 }

@@ -7,7 +7,6 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Copy, Check, FileCode, Coins, Wrench, Settings2, ChevronDown, ChevronUp, Maximize2, Minimize2, Search, ClipboardList } from "lucide-react";
-import { AgentRole } from "@/lib/ai/agent-roles";
 import type { GlobalPromptResponse } from "@/lib/ai/types/global-prompt";
 
 const COPY_FEEDBACK_DURATION = 2000;
@@ -17,7 +16,7 @@ interface GlobalPromptClientProps {
 }
 
 export default function GlobalPromptClient({ data }: GlobalPromptClientProps) {
-  const [selectedRole, setSelectedRole] = useState<string>(AgentRole.PARTNER);
+  const [selectedMode, setSelectedMode] = useState<string>("fullAccess");
   const [copiedSections, setCopiedSections] = useState<Set<string>>(new Set());
   const [copiedToolName, setCopiedToolName] = useState<string | null>(null);
   const [copiedContext, setCopiedContext] = useState(false);
@@ -26,12 +25,12 @@ export default function GlobalPromptClient({ data }: GlobalPromptClientProps) {
   const [isPayloadExpanded, setIsPayloadExpanded] = useState(false);
   const timeoutRefs = useRef<Map<string, NodeJS.Timeout>>(new Map());
 
-  const currentRoleData = data.promptData[selectedRole];
-  const roleFilteredTools = useMemo(() =>
+  const currentModeData = data.promptData[selectedMode];
+  const modeFilteredTools = useMemo(() =>
     data.toolSchemas?.filter(t =>
-      currentRoleData?.toolsAllowed.includes(t.name)
+      currentModeData?.toolsAllowed.includes(t.name)
     ) || [],
-    [data.toolSchemas, currentRoleData?.toolsAllowed]
+    [data.toolSchemas, currentModeData?.toolsAllowed]
   );
 
   // Cleanup timeouts on unmount
@@ -98,28 +97,28 @@ export default function GlobalPromptClient({ data }: GlobalPromptClientProps) {
   }, [data.experimentalContext, copyToClipboard, setTrackedTimeout]);
 
   const handleCopyCompletePayload = useCallback(async () => {
-    const payload = currentRoleData?.completePayload?.formattedString;
+    const payload = currentModeData?.completePayload?.formattedString;
     if (!payload) return;
     await copyToClipboard(payload, () => {
       setCopiedCompletePayload(true);
       setTrackedTimeout('completePayload', () => setCopiedCompletePayload(false));
     });
-  }, [currentRoleData?.completePayload?.formattedString, copyToClipboard, setTrackedTimeout]);
+  }, [currentModeData?.completePayload?.formattedString, copyToClipboard, setTrackedTimeout]);
 
   const handleToggleExpandAll = useCallback(() => {
     if (expandedTools.length > 0) {
       setExpandedTools([]);
     } else {
-      setExpandedTools(roleFilteredTools.map((_, i) => `tool-${i}`));
+      setExpandedTools(modeFilteredTools.map((_, i) => `tool-${i}`));
     }
-  }, [expandedTools.length, roleFilteredTools]);
+  }, [expandedTools.length, modeFilteredTools]);
 
-  if (!currentRoleData) {
-    return <div>No data available for this role</div>;
+  if (!currentModeData) {
+    return <div>No data available for this mode</div>;
   }
 
-  // Filter tools by role permissions
-  const allowedToolNames = new Set(currentRoleData.toolsAllowed);
+  // Filter tools by mode permissions
+  const allowedToolNames = new Set(currentModeData.toolsAllowed);
   const deniedTools = data.toolSchemas?.filter(t => !allowedToolNames.has(t.name)) || [];
 
   return (
@@ -137,40 +136,39 @@ export default function GlobalPromptClient({ data }: GlobalPromptClientProps) {
         </div>
       </div>
 
-      {/* Role Selector */}
+      {/* Mode Selector */}
       <Card>
         <CardHeader>
-          <CardTitle>Agent Role</CardTitle>
+          <CardTitle>Access Mode</CardTitle>
         </CardHeader>
         <CardContent>
-          <Tabs value={selectedRole} onValueChange={setSelectedRole}>
-            <TabsList className="grid w-full grid-cols-3">
-              <TabsTrigger value="PARTNER">Partner</TabsTrigger>
-              <TabsTrigger value="PLANNER">Planner</TabsTrigger>
-              <TabsTrigger value="WRITER">Writer</TabsTrigger>
+          <Tabs value={selectedMode} onValueChange={setSelectedMode}>
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="fullAccess">Full Access</TabsTrigger>
+              <TabsTrigger value="readOnly">Read-Only</TabsTrigger>
             </TabsList>
           </Tabs>
 
-          {/* Role Info */}
+          {/* Mode Info */}
           <div className="mt-4 space-y-3">
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">Total Tokens:</span>
               <Badge variant="secondary" className="gap-1">
                 <Coins className="h-3 w-3" />
-                {currentRoleData.totalTokens.toLocaleString()}
+                {currentModeData.totalTokens.toLocaleString()}
               </Badge>
             </div>
 
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">Permissions:</span>
               <div className="flex gap-2">
-                {currentRoleData.permissions.canRead && (
+                {currentModeData.permissions.canRead && (
                   <Badge variant="outline">Read</Badge>
                 )}
-                {currentRoleData.permissions.canWrite && (
+                {currentModeData.permissions.canWrite && (
                   <Badge variant="outline">Write</Badge>
                 )}
-                {currentRoleData.permissions.canDelete && (
+                {currentModeData.permissions.canDelete && (
                   <Badge variant="outline">Delete</Badge>
                 )}
               </div>
@@ -179,7 +177,7 @@ export default function GlobalPromptClient({ data }: GlobalPromptClientProps) {
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">Tools Available:</span>
               <Badge variant="secondary">
-                {currentRoleData.toolsAllowed.length} / {currentRoleData.toolsAllowed.length + currentRoleData.toolsDenied.length}
+                {currentModeData.toolsAllowed.length} / {currentModeData.toolsAllowed.length + currentModeData.toolsDenied.length}
               </Badge>
             </div>
           </div>
@@ -193,7 +191,7 @@ export default function GlobalPromptClient({ data }: GlobalPromptClientProps) {
         </CardHeader>
         <CardContent>
           <Accordion type="multiple" className="w-full">
-            {currentRoleData.sections.map((section, index) => {
+            {currentModeData.sections.map((section, index) => {
               const isCopied = copiedSections.has(section.name);
               return (
                 <AccordionItem key={index} value={`section-${index}`}>
@@ -259,7 +257,7 @@ export default function GlobalPromptClient({ data }: GlobalPromptClientProps) {
             <div className="flex items-center justify-between">
               <CardTitle className="flex items-center gap-2">
                 <Wrench className="h-5 w-5" />
-                Tool Definitions ({roleFilteredTools.length} available for {selectedRole})
+                Tool Definitions ({modeFilteredTools.length} available in {selectedMode === 'fullAccess' ? 'Full Access' : 'Read-Only'} mode)
               </CardTitle>
               <Button
                 variant="outline"
@@ -288,7 +286,7 @@ export default function GlobalPromptClient({ data }: GlobalPromptClientProps) {
               value={expandedTools}
               onValueChange={setExpandedTools}
             >
-              {roleFilteredTools.map((tool, index) => {
+              {modeFilteredTools.map((tool, index) => {
                 const isCopied = copiedToolName === tool.name;
                 const toolJson = JSON.stringify({
                   name: tool.name,
@@ -348,11 +346,11 @@ export default function GlobalPromptClient({ data }: GlobalPromptClientProps) {
               })}
             </Accordion>
 
-            {/* Denied Tools for this Role */}
+            {/* Denied Tools for this Mode */}
             {deniedTools.length > 0 && (
               <div className="mt-6 pt-6 border-t">
                 <h4 className="text-sm font-medium mb-3 text-red-600 dark:text-red-400">
-                  Denied Tools for {selectedRole} ({deniedTools.length})
+                  Denied Tools in {selectedMode === 'fullAccess' ? 'Full Access' : 'Read-Only'} mode ({deniedTools.length})
                 </h4>
                 <div className="flex flex-wrap gap-2">
                   {deniedTools.map((tool) => (
@@ -376,10 +374,10 @@ export default function GlobalPromptClient({ data }: GlobalPromptClientProps) {
           <CardContent className="space-y-4">
             <div>
               <h4 className="text-sm font-medium mb-2 text-green-600 dark:text-green-400">
-                Allowed Tools ({currentRoleData.toolsAllowed.length})
+                Allowed Tools ({currentModeData.toolsAllowed.length})
               </h4>
               <div className="flex flex-wrap gap-2">
-                {currentRoleData.toolsAllowed.map((tool) => (
+                {currentModeData.toolsAllowed.map((tool) => (
                   <Badge key={tool} variant="outline" className="font-mono text-xs">
                     {tool}
                   </Badge>
@@ -387,13 +385,13 @@ export default function GlobalPromptClient({ data }: GlobalPromptClientProps) {
               </div>
             </div>
 
-            {currentRoleData.toolsDenied.length > 0 && (
+            {currentModeData.toolsDenied.length > 0 && (
               <div>
                 <h4 className="text-sm font-medium mb-2 text-red-600 dark:text-red-400">
-                  Denied Tools ({currentRoleData.toolsDenied.length})
+                  Denied Tools ({currentModeData.toolsDenied.length})
                 </h4>
                 <div className="flex flex-wrap gap-2">
-                  {currentRoleData.toolsDenied.map((tool) => (
+                  {currentModeData.toolsDenied.map((tool) => (
                     <Badge key={tool} variant="secondary" className="font-mono text-xs opacity-50">
                       {tool}
                     </Badge>
@@ -459,21 +457,21 @@ export default function GlobalPromptClient({ data }: GlobalPromptClientProps) {
       </div>
 
       {/* Complete Payload */}
-      {currentRoleData.completePayload && (
+      {currentModeData.completePayload && (
         <Card className="border-2 border-primary/20 bg-card/50">
           <CardHeader>
             <div className="flex items-center justify-between flex-wrap gap-4">
               <div className="flex flex-wrap items-center gap-4">
                 <Badge variant="default" className="gap-1 text-base px-3 py-1">
                   <Coins className="h-4 w-4" />
-                  ~{currentRoleData.completePayload.tokenEstimates.total.toLocaleString()} tokens
+                  ~{currentModeData.completePayload.tokenEstimates.total.toLocaleString()} tokens
                 </Badge>
                 <div className="flex flex-wrap gap-2 text-sm">
-                  <span className="text-muted-foreground">System: {currentRoleData.completePayload.tokenEstimates.systemPrompt.toLocaleString()}</span>
+                  <span className="text-muted-foreground">System: {currentModeData.completePayload.tokenEstimates.systemPrompt.toLocaleString()}</span>
                   <span className="text-muted-foreground">|</span>
-                  <span className="text-muted-foreground">Tools: {currentRoleData.completePayload.tokenEstimates.tools.toLocaleString()}</span>
+                  <span className="text-muted-foreground">Tools: {currentModeData.completePayload.tokenEstimates.tools.toLocaleString()}</span>
                   <span className="text-muted-foreground">|</span>
-                  <span className="text-muted-foreground">Context: {currentRoleData.completePayload.tokenEstimates.experimentalContext.toLocaleString()}</span>
+                  <span className="text-muted-foreground">Context: {currentModeData.completePayload.tokenEstimates.experimentalContext.toLocaleString()}</span>
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -522,7 +520,7 @@ export default function GlobalPromptClient({ data }: GlobalPromptClientProps) {
                 isPayloadExpanded ? '' : 'max-h-[800px] overflow-y-auto'
               }`}
             >
-              {currentRoleData.completePayload.formattedString}
+              {currentModeData.completePayload.formattedString}
             </pre>
           </CardContent>
         </Card>

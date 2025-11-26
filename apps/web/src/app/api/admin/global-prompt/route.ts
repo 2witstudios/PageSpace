@@ -10,14 +10,13 @@
  */
 
 import { verifyAdminAuth } from '@/lib/auth';
-import { AgentRole, ROLE_PERMISSIONS } from '@/lib/ai/agent-roles';
-import { ROLE_PROMPTS } from '@/lib/ai/role-prompts';
-import { ToolPermissionFilter } from '@/lib/ai/tool-permissions';
 import { buildCompleteRequest, type CompletePayloadResult, type LocationContext } from '@/lib/ai/complete-request-builder';
+import { getToolsSummary } from '@/lib/ai/tool-filtering';
 import { pageSpaceTools } from '@/lib/ai/ai-tools';
 import { extractToolSchemas, calculateTotalToolTokens } from '@/lib/ai/schema-introspection';
 import { db, driveMembers, drives, pages, eq, and, asc } from '@pagespace/db';
 import { estimateSystemPromptTokens } from '@pagespace/lib/ai-context-calculator';
+import { buildSystemPrompt } from '@/lib/ai/system-prompt';
 
 interface PromptSection {
   name: string;
@@ -27,15 +26,20 @@ interface PromptSection {
   tokens: number;
 }
 
-interface RolePromptData {
-  role: AgentRole;
+interface ModePromptData {
+  mode: 'fullAccess' | 'readOnly';
   fullPrompt: string;
   sections: PromptSection[];
   totalTokens: number;
   toolsAllowed: string[];
   toolsDenied: string[];
-  permissions: typeof ROLE_PERMISSIONS[AgentRole];
-  // New: Complete payload for this role
+  permissions: {
+    canRead: boolean;
+    canWrite: boolean;
+    canDelete: boolean;
+    canOrganize: boolean;
+  };
+  // Complete payload for this mode
   completePayload: CompletePayloadResult;
 }
 
@@ -163,83 +167,75 @@ export async function GET(request: Request) {
     }
     // If no drive selected (or invalid), locationContext remains undefined (dashboard context)
 
-    // Build prompt data for all three roles
-    const roles = [AgentRole.PARTNER, AgentRole.PLANNER, AgentRole.WRITER];
-    const promptData: Record<string, RolePromptData> = {};
+    // Build prompt data for both modes (Full Access and Read-Only)
+    const modes: Array<{ key: 'fullAccess' | 'readOnly'; isReadOnly: boolean }> = [
+      { key: 'fullAccess', isReadOnly: false },
+      { key: 'readOnly', isReadOnly: true },
+    ];
+    const promptData: Record<string, ModePromptData> = {};
 
-    for (const role of roles) {
-      const rolePrompt = ROLE_PROMPTS[role];
-
+    for (const { key, isReadOnly } of modes) {
       // Build complete payload using shared module (EXACT match with chat route)
       const completePayload = buildCompleteRequest({
-        role,
+        isReadOnly,
         contextType,
         locationContext,
         includeExampleMessage: true,
       });
 
+      // Build system prompt for sections display
+      const systemPrompt = buildSystemPrompt(
+        contextType,
+        locationContext?.currentDrive ? {
+          driveName: locationContext.currentDrive.name,
+          driveSlug: locationContext.currentDrive.slug,
+          driveId: locationContext.currentDrive.id,
+          pagePath: locationContext.currentPage?.path,
+          pageType: locationContext.currentPage?.type,
+          breadcrumbs: locationContext.breadcrumbs?.map(b => b.title),
+        } : undefined,
+        isReadOnly
+      );
+
       // Build detailed sections with source annotations for the breakdown view
       const sections: PromptSection[] = [
         {
-          name: 'Role Core Identity',
-          content: rolePrompt.core,
-          source: 'apps/web/src/lib/ai/role-prompts.ts',
-          lines: role === AgentRole.PARTNER ? '23-24' : role === AgentRole.PLANNER ? '59' : '94',
-          tokens: estimateSystemPromptTokens(rolePrompt.core),
+          name: 'System Prompt',
+          content: systemPrompt,
+          source: 'apps/web/src/lib/ai/system-prompt.ts',
+          lines: '73-94',
+          tokens: estimateSystemPromptTokens(systemPrompt),
         },
         {
-          name: 'Role Behavior',
-          content: rolePrompt.behavior,
-          source: 'apps/web/src/lib/ai/role-prompts.ts',
-          lines: role === AgentRole.PARTNER ? '26-31' : role === AgentRole.PLANNER ? '61-66' : '96-101',
-          tokens: estimateSystemPromptTokens(rolePrompt.behavior),
-        },
-        {
-          name: 'Role Tone',
-          content: rolePrompt.tone,
-          source: 'apps/web/src/lib/ai/role-prompts.ts',
-          lines: role === AgentRole.PARTNER ? '33-37' : role === AgentRole.PLANNER ? '68-73' : '103-108',
-          tokens: estimateSystemPromptTokens(rolePrompt.tone),
-        },
-        {
-          name: 'Role Constraints',
-          content: rolePrompt.constraints,
-          source: 'apps/web/src/lib/ai/role-prompts.ts',
-          lines: role === AgentRole.PARTNER ? '39-44' : role === AgentRole.PLANNER ? '75-80' : '110-115',
-          tokens: estimateSystemPromptTokens(rolePrompt.constraints),
-        },
-        {
-          name: 'Post-Tool Execution Guidance',
-          content: rolePrompt.postToolExecution,
-          source: 'apps/web/src/lib/ai/role-prompts.ts',
-          lines: role === AgentRole.PARTNER ? '46-49' : role === AgentRole.PLANNER ? '82-85' : '117-118',
-          tokens: estimateSystemPromptTokens(rolePrompt.postToolExecution),
-        },
-        {
-          name: 'Inline Instructions (Page Context)',
+          name: 'Inline Instructions',
           content: '(See complete payload for full instructions)',
           source: 'apps/web/src/lib/ai/inline-instructions.ts',
-          lines: '24-158',
+          lines: '19-53',
           tokens: 0, // Already counted in complete payload
         },
       ];
 
-      // Get tool permissions
-      const toolsSummary = ToolPermissionFilter.getToolsSummary(role);
+      // Get tool permissions summary
+      const toolsSummary = getToolsSummary(isReadOnly);
 
-      promptData[role] = {
-        role,
+      promptData[key] = {
+        mode: key,
         fullPrompt: completePayload.request.system,
         sections,
         totalTokens: completePayload.tokenEstimates.total,
         toolsAllowed: toolsSummary.allowed,
         toolsDenied: toolsSummary.denied,
-        permissions: ROLE_PERMISSIONS[role],
+        permissions: {
+          canRead: true,
+          canWrite: !isReadOnly,
+          canDelete: !isReadOnly,
+          canOrganize: !isReadOnly,
+        },
         completePayload,
       };
     }
 
-    // Extract full tool schemas for display (all tools, not filtered by role)
+    // Extract full tool schemas for display (all tools, not filtered by mode)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const toolsForExtraction: Record<string, { description?: string; parameters?: any }> = {};
     for (const [name, tool] of Object.entries(pageSpaceTools)) {

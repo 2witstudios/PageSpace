@@ -1,5 +1,7 @@
 # PageSpace AI Prompt Construction System
 
+> **DEPRECATED**: This document describes the legacy PARTNER/PLANNER/WRITER role system which has been replaced with a simpler read-only toggle. The old role files (`agent-roles.ts`, `role-prompts.ts`, `tool-permissions.ts`) have been removed. The new system uses `tool-filtering.ts` for simple read-only filtering and `system-prompt.ts` for unified prompt building. Tool filtering is now a simple boolean: `isReadOnly` toggles between full access and read-only modes.
+
 This document explains how system prompts are constructed for the PageSpace AI assistant. It covers all source files, data flow, and the final structure that gets sent to the LLM.
 
 ## Overview

@@ -139,7 +139,6 @@ The database is organized into the following schema files:
 - `isActive`: `boolean` (Default: true) - Whether the message is active (not deleted)
 - `editedAt`: `timestamp` - When the message was last edited
 - `userId`: `text` (Foreign Key to `users.id`) - The ID of the user who sent the message (null for assistant messages)
-- `agentRole`: `text` (Default: 'PARTNER') - The role of the AI agent
 
 **Indexes:**
 - `chat_messages_page_id_idx` on `pageId`
@@ -370,7 +369,6 @@ The database is organized into the following schema files:
 - `toolResults`: `jsonb` - JSON array of tool call results
 - `createdAt`: `timestamp` - When the message was created
 - `isActive`: `boolean` (Default: true) - Whether the message is active
-- `agentRole`: `text` (Default: 'PARTNER') - The AI agent role
 - `editedAt`: `timestamp` - When the message was last edited
 
 **Indexes:**

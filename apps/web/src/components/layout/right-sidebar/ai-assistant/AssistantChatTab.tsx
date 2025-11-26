@@ -6,8 +6,7 @@ import ChatInput, { ChatInputRef } from '@/components/messages/ChatInput';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Loader2, Send, Plus, StopCircle } from 'lucide-react';
 import { CompactConversationMessageRenderer } from '@/components/ai/CompactConversationMessageRenderer';
-import { AgentRole, AgentRoleUtils } from '@/lib/ai/agent-roles';
-import { AgentRoleDropdownCompact } from '@/components/ai/AgentRoleDropdown';
+import { ReadOnlyToggle } from '@/components/ai/ReadOnlyToggle';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth, patch, del } from '@/lib/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
@@ -64,7 +63,7 @@ const AssistantChatTab: React.FC = () => {
   // Local state for component-specific concerns
   const [providerSettings, setProviderSettings] = useState<ProviderSettings | null>(null);
   const [input, setInput] = useState<string>('');
-  const [currentAgentRole, setCurrentAgentRole] = useState<AgentRole>(AgentRoleUtils.getDefaultRole());
+  const [isReadOnly, setIsReadOnly] = useState<boolean>(false);
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
   
@@ -341,7 +340,7 @@ const AssistantChatTab: React.FC = () => {
       { text: input },
       {
         body: {
-          agentRole: currentAgentRole,
+          isReadOnly,
           locationContext: locationContext || undefined,
           selectedProvider: providerSettings?.currentProvider,
           selectedModel: providerSettings?.currentModel,
@@ -549,12 +548,13 @@ const AssistantChatTab: React.FC = () => {
           </div>
         )}
         
-        {/* Role Selector Row */}
+        {/* Read-Only Toggle Row */}
         <div className="px-1">
-          <AgentRoleDropdownCompact
-            currentRole={currentAgentRole}
-            onRoleChange={setCurrentAgentRole}
+          <ReadOnlyToggle
+            isReadOnly={isReadOnly}
+            onToggle={setIsReadOnly}
             disabled={status === 'streaming'}
+            size="sm"
           />
         </div>
         

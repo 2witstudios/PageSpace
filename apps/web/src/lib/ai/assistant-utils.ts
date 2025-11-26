@@ -81,7 +81,6 @@ interface GlobalAssistantMessage {
   toolResults: unknown;
   createdAt: Date;
   isActive: boolean;
-  agentRole?: string;
   editedAt?: Date | null;
   messageType?: 'standard' | 'todo_list';
 }
@@ -300,7 +299,6 @@ export async function saveMessageToDatabase({
   toolCalls,
   toolResults,
   uiMessage,
-  agentRole,
 }: {
   messageId: string;
   pageId: string;
@@ -310,8 +308,7 @@ export async function saveMessageToDatabase({
   content: string;
   toolCalls?: ToolCall[];
   toolResults?: ToolResult[];
-  uiMessage?: UIMessage; // NEW: Pass the complete UIMessage to preserve part ordering
-  agentRole?: string; // NEW: Pass agent role for tracking
+  uiMessage?: UIMessage; // Pass the complete UIMessage to preserve part ordering
 }) {
   try {
     let structuredContent = content;
@@ -354,7 +351,6 @@ export async function saveMessageToDatabase({
         toolResults: toolResults ? JSON.stringify(toolResults) : null,
         createdAt: new Date(),
         isActive: true,
-        agentRole: agentRole || 'PARTNER', // Default to PARTNER if not specified
       })
       .onConflictDoUpdate({
         target: chatMessages.id,
@@ -362,7 +358,6 @@ export async function saveMessageToDatabase({
           content: structuredContent,
           toolCalls: toolCalls ? JSON.stringify(toolCalls) : null,
           toolResults: toolResults ? JSON.stringify(toolResults) : null,
-          agentRole: agentRole || 'PARTNER',
           conversationId, // Update conversationId if message is reprocessed
         }
       });
@@ -501,7 +496,6 @@ export async function saveGlobalAssistantMessageToDatabase({
   toolCalls,
   toolResults,
   uiMessage,
-  agentRole,
 }: {
   messageId: string;
   conversationId: string;
@@ -511,7 +505,6 @@ export async function saveGlobalAssistantMessageToDatabase({
   toolCalls?: ToolCall[];
   toolResults?: ToolResult[];
   uiMessage?: UIMessage; // Pass the complete UIMessage to preserve part ordering
-  agentRole?: string; // Pass agent role for tracking
 }) {
   try {
     let structuredContent = content;
@@ -553,7 +546,6 @@ export async function saveGlobalAssistantMessageToDatabase({
         toolResults: toolResults ? JSON.stringify(toolResults) : null,
         createdAt: new Date(),
         isActive: true,
-        agentRole: agentRole || 'PARTNER', // Default to PARTNER if not specified
       })
       .onConflictDoUpdate({
         target: messages.id,
@@ -561,7 +553,6 @@ export async function saveGlobalAssistantMessageToDatabase({
           content: structuredContent,
           toolCalls: toolCalls ? JSON.stringify(toolCalls) : null,
           toolResults: toolResults ? JSON.stringify(toolResults) : null,
-          agentRole: agentRole || 'PARTNER',
         }
       });
 

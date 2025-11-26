@@ -5,13 +5,19 @@
  * Used by the admin global-prompt viewer to show the exact context window.
  */
 
-import { AgentRole } from './agent-roles';
-import { RolePromptBuilder } from './role-prompts';
-import { ToolPermissionFilter } from './tool-permissions';
+import { buildSystemPrompt } from './system-prompt';
+import { filterToolsForReadOnly, getToolsSummary } from './tool-filtering';
 import { buildTimestampSystemPrompt } from './timestamp-utils';
 import { buildMentionSystemPrompt } from './mention-processor';
-import { buildInlineInstructions, buildGlobalAssistantInstructions } from './inline-instructions';
-import { extractToolSchemas, type ToolSchemaInfo, type JsonSchema } from './schema-introspection';
+import {
+  buildInlineInstructions,
+  buildGlobalAssistantInstructions,
+} from './inline-instructions';
+import {
+  extractToolSchemas,
+  type ToolSchemaInfo,
+  type JsonSchema,
+} from './schema-introspection';
 import { estimateSystemPromptTokens } from '@pagespace/lib/ai-context-calculator';
 import { pageSpaceTools } from './ai-tools';
 
@@ -64,10 +70,14 @@ export interface CompletePayloadResult {
     experimentalContext: number;
     total: number;
   };
+  toolsSummary: {
+    allowed: string[];
+    denied: string[];
+  };
 }
 
 interface BuildCompleteRequestConfig {
-  role: AgentRole;
+  isReadOnly?: boolean;
   contextType: 'dashboard' | 'drive' | 'page';
   locationContext?: LocationContext;
   model?: string;
@@ -77,9 +87,11 @@ interface BuildCompleteRequestConfig {
 /**
  * Build the complete AI request payload.
  */
-export function buildCompleteRequest(config: BuildCompleteRequestConfig): CompletePayloadResult {
+export function buildCompleteRequest(
+  config: BuildCompleteRequestConfig
+): CompletePayloadResult {
   const {
-    role,
+    isReadOnly = false,
     contextType,
     locationContext,
     model = 'openrouter/anthropic/claude-sonnet-4',
@@ -87,23 +99,25 @@ export function buildCompleteRequest(config: BuildCompleteRequestConfig): Comple
   } = config;
 
   // Build the base system prompt
-  const baseSystemPrompt = RolePromptBuilder.buildSystemPrompt(
-    role,
+  const baseSystemPrompt = buildSystemPrompt(
     contextType,
-    locationContext?.currentDrive ? {
-      driveName: locationContext.currentDrive.name,
-      driveSlug: locationContext.currentDrive.slug,
-      driveId: locationContext.currentDrive.id,
-      pagePath: locationContext.currentPage?.path,
-      pageType: locationContext.currentPage?.type,
-      breadcrumbs: locationContext.breadcrumbs?.map(b => b.title),
-    } : undefined
+    locationContext?.currentDrive
+      ? {
+          driveName: locationContext.currentDrive.name,
+          driveSlug: locationContext.currentDrive.slug,
+          driveId: locationContext.currentDrive.id,
+          pagePath: locationContext.currentPage?.path,
+          pageType: locationContext.currentPage?.type,
+          breadcrumbs: locationContext.breadcrumbs?.map((b) => b.title),
+        }
+      : undefined,
+    isReadOnly
   );
 
   // Build additional prompt sections
   const timestampSystemPrompt = buildTimestampSystemPrompt();
   const mentionSystemPrompt = buildMentionSystemPrompt([
-    { id: 'example-page-id', label: 'Example Document', type: 'page' }
+    { id: 'example-page-id', label: 'Example Document', type: 'page' },
   ]);
 
   // Build inline instructions based on context type
@@ -118,23 +132,33 @@ export function buildCompleteRequest(config: BuildCompleteRequestConfig): Comple
     });
   } else {
     inlineInstructions = buildGlobalAssistantInstructions(
-      locationContext?.currentDrive ? {
-        driveName: locationContext.currentDrive.name,
-        driveSlug: locationContext.currentDrive.slug,
-        driveId: locationContext.currentDrive.id,
-      } : undefined
+      locationContext?.currentDrive
+        ? {
+            driveName: locationContext.currentDrive.name,
+            driveSlug: locationContext.currentDrive.slug,
+            driveId: locationContext.currentDrive.id,
+          }
+        : undefined
     );
   }
 
   // Complete system prompt
-  const systemPrompt = baseSystemPrompt + mentionSystemPrompt + timestampSystemPrompt + inlineInstructions;
+  const systemPrompt =
+    baseSystemPrompt +
+    mentionSystemPrompt +
+    timestampSystemPrompt +
+    inlineInstructions;
 
-  // Get filtered tools for this role
-  const filteredTools = ToolPermissionFilter.filterTools(pageSpaceTools, role);
+  // Get filtered tools based on read-only mode
+  const filteredTools = filterToolsForReadOnly(pageSpaceTools, isReadOnly);
+  const toolsSummary = getToolsSummary(isReadOnly);
 
   // Convert tools to the format we display
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const toolsForExtraction: Record<string, { description?: string; parameters?: any }> = {};
+  const toolsForExtraction: Record<
+    string,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    { description?: string; parameters?: any }
+  > = {};
   for (const [name, tool] of Object.entries(filteredTools)) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const toolAny = tool as any;
@@ -146,11 +170,13 @@ export function buildCompleteRequest(config: BuildCompleteRequestConfig): Comple
   const toolSchemas = extractToolSchemas(toolsForExtraction);
 
   // Convert to ToolDefinition format
-  const tools: ToolDefinition[] = toolSchemas.map((schema: ToolSchemaInfo) => ({
-    name: schema.name,
-    description: schema.description,
-    parameters: schema.parameters,
-  }));
+  const tools: ToolDefinition[] = toolSchemas.map(
+    (schema: ToolSchemaInfo) => ({
+      name: schema.name,
+      description: schema.description,
+      parameters: schema.parameters,
+    })
+  );
 
   // Build experimental context
   const experimental_context = {
@@ -179,8 +205,13 @@ export function buildCompleteRequest(config: BuildCompleteRequestConfig): Comple
 
   // Calculate token estimates
   const systemPromptTokens = estimateSystemPromptTokens(systemPrompt);
-  const toolTokens = toolSchemas.reduce((sum: number, t: ToolSchemaInfo) => sum + t.tokenEstimate, 0);
-  const contextTokens = estimateSystemPromptTokens(JSON.stringify(experimental_context));
+  const toolTokens = toolSchemas.reduce(
+    (sum: number, t: ToolSchemaInfo) => sum + t.tokenEstimate,
+    0
+  );
+  const contextTokens = estimateSystemPromptTokens(
+    JSON.stringify(experimental_context)
+  );
 
   const tokenEstimates = {
     systemPrompt: systemPromptTokens,
@@ -190,12 +221,17 @@ export function buildCompleteRequest(config: BuildCompleteRequestConfig): Comple
   };
 
   // Format as a human-readable string
-  const formattedString = formatCompletePayload(request, tokenEstimates);
+  const formattedString = formatCompletePayload(
+    request,
+    tokenEstimates,
+    isReadOnly
+  );
 
   return {
     request,
     formattedString,
     tokenEstimates,
+    toolsSummary,
   };
 }
 
@@ -204,18 +240,29 @@ export function buildCompleteRequest(config: BuildCompleteRequestConfig): Comple
  */
 function formatCompletePayload(
   request: CompleteAIRequest,
-  tokenEstimates: { systemPrompt: number; tools: number; experimentalContext: number; total: number }
+  tokenEstimates: {
+    systemPrompt: number;
+    tools: number;
+    experimentalContext: number;
+    total: number;
+  },
+  isReadOnly: boolean
 ): string {
   const divider = '═'.repeat(70);
   const sectionDivider = '─'.repeat(70);
 
-  const toolsJson = request.tools.map(tool => JSON.stringify(tool, null, 2)).join('\n\n');
+  const toolsJson = request.tools
+    .map((tool) => JSON.stringify(tool, null, 2))
+    .join('\n\n');
   const contextJson = JSON.stringify(request.experimental_context, null, 2);
   const messagesJson = JSON.stringify(request.messages, null, 2);
+
+  const modeLabel = isReadOnly ? 'READ-ONLY' : 'FULL ACCESS';
 
   return `${divider}
 COMPLETE AI REQUEST PAYLOAD
 Model: ${request.model}
+Mode: ${modeLabel}
 Total Estimated Tokens: ~${tokenEstimates.total.toLocaleString()}
 ${divider}
 
@@ -241,25 +288,20 @@ ${divider}`;
 }
 
 /**
- * Build complete payload for all three roles for comparison.
+ * Build payload for both modes for comparison.
  */
-export function buildAllRolePayloads(
+export function buildBothModePayloads(
   contextType: 'dashboard' | 'drive' | 'page',
   locationContext?: LocationContext
-): Record<AgentRole, CompletePayloadResult> {
+): { fullAccess: CompletePayloadResult; readOnly: CompletePayloadResult } {
   return {
-    [AgentRole.PARTNER]: buildCompleteRequest({
-      role: AgentRole.PARTNER,
+    fullAccess: buildCompleteRequest({
+      isReadOnly: false,
       contextType,
       locationContext,
     }),
-    [AgentRole.PLANNER]: buildCompleteRequest({
-      role: AgentRole.PLANNER,
-      contextType,
-      locationContext,
-    }),
-    [AgentRole.WRITER]: buildCompleteRequest({
-      role: AgentRole.WRITER,
+    readOnly: buildCompleteRequest({
+      isReadOnly: true,
       contextType,
       locationContext,
     }),

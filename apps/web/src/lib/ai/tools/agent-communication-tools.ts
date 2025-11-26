@@ -471,7 +471,6 @@ export const agentCommunicationTools = {
           userId: userId, // Track which user (via calling agent) asked the question
           role: 'user',
           content: userMessageContent,
-          agentRole: executionContext?.locationContext?.currentPage?.title, // Track the calling agent
         });
 
         // Add user message to conversation
@@ -577,7 +576,6 @@ export const agentCommunicationTools = {
           userId: null, // Assistant message, not from a user
           role: 'assistant',
           content: agentResponse,
-          agentRole: targetAgent.title,
         });
 
         loggers.ai.debug('Saved ask_agent conversation:', {

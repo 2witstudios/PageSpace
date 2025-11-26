@@ -211,8 +211,7 @@ CREATE TABLE chat_messages (
   tool_calls JSONB,                -- Array of tool calls
   tool_results JSONB,              -- Array of tool results
   created_at TIMESTAMP NOT NULL,
-  is_active BOOLEAN DEFAULT TRUE,
-  agent_role TEXT DEFAULT 'PARTNER'
+  is_active BOOLEAN DEFAULT TRUE
 );
 ```
 
@@ -271,17 +270,16 @@ enum ToolState: String, Codable {
 
 ## 4. Agent Configuration and Communication
 
-### 4.1 Agent Roles
+### 4.1 Read-Only Mode
 
-PageSpace supports **three agent roles** (legacy system, still functional):
+PageSpace supports a simple **read-only toggle** for AI conversations:
 
-| Role | Permissions | Use Case |
+| Mode | Permissions | Use Case |
 |------|------------|----------|
-| **PARTNER** | Read + Write + Delete | Balanced conversational AI |
-| **PLANNER** | Read-only | Strategic planning without execution |
-| **WRITER** | Read + Write + Delete | Execution-focused, minimal chat |
+| **Full Access** | Read + Write + Delete | Default mode with all tools available |
+| **Read-Only** | Read-only | Strategic planning without execution, safe exploration |
 
-**Note**: Page AI now supports **custom system prompts** and **tool filtering** instead of fixed roles.
+**Note**: Page AI also supports **custom system prompts** and **tool filtering** for fine-grained control.
 
 ### 4.2 Page AI Agent Configuration
 
@@ -332,8 +330,8 @@ Core tools available to AI agents:
 - `list_trash` - List trashed pages
 
 **Tool Filtering**:
-- Global AI: Tools filtered by agent role
-- Page AI: Tools filtered by `enabledTools` configuration (or defaults to PARTNER role tools)
+- Global AI: Tools filtered by read-only mode toggle
+- Page AI: Tools filtered by `enabledTools` configuration (or all tools by default)
 
 ### 4.4 Agent-to-Agent Communication
 
@@ -434,7 +432,7 @@ Content-Type: application/json
     },
     "breadcrumbs": ["Dashboard", "Marketing"]
   },
-  "agentRole": "PARTNER"
+  "isReadOnly": false
 }
 ```
 

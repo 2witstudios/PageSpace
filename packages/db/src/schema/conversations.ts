@@ -38,7 +38,6 @@ export const messages = pgTable('messages', {
   toolResults: jsonb('toolResults'),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   isActive: boolean('isActive').default(true).notNull(),
-  agentRole: text('agentRole').default('PARTNER').notNull(),
   editedAt: timestamp('editedAt', { mode: 'date' }),
 }, (table) => ({
   conversationIdx: index('messages_conversation_id_idx').on(table.conversationId),

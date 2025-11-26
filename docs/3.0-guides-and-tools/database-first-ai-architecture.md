@@ -92,7 +92,6 @@ messages (
   toolResults: jsonb,
   createdAt: timestamp,
   isActive: boolean,  -- For soft delete and versioning
-  agentRole: text,
   editedAt: timestamp
 )
 ```
@@ -110,7 +109,6 @@ chat_messages (
   toolResults: jsonb,
   createdAt: timestamp,
   isActive: boolean,
-  agentRole: text,
   editedAt: timestamp
 )
 ```

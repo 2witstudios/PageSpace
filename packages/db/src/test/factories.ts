@@ -73,7 +73,6 @@ export const factories = {
       content: faker.lorem.sentence(),
       createdAt: new Date(),
       isActive: true,
-      agentRole: 'PARTNER',
       messageType: 'standard' as const,
       ...overrides,
     }

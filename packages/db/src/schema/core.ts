@@ -71,7 +71,6 @@ export const chatMessages = pgTable('chat_messages', {
   isActive: boolean('isActive').default(true).notNull(),
   editedAt: timestamp('editedAt', { mode: 'date' }),
   userId: text('userId').references(() => users.id, { onDelete: 'cascade' }),
-  agentRole: text('agentRole').default('PARTNER').notNull(),
   messageType: text('messageType', { enum: ['standard', 'todo_list'] }).default('standard').notNull(),
 }, (table) => {
     return {
