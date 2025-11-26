@@ -44,9 +44,10 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
       // Switching to agent mode - persist to cookie
       conversationState.setActiveAgentId(agent.id);
 
-      // Update URL with agent param
+      // Update URL with agent param, clear old conversation ID
       const url = new URL(window.location.href);
       url.searchParams.set('agent', agent.id);
+      url.searchParams.delete('c'); // Clear stale conversation ID so most recent loads
       window.history.pushState({}, '', url.toString());
     } else {
       // Switching back to Global Assistant - clear cookie

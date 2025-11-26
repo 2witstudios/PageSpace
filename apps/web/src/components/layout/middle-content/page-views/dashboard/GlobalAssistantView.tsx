@@ -192,6 +192,12 @@ const GlobalAssistantView: React.FC = () => {
         return;
       }
 
+      // IMMEDIATELY reset state when switching agents to prevent stale data
+      // This ensures no messages can be sent to the wrong agent during async load
+      setAgentConversationId(null);
+      setAgentInitialMessages([]);
+      setAgentIsInitialized(false);
+
       // Check URL for existing conversation ID
       const urlParams = new URLSearchParams(window.location.search);
       const conversationIdFromUrl = urlParams.get('c');
