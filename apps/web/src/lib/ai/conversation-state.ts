@@ -6,7 +6,22 @@
 import { post } from '@/lib/auth-fetch';
 
 const ACTIVE_CONVERSATION_COOKIE = 'activeConversationId';
+const ACTIVE_AGENT_COOKIE = 'activeAgentId';
 const COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
+
+/**
+ * Get a cookie value by name (client-side only)
+ */
+const getCookieValue = (name: string): string | null => {
+  if (typeof document === 'undefined') return null;
+  try {
+    const cookies = document.cookie.split(';');
+    const cookie = cookies.find(c => c.trim().startsWith(`${name}=`));
+    return cookie ? cookie.split('=')[1] : null;
+  } catch {
+    return null;
+  }
+};
 
 /**
  * Client-side utilities for conversation state
@@ -16,16 +31,7 @@ export const conversationState = {
    * Get the active conversation ID from cookies (client-side)
    */
   getActiveConversationId(): string | null {
-    if (typeof document === 'undefined') return null;
-    
-    try {
-      const cookies = document.cookie.split(';');
-      const cookie = cookies.find(c => c.trim().startsWith(`${ACTIVE_CONVERSATION_COOKIE}=`));
-      return cookie ? cookie.split('=')[1] : null;
-    } catch (error) {
-      console.error('Error getting active conversation ID:', error);
-      return null;
-    }
+    return getCookieValue(ACTIVE_CONVERSATION_COOKIE);
   },
 
   /**
@@ -91,5 +97,39 @@ export const conversationState = {
   async startNewConversation() {
     const conversation = await this.createAndSetActiveConversation();
     return conversation;
+  },
+
+  /**
+   * Get the active agent ID from cookies (client-side)
+   */
+  getActiveAgentId(): string | null {
+    return getCookieValue(ACTIVE_AGENT_COOKIE);
+  },
+
+  /**
+   * Set the active agent ID in cookies (client-side)
+   * Pass null to clear the agent (switches to Global Assistant)
+   */
+  setActiveAgentId(agentId: string | null) {
+    if (typeof document === 'undefined') return;
+
+    try {
+      if (agentId) {
+        const maxAge = COOKIE_MAX_AGE;
+        const secure = window.location.protocol === 'https:';
+        document.cookie = `${ACTIVE_AGENT_COOKIE}=${agentId}; max-age=${maxAge}; path=/; ${secure ? 'secure;' : ''} samesite=lax`;
+      } else {
+        document.cookie = `${ACTIVE_AGENT_COOKIE}=; max-age=0; path=/`;
+      }
+    } catch (error) {
+      console.error('Error setting active agent ID:', error);
+    }
+  },
+
+  /**
+   * Clear the active agent (switch to Global Assistant)
+   */
+  clearActiveAgent() {
+    this.setActiveAgentId(null);
   },
 };

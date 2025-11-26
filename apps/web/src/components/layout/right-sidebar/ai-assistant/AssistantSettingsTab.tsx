@@ -4,10 +4,11 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { Settings, CheckCircle, XCircle, Key, ExternalLink, Zap } from 'lucide-react';
+import { CheckCircle, XCircle, Key, ExternalLink, Zap, Bot, Sparkles, Wrench, FileText, ExternalLinkIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import { AI_PROVIDERS, getBackendProvider } from '@/lib/ai/ai-providers-config';
 import { patch, fetchWithAuth } from '@/lib/auth-fetch';
+import { useGlobalChat } from '@/contexts/GlobalChatContext';
 
 // Using centralized AI providers configuration from ai-providers-config.ts
 
@@ -36,6 +37,7 @@ interface SaveSettingsResult {
 
 const AssistantSettingsTab: React.FC = () => {
   const router = useRouter();
+  const { selectedAgent } = useGlobalChat();
   const [providerSettings, setProviderSettings] = useState<ProviderSettings | null>(null);
   const [selectedProvider, setSelectedProvider] = useState<string>('pagespace');
   const [selectedModel, setSelectedModel] = useState<string>('glm-4.5-air');
@@ -342,14 +344,131 @@ const AssistantSettingsTab: React.FC = () => {
     );
   }
 
+  // When an agent is selected, show agent-specific settings
+  if (selectedAgent) {
+    return (
+      <div className="flex flex-col h-full">
+        {/* Header */}
+        <div className="p-3 border-b">
+          <div className="flex items-center gap-2">
+            <Bot className="h-4 w-4 text-primary" />
+            <h3 className="text-sm font-medium truncate">
+              {selectedAgent.title} Settings
+            </h3>
+          </div>
+        </div>
+
+        {/* Agent Settings Content */}
+        <div className="flex-grow overflow-y-auto">
+          <div className="p-4 space-y-4">
+            {/* Agent Info Card */}
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <Bot className="h-4 w-4" />
+                  Agent Configuration
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {/* Agent Name */}
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">Name</label>
+                  <p className="text-sm">{selectedAgent.title}</p>
+                </div>
+
+                {/* AI Provider & Model */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-muted-foreground">Provider</label>
+                    <p className="text-sm capitalize">{selectedAgent.aiProvider || 'Default'}</p>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-muted-foreground">Model</label>
+                    <p className="text-sm truncate">{selectedAgent.aiModel || 'Default'}</p>
+                  </div>
+                </div>
+
+                {/* System Prompt Preview */}
+                {selectedAgent.systemPrompt && (
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                      <FileText className="h-3 w-3" />
+                      System Prompt
+                    </label>
+                    <div className="text-xs text-muted-foreground bg-muted/50 rounded-md p-2 max-h-32 overflow-y-auto whitespace-pre-wrap">
+                      {selectedAgent.systemPrompt.length > 300
+                        ? selectedAgent.systemPrompt.substring(0, 300) + '...'
+                        : selectedAgent.systemPrompt}
+                    </div>
+                  </div>
+                )}
+
+                {/* Enabled Tools */}
+                {selectedAgent.enabledTools && selectedAgent.enabledTools.length > 0 && (
+                  <div className="space-y-2">
+                    <label className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                      <Wrench className="h-3 w-3" />
+                      Enabled Tools ({selectedAgent.enabledTools.length})
+                    </label>
+                    <div className="flex flex-wrap gap-1">
+                      {selectedAgent.enabledTools.slice(0, 8).map((tool) => (
+                        <Badge key={tool} variant="secondary" className="text-xs">
+                          {tool.replace(/_/g, ' ')}
+                        </Badge>
+                      ))}
+                      {selectedAgent.enabledTools.length > 8 && (
+                        <Badge variant="outline" className="text-xs">
+                          +{selectedAgent.enabledTools.length - 8} more
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Edit Agent Link */}
+            <Card>
+              <CardContent className="pt-6">
+                <div className="text-center space-y-3">
+                  <p className="text-xs text-muted-foreground">
+                    Agent configuration is read-only here.
+                  </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => router.push(`/dashboard/${selectedAgent.driveId}/${selectedAgent.id}`)}
+                    className="w-full"
+                  >
+                    <ExternalLinkIcon className="h-3 w-3 mr-2" />
+                    Edit Agent Settings
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="border-t p-3">
+          <div className="text-xs text-muted-foreground text-center flex items-center justify-center gap-1">
+            <Bot className="h-3 w-3" />
+            Viewing {selectedAgent.title} in {selectedAgent.driveName}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Global Assistant Settings (original code)
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
       <div className="p-3 border-b">
-        <h3 className="text-sm font-medium flex items-center space-x-2">
-          <Settings className="h-4 w-4" />
-          <span>Settings</span>
-        </h3>
+        <div className="flex items-center gap-2">
+          <Sparkles className="h-4 w-4 text-primary" />
+          <h3 className="text-sm font-medium">Global Settings</h3>
+        </div>
       </div>
 
       {/* Settings Content - with native scrolling */}

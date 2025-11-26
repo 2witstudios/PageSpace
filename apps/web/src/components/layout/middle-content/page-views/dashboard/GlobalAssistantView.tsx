@@ -20,6 +20,7 @@ import { useMCPStore } from '@/stores/useMCPStore';
 import { useMCP } from '@/hooks/useMCP';
 import { toast } from 'sonner';
 import { AiUsageMonitor } from '@/components/ai/AiUsageMonitor';
+import { AgentSelector } from '@/components/ai/AgentSelector';
 
 
 interface ProviderSettings {
@@ -69,6 +70,10 @@ const GlobalAssistantView: React.FC = () => {
     isInitialized,
     createNewConversation,
     refreshConversation,
+    // Agent selection
+    selectedAgent,
+    selectAgent,
+    createAgentConversation,
   } = useGlobalChat();
 
   // Local state for component-specific concerns
@@ -366,10 +371,16 @@ const GlobalAssistantView: React.FC = () => {
     fetchMCPTools();
   }, [mcp.isDesktop, mcpEnabled, runningMCPServers]);
 
-  // Use context method to create new conversation
+  // Use context method to create new conversation (handles both global and agent mode)
   const handleNewConversation = async () => {
     try {
-      await createNewConversation();
+      if (selectedAgent) {
+        // Create new conversation for the selected agent
+        await createAgentConversation(selectedAgent.id);
+      } else {
+        // Create new global conversation
+        await createNewConversation();
+      }
     } catch (error) {
       console.error('Failed to create new conversation:', error);
     }
@@ -458,12 +469,15 @@ const GlobalAssistantView: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header with Global Assistant title, conversation info and action buttons */}
+      {/* Header with Agent Selector, conversation info and action buttons */}
       <div className="flex items-center justify-between p-4 border-[var(--separator)]">
         <div className="flex items-center space-x-2">
-          <span className="text-sm font-medium">
-            Global Assistant
-          </span>
+          <AgentSelector
+            selectedAgent={selectedAgent}
+            onSelectAgent={selectAgent}
+            driveId={locationContext?.currentDrive?.id}
+            disabled={status === 'streaming'}
+          />
         </div>
 
         <div className="flex items-center space-x-2">

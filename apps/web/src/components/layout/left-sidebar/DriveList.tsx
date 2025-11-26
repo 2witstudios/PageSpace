@@ -271,7 +271,7 @@ export default function DriveList() {
     <div className="space-y-4">
       {ownedDrives.length > 0 && (
         <div>
-          <h3 className="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">My Drive</h3>
+          <h3 className="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">My Drives</h3>
           <div className="space-y-1">
             {ownedDrives.map((drive) => (
               <DriveListItem

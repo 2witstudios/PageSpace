@@ -5,6 +5,21 @@ import { DefaultChatTransport, UIMessage } from 'ai';
 import { fetchWithAuth } from '@/lib/auth-fetch';
 import { conversationState } from '@/lib/ai/conversation-state';
 
+/**
+ * Agent information for the selected agent
+ * null = Global Assistant mode
+ */
+export interface AgentInfo {
+  id: string;
+  title: string;
+  driveId: string;
+  driveName: string;
+  systemPrompt?: string;
+  aiProvider?: string;
+  aiModel?: string;
+  enabledTools?: string[];
+}
+
 interface GlobalChatContextValue {
   // Shared chat configuration for creating Chat instances
   // Each component creates its own Chat instance with this config
@@ -37,6 +52,16 @@ interface GlobalChatContextValue {
   loadConversation: (id: string) => Promise<void>;
   createNewConversation: () => Promise<void>;
   refreshConversation: () => Promise<void>;
+
+  // Agent selection state
+  selectedAgent: AgentInfo | null;  // null = Global Assistant
+  setSelectedAgent: (agent: AgentInfo | null) => void;
+  chatMode: 'global' | 'agent';
+
+  // Agent-specific methods
+  loadAgentConversation: (agentId: string, conversationId?: string) => Promise<void>;
+  createAgentConversation: (agentId: string) => Promise<void>;
+  selectAgent: (agent: AgentInfo | null) => Promise<void>;
 }
 
 const GlobalChatContext = createContext<GlobalChatContextValue | undefined>(undefined);
@@ -56,6 +81,12 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
 
   // Global stop function - allows ANY view to stop the active stream
   const [stopStreaming, setStopStreaming] = useState<(() => void) | null>(null);
+
+  // Agent selection state - null means Global Assistant
+  const [selectedAgent, setSelectedAgent] = useState<AgentInfo | null>(null);
+
+  // Derived chat mode
+  const chatMode: 'global' | 'agent' = selectedAgent ? 'agent' : 'global';
 
   /**
    * Load a conversation by ID
@@ -130,6 +161,141 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   }, [currentConversationId, loadConversation]);
 
   /**
+   * Load a conversation for a specific agent
+   * If no conversationId provided, loads the most recent or creates new
+   */
+  const loadAgentConversation = useCallback(async (agentId: string, conversationId?: string) => {
+    try {
+      setIsInitialized(false);
+
+      let targetConversationId = conversationId;
+
+      // If no conversationId, fetch the latest conversation for this agent
+      if (!targetConversationId) {
+        const latestResponse = await fetchWithAuth(`/api/agents/${agentId}/conversations/latest`);
+        if (latestResponse.ok) {
+          const latestConversation = await latestResponse.json();
+          targetConversationId = latestConversation.id;
+        }
+      }
+
+      if (!targetConversationId) {
+        // No conversation exists, create one
+        await createAgentConversation(agentId);
+        return;
+      }
+
+      // Fetch messages for this conversation
+      const messagesResponse = await fetchWithAuth(
+        `/api/agents/${agentId}/conversations/${targetConversationId}/messages?limit=50`
+      );
+
+      if (messagesResponse.ok) {
+        const messageData = await messagesResponse.json();
+        const loadedMessages = Array.isArray(messageData) ? messageData : messageData.messages || [];
+
+        setInitialMessages(loadedMessages);
+        setMessages(loadedMessages);
+        setCurrentConversationId(targetConversationId);
+        conversationState.setActiveConversationId(targetConversationId);
+        conversationState.setActiveAgentId(agentId);
+
+        // Update URL to reflect agent and conversation
+        const url = new URL(window.location.href);
+        url.searchParams.set('agent', agentId);
+        url.searchParams.set('c', targetConversationId);
+        window.history.pushState({}, '', url.toString());
+
+        setIsInitialized(true);
+      } else {
+        console.error('Failed to load agent conversation:', targetConversationId);
+        setIsInitialized(true);
+      }
+    } catch (error) {
+      console.error('Error loading agent conversation:', error);
+      setInitialMessages([]);
+      setMessages([]);
+      setIsInitialized(true);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /**
+   * Create a new conversation for a specific agent
+   */
+  const createAgentConversation = useCallback(async (agentId: string) => {
+    try {
+      const response = await fetchWithAuth(`/api/agents/${agentId}/conversations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+
+      if (response.ok) {
+        const newConversation = await response.json();
+        setCurrentConversationId(newConversation.id);
+        setInitialMessages([]);
+        setMessages([]);
+        conversationState.setActiveConversationId(newConversation.id);
+        conversationState.setActiveAgentId(agentId);
+
+        // Update URL to reflect agent and new conversation
+        const url = new URL(window.location.href);
+        url.searchParams.set('agent', agentId);
+        url.searchParams.set('c', newConversation.id);
+        window.history.pushState({}, '', url.toString());
+
+        setIsInitialized(true);
+      } else {
+        console.error('Failed to create agent conversation');
+      }
+    } catch (error) {
+      console.error('Error creating agent conversation:', error);
+    }
+  }, []);
+
+  /**
+   * Select an agent (or null for Global Assistant) and load their conversation
+   * Handles all state transitions including stopping streams and loading history
+   */
+  const selectAgent = useCallback(async (agent: AgentInfo | null) => {
+    // Stop any active streaming before switching
+    if (stopStreaming) {
+      stopStreaming();
+      setStopStreaming(null);
+    }
+
+    setSelectedAgent(agent);
+
+    if (agent) {
+      // Switching to a specific agent
+      await loadAgentConversation(agent.id);
+    } else {
+      // Switching back to Global Assistant
+      conversationState.setActiveAgentId(null);
+
+      // Clear agent from URL
+      const url = new URL(window.location.href);
+      url.searchParams.delete('agent');
+
+      // Try to load the most recent global conversation
+      const response = await fetchWithAuth('/api/ai_conversations/global');
+      if (response.ok) {
+        const conversation = await response.json();
+        if (conversation && conversation.id) {
+          await loadConversation(conversation.id);
+          url.searchParams.set('c', conversation.id);
+          window.history.pushState({}, '', url.toString());
+          return;
+        }
+      }
+
+      // No global conversation - create one
+      await createNewConversation();
+    }
+  }, [stopStreaming, loadAgentConversation, loadConversation, createNewConversation]);
+
+  /**
    * Initialize with most recent global conversation on mount
    */
   useEffect(() => {
@@ -186,11 +352,16 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   const chatConfig = useMemo(() => {
     if (!currentConversationId) return null;
 
+    // Determine the API endpoint based on whether we're in agent mode
+    const apiEndpoint = selectedAgent
+      ? `/api/agents/${selectedAgent.id}/conversations/${currentConversationId}/messages`
+      : `/api/ai_conversations/${currentConversationId}/messages`;
+
     return {
       id: currentConversationId,
       messages: initialMessages, // Stable - only updates on conversation load
       transport: new DefaultChatTransport({
-        api: `/api/ai_conversations/${currentConversationId}/messages`,
+        api: apiEndpoint,
         fetch: (url, options) => {
           const urlString = url instanceof Request ? url.url : url.toString();
           return fetchWithAuth(urlString, options);
@@ -203,7 +374,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
         }
       },
     };
-  }, [currentConversationId, initialMessages]);
+  }, [currentConversationId, initialMessages, selectedAgent]);
 
   // Context value with memoization - prevents SWR revalidation loops and unnecessary re-renders
   // Functions are already stable via useCallback
@@ -222,6 +393,14 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     loadConversation,
     createNewConversation,
     refreshConversation,
+    // Agent selection state
+    selectedAgent,
+    setSelectedAgent,
+    chatMode,
+    // Agent-specific methods
+    loadAgentConversation,
+    createAgentConversation,
+    selectAgent,
   }), [
     chatConfig,
     messages,
@@ -233,6 +412,11 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     loadConversation,
     createNewConversation,
     refreshConversation,
+    selectedAgent,
+    chatMode,
+    loadAgentConversation,
+    createAgentConversation,
+    selectAgent,
   ]);
 
   return (
