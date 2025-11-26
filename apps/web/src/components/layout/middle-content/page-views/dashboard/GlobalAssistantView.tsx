@@ -192,9 +192,14 @@ const GlobalAssistantView: React.FC = () => {
         return;
       }
 
-      // IMMEDIATELY reset state when switching agents to prevent stale data
+      // If we already have a valid conversation for this agent, don't reload
+      // This guard prevents unnecessary reloads when the effect re-runs
+      if (agentConversationId && agentIsInitialized) {
+        return;
+      }
+
+      // Reset state when switching agents or recreating after deletion
       // This ensures no messages can be sent to the wrong agent during async load
-      setAgentConversationId(null);
       setAgentInitialMessages([]);
       setAgentIsInitialized(false);
 
@@ -280,11 +285,12 @@ const GlobalAssistantView: React.FC = () => {
       } catch (error) {
         console.error('Failed to create new agent conversation:', error);
         toast.error('Failed to initialize agent conversation');
+        setAgentIsInitialized(true); // Allow UI to recover from error state
       }
     };
 
     loadOrCreateAgentConversation();
-  }, [selectedAgent]);
+  }, [selectedAgent, agentConversationId]);
 
   // MCP state - use appropriate conversation ID based on mode
   const { isChatMCPEnabled, setChatMCPEnabled } = useMCPStore();
