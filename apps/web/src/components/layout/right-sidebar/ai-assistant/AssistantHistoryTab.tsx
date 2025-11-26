@@ -2,10 +2,11 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Trash2, Search, MessageSquare, Sparkles } from 'lucide-react';
+import { Trash2, Search, MessageSquare, Sparkles, Bot } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { del, fetchWithAuth } from '@/lib/auth-fetch';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
+import { SidebarAgentInfo, useSidebarAgentState } from '@/hooks/useSidebarAgentState';
 
 interface Conversation {
   id: string;
@@ -15,21 +16,32 @@ interface Conversation {
   createdAt: string;
 }
 
+interface AssistantHistoryTabProps {
+  selectedAgent: SidebarAgentInfo | null;
+}
+
 /**
- * Global Assistant history tab for the right sidebar.
+ * Assistant history tab for the right sidebar.
  *
- * This component ONLY shows Global Assistant conversation history.
- * Agent history is handled by GlobalAssistantView's local AgentHistoryTab.
+ * Supports both Global Assistant mode (selectedAgent = null) and Agent mode.
+ * When an agent is selected, loads and manages that agent's conversation history.
  */
-const AssistantHistoryTab: React.FC = () => {
+const AssistantHistoryTab: React.FC<AssistantHistoryTabProps> = ({ selectedAgent }) => {
   const pathname = usePathname();
 
   // Use GlobalChatContext for GLOBAL conversation management only
   const {
-    loadConversation,
+    loadConversation: loadGlobalConversation,
     createNewConversation: createNewGlobalConversation,
     currentConversationId: globalConversationId,
   } = useGlobalChat();
+
+  // Use sidebar agent state for agent conversation management
+  const {
+    conversationId: agentConversationId,
+    createNewConversation: createNewAgentConversation,
+    refreshConversation: refreshAgentConversation,
+  } = useSidebarAgentState();
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -46,17 +58,21 @@ const AssistantHistoryTab: React.FC = () => {
     );
   }, [searchQuery, conversations]);
 
-  // Load GLOBAL conversations on mount and when conversation or pathname changes
-  // Agent conversations are handled by GlobalAssistantView's local AgentHistoryTab
+  // Load conversations based on mode (global or agent)
   useEffect(() => {
     const loadConversations = async () => {
       setLoading(true);
       try {
-        // Always load global conversations
-        const response = await fetchWithAuth('/api/ai_conversations');
+        // Switch endpoint based on whether an agent is selected
+        const endpoint = selectedAgent
+          ? `/api/agents/${selectedAgent.id}/conversations`
+          : '/api/ai_conversations';
+
+        const response = await fetchWithAuth(endpoint);
         if (response.ok) {
           const data = await response.json();
-          setConversations(data);
+          // Agent endpoint returns { conversations: [...] }, global returns array directly
+          setConversations(selectedAgent ? data.conversations || [] : data);
         }
       } catch (error) {
         console.error('Failed to load conversations:', error);
@@ -67,23 +83,45 @@ const AssistantHistoryTab: React.FC = () => {
     };
 
     loadConversations();
-  }, [globalConversationId, pathname]); // Refetch when conversation or navigation changes
+  }, [selectedAgent, globalConversationId, agentConversationId, pathname]); // Refetch when agent, conversation, or navigation changes
 
-  // Sync local active conversation ID with global context
+  // Sync local active conversation ID based on mode
   useEffect(() => {
-    setActiveConversationId(globalConversationId);
-  }, [globalConversationId]);
+    if (selectedAgent) {
+      setActiveConversationId(agentConversationId);
+    } else {
+      setActiveConversationId(globalConversationId);
+    }
+  }, [selectedAgent, globalConversationId, agentConversationId]);
 
   const handleConversationClick = async (conversationId: string) => {
-    // Load GLOBAL conversation using GlobalChatContext
-    // Agent conversations are handled by GlobalAssistantView's local AgentHistoryTab
-    await loadConversation(conversationId);
-    setActiveConversationId(conversationId);
+    if (selectedAgent) {
+      // For agent mode, we need to load the conversation messages
+      // The useSidebarAgentState hook handles this when we refresh
+      try {
+        const messagesResponse = await fetchWithAuth(
+          `/api/agents/${selectedAgent.id}/conversations/${conversationId}/messages`
+        );
+        if (messagesResponse.ok) {
+          // Trigger a state update via the sidebar agent state
+          // For now, just set local active and refresh will sync
+          setActiveConversationId(conversationId);
+          // Refresh to sync conversation data
+          await refreshAgentConversation();
+        }
+      } catch (error) {
+        console.error('Failed to load agent conversation:', error);
+      }
+    } else {
+      // Load GLOBAL conversation using GlobalChatContext
+      await loadGlobalConversation(conversationId);
+      setActiveConversationId(conversationId);
 
-    // Update URL for browser history
-    const url = new URL(window.location.href);
-    url.searchParams.set('c', conversationId);
-    window.history.pushState({}, '', url.toString());
+      // Update URL for browser history
+      const url = new URL(window.location.href);
+      url.searchParams.set('c', conversationId);
+      window.history.pushState({}, '', url.toString());
+    }
   };
 
   const handleDeleteConversation = async (conversationId: string, event: React.MouseEvent) => {
@@ -94,16 +132,23 @@ const AssistantHistoryTab: React.FC = () => {
     }
 
     try {
-      // Delete GLOBAL conversation
-      // Agent conversation deletion is handled by GlobalAssistantView's local AgentHistoryTab
-      await del(`/api/ai_conversations/${conversationId}`);
+      // Delete based on mode
+      if (selectedAgent) {
+        await del(`/api/agents/${selectedAgent.id}/conversations/${conversationId}`);
+      } else {
+        await del(`/api/ai_conversations/${conversationId}`);
+      }
 
       // Remove from local state (useMemo handles filtering automatically)
       setConversations(conversations.filter(conv => conv.id !== conversationId));
 
-      // If deleted conversation was active, create a new global conversation
+      // If deleted conversation was active, create a new conversation
       if (conversationId === activeConversationId) {
-        await createNewGlobalConversation();
+        if (selectedAgent) {
+          await createNewAgentConversation();
+        } else {
+          await createNewGlobalConversation();
+        }
         // setActiveConversationId will be updated via the sync useEffect
       }
     } catch (error) {
@@ -126,12 +171,16 @@ const AssistantHistoryTab: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header - Always shows Global Assistant history */}
+      {/* Header - Shows agent name or Global Assistant */}
       <div className="p-3 border-b space-y-2">
         <div className="flex items-center gap-2">
-          <Sparkles className="h-4 w-4 text-primary" />
+          {selectedAgent ? (
+            <Bot className="h-4 w-4 text-primary" />
+          ) : (
+            <Sparkles className="h-4 w-4 text-primary" />
+          )}
           <h3 className="text-sm font-medium truncate">
-            Conversation History
+            {selectedAgent ? `${selectedAgent.title} History` : 'Conversation History'}
           </h3>
         </div>
         <div className="relative">

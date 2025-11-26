@@ -1,5 +1,5 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { useChat } from '@ai-sdk/react';
+import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
+import { DefaultChatTransport } from 'ai';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import ChatInput, { ChatInputRef } from '@/components/messages/ChatInput';
@@ -7,13 +7,15 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Loader2, Send, Plus, StopCircle } from 'lucide-react';
 import { CompactConversationMessageRenderer } from '@/components/ai/CompactConversationMessageRenderer';
 import { ReadOnlyToggle } from '@/components/ai/ReadOnlyToggle';
+import { AgentSelector } from '@/components/ai/AgentSelector';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth, patch, del } from '@/lib/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
+import { useSidebarAgentState, SidebarAgentInfo } from '@/hooks/useSidebarAgentState';
+import { useSidebarChat } from '@/hooks/useSidebarChat';
 import { toast } from 'sonner';
 import { AiUsageMonitor } from '@/components/ai/AiUsageMonitor';
-
 
 interface ProviderSettings {
   currentProvider: string;
@@ -41,62 +43,141 @@ interface LocationContext {
   breadcrumbs?: string[];
 }
 
-
 /**
- * Global Assistant chat tab for the right sidebar.
+ * Assistant chat tab for the right sidebar.
  *
- * This component ONLY shows Global Assistant state. It does NOT know about
- * agent selection - that's handled separately in the middle panel.
+ * Supports dual-mode operation:
+ * - Global Mode (default): Uses GlobalChatContext, syncs with middle panel
+ * - Agent Mode: Uses local state, independent from middle panel
+ *
+ * The sidebar maintains its own agent selection, separate from the middle panel's useAgentStore.
  */
 const AssistantChatTab: React.FC = () => {
   const pathname = usePathname();
 
-  // Use shared global chat context - ONLY for Global Assistant
+  // ============================================
+  // Global Chat Context (for global mode sync)
+  // ============================================
   const {
-    chatConfig,
-    messages: globalMessages,
-    setMessages: setGlobalMessages,
-    isStreaming: globalIsStreaming,
+    chatConfig: globalChatConfig,
+    setMessages: setGlobalContextMessages,
     setIsStreaming: setGlobalIsStreaming,
-    stopStreaming: globalStopStreaming,
     setStopStreaming: setGlobalStopStreaming,
-    currentConversationId,
-    isInitialized,
-    createNewConversation,
-    refreshConversation,
+    currentConversationId: globalConversationId,
+    isInitialized: globalIsInitialized,
+    createNewConversation: createGlobalConversation,
+    refreshConversation: refreshGlobalConversation,
   } = useGlobalChat();
 
-  // Local state for component-specific concerns
+  // ============================================
+  // Sidebar Agent State (custom hook)
+  // ============================================
+  const {
+    selectedAgent,
+    conversationId: agentConversationId,
+    initialMessages: agentInitialMessages,
+    isInitialized: agentIsInitialized,
+    selectAgent,
+    createNewConversation: createAgentConversation,
+    refreshConversation: refreshAgentConversation,
+  } = useSidebarAgentState();
+
+  // ============================================
+  // Agent Chat Configuration
+  // ============================================
+  const agentChatConfig = useMemo(() => {
+    if (!selectedAgent || !agentConversationId) return null;
+    return {
+      id: agentConversationId,
+      messages: agentInitialMessages,
+      transport: new DefaultChatTransport({
+        api: '/api/ai/chat',
+        fetch: (url, options) => {
+          const urlString = url instanceof Request ? url.url : url.toString();
+          return fetchWithAuth(urlString, options);
+        },
+      }),
+      experimental_throttle: 50,
+      onError: (error: Error) => {
+        console.error('Sidebar Agent Chat error:', error);
+        toast.error('Chat error. Please try again.');
+      },
+    };
+  }, [selectedAgent, agentConversationId, agentInitialMessages]);
+
+  // ============================================
+  // Sidebar Chat (custom hook - unified interface)
+  // ============================================
+  const {
+    messages,
+    sendMessage,
+    status,
+    error,
+    regenerate,
+    setMessages,
+    stop,
+    isStreaming,
+    globalStatus,
+    globalStop,
+    globalMessages,
+    setGlobalMessages,
+  } = useSidebarChat({
+    selectedAgent,
+    globalChatConfig,
+    agentChatConfig,
+  });
+
+  // ============================================
+  // Derived State
+  // ============================================
+  const currentConversationId = selectedAgent ? agentConversationId : globalConversationId;
+  const isInitialized = selectedAgent ? agentIsInitialized : globalIsInitialized;
+  const assistantName = selectedAgent ? selectedAgent.title : 'Global Assistant';
+
+  // ============================================
+  // Local Component State
+  // ============================================
   const [providerSettings, setProviderSettings] = useState<ProviderSettings | null>(null);
   const [input, setInput] = useState<string>('');
   const [isReadOnly, setIsReadOnly] = useState<boolean>(false);
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
-  
-  // Refs for auto-scrolling and chat input
+
+  // Refs
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<ChatInputRef>(null);
-  const prevStatusRef = useRef<string>('ready');
-  
-  // Auto-scroll to bottom function
-  const scrollToBottom = () => {
+  const prevGlobalStatusRef = useRef<string>('ready');
+
+  // ============================================
+  // Helper Functions
+  // ============================================
+  const scrollToBottom = useCallback(() => {
     if (scrollAreaRef.current) {
       scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight;
     }
-  };
+  }, []);
 
-  // Get fetchDrives from store to ensure drives are loaded
-  // Note: We don't subscribe to drives array to avoid re-renders
+  // Determine if send button should be enabled
+  const canSend = useMemo(() => {
+    if (!input.trim()) return false;
+    if (!currentConversationId) return false;
+    if (selectedAgent) return true; // Agent mode has its own provider config
+    return providerSettings?.isAnyProviderConfigured ?? false;
+  }, [input, currentConversationId, selectedAgent, providerSettings]);
+
+  // ============================================
+  // Effects: Drive Loading
+  // ============================================
   const { fetchDrives } = useDriveStore();
 
-  // Ensure drives are loaded on mount
   useEffect(() => {
     fetchDrives();
   }, [fetchDrives]);
-  
-  // Extract location context from pathname
-  // Note: Only depends on pathname, not drives array, to prevent re-fetching on drive refreshes
+
+  // ============================================
+  // Effects: Location Context Extraction
+  // ============================================
   useEffect(() => {
     const extractLocationContext = async () => {
       const pathParts = pathname.split('/').filter(Boolean);
@@ -108,7 +189,6 @@ const AssistantChatTab: React.FC = () => {
           let currentPage = null;
           let currentDrive = null;
 
-          // Get drive information from store (using current drives snapshot)
           if (driveId) {
             const currentDrives = useDriveStore.getState().drives;
             const driveData = currentDrives.find(d => d.id === driveId);
@@ -119,30 +199,23 @@ const AssistantChatTab: React.FC = () => {
                 name: driveData.name
               };
             }
-            // If drive not found in store, set to null (no fallback with fake data)
           }
-          
-          // Fetch page information if we have a page ID in the path
+
           if (pathParts.length > 2) {
             const pageId = pathParts[2];
-            
+
             try {
-              // Fetch page data
               const pageResponse = await fetchWithAuth(`/api/pages/${pageId}`);
               if (pageResponse.ok) {
                 const pageData = await pageResponse.json();
-                
-                // Fetch breadcrumbs to build the full path with parent folders
+
                 try {
                   const breadcrumbsResponse = await fetchWithAuth(`/api/pages/${pageId}/breadcrumbs`);
                   if (breadcrumbsResponse.ok) {
                     const breadcrumbsData = await breadcrumbsResponse.json();
-                    
-                    // Build the full path from breadcrumbs: /driveSlug/Folder1/Folder2/PageTitle
-                    // The AI tools expect paths with actual page titles, not IDs
                     const pathSegments = breadcrumbsData.map((crumb: { title: string }) => crumb.title);
                     const fullPath = `/${currentDrive?.slug}/${pathSegments.join('/')}`;
-                    
+
                     currentPage = {
                       id: pageData.id,
                       title: pageData.title,
@@ -150,7 +223,6 @@ const AssistantChatTab: React.FC = () => {
                       path: fullPath
                     };
                   } else {
-                    // Fallback to simple path if breadcrumbs fail
                     currentPage = {
                       id: pageData.id,
                       title: pageData.title,
@@ -158,9 +230,7 @@ const AssistantChatTab: React.FC = () => {
                       path: `/${currentDrive?.slug}/${pageData.title}`
                     };
                   }
-                } catch (breadcrumbError) {
-                  console.error('Failed to fetch breadcrumbs:', breadcrumbError);
-                  // Fallback to simple path
+                } catch {
                   currentPage = {
                     id: pageData.id,
                     title: pageData.title,
@@ -169,7 +239,6 @@ const AssistantChatTab: React.FC = () => {
                   };
                 }
               } else {
-                // Fallback if API call fails
                 currentPage = {
                   id: pageId,
                   title: pathParts[pathParts.length - 1].replace(/-/g, ' '),
@@ -177,9 +246,7 @@ const AssistantChatTab: React.FC = () => {
                   path: `/${currentDrive?.slug}/${pathParts[pathParts.length - 1].replace(/-/g, ' ')}`
                 };
               }
-            } catch (error) {
-              console.error('Failed to fetch page data:', error);
-              // Fallback
+            } catch {
               currentPage = {
                 id: pageId,
                 title: pathParts[pathParts.length - 1].replace(/-/g, ' '),
@@ -188,26 +255,18 @@ const AssistantChatTab: React.FC = () => {
               };
             }
           }
-          
-          // Build breadcrumbs using actual titles if available
+
           const breadcrumbs = [];
           if (currentDrive) {
             breadcrumbs.push(currentDrive.name);
           }
           if (currentPage && currentPage.path) {
-            // Extract all folder/page names from the path for breadcrumbs
             const pathParts = currentPage.path.split('/').filter(Boolean);
-            // Skip the drive slug (first part) as it's already added
             breadcrumbs.push(...pathParts.slice(1));
           }
-          
-          setLocationContext({
-            currentPage,
-            currentDrive,
-            breadcrumbs
-          });
-        } catch (error) {
-          console.error('Failed to extract location context:', error);
+
+          setLocationContext({ currentPage, currentDrive, breadcrumbs });
+        } catch {
           setLocationContext(null);
         }
       } else {
@@ -216,58 +275,46 @@ const AssistantChatTab: React.FC = () => {
     };
 
     extractLocationContext();
-  }, [pathname]); // Only re-run when pathname changes, not on every drives refresh
+  }, [pathname]);
 
-  // Create own Chat instance for streaming
-  // This component manages the stream and syncs to global state
-  const {
-    messages: localMessages,
-    sendMessage,
-    status,
-    error,
-    regenerate,
-    setMessages: setLocalMessages,
-    stop,
-  } = useChat(chatConfig || {});
-
-  // Sync local messages to global state
-  // This ensures both views always render the same messages
+  // ============================================
+  // Effects: Global Mode Sync to Context
+  // ============================================
   useEffect(() => {
-    setGlobalMessages(localMessages);
-  }, [localMessages, setGlobalMessages]);
+    if (!selectedAgent) {
+      setGlobalContextMessages(globalMessages);
+    }
+  }, [selectedAgent, globalMessages, setGlobalContextMessages]);
 
-  // Sync streaming status to global state
-  // This prevents race conditions when switching views mid-stream
   useEffect(() => {
-    const isCurrentlyStreaming = status === 'submitted' || status === 'streaming';
-    const wasStreaming = prevStatusRef.current === 'submitted' || prevStatusRef.current === 'streaming';
+    if (selectedAgent) return;
 
-    // Only update global state if there's an actual transition
+    const isCurrentlyStreaming = globalStatus === 'submitted' || globalStatus === 'streaming';
+    const wasStreaming = prevGlobalStatusRef.current === 'submitted' || prevGlobalStatusRef.current === 'streaming';
+
     if (isCurrentlyStreaming && !wasStreaming) {
-      // We started streaming
       setGlobalIsStreaming(true);
     } else if (!isCurrentlyStreaming && wasStreaming) {
-      // We stopped streaming (actual transition, not just mounting as ready)
       setGlobalIsStreaming(false);
     }
 
-    // Update the ref for next comparison
-    prevStatusRef.current = status;
-  }, [status, setGlobalIsStreaming]);
+    prevGlobalStatusRef.current = globalStatus;
+  }, [selectedAgent, globalStatus, setGlobalIsStreaming]);
 
-  // Register local stop function to global context when streaming
-  // This allows the other view to stop this view's stream
   useEffect(() => {
-    const streaming = status === 'submitted' || status === 'streaming';
+    if (selectedAgent) return;
+
+    const streaming = globalStatus === 'submitted' || globalStatus === 'streaming';
     if (streaming) {
-      setGlobalStopStreaming(() => stop);
+      setGlobalStopStreaming(() => globalStop);
     } else {
       setGlobalStopStreaming(null);
     }
-  }, [status, stop, setGlobalStopStreaming]);
+  }, [selectedAgent, globalStatus, globalStop, setGlobalStopStreaming]);
 
-  // Register streaming state with editing store (state-based protection)
-  // Note: In AI SDK v5, status can be 'ready', 'submitted', 'streaming', or 'error'
+  // ============================================
+  // Effects: Editing Store Registration
+  // ============================================
   useEffect(() => {
     const componentId = `assistant-sidebar-${currentConversationId || 'init'}`;
 
@@ -280,187 +327,229 @@ const AssistantChatTab: React.FC = () => {
       useEditingStore.getState().endStreaming(componentId);
     }
 
-    // Cleanup on unmount
     return () => {
       useEditingStore.getState().endStreaming(componentId);
     };
   }, [status, currentConversationId]);
 
-  // ✅ Combined scroll effects - use globalMessages.length instead of messages array
+  // ============================================
+  // Effects: UI State
+  // ============================================
   useEffect(() => {
     scrollToBottom();
-  }, [globalMessages.length, status]);
+  }, [messages.length, status, scrollToBottom]);
 
-  // Reset error visibility when new error occurs
   useEffect(() => {
     if (error) setShowError(true);
   }, [error]);
 
-  // Load provider settings on mount
+  // ============================================
+  // Effects: Provider Settings
+  // ============================================
   useEffect(() => {
     const loadProviderSettings = async () => {
       try {
         const configResponse = await fetchWithAuth('/api/ai/settings');
         const configData: ProviderSettings = await configResponse.json();
         setProviderSettings(configData);
-      } catch (error) {
-        console.error('Failed to load provider settings:', error);
+      } catch {
+        // Silently fail - provider settings are optional in agent mode
       }
     };
 
     loadProviderSettings();
   }, []);
-  
-  // Listen for settings updates and reload provider settings
+
   useEffect(() => {
     const handleSettingsUpdate = async () => {
       try {
         const configResponse = await fetchWithAuth('/api/ai/settings');
         const configData: ProviderSettings = await configResponse.json();
         setProviderSettings(configData);
-      } catch (error) {
-        console.error('Failed to reload settings:', error);
+      } catch {
+        // Silently fail
       }
     };
 
     window.addEventListener('ai-settings-updated', handleSettingsUpdate);
-    return () => {
-      window.removeEventListener('ai-settings-updated', handleSettingsUpdate);
-    };
+    return () => window.removeEventListener('ai-settings-updated', handleSettingsUpdate);
   }, []);
 
-  // Use the context method to create new conversation
-  const handleNewConversation = async () => {
+  // ============================================
+  // Handlers
+  // ============================================
+  const handleNewConversation = useCallback(async () => {
     try {
-      await createNewConversation();
-    } catch (error) {
-      console.error('Failed to create new conversation:', error);
+      if (selectedAgent) {
+        await createAgentConversation();
+        setMessages([]);
+      } else {
+        await createGlobalConversation();
+      }
+    } catch {
+      toast.error('Failed to create new conversation');
     }
-  };
+  }, [selectedAgent, createAgentConversation, createGlobalConversation, setMessages]);
 
-  const handleSendMessage = async () => {
+  const handleSendMessage = useCallback(async () => {
     if (!input.trim() || !currentConversationId) return;
 
-    // Send the message with selected provider and model
-    sendMessage(
-      { text: input },
-      {
-        body: {
+    const body = selectedAgent
+      ? {
+          chatId: selectedAgent.id,
+          conversationId: agentConversationId,
+          isReadOnly,
+          provider: selectedAgent.aiProvider,
+          model: selectedAgent.aiModel,
+          systemPrompt: selectedAgent.systemPrompt,
+          locationContext: locationContext || undefined,
+          enabledTools: selectedAgent.enabledTools,
+        }
+      : {
           isReadOnly,
           locationContext: locationContext || undefined,
           selectedProvider: providerSettings?.currentProvider,
           selectedModel: providerSettings?.currentModel,
-        }
-      }
-    );
+        };
+
+    sendMessage({ text: input }, { body });
     setInput('');
     chatInputRef.current?.clear();
     setTimeout(scrollToBottom, 100);
-  };
+  }, [
+    input,
+    currentConversationId,
+    selectedAgent,
+    agentConversationId,
+    isReadOnly,
+    locationContext,
+    providerSettings,
+    sendMessage,
+    scrollToBottom,
+  ]);
 
-  // Edit message handler
-  const handleEdit = async (messageId: string, newContent: string) => {
+  const handleEdit = useCallback(async (messageId: string, newContent: string) => {
     if (!currentConversationId) return;
 
     try {
-      // Persist to backend (already handles structured content correctly)
-      await patch(`/api/ai_conversations/${currentConversationId}/messages/${messageId}`, {
-        content: newContent,
-      });
-
-      // Refresh conversation (recreates Chat with fresh messages from DB)
-      await refreshConversation();
-
+      if (selectedAgent) {
+        await patch(`/api/agents/${selectedAgent.id}/conversations/${currentConversationId}/messages/${messageId}`, {
+          content: newContent,
+        });
+        await refreshAgentConversation();
+      } else {
+        await patch(`/api/ai_conversations/${currentConversationId}/messages/${messageId}`, {
+          content: newContent,
+        });
+        await refreshGlobalConversation();
+      }
       toast.success('Message updated successfully');
-    } catch (error) {
-      console.error('Failed to edit message:', error);
+    } catch {
       toast.error('Failed to update message');
     }
-  };
+  }, [currentConversationId, selectedAgent, refreshAgentConversation, refreshGlobalConversation]);
 
-  // Delete message handler
-  const handleDelete = async (messageId: string) => {
+  const handleDelete = useCallback(async (messageId: string) => {
     if (!currentConversationId) return;
 
     try {
-      await del(`/api/ai_conversations/${currentConversationId}/messages/${messageId}`);
+      if (selectedAgent) {
+        await del(`/api/agents/${selectedAgent.id}/conversations/${currentConversationId}/messages/${messageId}`);
+      } else {
+        await del(`/api/ai_conversations/${currentConversationId}/messages/${messageId}`);
+      }
 
-      // Optimistically remove from UI (both local and global)
-      const filtered = globalMessages.filter(m => m.id !== messageId);
-      setGlobalMessages(filtered);
-      setLocalMessages(filtered);
+      const filtered = messages.filter(m => m.id !== messageId);
+      setMessages(filtered);
+
+      if (!selectedAgent) {
+        setGlobalMessages(filtered);
+      }
 
       toast.success('Message deleted');
-    } catch (error) {
-      console.error('Failed to delete message:', error);
+    } catch {
       toast.error('Failed to delete message');
     }
-  };
+  }, [currentConversationId, selectedAgent, messages, setMessages, setGlobalMessages]);
 
-  // Retry handler - regenerate the last assistant message
-  const handleRetry = async () => {
+  const handleRetry = useCallback(async () => {
     if (!currentConversationId) return;
 
-    // Before regenerating, clean up old assistant responses after the last user message
-    const lastUserMsgIndex = globalMessages.map(m => m.role).lastIndexOf('user');
+    const lastUserMsgIndex = messages.map(m => m.role).lastIndexOf('user');
 
     if (lastUserMsgIndex !== -1) {
-      // Get all assistant messages after the last user message
-      const assistantMessagesToDelete = globalMessages
+      const assistantMessagesToDelete = messages
         .slice(lastUserMsgIndex + 1)
         .filter(m => m.role === 'assistant');
 
-      // Delete them from the database
       for (const msg of assistantMessagesToDelete) {
         try {
-          await del(`/api/ai_conversations/${currentConversationId}/messages/${msg.id}`);
-        } catch (error) {
-          console.error('Failed to delete old assistant message:', error);
+          if (selectedAgent) {
+            await del(`/api/agents/${selectedAgent.id}/conversations/${currentConversationId}/messages/${msg.id}`);
+          } else {
+            await del(`/api/ai_conversations/${currentConversationId}/messages/${msg.id}`);
+          }
+        } catch {
+          // Continue with other deletions
         }
       }
 
-      // Remove them from state (both local and global)
-      const filteredMessages = globalMessages.filter(
+      const filteredMessages = messages.filter(
         m => !assistantMessagesToDelete.some(toDelete => toDelete.id === m.id)
       );
-      setGlobalMessages(filteredMessages);
-      setLocalMessages(filteredMessages);
+      setMessages(filteredMessages);
+
+      if (!selectedAgent) {
+        setGlobalMessages(filteredMessages);
+      }
     }
 
-    // Now regenerate with a clean slate
     regenerate();
-  };
+  }, [currentConversationId, selectedAgent, messages, setMessages, setGlobalMessages, regenerate]);
 
-  // Calculate the last assistant/user message IDs for retry buttons
-  const lastAssistantMessageId = globalMessages
+  // Adapter for AgentSelector (converts SidebarAgentInfo to AgentInfo shape)
+  const handleSelectAgent = useCallback((agent: SidebarAgentInfo | null) => {
+    selectAgent(agent);
+  }, [selectAgent]);
+
+  // ============================================
+  // Computed Values for Rendering
+  // ============================================
+  const lastAssistantMessageId = messages
     .filter(m => m.role === 'assistant')
     .slice(-1)[0]?.id;
 
-  const lastUserMessageId = globalMessages
+  const lastUserMessageId = messages
     .filter(m => m.role === 'user')
     .slice(-1)[0]?.id;
 
-  // Show loading state until chat is properly initialized
+  // ============================================
+  // Render
+  // ============================================
   if (!isInitialized) {
     return (
       <div className="flex flex-col h-full p-4">
         <div className="flex-grow flex items-center justify-center">
           <div className="flex items-center space-x-2 text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
-            <span>Loading Global Assistant...</span>
+            <span>Loading {assistantName}...</span>
           </div>
         </div>
       </div>
     );
   }
 
-
   return (
     <div className="flex flex-col h-full">
-      {/* Header with New Chat button and Usage Monitor */}
+      {/* Header */}
       <div className="flex flex-col border-b border-gray-200 dark:border-[var(--separator)] bg-card">
         <div className="flex items-center justify-between p-2">
-          <span className="text-sm font-medium text-muted-foreground">Chat</span>
+          <AgentSelector
+            selectedAgent={selectedAgent}
+            onSelectAgent={handleSelectAgent}
+            disabled={isStreaming}
+            className="text-sm font-medium"
+          />
           <Button
             variant="ghost"
             size="sm"
@@ -471,35 +560,30 @@ const AssistantChatTab: React.FC = () => {
           </Button>
         </div>
 
-        {/* AI Usage Monitor - Compact mode in sidebar */}
         {currentConversationId && (
           <div className="px-2 pb-2">
-            <AiUsageMonitor
-              conversationId={currentConversationId}
-              compact
-            />
+            <AiUsageMonitor conversationId={currentConversationId} compact />
           </div>
         )}
       </div>
 
-      {/* Messages Area */}
+      {/* Messages */}
       <div className="flex-1 min-h-0 overflow-hidden max-w-full" style={{ contain: 'layout' }}>
         <ScrollArea className="h-full p-3 max-w-full" ref={scrollAreaRef}>
           <div className="space-y-3 max-w-full">
-            {globalMessages.length === 0 ? (
+            {messages.length === 0 ? (
               <div className="flex items-center justify-center h-20 text-muted-foreground text-xs text-center">
                 <div>
-                  <p className="font-medium">Global Assistant</p>
+                  <p className="font-medium">{assistantName}</p>
                   <p className="text-xs">
                     {locationContext
                       ? `Context-aware help for ${locationContext.currentPage?.title || locationContext.currentDrive?.name}`
-                      : 'Ask me anything about your workspace'
-                    }
+                      : 'Ask me anything about your workspace'}
                   </p>
                 </div>
               </div>
             ) : (
-              globalMessages.map(message => (
+              messages.map(message => (
                 <CompactConversationMessageRenderer
                   key={message.id}
                   message={message}
@@ -511,11 +595,11 @@ const AssistantChatTab: React.FC = () => {
                 />
               ))
             )}
-            
-            {globalIsStreaming && (
+
+            {isStreaming && (
               <div className="p-2 rounded-lg bg-gray-50 dark:bg-gray-800/50">
                 <div className="text-xs font-medium mb-1 text-gray-700 dark:text-gray-300">
-                  Global Assistant
+                  {assistantName}
                 </div>
                 <div className="flex items-center space-x-2 text-gray-500 text-xs">
                   <Loader2 className="h-3 w-3 animate-spin" />
@@ -523,22 +607,22 @@ const AssistantChatTab: React.FC = () => {
                 </div>
               </div>
             )}
-            
+
             <div ref={messagesEndRef} />
           </div>
         </ScrollArea>
       </div>
 
-      {/* Input Area */}
+      {/* Input */}
       <div className="border-t p-3 space-y-2">
         {error && showError && (
           <div className="p-2 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded text-xs flex items-center justify-between">
             <p className="text-red-700 dark:text-red-300">
-              {error.message?.includes('Unauthorized') || error.message?.includes('401') 
+              {error.message?.includes('Unauthorized') || error.message?.includes('401')
                 ? 'Authentication failed. Please refresh the page and try again.'
-                : (error.message?.toLowerCase().includes('rate') || 
-                   error.message?.toLowerCase().includes('limit') || 
-                   error.message?.includes('429') || 
+                : (error.message?.toLowerCase().includes('rate') ||
+                   error.message?.toLowerCase().includes('limit') ||
+                   error.message?.includes('429') ||
                    error.message?.includes('402') ||
                    error.message?.includes('Failed after') ||
                    error.message?.includes('Provider returned error'))
@@ -553,8 +637,7 @@ const AssistantChatTab: React.FC = () => {
             </button>
           </div>
         )}
-        
-        {/* Read-Only Toggle Row */}
+
         <div className="px-1">
           <ReadOnlyToggle
             isReadOnly={isReadOnly}
@@ -563,23 +646,22 @@ const AssistantChatTab: React.FC = () => {
             size="sm"
           />
         </div>
-        
-        {/* Input Form Row */}
+
         <div className="flex items-center space-x-2">
           <ChatInput
             ref={chatInputRef}
             value={input}
             onChange={setInput}
             onSendMessage={handleSendMessage}
-            placeholder={locationContext 
+            placeholder={locationContext
               ? `Ask about ${locationContext.currentPage?.title || 'this page'}...`
-              : "Ask about your workspace..."}
+              : 'Ask about your workspace...'}
             driveId={locationContext?.currentDrive?.id}
-            crossDrive={true}  // Allow searching across all drives in global assistant
+            crossDrive={true}
           />
-          {globalIsStreaming ? (
+          {isStreaming ? (
             <Button
-              onClick={() => globalStopStreaming?.()}
+              onClick={() => stop()}
               variant="destructive"
               size="sm"
               className="h-8 px-3"
@@ -590,7 +672,7 @@ const AssistantChatTab: React.FC = () => {
           ) : (
             <Button
               onClick={handleSendMessage}
-              disabled={!input.trim() || !providerSettings?.isAnyProviderConfigured}
+              disabled={!canSend}
               size="sm"
               className="h-8 px-3"
             >

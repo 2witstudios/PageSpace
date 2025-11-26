@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { History, MessageSquare, Settings } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { useSidebarAgentState } from "@/hooks/useSidebarAgentState";
 
 import AssistantChatTab from "./ai-assistant/AssistantChatTab";
 import AssistantHistoryTab from "./ai-assistant/AssistantHistoryTab";
@@ -15,13 +16,16 @@ export interface RightPanelProps {
 }
 
 /**
- * Right sidebar panel - contains Global Assistant chat, history, and settings.
+ * Right sidebar panel - contains AI Assistant chat, history, and settings.
  *
- * This component ONLY shows Global Assistant state. It does NOT know about
- * agent selection - that's handled by GlobalAssistantView in the middle panel.
- * This mirrors the pattern used by AiChatView pages.
+ * This component supports both Global Assistant mode (selectedAgent = null)
+ * and Agent mode (selectedAgent is set). The agent selection is managed
+ * independently from the middle panel via useSidebarAgentState.
  */
 export default function RightPanel({ className }: RightPanelProps) {
+  // Get sidebar agent state - independent from middle panel
+  const { selectedAgent } = useSidebarAgentState();
+
   // Always show all 3 tabs - Global Assistant is always available
   const [activeTab, setActiveTab] = useState<string>("chat");
 
@@ -117,10 +121,10 @@ export default function RightPanel({ className }: RightPanelProps) {
           <AssistantChatTab />
         </div>
         <div style={{ display: activeTab === "history" ? "flex" : "none", flexDirection: "column", height: "100%" }}>
-          <AssistantHistoryTab />
+          <AssistantHistoryTab selectedAgent={selectedAgent} />
         </div>
         <div style={{ display: activeTab === "settings" ? "flex" : "none", flexDirection: "column", height: "100%" }}>
-          <AssistantSettingsTab />
+          <AssistantSettingsTab selectedAgent={selectedAgent} />
         </div>
       </div>
     </aside>
