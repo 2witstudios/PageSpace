@@ -233,16 +233,16 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
 
       if (response.ok) {
         const newConversation = await response.json();
-        setCurrentConversationId(newConversation.id);
+        setCurrentConversationId(newConversation.conversationId);
         setInitialMessages([]);
         setMessages([]);
-        conversationState.setActiveConversationId(newConversation.id);
+        conversationState.setActiveConversationId(newConversation.conversationId);
         conversationState.setActiveAgentId(agentId);
 
         // Update URL to reflect agent and new conversation
         const url = new URL(window.location.href);
         url.searchParams.set('agent', agentId);
-        url.searchParams.set('c', newConversation.id);
+        url.searchParams.set('c', newConversation.conversationId);
         window.history.pushState({}, '', url.toString());
 
         setIsInitialized(true);
