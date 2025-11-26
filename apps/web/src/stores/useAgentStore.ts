@@ -85,6 +85,9 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
           const agent = allAgents.find((a: { id: string }) => a.id === agentId);
 
           if (agent) {
+            // Persist to cookie so agent survives navigation/reload
+            conversationState.setActiveAgentId(agent.id);
+
             set({
               selectedAgent: {
                 id: agent.id,
