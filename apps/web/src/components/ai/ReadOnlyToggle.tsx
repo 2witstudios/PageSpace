@@ -41,7 +41,7 @@ export function ReadOnlyToggle({
         <span
           className={`text-muted-foreground ${size === 'sm' ? 'text-xs' : 'text-sm'}`}
         >
-          {isReadOnly ? 'Read-only' : 'Full access'}
+          {isReadOnly ? 'Read-only' : 'Read/Write'}
         </span>
       )}
     </div>

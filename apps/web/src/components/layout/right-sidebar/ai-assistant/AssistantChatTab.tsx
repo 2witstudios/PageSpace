@@ -42,10 +42,16 @@ interface LocationContext {
 }
 
 
+/**
+ * Global Assistant chat tab for the right sidebar.
+ *
+ * This component ONLY shows Global Assistant state. It does NOT know about
+ * agent selection - that's handled separately in the middle panel.
+ */
 const AssistantChatTab: React.FC = () => {
   const pathname = usePathname();
 
-  // Use shared global chat context
+  // Use shared global chat context - ONLY for Global Assistant
   const {
     chatConfig,
     messages: globalMessages,

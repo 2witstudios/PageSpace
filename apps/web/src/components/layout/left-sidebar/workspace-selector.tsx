@@ -101,7 +101,7 @@ export default function DriveSwitcher() {
         <DropdownMenuContent className="w-56">
           {ownedDrives.length > 0 && (
             <DropdownMenuGroup>
-              <DropdownMenuLabel>My Drive</DropdownMenuLabel>
+              <DropdownMenuLabel>My Drives</DropdownMenuLabel>
               {ownedDrives.map((drive) => (
                 <DropdownMenuItem
                   key={drive.id}

@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { Settings, CheckCircle, XCircle, Key, ExternalLink, Zap } from 'lucide-react';
+import { CheckCircle, XCircle, Key, ExternalLink, Zap, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import { AI_PROVIDERS, getBackendProvider } from '@/lib/ai/ai-providers-config';
 import { patch, fetchWithAuth } from '@/lib/auth-fetch';
@@ -34,6 +34,12 @@ interface SaveSettingsResult {
   success?: boolean;
 }
 
+/**
+ * Global Assistant settings tab for the right sidebar.
+ *
+ * This component ONLY shows Global Assistant settings.
+ * Agent settings are handled by the agent page itself.
+ */
 const AssistantSettingsTab: React.FC = () => {
   const router = useRouter();
   const [providerSettings, setProviderSettings] = useState<ProviderSettings | null>(null);
@@ -346,10 +352,10 @@ const AssistantSettingsTab: React.FC = () => {
     <div className="flex flex-col h-full">
       {/* Header */}
       <div className="p-3 border-b">
-        <h3 className="text-sm font-medium flex items-center space-x-2">
-          <Settings className="h-4 w-4" />
-          <span>Settings</span>
-        </h3>
+        <div className="flex items-center gap-2">
+          <Sparkles className="h-4 w-4 text-primary" />
+          <h3 className="text-sm font-medium">Global Settings</h3>
+        </div>
       </div>
 
       {/* Settings Content - with native scrolling */}

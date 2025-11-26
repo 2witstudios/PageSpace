@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react';
-import { useRouter, usePathname } from 'next/navigation';
+import React, { useEffect, useState, useMemo } from 'react';
+import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Trash2, Search, MessageSquare } from 'lucide-react';
+import { Trash2, Search, MessageSquare, Sparkles } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { del, fetchWithAuth } from '@/lib/auth-fetch';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
@@ -15,100 +15,96 @@ interface Conversation {
   createdAt: string;
 }
 
+/**
+ * Global Assistant history tab for the right sidebar.
+ *
+ * This component ONLY shows Global Assistant conversation history.
+ * Agent history is handled by GlobalAssistantView's local AgentHistoryTab.
+ */
 const AssistantHistoryTab: React.FC = () => {
-  const router = useRouter();
   const pathname = usePathname();
 
-  // Use GlobalChatContext for conversation management
+  // Use GlobalChatContext for GLOBAL conversation management only
   const {
     loadConversation,
     createNewConversation: createNewGlobalConversation,
-    currentConversationId: globalConversationId
+    currentConversationId: globalConversationId,
   } = useGlobalChat();
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [filteredConversations, setFilteredConversations] = useState<Conversation[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Load conversations on mount and when conversation or pathname changes
+  // Filter conversations based on search query (useMemo instead of useEffect + state)
+  const filteredConversations = useMemo(() => {
+    if (searchQuery.trim() === '') {
+      return conversations;
+    }
+    return conversations.filter(conv =>
+      conv.title?.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+  }, [searchQuery, conversations]);
+
+  // Load GLOBAL conversations on mount and when conversation or pathname changes
+  // Agent conversations are handled by GlobalAssistantView's local AgentHistoryTab
   useEffect(() => {
     const loadConversations = async () => {
+      setLoading(true);
       try {
+        // Always load global conversations
         const response = await fetchWithAuth('/api/ai_conversations');
         if (response.ok) {
           const data = await response.json();
           setConversations(data);
-          setFilteredConversations(data);
         }
       } catch (error) {
         console.error('Failed to load conversations:', error);
+        setConversations([]);
       } finally {
         setLoading(false);
       }
     };
 
     loadConversations();
-  }, [globalConversationId, pathname]); // Refetch when conversation changes or navigation occurs
+  }, [globalConversationId, pathname]); // Refetch when conversation or navigation changes
 
   // Sync local active conversation ID with global context
   useEffect(() => {
     setActiveConversationId(globalConversationId);
   }, [globalConversationId]);
 
-  // Filter conversations based on search query
-  useEffect(() => {
-    if (searchQuery.trim() === '') {
-      setFilteredConversations(conversations);
-    } else {
-      const filtered = conversations.filter(conv =>
-        conv.title?.toLowerCase().includes(searchQuery.toLowerCase())
-      );
-      setFilteredConversations(filtered);
-    }
-  }, [searchQuery, conversations]);
-
   const handleConversationClick = async (conversationId: string) => {
-    // Load conversation using GlobalChatContext - this updates the shared Chat instance
+    // Load GLOBAL conversation using GlobalChatContext
+    // Agent conversations are handled by GlobalAssistantView's local AgentHistoryTab
     await loadConversation(conversationId);
-
     setActiveConversationId(conversationId);
 
     // Update URL for browser history
-    if (pathname === '/dashboard') {
-      router.push(`/dashboard?c=${conversationId}`);
-    } else if (pathname.startsWith('/dashboard/')) {
-      // For drive routes, preserve the path and add conversation parameter
-      router.push(`${pathname}?c=${conversationId}`);
-    }
+    const url = new URL(window.location.href);
+    url.searchParams.set('c', conversationId);
+    window.history.pushState({}, '', url.toString());
   };
 
   const handleDeleteConversation = async (conversationId: string, event: React.MouseEvent) => {
     event.stopPropagation(); // Prevent conversation click
-    
+
     if (!confirm('Are you sure you want to delete this conversation?')) {
       return;
     }
 
     try {
+      // Delete GLOBAL conversation
+      // Agent conversation deletion is handled by GlobalAssistantView's local AgentHistoryTab
       await del(`/api/ai_conversations/${conversationId}`);
 
-      // Remove from local state
-      const updatedConversations = conversations.filter(conv => conv.id !== conversationId);
-      setConversations(updatedConversations);
-      setFilteredConversations(updatedConversations.filter(conv =>
-        conv.title?.toLowerCase().includes(searchQuery.toLowerCase()) || searchQuery.trim() === ''
-      ));
+      // Remove from local state (useMemo handles filtering automatically)
+      setConversations(conversations.filter(conv => conv.id !== conversationId));
 
-      // If deleted conversation was active, create a new one
+      // If deleted conversation was active, create a new global conversation
       if (conversationId === activeConversationId) {
-        // Use GlobalChatContext method to create new conversation
-        // This will update the URL and state automatically
         await createNewGlobalConversation();
-
         // setActiveConversationId will be updated via the sync useEffect
-        // No need to manually update URL - createNewGlobalConversation handles it
       }
     } catch (error) {
       console.error('Failed to delete conversation:', error);
@@ -130,9 +126,14 @@ const AssistantHistoryTab: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
+      {/* Header - Always shows Global Assistant history */}
       <div className="p-3 border-b space-y-2">
-        <h3 className="text-sm font-medium">Conversation History</h3>
+        <div className="flex items-center gap-2">
+          <Sparkles className="h-4 w-4 text-primary" />
+          <h3 className="text-sm font-medium truncate">
+            Conversation History
+          </h3>
+        </div>
         <div className="relative">
           <Search className="absolute left-2 top-2 h-3 w-3 text-muted-foreground" />
           <Input
