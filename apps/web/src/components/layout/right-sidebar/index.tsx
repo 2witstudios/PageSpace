@@ -6,6 +6,7 @@ import { History, MessageSquare, Settings } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { createClientLogger } from "@/lib/logging/client-logger";
+import { useGlobalChat } from "@/contexts/GlobalChatContext";
 
 import AssistantChatTab from "./ai-assistant/AssistantChatTab";
 import AssistantHistoryTab from "./ai-assistant/AssistantHistoryTab";
@@ -20,6 +21,8 @@ const panelLogger = createClientLogger({ namespace: "ui", component: "right-side
 
 export default function RightPanel({ className }: RightPanelProps) {
   const pathname = usePathname();
+  const { selectedAgent } = useGlobalChat();
+
   panelLogger.debug("Evaluating RightPanel pathname", {
     pathname,
     pathnameType: typeof pathname,
@@ -49,20 +52,24 @@ export default function RightPanel({ className }: RightPanelProps) {
     isDashboardOrDrive,
   });
 
-  const defaultTab = isDashboardOrDrive ? "history" : "chat";
+  // When an agent is selected in dashboard/drive view, show all 3 tabs
+  // so the user can access Global Assistant in sidebar while agent chat is in middle
+  const showChatTab = !isDashboardOrDrive || selectedAgent !== null;
+
+  const defaultTab = isDashboardOrDrive && !selectedAgent ? "history" : "chat";
   const [activeTab, setActiveTab] = useState<string>(defaultTab);
 
   useEffect(() => {
     const savedTab = localStorage.getItem("globalAssistantActiveTab");
 
-    if (isDashboardOrDrive && savedTab === "chat") {
+    if (!showChatTab && savedTab === "chat") {
       setActiveTab("history");
     } else if (savedTab && ["chat", "history", "settings"].includes(savedTab)) {
-      if (!isDashboardOrDrive || savedTab !== "chat") {
+      if (showChatTab || savedTab !== "chat") {
         setActiveTab(savedTab);
       }
     }
-  }, [isDashboardOrDrive]);
+  }, [showChatTab]);
 
   useEffect(() => {
     const handleStorageChange = () => {
@@ -92,10 +99,10 @@ export default function RightPanel({ className }: RightPanelProps) {
         <div
           className={cn(
             "grid gap-1 px-1 py-1 text-xs font-medium sm:text-sm",
-            isDashboardOrDrive ? "grid-cols-2" : "grid-cols-3",
+            showChatTab ? "grid-cols-3" : "grid-cols-2",
           )}
         >
-          {!isDashboardOrDrive && (
+          {showChatTab && (
             <button
               onClick={() => handleTabChange("chat")}
               className={cn(
@@ -152,14 +159,15 @@ export default function RightPanel({ className }: RightPanelProps) {
 
       <div className="min-h-0 flex-1 overflow-hidden">
         {/* Keep all tabs mounted to preserve state, toggle visibility with CSS */}
+        {/* When agent is selected, forceGlobal=true tells sidebar components to show global assistant state */}
         <div style={{ display: activeTab === "chat" ? "flex" : "none", flexDirection: "column", height: "100%" }}>
-          <AssistantChatTab />
+          <AssistantChatTab forceGlobal={selectedAgent !== null} />
         </div>
         <div style={{ display: activeTab === "history" ? "flex" : "none", flexDirection: "column", height: "100%" }}>
-          <AssistantHistoryTab />
+          <AssistantHistoryTab forceGlobal={selectedAgent !== null} />
         </div>
         <div style={{ display: activeTab === "settings" ? "flex" : "none", flexDirection: "column", height: "100%" }}>
-          <AssistantSettingsTab />
+          <AssistantSettingsTab forceGlobal={selectedAgent !== null} />
         </div>
       </div>
     </aside>

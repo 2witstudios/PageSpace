@@ -12,6 +12,14 @@ import { useGlobalChat } from '@/contexts/GlobalChatContext';
 
 // Using centralized AI providers configuration from ai-providers-config.ts
 
+interface AssistantSettingsTabProps {
+  /**
+   * When true, always show global settings regardless of selectedAgent.
+   * Used when sidebar is displayed alongside agent chat in middle view.
+   */
+  forceGlobal?: boolean;
+}
+
 interface ProviderSettings {
   currentProvider: string;
   currentModel: string;
@@ -35,9 +43,12 @@ interface SaveSettingsResult {
   success?: boolean;
 }
 
-const AssistantSettingsTab: React.FC = () => {
+const AssistantSettingsTab: React.FC<AssistantSettingsTabProps> = ({ forceGlobal = false }) => {
   const router = useRouter();
-  const { selectedAgent } = useGlobalChat();
+  const { selectedAgent: contextSelectedAgent } = useGlobalChat();
+
+  // When forceGlobal is true, ignore the agent selection and show global settings
+  const selectedAgent = forceGlobal ? null : contextSelectedAgent;
   const [providerSettings, setProviderSettings] = useState<ProviderSettings | null>(null);
   const [selectedProvider, setSelectedProvider] = useState<string>('pagespace');
   const [selectedModel, setSelectedModel] = useState<string>('glm-4.5-air');
