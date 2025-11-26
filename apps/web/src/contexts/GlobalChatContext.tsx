@@ -296,23 +296,61 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   }, [stopStreaming, loadAgentConversation, loadConversation, createNewConversation]);
 
   /**
-   * Initialize with most recent global conversation on mount
+   * Initialize chat on mount
+   * Detects agent context from URL/cookies and loads appropriate conversation
    */
   useEffect(() => {
     const initializeGlobalChat = async () => {
       try {
-        // Check URL for conversation ID
         const urlParams = new URLSearchParams(window.location.search);
+        const urlAgentId = urlParams.get('agent');
         const urlConversationId = urlParams.get('c');
+        const cookieAgentId = conversationState.getActiveAgentId();
+        const cookieConversationId = conversationState.getActiveConversationId();
 
+        // Determine if we're in agent mode
+        const agentId = urlAgentId || cookieAgentId;
+
+        if (agentId) {
+          // AGENT MODE: Restore agent state and load agent conversation
+
+          // Fetch agent info to restore selectedAgent state
+          const agentsResponse = await fetchWithAuth('/api/agents/multi-drive?groupByDrive=true');
+          if (agentsResponse.ok) {
+            const agentsData = await agentsResponse.json();
+            const allAgents = agentsData.agentsByDrive?.flatMap((d: { agents: unknown[] }) => d.agents) || [];
+            const agent = allAgents.find((a: { id: string }) => a.id === agentId);
+
+            if (agent) {
+              // Restore agent selection
+              setSelectedAgent({
+                id: agent.id,
+                title: agent.title || 'Unnamed Agent',
+                driveId: agent.driveId,
+                driveName: agent.driveName,
+                systemPrompt: agent.systemPrompt,
+                aiProvider: agent.aiProvider,
+                aiModel: agent.aiModel,
+                enabledTools: agent.enabledTools,
+              });
+
+              // Load agent conversation (with optional specific conversation ID)
+              const conversationId = urlConversationId || cookieConversationId;
+              await loadAgentConversation(agentId, conversationId || undefined);
+              return;
+            }
+          }
+
+          // Agent not found - clear stale agent cookie and fall through to global
+          conversationState.setActiveAgentId(null);
+        }
+
+        // GLOBAL MODE: Existing logic
         if (urlConversationId) {
-          // URL has a conversation ID - load it
           await loadConversation(urlConversationId);
           return;
         }
 
-        // Check cookie for active conversation
-        const cookieConversationId = conversationState.getActiveConversationId();
         if (cookieConversationId) {
           await loadConversation(cookieConversationId);
           return;
@@ -343,7 +381,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
 
     initializeGlobalChat();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Run once on mount - functions are stable via useCallback
+  }, []); // Run once on mount
 
   // Create stable chat config that components can use to create their own Chat instances
   // Each component creates its own independent Chat instance
