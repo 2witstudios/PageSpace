@@ -26,13 +26,6 @@ export default function SettingsPage() {
 
   const settingsCategories: SettingsCategory[] = [
     {
-      title: "General",
-      description: "Basic settings and preferences",
-      icon: Settings,
-      href: "/settings/general",
-      available: false,
-    },
-    {
       title: "Account",
       description: "Manage your account and profile",
       icon: User,

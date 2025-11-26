@@ -11,7 +11,8 @@ export default function AdminLayoutClient({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const currentTab = pathname.includes('/monitoring') ? 'monitoring' :
+  const currentTab = pathname === '/admin' ? 'overview' :
+                     pathname.includes('/monitoring') ? 'monitoring' :
                      pathname.includes('/tables') ? 'tables' :
                      pathname.includes('/global-prompt') ? 'global-prompt' :
                      pathname.includes('/support') ? 'support' : 'users';
@@ -30,6 +31,9 @@ export default function AdminLayoutClient({
 
         <Tabs value={currentTab} className="w-full">
           <TabsList className="flex w-full flex-wrap gap-2 overflow-x-auto rounded-lg bg-muted/50 p-1">
+            <TabsTrigger value="overview" asChild>
+              <Link href="/admin">Overview</Link>
+            </TabsTrigger>
             <TabsTrigger value="monitoring" asChild>
               <Link href="/admin/monitoring">Monitoring</Link>
             </TabsTrigger>
