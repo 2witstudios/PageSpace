@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { fetchWithAuth } from '@/lib/auth-fetch';
 import { conversationState } from '@/lib/ai/conversation-state';
+import { toast } from 'sonner';
 
 /**
  * Agent information for the selected agent
@@ -103,8 +104,14 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
             });
             return;
           } else {
-            // Agent not found - clear stale cookie
+            // Agent not found - clear stale cookie and notify user
             conversationState.setActiveAgentId(null);
+            // Clear URL param as well
+            const url = new URL(window.location.href);
+            url.searchParams.delete('agent');
+            url.searchParams.delete('c');
+            window.history.replaceState({}, '', url.toString());
+            toast.error('Agent no longer accessible. Switched to Global Assistant.');
           }
         }
       }

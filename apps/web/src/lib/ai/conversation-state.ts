@@ -11,13 +11,17 @@ const COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
 
 /**
  * Get a cookie value by name (client-side only)
+ * Properly handles values containing '=' and URL-encoded characters
  */
 const getCookieValue = (name: string): string | null => {
   if (typeof document === 'undefined') return null;
   try {
     const cookies = document.cookie.split(';');
     const cookie = cookies.find(c => c.trim().startsWith(`${name}=`));
-    return cookie ? cookie.split('=')[1] : null;
+    if (!cookie) return null;
+    // Use substring to handle values containing '=' characters
+    const value = cookie.substring(cookie.indexOf('=') + 1);
+    return decodeURIComponent(value);
   } catch {
     return null;
   }
@@ -39,12 +43,13 @@ export const conversationState = {
    */
   setActiveConversationId(conversationId: string | null) {
     if (typeof document === 'undefined') return;
-    
+
     try {
       if (conversationId) {
         const maxAge = COOKIE_MAX_AGE;
         const secure = window.location.protocol === 'https:';
-        document.cookie = `${ACTIVE_CONVERSATION_COOKIE}=${conversationId}; max-age=${maxAge}; path=/; ${secure ? 'secure;' : ''} samesite=lax`;
+        const encodedValue = encodeURIComponent(conversationId);
+        document.cookie = `${ACTIVE_CONVERSATION_COOKIE}=${encodedValue}; max-age=${maxAge}; path=/; ${secure ? 'secure;' : ''} samesite=lax`;
       } else {
         document.cookie = `${ACTIVE_CONVERSATION_COOKIE}=; max-age=0; path=/`;
       }
@@ -108,7 +113,8 @@ export const conversationState = {
       if (agentId) {
         const maxAge = COOKIE_MAX_AGE;
         const secure = window.location.protocol === 'https:';
-        document.cookie = `${ACTIVE_AGENT_COOKIE}=${agentId}; max-age=${maxAge}; path=/; ${secure ? 'secure;' : ''} samesite=lax`;
+        const encodedValue = encodeURIComponent(agentId);
+        document.cookie = `${ACTIVE_AGENT_COOKIE}=${encodedValue}; max-age=${maxAge}; path=/; ${secure ? 'secure;' : ''} samesite=lax`;
       } else {
         document.cookie = `${ACTIVE_AGENT_COOKIE}=; max-age=0; path=/`;
       }

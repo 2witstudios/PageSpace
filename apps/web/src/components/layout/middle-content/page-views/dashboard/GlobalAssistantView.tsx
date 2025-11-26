@@ -153,6 +153,8 @@ const GlobalAssistantView: React.FC = () => {
   const [agentConversationId, setAgentConversationId] = useState<string | null>(null);
   const [agentInitialMessages, setAgentInitialMessages] = useState<UIMessage[]>([]);
   const [agentIsInitialized, setAgentIsInitialized] = useState<boolean>(false);
+  // Track which agent the current conversation belongs to (prevents stale state on agent switch)
+  const [agentIdForConversation, setAgentIdForConversation] = useState<string | null>(null);
 
   // Agent mode state (tabs, settings)
   const [activeTab, setActiveTab] = useState<string>('chat');
@@ -185,21 +187,27 @@ const GlobalAssistantView: React.FC = () => {
   useEffect(() => {
     const loadOrCreateAgentConversation = async () => {
       if (!selectedAgent) {
-        // Switching back to global mode - reset agent state
+        // Switching back to global mode - reset ALL agent state
         setAgentConversationId(null);
         setAgentInitialMessages([]);
         setAgentIsInitialized(false);
+        setAgentIdForConversation(null);
         return;
       }
 
-      // If we already have a valid conversation for this agent, don't reload
-      // This guard prevents unnecessary reloads when the effect re-runs
-      if (agentConversationId && agentIsInitialized) {
+      // Check if we're switching to a DIFFERENT agent
+      const isSwitchingAgents = agentIdForConversation !== null && agentIdForConversation !== selectedAgent.id;
+
+      // If we already have a valid conversation for THIS SAME agent, don't reload
+      if (agentConversationId && agentIsInitialized && agentIdForConversation === selectedAgent.id) {
         return;
       }
 
       // Reset state when switching agents or recreating after deletion
       // This ensures no messages can be sent to the wrong agent during async load
+      if (isSwitchingAgents || !agentIdForConversation) {
+        setAgentConversationId(null);
+      }
       setAgentInitialMessages([]);
       setAgentIsInitialized(false);
 
@@ -219,11 +227,12 @@ const GlobalAssistantView: React.FC = () => {
             setAgentConversationId(conversationIdFromUrl);
             setAgentInitialMessages(data.messages || []);
             setAgentIsInitialized(true);
+            setAgentIdForConversation(selectedAgent.id);
             return;
           }
         } catch (error) {
           console.error('Failed to load conversation from URL:', error);
-          // Fall through to create new conversation
+          toast.error('Failed to load conversation. Creating new one.');
         }
       }
 
@@ -245,6 +254,7 @@ const GlobalAssistantView: React.FC = () => {
               setAgentConversationId(mostRecent.id);
               setAgentInitialMessages(messagesData.messages || []);
               setAgentIsInitialized(true);
+              setAgentIdForConversation(selectedAgent.id);
 
               // Update URL
               const url = new URL(window.location.href);
@@ -275,6 +285,7 @@ const GlobalAssistantView: React.FC = () => {
           setAgentConversationId(newConversationId);
           setAgentInitialMessages([]);
           setAgentIsInitialized(true);
+          setAgentIdForConversation(selectedAgent.id);
 
           // Update URL
           const url = new URL(window.location.href);
@@ -286,11 +297,12 @@ const GlobalAssistantView: React.FC = () => {
         console.error('Failed to create new agent conversation:', error);
         toast.error('Failed to initialize agent conversation');
         setAgentIsInitialized(true); // Allow UI to recover from error state
+        setAgentIdForConversation(selectedAgent.id); // Still track the agent to prevent loops
       }
     };
 
     loadOrCreateAgentConversation();
-  }, [selectedAgent, agentConversationId]);
+  }, [selectedAgent, agentConversationId, agentIdForConversation]);
 
   // MCP state - use appropriate conversation ID based on mode
   const { isChatMCPEnabled, setChatMCPEnabled } = useMCPStore();
@@ -435,6 +447,24 @@ const GlobalAssistantView: React.FC = () => {
 
   // Unified streaming state for UI
   const isStreaming = status === 'submitted' || status === 'streaming';
+
+  // Clear useChat messages when switching agents to prevent stale UI
+  useEffect(() => {
+    if (!selectedAgent) {
+      // Switching to global mode - clear agent messages
+      setAgentMessages([]);
+    } else if (agentIdForConversation !== selectedAgent.id) {
+      // Switching to a different agent - clear stale messages immediately
+      setAgentMessages([]);
+    }
+  }, [selectedAgent, agentIdForConversation, setAgentMessages]);
+
+  // Stop global stream when switching to agent mode
+  useEffect(() => {
+    if (selectedAgent && (globalStatus === 'submitted' || globalStatus === 'streaming')) {
+      globalStop();
+    }
+  }, [selectedAgent, globalStatus, globalStop]);
 
   // GLOBAL MODE ONLY: Sync local messages to global context
   // This keeps sidebar in sync with this view
