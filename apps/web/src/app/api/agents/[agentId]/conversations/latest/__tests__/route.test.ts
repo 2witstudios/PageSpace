@@ -44,7 +44,7 @@ import { authenticateHybridRequest, isAuthError } from '@/lib/auth';
 
 describe('GET /api/agents/[agentId]/conversations/latest', () => {
   const mockUserId = 'user_123';
-  const mockAgentId = 'agent_abc123def456';
+  const mockAgentId = 'abc123def456ghi789jkl012';
 
   const createContext = () => ({
     params: Promise.resolve({ agentId: mockAgentId }),
