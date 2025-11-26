@@ -2,7 +2,7 @@ import useSWR from 'swr';
 import { useMemo } from 'react';
 import { fetchWithAuth } from '@/lib/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
-import { AgentInfo } from '@/contexts/GlobalChatContext';
+import { AgentInfo } from '@/stores/useAgentStore';
 
 /**
  * Agent summary from the multi-drive API
@@ -107,7 +107,7 @@ export function useAgents(
     return agentsByDrive.flatMap(d => d.agents);
   }, [agentsByDrive]);
 
-  // Convert AgentSummary to AgentInfo for use with GlobalChatContext
+  // Convert AgentSummary to AgentInfo for use with agent selection
   const toAgentInfo = (agent: AgentSummary): AgentInfo => ({
     id: agent.id,
     title: agent.title || 'Unnamed Agent',

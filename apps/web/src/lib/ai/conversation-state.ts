@@ -83,15 +83,6 @@ export const conversationState = {
   },
 
   /**
-   * Switch to a different conversation
-   */
-  switchToConversation(conversationId: string) {
-    this.setActiveConversationId(conversationId);
-    // Trigger a page refresh or state update to load the new conversation
-    window.location.reload();
-  },
-
-  /**
    * Start a new conversation
    */
   async startNewConversation() {

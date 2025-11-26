@@ -42,21 +42,16 @@ interface LocationContext {
 }
 
 
-interface AssistantChatTabProps {
-  /**
-   * When true, the component shows Global Assistant state regardless of selectedAgent.
-   * Used when sidebar is displayed alongside agent chat in middle view.
-   */
-  forceGlobal?: boolean;
-}
-
-const AssistantChatTab: React.FC<AssistantChatTabProps> = ({ forceGlobal = false }) => {
+/**
+ * Global Assistant chat tab for the right sidebar.
+ *
+ * This component ONLY shows Global Assistant state. It does NOT know about
+ * agent selection - that's handled separately in the middle panel.
+ */
+const AssistantChatTab: React.FC = () => {
   const pathname = usePathname();
 
-  // Use shared global chat context
-  // Note: When forceGlobal=true, we ignore selectedAgent and show global assistant
-  // The chatConfig will still be affected by selectedAgent in the context,
-  // but this is intentional - the sidebar chat shares the same conversation context
+  // Use shared global chat context - ONLY for Global Assistant
   const {
     chatConfig,
     messages: globalMessages,
@@ -69,12 +64,7 @@ const AssistantChatTab: React.FC<AssistantChatTabProps> = ({ forceGlobal = false
     isInitialized,
     createNewConversation,
     refreshConversation,
-    selectedAgent,
   } = useGlobalChat();
-
-  // Suppress unused variable warning - forceGlobal is documented for future use
-  void forceGlobal;
-  void selectedAgent;
 
   // Local state for component-specific concerns
   const [providerSettings, setProviderSettings] = useState<ProviderSettings | null>(null);

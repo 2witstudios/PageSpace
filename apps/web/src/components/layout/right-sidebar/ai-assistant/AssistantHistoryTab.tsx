@@ -15,28 +15,21 @@ interface Conversation {
   createdAt: string;
 }
 
-interface AssistantHistoryTabProps {
-  /**
-   * When true, always show global conversation history regardless of selectedAgent.
-   * Used when sidebar is displayed alongside agent chat in middle view.
-   */
-  forceGlobal?: boolean;
-}
-
-const AssistantHistoryTab: React.FC<AssistantHistoryTabProps> = ({ forceGlobal = false }) => {
+/**
+ * Global Assistant history tab for the right sidebar.
+ *
+ * This component ONLY shows Global Assistant conversation history.
+ * Agent history is handled by GlobalAssistantView's local AgentHistoryTab.
+ */
+const AssistantHistoryTab: React.FC = () => {
   const pathname = usePathname();
 
-  // Use GlobalChatContext for GLOBAL conversation management
-  // This component ALWAYS shows Global Assistant history
-  // Agent history is handled by GlobalAssistantView's local AgentHistoryTab
+  // Use GlobalChatContext for GLOBAL conversation management only
   const {
     loadConversation,
     createNewConversation: createNewGlobalConversation,
     currentConversationId: globalConversationId,
   } = useGlobalChat();
-
-  // Note: forceGlobal prop is kept for backwards compatibility but component always shows global
-  void forceGlobal;
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [filteredConversations, setFilteredConversations] = useState<Conversation[]>([]);

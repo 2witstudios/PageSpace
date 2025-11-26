@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AgentSelector } from '../AgentSelector';
+import type { AgentSummary } from '@/hooks/useAgents';
+import type { AgentInfo } from '@/stores/useAgentStore';
 
 // Mock the useAgents hook
 vi.mock('@/hooks/useAgents', () => ({
@@ -39,7 +41,7 @@ describe('AgentSelector', () => {
     },
   ];
 
-  const mockToAgentInfo = (agent: typeof mockAgentsByDrive[0]['agents'][0]) => ({
+  const mockToAgentInfo = (agent: AgentSummary): AgentInfo => ({
     id: agent.id,
     title: agent.title || 'Unnamed Agent',
     driveId: agent.driveId,

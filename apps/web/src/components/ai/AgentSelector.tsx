@@ -13,7 +13,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
 import { useAgents, AgentSummary } from '@/hooks/useAgents';
-import { AgentInfo } from '@/contexts/GlobalChatContext';
+import { AgentInfo } from '@/stores/useAgentStore';
 import { cn } from '@/lib/utils';
 
 interface AgentSelectorProps {

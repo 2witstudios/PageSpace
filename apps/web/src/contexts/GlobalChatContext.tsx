@@ -6,23 +6,16 @@ import { fetchWithAuth } from '@/lib/auth-fetch';
 import { conversationState } from '@/lib/ai/conversation-state';
 
 /**
- * Agent information for the selected agent
- * null = Global Assistant mode
+ * Global Chat Context - ONLY for Global Assistant state
+ *
+ * This context manages the Global Assistant chat that appears in the sidebar.
+ * It does NOT manage agent selection or agent conversations.
+ *
+ * Agent selection is managed by useAgentStore (Zustand store).
+ * Agent conversations are managed locally by GlobalAssistantView when in agent mode.
  */
-export interface AgentInfo {
-  id: string;
-  title: string;
-  driveId: string;
-  driveName: string;
-  systemPrompt?: string;
-  aiProvider?: string;
-  aiModel?: string;
-  enabledTools?: string[];
-}
-
 interface GlobalChatContextValue {
-  // Chat configuration for GLOBAL ASSISTANT mode only
-  // When agent is selected, GlobalAssistantView uses its own local config
+  // Chat configuration for Global Assistant
   chatConfig: {
     id: string | undefined;
     messages: UIMessage[];
@@ -30,40 +23,28 @@ interface GlobalChatContextValue {
     onError: (error: Error) => void;
   } | null;
 
-  // Global message state - for GLOBAL ASSISTANT mode
-  // Shared across sidebar and middle view when in global mode
+  // Global message state - shared between sidebar and middle view when in global mode
   messages: UIMessage[];
   setMessages: (messages: UIMessage[]) => void;
 
-  // Global streaming status - for GLOBAL ASSISTANT mode
+  // Global streaming status
   isStreaming: boolean;
   setIsStreaming: (streaming: boolean) => void;
 
-  // Global stop function - for GLOBAL ASSISTANT mode
+  // Global stop function
   stopStreaming: (() => void) | null;
   setStopStreaming: (fn: (() => void) | null) => void;
 
-  // Current conversation state - for GLOBAL ASSISTANT mode
+  // Current conversation state
   currentConversationId: string | null;
   initialMessages: UIMessage[];
   isInitialized: boolean;
 
-  // Methods to manage GLOBAL conversation state
+  // Methods to manage conversation state
   setCurrentConversationId: (id: string | null) => void;
   loadConversation: (id: string) => Promise<void>;
   createNewConversation: () => Promise<void>;
   refreshConversation: () => Promise<void>;
-
-  // Agent selection state (UI state shared across app)
-  // When selectedAgent is set, GlobalAssistantView uses LOCAL state for agent chat
-  // This context continues to manage GLOBAL ASSISTANT state for the sidebar
-  selectedAgent: AgentInfo | null;  // null = Global Assistant
-  setSelectedAgent: (agent: AgentInfo | null) => void;
-  chatMode: 'global' | 'agent';
-
-  // Agent selection method - just sets the agent, no conversation loading
-  // GlobalAssistantView handles agent conversation loading locally
-  selectAgent: (agent: AgentInfo | null) => void;
 }
 
 const GlobalChatContext = createContext<GlobalChatContextValue | undefined>(undefined);
@@ -75,41 +56,31 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   const [isInitialized, setIsInitialized] = useState<boolean>(false);
 
   // Global message state - THE single source of truth for messages
-  // Both views sync to and render from this state
   const [messages, setMessages] = useState<UIMessage[]>([]);
 
-  // Global streaming status - tracks if ANY view is streaming
+  // Global streaming status
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
 
-  // Global stop function - allows ANY view to stop the active stream
+  // Global stop function
   const [stopStreaming, setStopStreaming] = useState<(() => void) | null>(null);
-
-  // Agent selection state - null means Global Assistant
-  const [selectedAgent, setSelectedAgent] = useState<AgentInfo | null>(null);
-
-  // Derived chat mode
-  const chatMode: 'global' | 'agent' = selectedAgent ? 'agent' : 'global';
 
   /**
    * Load a conversation by ID
-   * This fetches messages and updates the chat config
    */
   const loadConversation = useCallback(async (conversationId: string) => {
     try {
       setIsInitialized(false);
 
-      // Fetch messages for this conversation
       const messagesResponse = await fetchWithAuth(
         `/api/ai_conversations/${conversationId}/messages?limit=50`
       );
 
       if (messagesResponse.ok) {
         const messageData = await messagesResponse.json();
-        // Handle both old format (array) and new format (object with messages and pagination)
         const loadedMessages = Array.isArray(messageData) ? messageData : messageData.messages || [];
 
         setInitialMessages(loadedMessages);
-        setMessages(loadedMessages); // Initialize global messages
+        setMessages(loadedMessages);
         setCurrentConversationId(conversationId);
         conversationState.setActiveConversationId(conversationId);
 
@@ -121,7 +92,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error('Error loading conversation:', error);
       setInitialMessages([]);
-      setMessages([]); // Clear global messages on error
+      setMessages([]);
       setIsInitialized(true);
     }
   }, []);
@@ -138,13 +109,16 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
       if (newConversation && newConversation.id) {
         setCurrentConversationId(newConversation.id);
         setInitialMessages([]);
-        setMessages([]); // Clear global messages for new conversation
+        setMessages([]);
         conversationState.setActiveConversationId(newConversation.id);
 
-        // Update URL to reflect new conversation
-        const url = new URL(window.location.href);
-        url.searchParams.set('c', newConversation.id);
-        window.history.pushState({}, '', url.toString());
+        // Update URL to reflect new conversation (only if no agent selected)
+        const urlParams = new URLSearchParams(window.location.search);
+        if (!urlParams.get('agent')) {
+          const url = new URL(window.location.href);
+          url.searchParams.set('c', newConversation.id);
+          window.history.pushState({}, '', url.toString());
+        }
 
         setIsInitialized(true);
       }
@@ -154,7 +128,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   }, []);
 
   /**
-   * Refresh the current conversation (re-fetch messages)
+   * Refresh the current conversation
    */
   const refreshConversation = useCallback(async () => {
     if (currentConversationId) {
@@ -163,101 +137,40 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   }, [currentConversationId, loadConversation]);
 
   /**
-   * Select an agent (or null for Global Assistant)
-   * This just sets the agent selection state.
-   * GlobalAssistantView handles agent conversation loading locally.
-   * When switching back to global, ensures global conversation is ready.
-   */
-  const selectAgent = useCallback((agent: AgentInfo | null) => {
-    // Stop any active global streaming before switching
-    if (stopStreaming) {
-      stopStreaming();
-      setStopStreaming(null);
-    }
-
-    setSelectedAgent(agent);
-
-    if (agent) {
-      // Switching to agent mode
-      // GlobalAssistantView will handle loading agent conversation locally
-      conversationState.setActiveAgentId(agent.id);
-    } else {
-      // Switching back to Global Assistant
-      conversationState.setActiveAgentId(null);
-
-      // Clear agent from URL
-      const url = new URL(window.location.href);
-      url.searchParams.delete('agent');
-      window.history.pushState({}, '', url.toString());
-
-      // Global conversation should already be initialized from mount
-      // If not, the useEffect will handle it
-    }
-  }, [stopStreaming]);
-
-  /**
-   * Initialize GLOBAL ASSISTANT chat on mount
-   * Only initializes Global Assistant state - agent mode is handled by GlobalAssistantView locally
-   * Also restores selectedAgent UI state if agent was previously selected
+   * Initialize Global Assistant chat on mount
+   * Agent initialization is handled separately by useAgentStore
    */
   useEffect(() => {
     const initializeGlobalChat = async () => {
       try {
         const urlParams = new URLSearchParams(window.location.search);
-        const urlAgentId = urlParams.get('agent');
         const urlConversationId = urlParams.get('c');
-        const cookieAgentId = conversationState.getActiveAgentId();
+        const urlAgentId = urlParams.get('agent');
         const cookieConversationId = conversationState.getActiveConversationId();
+        const cookieAgentId = conversationState.getActiveAgentId();
 
-        // Restore agent selection UI state if needed (but don't load agent conversation)
-        const agentId = urlAgentId || cookieAgentId;
-        if (agentId) {
-          // Fetch agent info to restore selectedAgent UI state
-          const agentsResponse = await fetchWithAuth('/api/agents/multi-drive?groupByDrive=true');
-          if (agentsResponse.ok) {
-            const agentsData = await agentsResponse.json();
-            const allAgents = agentsData.agentsByDrive?.flatMap((d: { agents: unknown[] }) => d.agents) || [];
-            const agent = allAgents.find((a: { id: string }) => a.id === agentId);
+        // Determine if an agent is selected (from URL or cookie)
+        const hasAgent = Boolean(urlAgentId || cookieAgentId);
 
-            if (agent) {
-              // Restore agent selection UI state
-              // GlobalAssistantView will handle loading agent conversation locally
-              setSelectedAgent({
-                id: agent.id,
-                title: agent.title || 'Unnamed Agent',
-                driveId: agent.driveId,
-                driveName: agent.driveName,
-                systemPrompt: agent.systemPrompt,
-                aiProvider: agent.aiProvider,
-                aiModel: agent.aiModel,
-                enabledTools: agent.enabledTools,
-              });
-            } else {
-              // Agent not found - clear stale agent cookie
-              conversationState.setActiveAgentId(null);
-            }
+        // If no agent selected, try to load from URL or cookie
+        if (!hasAgent && (urlConversationId || cookieConversationId)) {
+          const conversationId = urlConversationId || cookieConversationId;
+          if (conversationId) {
+            await loadConversation(conversationId);
+            return;
           }
         }
 
-        // Always initialize GLOBAL conversation state (for sidebar to use)
-        // When agent is selected, GlobalAssistantView manages agent chat separately
-        const globalConversationId = agentId ? cookieConversationId : (urlConversationId || cookieConversationId);
-
-        if (globalConversationId && !agentId) {
-          // Only load if not in agent mode - URL conversation is for agent
-          await loadConversation(globalConversationId);
-          return;
-        }
-
-        // Try to get the most recent global conversation
+        // Always try to get the most recent global conversation
+        // This ensures sidebar has a conversation to display
         const response = await fetchWithAuth('/api/ai_conversations/global');
         if (response.ok) {
           const conversation = await response.json();
           if (conversation && conversation.id) {
             await loadConversation(conversation.id);
 
-            // Update URL only if not in agent mode
-            if (!agentId) {
+            // Only update URL if no agent is selected
+            if (!hasAgent) {
               const url = new URL(window.location.href);
               url.searchParams.set('c', conversation.id);
               window.history.replaceState({}, '', url.toString());
@@ -278,18 +191,15 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Run once on mount
 
-  // Create stable chat config for GLOBAL ASSISTANT mode only
-  // This config is used by AssistantChatTab (sidebar) and GlobalAssistantView when no agent selected
-  // When agent is selected, GlobalAssistantView uses its own local config
+  // Create stable chat config
   const chatConfig = useMemo(() => {
     if (!currentConversationId) return null;
 
-    // Global Assistant API endpoint - always for global conversations
     const apiEndpoint = `/api/ai_conversations/${currentConversationId}/messages`;
 
     return {
       id: currentConversationId,
-      messages: initialMessages, // Stable - only updates on conversation load
+      messages: initialMessages,
       transport: new DefaultChatTransport({
         api: apiEndpoint,
         fetch: (url, options) => {
@@ -306,8 +216,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     };
   }, [currentConversationId, initialMessages]);
 
-  // Context value with memoization - prevents SWR revalidation loops and unnecessary re-renders
-  // Functions are already stable via useCallback
+  // Context value
   const contextValue: GlobalChatContextValue = useMemo(() => ({
     chatConfig,
     messages,
@@ -323,11 +232,6 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     loadConversation,
     createNewConversation,
     refreshConversation,
-    // Agent selection state (UI only - agent conversation loading is handled locally)
-    selectedAgent,
-    setSelectedAgent,
-    chatMode,
-    selectAgent,
   }), [
     chatConfig,
     messages,
@@ -339,9 +243,6 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     loadConversation,
     createNewConversation,
     refreshConversation,
-    selectedAgent,
-    chatMode,
-    selectAgent,
   ]);
 
   return (
@@ -353,7 +254,6 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
 
 /**
  * Hook to access the shared global chat context
- * Throws error if used outside of GlobalChatProvider
  */
 export function useGlobalChat() {
   const context = useContext(GlobalChatContext);

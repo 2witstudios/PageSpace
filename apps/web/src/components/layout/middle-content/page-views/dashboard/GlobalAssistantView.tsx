@@ -18,6 +18,7 @@ import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth, patch, del } from '@/lib/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
+import { useAgentStore } from '@/stores/useAgentStore';
 import { useMCPStore } from '@/stores/useMCPStore';
 import { useMCP } from '@/hooks/useMCP';
 import { toast } from 'sonner';
@@ -58,6 +59,63 @@ interface LocationContext {
   breadcrumbs?: string[];
 }
 
+/**
+ * MCP Toggle component - used in header and chat tab
+ */
+interface MCPToggleProps {
+  isDesktop: boolean;
+  mcpEnabled: boolean;
+  runningServers: number;
+  onToggle: (enabled: boolean) => void;
+}
+
+const MCPToggle: React.FC<MCPToggleProps> = ({ isDesktop, mcpEnabled, runningServers, onToggle }) => {
+  if (!isDesktop) return null;
+
+  return (
+    <div className="flex items-center gap-2 border border-[var(--separator)] rounded-lg px-3 py-1.5">
+      <Server className="h-4 w-4 text-muted-foreground" />
+      <span className="text-sm text-muted-foreground hidden md:inline">MCP</span>
+      {runningServers > 0 && mcpEnabled && (
+        <Badge variant="default" className="h-5 text-xs">
+          {runningServers}
+        </Badge>
+      )}
+      <Switch
+        checked={mcpEnabled}
+        onCheckedChange={onToggle}
+        disabled={runningServers === 0}
+        aria-label="Enable/disable MCP tools for this conversation"
+        className="scale-75 md:scale-100"
+      />
+    </div>
+  );
+};
+
+/**
+ * Get user-friendly error message based on error content
+ */
+const getAIErrorMessage = (errorMessage: string | undefined): string => {
+  if (!errorMessage) return 'Something went wrong. Please try again.';
+
+  if (errorMessage.includes('Unauthorized') || errorMessage.includes('401')) {
+    return 'Authentication failed. Please refresh the page and try again.';
+  }
+
+  if (
+    errorMessage.toLowerCase().includes('rate') ||
+    errorMessage.toLowerCase().includes('limit') ||
+    errorMessage.includes('429') ||
+    errorMessage.includes('402') ||
+    errorMessage.includes('Failed after') ||
+    errorMessage.includes('Provider returned error')
+  ) {
+    return 'Free tier rate limit hit. Please try again in a few seconds or subscribe for premium models and access.';
+  }
+
+  return 'Something went wrong. Please try again.';
+};
+
 const GlobalAssistantView: React.FC = () => {
   const pathname = usePathname();
   const { rightSidebarOpen, toggleRightSidebar } = useLayoutStore();
@@ -66,20 +124,18 @@ const GlobalAssistantView: React.FC = () => {
   // When an agent is selected, we use LOCAL state instead (like AiChatView)
   const {
     chatConfig: globalChatConfig,
-    messages: globalMessages,
     setMessages: setGlobalMessages,
-    isStreaming: globalIsStreaming,
     setIsStreaming: setGlobalIsStreaming,
-    stopStreaming: globalStopStreaming,
     setStopStreaming: setGlobalStopStreaming,
     currentConversationId: globalConversationId,
     isInitialized: globalIsInitialized,
     createNewConversation,
     refreshConversation,
-    // Agent selection state (shared across app)
-    selectedAgent,
-    selectAgent,
   } = useGlobalChat();
+
+  // Agent selection state from Zustand store (separate from GlobalChatContext)
+  // This ensures sidebar never sees agent state - just like AiChatView pattern
+  const { selectedAgent, selectAgent, initializeFromUrlOrCookie } = useAgentStore();
 
   // Local state for component-specific concerns
   const [providerSettings, setProviderSettings] = useState<ProviderSettings | null>(null);
@@ -113,6 +169,14 @@ const GlobalAssistantView: React.FC = () => {
 
   // Edit version for forcing re-renders after message edits (like AiChatView)
   const [editVersion, setEditVersion] = useState(0);
+
+  // ============================================
+  // AGENT STORE: Initialize from URL/cookie on mount
+  // This restores agent selection if user refreshes page
+  // ============================================
+  useEffect(() => {
+    initializeFromUrlOrCookie();
+  }, [initializeFromUrlOrCookie]);
 
   // ============================================
   // AGENT MODE: Load/create conversation when agent is selected
@@ -355,7 +419,6 @@ const GlobalAssistantView: React.FC = () => {
   const status = selectedAgent ? agentStatus : globalStatus;
   const error = selectedAgent ? agentError : globalError;
   const regenerate = selectedAgent ? agentRegenerate : globalRegenerate;
-  const setMessages = selectedAgent ? setAgentMessages : setGlobalLocalMessages;
   const stop = selectedAgent ? agentStop : globalStop;
 
   // Unified streaming state for UI
@@ -902,24 +965,12 @@ const GlobalAssistantView: React.FC = () => {
 
         <div className="flex items-center space-x-2">
           {/* MCP Toggle (Desktop only, enabled by default per-conversation) */}
-          {mcp.isDesktop && (
-            <div className="flex items-center gap-2 border border-[var(--separator)] rounded-lg px-3 py-1.5">
-              <Server className="h-4 w-4 text-muted-foreground" />
-              <span className="text-sm text-muted-foreground hidden md:inline">MCP</span>
-              {runningMCPServers > 0 && mcpEnabled && (
-                <Badge variant="default" className="h-5 text-xs">
-                  {runningMCPServers}
-                </Badge>
-              )}
-              <Switch
-                checked={mcpEnabled}
-                onCheckedChange={(checked) => setChatMCPEnabled(currentConversationId || 'global', checked)}
-                disabled={runningMCPServers === 0}
-                aria-label="Enable/disable MCP tools for this conversation"
-                className="scale-75 md:scale-100"
-              />
-            </div>
-          )}
+          <MCPToggle
+            isDesktop={mcp.isDesktop}
+            mcpEnabled={mcpEnabled}
+            runningServers={runningMCPServers}
+            onToggle={(checked) => setChatMCPEnabled(currentConversationId || 'global', checked)}
+          />
 
           <Button
             variant="ghost"
@@ -982,24 +1033,12 @@ const GlobalAssistantView: React.FC = () => {
                 />
 
                 {/* MCP Toggle (Desktop only) */}
-                {mcp.isDesktop && (
-                  <div className="flex items-center gap-2 border border-[var(--separator)] rounded-lg px-3 py-1.5">
-                    <Server className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm text-muted-foreground hidden md:inline">MCP</span>
-                    {runningMCPServers > 0 && mcpEnabled && (
-                      <Badge variant="default" className="h-5 text-xs">
-                        {runningMCPServers}
-                      </Badge>
-                    )}
-                    <Switch
-                      checked={mcpEnabled}
-                      onCheckedChange={(checked) => setChatMCPEnabled(currentConversationId || 'global', checked)}
-                      disabled={runningMCPServers === 0}
-                      aria-label="Enable/disable MCP tools"
-                      className="scale-75 md:scale-100"
-                    />
-                  </div>
-                )}
+                <MCPToggle
+                  isDesktop={mcp.isDesktop}
+                  mcpEnabled={mcpEnabled}
+                  runningServers={runningMCPServers}
+                  onToggle={(checked) => setChatMCPEnabled(currentConversationId || 'global', checked)}
+                />
               </div>
             )}
 
@@ -1096,9 +1135,7 @@ const GlobalAssistantView: React.FC = () => {
                 {error && showError && (
                   <div className="mb-3 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg flex items-center justify-between">
                     <p className="text-sm text-red-700 dark:text-red-300">
-                      {error.message?.includes('Unauthorized') || error.message?.includes('401')
-                        ? 'Authentication failed. Please refresh the page and try again.'
-                        : 'Something went wrong. Please try again.'}
+                      {getAIErrorMessage(error.message)}
                     </p>
                     <button
                       onClick={() => setShowError(false)}
@@ -1258,16 +1295,7 @@ const GlobalAssistantView: React.FC = () => {
               {error && showError && (
                 <div className="mb-3 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg flex items-center justify-between">
                   <p className="text-sm text-red-700 dark:text-red-300">
-                    {error.message?.includes('Unauthorized') || error.message?.includes('401')
-                      ? 'Authentication failed. Please refresh the page and try again.'
-                      : (error.message?.toLowerCase().includes('rate') ||
-                         error.message?.toLowerCase().includes('limit') ||
-                         error.message?.includes('429') ||
-                         error.message?.includes('402') ||
-                         error.message?.includes('Failed after') ||
-                         error.message?.includes('Provider returned error'))
-                      ? 'Free tier rate limit hit. Please try again in a few seconds or subscribe for premium models and access.'
-                      : 'Something went wrong. Please try again.'}
+                    {getAIErrorMessage(error.message)}
                   </p>
                   <button
                     onClick={() => setShowError(false)}
