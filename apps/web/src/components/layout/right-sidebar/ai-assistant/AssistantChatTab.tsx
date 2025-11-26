@@ -560,9 +560,13 @@ const AssistantChatTab: React.FC = () => {
           </Button>
         </div>
 
-        {currentConversationId && (
+        {(currentConversationId || selectedAgent) && (
           <div className="px-2 pb-2">
-            <AiUsageMonitor conversationId={currentConversationId} compact />
+            <AiUsageMonitor
+              conversationId={selectedAgent ? undefined : currentConversationId}
+              pageId={selectedAgent ? selectedAgent.id : undefined}
+              compact
+            />
           </div>
         )}
       </div>
