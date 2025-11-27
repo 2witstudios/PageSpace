@@ -651,7 +651,6 @@ const GlobalAssistantView: React.FC = () => {
               lastAssistantMessageId={lastAssistantMessageId}
               lastUserMessageId={lastUserMessageId}
               editVersion={editVersion}
-              useConversationRenderer={true}
             />
             <ChatInputArea
               ref={inputAreaRef}
@@ -726,7 +725,6 @@ const GlobalAssistantView: React.FC = () => {
             lastAssistantMessageId={lastAssistantMessageId}
             lastUserMessageId={lastUserMessageId}
             editVersion={editVersion}
-            useConversationRenderer={true}
           />
 
           <ChatInputArea

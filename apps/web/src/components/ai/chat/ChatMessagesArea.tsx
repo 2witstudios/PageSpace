@@ -34,7 +34,7 @@ interface ChatMessagesAreaProps {
   lastUserMessageId?: string;
   /** Edit version for forcing re-renders after edits */
   editVersion?: number;
-  /** Use ConversationMessageRenderer instead of MessageRenderer */
+  /** Use ConversationMessageRenderer (with todo list/socket support) instead of plain MessageRenderer. Defaults to true. */
   useConversationRenderer?: boolean;
   /** Whether user has read-only access */
   isReadOnly?: boolean;
@@ -62,7 +62,7 @@ export const ChatMessagesArea = forwardRef<ChatMessagesAreaRef, ChatMessagesArea
       lastAssistantMessageId,
       lastUserMessageId,
       editVersion = 0,
-      useConversationRenderer = false,
+      useConversationRenderer = true,
       isReadOnly = false,
     },
     ref

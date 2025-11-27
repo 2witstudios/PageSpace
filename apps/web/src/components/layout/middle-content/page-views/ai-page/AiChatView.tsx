@@ -395,7 +395,6 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             lastAssistantMessageId={lastAssistantMessageId}
             lastUserMessageId={lastUserMessageId}
             editVersion={editVersion}
-            useConversationRenderer={true}
             isReadOnly={isReadOnly}
           />
 
