@@ -11,18 +11,8 @@ import { Switch } from '@/components/ui/switch';
 import { ChevronLeft, Save } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { post, patch } from '@/lib/auth-fetch';
+import { ROLE_COLORS } from '@/lib/utils';
 import { PermissionsGrid } from '@/components/members/PermissionsGrid';
-
-const COLORS = [
-  { name: 'blue', class: 'bg-blue-500' },
-  { name: 'green', class: 'bg-green-500' },
-  { name: 'purple', class: 'bg-purple-500' },
-  { name: 'orange', class: 'bg-orange-500' },
-  { name: 'red', class: 'bg-red-500' },
-  { name: 'yellow', class: 'bg-yellow-500' },
-  { name: 'pink', class: 'bg-pink-500' },
-  { name: 'cyan', class: 'bg-cyan-500' },
-];
 
 interface Role {
   id: string;
@@ -75,10 +65,20 @@ export function RoleEditor({ driveId, role, onSave, onCancel }: RoleEditorProps)
   };
 
   const handleSave = async () => {
-    if (!name.trim()) {
+    const trimmedName = name.trim();
+    if (!trimmedName) {
       toast({
         title: 'Name required',
         description: 'Please enter a name for this role',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    if (trimmedName.length > 50) {
+      toast({
+        title: 'Name too long',
+        description: 'Role name must be 50 characters or less',
         variant: 'destructive',
       });
       return;
@@ -167,12 +167,13 @@ export function RoleEditor({ driveId, role, onSave, onCancel }: RoleEditorProps)
                 placeholder="e.g., Editor, Viewer, Contributor"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
+                maxLength={50}
               />
             </div>
             <div className="space-y-2">
               <Label>Color</Label>
               <div className="flex gap-2">
-                {COLORS.map((c) => (
+                {ROLE_COLORS.map((c) => (
                   <button
                     key={c.name}
                     onClick={() => setColor(c.name)}

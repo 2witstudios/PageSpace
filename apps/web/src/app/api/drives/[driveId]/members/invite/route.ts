@@ -121,11 +121,8 @@ export async function POST(
     // Validate that all pageIds belong to this drive
     const validPages = await db.select({ id: pages.id })
       .from(pages)
-      .where(and(
-        eq(pages.driveId, driveId),
-        // This would need inArray but we'll validate one by one for now
-      ));
-    
+      .where(eq(pages.driveId, driveId));
+
     const validPageIds = new Set(validPages.map(p => p.id));
 
     // Add permissions for each page

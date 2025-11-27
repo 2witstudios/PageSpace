@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Plus, Pencil, Trash2, GripVertical, Star } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { fetchWithAuth, del } from '@/lib/auth-fetch';
+import { getRoleColorClasses } from '@/lib/utils';
 import { RoleEditor } from './RoleEditor';
 import {
   AlertDialog,
@@ -93,20 +94,6 @@ export function RolesManager({ driveId }: RolesManagerProps) {
     fetchRoles();
   };
 
-  const getColorClasses = (color?: string) => {
-    const colorMap: Record<string, string> = {
-      blue: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300',
-      green: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300',
-      purple: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300',
-      orange: 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300',
-      red: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300',
-      yellow: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300',
-      pink: 'bg-pink-100 text-pink-800 dark:bg-pink-900/30 dark:text-pink-300',
-      cyan: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/30 dark:text-cyan-300',
-    };
-    return colorMap[color || ''] || 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300';
-  };
-
   const getPermissionSummary = (permissions: Role['permissions']) => {
     const { canView, canEdit, canShare } = permissions.defaultPermissions;
     const parts = [];
@@ -190,7 +177,7 @@ export function RolesManager({ driveId }: RolesManagerProps) {
 
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
-                      <Badge className={getColorClasses(role.color)}>
+                      <Badge className={getRoleColorClasses(role.color)}>
                         {role.name}
                       </Badge>
                       {role.isDefault && (

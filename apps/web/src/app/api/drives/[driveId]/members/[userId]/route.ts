@@ -230,8 +230,7 @@ export async function PATCH(
 
     const validPageIds = new Set(drivePages.map(p => p.id));
 
-    // Begin transaction-like operation
-    // First, delete all existing permissions for this user in this drive
+    // Delete all existing permissions for this user in this drive
     const existingPermissions = await db.select({ pageId: pagePermissions.pageId })
       .from(pagePermissions)
       .innerJoin(pages, eq(pagePermissions.pageId, pages.id))
@@ -240,22 +239,13 @@ export async function PATCH(
         eq(pages.driveId, driveId)
       ));
 
-    if (existingPermissions.length > 0) {
+    // Delete permissions for pages in this drive (can't join in delete, so delete by pageId)
+    for (const perm of existingPermissions) {
       await db.delete(pagePermissions)
         .where(and(
           eq(pagePermissions.userId, userId),
-          // Only delete permissions for pages in this drive
-          // We need to do this in batches since we can't join in delete
+          eq(pagePermissions.pageId, perm.pageId)
         ));
-      
-      // More precise deletion - only for pages in this drive
-      for (const perm of existingPermissions) {
-        await db.delete(pagePermissions)
-          .where(and(
-            eq(pagePermissions.userId, userId),
-            eq(pagePermissions.pageId, perm.pageId)
-          ));
-      }
     }
 
     // Insert new permissions

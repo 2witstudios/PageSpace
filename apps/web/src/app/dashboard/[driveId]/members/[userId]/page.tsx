@@ -13,6 +13,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { patch, fetchWithAuth } from '@/lib/auth-fetch';
+import { getRoleColorClasses } from '@/lib/utils';
 
 interface MemberDetails {
   id: string;
@@ -391,17 +392,7 @@ export default function MemberSettingsPage() {
                           <div className="flex items-center gap-2">
                             <Badge
                               variant="outline"
-                              className={`text-xs ${
-                                role.color === 'blue' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300' :
-                                role.color === 'green' ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300' :
-                                role.color === 'purple' ? 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300' :
-                                role.color === 'orange' ? 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300' :
-                                role.color === 'red' ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300' :
-                                role.color === 'yellow' ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300' :
-                                role.color === 'pink' ? 'bg-pink-100 text-pink-800 dark:bg-pink-900/30 dark:text-pink-300' :
-                                role.color === 'cyan' ? 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/30 dark:text-cyan-300' :
-                                ''
-                              }`}
+                              className={`text-xs ${getRoleColorClasses(role.color)}`}
                             >
                               {role.name}
                             </Badge>

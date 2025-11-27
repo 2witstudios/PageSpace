@@ -48,17 +48,18 @@ export async function PATCH(
       return NextResponse.json({ error: 'Invalid role IDs' }, { status: 400 });
     }
 
-    // Update positions for each role
-    await Promise.all(
-      roleIds.map((roleId, index) =>
-        db.update(driveRoles)
+    // Update positions for each role in a transaction to prevent race conditions
+    await db.transaction(async (tx) => {
+      for (let index = 0; index < roleIds.length; index++) {
+        const roleId = roleIds[index];
+        await tx.update(driveRoles)
           .set({ position: index, updatedAt: new Date() })
           .where(and(
             eq(driveRoles.id, roleId),
             eq(driveRoles.driveId, driveId)
-          ))
-      )
-    );
+          ));
+      }
+    });
 
     return NextResponse.json({ success: true });
   } catch (error) {

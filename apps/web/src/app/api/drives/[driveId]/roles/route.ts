@@ -106,6 +106,11 @@ export async function POST(
       return NextResponse.json({ error: 'Name and permissions are required' }, { status: 400 });
     }
 
+    const trimmedName = name.trim();
+    if (trimmedName.length === 0 || trimmedName.length > 50) {
+      return NextResponse.json({ error: 'Role name must be between 1 and 50 characters' }, { status: 400 });
+    }
+
     if (!validatePermissions(permissions)) {
       return NextResponse.json({ error: 'Invalid permissions structure' }, { status: 400 });
     }
@@ -128,7 +133,7 @@ export async function POST(
 
     const [newRole] = await db.insert(driveRoles).values({
       driveId,
-      name,
+      name: trimmedName,
       description,
       color,
       isDefault: isDefault || false,
