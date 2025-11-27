@@ -1080,14 +1080,6 @@ const GlobalAssistantView: React.FC = () => {
                   pageId={selectedAgent.id}
                   compact
                 />
-
-                {/* MCP Toggle (Desktop only) */}
-                <MCPToggle
-                  isDesktop={mcp.isDesktop}
-                  mcpEnabled={mcpEnabled}
-                  runningServers={runningMCPServers}
-                  onToggle={(checked) => setChatMCPEnabled(currentConversationId || 'global', checked)}
-                />
               </div>
             )}
 
