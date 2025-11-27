@@ -146,7 +146,7 @@ interface MessageRendererProps {
  * Renders a UIMessage with parts in chronological order
  * Groups consecutive text parts together while preserving tool call positions
  */
-export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
+export const MessageRenderer: React.FC<MessageRendererProps> = ({
   message,
   onEdit,
   onDelete,
@@ -353,6 +353,4 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
       )}
     </>
   );
-});
-
-MessageRenderer.displayName = 'MessageRenderer';
+};
