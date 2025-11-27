@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { UIMessage } from 'ai';
 import { ToolCallRenderer } from './ToolCallRenderer';
 import { GroupedToolCallsRenderer } from './GroupedToolCallsRenderer';
@@ -6,6 +6,19 @@ import { MemoizedMarkdown } from './MemoizedMarkdown';
 import { MessageActionButtons } from './MessageActionButtons';
 import { MessageEditor } from './MessageEditor';
 import { DeleteMessageDialog } from './DeleteMessageDialog';
+import { TodoListMessage } from './TodoListMessage';
+import { useSocket } from '@/hooks/useSocket';
+import { ErrorBoundary } from './ErrorBoundary';
+import { patch, fetchWithAuth } from '@/lib/auth-fetch';
+
+// Extended message interface that includes database fields
+interface ConversationMessage extends UIMessage {
+  messageType?: 'standard' | 'todo_list';
+  conversationId?: string;
+  isActive?: boolean;
+  editedAt?: Date;
+  createdAt?: Date;
+}
 
 interface TextPart {
   type: 'text';
@@ -134,23 +147,26 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({
 TextBlock.displayName = 'TextBlock';
 
 interface MessageRendererProps {
-  message: UIMessage;
+  message: ConversationMessage;
   onEdit?: (messageId: string, newContent: string) => Promise<void>;
   onDelete?: (messageId: string) => Promise<void>;
   onRetry?: (messageId: string) => void;
+  onTaskUpdate?: (taskId: string, newStatus: 'pending' | 'in_progress' | 'completed' | 'blocked') => void;
   isLastAssistantMessage?: boolean;
   isLastUserMessage?: boolean;
 }
 
 /**
- * Renders a UIMessage with parts in chronological order
- * Groups consecutive text parts together while preserving tool call positions
+ * Renders a UIMessage with parts in chronological order.
+ * Supports both standard messages and todo_list messages with real-time socket updates.
+ * Groups consecutive text parts together while preserving tool call positions.
  */
-export const MessageRenderer: React.FC<MessageRendererProps> = ({
+export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
   message,
   onEdit,
   onDelete,
   onRetry,
+  onTaskUpdate,
   isLastAssistantMessage = false,
   isLastUserMessage = false
 }) => {
@@ -158,6 +174,108 @@ export const MessageRenderer: React.FC<MessageRendererProps> = ({
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const canRetry = Boolean(onRetry) && (isLastAssistantMessage || isLastUserMessage);
+
+  // ============================================
+  // Todo List State & Socket (only for todo_list messages)
+  // ============================================
+  const [tasks, setTasks] = useState<Array<{
+    id: string;
+    title: string;
+    status: 'pending' | 'in_progress' | 'completed' | 'blocked';
+    priority: 'low' | 'medium' | 'high';
+    position: number;
+    updatedAt?: Date;
+  }>>([]);
+  const [taskList, setTaskList] = useState<{
+    id: string;
+    title: string;
+    description?: string;
+    status: string;
+    createdAt?: Date;
+    updatedAt?: Date;
+  } | null>(null);
+  const [isLoadingTasks, setIsLoadingTasks] = useState(false);
+
+  // Socket connection (singleton pattern) - only used for todo_list messages
+  const socket = useSocket();
+
+  const loadTasksForMessage = async (messageId: string) => {
+    setIsLoadingTasks(true);
+    try {
+      const response = await fetchWithAuth(`/api/ai/tasks/by-message/${messageId}`);
+      if (response.ok) {
+        const data = await response.json();
+        setTasks(data.tasks || []);
+        setTaskList(data.taskList);
+      } else {
+        console.error('Failed to load tasks for message:', messageId);
+      }
+    } catch (error) {
+      console.error('Error loading tasks:', error);
+    } finally {
+      setIsLoadingTasks(false);
+    }
+  };
+
+  // Load tasks for todo_list messages
+  useEffect(() => {
+    if (message.messageType === 'todo_list' && message.id) {
+      loadTasksForMessage(message.id);
+    }
+  }, [message.messageType, message.id]);
+
+  // Listen for real-time task updates
+  useEffect(() => {
+    if (!socket || message.messageType !== 'todo_list') return;
+
+    const handleTaskUpdate = (payload: {
+      taskId: string;
+      data: { newStatus: 'pending' | 'in_progress' | 'completed' | 'blocked' };
+    }) => {
+      const taskInOurMessage = tasks.find(task => task.id === payload.taskId);
+      if (taskInOurMessage) {
+        setTasks(prevTasks =>
+          prevTasks.map(task =>
+            task.id === payload.taskId
+              ? { ...task, status: payload.data.newStatus, updatedAt: new Date() }
+              : task
+          )
+        );
+      }
+    };
+
+    const handleTaskListUpdate = (payload: { taskListId: string }) => {
+      if (taskList && payload.taskListId === taskList.id) {
+        loadTasksForMessage(message.id);
+      }
+    };
+
+    socket.on('task:task_updated', handleTaskUpdate);
+    socket.on('task:task_list_created', handleTaskListUpdate);
+
+    return () => {
+      socket.off('task:task_updated', handleTaskUpdate);
+      socket.off('task:task_list_created', handleTaskListUpdate);
+    };
+  }, [socket, message.messageType, message.id, tasks, taskList]);
+
+  const handleTaskStatusUpdate = async (taskId: string, newStatus: 'pending' | 'in_progress' | 'completed' | 'blocked') => {
+    try {
+      await patch(`/api/ai/tasks/${taskId}/status`, { status: newStatus });
+      setTasks(prevTasks =>
+        prevTasks.map(task =>
+          task.id === taskId ? { ...task, status: newStatus, updatedAt: new Date() } : task
+        )
+      );
+      onTaskUpdate?.(taskId, newStatus);
+    } catch (error) {
+      console.error('Error updating task:', error);
+    }
+  };
+
+  // ============================================
+  // Standard Message Rendering
+  // ============================================
   const groupedParts = useMemo(() => {
     if (!message.parts || message.parts.length === 0) {
       return [];
@@ -247,10 +365,10 @@ export const MessageRenderer: React.FC<MessageRendererProps> = ({
     }
 
     return groups;
-  }, [message.parts]); // Remove message.id as it's not needed for memoization
+  }, [message.parts]);
 
-  const createdAt = (message as { createdAt?: Date }).createdAt;
-  const editedAt = (message as { editedAt?: Date }).editedAt;
+  const createdAt = message.createdAt;
+  const editedAt = message.editedAt;
 
   const handleSaveEdit = async (newContent: string) => {
     if (onEdit) {
@@ -279,6 +397,65 @@ export const MessageRenderer: React.FC<MessageRendererProps> = ({
     }
   };
 
+  // ============================================
+  // Render todo_list messages
+  // ============================================
+  if (message.messageType === 'todo_list') {
+    if (isLoadingTasks) {
+      return (
+        <div className="mb-4 mr-8">
+          <div className="bg-primary/5 dark:bg-primary/10 border border-primary/20 dark:border-primary/30 rounded-lg p-4">
+            <div className="animate-pulse">
+              <div className="h-4 bg-primary/20 dark:bg-primary/30 rounded w-1/3 mb-2"></div>
+              <div className="h-2 bg-primary/15 dark:bg-primary/25 rounded w-full mb-3"></div>
+              <div className="space-y-2">
+                <div className="h-8 bg-white dark:bg-gray-800 rounded"></div>
+                <div className="h-8 bg-white dark:bg-gray-800 rounded"></div>
+                <div className="h-8 bg-white dark:bg-gray-800 rounded"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (!taskList || tasks.length === 0) {
+      return (
+        <div className="mb-4 mr-8">
+          <div className="bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
+            <div className="text-yellow-800 dark:text-yellow-200">
+              No tasks found for this todo list.
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <ErrorBoundary
+        fallback={
+          <div className="mb-4">
+            <div className="bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
+              <div className="text-yellow-800 dark:text-yellow-200">
+                Failed to load TODO list. Please refresh the page.
+              </div>
+            </div>
+          </div>
+        }
+      >
+        <TodoListMessage
+          tasks={tasks}
+          taskList={taskList}
+          createdAt={message.createdAt}
+          onTaskUpdate={handleTaskStatusUpdate}
+        />
+      </ErrorBoundary>
+    );
+  }
+
+  // ============================================
+  // Render standard messages
+  // ============================================
   return (
     <>
       <div key={message.id} className="mb-4">
@@ -353,4 +530,6 @@ export const MessageRenderer: React.FC<MessageRendererProps> = ({
       )}
     </>
   );
-};
+});
+
+MessageRenderer.displayName = 'MessageRenderer';
