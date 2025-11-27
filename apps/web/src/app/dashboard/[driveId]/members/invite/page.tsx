@@ -1,17 +1,18 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Badge } from '@/components/ui/badge';
 import { PermissionsGrid } from '@/components/members/PermissionsGrid';
 import { UserSearch } from '@/components/members/UserSearch';
-import { ChevronLeft, UserPlus, User } from 'lucide-react';
+import { ChevronLeft, UserPlus, User, RefreshCw } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { post } from '@/lib/auth-fetch';
+import { post, fetchWithAuth } from '@/lib/auth-fetch';
 import { VerificationRequiredAlert } from '@/components/VerificationRequiredAlert';
 
 interface SelectedUser {
@@ -22,6 +23,18 @@ interface SelectedUser {
   avatarUrl?: string;
 }
 
+interface CustomRole {
+  id: string;
+  name: string;
+  description?: string;
+  color?: string;
+  isDefault: boolean;
+  permissions: {
+    defaultPermissions: { canView: boolean; canEdit: boolean; canShare: boolean };
+    pageOverrides?: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
+  };
+}
+
 export default function InviteMemberPage() {
   const params = useParams();
   const router = useRouter();
@@ -30,9 +43,73 @@ export default function InviteMemberPage() {
 
   const [selectedUser, setSelectedUser] = useState<SelectedUser | null>(null);
   const [selectedRole, setSelectedRole] = useState<'MEMBER' | 'ADMIN'>('MEMBER');
+  const [customRoles, setCustomRoles] = useState<CustomRole[]>([]);
+  const [selectedCustomRoleId, setSelectedCustomRoleId] = useState<string | null>(null);
   const [permissions, setPermissions] = useState<Map<string, { canView: boolean; canEdit: boolean; canShare: boolean }>>(new Map());
   const [saving, setSaving] = useState(false);
   const [showVerificationAlert, setShowVerificationAlert] = useState(false);
+
+  // Fetch custom roles
+  useEffect(() => {
+    const fetchRoles = async () => {
+      try {
+        const response = await fetchWithAuth(`/api/drives/${driveId}/roles`);
+        if (response.ok) {
+          const data = await response.json();
+          setCustomRoles(data.roles || []);
+          // Auto-select default role if exists
+          const defaultRole = data.roles?.find((r: CustomRole) => r.isDefault);
+          if (defaultRole) {
+            setSelectedCustomRoleId(defaultRole.id);
+            applyRolePermissions(defaultRole);
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching roles:', error);
+      }
+    };
+    fetchRoles();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [driveId]);
+
+  const applyRolePermissions = (role: CustomRole) => {
+    // Clear existing permissions and apply role's template
+    const newPermissions = new Map<string, { canView: boolean; canEdit: boolean; canShare: boolean }>();
+
+    // Apply page overrides if any
+    if (role.permissions.pageOverrides) {
+      Object.entries(role.permissions.pageOverrides).forEach(([pageId, perms]) => {
+        newPermissions.set(pageId, perms);
+      });
+    }
+
+    setPermissions(newPermissions);
+  };
+
+  const handleCustomRoleChange = (roleId: string) => {
+    if (roleId === 'none') {
+      setSelectedCustomRoleId(null);
+      return;
+    }
+    setSelectedCustomRoleId(roleId);
+    const role = customRoles.find(r => r.id === roleId);
+    if (role) {
+      applyRolePermissions(role);
+    }
+  };
+
+  const handleSyncToRole = () => {
+    if (selectedCustomRoleId) {
+      const role = customRoles.find(r => r.id === selectedCustomRoleId);
+      if (role) {
+        applyRolePermissions(role);
+        toast({
+          title: 'Permissions synced',
+          description: `Permissions reset to "${role.name}" template`,
+        });
+      }
+    }
+  };
 
   const handleUserSelect = (user: SelectedUser) => {
     setSelectedUser(user);
@@ -42,6 +119,7 @@ export default function InviteMemberPage() {
     setSelectedUser(null);
     setPermissions(new Map());
     setSelectedRole('MEMBER');
+    setSelectedCustomRoleId(null);
   };
 
   const handlePermissionChange = (pageId: string, perms: { canView: boolean; canEdit: boolean; canShare: boolean }) => {
@@ -79,6 +157,7 @@ export default function InviteMemberPage() {
       await post(`/api/drives/${driveId}/members/invite`, {
         userId: selectedUser.userId,
         role: selectedRole,
+        customRoleId: selectedCustomRoleId,
         permissions: permissionArray,
       });
 
@@ -217,10 +296,61 @@ export default function InviteMemberPage() {
             {/* Permissions Card */}
             <Card className="mb-6">
               <CardHeader>
-                <CardTitle>Page Permissions</CardTitle>
-                <CardDescription>
-                  Select which pages this member can access
-                </CardDescription>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>Page Permissions</CardTitle>
+                    <CardDescription>
+                      Select which pages this member can access
+                    </CardDescription>
+                  </div>
+                  {customRoles.length > 0 && (
+                    <div className="flex items-center gap-2">
+                      <Select
+                        value={selectedCustomRoleId || 'none'}
+                        onValueChange={handleCustomRoleChange}
+                      >
+                        <SelectTrigger className="w-[180px]">
+                          <SelectValue placeholder="Use a role template" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">No template</SelectItem>
+                          {customRoles.map((role) => (
+                            <SelectItem key={role.id} value={role.id}>
+                              <div className="flex items-center gap-2">
+                                <Badge
+                                  variant="outline"
+                                  className={`text-xs ${
+                                    role.color === 'blue' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300' :
+                                    role.color === 'green' ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300' :
+                                    role.color === 'purple' ? 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300' :
+                                    role.color === 'orange' ? 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300' :
+                                    role.color === 'red' ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300' :
+                                    role.color === 'yellow' ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300' :
+                                    role.color === 'pink' ? 'bg-pink-100 text-pink-800 dark:bg-pink-900/30 dark:text-pink-300' :
+                                    role.color === 'cyan' ? 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/30 dark:text-cyan-300' :
+                                    ''
+                                  }`}
+                                >
+                                  {role.name}
+                                </Badge>
+                              </div>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {selectedCustomRoleId && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleSyncToRole}
+                          title="Reset permissions to role template"
+                        >
+                          <RefreshCw className="w-4 h-4" />
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                </div>
               </CardHeader>
               <CardContent>
                 <PermissionsGrid

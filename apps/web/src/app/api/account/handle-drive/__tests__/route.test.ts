@@ -69,6 +69,7 @@ describe('POST /api/account/handle-drive', () => {
       userId: mockNewOwnerId,
       driveId: mockDriveId,
       role: 'ADMIN',
+      customRoleId: null,
     });
 
     // Setup default database operations
@@ -244,6 +245,7 @@ describe('POST /api/account/handle-drive', () => {
         userId: mockNewOwnerId,
         driveId: mockDriveId,
         role: 'MEMBER', // Not admin
+        customRoleId: null,
       });
 
       const request = new Request('https://example.com/api/account/handle-drive', {
@@ -268,6 +270,7 @@ describe('POST /api/account/handle-drive', () => {
         userId: mockNewOwnerId,
         driveId: 'different_drive', // Different drive
         role: 'ADMIN',
+        customRoleId: null,
       });
 
       const request = new Request('https://example.com/api/account/handle-drive', {

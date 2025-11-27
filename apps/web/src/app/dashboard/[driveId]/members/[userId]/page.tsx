@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { PermissionsGrid } from '@/components/members/PermissionsGrid';
-import { ChevronLeft, Save, X, Shield } from 'lucide-react';
+import { ChevronLeft, Save, X, Shield, RefreshCw } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Label } from '@/components/ui/label';
@@ -18,6 +18,7 @@ interface MemberDetails {
   id: string;
   userId: string;
   role: string;
+  customRoleId?: string | null;
   invitedAt: string;
   acceptedAt?: string;
   user: {
@@ -38,6 +39,18 @@ interface MemberDetails {
   };
 }
 
+interface CustomRole {
+  id: string;
+  name: string;
+  description?: string;
+  color?: string;
+  isDefault: boolean;
+  permissions: {
+    defaultPermissions: { canView: boolean; canEdit: boolean; canShare: boolean };
+    pageOverrides?: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
+  };
+}
+
 export default function MemberSettingsPage() {
   const params = useParams();
   const router = useRouter();
@@ -48,6 +61,9 @@ export default function MemberSettingsPage() {
   const [member, setMember] = useState<MemberDetails | null>(null);
   const [selectedRole, setSelectedRole] = useState<'MEMBER' | 'ADMIN'>('MEMBER');
   const [originalRole, setOriginalRole] = useState<'MEMBER' | 'ADMIN'>('MEMBER');
+  const [customRoles, setCustomRoles] = useState<CustomRole[]>([]);
+  const [selectedCustomRoleId, setSelectedCustomRoleId] = useState<string | null>(null);
+  const [originalCustomRoleId, setOriginalCustomRoleId] = useState<string | null>(null);
   const [permissions, setPermissions] = useState<Map<string, { canView: boolean; canEdit: boolean; canShare: boolean }>>(new Map());
   const [originalPermissions, setOriginalPermissions] = useState<Map<string, { canView: boolean; canEdit: boolean; canShare: boolean }>>(new Map());
   const [loading, setLoading] = useState(true);
@@ -56,12 +72,61 @@ export default function MemberSettingsPage() {
 
   useEffect(() => {
     fetchMemberDetails();
+    fetchRoles();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [driveId, userId]);
+
+  const fetchRoles = async () => {
+    try {
+      const response = await fetchWithAuth(`/api/drives/${driveId}/roles`);
+      if (response.ok) {
+        const data = await response.json();
+        setCustomRoles(data.roles || []);
+      }
+    } catch (error) {
+      console.error('Error fetching roles:', error);
+    }
+  };
+
+  const applyRolePermissions = (role: CustomRole) => {
+    const newPermissions = new Map<string, { canView: boolean; canEdit: boolean; canShare: boolean }>();
+    if (role.permissions.pageOverrides) {
+      Object.entries(role.permissions.pageOverrides).forEach(([pageId, perms]) => {
+        newPermissions.set(pageId, perms);
+      });
+    }
+    setPermissions(newPermissions);
+  };
+
+  const handleCustomRoleChange = (roleId: string) => {
+    if (roleId === 'none') {
+      setSelectedCustomRoleId(null);
+      return;
+    }
+    setSelectedCustomRoleId(roleId);
+    const role = customRoles.find(r => r.id === roleId);
+    if (role) {
+      applyRolePermissions(role);
+    }
+  };
+
+  const handleSyncToRole = () => {
+    if (selectedCustomRoleId) {
+      const role = customRoles.find(r => r.id === selectedCustomRoleId);
+      if (role) {
+        applyRolePermissions(role);
+        toast({
+          title: 'Permissions synced',
+          description: `Permissions reset to "${role.name}" template`,
+        });
+      }
+    }
+  };
 
   useEffect(() => {
     // Check if permissions or role have changed
     const roleChanged = selectedRole !== originalRole;
+    const customRoleChanged = selectedCustomRoleId !== originalCustomRoleId;
     const permsChanged = originalPermissions.size > 0 && Array.from(permissions.entries()).some(([pageId, perms]) => {
       const original = originalPermissions.get(pageId);
       if (!original) return true;
@@ -69,8 +134,8 @@ export default function MemberSettingsPage() {
              original.canEdit !== perms.canEdit ||
              original.canShare !== perms.canShare;
     });
-    setHasChanges(roleChanged || permsChanged);
-  }, [permissions, originalPermissions, selectedRole, originalRole]);
+    setHasChanges(roleChanged || customRoleChanged || permsChanged);
+  }, [permissions, originalPermissions, selectedRole, originalRole, selectedCustomRoleId, originalCustomRoleId]);
 
   const fetchMemberDetails = async () => {
     try {
@@ -94,6 +159,11 @@ export default function MemberSettingsPage() {
       const memberRole = (data.member.role || 'MEMBER') as 'MEMBER' | 'ADMIN';
       setSelectedRole(memberRole);
       setOriginalRole(memberRole);
+
+      // Initialize custom role state
+      const customRole = data.member.customRoleId || null;
+      setSelectedCustomRoleId(customRole);
+      setOriginalCustomRoleId(customRole);
 
       // Initialize permissions map
       if (data.permissions) {
@@ -138,6 +208,7 @@ export default function MemberSettingsPage() {
 
       await patch(`/api/drives/${driveId}/members/${userId}`, {
         role: selectedRole,
+        customRoleId: selectedCustomRoleId,
         permissions: permissionsArray
       });
 
@@ -148,6 +219,7 @@ export default function MemberSettingsPage() {
 
       setOriginalPermissions(new Map(permissions));
       setOriginalRole(selectedRole);
+      setOriginalCustomRoleId(selectedCustomRoleId);
       setHasChanges(false);
     } catch (error) {
       console.error('Error saving changes:', error);
@@ -164,6 +236,7 @@ export default function MemberSettingsPage() {
   const handleCancel = () => {
     setPermissions(new Map(originalPermissions));
     setSelectedRole(originalRole);
+    setSelectedCustomRoleId(originalCustomRoleId);
     setHasChanges(false);
   };
 
@@ -292,13 +365,64 @@ export default function MemberSettingsPage() {
         {/* Permissions Card */}
         <Card>
           <CardHeader>
-            <CardTitle>Page Permissions</CardTitle>
-            <CardDescription>
-              {member.userId === member.drive.ownerId 
-                ? 'Drive owner permissions'
-                : 'Control which pages this member can view, edit, or share'
-              }
-            </CardDescription>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle>Page Permissions</CardTitle>
+                <CardDescription>
+                  {member.userId === member.drive.ownerId
+                    ? 'Drive owner permissions'
+                    : 'Control which pages this member can view, edit, or share'
+                  }
+                </CardDescription>
+              </div>
+              {member.userId !== member.drive.ownerId && customRoles.length > 0 && (
+                <div className="flex items-center gap-2">
+                  <Select
+                    value={selectedCustomRoleId || 'none'}
+                    onValueChange={handleCustomRoleChange}
+                  >
+                    <SelectTrigger className="w-[180px]">
+                      <SelectValue placeholder="Use a role template" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">No template</SelectItem>
+                      {customRoles.map((role) => (
+                        <SelectItem key={role.id} value={role.id}>
+                          <div className="flex items-center gap-2">
+                            <Badge
+                              variant="outline"
+                              className={`text-xs ${
+                                role.color === 'blue' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300' :
+                                role.color === 'green' ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300' :
+                                role.color === 'purple' ? 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300' :
+                                role.color === 'orange' ? 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300' :
+                                role.color === 'red' ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300' :
+                                role.color === 'yellow' ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300' :
+                                role.color === 'pink' ? 'bg-pink-100 text-pink-800 dark:bg-pink-900/30 dark:text-pink-300' :
+                                role.color === 'cyan' ? 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/30 dark:text-cyan-300' :
+                                ''
+                              }`}
+                            >
+                              {role.name}
+                            </Badge>
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {selectedCustomRoleId && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleSyncToRole}
+                      title="Reset permissions to role template"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                    </Button>
+                  )}
+                </div>
+              )}
+            </div>
           </CardHeader>
           <CardContent>
             {member.userId === member.drive.ownerId ? (
