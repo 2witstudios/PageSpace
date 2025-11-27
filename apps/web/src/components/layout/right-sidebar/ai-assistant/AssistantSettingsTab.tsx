@@ -4,10 +4,11 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { CheckCircle, XCircle, Key, ExternalLink, Zap, Sparkles } from 'lucide-react';
+import { CheckCircle, XCircle, Key, ExternalLink, Zap, Sparkles, Bot, Wrench } from 'lucide-react';
 import { toast } from 'sonner';
 import { AI_PROVIDERS, getBackendProvider } from '@/lib/ai/ai-providers-config';
 import { patch, fetchWithAuth } from '@/lib/auth-fetch';
+import { SidebarAgentInfo } from '@/hooks/useSidebarAgentState';
 
 // Using centralized AI providers configuration from ai-providers-config.ts
 
@@ -34,13 +35,17 @@ interface SaveSettingsResult {
   success?: boolean;
 }
 
+interface AssistantSettingsTabProps {
+  selectedAgent: SidebarAgentInfo | null;
+}
+
 /**
- * Global Assistant settings tab for the right sidebar.
+ * Assistant settings tab for the right sidebar.
  *
- * This component ONLY shows Global Assistant settings.
- * Agent settings are handled by the agent page itself.
+ * Shows Global Assistant settings when no agent is selected.
+ * When an agent is selected, shows info message directing to agent page.
  */
-const AssistantSettingsTab: React.FC = () => {
+const AssistantSettingsTab: React.FC<AssistantSettingsTabProps> = ({ selectedAgent }) => {
   const router = useRouter();
   const [providerSettings, setProviderSettings] = useState<ProviderSettings | null>(null);
   const [selectedProvider, setSelectedProvider] = useState<string>('pagespace');
@@ -334,6 +339,90 @@ const AssistantSettingsTab: React.FC = () => {
   const handleManageApiKeys = () => {
     router.push('/settings/ai');
   };
+
+  // Agent mode: Show info message instead of global settings
+  if (selectedAgent) {
+    return (
+      <div className="flex flex-col h-full">
+        {/* Header */}
+        <div className="p-3 border-b">
+          <div className="flex items-center gap-2">
+            <Bot className="h-4 w-4 text-primary" />
+            <h3 className="text-sm font-medium truncate">{selectedAgent.title} Settings</h3>
+          </div>
+        </div>
+
+        {/* Agent Info Content */}
+        <div className="flex-grow overflow-y-auto">
+          <div className="p-4 space-y-4">
+            <Card>
+              <CardContent className="pt-6">
+                <div className="text-center space-y-4">
+                  <div className="h-12 w-12 mx-auto rounded-full bg-primary/10 flex items-center justify-center">
+                    <Bot className="h-6 w-6 text-primary" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium">{selectedAgent.title}</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Agent settings are configured in the agent page.
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Agent Configuration Info */}
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm">Configuration</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">Provider</span>
+                  <Badge variant="secondary">
+                    {selectedAgent.aiProvider || 'Default'}
+                  </Badge>
+                </div>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">Model</span>
+                  <Badge variant="secondary">
+                    {selectedAgent.aiModel || 'Default'}
+                  </Badge>
+                </div>
+                {selectedAgent.enabledTools && selectedAgent.enabledTools.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                      <Wrench className="h-3 w-3" />
+                      <span>Enabled Tools ({selectedAgent.enabledTools.length})</span>
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      {selectedAgent.enabledTools.slice(0, 5).map((tool) => (
+                        <Badge key={tool} variant="outline" className="text-xs">
+                          {tool}
+                        </Badge>
+                      ))}
+                      {selectedAgent.enabledTools.length > 5 && (
+                        <Badge variant="outline" className="text-xs">
+                          +{selectedAgent.enabledTools.length - 5} more
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="border-t p-3">
+          <div className="text-xs text-muted-foreground text-center">
+            From {selectedAgent.driveName}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (

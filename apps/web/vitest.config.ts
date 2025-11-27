@@ -1,10 +1,11 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import path from 'path'
-import tsconfigPaths from 'vite-tsconfig-paths'
+// Note: vite-tsconfig-paths removed due to ESM compatibility issue
+// Using manual path alias instead
 
 export default defineConfig({
-  plugins: [react(), tsconfigPaths()],
+  plugins: [react()],
   test: {
     globals: true,
     environment: 'jsdom',
