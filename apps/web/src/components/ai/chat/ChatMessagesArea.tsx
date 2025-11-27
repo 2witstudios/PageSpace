@@ -8,7 +8,6 @@ import { UIMessage } from 'ai';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Loader2 } from 'lucide-react';
 import { MessageRenderer } from '@/components/ai/MessageRenderer';
-import { ConversationMessageRenderer } from '@/components/ai/ConversationMessageRenderer';
 import { StreamingIndicator } from './StreamingIndicator';
 
 interface ChatMessagesAreaProps {
@@ -34,8 +33,6 @@ interface ChatMessagesAreaProps {
   lastUserMessageId?: string;
   /** Edit version for forcing re-renders after edits */
   editVersion?: number;
-  /** Use ConversationMessageRenderer (with todo list/socket support) instead of plain MessageRenderer. Defaults to true. */
-  useConversationRenderer?: boolean;
   /** Whether user has read-only access */
   isReadOnly?: boolean;
 }
@@ -62,7 +59,6 @@ export const ChatMessagesArea = forwardRef<ChatMessagesAreaRef, ChatMessagesArea
       lastAssistantMessageId,
       lastUserMessageId,
       editVersion = 0,
-      useConversationRenderer = true,
       isReadOnly = false,
     },
     ref
@@ -116,11 +112,6 @@ export const ChatMessagesArea = forwardRef<ChatMessagesAreaRef, ChatMessagesArea
       </div>
     );
 
-    // Message renderer component based on mode
-    const MessageComponent = useConversationRenderer
-      ? ConversationMessageRenderer
-      : MessageRenderer;
-
     return (
       <div className="flex-1 min-h-0 overflow-hidden px-4">
         <ScrollArea className="h-full" ref={scrollAreaRef}>
@@ -132,7 +123,7 @@ export const ChatMessagesArea = forwardRef<ChatMessagesAreaRef, ChatMessagesArea
                 <EmptyState />
               ) : (
                 messages.map((message) => (
-                  <MessageComponent
+                  <MessageRenderer
                     key={`${message.id}-${editVersion}`}
                     message={message}
                     onEdit={!isReadOnly ? onEdit : undefined}
