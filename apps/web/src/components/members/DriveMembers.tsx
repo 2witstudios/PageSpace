@@ -1,9 +1,9 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { UserPlus } from 'lucide-react';
-import { InviteMemberModal } from './InviteMemberModal';
 import { MemberRow } from './MemberRow';
 import { useToast } from '@/hooks/use-toast';
 import { del, fetchWithAuth } from '@/lib/auth-fetch';
@@ -39,7 +39,7 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
   const [members, setMembers] = useState<DriveMember[]>([]);
   const [currentUserRole, setCurrentUserRole] = useState<'OWNER' | 'ADMIN' | 'MEMBER'>('MEMBER');
   const [loading, setLoading] = useState(true);
-  const [inviteModalOpen, setInviteModalOpen] = useState(false);
+  const router = useRouter();
   const { toast } = useToast();
 
   const fetchMembers = async () => {
@@ -65,15 +65,6 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
     fetchMembers();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [driveId]);
-
-  const handleInviteComplete = () => {
-    setInviteModalOpen(false);
-    fetchMembers(); // Refresh the member list
-    toast({
-      title: 'Success',
-      description: 'Member invited successfully',
-    });
-  };
 
   const handleRemoveMember = async (memberId: string) => {
     if (!confirm('Are you sure you want to remove this member?')) return;
@@ -116,7 +107,7 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
           </p>
         </div>
         {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
-          <Button onClick={() => setInviteModalOpen(true)}>
+          <Button onClick={() => router.push(`/dashboard/${driveId}/members/invite`)}>
             <UserPlus className="w-4 h-4 mr-2" />
             Invite Member
           </Button>
@@ -142,15 +133,6 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
         )}
       </div>
 
-      {/* Invite Modal */}
-      {inviteModalOpen && (
-        <InviteMemberModal
-          driveId={driveId}
-          isOpen={inviteModalOpen}
-          onClose={() => setInviteModalOpen(false)}
-          onComplete={handleInviteComplete}
-        />
-      )}
     </div>
   );
 }
