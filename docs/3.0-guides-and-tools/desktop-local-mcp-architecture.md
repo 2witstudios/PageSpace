@@ -2460,8 +2460,8 @@ apps/desktop/
 │   │   ├── mcp-manager.ts              # MCP server lifecycle manager
 │   │   ├── command-resolver.ts         # Command path resolution for packaged apps
 │   │   ├── ws-client.ts                # WebSocket client for MCP bridge
-│   │   ├── mcp-bridge.ts               # (Optional) Additional bridge logic
 │   │   ├── mcp-tool-converter.ts       # Tool format conversion utilities
+│   │   ├── logger.ts                   # Desktop app logging
 │   │   └── __tests__/
 │   │       ├── mcp-tool-converter.test.ts
 │   │       ├── mcp-tool-name-validation.test.ts

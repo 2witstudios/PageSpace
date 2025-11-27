@@ -283,7 +283,8 @@ apps/desktop/
 │   ├── main/
 │   │   ├── index.ts              # Main entry, MCP IPC handlers
 │   │   ├── mcp-manager.ts        # Process lifecycle management ✅
-│   │   └── mcp-bridge.ts         # MCP protocol communication (stub)
+│   │   ├── mcp-tool-converter.ts # Converts MCP tools to AI SDK format
+│   │   └── ws-client.ts          # WebSocket bridge to VPS server
 │   └── preload/
 │       └── index.ts              # IPC exposure to renderer ✅
 

@@ -3,114 +3,124 @@
 **Generated:** 2025-11-27
 **Tool:** [Knip](https://knip.dev) v5.70.2
 **Scope:** Full monorepo analysis
+**Status:** ✅ **CLEANUP COMPLETED** (2025-11-27)
 
 ## Executive Summary
 
-The Knip audit identified **35 unused files**, **30 unused dependencies**, **65 unused exports**, and **13 unused types** across the PageSpace monorepo. Addressing these issues will reduce bundle sizes, improve maintainability, and lower technical debt.
+The Knip audit identified **35 unused files**, **30 unused dependencies**, **65 unused exports**, and **13 unused types** across the PageSpace monorepo.
+
+### Cleanup Results
+
+| Category | Found | Removed | Remaining |
+|----------|-------|---------|-----------|
+| Unused Files | 35 | 30+ | ~5 (false positives) |
+| Unused Dependencies | 30 | 15 | ~15 (false positives) |
+| Duplicate Exports | 4 | 4 | 0 |
+| Lines of Code | - | ~4,600 | - |
+
+**Commits:**
+- `c29cbcc` - feat: add Knip for dead code detection
+- `2a6ce84` - chore: remove dead code identified by Knip audit
 
 ---
 
 ## 1. Unused Files (35 files)
 
-These files exist in the codebase but are not imported anywhere:
+These files were identified as unused. Items marked ✅ have been deleted.
 
 ### Desktop App (`apps/desktop`)
-| File | Recommendation |
-|------|---------------|
-| `src/main/mcp-bridge.ts` | Delete - appears to be unused bridge code |
+| File | Status |
+|------|--------|
+| `src/main/mcp-bridge.ts` | ✅ Deleted - unused stub code |
 
 ### Processor Service (`apps/processor`)
-| File | Recommendation |
-|------|---------------|
-| `src/middleware/validation.ts` | Delete - validation middleware not in use |
+| File | Status |
+|------|--------|
+| `src/middleware/validation.ts` | ✅ Deleted |
 
 ### Realtime Service (`apps/realtime`)
-| File | Recommendation |
-|------|---------------|
-| `src/test/socket-helpers.ts` | Keep if tests need it, otherwise delete |
+| File | Status |
+|------|--------|
+| `src/test/socket-helpers.ts` | ✅ Deleted |
 
 ### Web App (`apps/web`)
-| File | Recommendation |
-|------|---------------|
-| `test-glm-web-search.ts` | Delete - appears to be a test/debug file |
-| `src/scripts/migrate-permissions.ts` | Delete if migration completed |
-| `src/lib/auth-utils.ts` | Consolidate with `@pagespace/lib/auth-utils` |
-| `src/lib/cache-utils.ts` | Delete if functionality moved elsewhere |
-| `src/lib/debug-utils.ts` | Delete or keep for debugging |
-| `src/lib/server-auth.ts` | Delete - duplicate of lib package auth |
-| `src/stores/useAssistantStore.ts` | Delete - replaced by other stores |
-| `src/test/ai-helpers.ts` | Keep for tests or delete |
-| `src/test/api-helpers.ts` | Keep for tests or delete |
-| `src/components/ai/MCPTokenManager.tsx` | Delete if MCP moved to settings |
-| `src/components/dialogs/ConfirmDialog.tsx` | Delete - use AlertDialog instead |
-| `src/components/mentions/SuggestionList.tsx` | Delete if mentions redesigned |
-| `src/components/sandbox/SafePreview.tsx` | Delete if not used |
-| `src/components/sandbox/Sandbox.tsx` | Delete if not used |
-| `src/components/shared/ThemeToggle.tsx` | Delete if using next-themes |
-| `src/components/storage/StorageIndicator.tsx` | Delete if storage moved elsewhere |
-| `src/lib/admin/subscription-management.ts` | Delete if moved to server |
-| `src/lib/ai/conversation-state-server.ts` | Delete if conversation logic refactored |
-| `src/lib/canvas/css-sanitizer-fixed.ts` | Delete if using DOMPurify |
-| `src/components/layout/right-sidebar/DashboardSettingsNavigation.tsx` | Delete if navigation redesigned |
-| `src/components/layout/right-sidebar/MemoizedRightPanel.tsx` | Delete if not used |
-| `src/components/layout/middle-content/content-header/DriveHeader.tsx` | Delete if drive header redesigned |
-| `src/components/layout/middle-content/page-views/dashboard/UserDashboardView.tsx` | Delete if dashboard redesigned |
-| `src/components/layout/middle-content/page-views/drive/DriveView.tsx` | Delete if drive view redesigned |
-| `src/components/layout/middle-content/page-views/drive/DriveViewHeader.tsx` | Delete if drive header redesigned |
-| `src/components/layout/middle-content/page-views/drive/GridView.tsx` | Delete if grid view redesigned |
-| `src/components/layout/middle-content/page-views/drive/ListView.tsx` | Delete if list view redesigned |
-| `src/components/layout/middle-content/page-views/drive/types.ts` | Delete with other drive view files |
+| File | Status |
+|------|--------|
+| `test-glm-web-search.ts` | ✅ Deleted |
+| `src/scripts/migrate-permissions.ts` | ✅ Deleted |
+| `src/lib/auth-utils.ts` | ✅ Deleted |
+| `src/lib/cache-utils.ts` | ✅ Deleted |
+| `src/lib/debug-utils.ts` | ✅ Deleted |
+| `src/lib/server-auth.ts` | ✅ Deleted |
+| `src/stores/useAssistantStore.ts` | ✅ Deleted |
+| `src/test/ai-helpers.ts` | ✅ Deleted |
+| `src/test/api-helpers.ts` | ✅ Deleted |
+| `src/components/ai/MCPTokenManager.tsx` | ✅ Deleted |
+| `src/components/dialogs/ConfirmDialog.tsx` | ✅ Deleted |
+| `src/components/mentions/SuggestionList.tsx` | ✅ Deleted |
+| `src/components/sandbox/*` | ✅ Deleted (entire directory) |
+| `src/components/shared/ThemeToggle.tsx` | ✅ Deleted |
+| `src/components/storage/StorageIndicator.tsx` | ✅ Deleted |
+| `src/lib/admin/subscription-management.ts` | ✅ Deleted |
+| `src/lib/ai/conversation-state-server.ts` | ✅ Deleted |
+| `src/lib/canvas/css-sanitizer-fixed.ts` | ✅ Deleted |
+| `src/components/layout/right-sidebar/DashboardSettingsNavigation.tsx` | ✅ Deleted |
+| `src/components/layout/right-sidebar/MemoizedRightPanel.tsx` | ✅ Deleted |
+| `src/components/layout/middle-content/content-header/DriveHeader.tsx` | ✅ Deleted |
+| `src/components/layout/middle-content/page-views/dashboard/UserDashboardView.tsx` | ✅ Deleted |
+| `src/components/layout/middle-content/page-views/drive/*` | ✅ Deleted (entire directory) |
 
 ### Packages (`packages/*`)
-| File | Recommendation |
-|------|---------------|
-| `packages/lib/src/server.ts` | Delete - exports moved to index.ts |
-| `packages/lib/src/email-templates/NotificationEmail.tsx` | Keep if notifications planned |
-| `packages/db/src/migrate-permissions.ts` | Delete if migration completed |
-| `packages/db/src/server.ts` | Delete - db access via index.ts |
+| File | Status |
+|------|--------|
+| `packages/lib/src/server.ts` | ⚠️ Kept - used via package exports |
+| `packages/lib/src/email-templates/NotificationEmail.tsx` | ⚠️ Kept - planned feature |
+| `packages/db/src/migrate-permissions.ts` | ✅ Deleted |
+| `packages/db/src/server.ts` | ⚠️ Kept - used via package exports |
 
 ---
 
 ## 2. Unused Dependencies (20 packages)
 
+Items marked ✅ have been removed.
+
 ### Desktop App (`apps/desktop`)
-| Package | Action |
+| Package | Status |
 |---------|--------|
-| `ai` | Remove - not used in desktop app |
+| `ai` | ✅ Removed |
 
 ### Processor Service (`apps/processor`)
-| Package | Action |
+| Package | Status |
 |---------|--------|
-| `jsonwebtoken` | Remove - using jose instead |
-| `@types/jsonwebtoken` | Remove with jsonwebtoken |
+| `jsonwebtoken` | ✅ Removed |
+| `@types/jsonwebtoken` | ✅ Removed |
 
 ### Realtime Service (`apps/realtime`)
-| Package | Action |
+| Package | Status |
 |---------|--------|
-| `drizzle-orm` | Keep - may be used indirectly via @pagespace/db |
-| `ioredis` | Remove if not using Redis |
+| `drizzle-orm` | ✅ Removed - uses @pagespace/db instead |
+| `ioredis` | ✅ Removed |
 
 ### Web App (`apps/web`)
-| Package | Action |
+| Package | Status |
 |---------|--------|
-| `@ai-sdk/provider` | Remove - interface types only |
-| `@floating-ui/dom` | Remove - using Radix popovers |
-| `@radix-ui/react-navigation-menu` | Remove if not used |
-| `@radix-ui/react-slider` | Remove if not used |
-| `@tiptap/extension-link` | Remove if link extension not used |
-| `@tiptap/extension-list` | Remove if using built-in lists |
-| `@tiptap/suggestion` | Remove if not using suggestions |
-| `framer-motion` | Remove - using motion instead |
-| `fuse.js` | Remove if search redesigned |
-| `next-ws` | Keep - used for WebSocket patching |
-| `react-dom` | Keep - required by React |
-| `slate`, `slate-history`, `slate-react` | Remove - migrated to Tiptap |
+| `@floating-ui/dom` | ✅ Removed |
+| `@tiptap/extension-link` | ✅ Removed |
+| `@tiptap/extension-list` | ✅ Removed |
+| `@tiptap/suggestion` | ✅ Removed |
+| `framer-motion` | ✅ Removed |
+| `fuse.js` | ✅ Removed |
+| `slate`, `slate-history`, `slate-react` | ✅ Removed |
+| `@radix-ui/react-navigation-menu` | ⚠️ Kept - used by UI components |
+| `@radix-ui/react-slider` | ⚠️ Kept - used by UI components |
+| `next-ws` | ⚠️ Kept - used for WebSocket patching |
+| `react-dom` | ⚠️ Kept - required by React |
 
 ### Packages (`packages/lib`)
-| Package | Action |
+| Package | Status |
 |---------|--------|
-| `pg-boss` | Remove if job queue moved elsewhere |
-| `react-email` | Keep if emails are used |
+| `pg-boss` | ⚠️ Kept - used in processor |
+| `react-email` | ⚠️ Kept - used for emails |
 
 ---
 
@@ -197,18 +207,16 @@ High-impact unused exports that should be reviewed:
 
 ---
 
-## 6. Duplicate Exports (4 files)
+## 6. Duplicate Exports (4 files) - ✅ FIXED
 
-These files export both named and default exports for the same value:
+All duplicate exports have been resolved by removing default exports:
 
-| File | Named Export | Default Export |
-|------|--------------|----------------|
-| `AgentSelector.tsx` | `AgentSelector` | `default` |
-| `content-header/index.tsx` | `ViewHeader` | `default` |
-| `ai-monitoring.ts` | `AIMonitoring` | `default` |
-| `logger.ts` | `logger` | `default` |
-
-**Recommendation:** Pick one export style (prefer named exports) and update imports.
+| File | Status |
+|------|--------|
+| `AgentSelector.tsx` | ✅ Fixed - removed default export |
+| `content-header/index.tsx` | ✅ Fixed - removed default export |
+| `ai-monitoring.ts` | ✅ Fixed - removed default export |
+| `logger.ts` | ✅ Fixed - removed default export |
 
 ---
 
