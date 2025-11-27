@@ -121,9 +121,11 @@ export default function MemberSettingsPage() {
   };
 
   const handlePermissionChange = (pageId: string, perms: { canView: boolean; canEdit: boolean; canShare: boolean }) => {
-    const newPermissions = new Map(permissions);
-    newPermissions.set(pageId, perms);
-    setPermissions(newPermissions);
+    setPermissions(prevPermissions => {
+      const newPermissions = new Map(prevPermissions);
+      newPermissions.set(pageId, perms);
+      return newPermissions;
+    });
   };
 
   const handleSave = async () => {

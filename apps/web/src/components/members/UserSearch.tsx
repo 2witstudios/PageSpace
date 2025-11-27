@@ -76,7 +76,7 @@ export function UserSearch({ onSelect }: UserSearchProps) {
 
       {/* Help Text */}
       {query.length === 0 && (
-        <p className="text-sm text-gray-600">
+        <p className="text-sm text-muted-foreground">
           Enter a username, display name, or email address to find users
         </p>
       )}
@@ -84,7 +84,7 @@ export function UserSearch({ onSelect }: UserSearchProps) {
       {/* Loading State */}
       {loading && (
         <div className="flex justify-center py-4">
-          <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-gray-900" />
+          <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-foreground" />
         </div>
       )}
 
@@ -95,7 +95,7 @@ export function UserSearch({ onSelect }: UserSearchProps) {
             <button
               key={user.userId}
               onClick={() => onSelect(user)}
-              className="w-full p-3 rounded-lg border hover:bg-gray-50 transition-colors flex items-center space-x-3 text-left"
+              className="w-full p-3 rounded-lg border border-border hover:bg-muted transition-colors flex items-center space-x-3 text-left"
             >
               <Avatar>
                 <AvatarImage src={user.avatarUrl} alt={user.displayName} />
@@ -107,12 +107,12 @@ export function UserSearch({ onSelect }: UserSearchProps) {
                 <div className="flex items-center space-x-2">
                   <p className="font-medium">{user.displayName}</p>
                   {user.username && (
-                    <span className="text-sm text-gray-500">@{user.username}</span>
+                    <span className="text-sm text-muted-foreground">@{user.username}</span>
                   )}
                 </div>
-                <p className="text-sm text-gray-600">{user.email}</p>
+                <p className="text-sm text-muted-foreground">{user.email}</p>
                 {user.bio && (
-                  <p className="text-xs text-gray-500 mt-1 line-clamp-1">{user.bio}</p>
+                  <p className="text-xs text-muted-foreground mt-1 line-clamp-1">{user.bio}</p>
                 )}
               </div>
             </button>
@@ -122,7 +122,7 @@ export function UserSearch({ onSelect }: UserSearchProps) {
 
       {/* No Results */}
       {!loading && query.length >= 2 && results.length === 0 && (
-        <div className="text-center py-8 text-gray-500">
+        <div className="text-center py-8 text-muted-foreground">
           <User className="w-12 h-12 mx-auto mb-2 opacity-50" />
           <p>No users found</p>
           <p className="text-sm mt-1">Try searching by email address</p>

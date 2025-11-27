@@ -122,10 +122,10 @@ export function InviteMemberModal({ driveId, isOpen, onClose, onComplete }: Invi
           ) : (
             <div className="h-full flex flex-col">
               {/* Selected User Info */}
-              <div className="mb-4 p-3 bg-gray-50 rounded-lg flex items-center justify-between">
+              <div className="mb-4 p-3 bg-muted rounded-lg flex items-center justify-between">
                 <div>
                   <p className="font-medium">{selectedUser?.displayName}</p>
-                  <p className="text-sm text-gray-600">{selectedUser?.email}</p>
+                  <p className="text-sm text-muted-foreground">{selectedUser?.email}</p>
                 </div>
                 <Button
                   variant="ghost"
@@ -149,7 +149,7 @@ export function InviteMemberModal({ driveId, isOpen, onClose, onComplete }: Invi
                     <SelectItem value="ADMIN">Admin - Full access to all pages</SelectItem>
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-gray-500 mt-1">
+                <p className="text-xs text-muted-foreground mt-1">
                   {selectedRole === 'ADMIN'
                     ? 'Admins have the same permissions as drive owners and can manage members.'
                     : 'Members only have access to pages explicitly shared with them below.'}
