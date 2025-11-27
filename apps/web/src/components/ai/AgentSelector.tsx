@@ -155,5 +155,3 @@ export function AgentSelector({
     </DropdownMenu>
   );
 }
-
-export default AgentSelector;

@@ -736,5 +736,3 @@ export const AIMonitoring = {
   pricing: AI_PRICING,
   contextWindows: MODEL_CONTEXT_WINDOWS,
 };
-
-export default AIMonitoring;

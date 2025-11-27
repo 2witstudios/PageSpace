@@ -428,6 +428,3 @@ export const logger = Logger.getInstance();
 
 // Export for type usage
 export type { Logger };
-
-// Convenience exports
-export default logger;

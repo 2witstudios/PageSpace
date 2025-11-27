@@ -19,7 +19,6 @@
     "package:linux": "pnpm build && electron-builder --linux --publish never"
   },
   "dependencies": {
-    "ai": "^5.0.81",
     "electron-store": "^10.0.0",
     "electron-updater": "^6.6.2",
     "jose": "^6.0.11",

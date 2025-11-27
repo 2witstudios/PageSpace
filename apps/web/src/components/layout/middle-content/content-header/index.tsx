@@ -128,5 +128,3 @@ export function ViewHeader({ children }: ContentHeaderProps = {}) {
     </div>
   );
 }
-
-export default ViewHeader;

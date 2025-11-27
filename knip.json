@@ -14,7 +14,8 @@
         "src/app/**/route.ts",
         "next.config.ts",
         "postcss.config.mjs",
-        "vitest.config.ts"
+        "vitest.config.ts",
+        "src/test/setup.ts"
       ],
       "project": ["src/**/*.{ts,tsx}", "*.{ts,js,mjs}"],
       "next": {
@@ -25,12 +26,15 @@
         ]
       },
       "ignore": [
-        "src/components/ui/**"
+        "src/components/ui/**",
+        "src/**/__tests__/**"
       ],
       "ignoreDependencies": [
         "eslint-config-next",
         "monaco-editor",
-        "prettier"
+        "prettier",
+        "@pagespace/db",
+        "@pagespace/lib"
       ]
     },
     "apps/realtime": {
@@ -49,6 +53,7 @@
         "electron.vite.config.ts"
       ],
       "project": ["src/**/*.ts"],
+      "ignore": ["src/**/__tests__/**"],
       "ignoreDependencies": [
         "electron",
         "electron-builder",
@@ -60,6 +65,7 @@
         "src/index.ts",
         "src/migrate.ts",
         "src/promote-admin.ts",
+        "src/server.ts",
         "src/test/factories.ts",
         "vitest.config.ts"
       ],
@@ -69,6 +75,7 @@
     "packages/lib": {
       "entry": [
         "src/index.ts",
+        "src/server.ts",
         "src/client.ts",
         "src/client-safe.ts",
         "src/logger.ts",
