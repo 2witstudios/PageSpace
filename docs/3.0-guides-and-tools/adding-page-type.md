@@ -1,44 +1,72 @@
 # How to Add a New Page Type
 
-This guide explains how to add a new page type to the application using the centralized page type configuration system.
+This comprehensive guide explains how to add a new page type to PageSpace using the centralized page type configuration system. Follow each step carefully to ensure your new page type integrates correctly with all subsystems.
+
+## Table of Contents
+
+1. [Prerequisites](#1-prerequisites)
+2. [Overview of the Page Type System](#2-overview-of-the-page-type-system)
+3. [Step-by-Step Implementation](#3-step-by-step-implementation)
+4. [Capability-Specific Integrations](#4-capability-specific-integrations)
+5. [Testing Requirements](#5-testing-requirements)
+6. [Complete Implementation Checklist](#6-complete-implementation-checklist)
+7. [Helper Functions Reference](#7-helper-functions-reference)
+8. [Common Pitfalls](#8-common-pitfalls)
+9. [Example: Complete KANBAN Implementation](#9-example-complete-kanban-implementation)
+
+---
 
 ## 1. Prerequisites
 
-Before adding a new page type, you should be familiar with the following concepts:
+Before adding a new page type, familiarize yourself with:
 
--   **Component Architecture:** Understand how components are organized in the `/components` directory. See the [Component Organization Philosophy](../2.0-architecture/2.1-frontend/components.md) for more details.
--   **Layout System:** Understand the five-section layout and where to place new components. See the [Layout Architecture](../2.0-architecture/2.1-frontend/layout.md) for more details.
--   **Centralized Configuration:** The page type system uses a centralized configuration pattern for consistency and maintainability.
+- **Component Architecture:** See [Component Organization Philosophy](../2.0-architecture/2.1-frontend/components.md)
+- **Layout System:** See [Layout Architecture](../2.0-architecture/2.1-frontend/layout.md)
+- **Coding Standards:** See [Development Standards](./coding-standards.md)
+- **Database Patterns:** See [Database Architecture](../2.0-architecture/2.2-backend/database.md)
 
-## 2. Overview of Page Types
+### Key Principles
 
-Page types are centrally managed through:
+- Use the **centralized configuration** pattern for consistency
+- Follow the **"page" prop pattern** for view components (except DocumentView which uses `pageId`)
+- Leverage **helper functions** instead of hardcoded type checks
+- Add proper **TypeScript types** throughout
 
-- **Enum Definition:** `PageType` enum in [`packages/lib/src/enums.ts`](packages/lib/src/enums.ts)
-- **Configuration:** `PAGE_TYPE_CONFIGS` in [`packages/lib/src/page-types.config.ts`](packages/lib/src/page-types.config.ts)
-- **Validation:** `page-type-validators.ts` for creation and update validation
-- **Icon Component:** `PageTypeIcon` in [`apps/web/src/components/common/PageTypeIcon.tsx`](apps/web/src/components/common/PageTypeIcon.tsx)
+---
 
-The system automatically handles component selection, icon mapping, default content, and validation based on the centralized configuration.
+## 2. Overview of the Page Type System
+
+### Core Files
+
+| File | Purpose |
+|------|---------|
+| `packages/lib/src/enums.ts` | PageType enum definition |
+| `packages/db/src/schema/core.ts` | PostgreSQL enum (line 5) |
+| `packages/lib/src/page-types.config.ts` | Centralized configuration |
+| `packages/lib/src/page-type-validators.ts` | Validation logic |
+| `apps/web/src/components/common/PageTypeIcon.tsx` | Icon component |
 
 ### Existing Page Types
 
--   `FOLDER`: Displays content as a folder with child pages
--   `DOCUMENT`: Renders a rich text editor for documents
--   `CHANNEL`: For chat-like communication channels
--   `AI_CHAT`: A view for interacting with an AI chat
--   `CANVAS`: A canvas-based drawing/whiteboard interface
--   `FILE`: Uploaded files with metadata
+| Type | Description | Can Have Children | Supports AI | Supports Realtime |
+|------|-------------|-------------------|-------------|-------------------|
+| `FOLDER` | Hierarchical container | Yes | No | No |
+| `DOCUMENT` | Rich text editor | No | No | Yes |
+| `CHANNEL` | Team chat | No | No | Yes |
+| `AI_CHAT` | AI conversation | No | Yes | Yes |
+| `CANVAS` | Custom HTML/CSS | No | No | No |
+| `FILE` | Uploaded files | No | No | No |
+| `SHEET` | Spreadsheet | No | Yes | Yes |
 
-## 3. Steps to Add a New Page Type
+---
 
-### Step 1: Update the `PageType` Enum
+## 3. Step-by-Step Implementation
 
-Add your new page type to the `PageType` enum in [`packages/lib/src/enums.ts`](packages/lib/src/enums.ts).
+### Step 1: Update the PageType Enum
+
+**File:** `packages/lib/src/enums.ts`
 
 ```typescript
-// packages/lib/src/enums.ts
-
 export enum PageType {
   FOLDER = 'FOLDER',
   DOCUMENT = 'DOCUMENT',
@@ -46,95 +74,109 @@ export enum PageType {
   AI_CHAT = 'AI_CHAT',
   CANVAS = 'CANVAS',
   FILE = 'FILE',
-  KANBAN = 'KANBAN', // Add your new type here
+  SHEET = 'SHEET',
+  KANBAN = 'KANBAN', // Add your new type
 }
 ```
 
 ### Step 2: Update the Database Schema
 
-Add the new `PageType` to the `pageType` enum in [`packages/db/src/schema/core.ts`](packages/db/src/schema/core.ts).
+**File:** `packages/db/src/schema/core.ts` (line 5)
 
 ```typescript
-// packages/db/src/schema/core.ts
-
 export const pageType = pgEnum('PageType', [
-    'FOLDER',
-    'DOCUMENT', 
-    'CHANNEL',
-    'AI_CHAT',
-    'CANVAS',
-    'FILE',
-    'KANBAN', // Add your new type here
+  'FOLDER',
+  'DOCUMENT',
+  'CHANNEL',
+  'AI_CHAT',
+  'CANVAS',
+  'FILE',
+  'SHEET',
+  'KANBAN', // Add your new type
 ]);
 ```
 
-After updating the schema, generate and apply a new migration:
+**Generate and apply migration:**
 
 ```bash
 pnpm db:generate
 pnpm db:migrate
 ```
 
-### Step 3: Add Configuration Entry
+> **Important:** After generating the migration, review the SQL file in `packages/db/drizzle/` to ensure it correctly adds the enum value.
 
-Add your new page type configuration to [`packages/lib/src/page-types.config.ts`](packages/lib/src/page-types.config.ts):
+### Step 3: Add Page Type Configuration
+
+**File:** `packages/lib/src/page-types.config.ts`
+
+Add a complete configuration entry:
 
 ```typescript
-// packages/lib/src/page-types.config.ts
-
-export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
-  // ... existing configs ...
-  
-  [PageType.KANBAN]: {
-    type: PageType.KANBAN,
-    displayName: 'Kanban Board',
-    description: 'Visual task management board',
-    iconName: 'Layout', // Choose from available Lucide icons
-    emoji: '📋',
-    capabilities: {
-      canHaveChildren: false,
-      canAcceptUploads: false,
-      canBeConverted: false,
-      supportsRealtime: true,
-      supportsVersioning: true,
-      supportsAI: false,
-    },
-    defaultContent: () => JSON.stringify({ 
-      columns: [], 
-      cards: [] 
-    }),
-    allowedChildTypes: [],
-    apiValidation: {
-      optionalFields: ['columns', 'cards'],
-      customValidation: (data) => {
-        // Add custom validation logic if needed
-        return { valid: true };
-      }
-    },
-    uiComponent: 'KanbanView', // Must match your component name
-    layoutViewType: 'document', // or 'folder', 'channel', 'ai', 'canvas'
+[PageType.KANBAN]: {
+  type: PageType.KANBAN,
+  displayName: 'Kanban Board',
+  description: 'Visual task management board',
+  iconName: 'Layout', // Must be in PageTypeIcon iconMap
+  emoji: '📋',
+  capabilities: {
+    canHaveChildren: false,      // Can contain child pages?
+    canAcceptUploads: false,     // Can files be dropped on it?
+    canBeConverted: false,       // Can convert to other types?
+    supportsRealtime: true,      // Real-time collaboration?
+    supportsVersioning: true,    // Version history?
+    supportsAI: false,           // AI features enabled?
   },
-};
+  defaultContent: () => JSON.stringify({
+    columns: [],
+    cards: []
+  }),
+  allowedChildTypes: [],  // Which types can be children
+  apiValidation: {
+    optionalFields: ['columns', 'cards'],
+    customValidation: (data) => {
+      if (data.columns && !Array.isArray(data.columns)) {
+        return { valid: false, error: 'columns must be an array' };
+      }
+      return { valid: true };
+    }
+  },
+  uiComponent: 'KanbanView',     // Must match component name exactly
+  layoutViewType: 'document',    // Layout style: 'document' | 'folder' | 'channel' | 'ai' | 'canvas'
+},
 ```
 
-### Step 4: Add Icon Mapping (if using new icon)
+### Step 4: Add Type-Specific Helper Function (Optional but Recommended)
 
-If you're using a new Lucide icon not already in the icon map, update [`apps/web/src/components/common/PageTypeIcon.tsx`](apps/web/src/components/common/PageTypeIcon.tsx):
+**File:** `packages/lib/src/page-types.config.ts`
+
+Add a helper function for type checking:
 
 ```typescript
-// apps/web/src/components/common/PageTypeIcon.tsx
+export function isKanbanPage(type: PageType): boolean {
+  return type === PageType.KANBAN;
+}
+```
 
-import { 
-  FileText, 
-  Folder, 
-  MessageSquare, 
-  Sparkles, 
-  Palette, 
+> **Remember:** Export this function from `packages/lib/src/index.ts` and `packages/lib/src/client-safe.ts` if needed client-side.
+
+### Step 5: Update Icon Mapping
+
+**File:** `apps/web/src/components/common/PageTypeIcon.tsx`
+
+If using a new Lucide icon:
+
+```typescript
+import {
+  FileText,
+  Folder,
+  MessageSquare,
+  Sparkles,
+  Palette,
   FileIcon,
-  Layout // Add your new icon import
+  Table,
+  Layout, // Add your new icon
 } from 'lucide-react';
 
-// Map icon names to actual icon components
 const iconMap = {
   Folder,
   FileText,
@@ -142,33 +184,123 @@ const iconMap = {
   Sparkles,
   Palette,
   FileIcon,
-  Layout, // Add to the map
+  Table,
+  Layout, // Add to map
 } as const;
 ```
 
-### Step 5: Create the View Component
+### Step 6: Update Search Components (Critical - Often Missed!)
 
-Create a new React component that will render the view for your new page type. Place it in [`apps/web/src/components/layout/middle-content/page-views/`](apps/web/src/components/layout/middle-content/page-views/):
+Two search components have hardcoded icon switches that **must** be updated:
+
+**File:** `apps/web/src/components/search/GlobalSearch.tsx` (lines 33-50)
+
+```typescript
+const getPageIcon = (pageType?: string) => {
+  switch (pageType) {
+    case 'DOCUMENT':
+      return <FileText className="h-4 w-4" />;
+    case 'FOLDER':
+      return <FolderOpen className="h-4 w-4" />;
+    case 'CHANNEL':
+      return <Hash className="h-4 w-4" />;
+    case 'AI_CHAT':
+      return <MessageSquare className="h-4 w-4" />;
+    case 'CANVAS':
+      return <Sparkles className="h-4 w-4" />;
+    case 'SHEET':
+      return <Table className="h-4 w-4" />;
+    case 'KANBAN': // Add your new type
+      return <Layout className="h-4 w-4" />;
+    default:
+      return <FileText className="h-4 w-4" />;
+  }
+};
+```
+
+**File:** `apps/web/src/components/search/InlineSearch.tsx` (lines 23-40)
+
+Apply the same change to the `getPageIcon` function.
+
+### Step 7: Create the View Component
+
+**Location:** `apps/web/src/components/layout/middle-content/page-views/kanban/KanbanView.tsx`
+
+Follow the standard component pattern:
 
 ```tsx
-// apps/web/src/components/layout/middle-content/page-views/kanban/KanbanView.tsx
+"use client";
 
-import { Page } from "@pagespace/lib/client";
+import React, { useEffect, useCallback } from 'react';
+import { toast } from 'sonner';
+import { patch } from '@/lib/auth-fetch';
+import { TreePage } from '@/hooks/usePageTree';
+import { useDocumentStore } from '@/stores/useDocumentStore';
+import { useEditingStore } from '@/stores/useEditingStore';
 
 interface KanbanViewProps {
-  page: Page;
+  page: TreePage;  // Standard pattern - use TreePage from usePageTree
+}
+
+interface KanbanData {
+  columns: Array<{ id: string; title: string }>;
+  cards: Array<{ id: string; columnId: string; title: string }>;
 }
 
 const KanbanView = ({ page }: KanbanViewProps) => {
-  // Parse the content
-  const content = page.content ? JSON.parse(page.content) : { columns: [], cards: [] };
-  
+  const { setDocument, setSaveCallback } = useDocumentStore();
+
+  // Parse content safely
+  const parseContent = (content: string | undefined): KanbanData => {
+    try {
+      return content ? JSON.parse(content) : { columns: [], cards: [] };
+    } catch {
+      return { columns: [], cards: [] };
+    }
+  };
+
+  const saveContent = useCallback(async (pageId: string, newValue: string) => {
+    try {
+      await patch(`/api/pages/${pageId}`, { content: newValue });
+      toast.success('Kanban board saved!');
+    } catch (error) {
+      toast.error('Failed to save kanban board.');
+    }
+  }, []);
+
+  // Initialize document store
+  useEffect(() => {
+    const initialContent = typeof page.content === 'string' ? page.content : '';
+    setDocument(page.id, initialContent);
+    setSaveCallback(saveContent);
+  }, [page.id, page.content, setDocument, setSaveCallback, saveContent]);
+
+  // Register editing state for UI refresh protection (see docs/3.0-guides-and-tools/ui-refresh-protection.md)
+  useEffect(() => {
+    return () => {
+      useEditingStore.getState().endEditing(page.id);
+    };
+  }, [page.id]);
+
+  const data = parseContent(page.content);
+
   return (
     <div className="h-full p-4">
-      <h1 className="text-2xl font-bold mb-4">{page.title}</h1>
-      {/* Your Kanban board implementation here */}
-      <div className="grid grid-cols-3 gap-4">
-        {/* Render columns and cards */}
+      <div className="flex gap-4 overflow-x-auto h-full">
+        {data.columns.map(column => (
+          <div key={column.id} className="flex-shrink-0 w-72 bg-muted rounded-lg p-3">
+            <h3 className="font-semibold mb-2">{column.title}</h3>
+            <div className="space-y-2">
+              {data.cards
+                .filter(card => card.columnId === column.id)
+                .map(card => (
+                  <div key={card.id} className="bg-background p-3 rounded shadow-sm">
+                    {card.title}
+                  </div>
+                ))}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -177,18 +309,13 @@ const KanbanView = ({ page }: KanbanViewProps) => {
 export default KanbanView;
 ```
 
-### Step 6: Update Component Map
+### Step 8: Update Component Maps (Two Files!)
 
-Add your new component to the component map in both:
-- [`apps/web/src/components/layout/middle-content/index.tsx`](apps/web/src/components/layout/middle-content/index.tsx)
-- [`apps/web/src/components/layout/middle-content/CenterPanel.tsx`](apps/web/src/components/layout/middle-content/CenterPanel.tsx)
+**File:** `apps/web/src/components/layout/middle-content/CenterPanel.tsx` (lines 63-70)
 
-```tsx
-// apps/web/src/components/layout/middle-content/index.tsx
-
+```typescript
 import KanbanView from './page-views/kanban/KanbanView';
 
-// In the PageContent component:
 const componentMap = {
   FolderView,
   AiChatView,
@@ -196,36 +323,40 @@ const componentMap = {
   DocumentView,
   CanvasPageView,
   FileViewer,
-  KanbanView, // Add your new component
+  SheetView,
+  KanbanView, // Add your component
 };
 ```
 
-### Step 7: Add to Create Page Dialog
+**File:** `apps/web/src/components/layout/middle-content/index.tsx` (lines 41-49)
 
-Add your new page type to the dropdown in [`apps/web/src/components/layout/left-sidebar/CreatePageDialog.tsx`](apps/web/src/components/layout/left-sidebar/CreatePageDialog.tsx):
+Apply the same change. **Both files must stay in sync!**
+
+### Step 9: Add to Create Page Dialog
+
+**File:** `apps/web/src/components/layout/left-sidebar/CreatePageDialog.tsx` (lines 179-188)
 
 ```tsx
-// In the SelectContent component:
 <SelectContent>
   <SelectItem value="DOCUMENT">Document</SelectItem>
   <SelectItem value="FOLDER">Folder</SelectItem>
   <SelectItem value="CHANNEL">Channel</SelectItem>
   <SelectItem value="AI_CHAT">AI Chat</SelectItem>
   <SelectItem value="CANVAS">Canvas</SelectItem>
-  <SelectItem value="KANBAN">Kanban Board</SelectItem> {/* Add your new type */}
+  <SelectItem value="SHEET">Sheet</SelectItem>
+  <SelectItem value="KANBAN">Kanban Board</SelectItem> {/* Add your type */}
+  <SelectItem value="FILE">File Upload</SelectItem>
 </SelectContent>
 ```
 
-The initial content will be automatically handled by the `getDefaultContent()` function from your configuration.
+### Step 10: Add Validation Logic
 
-### Step 8: Add Validation (Optional)
+**File:** `packages/lib/src/page-type-validators.ts`
 
-If your page type requires special validation, update [`packages/lib/src/page-type-validators.ts`](packages/lib/src/page-type-validators.ts):
+Add a case in `validatePageCreation` (around line 77):
 
 ```typescript
-// In validatePageCreation function's switch statement:
 case PageType.KANBAN:
-  // Validate Kanban-specific fields
   if (data.columns && !Array.isArray(data.columns)) {
     errors.push('columns must be an array');
   }
@@ -235,115 +366,392 @@ case PageType.KANBAN:
   break;
 ```
 
-## 4. Benefits of the Centralized System
-
-The centralized page type configuration provides:
-
-- **Single Source of Truth:** All page type metadata in one place
-- **Automatic Icon Mapping:** No need to manually handle icons in multiple places
-- **Consistent Default Content:** Centralized default content generation
-- **Type Safety:** TypeScript ensures all page types are properly configured
-- **Reduced Duplication:** No need to update switch statements in multiple files
-- **Easy Extension:** Adding a new page type requires minimal changes
-
-## 5. Testing Your New Page Type
-
-After implementing your new page type:
-
-1. **Build the application** to ensure TypeScript compilation succeeds:
-   ```bash
-   pnpm build
-   ```
-
-2. **Run linting** to catch any issues:
-   ```bash
-   pnpm lint
-   ```
-
-3. **Create a new page** using the Create Page Dialog to ensure the new type appears
-
-4. **Test rendering** by creating a page of your new type and verifying it displays correctly
-
-5. **Test icon display** in the page tree and other locations
-
-6. **Test content persistence** by adding content and verifying it saves and loads correctly
-
-7. **Test validation** by attempting to create pages with invalid data
-
-## 6. Helper Functions Available
-
-The centralized system provides several helper functions you can use:
+Add a case in `validatePageUpdate` (around line 190):
 
 ```typescript
-import { 
-  getPageTypeConfig,      // Get full config for a type
-  getPageTypeIconName,    // Get icon name for a type
-  getPageTypeEmoji,       // Get emoji for a type
-  canPageTypeHaveChildren, // Check if type can have children
-  getDefaultContent,      // Get default content for a type
-  getPageTypeComponent,   // Get component name for a type
-  getLayoutViewType,      // Get layout view type
-  isDocumentPage,         // Check if type is DOCUMENT
-  isFilePage,            // Check if type is FILE
-  isFolderPage,          // Check if type is FOLDER
-  isCanvasPage,          // Check if type is CANVAS
-  isChannelPage,         // Check if type is CHANNEL
-  isAIChatPage,          // Check if type is AI_CHAT
-  supportsAI             // Check if type supports AI
-} from '@pagespace/lib';
+case PageType.KANBAN:
+  if (typeof data.content === 'string') {
+    try {
+      const parsed = JSON.parse(data.content);
+      if (parsed.columns && !Array.isArray(parsed.columns)) {
+        errors.push('columns must be an array');
+      }
+    } catch {
+      errors.push('Content must be valid JSON for kanban pages');
+    }
+  }
+  break;
 ```
 
-## 7. Common Pitfalls to Avoid
+### Step 11: Update AI Content Parser (Critical for AI Features!)
 
-- **Forgetting database migration:** Always generate and apply migrations after updating the schema
-- **Mismatched component names:** Ensure `uiComponent` in config matches your actual component name
-- **Missing icon mapping:** If using a new icon, add it to the iconMap in PageTypeIcon.tsx
-- **Invalid default content:** Ensure defaultContent returns valid JSON-serializable data
-- **Circular dependencies:** Be careful when importing from @pagespace/lib in packages/lib itself
+**File:** `packages/lib/src/page-content-parser.ts`
 
-## 8. Example: Complete Implementation
+Add a case in `getPageContentForAI` switch statement (around line 140):
 
-Here's a complete example of adding a "TIMELINE" page type:
+```typescript
+case PageType.KANBAN: {
+  try {
+    const kanbanData = page.content ? JSON.parse(page.content) : { columns: [], cards: [] };
+    contentString += "Kanban Board Structure:\n";
+    contentString += `Columns: ${kanbanData.columns?.length || 0}\n`;
+    contentString += `Cards: ${kanbanData.cards?.length || 0}\n\n`;
 
-1. **Update enum** (`packages/lib/src/enums.ts`):
+    if (kanbanData.columns && kanbanData.columns.length > 0) {
+      kanbanData.columns.forEach((col: any) => {
+        contentString += `Column: ${col.title}\n`;
+        const columnCards = kanbanData.cards?.filter((c: any) => c.columnId === col.id) || [];
+        columnCards.forEach((card: any) => {
+          contentString += `  - ${card.title}\n`;
+        });
+      });
+    } else {
+      contentString += "No columns defined.\n";
+    }
+  } catch (error) {
+    contentString += `Failed to parse kanban content: ${error instanceof Error ? error.message : String(error)}\n`;
+  }
+  break;
+}
+```
+
+> **Why this matters:** Without this case, AI tools like `read_page` won't be able to understand your page's content when providing context to the AI.
+
+### Step 12: Update API Route Type Union
+
+**File:** `apps/web/src/app/api/pages/route.ts` (lines 109-111, 123-125)
+
+The API route has a hardcoded type union that TypeScript won't catch automatically:
+
+```typescript
+interface APIPageInsertData {
+  title: string;
+  type: 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'SHEET' | 'KANBAN'; // Add here
+  // ...
+}
+
+// Also update line ~125:
+type: type as 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'SHEET' | 'KANBAN',
+```
+
+---
+
+## 4. Capability-Specific Integrations
+
+### If `supportsRealtime: true`
+
+Your component should listen for real-time updates via Socket.IO:
+
+```typescript
+import { useSocket } from '@/hooks/useSocket';
+import { PageEventPayload } from '@/lib/socket-utils';
+
+// In your component:
+const socket = useSocket();
+
+useEffect(() => {
+  if (!socket) return;
+
+  const handleContentUpdate = (payload: PageEventPayload) => {
+    if (payload.pageId === page.id && payload.event === 'content_updated') {
+      // Handle real-time update - refresh content from server or apply delta
+    }
+  };
+
+  socket.on('page_event', handleContentUpdate);
+  return () => { socket.off('page_event', handleContentUpdate); };
+}, [socket, page.id]);
+```
+
+### If `supportsAI: true`
+
+Consider adding AI-specific fields:
+
+1. **Database fields** (already exist for AI_CHAT, reuse pattern):
+   - `systemPrompt`, `enabledTools`, `aiProvider`, `aiModel`
+
+2. **Validation** in `validatePageCreation`:
    ```typescript
-   TIMELINE = 'TIMELINE'
-   ```
-
-2. **Update database** (`packages/db/src/schema/core.ts`):
-   ```typescript
-   'TIMELINE'
-   ```
-
-3. **Add configuration** (`packages/lib/src/page-types.config.ts`):
-   ```typescript
-   [PageType.TIMELINE]: {
-     type: PageType.TIMELINE,
-     displayName: 'Timeline',
-     description: 'Chronological event timeline',
-     iconName: 'Clock',
-     emoji: '⏰',
-     capabilities: {
-       canHaveChildren: false,
-       canAcceptUploads: false,
-       canBeConverted: false,
-       supportsRealtime: false,
-       supportsVersioning: true,
-       supportsAI: false,
-     },
-     defaultContent: () => JSON.stringify({ events: [] }),
-     allowedChildTypes: [],
-     uiComponent: 'TimelineView',
-     layoutViewType: 'document',
+   if (data.systemPrompt && typeof data.systemPrompt !== 'string') {
+     errors.push('systemPrompt must be a string');
    }
    ```
 
-4. **Create component** (`apps/web/src/components/layout/middle-content/page-views/timeline/TimelineView.tsx`)
+3. **API route handling** for AI settings
 
-5. **Update component maps** in index.tsx and CenterPanel.tsx
+### If the Type Should Support Exports
 
-6. **Add to Create Page Dialog**
+**File:** `apps/web/src/components/layout/middle-content/content-header/ExportDropdown.tsx`
 
-7. **Run migrations and test**
+Add export options:
 
-**Last Updated:** 2025-01-02
+```typescript
+{pageType === 'KANBAN' && (
+  <DropdownMenuItem onClick={() => handleExport('json')}>
+    Export as JSON
+  </DropdownMenuItem>
+)}
+```
+
+Create the export API route if needed at:
+`apps/web/src/app/api/pages/[pageId]/export/[format]/route.ts`
+
+### If `canHaveChildren: true`
+
+Your page type will appear in folder views. Ensure the sidebar tree can expand/collapse it properly (handled automatically by existing TreeNode component).
+
+---
+
+## 5. Testing Requirements
+
+### Unit Tests
+
+**File:** `packages/lib/src/__tests__/page-type-validators.test.ts`
+
+Add comprehensive test cases:
+
+```typescript
+describe('KANBAN page type', () => {
+  it('validates valid KANBAN creation', () => {
+    const result = validatePageCreation(PageType.KANBAN, {
+      title: 'Test Kanban'
+    });
+    expect(result.valid).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  it('validates KANBAN with valid columns and cards', () => {
+    const result = validatePageCreation(PageType.KANBAN, {
+      title: 'Test Kanban',
+      columns: [{ id: '1', title: 'To Do' }],
+      cards: [{ id: '1', columnId: '1', title: 'Task 1' }]
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it('rejects KANBAN with invalid columns type', () => {
+    const result = validatePageCreation(PageType.KANBAN, {
+      title: 'Test Kanban',
+      columns: 'not-an-array'
+    });
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain('columns must be an array');
+  });
+});
+```
+
+**File:** `packages/lib/src/__tests__/page-content-parser.test.ts`
+
+Add content parsing tests:
+
+```typescript
+it('parses KANBAN page content correctly', () => {
+  const page = {
+    id: '1',
+    title: 'Test Kanban',
+    type: PageType.KANBAN,
+    content: JSON.stringify({
+      columns: [{ id: '1', title: 'To Do' }],
+      cards: [{ id: '1', columnId: '1', title: 'Task 1' }]
+    })
+  };
+  const result = getPageContentForAI(page as any);
+  expect(result).toContain('Kanban Board Structure');
+  expect(result).toContain('To Do');
+  expect(result).toContain('Task 1');
+});
+```
+
+### Running Tests
+
+```bash
+# Run all tests
+pnpm test
+
+# Run specific test file
+cd packages/lib && npx vitest run src/__tests__/page-type-validators.test.ts
+
+# Run with watch mode
+pnpm test:watch
+
+# Run with coverage
+pnpm test:coverage
+```
+
+### Manual Testing Checklist
+
+1. Create a new page of your type via the Create Page Dialog
+2. Verify the icon displays correctly in:
+   - Sidebar tree (TreeNode)
+   - Global search results
+   - Inline search results
+3. Verify content saves and loads correctly
+4. Test validation by providing invalid data
+5. Test the page in the AI chat context (ask AI about the page)
+
+---
+
+## 6. Complete Implementation Checklist
+
+Use this checklist to ensure nothing is missed:
+
+### Required (All Page Types)
+
+- [ ] `packages/lib/src/enums.ts` - Add to PageType enum
+- [ ] `packages/db/src/schema/core.ts` - Add to pgEnum (line 5)
+- [ ] Run `pnpm db:generate && pnpm db:migrate`
+- [ ] `packages/lib/src/page-types.config.ts` - Add full configuration entry
+- [ ] `packages/lib/src/page-type-validators.ts` - Add case in `validatePageCreation`
+- [ ] `packages/lib/src/page-type-validators.ts` - Add case in `validatePageUpdate`
+- [ ] `packages/lib/src/page-content-parser.ts` - Add case in `getPageContentForAI`
+- [ ] `apps/web/src/components/common/PageTypeIcon.tsx` - Add icon import and mapping (if new icon)
+- [ ] `apps/web/src/components/search/GlobalSearch.tsx` - Add case in `getPageIcon` switch
+- [ ] `apps/web/src/components/search/InlineSearch.tsx` - Add case in `getPageIcon` switch
+- [ ] Create view component at `apps/web/src/components/layout/middle-content/page-views/[type]/[Type]View.tsx`
+- [ ] `apps/web/src/components/layout/middle-content/CenterPanel.tsx` - Add import and componentMap entry
+- [ ] `apps/web/src/components/layout/middle-content/index.tsx` - Add import and componentMap entry
+- [ ] `apps/web/src/components/layout/left-sidebar/CreatePageDialog.tsx` - Add SelectItem
+- [ ] `apps/web/src/app/api/pages/route.ts` - Add to type unions (lines ~111, ~125)
+
+### Optional (Based on Capabilities)
+
+- [ ] Add helper function `is[Type]Page()` in `page-types.config.ts`
+- [ ] Export helper from `packages/lib/src/index.ts`
+- [ ] Export helper from `packages/lib/src/client-safe.ts`
+- [ ] Add real-time socket listeners (if `supportsRealtime: true`)
+- [ ] Add AI configuration fields (if `supportsAI: true`)
+- [ ] Add export functionality in `ExportDropdown.tsx` (if applicable)
+- [ ] Register with `useEditingStore` for UI refresh protection
+
+### Testing
+
+- [ ] Add tests in `packages/lib/src/__tests__/page-type-validators.test.ts`
+- [ ] Add tests in `packages/lib/src/__tests__/page-content-parser.test.ts`
+- [ ] Manual test: Create page via dialog
+- [ ] Manual test: Verify icon displays in sidebar tree
+- [ ] Manual test: Verify icon displays in search results
+- [ ] Manual test: Verify content saves and loads
+- [ ] Manual test: Verify validation errors display correctly
+- [ ] Manual test: Verify AI can read page content
+
+### Build Verification
+
+- [ ] `pnpm build` - No TypeScript errors
+- [ ] `pnpm lint` - No linting errors
+- [ ] `pnpm test` - All tests pass
+
+---
+
+## 7. Helper Functions Reference
+
+Available from `@pagespace/lib` or `@pagespace/lib/client-safe`:
+
+```typescript
+// Configuration access
+getPageTypeConfig(type: PageType): PageTypeConfig
+getPageTypeIconName(type: PageType): string
+getPageTypeEmoji(type: PageType): string
+getPageTypeDisplayName(type: PageType): string
+getPageTypeDescription(type: PageType): string
+getPageTypeComponent(type: PageType): string
+getLayoutViewType(type: PageType): string
+
+// Capability checks
+canPageTypeHaveChildren(type: PageType): boolean
+canPageTypeAcceptUploads(type: PageType): boolean
+canBeConverted(type: PageType): boolean
+supportsAI(type: PageType): boolean
+supportsRealtime(type: PageType): boolean
+getAllowedChildTypes(type: PageType): PageType[]
+
+// Content
+getDefaultContent(type: PageType): any
+
+// Type guards
+isDocumentPage(type: PageType): boolean
+isFilePage(type: PageType): boolean
+isSheetPage(type: PageType): boolean
+isFolderPage(type: PageType): boolean
+isCanvasPage(type: PageType): boolean
+isChannelPage(type: PageType): boolean
+isAIChatPage(type: PageType): boolean
+```
+
+---
+
+## 8. Common Pitfalls
+
+### 1. Forgetting Database Migration
+
+Always run migrations after updating the schema:
+```bash
+pnpm db:generate && pnpm db:migrate
+```
+
+### 2. Mismatched Component Names
+
+The `uiComponent` value in config **must exactly match** your component name in the componentMap.
+
+### 3. Missing Icon Mapping
+
+If your `iconName` isn't in the PageTypeIcon's `iconMap`, you'll get a fallback icon.
+
+### 4. Inconsistent Component Maps
+
+Both `CenterPanel.tsx` and `index.tsx` have componentMaps that **must stay in sync**.
+
+### 5. Search Components Not Updated
+
+The `getPageIcon` functions in GlobalSearch.tsx and InlineSearch.tsx are **separate** from PageTypeIcon and need manual updates. This is often forgotten!
+
+### 6. Invalid Default Content
+
+Ensure `defaultContent()` returns JSON-serializable data. For structured content, return a stringified JSON object.
+
+### 7. API Type Union Not Updated
+
+The API route at `apps/web/src/app/api/pages/route.ts` has hardcoded type unions that TypeScript won't catch - update manually.
+
+### 8. Missing Content Parser Case
+
+If you don't add a case in `page-content-parser.ts`, AI tools won't understand your page's content and will show "Content extraction not implemented for page type: [TYPE]".
+
+### 9. Component Interface Mismatch
+
+Most view components use `{ page: TreePage }` as props. DocumentView is the exception using `{ pageId: string }`. Follow the standard pattern unless you have a specific reason.
+
+### 10. Circular Dependencies
+
+Be careful when importing from `@pagespace/lib` in `packages/lib` itself. Use relative imports within the package.
+
+---
+
+## 9. Example: Complete KANBAN Implementation
+
+Here's a summary of all files to modify for a KANBAN page type:
+
+| File | Changes |
+|------|---------|
+| `packages/lib/src/enums.ts` | +1 line |
+| `packages/db/src/schema/core.ts` | +1 line |
+| `packages/lib/src/page-types.config.ts` | +30 lines (config + helper) |
+| `packages/lib/src/page-type-validators.ts` | +16 lines (2 cases) |
+| `packages/lib/src/page-content-parser.ts` | +25 lines (1 case) |
+| `packages/lib/src/index.ts` | +1 line (export helper) |
+| `packages/lib/src/client-safe.ts` | +1 line (export helper) |
+| `apps/web/src/components/common/PageTypeIcon.tsx` | +2 lines |
+| `apps/web/src/components/search/GlobalSearch.tsx` | +2 lines |
+| `apps/web/src/components/search/InlineSearch.tsx` | +2 lines |
+| `apps/web/src/components/layout/middle-content/CenterPanel.tsx` | +2 lines |
+| `apps/web/src/components/layout/middle-content/index.tsx` | +2 lines |
+| `apps/web/src/components/layout/left-sidebar/CreatePageDialog.tsx` | +1 line |
+| `apps/web/src/app/api/pages/route.ts` | +2 lines (type unions) |
+| `apps/web/src/components/layout/middle-content/page-views/kanban/KanbanView.tsx` | NEW ~80 lines |
+| `packages/lib/src/__tests__/page-type-validators.test.ts` | +25 lines |
+| `packages/lib/src/__tests__/page-content-parser.test.ts` | +15 lines |
+
+**Total: ~17 files modified, ~200 lines of code**
+
+---
+
+**Last Updated:** 2025-01-27
