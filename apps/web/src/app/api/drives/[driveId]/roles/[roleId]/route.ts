@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db, eq, and } from '@pagespace/db';
-import { driveRoles, driveMembers } from '@pagespace/db';
+import { driveRoles, driveMembers, drives } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
@@ -50,16 +50,29 @@ export async function GET(
 
     const { driveId, roleId } = await context.params;
 
-    // Check if user is a member of the drive
-    const membership = await db.query.driveMembers.findFirst({
-      where: and(
-        eq(driveMembers.driveId, driveId),
-        eq(driveMembers.userId, userId)
-      ),
-    });
+    // Get drive and check access
+    const drive = await db.select()
+      .from(drives)
+      .where(eq(drives.id, driveId))
+      .limit(1);
 
-    if (!membership) {
-      return NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 });
+    if (drive.length === 0) {
+      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+    }
+
+    // Check if user is owner or member of the drive
+    const isOwner = drive[0].ownerId === userId;
+    if (!isOwner) {
+      const membership = await db.query.driveMembers.findFirst({
+        where: and(
+          eq(driveMembers.driveId, driveId),
+          eq(driveMembers.userId, userId)
+        ),
+      });
+
+      if (!membership) {
+        return NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 });
+      }
     }
 
     const role = await db.query.driveRoles.findFirst({
@@ -92,15 +105,34 @@ export async function PATCH(
 
     const { driveId, roleId } = await context.params;
 
-    // Check if user is owner or admin
-    const membership = await db.query.driveMembers.findFirst({
-      where: and(
-        eq(driveMembers.driveId, driveId),
-        eq(driveMembers.userId, userId)
-      ),
-    });
+    // Get drive and check ownership
+    const drive = await db.select()
+      .from(drives)
+      .where(eq(drives.id, driveId))
+      .limit(1);
 
-    if (!membership || (membership.role !== 'OWNER' && membership.role !== 'ADMIN')) {
+    if (drive.length === 0) {
+      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+    }
+
+    // Check if user is owner or admin
+    const isOwner = drive[0].ownerId === userId;
+    let isAdmin = false;
+
+    if (!isOwner) {
+      const adminMembership = await db.select()
+        .from(driveMembers)
+        .where(and(
+          eq(driveMembers.driveId, driveId),
+          eq(driveMembers.userId, userId),
+          eq(driveMembers.role, 'ADMIN')
+        ))
+        .limit(1);
+
+      isAdmin = adminMembership.length > 0;
+    }
+
+    if (!isOwner && !isAdmin) {
       return NextResponse.json({ error: 'Only owners and admins can update roles' }, { status: 403 });
     }
 
@@ -176,15 +208,34 @@ export async function DELETE(
 
     const { driveId, roleId } = await context.params;
 
-    // Check if user is owner or admin
-    const membership = await db.query.driveMembers.findFirst({
-      where: and(
-        eq(driveMembers.driveId, driveId),
-        eq(driveMembers.userId, userId)
-      ),
-    });
+    // Get drive and check ownership
+    const drive = await db.select()
+      .from(drives)
+      .where(eq(drives.id, driveId))
+      .limit(1);
 
-    if (!membership || (membership.role !== 'OWNER' && membership.role !== 'ADMIN')) {
+    if (drive.length === 0) {
+      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+    }
+
+    // Check if user is owner or admin
+    const isOwner = drive[0].ownerId === userId;
+    let isAdmin = false;
+
+    if (!isOwner) {
+      const adminMembership = await db.select()
+        .from(driveMembers)
+        .where(and(
+          eq(driveMembers.driveId, driveId),
+          eq(driveMembers.userId, userId),
+          eq(driveMembers.role, 'ADMIN')
+        ))
+        .limit(1);
+
+      isAdmin = adminMembership.length > 0;
+    }
+
+    if (!isOwner && !isAdmin) {
       return NextResponse.json({ error: 'Only owners and admins can delete roles' }, { status: 403 });
     }
 
