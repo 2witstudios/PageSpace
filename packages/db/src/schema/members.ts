@@ -18,10 +18,9 @@ export const driveRoles = pgTable('drive_roles', {
   description: text('description'),
   color: text('color'), // For badge display (e.g., "blue", "green", "#ff0000")
   isDefault: boolean('isDefault').default(false).notNull(),
-  permissions: jsonb('permissions').notNull().$type<{
-    defaultPermissions: { canView: boolean; canEdit: boolean; canShare: boolean };
-    pageOverrides?: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
-  }>(),
+  permissions: jsonb('permissions').notNull().$type<
+    Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>
+  >(),
   position: integer('position').default(0).notNull(),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),

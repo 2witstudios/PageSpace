@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Pencil, Trash2, GripVertical, Star } from 'lucide-react';
+import { Plus, Pencil, Trash2, GripVertical, Star, Shield } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { fetchWithAuth, del } from '@/lib/auth-fetch';
 import { getRoleColorClasses } from '@/lib/utils';
@@ -26,10 +26,7 @@ interface Role {
   description?: string;
   color?: string;
   isDefault: boolean;
-  permissions: {
-    defaultPermissions: { canView: boolean; canEdit: boolean; canShare: boolean };
-    pageOverrides?: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
-  };
+  permissions: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
   position: number;
 }
 
@@ -95,12 +92,9 @@ export function RolesManager({ driveId }: RolesManagerProps) {
   };
 
   const getPermissionSummary = (permissions: Role['permissions']) => {
-    const { canView, canEdit, canShare } = permissions.defaultPermissions;
-    const parts = [];
-    if (canView) parts.push('View');
-    if (canEdit) parts.push('Edit');
-    if (canShare) parts.push('Share');
-    return parts.length > 0 ? parts.join(', ') : 'No permissions';
+    const pageCount = Object.keys(permissions).length;
+    if (pageCount === 0) return 'No permissions';
+    return `${pageCount} page${pageCount === 1 ? '' : 's'}`;
   };
 
   if (loading) {
@@ -142,7 +136,7 @@ export function RolesManager({ driveId }: RolesManagerProps) {
             <div>
               <CardTitle>Roles</CardTitle>
               <CardDescription>
-                Create permission templates to quickly assign access levels to members
+                Create custom roles to define access levels for drive members
               </CardDescription>
             </div>
             <Button onClick={() => setIsCreating(true)}>
@@ -152,23 +146,42 @@ export function RolesManager({ driveId }: RolesManagerProps) {
           </div>
         </CardHeader>
         <CardContent>
-          {roles.length === 0 ? (
-            <div className="text-center py-12">
-              <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-muted mb-4">
-                <Plus className="w-8 h-8 text-muted-foreground" />
+          <div className="space-y-2">
+            {/* Built-in Admin role - always first, not editable */}
+            <div className="flex items-center gap-3 p-3 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20">
+              <div className="w-4 h-4 flex items-center justify-center">
+                <Shield className="w-4 h-4 text-blue-600 dark:text-blue-400" />
               </div>
-              <h3 className="text-lg font-semibold mb-2">No roles yet</h3>
-              <p className="text-muted-foreground mb-4">
-                Create your first role to define permission templates for your team.
-              </p>
-              <Button onClick={() => setIsCreating(true)}>
-                <Plus className="w-4 h-4 mr-2" />
-                Create Role
-              </Button>
+
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1">
+                  <Badge className="bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300">
+                    Admin
+                  </Badge>
+                  <Badge variant="outline" className="text-xs">
+                    Built-in
+                  </Badge>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  Full access to all pages and settings. Cannot be modified.
+                </p>
+              </div>
+
+              <div className="w-[72px]" /> {/* Spacer for action buttons alignment */}
             </div>
-          ) : (
-            <div className="space-y-2">
-              {roles.map((role) => (
+
+            {roles.length === 0 ? (
+              <div className="text-center py-8 border border-dashed border-border rounded-lg">
+                <p className="text-muted-foreground mb-4">
+                  Create custom roles to define access levels for your team.
+                </p>
+                <Button variant="outline" onClick={() => setIsCreating(true)}>
+                  <Plus className="w-4 h-4 mr-2" />
+                  Create Role
+                </Button>
+              </div>
+            ) : (
+              roles.map((role) => (
                 <div
                   key={role.id}
                   className="flex items-center gap-3 p-3 rounded-lg border border-border hover:bg-muted/50 transition-colors"
@@ -209,9 +222,9 @@ export function RolesManager({ driveId }: RolesManagerProps) {
                     </Button>
                   </div>
                 </div>
-              ))}
-            </div>
-          )}
+              ))
+            )}
+          </div>
         </CardContent>
       </Card>
 

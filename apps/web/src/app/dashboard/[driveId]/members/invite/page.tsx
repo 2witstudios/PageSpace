@@ -1,17 +1,17 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
-import { PermissionsGrid } from '@/components/members/PermissionsGrid';
+import { PermissionsGrid, PermissionsGridRef } from '@/components/members/PermissionsGrid';
 import { UserSearch } from '@/components/members/UserSearch';
-import { ChevronLeft, UserPlus, User, RefreshCw } from 'lucide-react';
+import { ChevronLeft, UserPlus, User, RefreshCw, Shield } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { post, fetchWithAuth } from '@/lib/auth-fetch';
 import { getRoleColorClasses } from '@/lib/utils';
 import { VerificationRequiredAlert } from '@/components/VerificationRequiredAlert';
@@ -30,11 +30,11 @@ interface CustomRole {
   description?: string;
   color?: string;
   isDefault: boolean;
-  permissions: {
-    defaultPermissions: { canView: boolean; canEdit: boolean; canShare: boolean };
-    pageOverrides?: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
-  };
+  permissions: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
 }
+
+// Unified role type: Admin or a custom role
+type UnifiedRole = { type: 'admin' } | { type: 'custom'; roleId: string } | null;
 
 export default function InviteMemberPage() {
   const params = useParams();
@@ -43,12 +43,12 @@ export default function InviteMemberPage() {
   const driveId = params.driveId as string;
 
   const [selectedUser, setSelectedUser] = useState<SelectedUser | null>(null);
-  const [selectedRole, setSelectedRole] = useState<'MEMBER' | 'ADMIN'>('MEMBER');
   const [customRoles, setCustomRoles] = useState<CustomRole[]>([]);
-  const [selectedCustomRoleId, setSelectedCustomRoleId] = useState<string | null>(null);
+  const [selectedUnifiedRole, setSelectedUnifiedRole] = useState<UnifiedRole>(null);
   const [permissions, setPermissions] = useState<Map<string, { canView: boolean; canEdit: boolean; canShare: boolean }>>(new Map());
   const [saving, setSaving] = useState(false);
   const [showVerificationAlert, setShowVerificationAlert] = useState(false);
+  const permissionsGridRef = useRef<PermissionsGridRef>(null);
 
   // Fetch custom roles
   useEffect(() => {
@@ -61,8 +61,8 @@ export default function InviteMemberPage() {
           // Auto-select default role if exists
           const defaultRole = data.roles?.find((r: CustomRole) => r.isDefault);
           if (defaultRole) {
-            setSelectedCustomRoleId(defaultRole.id);
-            applyRolePermissions(defaultRole);
+            setSelectedUnifiedRole({ type: 'custom', roleId: defaultRole.id });
+            // PermissionsGrid will apply the role permissions via rolePermissions prop
           }
         }
       } catch (error) {
@@ -72,40 +72,31 @@ export default function InviteMemberPage() {
     fetchRoles();
   }, [driveId]);
 
-  const applyRolePermissions = (role: CustomRole) => {
-    // Clear existing permissions and apply role's template
-    const newPermissions = new Map<string, { canView: boolean; canEdit: boolean; canShare: boolean }>();
-
-    // Apply page overrides if any
-    if (role.permissions.pageOverrides) {
-      Object.entries(role.permissions.pageOverrides).forEach(([pageId, perms]) => {
-        newPermissions.set(pageId, perms);
-      });
-    }
-
-    setPermissions(newPermissions);
-  };
-
-  const handleCustomRoleChange = (roleId: string) => {
-    if (roleId === 'none') {
-      setSelectedCustomRoleId(null);
-      return;
-    }
-    setSelectedCustomRoleId(roleId);
-    const role = customRoles.find(r => r.id === roleId);
-    if (role) {
-      applyRolePermissions(role);
+  // Unified role change handler
+  const handleUnifiedRoleChange = (value: string) => {
+    if (value === 'admin') {
+      setSelectedUnifiedRole({ type: 'admin' });
+      setPermissions(new Map()); // Clear permissions - admin has full access
+    } else if (value === 'none') {
+      setSelectedUnifiedRole(null);
+    } else {
+      setSelectedUnifiedRole({ type: 'custom', roleId: value });
+      // Apply role permissions imperatively
+      const role = customRoles.find(r => r.id === value);
+      if (role && permissionsGridRef.current) {
+        permissionsGridRef.current.applyRolePermissions(role.permissions);
+      }
     }
   };
 
   const handleSyncToRole = () => {
-    if (selectedCustomRoleId) {
-      const role = customRoles.find(r => r.id === selectedCustomRoleId);
-      if (role) {
-        applyRolePermissions(role);
+    if (selectedUnifiedRole?.type === 'custom') {
+      const role = customRoles.find(r => r.id === selectedUnifiedRole.roleId);
+      if (role && permissionsGridRef.current) {
+        permissionsGridRef.current.applyRolePermissions(role.permissions);
         toast({
           title: 'Permissions synced',
-          description: `Permissions reset to "${role.name}" template`,
+          description: `Permissions reset to "${role.name}" defaults`,
         });
       }
     }
@@ -118,8 +109,7 @@ export default function InviteMemberPage() {
   const handleClearUser = () => {
     setSelectedUser(null);
     setPermissions(new Map());
-    setSelectedRole('MEMBER');
-    setSelectedCustomRoleId(null);
+    setSelectedUnifiedRole(null);
   };
 
   const handlePermissionChange = (pageId: string, perms: { canView: boolean; canEdit: boolean; canShare: boolean }) => {
@@ -133,7 +123,47 @@ export default function InviteMemberPage() {
   const handleInvite = async () => {
     if (!selectedUser) return;
 
-    // Convert permissions map to array format
+    // Map unified role back to backend model
+    const backendRole = selectedUnifiedRole?.type === 'admin' ? 'ADMIN' : 'MEMBER';
+    const backendCustomRoleId = selectedUnifiedRole?.type === 'custom'
+      ? selectedUnifiedRole.roleId
+      : null;
+
+    // Skip permission validation for Admin
+    if (selectedUnifiedRole?.type === 'admin') {
+      setSaving(true);
+      try {
+        await post(`/api/drives/${driveId}/members/invite`, {
+          userId: selectedUser.userId,
+          role: 'ADMIN',
+          customRoleId: null,
+          permissions: [],
+        });
+
+        toast({
+          title: 'Success',
+          description: 'Admin invited successfully',
+        });
+
+        router.push(`/dashboard/${driveId}/members`);
+      } catch (error) {
+        if (error instanceof Error && 'requiresEmailVerification' in error) {
+          setShowVerificationAlert(true);
+          return;
+        }
+        console.error('Error adding member:', error);
+        toast({
+          title: 'Error',
+          description: error instanceof Error ? error.message : 'Failed to add member',
+          variant: 'destructive',
+        });
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
+    // For non-admin, convert permissions map to array format
     const permissionArray = Array.from(permissions.entries())
       .filter(([, perms]) => perms.canView || perms.canEdit || perms.canShare)
       .map(([pageId, perms]) => ({
@@ -156,8 +186,8 @@ export default function InviteMemberPage() {
     try {
       await post(`/api/drives/${driveId}/members/invite`, {
         userId: selectedUser.userId,
-        role: selectedRole,
-        customRoleId: selectedCustomRoleId,
+        role: backendRole,
+        customRoleId: backendCustomRoleId,
         permissions: permissionArray,
       });
 
@@ -264,92 +294,128 @@ export default function InviteMemberPage() {
         {/* Role & Permissions - Only show when user is selected */}
         {selectedUser && (
           <>
-            {/* Role Selection Card */}
+            {/* Unified Role Selection Card */}
             <Card className="mb-6">
               <CardHeader>
-                <CardTitle>Member Role</CardTitle>
+                <CardTitle>Role</CardTitle>
                 <CardDescription>
                   Choose the role for this member
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="max-w-md">
-                  <Label htmlFor="role-select" className="sr-only">Member Role</Label>
-                  <Select value={selectedRole} onValueChange={(value) => setSelectedRole(value as 'MEMBER' | 'ADMIN')}>
-                    <SelectTrigger id="role-select">
+                  <Label htmlFor="unified-role-select" className="sr-only">Role</Label>
+                  <Select
+                    value={
+                      selectedUnifiedRole?.type === 'admin'
+                        ? 'admin'
+                        : selectedUnifiedRole?.type === 'custom'
+                          ? selectedUnifiedRole.roleId
+                          : 'none'
+                    }
+                    onValueChange={handleUnifiedRoleChange}
+                  >
+                    <SelectTrigger id="unified-role-select">
                       <SelectValue placeholder="Select a role" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="MEMBER">Member - Requires page permissions</SelectItem>
-                      <SelectItem value="ADMIN">Admin - Full access to all pages</SelectItem>
+                      {/* Admin - always first */}
+                      <SelectItem value="admin">
+                        <div className="flex items-center gap-2">
+                          <Badge className="bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300">
+                            Admin
+                          </Badge>
+                          <span className="text-xs text-muted-foreground">Full access</span>
+                        </div>
+                      </SelectItem>
+
+                      {customRoles.length > 0 && <SelectSeparator />}
+
+                      {/* Custom roles */}
+                      {customRoles.map((role) => (
+                        <SelectItem key={role.id} value={role.id}>
+                          <div className="flex items-center gap-2">
+                            <Badge className={getRoleColorClasses(role.color)}>
+                              {role.name}
+                            </Badge>
+                            {role.isDefault && (
+                              <span className="text-xs text-muted-foreground">Default</span>
+                            )}
+                          </div>
+                        </SelectItem>
+                      ))}
+
+                      {customRoles.length === 0 && <SelectSeparator />}
+
+                      {/* No role option */}
+                      <SelectItem value="none">
+                        <span className="text-muted-foreground">No role</span>
+                      </SelectItem>
                     </SelectContent>
                   </Select>
                   <p className="text-sm text-muted-foreground mt-2">
-                    {selectedRole === 'ADMIN'
+                    {selectedUnifiedRole?.type === 'admin'
                       ? 'Admins have the same permissions as drive owners and can manage members.'
-                      : 'Members only have access to pages explicitly shared with them below.'}
+                      : 'This role defines which pages this member can access.'}
                   </p>
                 </div>
               </CardContent>
             </Card>
 
-            {/* Permissions Card */}
-            <Card className="mb-6">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle>Page Permissions</CardTitle>
-                    <CardDescription>
-                      Select which pages this member can access
-                    </CardDescription>
-                  </div>
-                  {customRoles.length > 0 && (
-                    <div className="flex items-center gap-2">
-                      <Select
-                        value={selectedCustomRoleId || 'none'}
-                        onValueChange={handleCustomRoleChange}
-                      >
-                        <SelectTrigger className="w-[180px]">
-                          <SelectValue placeholder="Use a role template" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="none">No template</SelectItem>
-                          {customRoles.map((role) => (
-                            <SelectItem key={role.id} value={role.id}>
-                              <div className="flex items-center gap-2">
-                                <Badge
-                                  variant="outline"
-                                  className={`text-xs ${getRoleColorClasses(role.color)}`}
-                                >
-                                  {role.name}
-                                </Badge>
-                              </div>
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      {selectedCustomRoleId && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={handleSyncToRole}
-                          title="Reset permissions to role template"
-                        >
-                          <RefreshCw className="w-4 h-4" />
-                        </Button>
-                      )}
+            {/* Permissions Card - Hidden when Admin is selected */}
+            {selectedUnifiedRole?.type !== 'admin' && (
+              <Card className="mb-6">
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle>Page Permissions</CardTitle>
+                      <CardDescription>
+                        Select which pages this member can access
+                      </CardDescription>
                     </div>
-                  )}
-                </div>
-              </CardHeader>
-              <CardContent>
-                <PermissionsGrid
-                  driveId={driveId}
-                  permissions={permissions}
-                  onChange={handlePermissionChange}
-                />
-              </CardContent>
-            </Card>
+                    {selectedUnifiedRole?.type === 'custom' && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleSyncToRole}
+                        title="Reset permissions to role defaults"
+                      >
+                        <RefreshCw className="w-4 h-4 mr-2" />
+                        Sync to role
+                      </Button>
+                    )}
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <PermissionsGrid
+                    ref={permissionsGridRef}
+                    driveId={driveId}
+                    permissions={permissions}
+                    onChange={handlePermissionChange}
+                  />
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Admin Access Card - When Admin role is selected */}
+            {selectedUnifiedRole?.type === 'admin' && (
+              <Card className="mb-6">
+                <CardContent className="py-8">
+                  <div className="text-center">
+                    <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-blue-100 dark:bg-blue-900/30 mb-4">
+                      <Shield className="w-8 h-8 text-blue-600 dark:text-blue-400" />
+                    </div>
+                    <h3 className="text-lg font-semibold mb-2">Admin Access</h3>
+                    <p className="text-muted-foreground">
+                      Admins have full access to all pages, just like the drive owner.
+                    </p>
+                    <p className="text-sm text-muted-foreground mt-2">
+                      No permission configuration needed.
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
 
             {/* Action Buttons */}
             <div className="flex justify-end gap-3">

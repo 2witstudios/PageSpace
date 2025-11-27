@@ -24,6 +24,11 @@ interface DriveMember {
     displayName?: string;
     avatarUrl?: string;
   };
+  customRole?: {
+    id: string;
+    name: string;
+    color?: string | null;
+  } | null;
   permissionCounts: {
     view: number;
     edit: number;

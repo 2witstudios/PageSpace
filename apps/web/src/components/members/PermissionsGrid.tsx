@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
 import { ChevronRight, ChevronDown } from 'lucide-react';
@@ -27,7 +27,14 @@ interface PermissionsGridProps {
   onChange: (pageId: string, perms: { canView: boolean; canEdit: boolean; canShare: boolean }) => void;
 }
 
-export function PermissionsGrid({ driveId, userId, permissions, onChange }: PermissionsGridProps) {
+export interface PermissionsGridRef {
+  applyRolePermissions: (rolePerms: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>) => void;
+}
+
+export const PermissionsGrid = forwardRef<PermissionsGridRef, PermissionsGridProps>(function PermissionsGrid(
+  { driveId, userId, permissions, onChange },
+  ref
+) {
   const [pages, setPages] = useState<PageNode[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
@@ -36,6 +43,20 @@ export function PermissionsGrid({ driveId, userId, permissions, onChange }: Perm
     fetchPermissionTree();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [driveId, userId]);
+
+  // Expose applyRolePermissions to parent via ref
+  useImperativeHandle(ref, () => ({
+    applyRolePermissions: (rolePerms: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>) => {
+      const apply = (nodes: PageNode[]) => {
+        nodes.forEach(node => {
+          const perms = rolePerms[node.id];
+          onChange(node.id, perms || { canView: false, canEdit: false, canShare: false });
+          if (node.children) apply(node.children);
+        });
+      };
+      apply(pages);
+    }
+  }), [pages, onChange]);
 
   const fetchPermissionTree = async () => {
     try {
@@ -267,4 +288,4 @@ export function PermissionsGrid({ driveId, userId, permissions, onChange }: Perm
       </div>
     </div>
   );
-}
+});

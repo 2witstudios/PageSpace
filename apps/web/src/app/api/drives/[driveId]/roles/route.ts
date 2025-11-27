@@ -5,34 +5,21 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
-// Type for role permissions structure
-type RolePermissions = {
-  defaultPermissions: { canView: boolean; canEdit: boolean; canShare: boolean };
-  pageOverrides?: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
-};
+// Type for role permissions structure (Record<pageId, permissions>)
+type RolePermissions = Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
 
 // Validate that permissions has the correct structure
 function validatePermissions(permissions: unknown): permissions is RolePermissions {
-  if (!permissions || typeof permissions !== 'object') return false;
-  const p = permissions as Record<string, unknown>;
+  if (!permissions || typeof permissions !== 'object' || Array.isArray(permissions)) return false;
 
-  // Validate defaultPermissions
-  if (!p.defaultPermissions || typeof p.defaultPermissions !== 'object') return false;
-  const dp = p.defaultPermissions as Record<string, unknown>;
-  if (typeof dp.canView !== 'boolean' ||
-      typeof dp.canEdit !== 'boolean' ||
-      typeof dp.canShare !== 'boolean') return false;
-
-  // Validate pageOverrides if present
-  if (p.pageOverrides !== undefined) {
-    if (typeof p.pageOverrides !== 'object' || p.pageOverrides === null) return false;
-    for (const override of Object.values(p.pageOverrides as Record<string, unknown>)) {
-      if (!override || typeof override !== 'object') return false;
-      const o = override as Record<string, unknown>;
-      if (typeof o.canView !== 'boolean' ||
-          typeof o.canEdit !== 'boolean' ||
-          typeof o.canShare !== 'boolean') return false;
-    }
+  // Validate each page's permissions
+  for (const [pageId, perms] of Object.entries(permissions)) {
+    if (typeof pageId !== 'string') return false;
+    if (!perms || typeof perms !== 'object') return false;
+    const p = perms as Record<string, unknown>;
+    if (typeof p.canView !== 'boolean' ||
+        typeof p.canEdit !== 'boolean' ||
+        typeof p.canShare !== 'boolean') return false;
   }
 
   return true;

@@ -3,7 +3,6 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -20,10 +19,7 @@ interface Role {
   description?: string;
   color?: string;
   isDefault: boolean;
-  permissions: {
-    defaultPermissions: { canView: boolean; canEdit: boolean; canShare: boolean };
-    pageOverrides?: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
-  };
+  permissions: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
   position: number;
 }
 
@@ -44,15 +40,12 @@ export function RoleEditor({ driveId, role, onSave, onCancel }: RoleEditorProps)
   const [isDefault, setIsDefault] = useState(role?.isDefault || false);
   const [permissions, setPermissions] = useState<Map<string, { canView: boolean; canEdit: boolean; canShare: boolean }>>(
     () => {
-      // Initialize from role's page overrides if editing
-      if (role?.permissions.pageOverrides) {
-        return new Map(Object.entries(role.permissions.pageOverrides));
+      // Initialize from role's permissions if editing
+      if (role?.permissions) {
+        return new Map(Object.entries(role.permissions));
       }
       return new Map();
     }
-  );
-  const [defaultPerms, setDefaultPerms] = useState(
-    role?.permissions.defaultPermissions || { canView: true, canEdit: false, canShare: false }
   );
   const [saving, setSaving] = useState(false);
 
@@ -86,16 +79,11 @@ export function RoleEditor({ driveId, role, onSave, onCancel }: RoleEditorProps)
 
     setSaving(true);
     try {
-      // Convert Map to object for JSON
-      const pageOverrides: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }> = {};
+      // Convert Map to object for JSON - only include pages with at least one permission
+      const permissionsObj: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }> = {};
       permissions.forEach((perms, pageId) => {
-        // Only include overrides that differ from defaults
-        if (
-          perms.canView !== defaultPerms.canView ||
-          perms.canEdit !== defaultPerms.canEdit ||
-          perms.canShare !== defaultPerms.canShare
-        ) {
-          pageOverrides[pageId] = perms;
+        if (perms.canView || perms.canEdit || perms.canShare) {
+          permissionsObj[pageId] = perms;
         }
       });
 
@@ -104,10 +92,7 @@ export function RoleEditor({ driveId, role, onSave, onCancel }: RoleEditorProps)
         description: description.trim() || undefined,
         color,
         isDefault,
-        permissions: {
-          defaultPermissions: defaultPerms,
-          pageOverrides: Object.keys(pageOverrides).length > 0 ? pageOverrides : undefined,
-        },
+        permissions: permissionsObj,
       };
 
       if (isEditing && role) {
@@ -214,59 +199,12 @@ export function RoleEditor({ driveId, role, onSave, onCancel }: RoleEditorProps)
         </CardContent>
       </Card>
 
-      {/* Default Permissions */}
+      {/* Page Permissions */}
       <Card>
         <CardHeader>
-          <CardTitle>Default Permissions</CardTitle>
+          <CardTitle>Page Permissions</CardTitle>
           <CardDescription>
-            Set the base permissions that apply to all pages
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex gap-6">
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id="default-canView"
-                checked={defaultPerms.canView}
-                onCheckedChange={(checked) => {
-                  const newPerms = { ...defaultPerms, canView: !!checked };
-                  if (!checked) {
-                    newPerms.canEdit = false;
-                    newPerms.canShare = false;
-                  }
-                  setDefaultPerms(newPerms);
-                }}
-              />
-              <Label htmlFor="default-canView" className="cursor-pointer">Can View</Label>
-            </div>
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id="default-canEdit"
-                checked={defaultPerms.canEdit}
-                disabled={!defaultPerms.canView}
-                onCheckedChange={(checked) => setDefaultPerms({ ...defaultPerms, canEdit: !!checked })}
-              />
-              <Label htmlFor="default-canEdit" className="cursor-pointer">Can Edit</Label>
-            </div>
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id="default-canShare"
-                checked={defaultPerms.canShare}
-                disabled={!defaultPerms.canView}
-                onCheckedChange={(checked) => setDefaultPerms({ ...defaultPerms, canShare: !!checked })}
-              />
-              <Label htmlFor="default-canShare" className="cursor-pointer">Can Share</Label>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Page Overrides */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Page Overrides (Optional)</CardTitle>
-          <CardDescription>
-            Override permissions for specific pages. Leave blank to use defaults for all pages.
+            Select which pages members with this role can access
           </CardDescription>
         </CardHeader>
         <CardContent>
