@@ -1048,7 +1048,7 @@ const GlobalAssistantView: React.FC = () => {
       {/* Agent Mode: Tabbed interface */}
       {selectedAgent ? (
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col flex-1 min-h-0">
-          <div className="flex items-center justify-between px-4 pt-2 border-b border-gray-200 dark:border-[var(--separator)]">
+          <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 dark:border-[var(--separator)]">
             <TabsList className="h-10">
               <TabsTrigger value="chat" className="gap-2">
                 <MessageSquare className="h-4 w-4" />
@@ -1067,6 +1067,14 @@ const GlobalAssistantView: React.FC = () => {
             {/* Chat tab actions */}
             {activeTab === 'chat' && (
               <div className="flex items-center gap-3">
+                {/* Read-Only Toggle */}
+                <ReadOnlyToggle
+                  isReadOnly={isReadOnly}
+                  onToggle={setIsReadOnly}
+                  disabled={status === 'streaming'}
+                  size="sm"
+                />
+
                 {/* AI Usage Monitor - Compact mode inline */}
                 <AiUsageMonitor
                   pageId={selectedAgent.id}
@@ -1110,16 +1118,6 @@ const GlobalAssistantView: React.FC = () => {
 
           {/* Chat Tab Content */}
           <TabsContent value="chat" className="flex-1 flex flex-col min-h-0 m-0">
-            {/* Read-Only Toggle Header for chat */}
-            <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-[var(--separator)]">
-              <ReadOnlyToggle
-                isReadOnly={isReadOnly}
-                onToggle={setIsReadOnly}
-                disabled={status === 'streaming'}
-                size="sm"
-              />
-            </div>
-
             {/* Messages Area */}
             <div className="flex-1 min-h-0 overflow-hidden px-4">
               <ScrollArea className="h-full" ref={scrollAreaRef}>
