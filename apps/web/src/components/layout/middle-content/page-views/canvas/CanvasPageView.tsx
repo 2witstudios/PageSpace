@@ -6,7 +6,7 @@ import { patch, fetchWithAuth } from '@/lib/auth-fetch';
 import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import { ShadowCanvas } from '@/components/canvas/ShadowCanvas';
-import PreviewErrorBoundary from '@/components/sandbox/PreviewErrorBoundary';
+import { ErrorBoundary } from '@/components/ai/ErrorBoundary';
 import { TreePage } from '@/hooks/usePageTree';
 import { useDocumentStore } from '@/stores/useDocumentStore';
 import { useAuth } from '@/hooks/use-auth';
@@ -156,9 +156,9 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
         )}
         {activeTab === 'view' && (
           <div className="w-full h-full bg-background text-foreground">
-            <PreviewErrorBoundary>
+            <ErrorBoundary>
               <ShadowCanvas html={content} onNavigate={handleNavigation} />
-            </PreviewErrorBoundary>
+            </ErrorBoundary>
           </div>
         )}
       </div>

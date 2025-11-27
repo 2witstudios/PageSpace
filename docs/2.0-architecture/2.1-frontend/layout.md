@@ -47,12 +47,11 @@ pagespace follows a **five-section layout** that provides consistent, predictabl
 **Examples**: Document editor, AI chat interface, file browser  
 **Component**: `/layout/middle-content/page-views/`
 - `document/` - Rich text document editing
-- `ai-page/` - AI chat interface  
+- `ai-page/` - AI chat interface
 - `channel/` - People group conversations
 - `folder/` - Directory listing view
 - `canvas/` - Canvas dashboard view with functional HTML/CSS navigation
-- `dashboard/` - User dashboard and global assistant views
-- `drive/` - Drive overview and management interface
+- `dashboard/` - Dashboard and global assistant views
 - `settings/` - Application settings (AI API, MCP configuration)
 
 #### ⚙️ Right Sidebar (Contextual)
@@ -124,11 +123,9 @@ The `/layout/` directory directly maps to this visual structure:
 │       ├── channel/       # People group conversations
 │       ├── folder/        # Directory listing view
 │       ├── canvas/        # Canvas dashboard with HTML/CSS navigation
-│       ├── dashboard/     # User dashboard and global assistant
-│       ├── drive/         # Drive overview and management
+│       ├── dashboard/     # Dashboard and global assistant
 │       └── settings/      # Application settings (AI API, MCP)
 └── right-sidebar/         # ⚙️ Contextual information & tools
-    ├── DashboardSettingsNavigation.tsx # Settings navigation for dashboard
     ├── ai-assistant/      # Personal AI assistant
     └── page-settings/     # Sharing, permissions, activity
 ```

@@ -176,9 +176,9 @@ export const useFavorites = create<FavoritesState>()(
 
 The codebase also includes several other specialized stores:
 
-- **`useAssistantStore`** ([`apps/web/src/stores/useAssistantStore.ts`](apps/web/src/stores/useAssistantStore.ts:1)): AI assistant conversation management
 - **`useDocumentStore`** ([`apps/web/src/stores/useDocumentStore.ts`](apps/web/src/stores/useDocumentStore.ts:1)): Basic document editing with auto-save
 - **`useDirtyStore`** ([`apps/web/src/stores/useDirtyStore.ts`](apps/web/src/stores/useDirtyStore.ts:1)): Tracks unsaved changes in documents
+- **`useEditingStore`** ([`apps/web/src/stores/useEditingStore.ts`](apps/web/src/stores/useEditingStore.ts:1)): Tracks active editing/streaming state for UI refresh protection
 
 ## Best Practices for New Developers
 

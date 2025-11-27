@@ -1,0 +1,123 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": ["scripts/**/*.{ts,js}"],
+      "project": ["scripts/**/*.{ts,js}"],
+      "ignoreDependencies": ["msw"],
+      "drizzle": false
+    },
+    "apps/web": {
+      "entry": [
+        "src/app/**/page.tsx",
+        "src/app/**/layout.tsx",
+        "src/app/**/route.ts",
+        "next.config.ts",
+        "postcss.config.mjs",
+        "vitest.config.ts",
+        "src/test/setup.ts"
+      ],
+      "project": ["src/**/*.{ts,tsx}", "*.{ts,js,mjs}"],
+      "next": {
+        "entry": [
+          "src/app/**/page.tsx",
+          "src/app/**/layout.tsx",
+          "src/app/**/route.ts"
+        ]
+      },
+      "ignore": [
+        "src/components/ui/**",
+        "src/**/__tests__/**"
+      ],
+      "ignoreDependencies": [
+        "eslint-config-next",
+        "monaco-editor",
+        "prettier",
+        "@pagespace/db",
+        "@pagespace/lib"
+      ]
+    },
+    "apps/realtime": {
+      "entry": ["src/index.ts", "vitest.config.ts"],
+      "project": ["src/**/*.ts"]
+    },
+    "apps/processor": {
+      "entry": ["src/server.ts"],
+      "project": ["src/**/*.ts"],
+      "ignoreDependencies": ["crypto"]
+    },
+    "apps/desktop": {
+      "entry": [
+        "src/main/index.ts",
+        "src/preload/index.ts",
+        "electron.vite.config.ts"
+      ],
+      "project": ["src/**/*.ts"],
+      "ignore": ["src/**/__tests__/**"],
+      "ignoreDependencies": [
+        "electron",
+        "electron-builder",
+        "electron-vite"
+      ]
+    },
+    "packages/db": {
+      "entry": [
+        "src/index.ts",
+        "src/migrate.ts",
+        "src/promote-admin.ts",
+        "src/server.ts",
+        "src/test/factories.ts",
+        "vitest.config.ts"
+      ],
+      "project": ["src/**/*.ts"],
+      "drizzle": false
+    },
+    "packages/lib": {
+      "entry": [
+        "src/index.ts",
+        "src/server.ts",
+        "src/client.ts",
+        "src/client-safe.ts",
+        "src/logger.ts",
+        "src/logger-config.ts",
+        "src/logger-database.ts",
+        "src/activity-tracker.ts",
+        "src/ai-monitoring.ts",
+        "src/ai-context-calculator.ts",
+        "src/auth-utils.ts",
+        "src/device-auth-utils.ts",
+        "src/device-fingerprint-utils.ts",
+        "src/api-utils.ts",
+        "src/broadcast-auth.ts",
+        "src/permissions-cached.ts",
+        "src/logger-browser.ts",
+        "src/verification-utils.ts",
+        "src/services/storage-limits.ts",
+        "src/services/subscription-utils.ts",
+        "src/services/upload-semaphore.ts",
+        "src/services/memory-monitor.ts",
+        "src/services/permission-cache.ts",
+        "src/services/email-service.ts",
+        "src/utils/environment.ts",
+        "src/utils/file-security.ts",
+        "src/pages/circular-reference-guard.ts",
+        "src/email-templates/VerificationEmail.tsx",
+        "vitest.config.ts"
+      ],
+      "project": ["src/**/*.{ts,tsx}"],
+      "ignoreDependencies": ["server-only"]
+    }
+  },
+  "ignore": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/.next/**",
+    "**/out/**",
+    "**/coverage/**",
+    "**/*.d.ts",
+    "**/migrations/**",
+    "**/drizzle.config.ts"
+  ],
+  "ignoreExportsUsedInFile": true,
+  "includeEntryExports": false
+}
