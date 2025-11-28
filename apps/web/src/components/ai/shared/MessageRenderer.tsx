@@ -9,7 +9,7 @@ import { DeleteMessageDialog } from './DeleteMessageDialog';
 import { TodoListMessage } from './TodoListMessage';
 import { useSocket } from '@/hooks/useSocket';
 import { ErrorBoundary } from './ErrorBoundary';
-import { patch, fetchWithAuth } from '@/lib/auth-fetch';
+import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 // Extended message interface that includes database fields
 interface ConversationMessage extends UIMessage {

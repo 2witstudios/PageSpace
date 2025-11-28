@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
-import { FileProcessor } from '../file-processor'
+import { FileProcessor } from '../file-processing/file-processor'
 import { db, sql, users } from '@pagespace/db'
 import { factories } from '@pagespace/db/test/factories'
 import { createHash } from 'crypto'

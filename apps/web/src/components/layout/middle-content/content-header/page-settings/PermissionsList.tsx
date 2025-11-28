@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Trash2, Shield } from 'lucide-react';
 import { toast } from 'sonner';
-import { post, del, fetchWithAuth } from '@/lib/auth-fetch';
+import { post, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 type User = {
   id: string;

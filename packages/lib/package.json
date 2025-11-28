@@ -18,9 +18,9 @@
       "browser": "./dist/client-safe.js"
     },
     "./server": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.js"
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js",
+      "require": "./dist/server.js"
     },
     "./client": {
       "types": "./dist/client.d.ts",
@@ -161,7 +161,7 @@
   "typesVersions": {
     "*": {
       "server": [
-        "./dist/index.d.ts"
+        "./dist/server.d.ts"
       ],
       "client": [
         "./dist/client.d.ts"

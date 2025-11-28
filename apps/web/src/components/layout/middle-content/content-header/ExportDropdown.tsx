@@ -11,7 +11,7 @@ import {
 import { FileDown, FileText, FileSpreadsheet, Sheet, Printer } from 'lucide-react';
 import { toast } from 'sonner';
 import { PageType } from '@pagespace/lib/client-safe';
-import { fetchWithAuth } from '@/lib/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 type ExportFormat = 'docx' | 'csv' | 'xlsx';
 

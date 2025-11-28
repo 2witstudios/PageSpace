@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { fetchWithAuth } from '@/lib/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { persist } from 'zustand/middleware';
 import { getLayoutViewType, PageType } from '@pagespace/lib/client-safe';
 import { toast } from 'sonner';

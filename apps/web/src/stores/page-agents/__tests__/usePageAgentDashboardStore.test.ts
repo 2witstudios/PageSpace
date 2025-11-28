@@ -9,7 +9,7 @@ import { usePageAgentDashboardStore, type AgentInfo, type SidebarTab } from '../
 
 // Mock fetchWithAuth
 const mockFetchWithAuth = vi.fn();
-vi.mock('@/lib/auth-fetch', () => ({
+vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: (...args: unknown[]) => mockFetchWithAuth(...args),
 }));
 

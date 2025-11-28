@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, drives, pages, driveMembers, pagePermissions, eq, and, inArray, not } from '@pagespace/db';
 import { slugify } from '@pagespace/lib/server';
-import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/socket-utils';
+import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket/socket-utils';
 import { loggers } from '@pagespace/lib/server';
 import { trackDriveOperation } from '@pagespace/lib/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';

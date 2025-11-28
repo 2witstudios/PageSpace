@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Plus, Pencil, Trash2, GripVertical, Star, Shield } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-import { fetchWithAuth, del } from '@/lib/auth-fetch';
+import { fetchWithAuth, del } from '@/lib/auth/auth-fetch';
 import { getRoleColorClasses } from '@/lib/utils';
 import { RoleEditor } from './RoleEditor';
 import {

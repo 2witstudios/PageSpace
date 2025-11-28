@@ -23,7 +23,7 @@ import { Trash2, Copy, Plus, Eye, EyeOff, Key, Terminal, Check, Download, AlertT
 import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
 import { useRouter } from 'next/navigation';
-import { post, del, fetchWithAuth } from '@/lib/auth-fetch';
+import { post, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 interface MCPToken {
   id: string;

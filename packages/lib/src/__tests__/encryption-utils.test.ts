@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { encrypt, decrypt } from '../encryption-utils'
+import { encrypt, decrypt } from '../encryption/encryption-utils'
 
 describe('encryption-utils', () => {
   const testData = 'sensitive-api-key-12345'

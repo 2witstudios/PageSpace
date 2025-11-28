@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { useDriveStore } from "@/hooks/useDrive";
 import { useAuth } from "@/hooks/use-auth";
 import { toast } from "sonner";
-import { post, del } from '@/lib/auth-fetch';
+import { post, del } from '@/lib/auth/auth-fetch';
 import { 
   Card, 
   CardHeader, 

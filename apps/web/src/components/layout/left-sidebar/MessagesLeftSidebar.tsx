@@ -12,7 +12,7 @@ import useSWR from 'swr';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import type { SidebarProps } from './index';
-import { fetchWithAuth } from '@/lib/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);

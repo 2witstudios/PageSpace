@@ -7,7 +7,7 @@ import {
   updateDeviceTokenActivity,
   revokeDeviceToken,
   validateOrCreateDeviceToken,
-} from '../device-auth-utils';
+} from '../auth/device-auth-utils';
 import { db, deviceTokens, eq } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 

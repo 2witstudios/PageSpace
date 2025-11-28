@@ -21,7 +21,7 @@ import { useAuth } from '@/hooks/use-auth';
 import { toast } from 'sonner';
 import PageAgentSettingsTab, { PageAgentSettingsTabRef } from '@/components/ai/page-agents/PageAgentSettingsTab';
 import PageAgentHistoryTab from '@/components/ai/page-agents/PageAgentHistoryTab';
-import { fetchWithAuth } from '@/lib/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 // Shared hooks and components
 import {

@@ -8,7 +8,7 @@ import { SubscriptionCard } from '@/components/billing/SubscriptionCard';
 import { PlanComparisonTable } from '@/components/billing/PlanComparisonTable';
 import { CheckCircle, XCircle, AlertCircle, ArrowLeft } from 'lucide-react';
 import { getNextPlan, type SubscriptionTier } from '@/lib/subscription/plans';
-import { post, fetchWithAuth } from '@/lib/auth-fetch';
+import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 // Stripe Payment Links for subscription upgrades
 const STRIPE_PRO_PAYMENT_LINK = 'https://buy.stripe.com/8x2fZjdczc7ffz0eF0eEo01';

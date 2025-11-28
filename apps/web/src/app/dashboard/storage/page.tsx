@@ -35,7 +35,7 @@ import {
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { toast } from "sonner";
-import { fetchWithAuth } from "@/lib/auth-fetch";
+import { fetchWithAuth } from "@/lib/auth/auth-fetch";
 
 interface StorageInfo {
   quota: {

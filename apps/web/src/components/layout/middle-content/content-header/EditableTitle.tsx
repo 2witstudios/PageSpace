@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
 import { usePageTree } from '@/hooks/usePageTree';
 import { useParams } from 'next/navigation';
-import { patch } from '@/lib/auth-fetch';
+import { patch } from '@/lib/auth/auth-fetch';
 
 export function EditableTitle() {
   const pageId = usePageStore((state) => state.pageId);

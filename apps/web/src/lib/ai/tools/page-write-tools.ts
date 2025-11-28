@@ -2,7 +2,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { db, pages, drives, eq, and, desc, isNull, inArray } from '@pagespace/db';
 import { canUserEditPage, canUserDeletePage, PageType, isAIChatPage, isDocumentPage } from '@pagespace/lib/server';
-import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
+import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket/socket-utils';
 import { ToolExecutionContext } from '../core/types';
 import { pageSpaceTools } from '../core/ai-tools';
 

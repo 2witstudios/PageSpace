@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Mail, MessageSquare, User } from "lucide-react";
-import { post } from '@/lib/auth-fetch';
+import { post } from '@/lib/auth/auth-fetch';
 
 interface FormData {
   name: string;

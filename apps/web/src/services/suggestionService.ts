@@ -1,5 +1,5 @@
 import { MentionSuggestion, MentionType } from '@/types/mentions';
-import { fetchWithAuth } from '@/lib/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 export interface SuggestionApiError {
   message: string;

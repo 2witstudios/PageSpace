@@ -16,7 +16,7 @@ import { Button } from '@/components/ui/button';
 import { Download } from 'lucide-react';
 import { isDocumentPage, isFilePage, isSheetPage } from '@pagespace/lib/client-safe';
 import { ExportDropdown } from './ExportDropdown';
-import { fetchWithAuth } from '@/lib/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 interface ContentHeaderProps {
   children?: React.ReactNode;

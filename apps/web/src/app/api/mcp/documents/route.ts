@@ -3,7 +3,7 @@ import { db, pages, eq } from '@pagespace/db';
 import { getUserAccessLevel } from '@pagespace/lib/server';
 import { z } from 'zod/v4';
 import prettier from 'prettier';
-import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
+import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket/socket-utils';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateMCPRequest, isAuthError } from '@/lib/auth';
 

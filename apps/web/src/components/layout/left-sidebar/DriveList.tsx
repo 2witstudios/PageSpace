@@ -20,7 +20,7 @@ import { Button } from "@/components/ui/button";
 import { RenameDialog } from "@/components/dialogs/RenameDialog";
 import { DeleteDriveDialog } from "@/components/dialogs/DeleteDriveDialog";
 import { toast } from "sonner";
-import { patch, del, post } from '@/lib/auth-fetch';
+import { patch, del, post } from '@/lib/auth/auth-fetch';
 
 const DriveListItem = ({
   drive,

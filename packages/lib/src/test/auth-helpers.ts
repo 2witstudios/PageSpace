@@ -1,4 +1,4 @@
-import { generateAccessToken, generateRefreshToken } from '../auth-utils'
+import { generateAccessToken, generateRefreshToken } from '../auth/auth-utils'
 import * as jose from 'jose'
 
 export const authHelpers = {

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { streamText, convertToModelMessages, stepCountIs, UIMessage } from 'ai';
 import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
 import { createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
-import { broadcastUsageEvent } from '@/lib/socket-utils';
+import { broadcastUsageEvent } from '@/lib/websocket/socket-utils';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import {
   createAIProvider,
@@ -28,7 +28,7 @@ import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
 import { filterToolsForReadOnly } from '@/lib/ai/core/tool-filtering';
 import { getModelCapabilities } from '@/lib/ai/core/model-capabilities';
 import { convertMCPToolsToAISDKSchemas, parseMCPToolName } from '@/lib/ai/core/mcp-tool-converter';
-import { getMCPBridge } from '@/lib/mcp-bridge';
+import { getMCPBridge } from '@/lib/mcp/mcp-bridge';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 import type { MCPTool } from '@/types/mcp';

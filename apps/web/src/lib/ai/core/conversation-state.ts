@@ -3,7 +3,7 @@
  * Simple and works everywhere - dashboard, sidebar, across navigation
  */
 
-import { post } from '@/lib/auth-fetch';
+import { post } from '@/lib/auth/auth-fetch';
 
 const ACTIVE_CONVERSATION_COOKIE = 'activeConversationId';
 const ACTIVE_AGENT_COOKIE = 'activeAgentId';

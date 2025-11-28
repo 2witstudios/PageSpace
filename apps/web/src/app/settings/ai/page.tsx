@@ -12,8 +12,8 @@ import {
   Alert,
   AlertDescription,
 } from '@/components/ui/alert';
-import { post } from '@/lib/auth-fetch';
-import { fetchWithAuth } from '@/lib/auth-fetch';
+import { post } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 interface ProviderSettings {
   currentProvider: string;

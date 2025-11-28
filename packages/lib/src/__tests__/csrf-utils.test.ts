@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { generateCSRFToken, validateCSRFToken, getSessionIdFromJWT } from '../csrf-utils'
+import { generateCSRFToken, validateCSRFToken, getSessionIdFromJWT } from '../auth/csrf-utils'
 
 describe('csrf-utils', () => {
   const testSessionId = 'session_abc123'

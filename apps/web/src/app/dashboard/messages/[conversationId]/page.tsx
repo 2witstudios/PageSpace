@@ -10,7 +10,7 @@ import { renderMessageParts, convertToMessageParts } from '@/components/messages
 import useSWR from 'swr';
 import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
-import { post, patch, fetchWithAuth } from '@/lib/auth-fetch';
+import { post, patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);

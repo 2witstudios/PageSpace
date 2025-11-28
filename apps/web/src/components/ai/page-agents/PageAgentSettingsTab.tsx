@@ -9,7 +9,7 @@ import { Switch } from '@/components/ui/switch';
 import { Loader2, Bot } from 'lucide-react';
 import { toast } from 'sonner';
 import { useForm, Controller } from 'react-hook-form';
-import { patch, fetchWithAuth } from '@/lib/auth-fetch';
+import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { AI_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
 
 interface AgentConfig {

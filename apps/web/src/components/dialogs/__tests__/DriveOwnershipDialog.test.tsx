@@ -12,12 +12,12 @@ vi.mock('sonner', () => ({
 }));
 
 // Mock auth-fetch
-vi.mock('@/lib/auth-fetch', () => ({
+vi.mock('@/lib/auth/auth-fetch', () => ({
   post: vi.fn(),
 }));
 
 import { toast } from 'sonner';
-import { post } from '@/lib/auth-fetch';
+import { post } from '@/lib/auth/auth-fetch';
 
 describe('DriveOwnershipDialog', () => {
   const mockOnClose = vi.fn();

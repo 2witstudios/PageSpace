@@ -13,7 +13,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { toast } from "sonner";
 import { User, Mail, Calendar, AlertTriangle, Loader2, ArrowLeft, Upload, X, CheckCircle2, AlertCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { patch, post, del, fetchWithAuth } from '@/lib/auth-fetch';
+import { patch, post, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { DeleteAccountDialog } from "@/components/dialogs/DeleteAccountDialog";
 import { DriveOwnershipDialog } from "@/components/dialogs/DriveOwnershipDialog";
 import { DeviceList } from "@/components/devices/DeviceList";

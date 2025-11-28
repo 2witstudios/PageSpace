@@ -7,10 +7,10 @@ import { Badge } from '@/components/ui/badge';
 import { AlertCircle } from 'lucide-react';
 import useSWR from 'swr';
 import { useSocketStore } from '@/stores/socketStore';
-import type { UsageEventPayload } from '@/lib/socket-utils';
+import type { UsageEventPayload } from '@/lib/websocket/socket-utils';
 import { createClientLogger } from '@/lib/logging/client-logger';
 import { maskIdentifier } from '@/lib/logging/mask';
-import { fetchWithAuth } from '@/lib/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 
 const usageLogger = createClientLogger({ namespace: 'usage', component: 'usage-counter' });

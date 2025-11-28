@@ -4,7 +4,7 @@ import { db, pages, eq } from '@pagespace/db';
 import { PageType, canConvertToType, canUserEditPage, canUserViewPage } from '@pagespace/lib';
 import mammoth from 'mammoth';
 import { createId } from '@paralleldrive/cuid2';
-import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
+import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket/socket-utils';
 import { createServiceToken } from '@pagespace/lib/auth-utils';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };

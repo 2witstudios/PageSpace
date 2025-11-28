@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { checkRateLimit, resetRateLimit, getRateLimitStatus, RATE_LIMIT_CONFIGS } from '../rate-limit-utils'
+import { checkRateLimit, resetRateLimit, getRateLimitStatus, RATE_LIMIT_CONFIGS } from '../auth/rate-limit-utils'
 
 describe('rate-limit-utils', () => {
   beforeEach(() => {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { generateAccessToken, generateRefreshToken, decodeToken, isAdmin } from '../auth-utils'
+import { generateAccessToken, generateRefreshToken, decodeToken, isAdmin } from '../auth/auth-utils'
 import { authHelpers } from '../test/auth-helpers'
 
 describe('auth-utils', () => {

@@ -6,7 +6,7 @@ import { useState, useEffect } from 'react';
 import { TreePage } from '@/hooks/usePageTree';
 import { Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { fetchWithAuth } from '@/lib/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 // Dynamically import react-pdf to avoid SSR issues
 let Document: any;

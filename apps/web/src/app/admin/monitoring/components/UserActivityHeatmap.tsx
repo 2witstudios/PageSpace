@@ -1,7 +1,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import type { UserActivityData, MonitoringWidgetProps } from '@/lib/monitoring-types';
+import type { UserActivityData, MonitoringWidgetProps } from '@/lib/monitoring/monitoring-types';
 
 type UserActivityHeatmapProps = MonitoringWidgetProps<UserActivityData>;
 

@@ -12,7 +12,7 @@ import {
   CommandList,
 } from '@/components/ui/command';
 import { useDebouncedCallback } from 'use-debounce';
-import { fetchWithAuth } from '@/lib/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 interface SearchResult {
   id: string;

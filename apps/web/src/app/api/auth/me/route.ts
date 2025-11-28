@@ -1,5 +1,5 @@
 import { users, db, eq } from '@pagespace/db';
-import { requireAuth, isAuthError } from '@/lib/auth-helpers';
+import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
 
 export async function GET(req: Request) {
   const auth = await requireAuth(req);

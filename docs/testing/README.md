@@ -25,33 +25,31 @@ pnpm --filter realtime test
 
 ## Running apps/web Tests
 
-The `apps/web` package has tests but requires a workaround due to a vitest.config.ts ESM module issue with `vite-tsconfig-paths`.
+The `apps/web` package has tests. Tests are colocated with source files in `__tests__` subdirectories.
 
-### Working Commands for apps/web:
+### Commands for apps/web:
 
 ```bash
 # Navigate to apps/web directory
 cd apps/web
 
-# Run all web tests (bypass config issue)
-npx vitest run --config=/dev/null
+# Run all web tests
+pnpm vitest run
 
 # Run specific test file
-npx vitest run --config=/dev/null src/lib/__tests__/ws-connections.test.ts
+pnpm vitest run src/lib/websocket/__tests__/ws-connections.test.ts
 
 # Run with verbose output
-npx vitest run --config=/dev/null --reporter=verbose
+pnpm vitest run --reporter=verbose
 
 # Watch mode
-npx vitest --config=/dev/null --watch
+pnpm vitest run --watch
 ```
 
-### Known Issues:
-- **vitest.config.ts Error**: `"vite-tsconfig-paths" resolved to an ESM file` - Use `--config=/dev/null` to bypass
-
 ### Test Files:
-- `src/lib/__tests__/ws-connections.test.ts` (35 tests ✅ all passing - WebSocket connection manager)
-- `src/lib/ai/__tests__/mcp-tool-name-validation.test.ts` (MCP security tests)
+- `src/lib/websocket/__tests__/ws-connections.test.ts` (35 tests - WebSocket connection manager)
+- `src/lib/websocket/__tests__/ws-message-schemas.test.ts` (WebSocket message validation)
+- `src/lib/ai/__tests__/` (AI and MCP security tests)
 
 ## Test Categories
 

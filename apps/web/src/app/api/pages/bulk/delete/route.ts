@@ -4,7 +4,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 import { db, pages, eq, and, inArray } from '@pagespace/db';
 import { canUserDeletePage, canUserEditPage } from '@pagespace/lib/server';
-import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
+import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket/socket-utils';
 import { loggers } from '@pagespace/lib/server';
 
 /**

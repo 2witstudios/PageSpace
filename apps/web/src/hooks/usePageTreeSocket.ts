@@ -1,7 +1,7 @@
 import { useEffect, useCallback, useRef } from 'react';
 import { usePageTree } from './usePageTree';
 import { useSocket } from './useSocket';
-import { PageEventPayload } from '@/lib/socket-utils';
+import { PageEventPayload } from '@/lib/websocket/socket-utils';
 
 /**
  * Enhanced version of usePageTree that listens for real-time page events

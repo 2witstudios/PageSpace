@@ -27,7 +27,7 @@ import { cn } from '@/lib/utils';
 import { useNotificationStore } from '@/stores/notificationStore';
 import { useSocketStore } from '@/stores/socketStore';
 import { isConnectionRequest } from '@pagespace/lib/client-safe';
-import { patch } from '@/lib/auth-fetch';
+import { patch } from '@/lib/auth/auth-fetch';
 
 const NotificationIcon = ({ type, size = 'default' }: { type: string; size?: 'default' | 'large' }) => {
   const sizeClass = size === 'large' ? 'h-5 w-5' : 'h-4 w-4';

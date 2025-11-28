@@ -4,7 +4,7 @@ import React, { useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, Loader2, CheckCircle2, XCircle, Clock } from 'lucide-react';
 import { CompactToolCallRenderer } from './CompactToolCallRenderer';
 import { cn } from '@/lib/utils';
-import { toTitleCase } from '@/lib/formatters';
+import { toTitleCase } from '@/lib/utils/formatters';
 
 interface ToolCallPart {
   type: string;

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { createEmptySheet, evaluateSheet, SheetData } from '../sheet'
+import { createEmptySheet, evaluateSheet, SheetData } from '../sheets/sheet'
 
 describe('sheet - advanced scenarios', () => {
   describe('circular reference detection', () => {

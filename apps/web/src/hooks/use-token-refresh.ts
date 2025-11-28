@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { mutate } from 'swr';
 import { useRouter } from 'next/navigation';
-import { post, fetchWithAuth, refreshAuthSession, clearJWTCache } from '@/lib/auth-fetch';
+import { post, fetchWithAuth, refreshAuthSession, clearJWTCache } from '@/lib/auth/auth-fetch';
 
 interface TokenRefreshOptions {
   refreshBeforeExpiryMs?: number; // How long before expiry to refresh (default: 2 minutes)

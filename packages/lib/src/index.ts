@@ -1,28 +1,51 @@
 // Server-side exports (includes Node.js modules)
 // For client-safe exports, use '@pagespace/lib/client-safe'
 
-// All exports including server-side modules
-export * from './page-content-parser';
-export * from './permissions-cached'; // Server-only: cached permissions (preferred)
+/**
+ * @module @pagespace/lib
+ * @description Main entry point for PageSpace shared library
+ *
+ * Organized by domain:
+ * - auth/         - Authentication & security
+ * - content/      - Page content processing
+ * - encryption/   - Cryptographic utilities
+ * - file-processing/ - File upload & processing
+ * - logging/      - Logging infrastructure
+ * - monitoring/   - Analytics & activity tracking
+ * - notifications/ - Notification system
+ * - permissions/  - Access control
+ * - sheets/       - Spreadsheet logic
+ * - utils/        - General utilities
+ */
+
+// Content processing
+export * from './content';
+
+// Permissions (export cached version by default)
+export * from './permissions/permissions-cached'; // Server-only: cached permissions (preferred)
 
 // Export specific functions from original permissions that aren't in cached version
 export {
   getUserAccessiblePagesInDriveWithDetails,
   getUserAccessiblePagesInDrive,
   isDriveOwnerOrAdmin
-} from './permissions';
-export * from './tree-utils';
+} from './permissions/permissions';
+
+// Utilities
 export * from './utils';
-export * from './enums';
+
+// Types
 export * from './types';
+
+// Notifications
 export * from './notifications';
-export * from './page-types.config';
-export * from './page-type-validators';
-export * from './sheet';
+
+// Sheets
+export * from './sheets';
 
 // Auth and security utilities (server-only)
-export * from './auth-utils';
-export * from './device-auth-utils';
+export * from './auth/auth-utils';
+export * from './auth/device-auth-utils';
 export {
   createServiceToken as createServiceTokenV2,
   verifyServiceToken as verifyServiceTokenV2,
@@ -36,23 +59,23 @@ export {
   type ServiceTokenOptions,
   type ServiceScope,
 } from './services/service-auth';
-export * from './csrf-utils';
-export * from './encryption-utils';
-export * from './rate-limit-utils';
-export * from './verification-utils';
+export * from './auth/csrf-utils';
+export * from './encryption';
+export * from './auth/rate-limit-utils';
+export * from './auth/verification-utils';
 
 // OAuth utilities (server-only)
-export * from './oauth-utils';
-export * from './oauth-types';
+export * from './auth/oauth-utils';
+export * from './auth/oauth-types';
 
 // Logging utilities (server-only)
-export * from './logger';
-export * from './logger-config';
-export * from './logger-database';
+export * from './logging/logger';
+export * from './logging/logger-config';
+export * from './logging/logger-database';
 
 // Monitoring and tracking utilities (server-only)
-export * from './ai-monitoring';
-export * from './activity-tracker';
+export * from './monitoring/ai-monitoring';
+export * from './monitoring/activity-tracker';
 
 // Rate limiting and caching services (server-only)
 export { rateLimitCache } from './services/rate-limit-cache';
@@ -60,13 +83,10 @@ export type { ProviderType, UsageTrackingResult } from './services/rate-limit-ca
 export { getTodayUTC, getTomorrowMidnightUTC, getSecondsUntilMidnightUTC } from './services/date-utils';
 
 // File processing utilities (server-only)
-export * from './file-processor';
-
-// Export utilities (server-only)
-export * from './export-utils';
+export * from './file-processing';
 
 // Real-time and broadcasting utilities (server-only)
-export * from './broadcast-auth';
+export * from './auth/broadcast-auth';
 
 // Note: This index includes server-side dependencies and should NOT be imported
 // from client-side components. Use '@pagespace/lib/client-safe' for client-side imports.

@@ -14,7 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ChevronDown, ChevronRight, Search, Shield, MessageCircle, Database, Settings, Crown, CreditCard, CheckCircle } from "lucide-react";
-import { put } from "@/lib/auth-fetch";
+import { put } from "@/lib/auth/auth-fetch";
 
 interface UserStats {
   drives: number;

@@ -6,8 +6,8 @@ import {
   canParentHaveChildType,
   getValidationRules,
   validateAIChatTools
-} from '../page-type-validators'
-import { PageType } from '../enums'
+} from '../content/page-type-validators'
+import { PageType } from '../utils/enums'
 
 describe('page-type-validators', () => {
   describe('validatePageCreation', () => {

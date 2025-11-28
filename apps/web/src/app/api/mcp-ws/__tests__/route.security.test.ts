@@ -18,7 +18,7 @@ vi.mock('@/lib/auth', () => ({
   verifyAuth: vi.fn(),
 }));
 
-vi.mock('@/lib/ws-connections', () => ({
+vi.mock('@/lib/websocket/ws-connections', () => ({
   registerConnection: vi.fn(),
   unregisterConnection: vi.fn(),
   updateLastPing: vi.fn(),
@@ -26,13 +26,13 @@ vi.mock('@/lib/ws-connections', () => ({
   verifyConnectionFingerprint: vi.fn(),
 }));
 
-vi.mock('@/lib/mcp-bridge', () => ({
+vi.mock('@/lib/mcp/mcp-bridge', () => ({
   getMCPBridge: vi.fn(() => ({
     handleToolResponse: vi.fn(),
   })),
 }));
 
-vi.mock('@/lib/ws-security', () => ({
+vi.mock('@/lib/websocket/ws-security', () => ({
   generateChallenge: vi.fn(),
   verifyChallengeResponse: vi.fn(),
   getConnectionFingerprint: vi.fn(),
@@ -42,12 +42,12 @@ import { verifyAuth } from '@/lib/auth';
 import {
   registerConnection,
   verifyConnectionFingerprint,
-} from '@/lib/ws-connections';
+} from '@/lib/websocket/ws-connections';
 import {
   generateChallenge,
   verifyChallengeResponse,
   getConnectionFingerprint,
-} from '@/lib/ws-security';
+} from '@/lib/websocket/ws-security';
 
 describe('WebSocket MCP Bridge - Security Tests', () => {
   let mockClient: WebSocket;

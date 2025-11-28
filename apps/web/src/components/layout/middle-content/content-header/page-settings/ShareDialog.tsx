@@ -34,7 +34,7 @@ import { Label } from '@/components/ui/label';
 import { PermissionsList } from './PermissionsList';
 import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { post, fetchWithAuth } from '@/lib/auth-fetch';
+import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 export function ShareDialog() {
   const pageId = usePageStore((state) => state.pageId);

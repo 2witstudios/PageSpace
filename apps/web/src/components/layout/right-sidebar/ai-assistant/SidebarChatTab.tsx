@@ -9,7 +9,7 @@ import { CompactMessageRenderer } from '@/components/ai/shared/CompactMessageRen
 import { ReadOnlyToggle } from '@/components/ai/shared/ReadOnlyToggle';
 import { AISelector } from '@/components/ai/shared/AISelector';
 import { useDriveStore } from '@/hooks/useDrive';
-import { fetchWithAuth, patch, del } from '@/lib/auth-fetch';
+import { fetchWithAuth, patch, del } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
 import { usePageAgentSidebarState, SidebarAgentInfo } from '@/hooks/page-agents/usePageAgentSidebarState';

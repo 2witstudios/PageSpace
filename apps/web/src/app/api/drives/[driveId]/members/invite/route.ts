@@ -4,7 +4,7 @@ import { driveMembers, drives, pagePermissions, pages } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createDriveNotification, isEmailVerified } from '@pagespace/lib';
 import { loggers } from '@pagespace/lib/server';
-import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/socket-utils';
+import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket/socket-utils';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 

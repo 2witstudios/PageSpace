@@ -13,7 +13,7 @@ import {
 import { ListViewProps, SortKey } from './types';
 import { PageTypeIcon } from '@/components/common/PageTypeIcon';
 import { PageType } from '@pagespace/lib/client-safe';
-import { toTitleCase } from '@/lib/formatters';
+import { toTitleCase } from '@/lib/utils/formatters';
 
 export function ListView({ items, sortKey, sortDirection, onSort }: ListViewProps) {
   const params = useParams();
