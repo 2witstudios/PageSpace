@@ -16,6 +16,8 @@ interface UseProviderSettingsOptions {
 }
 
 interface UseProviderSettingsResult {
+  /** Whether provider settings are still loading */
+  isLoading: boolean;
   /** Provider settings from backend */
   providerSettings: ProviderSettings | null;
   /** Whether any provider is configured */
@@ -43,6 +45,7 @@ interface UseProviderSettingsResult {
 export function useProviderSettings({
   pageId,
 }: UseProviderSettingsOptions = {}): UseProviderSettingsResult {
+  const [isLoading, setIsLoading] = useState(true);
   const [providerSettings, setProviderSettings] = useState<ProviderSettings | null>(null);
   const [selectedProvider, setSelectedProvider] = useState<string>('pagespace');
   const [selectedModel, setSelectedModel] = useState<string>('');
@@ -50,6 +53,7 @@ export function useProviderSettings({
   // Load provider settings
   const loadProviderSettings = useCallback(async () => {
     try {
+      setIsLoading(true);
       const endpoint = pageId ? `/api/ai/chat?pageId=${pageId}` : '/api/ai/chat';
       const response = await fetchWithAuth(endpoint);
 
@@ -63,6 +67,8 @@ export function useProviderSettings({
       }
     } catch (error) {
       console.error('Failed to load provider settings:', error);
+    } finally {
+      setIsLoading(false);
     }
   }, [pageId]);
 
@@ -108,6 +114,7 @@ export function useProviderSettings({
   const needsSetup = !isAnyProviderConfigured;
 
   return {
+    isLoading,
     providerSettings,
     isAnyProviderConfigured,
     needsSetup,

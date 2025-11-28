@@ -99,7 +99,7 @@ const GlobalAssistantView: React.FC = () => {
   // ============================================
   const currentConversationId = selectedAgent ? agentConversationId : globalConversationId;
 
-  const { isAnyProviderConfigured, needsSetup, isProviderConfigured } =
+  const { isLoading: isLoadingProviders, isAnyProviderConfigured, needsSetup, isProviderConfigured } =
     useProviderSettings();
 
   const { isDesktop, mcpEnabled, setMcpEnabled, runningServers, mcpToolSchemas } =
@@ -525,6 +525,15 @@ const GlobalAssistantView: React.FC = () => {
   // ============================================
   // RENDER
   // ============================================
+
+  // Show loading state while checking provider configuration
+  if (isLoadingProviders) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="animate-pulse text-muted-foreground">Loading...</div>
+      </div>
+    );
+  }
 
   // Show provider setup if needed
   if (needsSetup) {

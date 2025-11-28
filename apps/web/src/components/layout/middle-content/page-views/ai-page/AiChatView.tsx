@@ -74,6 +74,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // SHARED HOOKS
   // ============================================
   const {
+    isLoading: isLoadingProviders,
     isAnyProviderConfigured,
     needsSetup,
     selectedProvider,
@@ -299,6 +300,15 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // ============================================
   // RENDER
   // ============================================
+
+  // Show loading state while checking provider configuration
+  if (isLoadingProviders) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="animate-pulse text-muted-foreground">Loading...</div>
+      </div>
+    );
+  }
 
   // Show provider setup if needed
   if (needsSetup) {
