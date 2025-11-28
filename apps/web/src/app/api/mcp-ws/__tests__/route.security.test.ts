@@ -59,7 +59,6 @@ import {
   registerConnection,
   verifyConnectionFingerprint,
   isChallengeVerified,
-  updateLastPing,
 } from '@/lib/websocket/ws-connections';
 import {
   generateChallenge,
@@ -68,7 +67,6 @@ import {
   logSecurityEvent,
   validateMessageSize,
 } from '@/lib/websocket/ws-security';
-import { decodeToken } from '@pagespace/lib/server';
 
 describe('WebSocket MCP Bridge - Security Tests', () => {
   let mockClient: WebSocket;
