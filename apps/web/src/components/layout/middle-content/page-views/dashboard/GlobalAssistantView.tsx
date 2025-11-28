@@ -3,10 +3,10 @@
  *
  * This component operates in two modes:
  * 1. Global Assistant Mode: Workspace-level assistant synced with sidebar
- * 2. Agent Mode: Page-level AI agent using centralized useAgentStore
+ * 2. Agent Mode: Page-level AI agent using centralized usePageAgentDashboardStore
  *
  * IMPORTANT: This view never has tabs. The right sidebar provides History and
- * Settings tabs that control this view via the shared useAgentStore.
+ * Settings tabs that control this view via the shared usePageAgentDashboardStore.
  *
  * STATE MANAGEMENT ARCHITECTURE (3 Systems - Intentional Design):
  *
@@ -15,27 +15,27 @@
  *    - Used when selectedAgent is null
  *    - Persists conversation ID to cookies
  *
- * 2. useAgentStore (Zustand)
+ * 2. usePageAgentDashboardStore (Zustand)
  *    - Dashboard/drive context ONLY
  *    - Synced with this middle panel AND the right sidebar
  *    - Agent selection, conversations, sidebar tab state (activeTab)
  *    - Persists agent ID to cookies/URL
  *
- * 3. useSidebarAgentState (Zustand + localStorage)
+ * 3. usePageAgentSidebarState (Zustand + localStorage)
  *    - Page context ONLY (when viewing a specific page)
  *    - Independent from page content - sidebar is standalone
  *    - Has its own agent selection and conversation state
  *    - Persists agent selection to localStorage
  *
- * WHY TWO AGENT STORES (useAgentStore vs useSidebarAgentState):
+ * WHY TWO AGENT STORES (usePageAgentDashboardStore vs usePageAgentSidebarState):
  * The sidebar is designed as an independent chat interface. When viewing
  * a page, users can chat with Agent A in the sidebar while viewing Page B.
  * This independence is intentional UX - only on /dashboard and /drive routes
- * do we sync the sidebar with this middle panel via useAgentStore.
+ * do we sync the sidebar with this middle panel via usePageAgentDashboardStore.
  *
  * TAB COMMUNICATION (replacing localStorage event bus):
  * Instead of using localStorage.setItem() + window.dispatchEvent() for cross-
- * component tab switching, we use useAgentStore.setActiveTab(). The right
+ * component tab switching, we use usePageAgentDashboardStore.setActiveTab(). The right
  * sidebar subscribes to activeTab in dashboard context, ensuring reactive updates.
  */
 
@@ -51,7 +51,7 @@ import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth } from '@/lib/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
-import { useAgentStore } from '@/stores/useAgentStore';
+import { usePageAgentDashboardStore } from '@/stores/page-agents/usePageAgentDashboardStore';
 import { AiUsageMonitor } from '@/components/ai/shared/AiUsageMonitor';
 import { AISelector } from '@/components/ai/shared/AISelector';
 
@@ -69,7 +69,7 @@ import {
   ProviderSetupCard,
   ChatMessagesAreaRef,
   ChatInputAreaRef,
-} from '@/components/ai/chat';
+} from '@/components/ai/shared/chat';
 
 const GlobalAssistantView: React.FC = () => {
   const pathname = usePathname();
@@ -101,7 +101,7 @@ const GlobalAssistantView: React.FC = () => {
     setConversationMessages: setAgentStoreMessages,
     createNewConversation: createAgentConversation,
     loadMostRecentConversation,
-  } = useAgentStore();
+  } = usePageAgentDashboardStore();
 
   // ============================================
   // LOCAL STATE
@@ -352,7 +352,7 @@ const GlobalAssistantView: React.FC = () => {
   // ============================================
 
   // Get setActiveTab from store for sidebar tab control
-  const { setActiveTab } = useAgentStore();
+  const { setActiveTab } = usePageAgentDashboardStore();
 
   const handleNewConversation = async () => {
     if (selectedAgent) {

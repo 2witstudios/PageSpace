@@ -6,7 +6,7 @@
  *
  * This is a pure state-based solution (no refs) that integrates with:
  * - Document editing (DocumentView)
- * - AI streaming (AiChatView, GlobalAssistantView, AssistantChatTab)
+ * - AI streaming (AiChatView, GlobalAssistantView, SidebarChatTab)
  * - Auth refresh protection (auth-store)
  * - SWR isPaused() conditions (UsageCounter, UserDropdown)
  */

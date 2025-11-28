@@ -12,8 +12,8 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
-import { useAgents, AgentSummary } from '@/hooks/useAgents';
-import { AgentInfo } from '@/stores/useAgentStore';
+import { usePageAgents, AgentSummary } from '@/hooks/page-agents/usePageAgents';
+import { AgentInfo } from '@/stores/page-agents/usePageAgentDashboardStore';
 import { cn } from '@/lib/utils';
 
 interface AISelectorProps {
@@ -38,7 +38,7 @@ export function AISelector({
   disabled = false,
   className,
 }: AISelectorProps) {
-  const { agentsByDrive, isLoading, toAgentInfo } = useAgents(driveId);
+  const { agentsByDrive, isLoading, toAgentInfo } = usePageAgents(driveId);
 
   const hasAgents = agentsByDrive.some(drive => drive.agents.length > 0);
   const showDriveLabels = !driveId && agentsByDrive.length > 1;

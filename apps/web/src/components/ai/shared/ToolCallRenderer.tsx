@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { Task, TaskTrigger, TaskContent, TaskItem, TaskItemFile, TaskStatus } from '@/components/ai/task';
 import { TaskManagementToolRenderer } from './TaskManagementToolRenderer';
-import { AgentConversationRenderer } from './AgentConversationRenderer';
+import { PageAgentConversationRenderer } from '@/components/ai/page-agents/PageAgentConversationRenderer';
 import { patch } from '@/lib/auth-fetch';
 
 interface DriveInfo {
@@ -85,7 +85,7 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
 
   // Ask Agent tool - render with dedicated conversation UI
   if (toolName === 'ask_agent') {
-    return <AgentConversationRenderer part={part} />;
+    return <PageAgentConversationRenderer part={part} />;
   }
 
   // Convert AI SDK state to Task status

@@ -11,7 +11,7 @@ import { conversationState } from '@/lib/ai/core/conversation-state';
  * This context manages the Global Assistant chat that appears in the sidebar.
  * It does NOT manage agent selection or agent conversations.
  *
- * Agent selection is managed by useAgentStore (Zustand store).
+ * Agent selection is managed by usePageAgentDashboardStore (Zustand store).
  * Agent conversations are managed locally by GlobalAssistantView when in agent mode.
  */
 interface GlobalChatContextValue {
@@ -138,7 +138,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
 
   /**
    * Initialize Global Assistant chat on mount
-   * Agent initialization is handled separately by useAgentStore
+   * Agent initialization is handled separately by usePageAgentDashboardStore
    */
   useEffect(() => {
     const initializeGlobalChat = async () => {

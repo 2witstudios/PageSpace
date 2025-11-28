@@ -25,7 +25,7 @@ interface Conversation {
   };
 }
 
-interface AgentHistoryTabProps {
+interface PageAgentHistoryTabProps {
   conversations: Conversation[];
   currentConversationId: string | null;
   onSelectConversation: (conversationId: string) => void;
@@ -130,7 +130,7 @@ export default function PageAgentHistoryTab({
   onCreateNew,
   onDeleteConversation,
   isLoading,
-}: AgentHistoryTabProps) {
+}: PageAgentHistoryTabProps) {
   return (
     <div className="flex flex-col h-full p-4">
       <div className="mb-4">

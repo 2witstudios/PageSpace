@@ -7,8 +7,8 @@ import { Trash2, Search, MessageSquare, Sparkles, Bot } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { del, fetchWithAuth } from '@/lib/auth-fetch';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
-import { useSidebarAgentState } from '@/hooks/useSidebarAgentState';
-import { useAgentStore } from '@/stores/useAgentStore';
+import { usePageAgentSidebarState } from '@/hooks/page-agents/usePageAgentSidebarState';
+import { usePageAgentDashboardStore } from '@/stores/page-agents/usePageAgentDashboardStore';
 import type { AgentInfo } from '@/types/agent';
 
 interface Conversation {
@@ -19,7 +19,7 @@ interface Conversation {
   createdAt: string;
 }
 
-interface AssistantHistoryTabProps {
+interface SidebarHistoryTabProps {
   selectedAgent: AgentInfo | null;
   isDashboardContext?: boolean;
 }
@@ -30,14 +30,14 @@ interface AssistantHistoryTabProps {
  * Supports both Global Assistant mode (selectedAgent = null) and Agent mode.
  *
  * On dashboard context:
- * - Uses useAgentStore directly (shared with GlobalAssistantView)
+ * - Uses usePageAgentDashboardStore directly (shared with GlobalAssistantView)
  * - Clicking a conversation loads it into the middle panel
  *
  * On page context:
- * - Uses useSidebarAgentState (independent from page content)
+ * - Uses usePageAgentSidebarState (independent from page content)
  * - Clicking a conversation loads it into the sidebar chat
  */
-const AssistantHistoryTab: React.FC<AssistantHistoryTabProps> = ({
+const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
   selectedAgent,
   isDashboardContext = false,
 }) => {
@@ -55,10 +55,10 @@ const AssistantHistoryTab: React.FC<AssistantHistoryTabProps> = ({
     conversationId: sidebarAgentConversationId,
     createNewConversation: createNewSidebarAgentConversation,
     refreshConversation: refreshSidebarAgentConversation,
-  } = useSidebarAgentState();
+  } = usePageAgentSidebarState();
 
   // Use central agent store for dashboard context
-  const agentStore = useAgentStore();
+  const agentStore = usePageAgentDashboardStore();
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -293,4 +293,4 @@ const AssistantHistoryTab: React.FC<AssistantHistoryTabProps> = ({
   );
 };
 
-export default AssistantHistoryTab;
+export default SidebarHistoryTab;

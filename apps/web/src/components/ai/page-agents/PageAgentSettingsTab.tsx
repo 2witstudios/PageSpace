@@ -22,7 +22,7 @@ interface AgentConfig {
   drivePrompt?: string | null;
 }
 
-interface AgentSettingsTabProps {
+interface PageAgentSettingsTabProps {
   pageId: string;
   config: AgentConfig | null;
   onConfigUpdate: (config: AgentConfig) => void;
@@ -33,7 +33,7 @@ interface AgentSettingsTabProps {
   isProviderConfigured: (provider: string) => boolean;
 }
 
-export interface AgentSettingsTabRef {
+export interface PageAgentSettingsTabRef {
   submitForm: () => void;
   isSaving: boolean;
 }
@@ -46,7 +46,7 @@ interface FormData {
   includeDrivePrompt: boolean;
 }
 
-const AgentSettingsTab = forwardRef<AgentSettingsTabRef, AgentSettingsTabProps>(({
+const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettingsTabProps>(({
   pageId,
   config,
   onConfigUpdate,
@@ -415,6 +415,6 @@ const AgentSettingsTab = forwardRef<AgentSettingsTabRef, AgentSettingsTabProps>(
   );
 });
 
-AgentSettingsTab.displayName = 'AgentSettingsTab';
+PageAgentSettingsTab.displayName = 'PageAgentSettingsTab';
 
-export default AgentSettingsTab;
+export default PageAgentSettingsTab;

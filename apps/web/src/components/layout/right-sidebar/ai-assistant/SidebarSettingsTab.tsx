@@ -36,7 +36,7 @@ interface SaveSettingsResult {
   success?: boolean;
 }
 
-interface AssistantSettingsTabProps {
+interface SidebarSettingsTabProps {
   selectedAgent: AgentInfo | null;
 }
 
@@ -46,7 +46,7 @@ interface AssistantSettingsTabProps {
  * Shows Global Assistant settings when no agent is selected.
  * When an agent is selected, shows info message directing to agent page.
  */
-const AssistantSettingsTab: React.FC<AssistantSettingsTabProps> = ({
+const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
   selectedAgent,
 }) => {
   const router = useRouter();
@@ -327,7 +327,7 @@ const AssistantSettingsTab: React.FC<AssistantSettingsTabProps> = ({
       
       // Broadcast settings update event for other components
       // Note: This uses CustomEvent (not Zustand) because AI settings sync spans
-      // beyond the sidebar - includes /settings/ai page and AssistantChatTab.
+      // beyond the sidebar - includes /settings/ai page and SidebarChatTab.
       // A future refactor could consolidate into a dedicated AI settings store.
       window.dispatchEvent(new CustomEvent('ai-settings-updated', {
         detail: { provider: selectedProvider, model: selectedModel }
@@ -682,4 +682,4 @@ const AssistantSettingsTab: React.FC<AssistantSettingsTabProps> = ({
   );
 };
 
-export default AssistantSettingsTab;
+export default SidebarSettingsTab;

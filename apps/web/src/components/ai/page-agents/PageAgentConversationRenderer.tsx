@@ -2,7 +2,7 @@ import React from 'react';
 import { Loader2, AlertCircle } from 'lucide-react';
 import { Task, TaskTrigger, TaskContent, TaskItem, TaskStatus } from '@/components/ai/task';
 import { Badge } from '@/components/ui/badge';
-import { MemoizedMarkdown } from './MemoizedMarkdown';
+import { MemoizedMarkdown } from '@/components/ai/shared/MemoizedMarkdown';
 
 interface AgentConversationOutput {
   success: boolean;
@@ -33,7 +33,7 @@ interface ToolPart {
   errorText?: string;
 }
 
-interface AgentConversationRendererProps {
+interface PageAgentConversationRendererProps {
   part: ToolPart;
 }
 
@@ -44,7 +44,7 @@ type AskAgentInput = {
   context?: string;
 };
 
-export const AgentConversationRenderer: React.FC<AgentConversationRendererProps> = ({ part }) => {
+export const PageAgentConversationRenderer: React.FC<PageAgentConversationRendererProps> = ({ part }) => {
   const state = part.state || 'input-streaming';
 
   // Try to parse output into a typed shape

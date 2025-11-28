@@ -1,7 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { ToolExecutionContext } from '../types';
-import { getDefaultPageSpaceSettings, getUserGLMSettings } from '../ai-utils';
+import { ToolExecutionContext } from '../core/types';
+import { getDefaultPageSpaceSettings, getUserGLMSettings } from '../core/ai-utils';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 

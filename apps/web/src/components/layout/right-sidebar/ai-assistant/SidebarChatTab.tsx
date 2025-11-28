@@ -12,8 +12,8 @@ import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth, patch, del } from '@/lib/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
-import { useSidebarAgentState, SidebarAgentInfo } from '@/hooks/useSidebarAgentState';
-import { useSidebarChat } from '@/hooks/useSidebarChat';
+import { usePageAgentSidebarState, SidebarAgentInfo } from '@/hooks/page-agents/usePageAgentSidebarState';
+import { usePageAgentSidebarChat } from '@/hooks/page-agents/usePageAgentSidebarChat';
 import { toast } from 'sonner';
 import { AiUsageMonitor } from '@/components/ai/shared/AiUsageMonitor';
 
@@ -50,9 +50,9 @@ interface LocationContext {
  * - Global Mode (default): Uses GlobalChatContext, syncs with middle panel
  * - Agent Mode: Uses local state, independent from middle panel
  *
- * The sidebar maintains its own agent selection, separate from the middle panel's useAgentStore.
+ * The sidebar maintains its own agent selection, separate from the middle panel's usePageAgentDashboardStore.
  */
-const AssistantChatTab: React.FC = () => {
+const SidebarChatTab: React.FC = () => {
   const pathname = usePathname();
 
   // ============================================
@@ -80,7 +80,7 @@ const AssistantChatTab: React.FC = () => {
     selectAgent,
     createNewConversation: createAgentConversation,
     refreshConversation: refreshAgentConversation,
-  } = useSidebarAgentState();
+  } = usePageAgentSidebarState();
 
   // ============================================
   // Agent Chat Configuration
@@ -121,7 +121,7 @@ const AssistantChatTab: React.FC = () => {
     globalStop,
     globalMessages,
     setGlobalMessages,
-  } = useSidebarChat({
+  } = usePageAgentSidebarChat({
     selectedAgent,
     globalChatConfig,
     agentChatConfig,
@@ -321,7 +321,7 @@ const AssistantChatTab: React.FC = () => {
     if (status === 'submitted' || status === 'streaming') {
       useEditingStore.getState().startStreaming(componentId, {
         conversationId: currentConversationId || undefined,
-        componentName: 'AssistantChatTab',
+        componentName: 'SidebarChatTab',
       });
     } else {
       useEditingStore.getState().endStreaming(componentId);
@@ -689,4 +689,4 @@ const AssistantChatTab: React.FC = () => {
   );
 };
 
-export default AssistantChatTab;
+export default SidebarChatTab;

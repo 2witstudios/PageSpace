@@ -166,7 +166,7 @@ export interface UseSidebarAgentStateReturn {
  * Hook for managing sidebar agent selection state.
  * Uses Zustand store internally for shared state across components.
  */
-export function useSidebarAgentState(): UseSidebarAgentStateReturn {
+export function usePageAgentSidebarState(): UseSidebarAgentStateReturn {
   const store = useSidebarAgentStore();
 
   // Destructure store methods for useEffect dependencies (stable references from Zustand)

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useMemo, useCallback } from 'react';
 import { useChat, UseChatOptions } from '@ai-sdk/react';
 import { UIMessage } from 'ai';
-import { SidebarAgentInfo } from './useSidebarAgentState';
+import { SidebarAgentInfo } from './usePageAgentSidebarState';
 
 /**
  * Return type for the unified sidebar chat interface.
@@ -50,7 +50,7 @@ interface UseSidebarChatOptions {
  *
  * Handles mode switching gracefully (stops streams, clears stale messages).
  */
-export function useSidebarChat({
+export function usePageAgentSidebarChat({
   selectedAgent,
   globalChatConfig,
   agentChatConfig,

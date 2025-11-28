@@ -2,15 +2,15 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AISelector } from '../AgentSelector';
-import type { AgentSummary } from '@/hooks/useAgents';
-import type { AgentInfo } from '@/stores/useAgentStore';
+import type { AgentSummary } from '@/hooks/page-agents/usePageAgents';
+import type { AgentInfo } from '@/stores/page-agents/usePageAgentDashboardStore';
 
 // Mock the useAgents hook
 vi.mock('@/hooks/useAgents', () => ({
   useAgents: vi.fn(),
 }));
 
-import { useAgents } from '@/hooks/useAgents';
+import { usePageAgents } from '@/hooks/page-agents/usePageAgents';
 
 describe('AgentSelector', () => {
   const mockOnSelectAgent = vi.fn();

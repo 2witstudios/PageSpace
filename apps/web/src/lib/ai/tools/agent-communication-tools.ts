@@ -17,7 +17,7 @@ import {
   type ProviderRequest
 } from '@/lib/ai/core/provider-factory';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
-import { ToolExecutionContext } from '../types';
+import { ToolExecutionContext } from '../core/types';
 import { loggers } from '@pagespace/lib/server';
 import { AI_PROVIDERS, getModelDisplayName } from '@/lib/ai/core/ai-providers-config';
 

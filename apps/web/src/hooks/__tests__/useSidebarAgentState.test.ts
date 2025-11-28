@@ -1,11 +1,11 @@
 /**
- * useSidebarAgentState Hook Tests
+ * usePageAgentSidebarState Hook Tests
  * Tests for sidebar agent selection, persistence, and conversation management
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
-import { useSidebarAgentState, SidebarAgentInfo } from '../useSidebarAgentState';
+import { usePageAgentSidebarState, SidebarAgentInfo } from '../usePageAgentSidebarState';
 
 // Mock fetchWithAuth
 const mockFetchWithAuth = vi.fn();
@@ -24,7 +24,7 @@ vi.mock('sonner', () => ({
 // Storage key constant (must match the one in the hook)
 const STORAGE_KEY_AGENT_DATA = 'pagespace:sidebar:selectedAgentData';
 
-describe('useSidebarAgentState', () => {
+describe('usePageAgentSidebarState', () => {
   // Sample agent data
   const mockAgent: SidebarAgentInfo = {
     id: 'agent-123',
@@ -65,22 +65,22 @@ describe('useSidebarAgentState', () => {
   // ============================================
   describe('initial state', () => {
     it('should start with null selectedAgent (global mode)', () => {
-      const { result } = renderHook(() => useSidebarAgentState());
+      const { result } = renderHook(() => usePageAgentSidebarState());
       expect(result.current.selectedAgent).toBeNull();
     });
 
     it('should start with null conversationId', () => {
-      const { result } = renderHook(() => useSidebarAgentState());
+      const { result } = renderHook(() => usePageAgentSidebarState());
       expect(result.current.conversationId).toBeNull();
     });
 
     it('should start with empty initialMessages', () => {
-      const { result } = renderHook(() => useSidebarAgentState());
+      const { result } = renderHook(() => usePageAgentSidebarState());
       expect(result.current.initialMessages).toEqual([]);
     });
 
     it('should start as not initialized', () => {
-      const { result } = renderHook(() => useSidebarAgentState());
+      const { result } = renderHook(() => usePageAgentSidebarState());
       expect(result.current.isInitialized).toBe(false);
     });
   });
@@ -90,7 +90,7 @@ describe('useSidebarAgentState', () => {
   // ============================================
   describe('selectAgent', () => {
     it('should select an agent', () => {
-      const { result } = renderHook(() => useSidebarAgentState());
+      const { result } = renderHook(() => usePageAgentSidebarState());
 
       act(() => {
         result.current.selectAgent(mockAgent);
@@ -100,7 +100,7 @@ describe('useSidebarAgentState', () => {
     });
 
     it('should return to global mode when selecting null', () => {
-      const { result } = renderHook(() => useSidebarAgentState());
+      const { result } = renderHook(() => usePageAgentSidebarState());
 
       // First select an agent
       act(() => {
@@ -122,7 +122,7 @@ describe('useSidebarAgentState', () => {
         json: async () => ({ conversationId: 'conv-123' }),
       });
 
-      const { result } = renderHook(() => useSidebarAgentState());
+      const { result } = renderHook(() => usePageAgentSidebarState());
 
       // Select first agent
       act(() => {
@@ -149,7 +149,7 @@ describe('useSidebarAgentState', () => {
   // ============================================
   describe('localStorage persistence', () => {
     it('should persist selected agent to localStorage', () => {
-      const { result } = renderHook(() => useSidebarAgentState());
+      const { result } = renderHook(() => usePageAgentSidebarState());
 
       act(() => {
         result.current.selectAgent(mockAgent);
@@ -161,7 +161,7 @@ describe('useSidebarAgentState', () => {
     });
 
     it('should remove from localStorage when deselecting agent', () => {
-      const { result } = renderHook(() => useSidebarAgentState());
+      const { result } = renderHook(() => usePageAgentSidebarState());
 
       // Select agent
       act(() => {
@@ -180,7 +180,7 @@ describe('useSidebarAgentState', () => {
       // Pre-populate localStorage
       localStorage.setItem(STORAGE_KEY_AGENT_DATA, JSON.stringify(mockAgent));
 
-      const { result } = renderHook(() => useSidebarAgentState());
+      const { result } = renderHook(() => usePageAgentSidebarState());
 
       // Should restore the agent
       expect(result.current.selectedAgent).toEqual(mockAgent);
@@ -190,7 +190,7 @@ describe('useSidebarAgentState', () => {
       // Set invalid JSON
       localStorage.setItem(STORAGE_KEY_AGENT_DATA, 'not valid json');
 
-      const { result } = renderHook(() => useSidebarAgentState());
+      const { result } = renderHook(() => usePageAgentSidebarState());
 
       // Should start with null (invalid data cleaned up)
       expect(result.current.selectedAgent).toBeNull();
@@ -202,7 +202,7 @@ describe('useSidebarAgentState', () => {
       // Set data missing required fields
       localStorage.setItem(STORAGE_KEY_AGENT_DATA, JSON.stringify({ id: 'test' }));
 
-      const { result } = renderHook(() => useSidebarAgentState());
+      const { result } = renderHook(() => usePageAgentSidebarState());
 
       // Should start with null (incomplete data is invalid)
       expect(result.current.selectedAgent).toBeNull();
@@ -233,7 +233,7 @@ describe('useSidebarAgentState', () => {
           json: async () => ({ messages: mockMessages }),
         });
 
-      const { result } = renderHook(() => useSidebarAgentState());
+      const { result } = renderHook(() => usePageAgentSidebarState());
 
       act(() => {
         result.current.selectAgent(mockAgent);
@@ -259,7 +259,7 @@ describe('useSidebarAgentState', () => {
           json: async () => ({ conversationId: 'conv-new' }),
         });
 
-      const { result } = renderHook(() => useSidebarAgentState());
+      const { result } = renderHook(() => usePageAgentSidebarState());
 
       act(() => {
         result.current.selectAgent(mockAgent);
@@ -276,7 +276,7 @@ describe('useSidebarAgentState', () => {
     it('should handle conversation loading errors gracefully', async () => {
       mockFetchWithAuth.mockRejectedValueOnce(new Error('Network error'));
 
-      const { result } = renderHook(() => useSidebarAgentState());
+      const { result } = renderHook(() => usePageAgentSidebarState());
 
       act(() => {
         result.current.selectAgent(mockAgent);
@@ -314,7 +314,7 @@ describe('useSidebarAgentState', () => {
           json: async () => ({ conversationId: 'conv-new' }),
         });
 
-      const { result } = renderHook(() => useSidebarAgentState());
+      const { result } = renderHook(() => usePageAgentSidebarState());
 
       act(() => {
         result.current.selectAgent(mockAgent);
@@ -335,7 +335,7 @@ describe('useSidebarAgentState', () => {
     });
 
     it('should return null if no agent is selected', async () => {
-      const { result } = renderHook(() => useSidebarAgentState());
+      const { result } = renderHook(() => usePageAgentSidebarState());
 
       let newConvId: string | null = null;
       await act(async () => {
@@ -374,7 +374,7 @@ describe('useSidebarAgentState', () => {
           json: async () => ({ messages: updatedMessages }),
         });
 
-      const { result } = renderHook(() => useSidebarAgentState());
+      const { result } = renderHook(() => usePageAgentSidebarState());
 
       act(() => {
         result.current.selectAgent(mockAgent);
@@ -409,7 +409,7 @@ describe('useSidebarAgentState', () => {
           json: async () => ({ conversationId: 'conv-123' }),
         });
 
-      const { result } = renderHook(() => useSidebarAgentState());
+      const { result } = renderHook(() => usePageAgentSidebarState());
 
       act(() => {
         result.current.selectAgent(mockAgent);
@@ -445,7 +445,7 @@ describe('useSidebarAgentState', () => {
 
       localStorage.setItem(STORAGE_KEY_AGENT_DATA, JSON.stringify(validAgent));
 
-      const { result } = renderHook(() => useSidebarAgentState());
+      const { result } = renderHook(() => usePageAgentSidebarState());
       expect(result.current.selectedAgent).toEqual(validAgent);
     });
 
@@ -458,7 +458,7 @@ describe('useSidebarAgentState', () => {
 
       localStorage.setItem(STORAGE_KEY_AGENT_DATA, JSON.stringify(invalidAgent));
 
-      const { result } = renderHook(() => useSidebarAgentState());
+      const { result } = renderHook(() => usePageAgentSidebarState());
       expect(result.current.selectedAgent).toBeNull();
     });
 
@@ -471,7 +471,7 @@ describe('useSidebarAgentState', () => {
 
       localStorage.setItem(STORAGE_KEY_AGENT_DATA, JSON.stringify(invalidAgent));
 
-      const { result } = renderHook(() => useSidebarAgentState());
+      const { result } = renderHook(() => usePageAgentSidebarState());
       expect(result.current.selectedAgent).toBeNull();
     });
 
@@ -484,7 +484,7 @@ describe('useSidebarAgentState', () => {
 
       localStorage.setItem(STORAGE_KEY_AGENT_DATA, JSON.stringify(invalidAgent));
 
-      const { result } = renderHook(() => useSidebarAgentState());
+      const { result } = renderHook(() => usePageAgentSidebarState());
       expect(result.current.selectedAgent).toBeNull();
     });
 
@@ -497,7 +497,7 @@ describe('useSidebarAgentState', () => {
 
       localStorage.setItem(STORAGE_KEY_AGENT_DATA, JSON.stringify(invalidAgent));
 
-      const { result } = renderHook(() => useSidebarAgentState());
+      const { result } = renderHook(() => usePageAgentSidebarState());
       expect(result.current.selectedAgent).toBeNull();
     });
 
@@ -515,7 +515,7 @@ describe('useSidebarAgentState', () => {
 
       localStorage.setItem(STORAGE_KEY_AGENT_DATA, JSON.stringify(agentWithOptionals));
 
-      const { result } = renderHook(() => useSidebarAgentState());
+      const { result } = renderHook(() => usePageAgentSidebarState());
       expect(result.current.selectedAgent).toEqual(agentWithOptionals);
     });
   });

@@ -1,11 +1,11 @@
 /**
- * useAgentStore Tests
+ * usePageAgentDashboardStore Tests
  * Tests for centralized agent state management (dashboard context)
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
-import { useAgentStore, type AgentInfo, type SidebarTab } from '../useAgentStore';
+import { usePageAgentDashboardStore, type AgentInfo, type SidebarTab } from '../usePageAgentDashboardStore';
 
 // Mock fetchWithAuth
 const mockFetchWithAuth = vi.fn();
@@ -33,7 +33,7 @@ vi.mock('sonner', () => ({
 const mockPushState = vi.fn();
 const mockReplaceState = vi.fn();
 
-describe('useAgentStore', () => {
+describe('usePageAgentDashboardStore', () => {
   const mockAgent: AgentInfo = {
     id: 'agent-123',
     title: 'Test Agent',
@@ -54,7 +54,7 @@ describe('useAgentStore', () => {
 
   beforeEach(() => {
     // Reset the store state before each test
-    useAgentStore.setState({
+    usePageAgentDashboardStore.setState({
       selectedAgent: null,
       isInitialized: false,
       conversationId: null,
@@ -96,27 +96,27 @@ describe('useAgentStore', () => {
   // ============================================
   describe('initial state', () => {
     it('should have null selectedAgent', () => {
-      const { result } = renderHook(() => useAgentStore());
+      const { result } = renderHook(() => usePageAgentDashboardStore());
       expect(result.current.selectedAgent).toBeNull();
     });
 
     it('should not be initialized', () => {
-      const { result } = renderHook(() => useAgentStore());
+      const { result } = renderHook(() => usePageAgentDashboardStore());
       expect(result.current.isInitialized).toBe(false);
     });
 
     it('should have history as default activeTab', () => {
-      const { result } = renderHook(() => useAgentStore());
+      const { result } = renderHook(() => usePageAgentDashboardStore());
       expect(result.current.activeTab).toBe('history');
     });
 
     it('should have null conversationId', () => {
-      const { result } = renderHook(() => useAgentStore());
+      const { result } = renderHook(() => usePageAgentDashboardStore());
       expect(result.current.conversationId).toBeNull();
     });
 
     it('should have empty conversationMessages', () => {
-      const { result } = renderHook(() => useAgentStore());
+      const { result } = renderHook(() => usePageAgentDashboardStore());
       expect(result.current.conversationMessages).toEqual([]);
     });
   });
@@ -126,7 +126,7 @@ describe('useAgentStore', () => {
   // ============================================
   describe('setActiveTab', () => {
     it('should update activeTab to history', () => {
-      const { result } = renderHook(() => useAgentStore());
+      const { result } = renderHook(() => usePageAgentDashboardStore());
 
       act(() => {
         result.current.setActiveTab('history');
@@ -136,7 +136,7 @@ describe('useAgentStore', () => {
     });
 
     it('should update activeTab to settings', () => {
-      const { result } = renderHook(() => useAgentStore());
+      const { result } = renderHook(() => usePageAgentDashboardStore());
 
       act(() => {
         result.current.setActiveTab('settings');
@@ -146,7 +146,7 @@ describe('useAgentStore', () => {
     });
 
     it('should update activeTab to chat', () => {
-      const { result } = renderHook(() => useAgentStore());
+      const { result } = renderHook(() => usePageAgentDashboardStore());
 
       act(() => {
         result.current.setActiveTab('chat');
@@ -156,7 +156,7 @@ describe('useAgentStore', () => {
     });
 
     it('should preserve other state when changing tabs', () => {
-      const { result } = renderHook(() => useAgentStore());
+      const { result } = renderHook(() => usePageAgentDashboardStore());
 
       // Set up some state
       act(() => {
@@ -179,7 +179,7 @@ describe('useAgentStore', () => {
   // ============================================
   describe('selectAgent', () => {
     it('should select an agent', () => {
-      const { result } = renderHook(() => useAgentStore());
+      const { result } = renderHook(() => usePageAgentDashboardStore());
 
       act(() => {
         result.current.selectAgent(mockAgent);
@@ -189,7 +189,7 @@ describe('useAgentStore', () => {
     });
 
     it('should deselect agent when passing null', () => {
-      const { result } = renderHook(() => useAgentStore());
+      const { result } = renderHook(() => usePageAgentDashboardStore());
 
       act(() => {
         result.current.selectAgent(mockAgent);
@@ -203,10 +203,10 @@ describe('useAgentStore', () => {
     });
 
     it('should clear conversation state when switching agents', () => {
-      const { result } = renderHook(() => useAgentStore());
+      const { result } = renderHook(() => usePageAgentDashboardStore());
 
       // Set up initial agent with conversation
-      useAgentStore.setState({
+      usePageAgentDashboardStore.setState({
         selectedAgent: mockAgent,
         conversationId: 'conv-123',
         conversationMessages: [{ id: 'msg-1', role: 'user', content: 'Hello' }] as never[],
@@ -225,10 +225,10 @@ describe('useAgentStore', () => {
     });
 
     it('should not clear conversation when selecting same agent', () => {
-      const { result } = renderHook(() => useAgentStore());
+      const { result } = renderHook(() => usePageAgentDashboardStore());
 
       // Set up initial agent with conversation
-      useAgentStore.setState({
+      usePageAgentDashboardStore.setState({
         selectedAgent: mockAgent,
         conversationId: 'conv-123',
         conversationMessages: [{ id: 'msg-1', role: 'user', content: 'Hello' }] as never[],
@@ -249,7 +249,7 @@ describe('useAgentStore', () => {
   // ============================================
   describe('setConversationMessages', () => {
     it('should update conversation messages', () => {
-      const { result } = renderHook(() => useAgentStore());
+      const { result } = renderHook(() => usePageAgentDashboardStore());
 
       const messages = [
         { id: 'msg-1', role: 'user', content: 'Hello' },
@@ -264,7 +264,7 @@ describe('useAgentStore', () => {
     });
 
     it('should replace existing messages', () => {
-      const { result } = renderHook(() => useAgentStore());
+      const { result } = renderHook(() => usePageAgentDashboardStore());
 
       const initialMessages = [{ id: 'msg-1', role: 'user', content: 'First' }] as never[];
       const newMessages = [{ id: 'msg-2', role: 'user', content: 'Second' }] as never[];
@@ -286,10 +286,10 @@ describe('useAgentStore', () => {
   // ============================================
   describe('clearConversation', () => {
     it('should clear all conversation state', () => {
-      const { result } = renderHook(() => useAgentStore());
+      const { result } = renderHook(() => usePageAgentDashboardStore());
 
       // Set up conversation state
-      useAgentStore.setState({
+      usePageAgentDashboardStore.setState({
         conversationId: 'conv-123',
         conversationMessages: [{ id: 'msg-1', role: 'user', content: 'Hello' }] as never[],
         conversationAgentId: 'agent-123',
@@ -305,9 +305,9 @@ describe('useAgentStore', () => {
     });
 
     it('should preserve agent selection when clearing conversation', () => {
-      const { result } = renderHook(() => useAgentStore());
+      const { result } = renderHook(() => usePageAgentDashboardStore());
 
-      useAgentStore.setState({
+      usePageAgentDashboardStore.setState({
         selectedAgent: mockAgent,
         conversationId: 'conv-123',
         conversationMessages: [{ id: 'msg-1', role: 'user', content: 'Hello' }] as never[],
@@ -327,7 +327,7 @@ describe('useAgentStore', () => {
   // ============================================
   describe('type safety', () => {
     it('should accept valid SidebarTab values', () => {
-      const { result } = renderHook(() => useAgentStore());
+      const { result } = renderHook(() => usePageAgentDashboardStore());
 
       const validTabs: SidebarTab[] = ['chat', 'history', 'settings'];
 
@@ -340,7 +340,7 @@ describe('useAgentStore', () => {
     });
 
     it('should accept AgentInfo with optional fields', () => {
-      const { result } = renderHook(() => useAgentStore());
+      const { result } = renderHook(() => usePageAgentDashboardStore());
 
       const minimalAgent: AgentInfo = {
         id: 'test',

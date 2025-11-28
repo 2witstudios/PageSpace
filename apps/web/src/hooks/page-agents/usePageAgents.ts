@@ -2,7 +2,7 @@ import useSWR from 'swr';
 import { useMemo } from 'react';
 import { fetchWithAuth } from '@/lib/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
-import { AgentInfo } from '@/stores/useAgentStore';
+import { AgentInfo } from '@/stores/page-agents/usePageAgentDashboardStore';
 
 /**
  * Agent summary from the multi-drive API
@@ -64,7 +64,7 @@ const fetcher = async (url: string) => {
  * @param options.includeSystemPrompt - Include full system prompts (default: false)
  * @param options.refreshInterval - Refresh interval in ms (default: 60000 = 1 minute)
  */
-export function useAgents(
+export function usePageAgents(
   driveId?: string,
   options: {
     includeSystemPrompt?: boolean;

@@ -40,7 +40,7 @@ interface AgentState {
   loadMostRecentConversation: () => Promise<void>;
 }
 
-export const useAgentStore = create<AgentState>()((set, get) => ({
+export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
   selectedAgent: null,
   isInitialized: false,
   conversationId: null,

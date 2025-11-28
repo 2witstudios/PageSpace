@@ -19,8 +19,8 @@ import { buildPagePath } from '@/lib/tree/tree-utils';
 import { useDriveStore } from '@/hooks/useDrive';
 import { useAuth } from '@/hooks/use-auth';
 import { toast } from 'sonner';
-import AgentSettingsTab, { AgentSettingsTabRef } from '@/components/ai/page-agents/PageAgentSettingsTab';
-import AgentHistoryTab from '@/components/ai/page-agents/PageAgentHistoryTab';
+import PageAgentSettingsTab, { PageAgentSettingsTabRef } from '@/components/ai/page-agents/PageAgentSettingsTab';
+import PageAgentHistoryTab from '@/components/ai/page-agents/PageAgentHistoryTab';
 import { fetchWithAuth } from '@/lib/auth-fetch';
 
 // Shared hooks and components
@@ -38,7 +38,7 @@ import {
   ProviderSetupCard,
   ChatMessagesAreaRef,
   ChatInputAreaRef,
-} from '@/components/ai/chat';
+} from '@/components/ai/shared/chat';
 import { AiUsageMonitor } from '@/components/ai/shared/AiUsageMonitor';
 
 interface AiChatViewProps {
@@ -68,7 +68,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // Refs
   const messagesAreaRef = useRef<ChatMessagesAreaRef>(null);
   const inputAreaRef = useRef<ChatInputAreaRef>(null);
-  const agentSettingsRef = useRef<AgentSettingsTabRef>(null);
+  const agentSettingsRef = useRef<PageAgentSettingsTabRef>(null);
 
   // ============================================
   // SHARED HOOKS
@@ -429,7 +429,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
         {/* History Tab */}
         <TabsContent value="history" className="flex-1 overflow-hidden">
-          <AgentHistoryTab
+          <PageAgentHistoryTab
             conversations={conversations}
             currentConversationId={currentConversationId}
             onSelectConversation={loadConversation}
@@ -441,7 +441,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
         {/* Settings Tab */}
         <TabsContent value="settings" className="flex-1 overflow-auto">
-          <AgentSettingsTab
+          <PageAgentSettingsTab
             ref={agentSettingsRef}
             pageId={page.id}
             config={agentConfig}

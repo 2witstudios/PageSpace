@@ -2,7 +2,7 @@
  * Shared Agent Types
  *
  * This module provides a single source of truth for agent-related types
- * used across both dashboard (useAgentStore) and sidebar (useSidebarAgentState) contexts.
+ * used across both dashboard (usePageAgentDashboardStore) and sidebar (usePageAgentSidebarState) contexts.
  */
 
 /**
