@@ -44,7 +44,7 @@ struct AiConversationUsageData: Codable {
     }
 }
 
-/// API response structure from /api/ai_conversations/{id}/usage
+/// API response structure from /api/ai/global/{id}/usage
 struct AiConversationUsageApiResponse: Codable {
     let summary: UsageSummary
 

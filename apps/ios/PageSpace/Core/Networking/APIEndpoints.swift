@@ -13,23 +13,23 @@ enum APIEndpoints {
     static let oauthGoogleExchange = "/api/auth/mobile/oauth/google/exchange"
 
     // MARK: - Conversations (Global AI)
-    static let conversations = "/api/ai_conversations"
-    static let globalConversation = "/api/ai_conversations/global"
+    static let conversations = "/api/ai/global"
+    static let globalConversation = "/api/ai/global/active"
 
     static func conversation(_ id: String) -> String {
-        "/api/ai_conversations/\(id)"
+        "/api/ai/global/\(id)"
     }
 
     static func conversationMessages(_ id: String) -> String {
-        "/api/ai_conversations/\(id)/messages"
+        "/api/ai/global/\(id)/messages"
     }
 
     static func conversationMessage(_ conversationId: String, messageId: String) -> String {
-        "/api/ai_conversations/\(conversationId)/messages/\(messageId)"
+        "/api/ai/global/\(conversationId)/messages/\(messageId)"
     }
 
     static func conversationUsage(_ conversationId: String) -> String {
-        "/api/ai_conversations/\(conversationId)/usage"
+        "/api/ai/global/\(conversationId)/usage"
     }
 
     // MARK: - AI Settings
