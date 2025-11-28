@@ -74,19 +74,26 @@ const mockDrive = (overrides: { id: string; name: string }) => ({
 describe('GET /api/account/drives-status', () => {
   const mockUserId = 'user_123';
 
-  // Helper to setup select mock for count queries
-  const setupSelectMock = (count: number) => {
-    const whereMock = vi.fn().mockResolvedValue([{ count }]);
-    const fromMock = vi.fn().mockReturnValue({ where: whereMock });
-    vi.mocked(db.select).mockReturnValue({ from: fromMock } as unknown as ReturnType<typeof db.select>);
-  };
-
-  // Helper to setup select mock for admin queries
-  const setupAdminSelectMock = (admins: Array<{ id: string; name: string; email: string; role: string }>) => {
-    const whereMock = vi.fn().mockResolvedValue(admins);
-    const innerJoinMock = vi.fn().mockReturnValue({ where: whereMock });
-    const fromMock = vi.fn().mockReturnValue({ innerJoin: innerJoinMock });
-    vi.mocked(db.select).mockReturnValue({ from: fromMock } as unknown as ReturnType<typeof db.select>);
+  // Helper to setup select mock that handles both count AND admin queries
+  // The route calls db.select() multiple times:
+  // 1. Count query: .select({count}).from(driveMembers).where(...)
+  // 2. Admin query: .select({...}).from(driveMembers).innerJoin(users).where(...)
+  const setupSelectMocks = (
+    memberCount: number,
+    admins: Array<{ id: string; name: string; email: string; role: string }> = []
+  ) => {
+    vi.mocked(db.select).mockImplementation(() => {
+      return {
+        from: vi.fn().mockImplementation(() => ({
+          // For count query (direct where, no innerJoin)
+          where: vi.fn().mockResolvedValue([{ count: memberCount }]),
+          // For admin query (has innerJoin)
+          innerJoin: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue(admins),
+          }),
+        })),
+      } as unknown as ReturnType<typeof db.select>;
+    });
   };
 
   beforeEach(() => {
@@ -119,7 +126,7 @@ describe('GET /api/account/drives-status', () => {
     ]);
 
     // Mock member count to return 1 (solo)
-    setupSelectMock(1);
+    setupSelectMocks(1);
 
     const request = new Request('https://example.com/api/account/drives-status');
 
@@ -141,16 +148,13 @@ describe('GET /api/account/drives-status', () => {
       mockDrive({ id: 'drive_team', name: 'Team Drive' }),
     ]);
 
-    // Mock member count to return 5 (multi-member)
-    setupSelectMock(5);
-
-    // Mock admin query
+    // Mock member count to return 5 (multi-member) and admin query
     const admins = [
       { id: 'admin_1', name: 'Admin One', email: 'admin1@example.com', role: 'ADMIN' },
       { id: 'admin_2', name: 'Admin Two', email: 'admin2@example.com', role: 'ADMIN' },
     ];
 
-    setupAdminSelectMock(admins);
+    setupSelectMocks(5, admins);
 
     const request = new Request('https://example.com/api/account/drives-status');
 
@@ -176,11 +180,8 @@ describe('GET /api/account/drives-status', () => {
       mockDrive({ id: 'drive_no_admin', name: 'No Admins Drive' }),
     ]);
 
-    // Mock member count to return 3 (multi-member)
-    setupSelectMock(3);
-
-    // Mock empty admin list
-    setupAdminSelectMock([]);
+    // Mock member count to return 3 (multi-member) with empty admin list
+    setupSelectMocks(3, []);
 
     const request = new Request('https://example.com/api/account/drives-status');
 
@@ -199,30 +200,29 @@ describe('GET /api/account/drives-status', () => {
       mockDrive({ id: 'drive_team_2', name: 'Team 2' }),
     ]);
 
-    // Mock member counts - alternate between 1 and 5
-    let callCount = 0;
+    // Mock member counts - alternate between 1 and 5 for each drive's count query
+    // The route calls db.select() for EACH drive (count query), then for multi-member
+    // drives it also calls db.select() again (admin query).
+    // Order: count1, count2, count3, count4, then admin1, admin2 for multi-member drives
+    let countCallIndex = 0;
+    const memberCounts = [1, 5, 1, 5]; // solo, team, solo, team
+
     vi.mocked(db.select).mockImplementation(() => {
-      const count = callCount % 2 === 0 ? 1 : 5;
-      callCount++;
-
-      if (count === 5) {
-        // Multi-member drive - return admin query mock
-        return {
-          from: vi.fn().mockReturnValue({
-            innerJoin: vi.fn().mockReturnValue({
-              where: vi.fn().mockResolvedValue([
-                { id: 'admin_1', name: 'Admin', email: 'admin@example.com', role: 'ADMIN' },
-              ]),
-            }),
-          }),
-        } as unknown as ReturnType<typeof db.select>;
-      }
-
-      // Solo drive - return count query mock
       return {
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([{ count }]),
-        }),
+        from: vi.fn().mockImplementation(() => ({
+          // For count query
+          where: vi.fn().mockImplementation(async () => {
+            const count = memberCounts[countCallIndex % 4];
+            countCallIndex++;
+            return [{ count }];
+          }),
+          // For admin query (multi-member drives)
+          innerJoin: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([
+              { id: 'admin_1', name: 'Admin', email: 'admin@example.com', role: 'ADMIN' },
+            ]),
+          }),
+        })),
       } as unknown as ReturnType<typeof db.select>;
     });
 
@@ -268,7 +268,7 @@ describe('GET /api/account/drives-status', () => {
     ]);
 
     // Mock member count to return 0
-    setupSelectMock(0);
+    setupSelectMocks(0);
 
     const request = new Request('https://example.com/api/account/drives-status');
 
@@ -286,8 +286,6 @@ describe('GET /api/account/drives-status', () => {
       mockDrive({ id: 'drive_many_admins', name: 'Many Admins Drive' }),
     ]);
 
-    setupSelectMock(10);
-
     // Mock 5 admins
     const admins = Array.from({ length: 5 }, (_, i) => ({
       id: `admin_${i}`,
@@ -296,7 +294,8 @@ describe('GET /api/account/drives-status', () => {
       role: 'ADMIN',
     }));
 
-    setupAdminSelectMock(admins);
+    // Use combined mock for count (10) and admins
+    setupSelectMocks(10, admins);
 
     const request = new Request('https://example.com/api/account/drives-status');
 

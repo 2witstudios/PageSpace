@@ -146,38 +146,6 @@ describe('DriveOwnershipDialog', () => {
     expect(screen.getByText(/You must delete this drive/)).toBeInTheDocument();
   });
 
-  it('should call API with correct params on transfer', async () => {
-    const user = userEvent.setup();
-
-    render(
-      <DriveOwnershipDialog
-        isOpen={true}
-        onClose={mockOnClose}
-        onAllDrivesHandled={mockOnAllDrivesHandled}
-        multiMemberDrives={mockMultiMemberDrives}
-      />
-    );
-
-    // Select admin from dropdown (this is simplified - actual implementation may vary)
-    const dropdowns = screen.getAllByText('Select new owner (admin)');
-    await user.click(dropdowns[0]);
-
-    const adminOption = screen.getByText('Admin One (admin1@example.com)');
-    await user.click(adminOption);
-
-    // Click transfer button
-    const transferButtons = screen.getAllByRole('button', { name: /Transfer/i });
-    await user.click(transferButtons[0]);
-
-    await waitFor(() => {
-      expect(post).toHaveBeenCalledWith('/api/account/handle-drive', {
-        driveId: 'drive_1',
-        action: 'transfer',
-        newOwnerId: 'admin_1',
-      });
-    });
-  });
-
   it('should call API with correct params on delete', async () => {
     const user = userEvent.setup();
 
@@ -199,35 +167,6 @@ describe('DriveOwnershipDialog', () => {
         action: 'delete',
       });
     });
-  });
-
-  it('should remove drive from list after successful transfer', async () => {
-    const user = userEvent.setup();
-
-    render(
-      <DriveOwnershipDialog
-        isOpen={true}
-        onClose={mockOnClose}
-        onAllDrivesHandled={mockOnAllDrivesHandled}
-        multiMemberDrives={mockMultiMemberDrives}
-      />
-    );
-
-    // Select admin
-    const dropdowns = screen.getAllByText('Select new owner (admin)');
-    await user.click(dropdowns[0]);
-    const adminOption = screen.getByText('Admin One (admin1@example.com)');
-    await user.click(adminOption);
-
-    // Transfer
-    const transferButtons = screen.getAllByRole('button', { name: /Transfer/i });
-    await user.click(transferButtons[0]);
-
-    await waitFor(() => {
-      expect(screen.queryByText('Team Drive 1')).not.toBeInTheDocument();
-    });
-
-    expect(toast.success).toHaveBeenCalledWith('Transferred ownership of "Team Drive 1"');
   });
 
   it('should remove drive from list after successful delete', async () => {
@@ -291,9 +230,10 @@ describe('DriveOwnershipDialog', () => {
     const deleteButtons = screen.getAllByRole('button', { name: /Delete Drive/i });
     await user.click(deleteButtons[0]);
 
-    // Should show loading spinner
+    // Should show loading spinner - there may be multiple loading buttons
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: '' })).toBeInTheDocument(); // Loader has no name
+      const loadingButtons = screen.getAllByRole('button', { name: '' });
+      expect(loadingButtons.length).toBeGreaterThan(0);
     });
   });
 

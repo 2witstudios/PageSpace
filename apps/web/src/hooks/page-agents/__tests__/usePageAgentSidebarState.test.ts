@@ -5,7 +5,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
-import { usePageAgentSidebarState, SidebarAgentInfo } from '../usePageAgentSidebarState';
+import { usePageAgentSidebarState, SidebarAgentInfo, useSidebarAgentStore } from '../usePageAgentSidebarState';
 
 // Mock fetchWithAuth
 const mockFetchWithAuth = vi.fn();
@@ -23,6 +23,15 @@ vi.mock('sonner', () => ({
 
 // Storage key constant (must match the one in the hook)
 const STORAGE_KEY_AGENT_DATA = 'pagespace:sidebar:selectedAgentData';
+
+// Helper to store agent data in the Zustand persist format
+function storeAgentInPersistFormat(agent: SidebarAgentInfo | null) {
+  if (agent) {
+    localStorage.setItem(STORAGE_KEY_AGENT_DATA, JSON.stringify({ state: { selectedAgent: agent }, version: 0 }));
+  } else {
+    localStorage.removeItem(STORAGE_KEY_AGENT_DATA);
+  }
+}
 
 describe('usePageAgentSidebarState', () => {
   // Sample agent data
@@ -45,6 +54,15 @@ describe('usePageAgentSidebarState', () => {
   };
 
   beforeEach(() => {
+    // Reset Zustand store state to initial values
+    useSidebarAgentStore.setState({
+      selectedAgent: null,
+      conversationId: null,
+      initialMessages: [],
+      isInitialized: false,
+      agentIdForConversation: null,
+      _loadingAgentId: null,
+    });
     // Clear localStorage
     localStorage.clear();
     // Reset all mocks
@@ -157,28 +175,37 @@ describe('usePageAgentSidebarState', () => {
 
       const stored = localStorage.getItem(STORAGE_KEY_AGENT_DATA);
       expect(stored).not.toBeNull();
-      expect(JSON.parse(stored!)).toEqual(mockAgent);
+      // Zustand persist wraps state in { state: { ... }, version: 0 } format
+      const parsed = JSON.parse(stored!);
+      expect(parsed.state.selectedAgent).toEqual(mockAgent);
     });
 
-    it('should remove from localStorage when deselecting agent', () => {
+    it('should remove agent from localStorage when deselecting', () => {
       const { result } = renderHook(() => usePageAgentSidebarState());
 
       // Select agent
       act(() => {
         result.current.selectAgent(mockAgent);
       });
-      expect(localStorage.getItem(STORAGE_KEY_AGENT_DATA)).not.toBeNull();
+      const stored = localStorage.getItem(STORAGE_KEY_AGENT_DATA);
+      expect(stored).not.toBeNull();
+      expect(JSON.parse(stored!).state.selectedAgent).toEqual(mockAgent);
 
       // Deselect
       act(() => {
         result.current.selectAgent(null);
       });
-      expect(localStorage.getItem(STORAGE_KEY_AGENT_DATA)).toBeNull();
+      // Zustand persist keeps the key but sets selectedAgent to null
+      const storedAfter = localStorage.getItem(STORAGE_KEY_AGENT_DATA);
+      expect(storedAfter).not.toBeNull();
+      expect(JSON.parse(storedAfter!).state.selectedAgent).toBeNull();
     });
 
-    it('should restore agent from localStorage on mount', () => {
-      // Pre-populate localStorage
-      localStorage.setItem(STORAGE_KEY_AGENT_DATA, JSON.stringify(mockAgent));
+    it('should restore agent from localStorage on mount', async () => {
+      // Pre-populate localStorage with correct persist format
+      storeAgentInPersistFormat(mockAgent);
+      // Force store to rehydrate from localStorage
+      await useSidebarAgentStore.persist.rehydrate();
 
       const { result } = renderHook(() => usePageAgentSidebarState());
 
@@ -186,9 +213,11 @@ describe('usePageAgentSidebarState', () => {
       expect(result.current.selectedAgent).toEqual(mockAgent);
     });
 
-    it('should handle invalid localStorage data gracefully', () => {
+    it('should handle invalid localStorage data gracefully', async () => {
       // Set invalid JSON
       localStorage.setItem(STORAGE_KEY_AGENT_DATA, 'not valid json');
+      // Force store to attempt rehydration (should fail gracefully)
+      await useSidebarAgentStore.persist.rehydrate();
 
       const { result } = renderHook(() => usePageAgentSidebarState());
 
@@ -198,9 +227,11 @@ describe('usePageAgentSidebarState', () => {
       expect(localStorage.getItem(STORAGE_KEY_AGENT_DATA)).toBeNull();
     });
 
-    it('should handle incomplete agent data gracefully', () => {
-      // Set data missing required fields
-      localStorage.setItem(STORAGE_KEY_AGENT_DATA, JSON.stringify({ id: 'test' }));
+    it('should handle incomplete agent data gracefully', async () => {
+      // Set data missing required fields (in persist format)
+      localStorage.setItem(STORAGE_KEY_AGENT_DATA, JSON.stringify({ state: { selectedAgent: { id: 'test' } }, version: 0 }));
+      // Force store to attempt rehydration (should reject invalid data)
+      await useSidebarAgentStore.persist.rehydrate();
 
       const { result } = renderHook(() => usePageAgentSidebarState());
 
@@ -435,7 +466,7 @@ describe('usePageAgentSidebarState', () => {
   // Type Guard Tests
   // ============================================
   describe('type validation', () => {
-    it('should validate agent with all required fields', () => {
+    it('should validate agent with all required fields', async () => {
       const validAgent = {
         id: 'test',
         title: 'Test',
@@ -443,65 +474,70 @@ describe('usePageAgentSidebarState', () => {
         driveName: 'Drive',
       };
 
-      localStorage.setItem(STORAGE_KEY_AGENT_DATA, JSON.stringify(validAgent));
+      storeAgentInPersistFormat(validAgent as SidebarAgentInfo);
+      await useSidebarAgentStore.persist.rehydrate();
 
       const { result } = renderHook(() => usePageAgentSidebarState());
       expect(result.current.selectedAgent).toEqual(validAgent);
     });
 
-    it('should reject agent missing id', () => {
+    it('should reject agent missing id', async () => {
       const invalidAgent = {
         title: 'Test',
         driveId: 'drive-1',
         driveName: 'Drive',
       };
 
-      localStorage.setItem(STORAGE_KEY_AGENT_DATA, JSON.stringify(invalidAgent));
+      localStorage.setItem(STORAGE_KEY_AGENT_DATA, JSON.stringify({ state: { selectedAgent: invalidAgent }, version: 0 }));
+      await useSidebarAgentStore.persist.rehydrate();
 
       const { result } = renderHook(() => usePageAgentSidebarState());
       expect(result.current.selectedAgent).toBeNull();
     });
 
-    it('should reject agent missing title', () => {
+    it('should reject agent missing title', async () => {
       const invalidAgent = {
         id: 'test',
         driveId: 'drive-1',
         driveName: 'Drive',
       };
 
-      localStorage.setItem(STORAGE_KEY_AGENT_DATA, JSON.stringify(invalidAgent));
+      localStorage.setItem(STORAGE_KEY_AGENT_DATA, JSON.stringify({ state: { selectedAgent: invalidAgent }, version: 0 }));
+      await useSidebarAgentStore.persist.rehydrate();
 
       const { result } = renderHook(() => usePageAgentSidebarState());
       expect(result.current.selectedAgent).toBeNull();
     });
 
-    it('should reject agent missing driveId', () => {
+    it('should reject agent missing driveId', async () => {
       const invalidAgent = {
         id: 'test',
         title: 'Test',
         driveName: 'Drive',
       };
 
-      localStorage.setItem(STORAGE_KEY_AGENT_DATA, JSON.stringify(invalidAgent));
+      localStorage.setItem(STORAGE_KEY_AGENT_DATA, JSON.stringify({ state: { selectedAgent: invalidAgent }, version: 0 }));
+      await useSidebarAgentStore.persist.rehydrate();
 
       const { result } = renderHook(() => usePageAgentSidebarState());
       expect(result.current.selectedAgent).toBeNull();
     });
 
-    it('should reject agent missing driveName', () => {
+    it('should reject agent missing driveName', async () => {
       const invalidAgent = {
         id: 'test',
         title: 'Test',
         driveId: 'drive-1',
       };
 
-      localStorage.setItem(STORAGE_KEY_AGENT_DATA, JSON.stringify(invalidAgent));
+      localStorage.setItem(STORAGE_KEY_AGENT_DATA, JSON.stringify({ state: { selectedAgent: invalidAgent }, version: 0 }));
+      await useSidebarAgentStore.persist.rehydrate();
 
       const { result } = renderHook(() => usePageAgentSidebarState());
       expect(result.current.selectedAgent).toBeNull();
     });
 
-    it('should accept agent with optional fields', () => {
+    it('should accept agent with optional fields', async () => {
       const agentWithOptionals = {
         id: 'test',
         title: 'Test',
@@ -513,7 +549,8 @@ describe('usePageAgentSidebarState', () => {
         enabledTools: ['tool1', 'tool2'],
       };
 
-      localStorage.setItem(STORAGE_KEY_AGENT_DATA, JSON.stringify(agentWithOptionals));
+      storeAgentInPersistFormat(agentWithOptionals as SidebarAgentInfo);
+      await useSidebarAgentStore.persist.rehydrate();
 
       const { result } = renderHook(() => usePageAgentSidebarState());
       expect(result.current.selectedAgent).toEqual(agentWithOptionals);
