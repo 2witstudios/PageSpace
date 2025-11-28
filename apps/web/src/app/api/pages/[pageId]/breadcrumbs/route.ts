@@ -3,42 +3,25 @@ import { canUserViewPage } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { pages, db, drives, sql } from '@pagespace/db';
 
-type BreadcrumbPage = (typeof pages.$inferSelect) & { drive: { id: string; slug: string; name: string } | null };
+interface BreadcrumbPage {
+  id: string;
+  title: string;
+  type: 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'FILE' | 'SHEET';
+  parentId: string | null;
+  driveId: string;
+  drive: { id: string; slug: string; name: string } | null;
+}
 
 type QueryResultRow = {
   id: string;
   title: string;
   type: 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'FILE' | 'SHEET';
-  content: string;
-  isPaginated: boolean;
-  position: number;
-  isTrashed: boolean;
-  aiProvider: string | null;
-  aiModel: string | null;
-  systemPrompt: string | null;
-  enabledTools: unknown;
-  fileSize: number | null;
-  mimeType: string | null;
-  originalFileName: string | null;
-  filePath: string | null;
-  fileMetadata: unknown;
-  processingStatus: string | null;
-  processingError: string | null;
-  processedAt: Date | null;
-  extractionMethod: string | null;
-  extractionMetadata: unknown;
-  contentHash: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-  trashedAt: Date | null;
   driveId: string;
   parentId: string | null;
-  originalParentId: string | null;
   drive_id: string | null;
   drive_slug: string | null;
   drive_name: string | null;
   depth: number;
-  path: string[];
 };
 
 async function getBreadcrumbs(pageId: string): Promise<BreadcrumbPage[]> {
@@ -49,7 +32,11 @@ async function getBreadcrumbs(pageId: string): Promise<BreadcrumbPage[]> {
     WITH RECURSIVE page_ancestors AS (
       -- Base case: start with the requested page
       SELECT
-        p.*,
+        p.id,
+        p.title,
+        p.type,
+        p."driveId",
+        p."parentId",
         d.id as drive_id,
         d.slug as drive_slug,
         d.name as drive_name,
@@ -63,7 +50,11 @@ async function getBreadcrumbs(pageId: string): Promise<BreadcrumbPage[]> {
 
       -- Recursive case: get parent pages
       SELECT
-        p.*,
+        p.id,
+        p.title,
+        p.type,
+        p."driveId",
+        p."parentId",
         d.id as drive_id,
         d.slug as drive_slug,
         d.name as drive_name,
@@ -76,7 +67,8 @@ async function getBreadcrumbs(pageId: string): Promise<BreadcrumbPage[]> {
         pa.depth < ${MAX_DEPTH}
         AND NOT (p.id = ANY(pa.path))  -- Cycle detection
     )
-    SELECT * FROM page_ancestors
+    SELECT id, title, type, "driveId", "parentId", drive_id, drive_slug, drive_name, depth
+    FROM page_ancestors
     ORDER BY depth DESC
   `);
 
@@ -84,32 +76,9 @@ async function getBreadcrumbs(pageId: string): Promise<BreadcrumbPage[]> {
   const breadcrumbs: BreadcrumbPage[] = result.rows.map((row: QueryResultRow): BreadcrumbPage => ({
     id: row.id,
     title: row.title,
-    type: row.type as typeof pages.$inferSelect.type,
-    content: row.content,
-    isPaginated: row.isPaginated,
-    position: row.position,
-    isTrashed: row.isTrashed,
-    aiProvider: row.aiProvider,
-    aiModel: row.aiModel,
-    systemPrompt: row.systemPrompt,
-    enabledTools: row.enabledTools as typeof pages.$inferSelect.enabledTools,
-    fileSize: row.fileSize,
-    mimeType: row.mimeType,
-    originalFileName: row.originalFileName,
-    filePath: row.filePath,
-    fileMetadata: row.fileMetadata as typeof pages.$inferSelect.fileMetadata,
-    processingStatus: row.processingStatus,
-    processingError: row.processingError,
-    processedAt: row.processedAt,
-    extractionMethod: row.extractionMethod,
-    extractionMetadata: row.extractionMetadata as typeof pages.$inferSelect.extractionMetadata,
-    contentHash: row.contentHash,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-    trashedAt: row.trashedAt,
+    type: row.type,
     driveId: row.driveId,
     parentId: row.parentId,
-    originalParentId: row.originalParentId,
     drive: row.drive_id && row.drive_slug && row.drive_name ? {
       id: row.drive_id,
       slug: row.drive_slug,

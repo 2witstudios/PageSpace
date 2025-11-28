@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/server';
-import { db, pages, eq } from '@pagespace/db';
+import { db, pages, drives, eq } from '@pagespace/db';
 import { pageSpaceTools } from '@/lib/ai/ai-tools';
 import { loggers } from '@pagespace/lib/server';
 
@@ -47,6 +47,20 @@ export async function GET(
       // You could add more metadata here like categories, etc.
     }));
 
+    // Fetch the drive's prompt for reference in UI
+    let drivePrompt: string | null = null;
+    try {
+      const [drive] = await db
+        .select({ drivePrompt: drives.drivePrompt })
+        .from(drives)
+        .where(eq(drives.id, page.driveId))
+        .limit(1);
+      drivePrompt = drive?.drivePrompt || null;
+    } catch (error) {
+      loggers.api.error('Error fetching drive prompt:', error as Error);
+      // Continue without drive prompt on error
+    }
+
     return NextResponse.json({
       pageId,
       systemPrompt: page.systemPrompt || '',
@@ -54,6 +68,8 @@ export async function GET(
       availableTools,
       aiProvider: page.aiProvider || '',
       aiModel: page.aiModel || '',
+      includeDrivePrompt: page.includeDrivePrompt ?? false,
+      drivePrompt,
     });
   } catch (error) {
     loggers.api.error('Error fetching page agent configuration:', error as Error);
@@ -78,7 +94,7 @@ export async function PATCH(
 
     const { pageId } = await context.params;
     const body = await request.json();
-    const { systemPrompt, enabledTools, aiProvider, aiModel } = body;
+    const { systemPrompt, enabledTools, aiProvider, aiModel, includeDrivePrompt } = body;
 
     // Check if user has permission to edit this page
     const canEdit = await canUserEditPage(userId, pageId);
@@ -131,6 +147,10 @@ export async function PATCH(
       updateData.aiModel = aiModel.trim() || null;
     }
 
+    if (includeDrivePrompt !== undefined) {
+      updateData.includeDrivePrompt = Boolean(includeDrivePrompt);
+    }
+
     // Only update if there are changes
     if (Object.keys(updateData).length > 0) {
       await db
@@ -155,6 +175,7 @@ export async function PATCH(
       enabledTools: updateData.enabledTools,
       aiProvider: updateData.aiProvider,
       aiModel: updateData.aiModel,
+      includeDrivePrompt: updateData.includeDrivePrompt,
     });
   } catch (error) {
     loggers.api.error('Error updating page agent configuration:', error as Error);

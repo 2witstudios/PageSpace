@@ -13,6 +13,7 @@ export const drives = pgTable('drives', {
   trashedAt: timestamp('trashedAt', { mode: 'date' }),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
+  drivePrompt: text('drivePrompt'), // Custom AI instructions for this drive
 }, (table) => {
     return {
         ownerIdx: index('drives_owner_id_idx').on(table.ownerId),
@@ -32,6 +33,7 @@ export const pages = pgTable('pages', {
   aiModel: text('aiModel'),
   systemPrompt: text('systemPrompt'),
   enabledTools: jsonb('enabledTools'),
+  includeDrivePrompt: boolean('includeDrivePrompt').default(false), // Whether to include drive prompt for AI_CHAT pages
   // File-specific fields
   fileSize: real('fileSize'),
   mimeType: text('mimeType'),

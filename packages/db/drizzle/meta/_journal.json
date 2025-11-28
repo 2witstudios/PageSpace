@@ -85,6 +85,13 @@
       "when": 1764213948586,
       "tag": "0011_volatile_karma",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1764297805854,
+      "tag": "0012_zippy_angel",
+      "breakpoints": true
     }
   ]
 }

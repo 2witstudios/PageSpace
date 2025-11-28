@@ -2,10 +2,11 @@ import React, { useState, useEffect, useImperativeHandle, forwardRef, useCallbac
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Loader2 } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
+import { Loader2, Bot } from 'lucide-react';
 import { toast } from 'sonner';
 import { useForm, Controller } from 'react-hook-form';
 import { patch, fetchWithAuth } from '@/lib/auth-fetch';
@@ -17,6 +18,8 @@ interface AgentConfig {
   availableTools: Array<{ name: string; description: string }>;
   aiProvider?: string;
   aiModel?: string;
+  includeDrivePrompt?: boolean;
+  drivePrompt?: string | null;
 }
 
 interface AgentSettingsTabProps {
@@ -40,6 +43,7 @@ interface FormData {
   enabledTools: string[];
   aiProvider: string;
   aiModel: string;
+  includeDrivePrompt: boolean;
 }
 
 const AgentSettingsTab = forwardRef<AgentSettingsTabRef, AgentSettingsTabProps>(({
@@ -66,6 +70,7 @@ const AgentSettingsTab = forwardRef<AgentSettingsTabRef, AgentSettingsTabProps>(
       enabledTools: config?.enabledTools || [],
       aiProvider: selectedProvider || '',
       aiModel: selectedModel || '',
+      includeDrivePrompt: config?.includeDrivePrompt ?? false,
     }
   });
 
@@ -77,6 +82,7 @@ const AgentSettingsTab = forwardRef<AgentSettingsTabRef, AgentSettingsTabProps>(
         enabledTools: config.enabledTools,
         aiProvider: config.aiProvider || selectedProvider || '',
         aiModel: config.aiModel || selectedModel || '',
+        includeDrivePrompt: config.includeDrivePrompt ?? false,
       });
     }
   }, [config, reset, selectedProvider, selectedModel]);
@@ -154,6 +160,7 @@ const AgentSettingsTab = forwardRef<AgentSettingsTabRef, AgentSettingsTabProps>(
         ...data,
         aiProvider: selectedProvider,
         aiModel: selectedModel,
+        includeDrivePrompt: data.includeDrivePrompt,
       };
 
       await patch(`/api/pages/${pageId}/agent-config`, requestData);
@@ -163,6 +170,7 @@ const AgentSettingsTab = forwardRef<AgentSettingsTabRef, AgentSettingsTabProps>(
         ...data,
         aiProvider: selectedProvider,
         aiModel: selectedModel,
+        includeDrivePrompt: data.includeDrivePrompt,
       } as AgentConfig;
       onConfigUpdate(updatedConfig);
       toast.success('Agent configuration saved successfully');
@@ -278,6 +286,40 @@ const AgentSettingsTab = forwardRef<AgentSettingsTabRef, AgentSettingsTabProps>(
             </p>
           </CardContent>
         </Card>
+
+        {/* Drive Instructions Toggle - only show if drive has a prompt */}
+        {config?.drivePrompt && (
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Bot className="h-5 w-5" />
+                  <CardTitle className="text-lg">Include Drive Instructions</CardTitle>
+                </div>
+                <Controller
+                  name="includeDrivePrompt"
+                  control={control}
+                  render={({ field }) => (
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  )}
+                />
+              </div>
+              <CardDescription>
+                When enabled, the drive&apos;s AI instructions will be prepended to this agent&apos;s system prompt.
+              </CardDescription>
+            </CardHeader>
+            {watch('includeDrivePrompt') && (
+              <CardContent>
+                <div className="p-3 bg-muted/50 rounded-lg text-sm whitespace-pre-wrap max-h-48 overflow-y-auto">
+                  {config.drivePrompt}
+                </div>
+              </CardContent>
+            )}
+          </Card>
+        )}
 
         {/* System Prompt */}
         <Card className="flex-1 flex flex-col">

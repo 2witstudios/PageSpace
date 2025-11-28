@@ -11,7 +11,7 @@ import {
   isProviderError,
   type ProviderRequest
 } from '@/lib/ai/provider-factory';
-import { db, conversations, messages, eq, and, desc, gt, lt } from '@pagespace/db';
+import { db, conversations, messages, drives, eq, and, desc, gt, lt } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { pageSpaceTools } from '@/lib/ai/ai-tools';
 import { 
@@ -483,6 +483,29 @@ export async function POST(
     // Build timestamp system prompt for temporal awareness
     const timestampSystemPrompt = buildTimestampSystemPrompt();
 
+    // Fetch drive prompt if user is within a drive
+    let drivePromptSection = '';
+    if (locationContext?.currentDrive?.id) {
+      try {
+        const [drive] = await db
+          .select({ drivePrompt: drives.drivePrompt })
+          .from(drives)
+          .where(eq(drives.id, locationContext.currentDrive.id))
+          .limit(1);
+
+        if (drive?.drivePrompt?.trim()) {
+          drivePromptSection = `\n\n## DRIVE INSTRUCTIONS\n\nThe following custom instructions have been set for this drive by the drive owner:\n\n${drive.drivePrompt}`;
+          loggers.api.debug('Global Assistant Chat API: Including drive prompt', {
+            driveId: locationContext.currentDrive.id,
+            promptLength: drive.drivePrompt.length
+          });
+        }
+      } catch (error) {
+        loggers.api.error('Global Assistant Chat API: Failed to fetch drive prompt', error as Error);
+        // Continue without drive prompt on error
+      }
+    }
+
     // Add global assistant specific instructions
     const systemPrompt = baseSystemPrompt + mentionSystemPrompt + timestampSystemPrompt + `
 
@@ -547,7 +570,7 @@ MENTION PROCESSING:
 • When users @mention documents using @[Label](id:type) format, you MUST read those documents first
 • Use the read_page tool for each mentioned document before providing your main response
 • Let mentioned document content inform and enrich your response
-• Don't explicitly mention that you're reading @mentioned docs unless relevant to the conversation`;
+• Don't explicitly mention that you're reading @mentioned docs unless relevant to the conversation` + drivePromptSection;
 
     // Filter tools based on read-only mode
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

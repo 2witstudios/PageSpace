@@ -4,10 +4,10 @@ import { useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { ChevronLeft, Users, Shield } from 'lucide-react';
+import { ChevronLeft, Shield } from 'lucide-react';
 import { useDriveStore } from '@/hooks/useDrive';
 import { RolesManager } from '@/components/settings/RolesManager';
+import { DriveAISettings } from '@/components/settings/DriveAISettings';
 
 export default function DriveSettingsPage() {
   const params = useParams();
@@ -82,19 +82,11 @@ export default function DriveSettingsPage() {
           </p>
         </div>
 
-        {/* Settings Tabs */}
-        <Tabs defaultValue="roles" className="space-y-6">
-          <TabsList>
-            <TabsTrigger value="roles" className="flex items-center gap-2">
-              <Users className="w-4 h-4" />
-              Roles
-            </TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="roles">
-            <RolesManager driveId={driveId} />
-          </TabsContent>
-        </Tabs>
+        {/* Settings Cards */}
+        <div className="space-y-6">
+          <RolesManager driveId={driveId} />
+          <DriveAISettings driveId={driveId} />
+        </div>
       </div>
     </div>
   );

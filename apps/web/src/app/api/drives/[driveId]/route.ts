@@ -11,6 +11,7 @@ const patchSchema = z.object({
   name: z.string().optional(),
   aiProvider: z.string().optional(),
   aiModel: z.string().optional(),
+  drivePrompt: z.string().max(10000).optional(), // Custom AI instructions for this drive
 });
 
 /**

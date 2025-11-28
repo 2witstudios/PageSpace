@@ -33,7 +33,7 @@ import {
   getUserLMStudioSettings,
   getUserGLMSettings,
 } from '@/lib/ai/ai-utils';
-import { db, users, chatMessages, pages, eq, and } from '@pagespace/db';
+import { db, users, chatMessages, pages, drives, eq, and } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { pageSpaceTools } from '@/lib/ai/ai-tools';
 import {
@@ -230,10 +230,35 @@ export async function POST(request: Request) {
     const customSystemPrompt = page.systemPrompt;
     const enabledTools = page.enabledTools as string[] | null;
 
+    // Fetch drive prompt if page has includeDrivePrompt enabled
+    let drivePromptPrefix = '';
+    if (page.includeDrivePrompt) {
+      try {
+        const [drive] = await db
+          .select({ drivePrompt: drives.drivePrompt })
+          .from(drives)
+          .where(eq(drives.id, page.driveId))
+          .limit(1);
+
+        if (drive?.drivePrompt?.trim()) {
+          drivePromptPrefix = `## DRIVE INSTRUCTIONS\n\n${drive.drivePrompt}\n\n---\n\n`;
+          loggers.ai.debug('AI Page Chat API: Including drive prompt', {
+            driveId: page.driveId,
+            promptLength: drive.drivePrompt.length
+          });
+        }
+      } catch (error) {
+        loggers.ai.error('AI Page Chat API: Failed to fetch drive prompt', error as Error);
+        // Continue without drive prompt on error
+      }
+    }
+
     loggers.ai.debug('AI Page Chat API: Using custom agent configuration', {
       hasCustomSystemPrompt: !!customSystemPrompt,
       enabledToolsCount: enabledTools?.length || 0,
-      pageName: page.title
+      pageName: page.title,
+      includeDrivePrompt: page.includeDrivePrompt,
+      hasDrivePrompt: !!drivePromptPrefix
     });
 
     // Auto-generate conversationId if not provided (seamless UX)
@@ -609,7 +634,8 @@ export async function POST(request: Request) {
     let systemPrompt: string;
     if (customSystemPrompt) {
       // Use custom system prompt with page context injected
-      systemPrompt = customSystemPrompt;
+      // Prepend drive prompt if enabled and available
+      systemPrompt = drivePromptPrefix + customSystemPrompt;
       if (pageContext) {
         systemPrompt += `\n\nYou are operating within the page "${pageContext.pageTitle}" in the "${pageContext.driveName}" drive. Your current location: ${pageContext.pagePath}`;
       }
