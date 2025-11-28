@@ -1,27 +1,65 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { NextResponse } from 'next/server';
 import { DELETE } from '../route';
+import type { WebAuthResult, AuthError } from '@/lib/auth';
+import type { ServiceTokenClaims } from '@pagespace/lib/auth-utils';
+
+// Type for chainable mock methods (db.select().from().where())
+type ChainableMock = Mock & {
+  from: Mock & { where: Mock; innerJoin: Mock & { where: Mock } };
+};
+type DeleteMock = Mock & { where: Mock };
+
+// Create chainable select mock
+const createSelectMock = (resolvedValue: unknown): ChainableMock => {
+  const whereMock = vi.fn().mockResolvedValue(resolvedValue);
+  const innerJoinMock = vi.fn().mockReturnValue({ where: whereMock });
+  const fromMock = vi.fn().mockReturnValue({ where: whereMock, innerJoin: innerJoinMock });
+  const selectMock = vi.fn().mockReturnValue({ from: fromMock }) as ChainableMock;
+  selectMock.from = fromMock as ChainableMock['from'];
+  selectMock.from.where = whereMock;
+  selectMock.from.innerJoin = innerJoinMock as ChainableMock['from']['innerJoin'];
+  selectMock.from.innerJoin.where = whereMock;
+  return selectMock;
+};
+
+// Create chainable delete mock
+const createDeleteMock = (whereMockFn?: Mock): DeleteMock => {
+  const whereMock = whereMockFn ?? vi.fn().mockResolvedValue(undefined);
+  const deleteMock = vi.fn().mockReturnValue({ where: whereMock }) as DeleteMock;
+  deleteMock.where = whereMock;
+  return deleteMock;
+};
+
+// Store references to mocks for test access
+let selectMock: ChainableMock;
+let deleteMock: DeleteMock;
 
 // Mock dependencies
-vi.mock('@pagespace/db', () => ({
-  db: {
-    query: {
-      users: {
-        findFirst: vi.fn(),
-        findMany: vi.fn(),
+vi.mock('@pagespace/db', () => {
+  selectMock = createSelectMock([{ count: 0 }]);
+  deleteMock = createDeleteMock();
+  return {
+    db: {
+      query: {
+        users: {
+          findFirst: vi.fn(),
+          findMany: vi.fn(),
+        },
+        drives: {
+          findMany: vi.fn(),
+        },
       },
-      drives: {
-        findMany: vi.fn(),
-      },
+      select: selectMock,
+      delete: deleteMock,
     },
-    select: vi.fn(),
-    delete: vi.fn(),
-  },
-  users: {},
-  drives: {},
-  driveMembers: {},
-  eq: vi.fn((field, value) => ({ field, value, type: 'eq' })),
-  sql: vi.fn((strings, ...values) => ({ strings, values, type: 'sql' })),
-}));
+    users: {},
+    drives: {},
+    driveMembers: {},
+    eq: vi.fn((field, value) => ({ field, value, type: 'eq' })),
+    sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ strings, values, type: 'sql' })),
+  };
+});
 
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
@@ -49,41 +87,110 @@ import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createServiceToken, verifyServiceToken } from '@pagespace/lib/auth-utils';
 
+// Helper to create mock WebAuthResult
+const mockWebAuth = (userId: string, tokenVersion = 0): WebAuthResult => ({
+  userId,
+  tokenVersion,
+  tokenType: 'jwt',
+  source: 'cookie',
+  role: 'user',
+});
+
+// Helper to create mock AuthError
+const mockAuthError = (status = 401): AuthError => ({
+  error: NextResponse.json({ error: 'Unauthorized' }, { status }),
+});
+
+// Helper to create mock user matching the actual schema
+const mockUser = (overrides: { id: string; email: string; image?: string | null }) => ({
+  id: overrides.id,
+  name: 'Test User',
+  email: overrides.email,
+  emailVerified: null as Date | null,
+  image: overrides.image ?? null,
+  password: null as string | null,
+  googleId: null as string | null,
+  provider: 'email' as const,
+  role: 'user' as const,
+  tokenVersion: 0,
+  currentAiProvider: 'pagespace',
+  currentAiModel: 'glm-4.5-air',
+  storageUsedBytes: 0,
+  activeUploads: 0,
+  lastStorageCalculated: null as Date | null,
+  stripeCustomerId: null as string | null,
+  subscriptionTier: 'free',
+  tosAcceptedAt: null as Date | null,
+  createdAt: new Date(),
+  updatedAt: new Date(),
+});
+
+// Helper to create mock drive
+const mockDrive = (overrides: { id: string; name: string }) => ({
+  id: overrides.id,
+  name: overrides.name,
+  slug: overrides.id,
+  ownerId: 'user_123',
+  createdAt: new Date(),
+  updatedAt: new Date(),
+  isTrashed: false,
+  trashedAt: null,
+  drivePrompt: null,
+});
+
+// Helper to create mock ServiceTokenClaims
+const mockServiceClaims = (userId: string): ServiceTokenClaims => ({
+  sub: userId,
+  service: 'web',
+  scopes: ['avatars:write'],
+  userId,
+  tenantId: userId,
+  tokenType: 'service',
+  jti: 'mock-jti',
+  iat: Math.floor(Date.now() / 1000),
+  exp: Math.floor(Date.now() / 1000) + 120,
+});
+
 describe('DELETE /api/account', () => {
   const mockUserId = 'user_123';
   const mockUserEmail = 'test@example.com';
   const mockDriveId1 = 'drive_solo';
   const mockDriveId2 = 'drive_multi';
 
+  // Helper to setup select mock with specific count
+  const setupSelectMock = (count: number) => {
+    const whereMock = vi.fn().mockResolvedValue([{ count }]);
+    const fromMock = vi.fn().mockReturnValue({ where: whereMock });
+    vi.mocked(db.select).mockReturnValue({ from: fromMock } as unknown as ReturnType<typeof db.select>);
+  };
+
+  // Helper to setup delete mock with tracking
+  const setupDeleteMock = () => {
+    const whereMock = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(db.delete).mockReturnValue({ where: whereMock } as unknown as ReturnType<typeof db.delete>);
+    return whereMock;
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
 
     // Setup default auth success
-    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
-      userId: mockUserId,
-      tokenVersion: 0,
-    });
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(
+      mockWebAuth(mockUserId)
+    );
     vi.mocked(isAuthError).mockReturnValue(false);
 
     // Setup default user
-    vi.mocked(db.query.users.findFirst).mockResolvedValue({
-      id: mockUserId,
-      email: mockUserEmail,
-      image: null,
-    });
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(
+      mockUser({ id: mockUserId, email: mockUserEmail })
+    );
 
     // Setup default: no drives
     vi.mocked(db.query.drives.findMany).mockResolvedValue([]);
 
     // Setup default database operations
-    vi.mocked(db.select).mockReturnValue({
-      from: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue([{ count: 0 }]),
-      }),
-    });
-    vi.mocked(db.delete).mockReturnValue({
-      where: vi.fn().mockResolvedValue(undefined),
-    });
+    setupSelectMock(0);
+    setupDeleteMock();
   });
 
   it('should reject when email confirmation does not match', async () => {
@@ -124,7 +231,7 @@ describe('DELETE /api/account', () => {
   });
 
   it('should return 404 when user not found', async () => {
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(null);
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(undefined);
 
     const request = new Request('https://example.com/api/account', {
       method: 'DELETE',
@@ -140,9 +247,9 @@ describe('DELETE /api/account', () => {
 
   it('should return 401 when not authenticated', async () => {
     vi.mocked(isAuthError).mockReturnValue(true);
-    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
-      error: new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 }),
-    });
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(
+      mockAuthError(401)
+    );
 
     const request = new Request('https://example.com/api/account', {
       method: 'DELETE',
@@ -157,20 +264,13 @@ describe('DELETE /api/account', () => {
   it('should auto-delete solo drives before account deletion', async () => {
     // Setup: user owns one solo drive (1 member)
     vi.mocked(db.query.drives.findMany).mockResolvedValue([
-      { id: mockDriveId1, name: 'Solo Drive' },
+      mockDrive({ id: mockDriveId1, name: 'Solo Drive' }),
     ]);
 
     // Mock member count query to return 1 (solo)
-    vi.mocked(db.select).mockReturnValue({
-      from: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue([{ count: 1 }]),
-      }),
-    });
+    setupSelectMock(1);
 
-    const deleteMock = vi.fn().mockResolvedValue(undefined);
-    vi.mocked(db.delete).mockReturnValue({
-      where: deleteMock,
-    });
+    const deleteMock = setupDeleteMock();
 
     const request = new Request('https://example.com/api/account', {
       method: 'DELETE',
@@ -189,15 +289,11 @@ describe('DELETE /api/account', () => {
   it('should block deletion when multi-member drives exist', async () => {
     // Setup: user owns one multi-member drive (3 members)
     vi.mocked(db.query.drives.findMany).mockResolvedValue([
-      { id: mockDriveId2, name: 'Team Drive' },
+      mockDrive({ id: mockDriveId2, name: 'Team Drive' }),
     ]);
 
     // Mock member count query to return 3 (multi-member)
-    vi.mocked(db.select).mockReturnValue({
-      from: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue([{ count: 3 }]),
-      }),
-    });
+    setupSelectMock(3);
 
     const request = new Request('https://example.com/api/account', {
       method: 'DELETE',
@@ -215,20 +311,11 @@ describe('DELETE /api/account', () => {
   it('should delete user avatar via processor service', async () => {
     const mockToken = 'mock-service-token';
     vi.mocked(createServiceToken).mockResolvedValue(mockToken);
-    vi.mocked(verifyServiceToken).mockResolvedValue({
-      service: 'web',
-      scopes: ['avatars:write'],
-      userId: mockUserId,
-      tenantId: mockUserId,
-      iat: Date.now(),
-      exp: Date.now() + 120000,
-    });
+    vi.mocked(verifyServiceToken).mockResolvedValue(mockServiceClaims(mockUserId));
 
-    vi.mocked(db.query.users.findFirst).mockResolvedValue({
-      id: mockUserId,
-      email: mockUserEmail,
-      image: '/avatars/user_123.jpg', // Local file
-    });
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(
+      mockUser({ id: mockUserId, email: mockUserEmail, image: '/avatars/user_123.jpg' })
+    );
 
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
@@ -254,11 +341,9 @@ describe('DELETE /api/account', () => {
   });
 
   it('should not delete avatar for external URLs', async () => {
-    vi.mocked(db.query.users.findFirst).mockResolvedValue({
-      id: mockUserId,
-      email: mockUserEmail,
-      image: 'https://example.com/avatar.jpg', // External URL
-    });
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(
+      mockUser({ id: mockUserId, email: mockUserEmail, image: 'https://example.com/avatar.jpg' })
+    );
 
     global.fetch = vi.fn();
 
@@ -273,11 +358,9 @@ describe('DELETE /api/account', () => {
   });
 
   it('should continue deletion if avatar deletion fails', async () => {
-    vi.mocked(db.query.users.findFirst).mockResolvedValue({
-      id: mockUserId,
-      email: mockUserEmail,
-      image: '/avatars/user_123.jpg',
-    });
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(
+      mockUser({ id: mockUserId, email: mockUserEmail, image: '/avatars/user_123.jpg' })
+    );
 
     vi.mocked(createServiceToken).mockRejectedValue(new Error('Token creation failed'));
 
@@ -297,10 +380,7 @@ describe('DELETE /api/account', () => {
   });
 
   it('should delete user from database', async () => {
-    const deleteMock = vi.fn().mockResolvedValue(undefined);
-    vi.mocked(db.delete).mockReturnValue({
-      where: deleteMock,
-    });
+    const deleteMock = setupDeleteMock();
 
     const request = new Request('https://example.com/api/account', {
       method: 'DELETE',
@@ -317,9 +397,8 @@ describe('DELETE /api/account', () => {
   });
 
   it('should handle database errors gracefully', async () => {
-    vi.mocked(db.delete).mockReturnValue({
-      where: vi.fn().mockRejectedValue(new Error('Database connection lost')),
-    });
+    const whereMock = vi.fn().mockRejectedValue(new Error('Database connection lost'));
+    vi.mocked(db.delete).mockReturnValue({ where: whereMock } as unknown as ReturnType<typeof db.delete>);
 
     const request = new Request('https://example.com/api/account', {
       method: 'DELETE',
@@ -337,21 +416,13 @@ describe('DELETE /api/account', () => {
   it('should handle multiple solo drives correctly', async () => {
     // Setup: user owns 3 solo drives
     vi.mocked(db.query.drives.findMany).mockResolvedValue([
-      { id: 'drive_1', name: 'Solo 1' },
-      { id: 'drive_2', name: 'Solo 2' },
-      { id: 'drive_3', name: 'Solo 3' },
+      mockDrive({ id: 'drive_1', name: 'Solo 1' }),
+      mockDrive({ id: 'drive_2', name: 'Solo 2' }),
+      mockDrive({ id: 'drive_3', name: 'Solo 3' }),
     ]);
 
-    vi.mocked(db.select).mockReturnValue({
-      from: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue([{ count: 1 }]),
-      }),
-    });
-
-    const deleteMock = vi.fn().mockResolvedValue(undefined);
-    vi.mocked(db.delete).mockReturnValue({
-      where: deleteMock,
-    });
+    setupSelectMock(1);
+    const deleteMock = setupDeleteMock();
 
     const request = new Request('https://example.com/api/account', {
       method: 'DELETE',

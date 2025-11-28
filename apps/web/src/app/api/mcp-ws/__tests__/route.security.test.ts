@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { WebSocket } from 'ws';
+import type { WebSocket, WebSocketServer } from 'ws';
 import type { NextRequest } from 'next/server';
 
 /**
@@ -52,7 +52,7 @@ import {
 describe('WebSocket MCP Bridge - Security Tests', () => {
   let mockClient: WebSocket;
   let mockRequest: NextRequest;
-  let mockServer: unknown;
+  let mockServer: WebSocketServer;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -74,7 +74,7 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
       url: 'wss://example.com/api/mcp-ws',
     } as unknown as NextRequest;
 
-    mockServer = {};
+    mockServer = {} as unknown as WebSocketServer;
   });
 
   afterEach(() => {
@@ -132,7 +132,7 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
           toolName: 'test-tool',
         });
 
-        await messageHandler(Buffer.from(toolRequest));
+        await messageHandler.call(mockClient, Buffer.from(toolRequest));
 
         // Should reject if challenge not completed
         expect(mockClient.send).toHaveBeenCalledWith(
@@ -240,7 +240,7 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
         tokenVersion: 1,
       });
 
-      vi.mocked(verifyChallengeResponse).mockReturnValue(false);
+      vi.mocked(verifyChallengeResponse).mockReturnValue({ valid: false, failureReason: 'Invalid response' });
 
       const { UPGRADE } = await import('../route');
       await UPGRADE(mockClient, mockServer, mockRequest);
@@ -256,7 +256,7 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
           response: 'invalid_response',
         });
 
-        await messageHandler(Buffer.from(response));
+        await messageHandler.call(mockClient, Buffer.from(response));
 
         // Connection should be closed
         expect(mockClient.close).toHaveBeenCalledWith(
@@ -354,7 +354,7 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
         tokenVersion: 1,
       });
 
-      vi.mocked(verifyChallengeResponse).mockReturnValue(false);
+      vi.mocked(verifyChallengeResponse).mockReturnValue({ valid: false, failureReason: 'Invalid response' });
 
       const { UPGRADE } = await import('../route');
       await UPGRADE(mockClient, mockServer, mockRequest);
@@ -371,7 +371,7 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
             response: `invalid_${i}`,
           });
 
-          await messageHandler(Buffer.from(response));
+          await messageHandler.call(mockClient, Buffer.from(response));
         }
 
         // After 3 failed attempts, connection should be closed
@@ -438,7 +438,7 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
           success: true,
         });
 
-        await messageHandler(Buffer.from(toolRequest));
+        await messageHandler.call(mockClient, Buffer.from(toolRequest));
 
         // Should log tool execution
         expect(consoleSpy).toHaveBeenCalled();
@@ -494,7 +494,7 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
       if (closeHandler) {
         const consoleSpy = vi.spyOn(console, 'log');
 
-        await closeHandler(1000, Buffer.from('Normal closure'));
+        await closeHandler.call(mockClient, 1000, Buffer.from('Normal closure'));
 
         expect(consoleSpy).toHaveBeenCalledWith(
           expect.stringContaining('User user_123 disconnected')
@@ -528,7 +528,7 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
           args: 'A'.repeat(10 * 1024 * 1024), // 10MB
         });
 
-        await messageHandler(Buffer.from(largeMessage));
+        await messageHandler.call(mockClient, Buffer.from(largeMessage));
 
         // Should reject oversized messages
         expect(mockClient.send).toHaveBeenCalledWith(
@@ -553,7 +553,7 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
 
       if (messageHandler) {
         // Send malformed JSON
-        await messageHandler(Buffer.from('{ invalid json'));
+        await messageHandler.call(mockClient, Buffer.from('{ invalid json'));
 
         // Should send error, not crash
         expect(mockClient.send).toHaveBeenCalledWith(
@@ -601,7 +601,7 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
       if (errorHandler) {
         const errorSpy = vi.spyOn(console, 'error');
 
-        await errorHandler(new Error('Test error'));
+        await errorHandler.call(mockClient, new Error('Test error'));
 
         // Should log error, not crash
         expect(errorSpy).toHaveBeenCalled();

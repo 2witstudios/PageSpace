@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { NextResponse } from 'next/server';
 import { POST } from '../route';
+import type { WebAuthResult, AuthError } from '@/lib/auth';
 
 // Mock dependencies
 vi.mock('@pagespace/db', () => ({
@@ -17,8 +19,8 @@ vi.mock('@pagespace/db', () => ({
   },
   drives: {},
   driveMembers: {},
-  eq: vi.fn((field, value) => ({ field, value, type: 'eq' })),
-  and: vi.fn((...args) => ({ args, type: 'and' })),
+  eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
+  and: vi.fn((...args: unknown[]) => ({ args, type: 'and' })),
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
@@ -41,46 +43,98 @@ import { db } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
+// Helper to create mock WebAuthResult
+const mockWebAuth = (userId: string, tokenVersion = 0): WebAuthResult => ({
+  userId,
+  tokenVersion,
+  tokenType: 'jwt',
+  source: 'cookie',
+  role: 'user',
+});
+
+// Helper to create mock AuthError
+const mockAuthError = (status = 401): AuthError => ({
+  error: NextResponse.json({ error: 'Unauthorized' }, { status }),
+});
+
+// Helper to create mock drive
+const mockDrive = (overrides: { id: string; name: string; ownerId?: string }) => ({
+  id: overrides.id,
+  name: overrides.name,
+  slug: overrides.id,
+  ownerId: overrides.ownerId ?? 'user_123',
+  createdAt: new Date(),
+  updatedAt: new Date(),
+  isTrashed: false,
+  trashedAt: null,
+  drivePrompt: null,
+});
+
+// Helper to create mock drive member
+const mockDriveMember = (overrides: {
+  id: string;
+  userId: string;
+  driveId: string;
+  role: 'OWNER' | 'ADMIN' | 'MEMBER';
+}) => ({
+  id: overrides.id,
+  userId: overrides.userId,
+  driveId: overrides.driveId,
+  role: overrides.role,
+  customRoleId: null,
+  invitedBy: null,
+  invitedAt: new Date(),
+  acceptedAt: new Date(),
+  lastAccessedAt: null,
+});
+
 describe('POST /api/account/handle-drive', () => {
   const mockUserId = 'user_123';
   const mockDriveId = 'drive_abc';
   const mockNewOwnerId = 'admin_456';
 
+  // Helper to setup update mock
+  const setupUpdateMock = () => {
+    const whereMock = vi.fn().mockResolvedValue(undefined);
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    vi.mocked(db.update).mockReturnValue({ set: setMock } as unknown as ReturnType<typeof db.update>);
+    return whereMock;
+  };
+
+  // Helper to setup delete mock
+  const setupDeleteMock = () => {
+    const whereMock = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(db.delete).mockReturnValue({ where: whereMock } as unknown as ReturnType<typeof db.delete>);
+    return whereMock;
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
 
     // Setup default auth success
-    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
-      userId: mockUserId,
-      tokenVersion: 0,
-    });
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(
+      mockWebAuth(mockUserId)
+    );
     vi.mocked(isAuthError).mockReturnValue(false);
 
     // Setup default drive owned by user
-    vi.mocked(db.query.drives.findFirst).mockResolvedValue({
-      id: mockDriveId,
-      ownerId: mockUserId,
-      name: 'Test Drive',
-    });
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(
+      mockDrive({ id: mockDriveId, name: 'Test Drive', ownerId: mockUserId })
+    );
 
     // Setup default admin membership
-    vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue({
-      id: 'membership_1',
-      userId: mockNewOwnerId,
-      driveId: mockDriveId,
-      role: 'ADMIN',
-      customRoleId: null,
-    });
+    vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(
+      mockDriveMember({
+        id: 'membership_1',
+        userId: mockNewOwnerId,
+        driveId: mockDriveId,
+        role: 'ADMIN',
+      })
+    );
 
     // Setup default database operations
-    vi.mocked(db.update).mockReturnValue({
-      set: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue(undefined),
-      }),
-    });
-    vi.mocked(db.delete).mockReturnValue({
-      where: vi.fn().mockResolvedValue(undefined),
-    });
+    setupUpdateMock();
+    setupDeleteMock();
   });
 
   describe('validation', () => {
@@ -140,9 +194,9 @@ describe('POST /api/account/handle-drive', () => {
   describe('authentication and authorization', () => {
     it('should return 401 when not authenticated', async () => {
       vi.mocked(isAuthError).mockReturnValue(true);
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
-        error: new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 }),
-      });
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(
+        mockAuthError(401)
+      );
 
       const request = new Request('https://example.com/api/account/handle-drive', {
         method: 'POST',
@@ -155,7 +209,7 @@ describe('POST /api/account/handle-drive', () => {
     });
 
     it('should return 404 when drive not found', async () => {
-      vi.mocked(db.query.drives.findFirst).mockResolvedValue(null);
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue(undefined);
 
       const request = new Request('https://example.com/api/account/handle-drive', {
         method: 'POST',
@@ -170,11 +224,9 @@ describe('POST /api/account/handle-drive', () => {
     });
 
     it('should return 403 when user is not drive owner', async () => {
-      vi.mocked(db.query.drives.findFirst).mockResolvedValue({
-        id: mockDriveId,
-        ownerId: 'different_user',
-        name: 'Test Drive',
-      });
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue(
+        mockDrive({ id: mockDriveId, name: 'Test Drive', ownerId: 'different_user' })
+      );
 
       const request = new Request('https://example.com/api/account/handle-drive', {
         method: 'POST',
@@ -191,12 +243,7 @@ describe('POST /api/account/handle-drive', () => {
 
   describe('transfer action', () => {
     it('should successfully transfer ownership to admin', async () => {
-      const updateMock = vi.fn().mockResolvedValue(undefined);
-      vi.mocked(db.update).mockReturnValue({
-        set: vi.fn().mockReturnValue({
-          where: updateMock,
-        }),
-      });
+      const updateMock = setupUpdateMock();
 
       const request = new Request('https://example.com/api/account/handle-drive', {
         method: 'POST',
@@ -221,7 +268,7 @@ describe('POST /api/account/handle-drive', () => {
     });
 
     it('should reject transfer when new owner is not an admin', async () => {
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(null);
+      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined);
 
       const request = new Request('https://example.com/api/account/handle-drive', {
         method: 'POST',
@@ -240,13 +287,14 @@ describe('POST /api/account/handle-drive', () => {
     });
 
     it('should reject transfer when new owner is not admin role', async () => {
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue({
-        id: 'membership_1',
-        userId: mockNewOwnerId,
-        driveId: mockDriveId,
-        role: 'MEMBER', // Not admin
-        customRoleId: null,
-      });
+      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(
+        mockDriveMember({
+          id: 'membership_1',
+          userId: mockNewOwnerId,
+          driveId: mockDriveId,
+          role: 'MEMBER', // Not admin
+        })
+      );
 
       const request = new Request('https://example.com/api/account/handle-drive', {
         method: 'POST',
@@ -265,13 +313,14 @@ describe('POST /api/account/handle-drive', () => {
     });
 
     it('should reject transfer when new owner is in different drive', async () => {
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue({
-        id: 'membership_1',
-        userId: mockNewOwnerId,
-        driveId: 'different_drive', // Different drive
-        role: 'ADMIN',
-        customRoleId: null,
-      });
+      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(
+        mockDriveMember({
+          id: 'membership_1',
+          userId: mockNewOwnerId,
+          driveId: 'different_drive', // Different drive
+          role: 'ADMIN',
+        })
+      );
 
       const request = new Request('https://example.com/api/account/handle-drive', {
         method: 'POST',
@@ -291,10 +340,7 @@ describe('POST /api/account/handle-drive', () => {
 
   describe('delete action', () => {
     it('should successfully delete drive', async () => {
-      const deleteMock = vi.fn().mockResolvedValue(undefined);
-      vi.mocked(db.delete).mockReturnValue({
-        where: deleteMock,
-      });
+      const deleteMock = setupDeleteMock();
 
       const request = new Request('https://example.com/api/account/handle-drive', {
         method: 'POST',
@@ -318,10 +364,7 @@ describe('POST /api/account/handle-drive', () => {
     });
 
     it('should not require newOwnerId for delete action', async () => {
-      const deleteMock = vi.fn().mockResolvedValue(undefined);
-      vi.mocked(db.delete).mockReturnValue({
-        where: deleteMock,
-      });
+      const deleteMock = setupDeleteMock();
 
       const request = new Request('https://example.com/api/account/handle-drive', {
         method: 'POST',
@@ -341,9 +384,8 @@ describe('POST /api/account/handle-drive', () => {
 
   describe('error handling', () => {
     it('should handle database errors gracefully', async () => {
-      vi.mocked(db.delete).mockReturnValue({
-        where: vi.fn().mockRejectedValue(new Error('Database connection lost')),
-      });
+      const whereMock = vi.fn().mockRejectedValue(new Error('Database connection lost'));
+      vi.mocked(db.delete).mockReturnValue({ where: whereMock } as unknown as ReturnType<typeof db.delete>);
 
       const request = new Request('https://example.com/api/account/handle-drive', {
         method: 'POST',
@@ -362,11 +404,9 @@ describe('POST /api/account/handle-drive', () => {
     });
 
     it('should handle transfer database errors', async () => {
-      vi.mocked(db.update).mockReturnValue({
-        set: vi.fn().mockReturnValue({
-          where: vi.fn().mockRejectedValue(new Error('Update failed')),
-        }),
-      });
+      const whereMock = vi.fn().mockRejectedValue(new Error('Update failed'));
+      const setMock = vi.fn().mockReturnValue({ where: whereMock });
+      vi.mocked(db.update).mockReturnValue({ set: setMock } as unknown as ReturnType<typeof db.update>);
 
       const request = new Request('https://example.com/api/account/handle-drive', {
         method: 'POST',

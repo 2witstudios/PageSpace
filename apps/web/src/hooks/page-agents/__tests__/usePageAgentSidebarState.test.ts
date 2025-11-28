@@ -5,7 +5,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
-import { usePageAgentSidebarState, useSidebarAgentStore, SidebarAgentInfo } from '../usePageAgentSidebarState';
+import { usePageAgentSidebarState, SidebarAgentInfo } from '../usePageAgentSidebarState';
 
 // Mock fetchWithAuth
 const mockFetchWithAuth = vi.fn();
