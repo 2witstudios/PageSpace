@@ -3,19 +3,48 @@
  *
  * This component operates in two modes:
  * 1. Global Assistant Mode: Workspace-level assistant synced with sidebar
- * 2. Agent Mode: Page-level AI agent with independent conversation management
+ * 2. Agent Mode: Page-level AI agent using centralized useAgentStore
  *
- * When an agent is selected, this view operates independently (like AiChatView)
- * to prevent interference with the sidebar's Global Assistant state.
+ * IMPORTANT: This view never has tabs. The right sidebar provides History and
+ * Settings tabs that control this view via the shared useAgentStore.
+ *
+ * STATE MANAGEMENT ARCHITECTURE (3 Systems - Intentional Design):
+ *
+ * 1. GlobalChatContext (React Context)
+ *    - Manages Global Assistant conversations ONLY
+ *    - Used when selectedAgent is null
+ *    - Persists conversation ID to cookies
+ *
+ * 2. useAgentStore (Zustand)
+ *    - Dashboard/drive context ONLY
+ *    - Synced with this middle panel AND the right sidebar
+ *    - Agent selection, conversations, sidebar tab state (activeTab)
+ *    - Persists agent ID to cookies/URL
+ *
+ * 3. useSidebarAgentState (Zustand + localStorage)
+ *    - Page context ONLY (when viewing a specific page)
+ *    - Independent from page content - sidebar is standalone
+ *    - Has its own agent selection and conversation state
+ *    - Persists agent selection to localStorage
+ *
+ * WHY TWO AGENT STORES (useAgentStore vs useSidebarAgentState):
+ * The sidebar is designed as an independent chat interface. When viewing
+ * a page, users can chat with Agent A in the sidebar while viewing Page B.
+ * This independence is intentional UX - only on /dashboard and /drive routes
+ * do we sync the sidebar with this middle panel via useAgentStore.
+ *
+ * TAB COMMUNICATION (replacing localStorage event bus):
+ * Instead of using localStorage.setItem() + window.dispatchEvent() for cross-
+ * component tab switching, we use useAgentStore.setActiveTab(). The right
+ * sidebar subscribes to activeTab in dashboard context, ensuring reactive updates.
  */
 
-import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useChat } from '@ai-sdk/react';
-import { DefaultChatTransport, UIMessage } from 'ai';
+import { DefaultChatTransport } from 'ai';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Loader2, Settings, Plus, History, MessageSquare, Save } from 'lucide-react';
+import { Settings, Plus, History } from 'lucide-react';
 import { ReadOnlyToggle } from '@/components/ai/ReadOnlyToggle';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore } from '@/hooks/useDrive';
@@ -23,20 +52,15 @@ import { fetchWithAuth } from '@/lib/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
 import { useAgentStore } from '@/stores/useAgentStore';
-import { toast } from 'sonner';
 import { AiUsageMonitor } from '@/components/ai/AiUsageMonitor';
 import { AgentSelector } from '@/components/ai/AgentSelector';
-import AgentHistoryTab from '@/components/ai/AgentHistoryTab';
-import AgentSettingsTab, { AgentSettingsTabRef } from '@/components/ai/AgentSettingsTab';
 
 // Shared hooks and components
 import {
   useMCPTools,
   useMessageActions,
   useProviderSettings,
-  useConversations,
   LocationContext,
-  AgentConfig,
 } from '@/lib/ai/shared';
 import {
   MCPToggle,
@@ -65,9 +89,19 @@ const GlobalAssistantView: React.FC = () => {
   } = useGlobalChat();
 
   // ============================================
-  // AGENT STORE - for agent selection
+  // AGENT STORE - for agent selection and conversation management
   // ============================================
-  const { selectedAgent, selectAgent, initializeFromUrlOrCookie } = useAgentStore();
+  const {
+    selectedAgent,
+    selectAgent,
+    initializeFromUrlOrCookie,
+    conversationId: agentConversationId,
+    conversationMessages: agentInitialMessages,
+    isConversationLoading: agentIsLoading,
+    setConversationMessages: setAgentStoreMessages,
+    createNewConversation: createAgentConversation,
+    loadMostRecentConversation,
+  } = useAgentStore();
 
   // ============================================
   // LOCAL STATE
@@ -77,13 +111,7 @@ const GlobalAssistantView: React.FC = () => {
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
 
-  // Agent mode state
-  const [agentConversationId, setAgentConversationId] = useState<string | null>(null);
-  const [agentInitialMessages, setAgentInitialMessages] = useState<UIMessage[]>([]);
-  const [agentIsInitialized, setAgentIsInitialized] = useState<boolean>(false);
-  const [agentIdForConversation, setAgentIdForConversation] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<string>('chat');
-  const [agentConfig, setAgentConfig] = useState<AgentConfig | null>(null);
+  // Agent mode state (provider/model settings)
   const [agentSelectedProvider, setAgentSelectedProvider] = useState<string>('pagespace');
   const [agentSelectedModel, setAgentSelectedModel] = useState<string>('');
   const [editVersion, setEditVersion] = useState(0);
@@ -91,7 +119,6 @@ const GlobalAssistantView: React.FC = () => {
   // Refs
   const messagesAreaRef = useRef<ChatMessagesAreaRef>(null);
   const inputAreaRef = useRef<ChatInputAreaRef>(null);
-  const agentSettingsRef = useRef<AgentSettingsTabRef>(null);
   const prevStatusRef = useRef<string>('ready');
 
   // ============================================
@@ -99,60 +126,14 @@ const GlobalAssistantView: React.FC = () => {
   // ============================================
   const currentConversationId = selectedAgent ? agentConversationId : globalConversationId;
 
-  const { isLoading: isLoadingProviders, isAnyProviderConfigured, needsSetup, isProviderConfigured } =
+  const { isLoading: isLoadingProviders, isAnyProviderConfigured, needsSetup } =
     useProviderSettings();
 
   const { isDesktop, mcpEnabled, setMcpEnabled, runningServers, mcpToolSchemas } =
     useMCPTools({ conversationId: currentConversationId });
 
-  // Conversations for agent history tab
-  const {
-    conversations: agentConversations,
-    isLoading: isLoadingConversations,
-    loadConversation: loadAgentConversation,
-    createConversation: createAgentConversation,
-    deleteConversation: deleteAgentConversation,
-  } = useConversations({
-    agentId: selectedAgent?.id || null,
-    currentConversationId: agentConversationId,
-    enabled: selectedAgent !== null && activeTab === 'history',
-    onConversationLoad: (conversationId, messages) => {
-      setAgentConversationId(conversationId);
-      setAgentInitialMessages(messages);
-      setAgentMessages(messages);
-      setActiveTab('chat');
-      updateAgentUrl(conversationId);
-    },
-    onConversationCreate: (conversationId) => {
-      setAgentConversationId(conversationId);
-      setAgentInitialMessages([]);
-      setAgentMessages([]);
-      setActiveTab('chat');
-      updateAgentUrl(conversationId);
-    },
-    onConversationDelete: () => {
-      setAgentConversationId(null);
-      setAgentInitialMessages([]);
-      setAgentMessages([]);
-    },
-  });
-
   // Get drives from store
   const { drives, fetchDrives } = useDriveStore();
-
-  // ============================================
-  // URL HELPERS
-  // ============================================
-  const updateAgentUrl = useCallback(
-    (conversationId: string) => {
-      if (!selectedAgent) return;
-      const url = new URL(window.location.href);
-      url.searchParams.set('c', conversationId);
-      url.searchParams.set('agent', selectedAgent.id);
-      window.history.pushState({}, '', url.toString());
-    },
-    [selectedAgent]
-  );
 
   // ============================================
   // INITIALIZATION EFFECTS
@@ -167,6 +148,13 @@ const GlobalAssistantView: React.FC = () => {
   useEffect(() => {
     fetchDrives();
   }, [fetchDrives]);
+
+  // Load most recent conversation when agent is selected
+  useEffect(() => {
+    if (selectedAgent && !agentConversationId && !agentIsLoading) {
+      loadMostRecentConversation();
+    }
+  }, [selectedAgent, agentConversationId, agentIsLoading, loadMostRecentConversation]);
 
   // Extract location context from pathname
   useEffect(() => {
@@ -186,132 +174,16 @@ const GlobalAssistantView: React.FC = () => {
     }
   }, [pathname, drives]);
 
-  // Load/create agent conversation when agent is selected
-  useEffect(() => {
-    const loadOrCreateAgentConversation = async () => {
-      if (!selectedAgent) {
-        // Switching back to global mode - reset agent state
-        setAgentConversationId(null);
-        setAgentInitialMessages([]);
-        setAgentIsInitialized(false);
-        setAgentIdForConversation(null);
-        return;
-      }
-
-      const isSwitchingAgents =
-        agentIdForConversation !== null && agentIdForConversation !== selectedAgent.id;
-
-      // If we already have a valid conversation for this same agent, don't reload
-      if (
-        agentConversationId &&
-        agentIsInitialized &&
-        agentIdForConversation === selectedAgent.id
-      ) {
-        return;
-      }
-
-      // Reset state when switching agents
-      if (isSwitchingAgents || !agentIdForConversation) {
-        setAgentConversationId(null);
-      }
-      setAgentInitialMessages([]);
-      setAgentIsInitialized(false);
-
-      // Check URL for existing conversation ID
-      const urlParams = new URLSearchParams(window.location.search);
-      const conversationIdFromUrl = urlParams.get('c');
-      const agentIdFromUrl = urlParams.get('agent');
-
-      // If URL has conversation for THIS agent, load it
-      if (conversationIdFromUrl && agentIdFromUrl === selectedAgent.id) {
-        try {
-          const response = await fetchWithAuth(
-            `/api/agents/${selectedAgent.id}/conversations/${conversationIdFromUrl}/messages`
-          );
-          if (response.ok) {
-            const data = await response.json();
-            setAgentConversationId(conversationIdFromUrl);
-            setAgentInitialMessages(data.messages || []);
-            setAgentIsInitialized(true);
-            setAgentIdForConversation(selectedAgent.id);
-            return;
-          }
-        } catch (error) {
-          console.error('Failed to load conversation from URL:', error);
-          toast.error('Failed to load conversation. Creating new one.');
-        }
-      }
-
-      // Try to load most recent conversation for this agent
-      try {
-        const response = await fetchWithAuth(
-          `/api/agents/${selectedAgent.id}/conversations?limit=1`
-        );
-        if (response.ok) {
-          const data = await response.json();
-          if (data.conversations && data.conversations.length > 0) {
-            const mostRecent = data.conversations[0];
-            const messagesResponse = await fetchWithAuth(
-              `/api/agents/${selectedAgent.id}/conversations/${mostRecent.id}/messages`
-            );
-            if (messagesResponse.ok) {
-              const messagesData = await messagesResponse.json();
-              setAgentConversationId(mostRecent.id);
-              setAgentInitialMessages(messagesData.messages || []);
-              setAgentIsInitialized(true);
-              setAgentIdForConversation(selectedAgent.id);
-              updateAgentUrl(mostRecent.id);
-              return;
-            }
-          }
-        }
-      } catch (error) {
-        console.error('Failed to load recent conversation:', error);
-      }
-
-      // No existing conversation - create a new one
-      try {
-        const response = await fetchWithAuth(
-          `/api/agents/${selectedAgent.id}/conversations`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({}),
-          }
-        );
-        if (response.ok) {
-          const data = await response.json();
-          const newConversationId = data.conversationId || data.id;
-          setAgentConversationId(newConversationId);
-          setAgentInitialMessages([]);
-          setAgentIsInitialized(true);
-          setAgentIdForConversation(selectedAgent.id);
-          updateAgentUrl(newConversationId);
-        }
-      } catch (error) {
-        console.error('Failed to create new agent conversation:', error);
-        toast.error('Failed to initialize agent conversation');
-        setAgentIsInitialized(true);
-        setAgentIdForConversation(selectedAgent.id);
-      }
-    };
-
-    loadOrCreateAgentConversation();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedAgent, agentConversationId, agentIdForConversation, updateAgentUrl]);
-
   // Load agent config when agent is selected
   useEffect(() => {
     const loadAgentConfig = async () => {
       if (!selectedAgent) {
-        setAgentConfig(null);
         return;
       }
       try {
         const response = await fetchWithAuth(`/api/pages/${selectedAgent.id}/agent-config`);
         if (response.ok) {
           const config = await response.json();
-          setAgentConfig(config);
           if (config.aiProvider) setAgentSelectedProvider(config.aiProvider);
           if (config.aiModel) setAgentSelectedModel(config.aiModel);
         }
@@ -378,6 +250,9 @@ const GlobalAssistantView: React.FC = () => {
   const regenerate = selectedAgent ? agentRegenerate : globalRegenerate;
   const stop = selectedAgent ? agentStop : globalStop;
   const isStreaming = status === 'submitted' || status === 'streaming';
+  // Agent mode: initialized when we have a conversationId and not loading
+  // Global mode: use globalIsInitialized from context
+  const agentIsInitialized = selectedAgent ? (!!agentConversationId && !agentIsLoading) : false;
   const isInitialized = selectedAgent ? agentIsInitialized : globalIsInitialized;
   const isLoading = !isInitialized;
 
@@ -392,7 +267,7 @@ const GlobalAssistantView: React.FC = () => {
       setMessages: selectedAgent
         ? (msgs) => {
             setAgentMessages(msgs);
-            setAgentInitialMessages(msgs);
+            setAgentStoreMessages(msgs); // Sync to store
           }
         : (msgs) => {
             setGlobalMessages(msgs);
@@ -406,14 +281,12 @@ const GlobalAssistantView: React.FC = () => {
   // GLOBAL MODE SYNC EFFECTS
   // ============================================
 
-  // Clear agent messages when switching modes
+  // Clear agent messages when switching to global mode
   useEffect(() => {
     if (!selectedAgent) {
       setAgentMessages([]);
-    } else if (agentIdForConversation !== selectedAgent.id) {
-      setAgentMessages([]);
     }
-  }, [selectedAgent, agentIdForConversation, setAgentMessages]);
+  }, [selectedAgent, setAgentMessages]);
 
   // Stop global stream when switching to agent mode
   useEffect(() => {
@@ -478,6 +351,9 @@ const GlobalAssistantView: React.FC = () => {
   // HANDLERS
   // ============================================
 
+  // Get setActiveTab from store for sidebar tab control
+  const { setActiveTab } = useAgentStore();
+
   const handleNewConversation = async () => {
     if (selectedAgent) {
       await createAgentConversation();
@@ -488,14 +364,12 @@ const GlobalAssistantView: React.FC = () => {
 
   const handleOpenSettings = () => {
     if (!rightSidebarOpen) toggleRightSidebar();
-    localStorage.setItem('globalAssistantActiveTab', 'settings');
-    window.dispatchEvent(new Event('storage'));
+    setActiveTab('settings');
   };
 
   const handleOpenHistory = () => {
     if (!rightSidebarOpen) toggleRightSidebar();
-    localStorage.setItem('globalAssistantActiveTab', 'history');
-    window.dispatchEvent(new Event('storage'));
+    setActiveTab('history');
   };
 
   const handleSendMessage = async () => {
@@ -588,172 +462,59 @@ const GlobalAssistantView: React.FC = () => {
         </div>
       </div>
 
-      {/* Agent Mode: Tabbed interface */}
-      {selectedAgent ? (
-        <Tabs
-          value={activeTab}
-          onValueChange={setActiveTab}
-          className="flex flex-col flex-1 min-h-0"
-        >
-          <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 dark:border-[var(--separator)]">
-            <TabsList className="h-10">
-              <TabsTrigger value="chat" className="gap-2">
-                <MessageSquare className="h-4 w-4" />
-                <span className="hidden sm:inline">Chat</span>
-              </TabsTrigger>
-              <TabsTrigger value="history" className="gap-2">
-                <History className="h-4 w-4" />
-                <span className="hidden sm:inline">History</span>
-              </TabsTrigger>
-              <TabsTrigger value="settings" className="gap-2">
-                <Settings className="h-4 w-4" />
-                <span className="hidden sm:inline">Settings</span>
-              </TabsTrigger>
-            </TabsList>
+      {/* Chat Controls - unified for both modes */}
+      <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 dark:border-[var(--separator)]">
+        <ReadOnlyToggle
+          isReadOnly={isReadOnly}
+          onToggle={setIsReadOnly}
+          disabled={isStreaming}
+          size="sm"
+        />
+        {selectedAgent ? (
+          <AiUsageMonitor pageId={selectedAgent.id} compact />
+        ) : (
+          currentConversationId && (
+            <AiUsageMonitor conversationId={currentConversationId} compact />
+          )
+        )}
+      </div>
 
-            {activeTab === 'chat' && (
-              <div className="flex items-center gap-3">
-                <ReadOnlyToggle
-                  isReadOnly={isReadOnly}
-                  onToggle={setIsReadOnly}
-                  disabled={isStreaming}
-                  size="sm"
-                />
-                <AiUsageMonitor pageId={selectedAgent.id} compact />
-              </div>
-            )}
+      {/* Chat Interface - unified for both modes */}
+      <ChatMessagesArea
+        ref={messagesAreaRef}
+        messages={messages}
+        isLoading={isLoading}
+        isStreaming={isStreaming}
+        assistantName={selectedAgent ? selectedAgent.title : 'Global Assistant'}
+        emptyMessage={
+          selectedAgent
+            ? `Start a conversation with ${selectedAgent.title}`
+            : 'Welcome to your Global Assistant! Ask me anything about your workspace.'
+        }
+        onEdit={handleEdit}
+        onDelete={handleDelete}
+        onRetry={handleRetry}
+        lastAssistantMessageId={lastAssistantMessageId}
+        lastUserMessageId={lastUserMessageId}
+        editVersion={editVersion}
+      />
 
-            {activeTab === 'settings' && (
-              <Button
-                variant="default"
-                size="sm"
-                onClick={() => agentSettingsRef.current?.submitForm()}
-                disabled={agentSettingsRef.current?.isSaving}
-              >
-                {agentSettingsRef.current?.isSaving ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Saving...
-                  </>
-                ) : (
-                  <>
-                    <Save className="h-4 w-4 mr-2" />
-                    Save
-                  </>
-                )}
-              </Button>
-            )}
-          </div>
-
-          {/* Chat Tab */}
-          <TabsContent value="chat" className="flex-1 flex flex-col min-h-0 m-0">
-            <ChatMessagesArea
-              ref={messagesAreaRef}
-              messages={messages}
-              isLoading={isLoading}
-              isStreaming={isStreaming}
-              assistantName={selectedAgent.title}
-              emptyMessage={`Start a conversation with ${selectedAgent.title}`}
-              onEdit={handleEdit}
-              onDelete={handleDelete}
-              onRetry={handleRetry}
-              lastAssistantMessageId={lastAssistantMessageId}
-              lastUserMessageId={lastUserMessageId}
-              editVersion={editVersion}
-            />
-            <ChatInputArea
-              ref={inputAreaRef}
-              value={input}
-              onChange={setInput}
-              onSend={handleSendMessage}
-              onStop={stop}
-              isStreaming={isStreaming}
-              disabled={!isAnyProviderConfigured}
-              isLoading={isLoading}
-              placeholder={`Ask ${selectedAgent.title}...`}
-              driveId={selectedAgent.driveId}
-              crossDrive={false}
-              error={error}
-              showError={showError}
-              onClearError={() => setShowError(false)}
-            />
-          </TabsContent>
-
-          {/* History Tab */}
-          <TabsContent value="history" className="flex-1 min-h-0 m-0">
-            <AgentHistoryTab
-              conversations={agentConversations}
-              currentConversationId={currentConversationId}
-              onSelectConversation={loadAgentConversation}
-              onCreateNew={createAgentConversation}
-              onDeleteConversation={deleteAgentConversation}
-              isLoading={isLoadingConversations}
-            />
-          </TabsContent>
-
-          {/* Settings Tab */}
-          <TabsContent value="settings" className="flex-1 min-h-0 m-0 overflow-y-auto">
-            <AgentSettingsTab
-              ref={agentSettingsRef}
-              pageId={selectedAgent.id}
-              config={agentConfig}
-              onConfigUpdate={setAgentConfig}
-              selectedProvider={agentSelectedProvider}
-              selectedModel={agentSelectedModel}
-              onProviderChange={setAgentSelectedProvider}
-              onModelChange={setAgentSelectedModel}
-              isProviderConfigured={isProviderConfigured}
-            />
-          </TabsContent>
-        </Tabs>
-      ) : (
-        /* Global Assistant Mode */
-        <>
-          <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-[var(--separator)]">
-            <ReadOnlyToggle
-              isReadOnly={isReadOnly}
-              onToggle={setIsReadOnly}
-              disabled={isStreaming}
-              size="sm"
-            />
-            {currentConversationId && (
-              <AiUsageMonitor conversationId={currentConversationId} compact />
-            )}
-          </div>
-
-          <ChatMessagesArea
-            ref={messagesAreaRef}
-            messages={messages}
-            isLoading={isLoading}
-            isStreaming={isStreaming}
-            assistantName="Global Assistant"
-            emptyMessage="Welcome to your Global Assistant! Ask me anything about your workspace."
-            onEdit={handleEdit}
-            onDelete={handleDelete}
-            onRetry={handleRetry}
-            lastAssistantMessageId={lastAssistantMessageId}
-            lastUserMessageId={lastUserMessageId}
-            editVersion={editVersion}
-          />
-
-          <ChatInputArea
-            ref={inputAreaRef}
-            value={input}
-            onChange={setInput}
-            onSend={handleSendMessage}
-            onStop={stop}
-            isStreaming={isStreaming}
-            disabled={!isAnyProviderConfigured}
-            isLoading={isLoading}
-            placeholder="Ask about your workspace..."
-            driveId={locationContext?.currentDrive?.id}
-            crossDrive={true}
-            error={error}
-            showError={showError}
-            onClearError={() => setShowError(false)}
-          />
-        </>
-      )}
+      <ChatInputArea
+        ref={inputAreaRef}
+        value={input}
+        onChange={setInput}
+        onSend={handleSendMessage}
+        onStop={stop}
+        isStreaming={isStreaming}
+        disabled={!isAnyProviderConfigured}
+        isLoading={isLoading}
+        placeholder={selectedAgent ? `Ask ${selectedAgent.title}...` : 'Ask about your workspace...'}
+        driveId={selectedAgent ? selectedAgent.driveId : locationContext?.currentDrive?.id}
+        crossDrive={!selectedAgent}
+        error={error}
+        showError={showError}
+        onClearError={() => setShowError(false)}
+      />
     </div>
   );
 };

@@ -4,37 +4,13 @@ import { persist } from 'zustand/middleware';
 import { UIMessage } from 'ai';
 import { fetchWithAuth } from '@/lib/auth-fetch';
 import { toast } from 'sonner';
+import { AgentInfo, isValidAgentInfo } from '@/types/agent';
 
 /**
- * Agent information for sidebar selection.
- * Matches the AgentInfo type from useAgentStore but kept separate
- * to avoid coupling sidebar state to the middle panel's store.
+ * SidebarAgentInfo is now an alias for the shared AgentInfo type.
+ * Kept for backward compatibility with existing code.
  */
-export interface SidebarAgentInfo {
-  id: string;
-  title: string;
-  driveId: string;
-  driveName: string;
-  systemPrompt?: string;
-  aiProvider?: string;
-  aiModel?: string;
-  enabledTools?: string[];
-}
-
-// ============================================
-// Type Guards for localStorage validation
-// ============================================
-
-function isValidAgentInfo(data: unknown): data is SidebarAgentInfo {
-  if (typeof data !== 'object' || data === null) return false;
-  const obj = data as Record<string, unknown>;
-  return (
-    typeof obj.id === 'string' &&
-    typeof obj.title === 'string' &&
-    typeof obj.driveId === 'string' &&
-    typeof obj.driveName === 'string'
-  );
-}
+export type SidebarAgentInfo = AgentInfo;
 
 // ============================================
 // Zustand Store
@@ -193,6 +169,17 @@ export interface UseSidebarAgentStateReturn {
 export function useSidebarAgentState(): UseSidebarAgentStateReturn {
   const store = useSidebarAgentStore();
 
+  // Destructure store methods for useEffect dependencies (stable references from Zustand)
+  const {
+    selectedAgent,
+    isInitialized,
+    agentIdForConversation,
+    setConversationLoading,
+    setConversationLoaded,
+    setConversationCreated,
+    setConversationError,
+  } = store;
+
   // Ref to track which agent we're currently loading (for race condition protection)
   const loadingAgentIdRef = useRef<string | null>(null);
 
@@ -201,29 +188,27 @@ export function useSidebarAgentState(): UseSidebarAgentStateReturn {
   // ============================================
   useEffect(() => {
     const loadOrCreateConversation = async () => {
-      const agent = store.selectedAgent;
-
-      if (!agent) {
+      if (!selectedAgent) {
         // No agent selected (global mode) - nothing to load
         loadingAgentIdRef.current = null;
         return;
       }
 
       // If already initialized for this agent, skip
-      if (store.isInitialized && store.agentIdForConversation === agent.id) {
+      if (isInitialized && agentIdForConversation === selectedAgent.id) {
         return;
       }
 
       // Track which agent we're loading for (race condition protection)
-      const currentAgentId = agent.id;
+      const currentAgentId = selectedAgent.id;
       loadingAgentIdRef.current = currentAgentId;
 
-      store.setConversationLoading();
+      setConversationLoading();
 
       // Try to load most recent conversation
       try {
         const response = await fetchWithAuth(
-          `/api/agents/${agent.id}/conversations?limit=1`
+          `/api/agents/${selectedAgent.id}/conversations?limit=1`
         );
 
         // Abort if agent changed during fetch
@@ -235,7 +220,7 @@ export function useSidebarAgentState(): UseSidebarAgentStateReturn {
             const mostRecent = data.conversations[0];
             // Load messages
             const messagesResponse = await fetchWithAuth(
-              `/api/agents/${agent.id}/conversations/${mostRecent.id}/messages`
+              `/api/agents/${selectedAgent.id}/conversations/${mostRecent.id}/messages`
             );
 
             // Abort if agent changed during fetch
@@ -243,10 +228,10 @@ export function useSidebarAgentState(): UseSidebarAgentStateReturn {
 
             if (messagesResponse.ok) {
               const messagesData = await messagesResponse.json();
-              store.setConversationLoaded(
+              setConversationLoaded(
                 mostRecent.id,
                 messagesData.messages || [],
-                agent.id
+                selectedAgent.id
               );
               return;
             }
@@ -264,7 +249,7 @@ export function useSidebarAgentState(): UseSidebarAgentStateReturn {
       // No existing conversation - create new one
       try {
         const response = await fetchWithAuth(
-          `/api/agents/${agent.id}/conversations`,
+          `/api/agents/${selectedAgent.id}/conversations`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -278,7 +263,7 @@ export function useSidebarAgentState(): UseSidebarAgentStateReturn {
         if (response.ok) {
           const data = await response.json();
           const newConversationId = data.conversationId || data.id;
-          store.setConversationCreated(newConversationId, agent.id);
+          setConversationCreated(newConversationId, selectedAgent.id);
         } else {
           throw new Error('Failed to create conversation');
         }
@@ -287,12 +272,20 @@ export function useSidebarAgentState(): UseSidebarAgentStateReturn {
         if (loadingAgentIdRef.current !== currentAgentId) return;
         console.error('Failed to create new agent conversation:', error);
         toast.error('Failed to initialize agent conversation');
-        store.setConversationError(agent.id);
+        setConversationError(selectedAgent.id);
       }
     };
 
     loadOrCreateConversation();
-  }, [store.selectedAgent, store.isInitialized, store.agentIdForConversation]);
+  }, [
+    selectedAgent,
+    isInitialized,
+    agentIdForConversation,
+    setConversationLoading,
+    setConversationLoaded,
+    setConversationCreated,
+    setConversationError,
+  ]);
 
   // ============================================
   // Action: Create New Conversation
