@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { CheckCircle, XCircle, Key, ExternalLink, Zap, Sparkles, Bot, Wrench } from 'lucide-react';
 import { toast } from 'sonner';
-import { AI_PROVIDERS, getBackendProvider } from '@/lib/ai/ai-providers-config';
+import { AI_PROVIDERS, getBackendProvider } from '@/lib/ai/core/ai-providers-config';
 import { patch, fetchWithAuth } from '@/lib/auth-fetch';
 import type { AgentInfo } from '@/types/agent';
 

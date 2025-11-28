@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateWebRequest, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
-import { getUserLMStudioSettings } from '@/lib/ai/ai-utils';
+import { getUserLMStudioSettings } from '@/lib/ai/core/ai-utils';
 
 /**
  * GET /api/ai/lmstudio/models

@@ -6,7 +6,7 @@
 import React, { useRef, forwardRef, useImperativeHandle } from 'react';
 import { Button } from '@/components/ui/button';
 import { Send, StopCircle } from 'lucide-react';
-import AiInput from '@/components/ai/AiInput';
+import AiInput from '@/components/ai/shared/AiInput';
 import { ChatInputRef } from '@/components/messages/ChatInput';
 import { getAIErrorMessage } from '@/lib/ai/shared/error-messages';
 

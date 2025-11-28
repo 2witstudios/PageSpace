@@ -123,7 +123,7 @@ function EmptyState({ message }: { message: string }) {
   );
 }
 
-export default function AgentHistoryTab({
+export default function PageAgentHistoryTab({
   conversations,
   currentConversationId,
   onSelectConversation,

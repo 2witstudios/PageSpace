@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { authenticateHybridRequest, isAuthError } from '@/lib/auth';
 import { db, chatMessages, pages, eq, and } from '@pagespace/db';
 import { canUserViewPage } from '@pagespace/lib/server';
-import { convertDbMessageToUIMessage } from '@/lib/ai/assistant-utils';
+import { convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
 import { loggers } from '@pagespace/lib/server';
 
 /**

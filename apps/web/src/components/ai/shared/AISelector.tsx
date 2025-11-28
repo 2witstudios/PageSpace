@@ -16,7 +16,7 @@ import { useAgents, AgentSummary } from '@/hooks/useAgents';
 import { AgentInfo } from '@/stores/useAgentStore';
 import { cn } from '@/lib/utils';
 
-interface AgentSelectorProps {
+interface AISelectorProps {
   selectedAgent: AgentInfo | null;
   onSelectAgent: (agent: AgentInfo | null) => void;
   driveId?: string;
@@ -31,13 +31,13 @@ interface AgentSelectorProps {
  * - Groups agents by drive when showing multiple drives
  * - Filters to single drive when driveId is provided
  */
-export function AgentSelector({
+export function AISelector({
   selectedAgent,
   onSelectAgent,
   driveId,
   disabled = false,
   className,
-}: AgentSelectorProps) {
+}: AISelectorProps) {
   const { agentsByDrive, isLoading, toAgentInfo } = useAgents(driveId);
 
   const hasAgents = agentsByDrive.some(drive => drive.agents.length > 0);

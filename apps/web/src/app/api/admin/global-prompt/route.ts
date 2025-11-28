@@ -10,13 +10,13 @@
  */
 
 import { verifyAdminAuth } from '@/lib/auth';
-import { buildCompleteRequest, type CompletePayloadResult, type LocationContext } from '@/lib/ai/complete-request-builder';
-import { getToolsSummary } from '@/lib/ai/tool-filtering';
-import { pageSpaceTools } from '@/lib/ai/ai-tools';
-import { extractToolSchemas, calculateTotalToolTokens } from '@/lib/ai/schema-introspection';
+import { buildCompleteRequest, type CompletePayloadResult, type LocationContext } from '@/lib/ai/core/complete-request-builder';
+import { getToolsSummary } from '@/lib/ai/core/tool-filtering';
+import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
+import { extractToolSchemas, calculateTotalToolTokens } from '@/lib/ai/core/schema-introspection';
 import { db, driveMembers, drives, pages, eq, and, asc } from '@pagespace/db';
 import { estimateSystemPromptTokens } from '@pagespace/lib/ai-context-calculator';
-import { buildSystemPrompt } from '@/lib/ai/system-prompt';
+import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
 
 interface PromptSection {
   name: string;

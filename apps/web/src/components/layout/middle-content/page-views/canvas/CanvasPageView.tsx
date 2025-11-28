@@ -6,7 +6,7 @@ import { patch, fetchWithAuth } from '@/lib/auth-fetch';
 import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import { ShadowCanvas } from '@/components/canvas/ShadowCanvas';
-import { ErrorBoundary } from '@/components/ai/ErrorBoundary';
+import { ErrorBoundary } from '@/components/ai/shared/ErrorBoundary';
 import { TreePage } from '@/hooks/usePageTree';
 import { useDocumentStore } from '@/stores/useDocumentStore';
 import { useAuth } from '@/hooks/use-auth';

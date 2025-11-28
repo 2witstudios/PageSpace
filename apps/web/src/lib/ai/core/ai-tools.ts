@@ -1,11 +1,11 @@
-import { driveTools } from './tools/drive-tools';
-import { pageReadTools } from './tools/page-read-tools';
-import { pageWriteTools } from './tools/page-write-tools';
-import { searchTools } from './tools/search-tools';
-import { taskManagementTools } from './tools/task-management-tools';
-import { agentTools } from './tools/agent-tools';
-import { agentCommunicationTools } from './tools/agent-communication-tools';
-import { webSearchTools } from './tools/web-search-tools';
+import { driveTools } from '../tools/drive-tools';
+import { pageReadTools } from '../tools/page-read-tools';
+import { pageWriteTools } from '../tools/page-write-tools';
+import { searchTools } from '../tools/search-tools';
+import { taskManagementTools } from '../tools/task-management-tools';
+import { agentTools } from '../tools/agent-tools';
+import { agentCommunicationTools } from '../tools/agent-communication-tools';
+import { webSearchTools } from '../tools/web-search-tools';
 
 /**
  * PageSpace AI Tools - Internal AI SDK tool implementations

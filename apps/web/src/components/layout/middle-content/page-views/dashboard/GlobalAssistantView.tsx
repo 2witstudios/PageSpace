@@ -45,15 +45,15 @@ import { DefaultChatTransport } from 'ai';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Settings, Plus, History } from 'lucide-react';
-import { ReadOnlyToggle } from '@/components/ai/ReadOnlyToggle';
+import { ReadOnlyToggle } from '@/components/ai/shared/ReadOnlyToggle';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth } from '@/lib/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
 import { useAgentStore } from '@/stores/useAgentStore';
-import { AiUsageMonitor } from '@/components/ai/AiUsageMonitor';
-import { AgentSelector } from '@/components/ai/AgentSelector';
+import { AiUsageMonitor } from '@/components/ai/shared/AiUsageMonitor';
+import { AISelector } from '@/components/ai/shared/AISelector';
 
 // Shared hooks and components
 import {
@@ -419,7 +419,7 @@ const GlobalAssistantView: React.FC = () => {
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-[var(--separator)]">
         <div className="flex items-center space-x-2">
-          <AgentSelector
+          <AISelector
             selectedAgent={selectedAgent}
             onSelectAgent={selectAgent}
             disabled={isStreaming}

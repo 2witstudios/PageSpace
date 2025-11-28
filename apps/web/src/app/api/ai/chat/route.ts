@@ -21,7 +21,7 @@ import {
   createProviderErrorResponse,
   isProviderError,
   type ProviderRequest
-} from '@/lib/ai/provider-factory';
+} from '@/lib/ai/core/provider-factory';
 import {
   getUserOpenRouterSettings,
   getUserGoogleSettings,
@@ -32,10 +32,10 @@ import {
   getUserOllamaSettings,
   getUserLMStudioSettings,
   getUserGLMSettings,
-} from '@/lib/ai/ai-utils';
+} from '@/lib/ai/core/ai-utils';
 import { db, users, chatMessages, pages, drives, eq, and } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
-import { pageSpaceTools } from '@/lib/ai/ai-tools';
+import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import {
   extractMessageContent,
   extractToolCalls,
@@ -43,18 +43,18 @@ import {
   saveMessageToDatabase,
   sanitizeMessagesForModel,
   convertDbMessageToUIMessage
-} from '@/lib/ai/assistant-utils';
-import { processMentionsInMessage, buildMentionSystemPrompt } from '@/lib/ai/mention-processor';
-import { buildTimestampSystemPrompt } from '@/lib/ai/timestamp-utils';
-import { buildInlineInstructions } from '@/lib/ai/inline-instructions';
-import { buildSystemPrompt } from '@/lib/ai/system-prompt';
-import { filterToolsForReadOnly } from '@/lib/ai/tool-filtering';
+} from '@/lib/ai/core/message-utils';
+import { processMentionsInMessage, buildMentionSystemPrompt } from '@/lib/ai/core/mention-processor';
+import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
+import { buildInlineInstructions } from '@/lib/ai/core/inline-instructions';
+import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
+import { filterToolsForReadOnly } from '@/lib/ai/core/tool-filtering';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { trackFeature } from '@pagespace/lib/activity-tracker';
 import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
-import { getModelCapabilities } from '@/lib/ai/model-capabilities';
-import { convertMCPToolsToAISDKSchemas, parseMCPToolName } from '@/lib/ai/mcp-tool-converter';
+import { getModelCapabilities } from '@/lib/ai/core/model-capabilities';
+import { convertMCPToolsToAISDKSchemas, parseMCPToolName } from '@/lib/ai/core/mcp-tool-converter';
 import type { MCPTool } from '@/types/mcp';
 import { getMCPBridge } from '@/lib/mcp-bridge';
 

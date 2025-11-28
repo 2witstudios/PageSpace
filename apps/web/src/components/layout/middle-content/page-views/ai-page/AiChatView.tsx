@@ -19,8 +19,8 @@ import { buildPagePath } from '@/lib/tree/tree-utils';
 import { useDriveStore } from '@/hooks/useDrive';
 import { useAuth } from '@/hooks/use-auth';
 import { toast } from 'sonner';
-import AgentSettingsTab, { AgentSettingsTabRef } from '@/components/ai/AgentSettingsTab';
-import AgentHistoryTab from '@/components/ai/AgentHistoryTab';
+import AgentSettingsTab, { AgentSettingsTabRef } from '@/components/ai/page-agents/PageAgentSettingsTab';
+import AgentHistoryTab from '@/components/ai/page-agents/PageAgentHistoryTab';
 import { fetchWithAuth } from '@/lib/auth-fetch';
 
 // Shared hooks and components
@@ -39,7 +39,7 @@ import {
   ChatMessagesAreaRef,
   ChatInputAreaRef,
 } from '@/components/ai/chat';
-import { AiUsageMonitor } from '@/components/ai/AiUsageMonitor';
+import { AiUsageMonitor } from '@/components/ai/shared/AiUsageMonitor';
 
 interface AiChatViewProps {
   page: TreePage;

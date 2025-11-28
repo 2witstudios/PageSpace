@@ -10,10 +10,10 @@ import {
   createProviderErrorResponse,
   isProviderError,
   type ProviderRequest
-} from '@/lib/ai/provider-factory';
+} from '@/lib/ai/core/provider-factory';
 import { db, conversations, messages, drives, eq, and, desc, gt, lt } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
-import { pageSpaceTools } from '@/lib/ai/ai-tools';
+import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { 
   extractMessageContent, 
   extractToolCalls, 
@@ -21,13 +21,13 @@ import {
   sanitizeMessagesForModel,
   convertGlobalAssistantMessageToUIMessage,
   saveGlobalAssistantMessageToDatabase
-} from '@/lib/ai/assistant-utils';
-import { processMentionsInMessage, buildMentionSystemPrompt } from '@/lib/ai/mention-processor';
-import { buildTimestampSystemPrompt } from '@/lib/ai/timestamp-utils';
-import { buildSystemPrompt } from '@/lib/ai/system-prompt';
-import { filterToolsForReadOnly } from '@/lib/ai/tool-filtering';
-import { getModelCapabilities } from '@/lib/ai/model-capabilities';
-import { convertMCPToolsToAISDKSchemas, parseMCPToolName } from '@/lib/ai/mcp-tool-converter';
+} from '@/lib/ai/core/message-utils';
+import { processMentionsInMessage, buildMentionSystemPrompt } from '@/lib/ai/core/mention-processor';
+import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
+import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
+import { filterToolsForReadOnly } from '@/lib/ai/core/tool-filtering';
+import { getModelCapabilities } from '@/lib/ai/core/model-capabilities';
+import { convertMCPToolsToAISDKSchemas, parseMCPToolName } from '@/lib/ai/core/mcp-tool-converter';
 import { getMCPBridge } from '@/lib/mcp-bridge';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';

@@ -5,9 +5,9 @@ import { Button } from '@/components/ui/button';
 import ChatInput, { ChatInputRef } from '@/components/messages/ChatInput';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Loader2, Send, Plus, StopCircle } from 'lucide-react';
-import { CompactMessageRenderer } from '@/components/ai/CompactMessageRenderer';
-import { ReadOnlyToggle } from '@/components/ai/ReadOnlyToggle';
-import { AgentSelector } from '@/components/ai/AgentSelector';
+import { CompactMessageRenderer } from '@/components/ai/shared/CompactMessageRenderer';
+import { ReadOnlyToggle } from '@/components/ai/shared/ReadOnlyToggle';
+import { AISelector } from '@/components/ai/shared/AISelector';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth, patch, del } from '@/lib/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
@@ -15,7 +15,7 @@ import { useGlobalChat } from '@/contexts/GlobalChatContext';
 import { useSidebarAgentState, SidebarAgentInfo } from '@/hooks/useSidebarAgentState';
 import { useSidebarChat } from '@/hooks/useSidebarChat';
 import { toast } from 'sonner';
-import { AiUsageMonitor } from '@/components/ai/AiUsageMonitor';
+import { AiUsageMonitor } from '@/components/ai/shared/AiUsageMonitor';
 
 interface ProviderSettings {
   currentProvider: string;
@@ -544,7 +544,7 @@ const AssistantChatTab: React.FC = () => {
       {/* Header */}
       <div className="flex flex-col border-b border-gray-200 dark:border-[var(--separator)] bg-card">
         <div className="flex items-center justify-between p-2">
-          <AgentSelector
+          <AISelector
             selectedAgent={selectedAgent}
             onSelectAgent={handleSelectAgent}
             disabled={isStreaming}

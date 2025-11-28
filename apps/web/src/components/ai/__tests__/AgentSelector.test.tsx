@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { AgentSelector } from '../AgentSelector';
+import { AISelector } from '../AgentSelector';
 import type { AgentSummary } from '@/hooks/useAgents';
 import type { AgentInfo } from '@/stores/useAgentStore';
 
@@ -69,7 +69,7 @@ describe('AgentSelector', () => {
 
   it('should render Global Assistant when no agent selected', () => {
     render(
-      <AgentSelector
+      <AISelector
         selectedAgent={null}
         onSelectAgent={mockOnSelectAgent}
       />
@@ -87,7 +87,7 @@ describe('AgentSelector', () => {
     };
 
     render(
-      <AgentSelector
+      <AISelector
         selectedAgent={selectedAgent}
         onSelectAgent={mockOnSelectAgent}
       />
@@ -100,7 +100,7 @@ describe('AgentSelector', () => {
     const user = userEvent.setup();
 
     render(
-      <AgentSelector
+      <AISelector
         selectedAgent={null}
         onSelectAgent={mockOnSelectAgent}
       />

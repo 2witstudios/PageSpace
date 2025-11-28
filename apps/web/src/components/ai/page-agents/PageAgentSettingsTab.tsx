@@ -10,7 +10,7 @@ import { Loader2, Bot } from 'lucide-react';
 import { toast } from 'sonner';
 import { useForm, Controller } from 'react-hook-form';
 import { patch, fetchWithAuth } from '@/lib/auth-fetch';
-import { AI_PROVIDERS } from '@/lib/ai/ai-providers-config';
+import { AI_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
 
 interface AgentConfig {
   systemPrompt: string;

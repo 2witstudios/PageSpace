@@ -5,7 +5,7 @@ const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 import { db, pages, eq } from '@pagespace/db';
 import { canUserEditPage } from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
-import { pageSpaceTools } from '@/lib/ai/ai-tools';
+import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { loggers } from '@pagespace/lib/server';
 
 /**

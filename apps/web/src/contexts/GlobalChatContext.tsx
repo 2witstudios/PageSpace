@@ -3,7 +3,7 @@
 import React, { createContext, useContext, ReactNode, useState, useCallback, useEffect, useMemo } from 'react';
 import { DefaultChatTransport, UIMessage } from 'ai';
 import { fetchWithAuth } from '@/lib/auth-fetch';
-import { conversationState } from '@/lib/ai/conversation-state';
+import { conversationState } from '@/lib/ai/core/conversation-state';
 
 /**
  * Global Chat Context - ONLY for Global Assistant state
