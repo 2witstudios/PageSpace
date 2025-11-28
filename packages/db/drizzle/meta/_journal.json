@@ -78,6 +78,13 @@
       "when": 1764108228405,
       "tag": "0010_plain_korath",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1764213948586,
+      "tag": "0011_volatile_karma",
+      "breakpoints": true
     }
   ]
 }

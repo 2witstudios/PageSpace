@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
 import { ChevronRight, ChevronDown } from 'lucide-react';
@@ -27,15 +27,55 @@ interface PermissionsGridProps {
   onChange: (pageId: string, perms: { canView: boolean; canEdit: boolean; canShare: boolean }) => void;
 }
 
-export function PermissionsGrid({ driveId, userId, permissions, onChange }: PermissionsGridProps) {
+export interface PermissionsGridRef {
+  applyRolePermissions: (rolePerms: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>) => void;
+}
+
+export const PermissionsGrid = forwardRef<PermissionsGridRef, PermissionsGridProps>(function PermissionsGrid(
+  { driveId, userId, permissions, onChange },
+  ref
+) {
   const [pages, setPages] = useState<PageNode[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
+  const pendingRolePermissionsRef = useRef<Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }> | null>(null);
 
   useEffect(() => {
     fetchPermissionTree();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [driveId, userId]);
+
+  // Helper to apply permissions to all pages in tree
+  const applyPermissionsToTree = (rolePerms: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>, nodes: PageNode[]) => {
+    nodes.forEach(node => {
+      const perms = rolePerms[node.id];
+      onChange(node.id, perms || { canView: false, canEdit: false, canShare: false });
+      if (node.children) applyPermissionsToTree(rolePerms, node.children);
+    });
+  };
+
+  // Expose applyRolePermissions to parent via ref
+  useImperativeHandle(ref, () => ({
+    applyRolePermissions: (rolePerms: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>) => {
+      if (pages.length === 0) {
+        // Pages not loaded yet - store for later
+        pendingRolePermissionsRef.current = rolePerms;
+        return;
+      }
+      // Apply immediately
+      applyPermissionsToTree(rolePerms, pages);
+    }
+  }), [pages, onChange]);
+
+  // Apply pending role permissions once pages load
+  useEffect(() => {
+    if (pages.length > 0 && pendingRolePermissionsRef.current) {
+      const rolePerms = pendingRolePermissionsRef.current;
+      pendingRolePermissionsRef.current = null;
+      applyPermissionsToTree(rolePerms, pages);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pages]);
 
   const fetchPermissionTree = async () => {
     try {
@@ -267,4 +307,4 @@ export function PermissionsGrid({ driveId, userId, permissions, onChange }: Perm
       </div>
     </div>
   );
-}
+});

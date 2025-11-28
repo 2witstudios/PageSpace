@@ -55,6 +55,7 @@ export async function GET(
       id: driveMembers.id,
       userId: driveMembers.userId,
       role: driveMembers.role,
+      customRoleId: driveMembers.customRoleId,
       invitedAt: driveMembers.invitedAt,
       acceptedAt: driveMembers.acceptedAt,
       user: {
@@ -130,7 +131,7 @@ export async function PATCH(
     const { driveId, userId } = await context.params;
 
     const body = await request.json();
-    const { role, permissions } = body;
+    const { role, customRoleId, permissions } = body;
 
     if (!permissions || !Array.isArray(permissions)) {
       return NextResponse.json({ error: 'Invalid permissions data' }, { status: 400 });
@@ -184,34 +185,42 @@ export async function PATCH(
       return NextResponse.json({ error: 'Member not found' }, { status: 404 });
     }
 
-    // Update role if provided
+    // Update role and customRoleId if provided
     const oldRole = member[0].role;
-    if (role) {
+    const updateData: { role?: 'OWNER' | 'ADMIN' | 'MEMBER'; customRoleId?: string | null } = {};
+    if (role && ['OWNER', 'ADMIN', 'MEMBER'].includes(role)) {
+      updateData.role = role as 'OWNER' | 'ADMIN' | 'MEMBER';
+    }
+    if (customRoleId !== undefined) {
+      updateData.customRoleId = customRoleId || null;
+    }
+
+    if (Object.keys(updateData).length > 0) {
       await db.update(driveMembers)
-        .set({ role })
+        .set(updateData)
         .where(and(
           eq(driveMembers.driveId, driveId),
           eq(driveMembers.userId, userId)
         ));
+    }
 
-      // Send notification if role changed
-      if (role !== oldRole) {
-        await createDriveNotification(
-          userId,
-          driveId,
-          'role_changed',
+    // Send notification if role changed
+    if (role && role !== oldRole) {
+      await createDriveNotification(
+        userId,
+        driveId,
+        'role_changed',
+        role,
+        currentUserId
+      );
+
+      // Broadcast role change event to the affected user
+      await broadcastDriveMemberEvent(
+        createDriveMemberEventPayload(driveId, userId, 'member_role_changed', {
           role,
-          currentUserId
-        );
-
-        // Broadcast role change event to the affected user
-        await broadcastDriveMemberEvent(
-          createDriveMemberEventPayload(driveId, userId, 'member_role_changed', {
-            role,
-            driveName: drive[0].name
-          })
-        );
-      }
+          driveName: drive[0].name
+        })
+      );
     }
 
     // Get all pages in the drive to validate pageIds
@@ -221,8 +230,7 @@ export async function PATCH(
 
     const validPageIds = new Set(drivePages.map(p => p.id));
 
-    // Begin transaction-like operation
-    // First, delete all existing permissions for this user in this drive
+    // Delete all existing permissions for this user in this drive
     const existingPermissions = await db.select({ pageId: pagePermissions.pageId })
       .from(pagePermissions)
       .innerJoin(pages, eq(pagePermissions.pageId, pages.id))
@@ -231,22 +239,13 @@ export async function PATCH(
         eq(pages.driveId, driveId)
       ));
 
-    if (existingPermissions.length > 0) {
+    // Delete permissions for pages in this drive (can't join in delete, so delete by pageId)
+    for (const perm of existingPermissions) {
       await db.delete(pagePermissions)
         .where(and(
           eq(pagePermissions.userId, userId),
-          // Only delete permissions for pages in this drive
-          // We need to do this in batches since we can't join in delete
+          eq(pagePermissions.pageId, perm.pageId)
         ));
-      
-      // More precise deletion - only for pages in this drive
-      for (const perm of existingPermissions) {
-        await db.delete(pagePermissions)
-          .where(and(
-            eq(pagePermissions.userId, userId),
-            eq(pagePermissions.pageId, perm.pageId)
-          ));
-      }
     }
 
     // Insert new permissions

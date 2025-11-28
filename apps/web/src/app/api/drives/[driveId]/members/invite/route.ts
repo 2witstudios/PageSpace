@@ -39,9 +39,10 @@ export async function POST(
     }
 
     const body = await request.json();
-    const { userId: invitedUserId, role = 'MEMBER', permissions } = body as {
+    const { userId: invitedUserId, role = 'MEMBER', customRoleId, permissions } = body as {
       userId: string;
       role?: 'MEMBER' | 'ADMIN';
+      customRoleId?: string | null;
       permissions: PermissionEntry[];
     };
 
@@ -93,6 +94,7 @@ export async function POST(
           driveId,
           userId: invitedUserId,
           role,
+          customRoleId: customRoleId || null,
           invitedBy: userId,
           acceptedAt: new Date(), // Auto-accept for now
         })
@@ -102,7 +104,7 @@ export async function POST(
     } else {
       // Update role if member exists
       await db.update(driveMembers)
-        .set({ role })
+        .set({ role, customRoleId: customRoleId || null })
         .where(eq(driveMembers.id, existingMember[0].id));
 
       memberId = existingMember[0].id;
@@ -119,11 +121,8 @@ export async function POST(
     // Validate that all pageIds belong to this drive
     const validPages = await db.select({ id: pages.id })
       .from(pages)
-      .where(and(
-        eq(pages.driveId, driveId),
-        // This would need inArray but we'll validate one by one for now
-      ));
-    
+      .where(eq(pages.driveId, driveId));
+
     const validPageIds = new Set(validPages.map(p => p.id));
 
     // Add permissions for each page

@@ -23,6 +23,11 @@ interface MemberRowProps {
       displayName?: string;
       avatarUrl?: string;
     };
+    customRole?: {
+      id: string;
+      name: string;
+      color?: string | null;
+    } | null;
     permissionCounts: {
       view: number;
       edit: number;
@@ -43,15 +48,60 @@ export function MemberRow({ member, driveId, currentUserRole, onRemove }: Member
     .toUpperCase()
     .slice(0, 2);
 
-  const getRoleBadgeColor = (role: string) => {
-    switch (role) {
-      case 'OWNER':
-        return 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300';
-      case 'ADMIN':
+  // Get color classes for custom role badges
+  const getCustomRoleColorClasses = (color?: string | null) => {
+    switch (color) {
+      case 'blue':
         return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300';
+      case 'green':
+        return 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300';
+      case 'yellow':
+        return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300';
+      case 'red':
+        return 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300';
+      case 'purple':
+        return 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300';
+      case 'pink':
+        return 'bg-pink-100 text-pink-800 dark:bg-pink-900/30 dark:text-pink-300';
+      case 'orange':
+        return 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300';
+      case 'cyan':
+        return 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/30 dark:text-cyan-300';
       default:
         return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300';
     }
+  };
+
+  // Unified role badge - shows role name based on priority:
+  // Owner > Admin > Custom Role > Member (fallback)
+  const getRoleBadge = () => {
+    if (member.role === 'OWNER') {
+      return (
+        <Badge className="bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300">
+          Owner
+        </Badge>
+      );
+    }
+    if (member.role === 'ADMIN') {
+      return (
+        <Badge className="bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300">
+          Admin
+        </Badge>
+      );
+    }
+    if (member.customRole) {
+      return (
+        <Badge className={getCustomRoleColorClasses(member.customRole.color)}>
+          {member.customRole.name}
+        </Badge>
+      );
+    }
+    // Fallback for members without a custom role assigned
+    return (
+      <Badge className="bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300">
+        Member
+      </Badge>
+    );
   };
 
   return (
@@ -70,9 +120,7 @@ export function MemberRow({ member, driveId, currentUserRole, onRemove }: Member
             {member.profile?.username && (
               <span className="text-sm text-gray-500 dark:text-gray-400">@{member.profile.username}</span>
             )}
-            <Badge className={getRoleBadgeColor(member.role)}>
-              {member.role}
-            </Badge>
+            {getRoleBadge()}
           </div>
           <p className="text-sm text-gray-600 dark:text-gray-400">{member.user.email}</p>
           
