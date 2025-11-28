@@ -5,7 +5,7 @@ import { TreePage, usePageTree } from '@/hooks/usePageTree';
 import { useDocument } from '@/hooks/useDocument';
 import { useSocket } from '@/hooks/useSocket';
 import { useAuth } from '@/hooks/use-auth';
-import { PageEventPayload } from '@/lib/socket-utils';
+import { PageEventPayload } from '@/lib/websocket/socket-utils';
 import { toast } from 'sonner';
 import {
   SheetData,
@@ -25,7 +25,7 @@ import { FloatingCellEditor } from './FloatingCellEditor';
 import { useSuggestion } from '@/hooks/useSuggestion';
 import { SuggestionProvider, useSuggestionContext } from '@/components/providers/SuggestionProvider';
 import SuggestionPopup from '@/components/mentions/SuggestionPopup';
-import { fetchWithAuth } from '@/lib/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 interface SheetViewProps {
   page: TreePage;

@@ -243,9 +243,10 @@ pnpm test:coverage          # Run tests with coverage report
 pnpm test:e2e               # Run E2E tests (Playwright)
 pnpm test:security          # Run security tests
 
-# Testing apps/web (requires workaround for vitest config issue)
-cd apps/web && npx vitest run --config=/dev/null  # Run all web tests
-cd apps/web && npx vitest run --config=/dev/null src/lib/__tests__/ws-connections.test.ts  # Run specific test
+# Testing apps/web
+cd apps/web && pnpm vitest run                   # Run all web tests
+cd apps/web && pnpm vitest run src/lib/websocket/__tests__/ws-connections.test.ts  # Run specific test
+cd apps/web && pnpm vitest run --watch           # Run tests in watch mode
 
 # Linting & Type Checking
 pnpm --filter web lint      # Run ESLint on web app

@@ -1,5 +1,5 @@
 import { Resend } from 'resend';
-import { checkRateLimit, RATE_LIMIT_CONFIGS } from '../rate-limit-utils';
+import { checkRateLimit, RATE_LIMIT_CONFIGS } from '../auth/rate-limit-utils';
 import type * as React from 'react';
 
 function getResendConfig() {

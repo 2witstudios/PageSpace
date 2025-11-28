@@ -20,7 +20,7 @@ import useSWR, { mutate } from 'swr';
 import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
 import { VerificationRequiredAlert } from '@/components/VerificationRequiredAlert';
-import { post, patch, del, fetchWithAuth } from '@/lib/auth-fetch';
+import { post, patch, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);

@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { FileIcon } from "lucide-react";
-import { patch } from '@/lib/auth-fetch';
+import { patch } from '@/lib/auth/auth-fetch';
 import {
   DndContext,
   DragEndEvent,

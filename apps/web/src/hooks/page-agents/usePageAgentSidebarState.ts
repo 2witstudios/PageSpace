@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { UIMessage } from 'ai';
-import { fetchWithAuth } from '@/lib/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
 import { AgentInfo, isValidAgentInfo } from '@/types/agent';
 

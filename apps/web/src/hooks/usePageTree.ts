@@ -2,7 +2,7 @@ import useSWR, { useSWRConfig } from 'swr';
 import { useState, useCallback } from 'react';
 import { mergeChildren } from '@/lib/tree/tree-utils';
 import { Page } from '@pagespace/lib/client';
-import { fetchWithAuth } from '@/lib/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 
 type User = {

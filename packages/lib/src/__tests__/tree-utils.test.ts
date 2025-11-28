@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildTree } from '../tree-utils'
+import { buildTree } from '../content/tree-utils'
 
 describe('tree-utils', () => {
   describe('buildTree', () => {

@@ -13,7 +13,7 @@ import { renderMessageParts, convertToMessageParts } from '@/components/messages
 import ChatInput, { ChatInputRef } from '@/components/messages/ChatInput';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Lock } from 'lucide-react';
-import { post, fetchWithAuth } from '@/lib/auth-fetch';
+import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 interface ChannelViewProps {
   page: TreePage;

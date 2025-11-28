@@ -139,7 +139,7 @@ export const useAuthStore = create<AuthState>()(
 
         // Clear CSRF token from authFetch
         if (typeof window !== 'undefined') {
-          import('@/lib/auth-fetch').then(({ clearCSRFToken }) => {
+          import('@/lib/auth/auth-fetch').then(({ clearCSRFToken }) => {
             clearCSRFToken();
           });
         }
@@ -319,7 +319,7 @@ export const useAuthStore = create<AuthState>()(
                       console.log('[AUTH_STORE] Device token authentication succeeded, retrying session load');
 
                       // Clear JWT cache to ensure fresh token is used
-                      const { clearJWTCache } = await import('@/lib/auth-fetch');
+                      const { clearJWTCache } = await import('@/lib/auth/auth-fetch');
                       clearJWTCache();
 
                       // Retry loading session with new tokens
@@ -334,7 +334,7 @@ export const useAuthStore = create<AuthState>()(
 
                 // Fallback: Try standard refresh token flow
                 console.log('[AUTH_STORE] Attempting standard token refresh');
-                const { refreshAuthSession } = await import('@/lib/auth-fetch');
+                const { refreshAuthSession } = await import('@/lib/auth/auth-fetch');
                 const refreshResult = await refreshAuthSession();
 
                 if (refreshResult.success) {
@@ -546,7 +546,7 @@ export const authStoreHelpers = {
         }
 
         try {
-          const { clearJWTCache } = await import('@/lib/auth-fetch');
+          const { clearJWTCache } = await import('@/lib/auth/auth-fetch');
           clearJWTCache();
         } catch (error) {
           console.error('[AUTH_STORE] Failed to clear JWT cache on expiry', error);

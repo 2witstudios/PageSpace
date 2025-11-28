@@ -1,7 +1,7 @@
 import type { WebSocket, WebSocketServer } from 'ws';
 import type { NextRequest } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
-import { getMCPBridge } from '@/lib/mcp-bridge';
+import { getMCPBridge } from '@/lib/mcp/mcp-bridge';
 import {
   registerConnection,
   unregisterConnection,
@@ -12,7 +12,7 @@ import {
   checkConnectionHealth,
   setJWTExpiryTimer,
   verifyConnectionFingerprint,
-} from '@/lib/ws-connections';
+} from '@/lib/websocket/ws-connections';
 import {
   generateChallenge,
   verifyChallengeResponse,
@@ -22,7 +22,7 @@ import {
   logSecurityEvent,
   isSecureConnection,
   getSessionIdFromPayload,
-} from '@/lib/ws-security';
+} from '@/lib/websocket/ws-security';
 import { decodeToken } from '@pagespace/lib/server';
 import {
   validateIncomingMessageWithError,
@@ -31,7 +31,7 @@ import {
   isChallengeResponseMessage,
   isToolExecuteMessage,
   isToolResultMessage,
-} from '@/lib/ws-message-schemas';
+} from '@/lib/websocket/ws-message-schemas';
 
 // Initialize cleanup interval on module load
 // This prevents memory leaks from stale connections

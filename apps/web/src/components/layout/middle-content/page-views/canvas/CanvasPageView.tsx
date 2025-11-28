@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
-import { patch, fetchWithAuth } from '@/lib/auth-fetch';
+import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import { ShadowCanvas } from '@/components/canvas/ShadowCanvas';
@@ -11,7 +11,7 @@ import { TreePage } from '@/hooks/usePageTree';
 import { useDocumentStore } from '@/stores/useDocumentStore';
 import { useAuth } from '@/hooks/use-auth';
 import { useSocket } from '@/hooks/useSocket';
-import { PageEventPayload } from '@/lib/socket-utils';
+import { PageEventPayload } from '@/lib/websocket/socket-utils';
 
 interface CanvasPageViewProps {
   page: TreePage;

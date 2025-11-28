@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { getPageContentForAI } from '../page-content-parser'
-import { PageType } from '../enums'
+import { getPageContentForAI } from '../content/page-content-parser'
+import { PageType } from '../utils/enums'
 import type { Page } from '../types'
 
 describe('page-content-parser', () => {

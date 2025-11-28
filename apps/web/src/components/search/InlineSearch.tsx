@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { useDebouncedCallback } from 'use-debounce';
 import { cn } from '@/lib/utils';
-import { fetchWithAuth } from '@/lib/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 interface SearchResult {
   id: string;

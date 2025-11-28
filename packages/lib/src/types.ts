@@ -1,4 +1,4 @@
-import { PageType, PermissionAction } from './enums';
+import { PageType, PermissionAction } from './utils/enums';
 
 export type ProcessingStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'visual';
 export type ExtractionMethod = 'text' | 'ocr' | 'hybrid' | 'visual' | 'none';

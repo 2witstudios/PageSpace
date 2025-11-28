@@ -1,44 +1,19 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { DELETE } from '../route';
 import type { WebAuthResult, AuthError } from '@/lib/auth';
 import type { ServiceTokenClaims } from '@pagespace/lib/auth-utils';
 
-// Type for chainable mock methods (db.select().from().where())
-type ChainableMock = Mock & {
-  from: Mock & { where: Mock; innerJoin: Mock & { where: Mock } };
-};
-type DeleteMock = Mock & { where: Mock };
-
-// Create chainable select mock
-const createSelectMock = (resolvedValue: unknown): ChainableMock => {
-  const whereMock = vi.fn().mockResolvedValue(resolvedValue);
+// Mock dependencies - use inline mock factory to avoid hoisting issues
+vi.mock('@pagespace/db', () => {
+  const whereMock = vi.fn().mockResolvedValue([{ count: 0 }]);
   const innerJoinMock = vi.fn().mockReturnValue({ where: whereMock });
   const fromMock = vi.fn().mockReturnValue({ where: whereMock, innerJoin: innerJoinMock });
-  const selectMock = vi.fn().mockReturnValue({ from: fromMock }) as ChainableMock;
-  selectMock.from = fromMock as ChainableMock['from'];
-  selectMock.from.where = whereMock;
-  selectMock.from.innerJoin = innerJoinMock as ChainableMock['from']['innerJoin'];
-  selectMock.from.innerJoin.where = whereMock;
-  return selectMock;
-};
+  const selectMock = vi.fn().mockReturnValue({ from: fromMock });
 
-// Create chainable delete mock
-const createDeleteMock = (whereMockFn?: Mock): DeleteMock => {
-  const whereMock = whereMockFn ?? vi.fn().mockResolvedValue(undefined);
-  const deleteMock = vi.fn().mockReturnValue({ where: whereMock }) as DeleteMock;
-  deleteMock.where = whereMock;
-  return deleteMock;
-};
+  const deleteWhereMock = vi.fn().mockResolvedValue(undefined);
+  const deleteMock = vi.fn().mockReturnValue({ where: deleteWhereMock });
 
-// Store references to mocks for test access
-let selectMock: ChainableMock;
-let deleteMock: DeleteMock;
-
-// Mock dependencies
-vi.mock('@pagespace/db', () => {
-  selectMock = createSelectMock([{ count: 0 }]);
-  deleteMock = createDeleteMock();
   return {
     db: {
       query: {
@@ -56,7 +31,7 @@ vi.mock('@pagespace/db', () => {
     users: {},
     drives: {},
     driveMembers: {},
-    eq: vi.fn((field, value) => ({ field, value, type: 'eq' })),
+    eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
     sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ strings, values, type: 'sql' })),
   };
 });

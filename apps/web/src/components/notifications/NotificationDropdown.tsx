@@ -25,7 +25,7 @@ import { Separator } from '@/components/ui/separator';
 import { useNotificationStore } from '@/stores/notificationStore';
 import { cn } from '@/lib/utils';
 import { isConnectionRequest } from '@pagespace/lib/client-safe';
-import { patch } from '@/lib/auth-fetch';
+import { patch } from '@/lib/auth/auth-fetch';
 
 const NotificationIcon = ({ type }: { type: string }) => {
   switch (type) {

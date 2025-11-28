@@ -2,7 +2,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { db, aiTasks, eq, and, desc, asc, ne, ilike, sql } from '@pagespace/db';
 import { ToolExecutionContext } from '../core/types';
-import { broadcastTaskEvent } from '@/lib/socket-utils';
+import { broadcastTaskEvent } from '@/lib/websocket/socket-utils';
 
 
 export const taskManagementTools = {

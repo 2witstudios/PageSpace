@@ -28,7 +28,7 @@ import { useFavorites } from "@/hooks/useFavorites";
 import { toast } from "sonner";
 import { DeletePageDialog } from "@/components/dialogs/DeletePageDialog";
 import { RenameDialog } from "@/components/dialogs/RenameDialog";
-import { patch, del, post } from '@/lib/auth-fetch';
+import { patch, del, post } from '@/lib/auth/auth-fetch';
 
 interface TreeNodeProps {
   node: TreePage;

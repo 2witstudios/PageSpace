@@ -7,13 +7,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Button } from '@/components/ui/button';
 import { RefreshCw, Download, DollarSign, Users, AlertTriangle } from 'lucide-react';
 import { format } from 'date-fns';
-import { fetchWithAuth } from '@/lib/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import type {
   SystemHealthData,
   UserActivityData,
   AiUsageData,
   ErrorAnalyticsData
-} from '@/lib/monitoring-types';
+} from '@/lib/monitoring/monitoring-types';
 
 // Component imports
 import SystemHealthWidget from './components/SystemHealthWidget';

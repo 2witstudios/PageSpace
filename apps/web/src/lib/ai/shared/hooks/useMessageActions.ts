@@ -4,7 +4,7 @@
  */
 
 import { useCallback } from 'react';
-import { fetchWithAuth, patch, del } from '@/lib/auth-fetch';
+import { fetchWithAuth, patch, del } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
 import type { UIMessage } from 'ai';
 

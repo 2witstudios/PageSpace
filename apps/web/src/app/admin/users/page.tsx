@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Users, AlertCircle, Shield, MessageCircle, Database } from "lucide-react";
-import { fetchWithAuth } from "@/lib/auth-fetch";
+import { fetchWithAuth } from "@/lib/auth/auth-fetch";
 
 interface UserData {
   id: string;

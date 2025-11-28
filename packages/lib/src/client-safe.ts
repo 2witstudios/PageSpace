@@ -6,24 +6,24 @@
  */
 
 // Enums (always safe for client-side)
-export * from './enums';
+export * from './utils/enums';
 
 // Client-safe types (no server dependencies)
 export * from './types';
 
 // Browser-safe utilities
-export * from './utils';
-export * from './tree-utils';
+export * from './utils/utils';
+export * from './content/tree-utils';
 
 // Page type configurations (safe - no server dependencies)
-export * from './page-types.config';
-export * from './page-type-validators';
+export * from './content/page-types.config';
+export * from './content/page-type-validators';
 
 // Sheet utilities (safe - pure JavaScript functions)
-export * from './sheet';
+export * from './sheets';
 
 // Page content parsing (safe - no server dependencies)
-export * from './page-content-parser';
+export * from './content/page-content-parser';
 
 // Browser-safe format bytes utility
 export function formatBytes(bytes: number): string {

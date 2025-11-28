@@ -3,7 +3,7 @@
 import { useState, useCallback, DragEvent } from 'react';
 import { toast } from 'sonner';
 import { formatBytes } from '@pagespace/lib/services/storage-limits';
-import { post, fetchWithAuth } from '@/lib/auth-fetch';
+import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 interface FileDropState {
   isDraggingFiles: boolean;

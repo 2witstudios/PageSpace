@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useDocumentManagerStore, DocumentState } from '@/stores/useDocumentManagerStore';
 import { toast } from 'sonner';
-import { patch, fetchWithAuth } from '@/lib/auth-fetch';
+import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useSocket } from './useSocket';
 
 // Document state selectors

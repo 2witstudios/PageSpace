@@ -7,7 +7,7 @@ import {
   Tooltip, Legend, ResponsiveContainer
 } from 'recharts';
 import { format } from 'date-fns';
-import type { ErrorAnalyticsData, DetailedWidgetProps } from '@/lib/monitoring-types';
+import type { ErrorAnalyticsData, DetailedWidgetProps } from '@/lib/monitoring/monitoring-types';
 
 type ErrorRateGraphProps = DetailedWidgetProps<ErrorAnalyticsData>;
 

@@ -9,7 +9,7 @@ import { DeleteMessageDialog } from './DeleteMessageDialog';
 import { CompactTodoListMessage } from './CompactTodoListMessage';
 import { useSocket } from '@/hooks/useSocket';
 import { ErrorBoundary } from './ErrorBoundary';
-import { patch, fetchWithAuth } from '@/lib/auth-fetch';
+import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import styles from './CompactMessageRenderer.module.css';
 
 // Extended message interface that includes database fields

@@ -4,7 +4,7 @@ import {
   formatSignatureHeader,
   verifyBroadcastSignature,
   createSignedBroadcastHeaders
-} from '../broadcast-auth'
+} from '../auth/broadcast-auth'
 
 describe('broadcast-auth', () => {
   const testRequestBody = JSON.stringify({

@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { getOrCreateDeviceId, getDeviceName } from "@/lib/device-fingerprint";
+import { getOrCreateDeviceId, getDeviceName } from "@/lib/analytics/device-fingerprint";
 
 export default function SignUp() {
   const [name, setName] = useState("");

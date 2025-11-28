@@ -11,7 +11,7 @@ import {
   sanitizeSheetData,
   serializeSheetContent,
   SheetData,
-} from '../sheet';
+} from '../sheets/sheet';
 
 const getDisplay = (evaluation: ReturnType<typeof evaluateSheet>, address: string) => {
   return evaluation.byAddress[address]?.display;

@@ -1,5 +1,5 @@
 import os from 'os';
-import { loggers } from '../logger-config';
+import { loggers } from '../logging/logger-config';
 
 export interface MemoryStatus {
   totalMB: number;

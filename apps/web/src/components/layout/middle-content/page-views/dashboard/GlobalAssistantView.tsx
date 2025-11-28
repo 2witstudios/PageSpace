@@ -48,7 +48,7 @@ import { Settings, Plus, History } from 'lucide-react';
 import { ReadOnlyToggle } from '@/components/ai/shared/ReadOnlyToggle';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore } from '@/hooks/useDrive';
-import { fetchWithAuth } from '@/lib/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
 import { usePageAgentDashboardStore } from '@/stores/page-agents/usePageAgentDashboardStore';

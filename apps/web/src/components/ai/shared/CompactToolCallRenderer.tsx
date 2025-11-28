@@ -19,7 +19,7 @@ import {
   Bot
 } from 'lucide-react';
 import { CompactTaskManagementToolRenderer } from './CompactTaskManagementToolRenderer';
-import { patch } from '@/lib/auth-fetch';
+import { patch } from '@/lib/auth/auth-fetch';
 
 
 interface TreeItem {

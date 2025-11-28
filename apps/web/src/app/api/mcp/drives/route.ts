@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db, drives, eq } from '@pagespace/db';
 import { z } from 'zod/v4';
 import { slugify } from '@pagespace/lib/server';
-import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/socket-utils';
+import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket/socket-utils';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateMCPRequest, isAuthError } from '@/lib/auth';
 

@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Trash2, Search, MessageSquare, Sparkles, Bot } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
-import { del, fetchWithAuth } from '@/lib/auth-fetch';
+import { del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
 import { usePageAgentSidebarState } from '@/hooks/page-agents/usePageAgentSidebarState';
 import { usePageAgentDashboardStore } from '@/stores/page-agents/usePageAgentDashboardStore';

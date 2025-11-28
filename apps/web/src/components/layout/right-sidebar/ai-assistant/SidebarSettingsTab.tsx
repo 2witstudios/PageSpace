@@ -8,7 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { CheckCircle, XCircle, Key, ExternalLink, Zap, Sparkles, Bot, Wrench } from 'lucide-react';
 import { toast } from 'sonner';
 import { AI_PROVIDERS, getBackendProvider } from '@/lib/ai/core/ai-providers-config';
-import { patch, fetchWithAuth } from '@/lib/auth-fetch';
+import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import type { AgentInfo } from '@/types/agent';
 
 // Using centralized AI providers configuration from ai-providers-config.ts

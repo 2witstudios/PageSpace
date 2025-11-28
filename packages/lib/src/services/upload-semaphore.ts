@@ -1,6 +1,6 @@
 import { STORAGE_TIERS } from './storage-limits';
 import { getMemoryStatus } from './memory-monitor';
-import { loggers } from '../logger-config';
+import { loggers } from '../logging/logger-config';
 
 interface UploadSlot {
   userId: string;

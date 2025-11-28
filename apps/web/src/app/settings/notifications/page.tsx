@@ -11,7 +11,7 @@ import { Separator } from '@/components/ui/separator';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { Bell, Mail, Loader2, ArrowLeft } from 'lucide-react';
-import { patch, fetchWithAuth } from '@/lib/auth-fetch';
+import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);

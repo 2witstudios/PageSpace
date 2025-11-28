@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   validateDeviceFingerprint,
   calculateTrustScore,
-} from '../device-fingerprint-utils';
+} from '../auth/device-fingerprint-utils';
 
 describe('device-fingerprint-utils', () => {
   describe('validateDeviceFingerprint', () => {

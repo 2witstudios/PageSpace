@@ -11,7 +11,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "pnpm --filter @pagespace/db db:migrate",
     "test": "turbo run test",
-    "test:unit": "pnpm --filter @pagespace/lib test",
+    "test:unit": "pnpm --filter @pagespace/lib test && cd apps/web && npx vitest run",
     "test:watch": "pnpm --filter @pagespace/lib test -- --watch",
     "test:ui": "pnpm --filter @pagespace/lib test -- --ui",
     "test:coverage": "pnpm --filter @pagespace/lib test -- --coverage",

@@ -5,7 +5,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { ChevronDown, Loader2, CheckCircle2, XCircle, Clock } from 'lucide-react';
 import { ToolCallRenderer } from './ToolCallRenderer';
 import { cn } from '@/lib/utils';
-import { toTitleCase } from '@/lib/formatters';
+import { toTitleCase } from '@/lib/utils/formatters';
 
 interface ToolCallPart {
   type: string;

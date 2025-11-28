@@ -3,7 +3,7 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { AlertCircle, CheckCircle, Info, AlertTriangle, XCircle } from 'lucide-react';
 import { format } from 'date-fns';
-import type { SystemHealthData, MonitoringWidgetProps } from '@/lib/monitoring-types';
+import type { SystemHealthData, MonitoringWidgetProps } from '@/lib/monitoring/monitoring-types';
 
 type SystemHealthWidgetProps = MonitoringWidgetProps<SystemHealthData>;
 

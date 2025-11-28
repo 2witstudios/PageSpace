@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { TreePage } from '@/hooks/usePageTree';
 import { Loader2 } from 'lucide-react';
 import dynamic from 'next/dynamic';
-import { fetchWithAuth } from '@/lib/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 // Dynamically import Monaco to avoid SSR issues
 const MonacoEditor = dynamic(

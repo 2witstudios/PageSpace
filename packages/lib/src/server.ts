@@ -1,21 +1,33 @@
 // All exports including Node.js-only utilities
-export * from './auth-utils';
-export * from './device-auth-utils';
-export * from './csrf-utils';
-export * from './encryption-utils';
-export * from './page-content-parser';
-export * from './permissions-cached';
-export * from './rate-limit-utils';
-export * from './tree-utils';
-export * from './utils';
-export * from './enums';
+export * from './auth/auth-utils';
+export * from './auth/device-auth-utils';
+export * from './auth/csrf-utils';
+export * from './encryption';
+export * from './content';
+export * from './permissions/permissions-cached';
+export * from './auth/rate-limit-utils';
+export * from './utils/utils';
+export * from './utils/enums';
 export * from './types';
-export * from './file-processor';
+export * from './file-processing';
 export * from './services/subscription-utils';
 
 // OAuth utilities (server-only)
-export * from './oauth-utils';
-export * from './oauth-types';
+export * from './auth/oauth-utils';
+export * from './auth/oauth-types';
+
+// Logging utilities (server-only)
+export * from './logging';
+
+// Notifications
+export * from './notifications';
 
 // Re-export specific functions for backward compatibility
-export { isUserDriveMember } from './permissions';
+export {
+  isUserDriveMember,
+  getUserAccessiblePagesInDriveWithDetails,
+  getUserAccessiblePagesInDrive,
+  isDriveOwnerOrAdmin,
+  grantPagePermissions,
+  revokePagePermissions,
+} from './permissions/permissions';

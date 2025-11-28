@@ -5,7 +5,7 @@
 
 import { useCallback, useMemo } from 'react';
 import useSWR, { mutate } from 'swr';
-import { fetchWithAuth } from '@/lib/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
 import type { UIMessage } from 'ai';
 import {

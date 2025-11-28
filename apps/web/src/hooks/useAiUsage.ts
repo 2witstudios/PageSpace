@@ -1,5 +1,5 @@
 import useSWR from 'swr';
-import { fetchWithAuth } from '@/lib/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { getContextWindow } from '@pagespace/lib/ai-monitoring';
 import { useEditingStore } from '@/stores/useEditingStore';
 

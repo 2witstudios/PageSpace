@@ -4,7 +4,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { post } from '@/lib/auth-fetch';
+import { post } from '@/lib/auth/auth-fetch';
 
 export default function AuthButtons() {
   const { isAuthenticated, user } = useAuth();

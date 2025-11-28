@@ -7,7 +7,7 @@ import {
   canUserDeletePage,
   grantPagePermissions,
   revokePagePermissions
-} from '../permissions'
+} from '../permissions/permissions'
 import { factories } from '@pagespace/db/test/factories'
 import { db, sql, users } from '@pagespace/db'
 

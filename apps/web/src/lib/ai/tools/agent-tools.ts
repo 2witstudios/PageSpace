@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { db, pages, drives, eq, and, desc, isNull } from '@pagespace/db';
 import { canUserEditPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
-import { broadcastPageEvent, createPageEventPayload } from '@/lib/socket-utils';
+import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket/socket-utils';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { ToolExecutionContext } from '../core/types';
 import { pageSpaceTools } from '../core/ai-tools';

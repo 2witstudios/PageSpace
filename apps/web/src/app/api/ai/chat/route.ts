@@ -10,7 +10,7 @@ import {
 } from 'ai';
 import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
 import { requiresProSubscription, createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
-import { broadcastUsageEvent } from '@/lib/socket-utils';
+import { broadcastUsageEvent } from '@/lib/websocket/socket-utils';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
@@ -56,7 +56,7 @@ import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
 import { getModelCapabilities } from '@/lib/ai/core/model-capabilities';
 import { convertMCPToolsToAISDKSchemas, parseMCPToolName } from '@/lib/ai/core/mcp-tool-converter';
 import type { MCPTool } from '@/types/mcp';
-import { getMCPBridge } from '@/lib/mcp-bridge';
+import { getMCPBridge } from '@/lib/mcp/mcp-bridge';
 
 
 // Allow streaming responses up to 5 minutes for complex AI agent interactions

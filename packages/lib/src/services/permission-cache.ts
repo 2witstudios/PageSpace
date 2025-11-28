@@ -1,5 +1,5 @@
 import Redis from 'ioredis';
-import { loggers } from '../logger-config';
+import { loggers } from '../logging/logger-config';
 
 // Types for permission data
 export interface PermissionLevel {

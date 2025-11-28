@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth, isAuthError } from '@/lib/auth-helpers';
+import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
 import { db, eq, subscriptions, users } from '@pagespace/db';
 import { getStorageConfigFromSubscription, type SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 

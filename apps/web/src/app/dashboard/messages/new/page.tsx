@@ -11,7 +11,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Search, ArrowLeft, UserPlus } from 'lucide-react';
 import useSWR from 'swr';
 import { toast } from 'sonner';
-import { post, fetchWithAuth } from '@/lib/auth-fetch';
+import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);

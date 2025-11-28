@@ -1,9 +1,9 @@
 // Client-safe exports only (no Node.js modules)
-export * from './page-content-parser';
+export * from './content/page-content-parser';
 export * from './permissions';
-export * from './tree-utils';
-export * from './utils';
-export * from './enums';
+export * from './content/tree-utils';
+export * from './utils/utils';
+export * from './utils/enums';
 export * from './types';
-export * from './page-types.config';
-export * from './page-type-validators';
+export * from './content/page-types.config';
+export * from './content/page-type-validators';

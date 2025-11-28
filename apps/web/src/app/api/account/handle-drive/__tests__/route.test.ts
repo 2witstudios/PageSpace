@@ -287,14 +287,10 @@ describe('POST /api/account/handle-drive', () => {
     });
 
     it('should reject transfer when new owner is not admin role', async () => {
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(
-        mockDriveMember({
-          id: 'membership_1',
-          userId: mockNewOwnerId,
-          driveId: mockDriveId,
-          role: 'MEMBER', // Not admin
-        })
-      );
+      // NOTE: The production code uses WHERE clause with role='ADMIN'.
+      // Mocks don't evaluate WHERE clauses, so we return undefined to simulate
+      // what the database returns when no matching ADMIN record is found.
+      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined);
 
       const request = new Request('https://example.com/api/account/handle-drive', {
         method: 'POST',
@@ -313,14 +309,10 @@ describe('POST /api/account/handle-drive', () => {
     });
 
     it('should reject transfer when new owner is in different drive', async () => {
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(
-        mockDriveMember({
-          id: 'membership_1',
-          userId: mockNewOwnerId,
-          driveId: 'different_drive', // Different drive
-          role: 'ADMIN',
-        })
-      );
+      // NOTE: The production code uses WHERE clause with driveId filter.
+      // Mocks don't evaluate WHERE clauses, so we return undefined to simulate
+      // what the database returns when no matching record is found for this drive.
+      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined);
 
       const request = new Request('https://example.com/api/account/handle-drive', {
         method: 'POST',

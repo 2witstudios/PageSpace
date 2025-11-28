@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { UserPlus } from 'lucide-react';
 import { MemberRow } from './MemberRow';
 import { useToast } from '@/hooks/use-toast';
-import { del, fetchWithAuth } from '@/lib/auth-fetch';
+import { del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 interface DriveMember {
   id: string;

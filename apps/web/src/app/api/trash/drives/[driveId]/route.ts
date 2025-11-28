@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { drives, db, eq, and } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
-import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/socket-utils';
+import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket/socket-utils';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 

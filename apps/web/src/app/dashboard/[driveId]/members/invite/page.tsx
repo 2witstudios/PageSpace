@@ -12,7 +12,7 @@ import { ChevronLeft, UserPlus, User, RefreshCw, Shield } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { post, fetchWithAuth } from '@/lib/auth-fetch';
+import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { getRoleColorClasses } from '@/lib/utils';
 import { VerificationRequiredAlert } from '@/components/VerificationRequiredAlert';
 

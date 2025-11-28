@@ -17,7 +17,7 @@ import {
 import { Task, TaskTrigger, TaskContent, TaskItem, TaskItemFile, TaskStatus } from '@/components/ai/task';
 import { TaskManagementToolRenderer } from './TaskManagementToolRenderer';
 import { PageAgentConversationRenderer } from '@/components/ai/page-agents/PageAgentConversationRenderer';
-import { patch } from '@/lib/auth-fetch';
+import { patch } from '@/lib/auth/auth-fetch';
 
 interface DriveInfo {
   slug: string;

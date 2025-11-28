@@ -17,7 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { PageType, Page, getDefaultContent } from '@pagespace/lib/client-safe';
 import { toast } from 'sonner';
 import { Upload } from 'lucide-react';
-import { post, fetchWithAuth } from '@/lib/auth-fetch';
+import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 interface CreatePageDialogProps {
   parentId: string | null;

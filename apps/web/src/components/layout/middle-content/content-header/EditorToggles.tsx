@@ -5,7 +5,7 @@ import { useDocumentStore } from '@/stores/useDocumentStore';
 import { useParams } from 'next/navigation';
 import useSWR from 'swr';
 import { PageType, isDocumentPage, isCanvasPage } from '@pagespace/lib/client-safe';
-import { fetchWithAuth } from '@/lib/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);

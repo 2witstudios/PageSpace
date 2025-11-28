@@ -4,8 +4,8 @@ import { useEffect, useCallback, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore, authStoreHelpers } from '@/stores/auth-store';
 import { useTokenRefresh } from './use-token-refresh';
-import { post, clearJWTCache } from '@/lib/auth-fetch';
-import { getOrCreateDeviceId, getDeviceName } from '@/lib/device-fingerprint';
+import { post, clearJWTCache } from '@/lib/auth/auth-fetch';
+import { getOrCreateDeviceId, getDeviceName } from '@/lib/analytics/device-fingerprint';
 import { z } from 'zod/v4';
 
 // Schema for validating desktop OAuth tokens from URL

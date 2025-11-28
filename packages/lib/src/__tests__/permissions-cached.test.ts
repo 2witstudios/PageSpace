@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { getUserAccessLevel } from '../permissions-cached'
-import { grantPagePermissions } from '../permissions'
+import { getUserAccessLevel } from '../permissions/permissions-cached'
+import { grantPagePermissions } from '../permissions/permissions'
 import { factories } from '@pagespace/db/test/factories'
 import { db, users } from '@pagespace/db'
 import { PermissionCache } from '../services/permission-cache'
