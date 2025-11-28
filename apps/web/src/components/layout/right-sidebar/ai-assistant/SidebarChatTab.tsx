@@ -433,12 +433,12 @@ const SidebarChatTab: React.FC = () => {
 
     try {
       if (selectedAgent) {
-        await patch(`/api/agents/${selectedAgent.id}/conversations/${currentConversationId}/messages/${messageId}`, {
+        await patch(`/api/ai/page-agents/${selectedAgent.id}/conversations/${currentConversationId}/messages/${messageId}`, {
           content: newContent,
         });
         await refreshAgentConversation();
       } else {
-        await patch(`/api/ai_conversations/${currentConversationId}/messages/${messageId}`, {
+        await patch(`/api/ai/global/${currentConversationId}/messages/${messageId}`, {
           content: newContent,
         });
         await refreshGlobalConversation();
@@ -454,9 +454,9 @@ const SidebarChatTab: React.FC = () => {
 
     try {
       if (selectedAgent) {
-        await del(`/api/agents/${selectedAgent.id}/conversations/${currentConversationId}/messages/${messageId}`);
+        await del(`/api/ai/page-agents/${selectedAgent.id}/conversations/${currentConversationId}/messages/${messageId}`);
       } else {
-        await del(`/api/ai_conversations/${currentConversationId}/messages/${messageId}`);
+        await del(`/api/ai/global/${currentConversationId}/messages/${messageId}`);
       }
 
       const filtered = messages.filter(m => m.id !== messageId);
@@ -485,9 +485,9 @@ const SidebarChatTab: React.FC = () => {
       for (const msg of assistantMessagesToDelete) {
         try {
           if (selectedAgent) {
-            await del(`/api/agents/${selectedAgent.id}/conversations/${currentConversationId}/messages/${msg.id}`);
+            await del(`/api/ai/page-agents/${selectedAgent.id}/conversations/${currentConversationId}/messages/${msg.id}`);
           } else {
-            await del(`/api/ai_conversations/${currentConversationId}/messages/${msg.id}`);
+            await del(`/api/ai/global/${currentConversationId}/messages/${msg.id}`);
           }
         } catch {
           // Continue with other deletions

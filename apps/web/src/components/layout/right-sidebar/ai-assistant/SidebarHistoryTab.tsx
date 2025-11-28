@@ -91,8 +91,8 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
       try {
         // Switch endpoint based on whether an agent is selected
         const endpoint = selectedAgent
-          ? `/api/agents/${selectedAgent.id}/conversations`
-          : '/api/ai_conversations';
+          ? `/api/ai/page-agents/${selectedAgent.id}/conversations`
+          : '/api/ai/global';
 
         const response = await fetchWithAuth(endpoint);
         if (response.ok) {
@@ -120,7 +120,7 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
         // Page context: load into sidebar's own state
         try {
           const messagesResponse = await fetchWithAuth(
-            `/api/agents/${selectedAgent.id}/conversations/${conversationId}/messages`
+            `/api/ai/page-agents/${selectedAgent.id}/conversations/${conversationId}/messages`
           );
           if (messagesResponse.ok) {
             // Refresh to sync conversation data
@@ -151,9 +151,9 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
     try {
       // Delete based on mode
       if (selectedAgent) {
-        await del(`/api/agents/${selectedAgent.id}/conversations/${conversationId}`);
+        await del(`/api/ai/page-agents/${selectedAgent.id}/conversations/${conversationId}`);
       } else {
-        await del(`/api/ai_conversations/${conversationId}`);
+        await del(`/api/ai/global/${conversationId}`);
       }
 
       // Remove from local state

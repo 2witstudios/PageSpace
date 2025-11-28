@@ -120,7 +120,7 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
 
       if (agentId) {
         // Fetch agent info to restore selection
-        const agentsResponse = await fetchWithAuth('/api/agents/multi-drive?groupByDrive=true');
+        const agentsResponse = await fetchWithAuth('/api/ai/page-agents/multi-drive?groupByDrive=true');
         if (agentsResponse.ok) {
           const agentsData = await agentsResponse.json();
           const allAgents = agentsData.agentsByDrive?.flatMap((d: { agents: unknown[] }) => d.agents) || [];
@@ -176,7 +176,7 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
 
     try {
       const response = await fetchWithAuth(
-        `/api/agents/${agent.id}/conversations/${conversationId}/messages`
+        `/api/ai/page-agents/${agent.id}/conversations/${conversationId}/messages`
       );
 
       if (response.ok) {
@@ -214,7 +214,7 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
 
     try {
       const response = await fetchWithAuth(
-        `/api/agents/${agent.id}/conversations`,
+        `/api/ai/page-agents/${agent.id}/conversations`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -292,7 +292,7 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
       // If URL has conversation for THIS agent, load it
       if (conversationIdFromUrl && agentIdFromUrl === agent.id) {
         const response = await fetchWithAuth(
-          `/api/agents/${agent.id}/conversations/${conversationIdFromUrl}/messages`
+          `/api/ai/page-agents/${agent.id}/conversations/${conversationIdFromUrl}/messages`
         );
 
         if (response.ok) {
@@ -309,7 +309,7 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
 
       // Try to load most recent conversation
       const response = await fetchWithAuth(
-        `/api/agents/${agent.id}/conversations?limit=1`
+        `/api/ai/page-agents/${agent.id}/conversations?limit=1`
       );
 
       if (response.ok) {
@@ -319,7 +319,7 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
 
           // Load messages for this conversation
           const messagesResponse = await fetchWithAuth(
-            `/api/agents/${agent.id}/conversations/${mostRecent.id}/messages`
+            `/api/ai/page-agents/${agent.id}/conversations/${mostRecent.id}/messages`
           );
 
           if (messagesResponse.ok) {

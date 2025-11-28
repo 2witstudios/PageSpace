@@ -27,7 +27,7 @@ interface AgentSummary {
 }
 
 /**
- * GET /api/agents/multi-drive
+ * GET /api/ai/page-agents/multi-drive
  * List all AI agents across all accessible drives
  */
 export async function GET(request: Request) {

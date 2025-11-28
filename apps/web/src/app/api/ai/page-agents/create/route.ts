@@ -9,7 +9,7 @@ import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { loggers } from '@pagespace/lib/server';
 
 /**
- * POST /api/agents/create
+ * POST /api/ai/page-agents/create
  * Create a new AI agent with custom system prompt and tool configuration
  */
 export async function POST(request: Request) {

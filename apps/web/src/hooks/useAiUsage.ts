@@ -85,7 +85,7 @@ export function useAiUsage(conversationId: string | null | undefined, refreshInt
   const isAnyActive = useEditingStore(state => state.isAnyActive());
 
   const swrKey = conversationId
-    ? `/api/ai_conversations/${encodeURIComponent(conversationId)}/usage`
+    ? `/api/ai/global/${encodeURIComponent(conversationId)}/usage`
     : null;
 
   const { data, error, mutate } = useSWR<AiUsageResponse>(

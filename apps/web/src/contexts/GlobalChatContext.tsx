@@ -72,7 +72,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
       setIsInitialized(false);
 
       const messagesResponse = await fetchWithAuth(
-        `/api/ai_conversations/${conversationId}/messages?limit=50`
+        `/api/ai/global/${conversationId}/messages?limit=50`
       );
 
       if (messagesResponse.ok) {
@@ -163,7 +163,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
 
         // Always try to get the most recent global conversation
         // This ensures sidebar has a conversation to display
-        const response = await fetchWithAuth('/api/ai_conversations/global');
+        const response = await fetchWithAuth('/api/ai/global/active');
         if (response.ok) {
           const conversation = await response.json();
           if (conversation && conversation.id) {
@@ -195,7 +195,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   const chatConfig = useMemo(() => {
     if (!currentConversationId) return null;
 
-    const apiEndpoint = `/api/ai_conversations/${currentConversationId}/messages`;
+    const apiEndpoint = `/api/ai/global/${currentConversationId}/messages`;
 
     return {
       id: currentConversationId,

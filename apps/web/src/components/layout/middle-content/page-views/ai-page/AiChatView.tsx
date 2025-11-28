@@ -190,7 +190,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
         }
 
         // Create new conversation (fresh start on page load)
-        const newConvResponse = await fetchWithAuth(`/api/agents/${page.id}/conversations`, {
+        const newConvResponse = await fetchWithAuth(`/api/ai/page-agents/${page.id}/conversations`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({}),

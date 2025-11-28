@@ -6,7 +6,7 @@ import { convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
 import { loggers } from '@pagespace/lib/server';
 
 /**
- * GET /api/agents/[agentId]/conversations/[conversationId]/messages
+ * GET /api/ai/page-agents/[agentId]/conversations/[conversationId]/messages
  *
  * Retrieves all messages for a specific conversation session, ordered chronologically.
  * Messages are returned in UIMessage format compatible with the Vercel AI SDK,
@@ -29,7 +29,7 @@ import { loggers } from '@pagespace/lib/server';
  * @throws {500} If database query fails
  *
  * @example
- * GET /api/agents/abc123/conversations/conv_xyz789/messages
+ * GET /api/ai/page-agents/abc123/conversations/conv_xyz789/messages
  * Response: {
  *   messages: [
  *     { id: "msg1", role: "user", parts: [{type: "text", text: "Hello"}], createdAt: "..." },

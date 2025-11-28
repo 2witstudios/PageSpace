@@ -9,7 +9,7 @@ import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { loggers } from '@pagespace/lib/server';
 
 /**
- * PUT /api/agents/{agentId}/config
+ * PUT /api/ai/page-agents/{agentId}/config
  * Update the configuration of an existing AI agent
  */
 export async function PUT(

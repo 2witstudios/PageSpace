@@ -73,7 +73,7 @@ export const conversationState = {
         type: string;
         lastMessageAt: string;
         createdAt: string;
-      }>('/api/ai_conversations', {
+      }>('/api/ai/global', {
         title: options.title,
         type: options.type || 'global',
         contextId: options.contextId,

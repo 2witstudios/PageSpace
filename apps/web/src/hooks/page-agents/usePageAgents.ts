@@ -39,7 +39,7 @@ export interface DriveWithAgents {
 }
 
 /**
- * Response from /api/agents/multi-drive
+ * Response from /api/ai/page-agents/multi-drive
  */
 interface AgentsResponse {
   success: boolean;
@@ -81,7 +81,7 @@ export function usePageAgents(
     if (includeSystemPrompt) {
       params.set('includeSystemPrompt', 'true');
     }
-    return `/api/agents/multi-drive?${params.toString()}`;
+    return `/api/ai/page-agents/multi-drive?${params.toString()}`;
   }, [includeSystemPrompt]);
 
   const { data, error, mutate, isLoading } = useSWR<AgentsResponse>(

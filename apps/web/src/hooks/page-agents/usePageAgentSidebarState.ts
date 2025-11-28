@@ -208,7 +208,7 @@ export function usePageAgentSidebarState(): UseSidebarAgentStateReturn {
       // Try to load most recent conversation
       try {
         const response = await fetchWithAuth(
-          `/api/agents/${selectedAgent.id}/conversations?limit=1`
+          `/api/ai/page-agents/${selectedAgent.id}/conversations?limit=1`
         );
 
         // Abort if agent changed during fetch
@@ -220,7 +220,7 @@ export function usePageAgentSidebarState(): UseSidebarAgentStateReturn {
             const mostRecent = data.conversations[0];
             // Load messages
             const messagesResponse = await fetchWithAuth(
-              `/api/agents/${selectedAgent.id}/conversations/${mostRecent.id}/messages`
+              `/api/ai/page-agents/${selectedAgent.id}/conversations/${mostRecent.id}/messages`
             );
 
             // Abort if agent changed during fetch
@@ -249,7 +249,7 @@ export function usePageAgentSidebarState(): UseSidebarAgentStateReturn {
       // No existing conversation - create new one
       try {
         const response = await fetchWithAuth(
-          `/api/agents/${selectedAgent.id}/conversations`,
+          `/api/ai/page-agents/${selectedAgent.id}/conversations`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -296,7 +296,7 @@ export function usePageAgentSidebarState(): UseSidebarAgentStateReturn {
 
     try {
       const response = await fetchWithAuth(
-        `/api/agents/${agent.id}/conversations`,
+        `/api/ai/page-agents/${agent.id}/conversations`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -326,7 +326,7 @@ export function usePageAgentSidebarState(): UseSidebarAgentStateReturn {
 
     try {
       const response = await fetchWithAuth(
-        `/api/agents/${agent.id}/conversations/${conversationId}/messages`
+        `/api/ai/page-agents/${agent.id}/conversations/${conversationId}/messages`
       );
       if (response.ok) {
         const data = await response.json();

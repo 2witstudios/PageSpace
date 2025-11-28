@@ -72,8 +72,8 @@ export function useConversations({
   const swrKey = useMemo(() => {
     if (!enabled) return null;
     return isAgentMode
-      ? `/api/agents/${agentId}/conversations`
-      : `/api/ai_conversations`;
+      ? `/api/ai/page-agents/${agentId}/conversations`
+      : `/api/ai/global`;
   }, [enabled, isAgentMode, agentId]);
 
   // Fetch conversations with SWR
@@ -102,8 +102,8 @@ export function useConversations({
     async (conversationId: string) => {
       try {
         const messagesUrl = isAgentMode
-          ? `/api/agents/${agentId}/conversations/${conversationId}/messages`
-          : `/api/ai_conversations/${conversationId}/messages`;
+          ? `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages`
+          : `/api/ai/global/${conversationId}/messages`;
 
         const response = await fetchWithAuth(messagesUrl);
         if (response.ok) {
@@ -126,8 +126,8 @@ export function useConversations({
   const createConversation = useCallback(async (): Promise<string | null> => {
     try {
       const createUrl = isAgentMode
-        ? `/api/agents/${agentId}/conversations`
-        : `/api/ai_conversations`;
+        ? `/api/ai/page-agents/${agentId}/conversations`
+        : `/api/ai/global`;
 
       const response = await fetchWithAuth(createUrl, {
         method: 'POST',
@@ -161,8 +161,8 @@ export function useConversations({
     async (conversationId: string) => {
       try {
         const deleteUrl = isAgentMode
-          ? `/api/agents/${agentId}/conversations/${conversationId}`
-          : `/api/ai_conversations/${conversationId}`;
+          ? `/api/ai/page-agents/${agentId}/conversations/${conversationId}`
+          : `/api/ai/global/${conversationId}`;
 
         const response = await fetchWithAuth(deleteUrl, { method: 'DELETE' });
 

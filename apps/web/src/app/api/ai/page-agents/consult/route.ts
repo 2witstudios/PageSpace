@@ -133,7 +133,7 @@ async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: st
 }
 
 /**
- * POST /api/agents/consult
+ * POST /api/ai/page-agents/consult
  * Consult another AI agent in the workspace for specialized knowledge or assistance
  */
 export async function POST(request: Request) {

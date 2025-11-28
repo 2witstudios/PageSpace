@@ -5,7 +5,7 @@ import { canUserViewPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 
 /**
- * GET /api/agents/[agentId]/conversations
+ * GET /api/ai/page-agents/[agentId]/conversations
  *
  * Lists all conversations for a specific AI agent with pagination support.
  * Returns conversations in reverse chronological order (most recent first).
@@ -33,7 +33,7 @@ import { loggers } from '@pagespace/lib/server';
  * @throws {500} If database query fails
  *
  * @example
- * GET /api/agents/abc123/conversations?page=0&pageSize=20
+ * GET /api/ai/page-agents/abc123/conversations?page=0&pageSize=20
  * Response: {
  *   conversations: [{
  *     id: "conv_xyz789",
@@ -232,7 +232,7 @@ export async function GET(
 }
 
 /**
- * POST /api/agents/[agentId]/conversations
+ * POST /api/ai/page-agents/[agentId]/conversations
  *
  * Creates a new conversation session for an AI agent. The conversation ID is
  * automatically generated using CUID2 for security and uniqueness. Messages
@@ -252,7 +252,7 @@ export async function GET(
  * @throws {500} If conversation creation fails
  *
  * @example
- * POST /api/agents/abc123/conversations
+ * POST /api/ai/page-agents/abc123/conversations
  * Body: { "title": "My Custom Conversation" }
  * Response: {
  *   conversationId: "conv_def456",

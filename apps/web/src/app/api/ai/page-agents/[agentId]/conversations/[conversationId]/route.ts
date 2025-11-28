@@ -5,7 +5,7 @@ import { canUserEditPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 
 /**
- * PATCH /api/agents/[agentId]/conversations/[conversationId]
+ * PATCH /api/ai/page-agents/[agentId]/conversations/[conversationId]
  *
  * Updates conversation metadata such as title. This is currently a placeholder endpoint
  * that validates the conversation exists but does not persist custom titles. In a future
@@ -28,7 +28,7 @@ import { loggers } from '@pagespace/lib/server';
  * @throws {500} If database query fails
  *
  * @example
- * PATCH /api/agents/abc123/conversations/conv_xyz789
+ * PATCH /api/ai/page-agents/abc123/conversations/conv_xyz789
  * Body: { "title": "My Custom Title" }
  * Response: {
  *   success: true,
@@ -114,7 +114,7 @@ export async function PATCH(
 }
 
 /**
- * DELETE /api/agents/[agentId]/conversations/[conversationId]
+ * DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]
  *
  * Soft-deletes a conversation by marking all its messages as inactive. This operation
  * preserves the data in the database but hides it from all queries that filter by
@@ -134,7 +134,7 @@ export async function PATCH(
  * @throws {500} If database update fails
  *
  * @example
- * DELETE /api/agents/abc123/conversations/conv_xyz789
+ * DELETE /api/ai/page-agents/abc123/conversations/conv_xyz789
  * Response: {
  *   success: true,
  *   conversationId: "conv_xyz789",
