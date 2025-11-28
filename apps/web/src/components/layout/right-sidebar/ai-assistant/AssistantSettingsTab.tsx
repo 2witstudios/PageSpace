@@ -4,11 +4,12 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import { Skeleton } from '@/components/ui/skeleton';
 import { CheckCircle, XCircle, Key, ExternalLink, Zap, Sparkles, Bot, Wrench } from 'lucide-react';
 import { toast } from 'sonner';
 import { AI_PROVIDERS, getBackendProvider } from '@/lib/ai/ai-providers-config';
 import { patch, fetchWithAuth } from '@/lib/auth-fetch';
-import { SidebarAgentInfo } from '@/hooks/useSidebarAgentState';
+import type { AgentInfo } from '@/types/agent';
 
 // Using centralized AI providers configuration from ai-providers-config.ts
 
@@ -36,7 +37,7 @@ interface SaveSettingsResult {
 }
 
 interface AssistantSettingsTabProps {
-  selectedAgent: SidebarAgentInfo | null;
+  selectedAgent: AgentInfo | null;
 }
 
 /**
@@ -45,7 +46,9 @@ interface AssistantSettingsTabProps {
  * Shows Global Assistant settings when no agent is selected.
  * When an agent is selected, shows info message directing to agent page.
  */
-const AssistantSettingsTab: React.FC<AssistantSettingsTabProps> = ({ selectedAgent }) => {
+const AssistantSettingsTab: React.FC<AssistantSettingsTabProps> = ({
+  selectedAgent,
+}) => {
   const router = useRouter();
   const [providerSettings, setProviderSettings] = useState<ProviderSettings | null>(null);
   const [selectedProvider, setSelectedProvider] = useState<string>('pagespace');
@@ -323,6 +326,9 @@ const AssistantSettingsTab: React.FC<AssistantSettingsTabProps> = ({ selectedAge
       }
       
       // Broadcast settings update event for other components
+      // Note: This uses CustomEvent (not Zustand) because AI settings sync spans
+      // beyond the sidebar - includes /settings/ai page and AssistantChatTab.
+      // A future refactor could consolidate into a dedicated AI settings store.
       window.dispatchEvent(new CustomEvent('ai-settings-updated', {
         detail: { provider: selectedProvider, model: selectedModel }
       }));
@@ -427,11 +433,40 @@ const AssistantSettingsTab: React.FC<AssistantSettingsTabProps> = ({ selectedAge
   if (loading) {
     return (
       <div className="flex flex-col h-full">
-        <div className="p-4 border-b">
-          <h3 className="text-sm font-medium">Settings</h3>
+        {/* Skeleton header */}
+        <div className="p-3 border-b">
+          <div className="flex items-center gap-2">
+            <Skeleton className="h-4 w-4 rounded" />
+            <Skeleton className="h-4 w-28" />
+          </div>
         </div>
-        <div className="flex-grow flex items-center justify-center">
-          <div className="text-sm text-muted-foreground">Loading settings...</div>
+        {/* Skeleton content */}
+        <div className="flex-grow p-4 space-y-4">
+          {/* Provider selector skeleton */}
+          <div className="space-y-2">
+            <Skeleton className="h-4 w-24" />
+            <Skeleton className="h-10 w-full" />
+          </div>
+          {/* Model selector skeleton */}
+          <div className="space-y-2">
+            <Skeleton className="h-4 w-16" />
+            <Skeleton className="h-10 w-full" />
+          </div>
+          {/* Provider status cards skeleton */}
+          <div className="space-y-2">
+            <Skeleton className="h-4 w-32" />
+            <div className="space-y-2">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="flex items-center justify-between p-3 rounded-lg border">
+                  <div className="flex items-center gap-2">
+                    <Skeleton className="h-4 w-4 rounded-full" />
+                    <Skeleton className="h-4 w-20" />
+                  </div>
+                  <Skeleton className="h-5 w-16 rounded-full" />
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
     );

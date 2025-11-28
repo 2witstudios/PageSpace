@@ -1,10 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { History, MessageSquare, Settings } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { useSidebarAgentState } from "@/hooks/useSidebarAgentState";
+import { useDashboardContext } from "@/hooks/useDashboardContext";
+import { useAgentStore, type SidebarTab } from "@/stores/useAgentStore";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 
 import AssistantChatTab from "./ai-assistant/AssistantChatTab";
 import AssistantHistoryTab from "./ai-assistant/AssistantHistoryTab";
@@ -18,40 +21,55 @@ export interface RightPanelProps {
 /**
  * Right sidebar panel - contains AI Assistant chat, history, and settings.
  *
- * This component supports both Global Assistant mode (selectedAgent = null)
- * and Agent mode (selectedAgent is set). The agent selection is managed
- * independently from the middle panel via useSidebarAgentState.
+ * TAB STATE MANAGEMENT:
+ * - Dashboard context: Uses useAgentStore.activeTab (synced with GlobalAssistantView)
+ * - Page context: Uses local state (independent from page content)
+ *
+ * AGENT STATE MANAGEMENT:
+ * - Dashboard context: Uses useAgentStore.selectedAgent (shared with GlobalAssistantView)
+ * - Page context: Uses useSidebarAgentState (independent sidebar chat)
+ *
+ * ACCESSIBILITY:
+ * - Uses Radix UI Tabs for keyboard navigation (Arrow keys, Home, End)
+ * - Automatic ARIA roles (tablist, tab, tabpanel)
+ * - Focus management and screen reader support
  */
 export default function RightPanel({ className }: RightPanelProps) {
-  // Get sidebar agent state - independent from middle panel
-  const { selectedAgent } = useSidebarAgentState();
+  const { isDashboardContext } = useDashboardContext();
 
-  // Always show all 3 tabs - Global Assistant is always available
-  const [activeTab, setActiveTab] = useState<string>("chat");
+  // Get agent state from both stores (hooks must be called unconditionally)
+  // Only extract selectedAgent from sidebar state to minimize subscriptions
+  const { selectedAgent: sidebarAgent } = useSidebarAgentState();
+  const { selectedAgent: dashboardAgent, activeTab: dashboardActiveTab, setActiveTab: setDashboardActiveTab } = useAgentStore();
 
-  useEffect(() => {
-    const savedTab = localStorage.getItem("globalAssistantActiveTab");
-    if (savedTab && ["chat", "history", "settings"].includes(savedTab)) {
-      setActiveTab(savedTab);
-    }
-  }, []);
+  // On dashboard context, use the central agent store; otherwise use sidebar's own store
+  const selectedAgent = isDashboardContext ? dashboardAgent : sidebarAgent;
 
-  useEffect(() => {
-    const handleStorageChange = () => {
-      const savedTab = localStorage.getItem("globalAssistantActiveTab");
-      if (savedTab && ["chat", "history", "settings"].includes(savedTab)) {
-        setActiveTab(savedTab);
-      }
-    };
+  // Chat tab is only shown when NOT on dashboard context
+  const showChatTab = !isDashboardContext;
 
-    window.addEventListener("storage", handleStorageChange);
-    return () => window.removeEventListener("storage", handleStorageChange);
-  }, []);
+  // Local tab state for page context (independent from dashboard)
+  const [localActiveTab, setLocalActiveTab] = useState<SidebarTab>(showChatTab ? "chat" : "history");
+
+  // Use appropriate tab state based on context
+  const activeTab = isDashboardContext ? dashboardActiveTab : localActiveTab;
 
   const handleTabChange = (tab: string) => {
-    setActiveTab(tab);
-    localStorage.setItem("globalAssistantActiveTab", tab);
+    const validTab = tab as SidebarTab;
+    if (isDashboardContext) {
+      setDashboardActiveTab(validTab);
+    } else {
+      setLocalActiveTab(validTab);
+    }
   };
+
+  // Shared trigger styles matching original visual design
+  const triggerBaseStyles = cn(
+    "relative flex items-center justify-center gap-1 rounded-md px-2 py-2 transition-colors",
+    "text-xs font-medium sm:text-sm",
+    "data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm",
+    "data-[state=inactive]:text-muted-foreground data-[state=inactive]:hover:bg-muted/60 data-[state=inactive]:hover:text-foreground"
+  );
 
   return (
     <aside
@@ -60,73 +78,109 @@ export default function RightPanel({ className }: RightPanelProps) {
         className,
       )}
     >
-      <div className="border-b border-[var(--separator)]">
-        <div className="grid grid-cols-3 gap-1 px-1 py-1 text-xs font-medium sm:text-sm">
-          <button
-            onClick={() => handleTabChange("chat")}
+      <Tabs
+        value={activeTab}
+        onValueChange={handleTabChange}
+        className="flex h-full w-full flex-col"
+      >
+        <div className="border-b border-[var(--separator)]">
+          <TabsList
             className={cn(
-              "relative flex items-center justify-center gap-1 rounded-md px-2 py-2 transition-colors",
-              activeTab === "chat"
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+              "grid gap-1 px-1 py-1 w-full h-auto bg-transparent rounded-none",
+              showChatTab ? "grid-cols-3" : "grid-cols-2"
             )}
-            aria-pressed={activeTab === "chat"}
           >
-            <MessageSquare className="h-4 w-4" />
-            <span className="hidden md:inline">Chat</span>
-            {activeTab === "chat" && (
-              <div className="absolute bottom-0 left-1/2 h-0.5 w-1/2 -translate-x-1/2 bg-primary" />
+            {showChatTab && (
+              <TabsTrigger
+                value="chat"
+                className={triggerBaseStyles}
+              >
+                <MessageSquare className="h-4 w-4" />
+                <span className="hidden md:inline">Chat</span>
+                <div
+                  className={cn(
+                    "absolute bottom-0 left-1/2 h-0.5 w-1/2 -translate-x-1/2 bg-primary transition-opacity",
+                    activeTab === "chat" ? "opacity-100" : "opacity-0"
+                  )}
+                />
+              </TabsTrigger>
             )}
-          </button>
 
-          <button
-            onClick={() => handleTabChange("history")}
+            <TabsTrigger
+              value="history"
+              className={triggerBaseStyles}
+            >
+              <History className="h-4 w-4" />
+              <span className="hidden md:inline">History</span>
+              <div
+                className={cn(
+                  "absolute bottom-0 left-1/2 h-0.5 w-1/2 -translate-x-1/2 bg-primary transition-opacity",
+                  activeTab === "history" ? "opacity-100" : "opacity-0"
+                )}
+              />
+            </TabsTrigger>
+
+            <TabsTrigger
+              value="settings"
+              className={triggerBaseStyles}
+            >
+              <Settings className="h-4 w-4" />
+              <span className="hidden md:inline">Settings</span>
+              <div
+                className={cn(
+                  "absolute bottom-0 left-1/2 h-0.5 w-1/2 -translate-x-1/2 bg-primary transition-opacity",
+                  activeTab === "settings" ? "opacity-100" : "opacity-0"
+                )}
+              />
+            </TabsTrigger>
+          </TabsList>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-hidden">
+          {/*
+            Keep all tabs mounted to preserve state (chat history, scroll position, etc).
+            Use CSS visibility/display to hide inactive tabs.
+            TabsContent with forceMount keeps them in DOM but we control visibility.
+          */}
+          {showChatTab && (
+            <TabsContent
+              value="chat"
+              forceMount
+              className={cn(
+                "h-full m-0 outline-none",
+                activeTab === "chat" ? "flex flex-col" : "hidden"
+              )}
+            >
+              <AssistantChatTab />
+            </TabsContent>
+          )}
+          <TabsContent
+            value="history"
+            forceMount
             className={cn(
-              "relative flex items-center justify-center gap-1 rounded-md px-2 py-2 transition-colors",
-              activeTab === "history"
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+              "h-full m-0 outline-none",
+              activeTab === "history" ? "flex flex-col" : "hidden"
             )}
-            aria-pressed={activeTab === "history"}
           >
-            <History className="h-4 w-4" />
-            <span className="hidden md:inline">History</span>
-            {activeTab === "history" && (
-              <div className="absolute bottom-0 left-1/2 h-0.5 w-1/2 -translate-x-1/2 bg-primary" />
-            )}
-          </button>
-
-          <button
-            onClick={() => handleTabChange("settings")}
+            <AssistantHistoryTab
+              selectedAgent={selectedAgent}
+              isDashboardContext={isDashboardContext}
+            />
+          </TabsContent>
+          <TabsContent
+            value="settings"
+            forceMount
             className={cn(
-              "relative flex items-center justify-center gap-1 rounded-md px-2 py-2 transition-colors",
-              activeTab === "settings"
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+              "h-full m-0 outline-none",
+              activeTab === "settings" ? "flex flex-col" : "hidden"
             )}
-            aria-pressed={activeTab === "settings"}
           >
-            <Settings className="h-4 w-4" />
-            <span className="hidden md:inline">Settings</span>
-            {activeTab === "settings" && (
-              <div className="absolute bottom-0 left-1/2 h-0.5 w-1/2 -translate-x-1/2 bg-primary" />
-            )}
-          </button>
+            <AssistantSettingsTab
+              selectedAgent={selectedAgent}
+            />
+          </TabsContent>
         </div>
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-hidden">
-        {/* Keep all tabs mounted to preserve state, toggle visibility with CSS */}
-        <div style={{ display: activeTab === "chat" ? "flex" : "none", flexDirection: "column", height: "100%" }}>
-          <AssistantChatTab />
-        </div>
-        <div style={{ display: activeTab === "history" ? "flex" : "none", flexDirection: "column", height: "100%" }}>
-          <AssistantHistoryTab selectedAgent={selectedAgent} />
-        </div>
-        <div style={{ display: activeTab === "settings" ? "flex" : "none", flexDirection: "column", height: "100%" }}>
-          <AssistantSettingsTab selectedAgent={selectedAgent} />
-        </div>
-      </div>
+      </Tabs>
     </aside>
   );
 }

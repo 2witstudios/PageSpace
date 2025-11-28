@@ -2,11 +2,14 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Trash2, Search, MessageSquare, Sparkles, Bot } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { del, fetchWithAuth } from '@/lib/auth-fetch';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
-import { SidebarAgentInfo, useSidebarAgentState } from '@/hooks/useSidebarAgentState';
+import { useSidebarAgentState } from '@/hooks/useSidebarAgentState';
+import { useAgentStore } from '@/stores/useAgentStore';
+import type { AgentInfo } from '@/types/agent';
 
 interface Conversation {
   id: string;
@@ -17,16 +20,27 @@ interface Conversation {
 }
 
 interface AssistantHistoryTabProps {
-  selectedAgent: SidebarAgentInfo | null;
+  selectedAgent: AgentInfo | null;
+  isDashboardContext?: boolean;
 }
 
 /**
  * Assistant history tab for the right sidebar.
  *
  * Supports both Global Assistant mode (selectedAgent = null) and Agent mode.
- * When an agent is selected, loads and manages that agent's conversation history.
+ *
+ * On dashboard context:
+ * - Uses useAgentStore directly (shared with GlobalAssistantView)
+ * - Clicking a conversation loads it into the middle panel
+ *
+ * On page context:
+ * - Uses useSidebarAgentState (independent from page content)
+ * - Clicking a conversation loads it into the sidebar chat
  */
-const AssistantHistoryTab: React.FC<AssistantHistoryTabProps> = ({ selectedAgent }) => {
+const AssistantHistoryTab: React.FC<AssistantHistoryTabProps> = ({
+  selectedAgent,
+  isDashboardContext = false,
+}) => {
   const pathname = usePathname();
 
   // Use GlobalChatContext for GLOBAL conversation management only
@@ -36,19 +50,31 @@ const AssistantHistoryTab: React.FC<AssistantHistoryTabProps> = ({ selectedAgent
     currentConversationId: globalConversationId,
   } = useGlobalChat();
 
-  // Use sidebar agent state for agent conversation management
+  // Use sidebar agent state for agent conversation management (page context)
   const {
-    conversationId: agentConversationId,
-    createNewConversation: createNewAgentConversation,
-    refreshConversation: refreshAgentConversation,
+    conversationId: sidebarAgentConversationId,
+    createNewConversation: createNewSidebarAgentConversation,
+    refreshConversation: refreshSidebarAgentConversation,
   } = useSidebarAgentState();
+
+  // Use central agent store for dashboard context
+  const agentStore = useAgentStore();
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Filter conversations based on search query (useMemo instead of useEffect + state)
+  // Determine active conversation ID based on context
+  const activeConversationId = useMemo(() => {
+    if (selectedAgent) {
+      // Agent mode
+      return isDashboardContext ? agentStore.conversationId : sidebarAgentConversationId;
+    }
+    // Global assistant mode
+    return globalConversationId;
+  }, [selectedAgent, isDashboardContext, agentStore.conversationId, sidebarAgentConversationId, globalConversationId]);
+
+  // Filter conversations based on search query
   const filteredConversations = useMemo(() => {
     if (searchQuery.trim() === '') {
       return conversations;
@@ -83,39 +109,30 @@ const AssistantHistoryTab: React.FC<AssistantHistoryTabProps> = ({ selectedAgent
     };
 
     loadConversations();
-  }, [selectedAgent, globalConversationId, agentConversationId, pathname]); // Refetch when agent, conversation, or navigation changes
-
-  // Sync local active conversation ID based on mode
-  useEffect(() => {
-    if (selectedAgent) {
-      setActiveConversationId(agentConversationId);
-    } else {
-      setActiveConversationId(globalConversationId);
-    }
-  }, [selectedAgent, globalConversationId, agentConversationId]);
+  }, [selectedAgent, globalConversationId, activeConversationId, pathname]); // Refetch when agent, conversation, or navigation changes
 
   const handleConversationClick = async (conversationId: string) => {
     if (selectedAgent) {
-      // For agent mode, we need to load the conversation messages
-      // The useSidebarAgentState hook handles this when we refresh
-      try {
-        const messagesResponse = await fetchWithAuth(
-          `/api/agents/${selectedAgent.id}/conversations/${conversationId}/messages`
-        );
-        if (messagesResponse.ok) {
-          // Trigger a state update via the sidebar agent state
-          // For now, just set local active and refresh will sync
-          setActiveConversationId(conversationId);
-          // Refresh to sync conversation data
-          await refreshAgentConversation();
+      if (isDashboardContext) {
+        // Dashboard context: load into shared agent store (GlobalAssistantView will react)
+        await agentStore.loadConversation(conversationId);
+      } else {
+        // Page context: load into sidebar's own state
+        try {
+          const messagesResponse = await fetchWithAuth(
+            `/api/agents/${selectedAgent.id}/conversations/${conversationId}/messages`
+          );
+          if (messagesResponse.ok) {
+            // Refresh to sync conversation data
+            await refreshSidebarAgentConversation();
+          }
+        } catch (error) {
+          console.error('Failed to load agent conversation:', error);
         }
-      } catch (error) {
-        console.error('Failed to load agent conversation:', error);
       }
     } else {
       // Load GLOBAL conversation using GlobalChatContext
       await loadGlobalConversation(conversationId);
-      setActiveConversationId(conversationId);
 
       // Update URL for browser history
       const url = new URL(window.location.href);
@@ -139,17 +156,20 @@ const AssistantHistoryTab: React.FC<AssistantHistoryTabProps> = ({ selectedAgent
         await del(`/api/ai_conversations/${conversationId}`);
       }
 
-      // Remove from local state (useMemo handles filtering automatically)
+      // Remove from local state
       setConversations(conversations.filter(conv => conv.id !== conversationId));
 
       // If deleted conversation was active, create a new conversation
       if (conversationId === activeConversationId) {
         if (selectedAgent) {
-          await createNewAgentConversation();
+          if (isDashboardContext) {
+            await agentStore.createNewConversation();
+          } else {
+            await createNewSidebarAgentConversation();
+          }
         } else {
           await createNewGlobalConversation();
         }
-        // setActiveConversationId will be updated via the sync useEffect
       }
     } catch (error) {
       console.error('Failed to delete conversation:', error);
@@ -159,11 +179,31 @@ const AssistantHistoryTab: React.FC<AssistantHistoryTabProps> = ({ selectedAgent
   if (loading) {
     return (
       <div className="flex flex-col h-full">
-        <div className="p-4 border-b">
-          <h3 className="text-sm font-medium">Conversation History</h3>
+        {/* Skeleton header */}
+        <div className="p-3 border-b space-y-2">
+          <div className="flex items-center gap-2">
+            <Skeleton className="h-4 w-4 rounded" />
+            <Skeleton className="h-4 w-32" />
+          </div>
+          <Skeleton className="h-8 w-full" />
         </div>
-        <div className="flex-grow flex items-center justify-center">
-          <div className="text-sm text-muted-foreground">Loading conversations...</div>
+        {/* Skeleton conversation list */}
+        <div className="flex-grow p-2 space-y-2">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="p-3 rounded-lg border border-border">
+              <div className="flex items-start justify-between">
+                <div className="flex-grow space-y-2">
+                  <Skeleton className="h-4 w-3/4" />
+                  <Skeleton className="h-3 w-24" />
+                </div>
+                <Skeleton className="h-6 w-6 rounded" />
+              </div>
+            </div>
+          ))}
+        </div>
+        {/* Skeleton footer */}
+        <div className="border-t p-3">
+          <Skeleton className="h-3 w-24 mx-auto" />
         </div>
       </div>
     );
@@ -242,7 +282,7 @@ const AssistantHistoryTab: React.FC<AssistantHistoryTabProps> = ({ selectedAgent
           )}
         </div>
       </div>
-      
+
       {/* Footer - for consistent structure */}
       <div className="border-t p-3">
         <div className="text-xs text-muted-foreground text-center">
