@@ -72,13 +72,13 @@ export function useMessageActions({
         if (isAgentMode) {
           // Agent mode: Use agent API
           await patch(
-            `/api/agents/${agentId}/conversations/${conversationId}/messages/${messageId}`,
+            `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages/${messageId}`,
             { content: newContent }
           );
 
           // Refetch agent messages
           const response = await fetchWithAuth(
-            `/api/agents/${agentId}/conversations/${conversationId}/messages`
+            `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages`
           );
           if (response.ok) {
             const data = await response.json();
@@ -87,13 +87,13 @@ export function useMessageActions({
         } else {
           // Global mode: Use global API
           await patch(
-            `/api/ai_conversations/${conversationId}/messages/${messageId}`,
+            `/api/ai/global/${conversationId}/messages/${messageId}`,
             { content: newContent }
           );
 
           // Refetch messages
           const response = await fetchWithAuth(
-            `/api/ai_conversations/${conversationId}/messages`
+            `/api/ai/global/${conversationId}/messages`
           );
           if (response.ok) {
             const data = await response.json();
@@ -121,10 +121,10 @@ export function useMessageActions({
       try {
         if (isAgentMode) {
           await del(
-            `/api/agents/${agentId}/conversations/${conversationId}/messages/${messageId}`
+            `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages/${messageId}`
           );
         } else {
-          await del(`/api/ai_conversations/${conversationId}/messages/${messageId}`);
+          await del(`/api/ai/global/${conversationId}/messages/${messageId}`);
         }
 
         // Optimistically update local state
@@ -159,10 +159,10 @@ export function useMessageActions({
         try {
           if (isAgentMode) {
             await del(
-              `/api/agents/${agentId}/conversations/${conversationId}/messages/${msg.id}`
+              `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages/${msg.id}`
             );
           } else {
-            await del(`/api/ai_conversations/${conversationId}/messages/${msg.id}`);
+            await del(`/api/ai/global/${conversationId}/messages/${msg.id}`);
           }
         } catch (error) {
           console.error('Failed to delete old assistant message:', error);

@@ -5,7 +5,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { fetchWithAuth } from '@/lib/auth-fetch';
-import { getBackendProvider } from '@/lib/ai/ai-providers-config';
+import { getBackendProvider } from '@/lib/ai/core/ai-providers-config';
 import type { ProviderSettings } from '../chat-types';
 
 interface UseProviderSettingsOptions {

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { db, pages, drives, eq, and, driveMembers, pagePermissions, ne } from '@pagespace/db';
 import {} from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/socket-utils';
-import { ToolExecutionContext } from '../types';
+import { ToolExecutionContext } from '../core/types';
 
 export const driveTools = {
   /**

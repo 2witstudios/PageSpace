@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { generateText, convertToModelMessages, UIMessage } from 'ai';
 import { db, pages, chatMessages, drives, eq, and, sql } from '@pagespace/db';
 import { canUserViewPage } from '@pagespace/lib/server';
-import { sanitizeMessagesForModel, saveMessageToDatabase, convertDbMessageToUIMessage } from '@/lib/ai/assistant-utils';
+import { sanitizeMessagesForModel, saveMessageToDatabase, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
 import { createId } from '@paralleldrive/cuid2';
 import { driveTools } from './drive-tools';
 import { pageReadTools } from './page-read-tools';
@@ -15,11 +15,11 @@ import {
   createAIProvider,
   isProviderError,
   type ProviderRequest
-} from '@/lib/ai/provider-factory';
-import { buildTimestampSystemPrompt } from '@/lib/ai/timestamp-utils';
-import { ToolExecutionContext } from '../types';
+} from '@/lib/ai/core/provider-factory';
+import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
+import { ToolExecutionContext } from '../core/types';
 import { loggers } from '@pagespace/lib/server';
-import { AI_PROVIDERS, getModelDisplayName } from '@/lib/ai/ai-providers-config';
+import { AI_PROVIDERS, getModelDisplayName } from '@/lib/ai/core/ai-providers-config';
 
 // Constants
 const MAX_AGENT_DEPTH = 3;

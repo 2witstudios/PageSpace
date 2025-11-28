@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { NextResponse } from 'next/server';
 import { GET } from '../route';
+import type { WebAuthResult, AuthError } from '@/lib/auth';
 
 // Mock dependencies
 vi.mock('@pagespace/db', () => ({
@@ -18,8 +20,8 @@ vi.mock('@pagespace/db', () => ({
   driveMembers: {},
   users: {},
   eq: vi.fn((field, value) => ({ field, value, type: 'eq' })),
-  and: vi.fn((...args) => ({ args, type: 'and' })),
-  sql: vi.fn((strings, ...values) => ({ strings, values, type: 'sql' })),
+  and: vi.fn((...args: unknown[]) => ({ args, type: 'and' })),
+  sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ strings, values, type: 'sql' })),
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
@@ -42,17 +44,58 @@ import { db } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
+// Helper to create mock WebAuthResult
+const mockWebAuth = (userId: string, tokenVersion = 0): WebAuthResult => ({
+  userId,
+  tokenVersion,
+  tokenType: 'jwt',
+  source: 'cookie',
+  role: 'user',
+});
+
+// Helper to create mock AuthError
+const mockAuthError = (status = 401): AuthError => ({
+  error: NextResponse.json({ error: 'Unauthorized' }, { status }),
+});
+
+// Helper to create mock drive
+const mockDrive = (overrides: { id: string; name: string }) => ({
+  id: overrides.id,
+  name: overrides.name,
+  slug: overrides.id,
+  ownerId: 'user_123',
+  createdAt: new Date(),
+  updatedAt: new Date(),
+  isTrashed: false,
+  trashedAt: null,
+  drivePrompt: null,
+});
+
 describe('GET /api/account/drives-status', () => {
   const mockUserId = 'user_123';
+
+  // Helper to setup select mock for count queries
+  const setupSelectMock = (count: number) => {
+    const whereMock = vi.fn().mockResolvedValue([{ count }]);
+    const fromMock = vi.fn().mockReturnValue({ where: whereMock });
+    vi.mocked(db.select).mockReturnValue({ from: fromMock } as unknown as ReturnType<typeof db.select>);
+  };
+
+  // Helper to setup select mock for admin queries
+  const setupAdminSelectMock = (admins: Array<{ id: string; name: string; email: string; role: string }>) => {
+    const whereMock = vi.fn().mockResolvedValue(admins);
+    const innerJoinMock = vi.fn().mockReturnValue({ where: whereMock });
+    const fromMock = vi.fn().mockReturnValue({ innerJoin: innerJoinMock });
+    vi.mocked(db.select).mockReturnValue({ from: fromMock } as unknown as ReturnType<typeof db.select>);
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
 
     // Setup default auth success
-    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
-      userId: mockUserId,
-      tokenVersion: 0,
-    });
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(
+      mockWebAuth(mockUserId)
+    );
     vi.mocked(isAuthError).mockReturnValue(false);
 
     // Setup default: no drives
@@ -72,15 +115,11 @@ describe('GET /api/account/drives-status', () => {
 
   it('should categorize solo drive correctly', async () => {
     vi.mocked(db.query.drives.findMany).mockResolvedValue([
-      { id: 'drive_solo', name: 'My Solo Drive' },
+      mockDrive({ id: 'drive_solo', name: 'My Solo Drive' }),
     ]);
 
     // Mock member count to return 1 (solo)
-    vi.mocked(db.select).mockReturnValue({
-      from: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue([{ count: 1 }]),
-      }),
-    });
+    setupSelectMock(1);
 
     const request = new Request('https://example.com/api/account/drives-status');
 
@@ -99,39 +138,19 @@ describe('GET /api/account/drives-status', () => {
 
   it('should categorize multi-member drive correctly', async () => {
     vi.mocked(db.query.drives.findMany).mockResolvedValue([
-      { id: 'drive_team', name: 'Team Drive' },
+      mockDrive({ id: 'drive_team', name: 'Team Drive' }),
     ]);
 
     // Mock member count to return 5 (multi-member)
-    vi.mocked(db.select).mockReturnValue({
-      from: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue([{ count: 5 }]),
-      }),
-    });
+    setupSelectMock(5);
 
     // Mock admin query
-    const mockAdmins = [
-      {
-        id: 'admin_1',
-        name: 'Admin One',
-        email: 'admin1@example.com',
-        role: 'ADMIN',
-      },
-      {
-        id: 'admin_2',
-        name: 'Admin Two',
-        email: 'admin2@example.com',
-        role: 'ADMIN',
-      },
+    const admins = [
+      { id: 'admin_1', name: 'Admin One', email: 'admin1@example.com', role: 'ADMIN' },
+      { id: 'admin_2', name: 'Admin Two', email: 'admin2@example.com', role: 'ADMIN' },
     ];
 
-    vi.mocked(db.select).mockReturnValue({
-      from: vi.fn().mockReturnValue({
-        innerJoin: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue(mockAdmins),
-        }),
-      }),
-    });
+    setupAdminSelectMock(admins);
 
     const request = new Request('https://example.com/api/account/drives-status');
 
@@ -154,24 +173,14 @@ describe('GET /api/account/drives-status', () => {
 
   it('should handle drive with no admins', async () => {
     vi.mocked(db.query.drives.findMany).mockResolvedValue([
-      { id: 'drive_no_admin', name: 'No Admins Drive' },
+      mockDrive({ id: 'drive_no_admin', name: 'No Admins Drive' }),
     ]);
 
     // Mock member count to return 3 (multi-member)
-    vi.mocked(db.select).mockReturnValue({
-      from: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue([{ count: 3 }]),
-      }),
-    });
+    setupSelectMock(3);
 
     // Mock empty admin list
-    vi.mocked(db.select).mockReturnValue({
-      from: vi.fn().mockReturnValue({
-        innerJoin: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([]),
-        }),
-      }),
-    });
+    setupAdminSelectMock([]);
 
     const request = new Request('https://example.com/api/account/drives-status');
 
@@ -184,10 +193,10 @@ describe('GET /api/account/drives-status', () => {
 
   it('should handle mixed solo and multi-member drives', async () => {
     vi.mocked(db.query.drives.findMany).mockResolvedValue([
-      { id: 'drive_solo_1', name: 'Solo 1' },
-      { id: 'drive_team_1', name: 'Team 1' },
-      { id: 'drive_solo_2', name: 'Solo 2' },
-      { id: 'drive_team_2', name: 'Team 2' },
+      mockDrive({ id: 'drive_solo_1', name: 'Solo 1' }),
+      mockDrive({ id: 'drive_team_1', name: 'Team 1' }),
+      mockDrive({ id: 'drive_solo_2', name: 'Solo 2' }),
+      mockDrive({ id: 'drive_team_2', name: 'Team 2' }),
     ]);
 
     // Mock member counts - alternate between 1 and 5
@@ -206,8 +215,7 @@ describe('GET /api/account/drives-status', () => {
               ]),
             }),
           }),
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } as any;
+        } as unknown as ReturnType<typeof db.select>;
       }
 
       // Solo drive - return count query mock
@@ -215,8 +223,7 @@ describe('GET /api/account/drives-status', () => {
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockResolvedValue([{ count }]),
         }),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any;
+      } as unknown as ReturnType<typeof db.select>;
     });
 
     const request = new Request('https://example.com/api/account/drives-status');
@@ -231,9 +238,9 @@ describe('GET /api/account/drives-status', () => {
 
   it('should return 401 when not authenticated', async () => {
     vi.mocked(isAuthError).mockReturnValue(true);
-    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
-      error: new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 }),
-    });
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(
+      mockAuthError(401)
+    );
 
     const request = new Request('https://example.com/api/account/drives-status');
 
@@ -257,15 +264,11 @@ describe('GET /api/account/drives-status', () => {
 
   it('should handle drive with 0 members (edge case)', async () => {
     vi.mocked(db.query.drives.findMany).mockResolvedValue([
-      { id: 'drive_orphan', name: 'Orphan Drive' },
+      mockDrive({ id: 'drive_orphan', name: 'Orphan Drive' }),
     ]);
 
     // Mock member count to return 0
-    vi.mocked(db.select).mockReturnValue({
-      from: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue([{ count: 0 }]),
-      }),
-    });
+    setupSelectMock(0);
 
     const request = new Request('https://example.com/api/account/drives-status');
 
@@ -280,30 +283,20 @@ describe('GET /api/account/drives-status', () => {
 
   it('should correctly count multiple admins in multi-member drive', async () => {
     vi.mocked(db.query.drives.findMany).mockResolvedValue([
-      { id: 'drive_many_admins', name: 'Many Admins Drive' },
+      mockDrive({ id: 'drive_many_admins', name: 'Many Admins Drive' }),
     ]);
 
-    vi.mocked(db.select).mockReturnValue({
-      from: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue([{ count: 10 }]),
-      }),
-    });
+    setupSelectMock(10);
 
     // Mock 5 admins
-    const mockAdmins = Array.from({ length: 5 }, (_, i) => ({
+    const admins = Array.from({ length: 5 }, (_, i) => ({
       id: `admin_${i}`,
       name: `Admin ${i}`,
       email: `admin${i}@example.com`,
-      role: 'ADMIN' as const,
+      role: 'ADMIN',
     }));
 
-    vi.mocked(db.select).mockReturnValue({
-      from: vi.fn().mockReturnValue({
-        innerJoin: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue(mockAdmins),
-        }),
-      }),
-    });
+    setupAdminSelectMock(admins);
 
     const request = new Request('https://example.com/api/account/drives-status');
 

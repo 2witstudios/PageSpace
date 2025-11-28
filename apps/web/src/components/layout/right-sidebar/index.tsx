@@ -4,14 +4,14 @@ import { useState } from "react";
 import { History, MessageSquare, Settings } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import { useSidebarAgentState } from "@/hooks/useSidebarAgentState";
+import { usePageAgentSidebarState } from "@/hooks/page-agents/usePageAgentSidebarState";
 import { useDashboardContext } from "@/hooks/useDashboardContext";
-import { useAgentStore, type SidebarTab } from "@/stores/useAgentStore";
+import { usePageAgentDashboardStore, type SidebarTab } from "@/stores/page-agents/usePageAgentDashboardStore";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 
-import AssistantChatTab from "./ai-assistant/AssistantChatTab";
-import AssistantHistoryTab from "./ai-assistant/AssistantHistoryTab";
-import AssistantSettingsTab from "./ai-assistant/AssistantSettingsTab";
+import SidebarChatTab from "./ai-assistant/SidebarChatTab";
+import SidebarHistoryTab from "./ai-assistant/SidebarHistoryTab";
+import SidebarSettingsTab from "./ai-assistant/SidebarSettingsTab";
 
 export interface RightPanelProps {
   className?: string;
@@ -22,12 +22,12 @@ export interface RightPanelProps {
  * Right sidebar panel - contains AI Assistant chat, history, and settings.
  *
  * TAB STATE MANAGEMENT:
- * - Dashboard context: Uses useAgentStore.activeTab (synced with GlobalAssistantView)
+ * - Dashboard context: Uses usePageAgentDashboardStore.activeTab (synced with GlobalAssistantView)
  * - Page context: Uses local state (independent from page content)
  *
  * AGENT STATE MANAGEMENT:
- * - Dashboard context: Uses useAgentStore.selectedAgent (shared with GlobalAssistantView)
- * - Page context: Uses useSidebarAgentState (independent sidebar chat)
+ * - Dashboard context: Uses usePageAgentDashboardStore.selectedAgent (shared with GlobalAssistantView)
+ * - Page context: Uses usePageAgentSidebarState (independent sidebar chat)
  *
  * ACCESSIBILITY:
  * - Uses Radix UI Tabs for keyboard navigation (Arrow keys, Home, End)
@@ -39,8 +39,8 @@ export default function RightPanel({ className }: RightPanelProps) {
 
   // Get agent state from both stores (hooks must be called unconditionally)
   // Only extract selectedAgent from sidebar state to minimize subscriptions
-  const { selectedAgent: sidebarAgent } = useSidebarAgentState();
-  const { selectedAgent: dashboardAgent, activeTab: dashboardActiveTab, setActiveTab: setDashboardActiveTab } = useAgentStore();
+  const { selectedAgent: sidebarAgent } = usePageAgentSidebarState();
+  const { selectedAgent: dashboardAgent, activeTab: dashboardActiveTab, setActiveTab: setDashboardActiveTab } = usePageAgentDashboardStore();
 
   // On dashboard context, use the central agent store; otherwise use sidebar's own store
   const selectedAgent = isDashboardContext ? dashboardAgent : sidebarAgent;
@@ -151,7 +151,7 @@ export default function RightPanel({ className }: RightPanelProps) {
                 activeTab === "chat" ? "flex flex-col" : "hidden"
               )}
             >
-              <AssistantChatTab />
+              <SidebarChatTab />
             </TabsContent>
           )}
           <TabsContent
@@ -162,7 +162,7 @@ export default function RightPanel({ className }: RightPanelProps) {
               activeTab === "history" ? "flex flex-col" : "hidden"
             )}
           >
-            <AssistantHistoryTab
+            <SidebarHistoryTab
               selectedAgent={selectedAgent}
               isDashboardContext={isDashboardContext}
             />
@@ -175,7 +175,7 @@ export default function RightPanel({ className }: RightPanelProps) {
               activeTab === "settings" ? "flex flex-col" : "hidden"
             )}
           >
-            <AssistantSettingsTab
+            <SidebarSettingsTab
               selectedAgent={selectedAgent}
             />
           </TabsContent>

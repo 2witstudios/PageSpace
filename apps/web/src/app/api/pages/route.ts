@@ -79,7 +79,7 @@ export async function POST(request: Request) {
     }
 
     if (isAIChatPage(type) && enabledTools && enabledTools.length > 0) {
-      const { pageSpaceTools } = await import('@/lib/ai/ai-tools');
+      const { pageSpaceTools } = await import('@/lib/ai/core/ai-tools');
       const availableToolNames = Object.keys(pageSpaceTools);
       const toolValidation = validateAIChatTools(enabledTools, availableToolNames);
       if (!toolValidation.valid) {

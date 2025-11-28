@@ -3,7 +3,7 @@
 import React, { createContext, useContext, ReactNode, useState, useCallback, useEffect, useMemo } from 'react';
 import { DefaultChatTransport, UIMessage } from 'ai';
 import { fetchWithAuth } from '@/lib/auth-fetch';
-import { conversationState } from '@/lib/ai/conversation-state';
+import { conversationState } from '@/lib/ai/core/conversation-state';
 
 /**
  * Global Chat Context - ONLY for Global Assistant state
@@ -11,7 +11,7 @@ import { conversationState } from '@/lib/ai/conversation-state';
  * This context manages the Global Assistant chat that appears in the sidebar.
  * It does NOT manage agent selection or agent conversations.
  *
- * Agent selection is managed by useAgentStore (Zustand store).
+ * Agent selection is managed by usePageAgentDashboardStore (Zustand store).
  * Agent conversations are managed locally by GlobalAssistantView when in agent mode.
  */
 interface GlobalChatContextValue {
@@ -72,7 +72,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
       setIsInitialized(false);
 
       const messagesResponse = await fetchWithAuth(
-        `/api/ai_conversations/${conversationId}/messages?limit=50`
+        `/api/ai/global/${conversationId}/messages?limit=50`
       );
 
       if (messagesResponse.ok) {
@@ -138,7 +138,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
 
   /**
    * Initialize Global Assistant chat on mount
-   * Agent initialization is handled separately by useAgentStore
+   * Agent initialization is handled separately by usePageAgentDashboardStore
    */
   useEffect(() => {
     const initializeGlobalChat = async () => {
@@ -163,7 +163,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
 
         // Always try to get the most recent global conversation
         // This ensures sidebar has a conversation to display
-        const response = await fetchWithAuth('/api/ai_conversations/global');
+        const response = await fetchWithAuth('/api/ai/global/active');
         if (response.ok) {
           const conversation = await response.json();
           if (conversation && conversation.id) {
@@ -195,7 +195,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   const chatConfig = useMemo(() => {
     if (!currentConversationId) return null;
 
-    const apiEndpoint = `/api/ai_conversations/${currentConversationId}/messages`;
+    const apiEndpoint = `/api/ai/global/${currentConversationId}/messages`;
 
     return {
       id: currentConversationId,
