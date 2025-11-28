@@ -1,18 +1,18 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { AISelector } from '../AgentSelector';
+import { AISelector } from '../AISelector';
 import type { AgentSummary } from '@/hooks/page-agents/usePageAgents';
 import type { AgentInfo } from '@/stores/page-agents/usePageAgentDashboardStore';
 
-// Mock the useAgents hook
-vi.mock('@/hooks/useAgents', () => ({
-  useAgents: vi.fn(),
+// Mock the usePageAgents hook
+vi.mock('@/hooks/page-agents/usePageAgents', () => ({
+  usePageAgents: vi.fn(),
 }));
 
 import { usePageAgents } from '@/hooks/page-agents/usePageAgents';
 
-describe('AgentSelector', () => {
+describe('AISelector', () => {
   const mockOnSelectAgent = vi.fn();
 
   const mockAgentsByDrive = [
@@ -54,7 +54,7 @@ describe('AgentSelector', () => {
     vi.clearAllMocks();
 
     // Default mock: return agents
-    vi.mocked(useAgents).mockReturnValue({
+    vi.mocked(usePageAgents).mockReturnValue({
       agentsByDrive: mockAgentsByDrive,
       allAgents: mockAgentsByDrive[0].agents,
       totalCount: 1,

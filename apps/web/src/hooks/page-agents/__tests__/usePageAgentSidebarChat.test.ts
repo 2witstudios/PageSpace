@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { usePageAgentSidebarChat } from '../usePageAgentSidebarChat';
-import { SidebarAgentInfo } from '../usePageAgentSidebarState';
+import type { SidebarAgentInfo } from '../usePageAgentSidebarState';
 
 // Mock useChat from @ai-sdk/react
 const mockGlobalSendMessage = vi.fn();

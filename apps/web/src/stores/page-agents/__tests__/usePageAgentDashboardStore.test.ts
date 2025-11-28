@@ -14,7 +14,7 @@ vi.mock('@/lib/auth-fetch', () => ({
 }));
 
 // Mock conversationState
-vi.mock('@/lib/ai/conversation-state', () => ({
+vi.mock('@/lib/ai/core/conversation-state', () => ({
   conversationState: {
     getActiveAgentId: vi.fn(() => null),
     setActiveAgentId: vi.fn(),
