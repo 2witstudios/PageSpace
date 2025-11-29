@@ -250,9 +250,11 @@ AI messages have `userId = NULL`, while human messages have the user's ID, enabl
 
 The Global AI Conversations system provides persistent, context-aware AI assistant functionality that exists outside the page hierarchy. Unlike page-based AI chats that are embedded within the workspace structure, global conversations offer users a dedicated AI assistant that can access context across their entire workspace.
 
-### GET /api/ai_conversations
+> **Note:** These routes were reorganized in November 2025 from `/api/ai_conversations` to `/api/ai/global` for semantic clarity.
 
-**Purpose:** Lists all AI conversations for the authenticated user.
+### GET /api/ai/global
+
+**Purpose:** Lists all global AI conversations for the authenticated user.
 **Auth Required:** Yes
 **Request Schema:** None
 **Response Schema:** Array of AI conversation objects:
@@ -268,11 +270,11 @@ The Global AI Conversations system provides persistent, context-aware AI assista
 - AI conversations are user ↔ assistant interactions
 **Status Codes:** 200 (OK), 401 (Unauthorized), 500 (Internal Server Error)
 **Next.js 15 Handler:** async function returning NextResponse
-**Last Updated:** 2025-08-21
+**Last Updated:** 2025-11-28
 
-### POST /api/ai_conversations
+### POST /api/ai/global
 
-**Purpose:** Creates a new AI conversation.
+**Purpose:** Creates a new global AI conversation.
 **Auth Required:** Yes
 **Request Schema:**
 - title: string (optional)
@@ -281,11 +283,11 @@ The Global AI Conversations system provides persistent, context-aware AI assista
 **Response Schema:** New AI conversation object.
 **Status Codes:** 201 (Created), 400 (Bad Request), 401 (Unauthorized), 500 (Internal Server Error)
 **Next.js 15 Handler:** async function returning NextResponse
-**Last Updated:** 2025-08-21
+**Last Updated:** 2025-11-28
 
-### GET /api/ai_conversations/[id]
+### GET /api/ai/global/[id]
 
-**Purpose:** Retrieves a specific AI conversation.
+**Purpose:** Retrieves a specific global AI conversation.
 **Auth Required:** Yes
 **Request Schema:**
 - id: string (dynamic parameter - must await context.params in Next.js 15)
@@ -295,11 +297,11 @@ The Global AI Conversations system provides persistent, context-aware AI assista
 - Validates user owns the conversation
 **Status Codes:** 200 (OK), 401 (Unauthorized), 404 (Not Found), 500 (Internal Server Error)
 **Next.js 15 Handler:** async function with await context.params
-**Last Updated:** 2025-08-21
+**Last Updated:** 2025-11-28
 
-### PATCH /api/ai_conversations/[id]
+### PATCH /api/ai/global/[id]
 
-**Purpose:** Updates AI conversation metadata (e.g., title).
+**Purpose:** Updates global AI conversation metadata (e.g., title).
 **Auth Required:** Yes
 **Request Schema:**
 - id: string (dynamic parameter - must await context.params in Next.js 15)
@@ -310,11 +312,11 @@ The Global AI Conversations system provides persistent, context-aware AI assista
 - Only allows title updates currently
 **Status Codes:** 200 (OK), 401 (Unauthorized), 404 (Not Found), 500 (Internal Server Error)
 **Next.js 15 Handler:** async function with await context.params
-**Last Updated:** 2025-08-21
+**Last Updated:** 2025-11-28
 
-### DELETE /api/ai_conversations/[id]
+### DELETE /api/ai/global/[id]
 
-**Purpose:** Soft deletes an AI conversation.
+**Purpose:** Soft deletes a global AI conversation.
 **Auth Required:** Yes
 **Request Schema:**
 - id: string (dynamic parameter - must await context.params in Next.js 15)
@@ -324,11 +326,11 @@ The Global AI Conversations system provides persistent, context-aware AI assista
 - Sets isActive to false (soft delete)
 **Status Codes:** 200 (OK), 401 (Unauthorized), 404 (Not Found), 500 (Internal Server Error)
 **Next.js 15 Handler:** async function with await context.params
-**Last Updated:** 2025-08-21
+**Last Updated:** 2025-11-28
 
-### GET /api/ai_conversations/[id]/messages
+### GET /api/ai/global/[id]/messages
 
-**Purpose:** Retrieves messages for a specific AI conversation.
+**Purpose:** Retrieves messages for a specific global AI conversation.
 **Auth Required:** Yes
 **Request Schema:**
 - id: string (dynamic parameter - must await context.params in Next.js 15)
@@ -341,9 +343,9 @@ The Global AI Conversations system provides persistent, context-aware AI assista
 - Messages are AI conversation history
 **Status Codes:** 200 (OK), 401 (Unauthorized), 404 (Not Found), 500 (Internal Server Error)
 **Next.js 15 Handler:** async function with await context.params
-**Last Updated:** 2025-08-21
+**Last Updated:** 2025-11-28
 
-### POST /api/ai_conversations/[id]/messages
+### POST /api/ai/global/[id]/messages
 
 **Purpose:** Processes AI chat messages with streaming responses.
 **Auth Required:** Yes
@@ -362,11 +364,37 @@ The Global AI Conversations system provides persistent, context-aware AI assista
 - Messages saved to database in real-time
 **Status Codes:** 200 (OK), 400 (Bad Request), 401 (Unauthorized), 404 (Not Found), 500 (Internal Server Error)
 **Next.js 15 Handler:** async function with await context.params and streaming response
-**Last Updated:** 2025-08-21
+**Last Updated:** 2025-11-28
 
-### GET /api/ai_conversations/global
+### DELETE /api/ai/global/[id]/messages/[messageId]
 
-**Purpose:** Retrieves the most recent global AI conversation for the user.
+**Purpose:** Deletes a specific message from a global AI conversation.
+**Auth Required:** Yes
+**Request Schema:**
+- id: string (conversation ID - must await context.params in Next.js 15)
+- messageId: string (message ID - must await context.params in Next.js 15)
+**Response Schema:** Success message.
+**Implementation Notes:**
+- Uses Next.js 15 async params pattern
+- Validates user owns the conversation
+**Status Codes:** 200 (OK), 401 (Unauthorized), 404 (Not Found), 500 (Internal Server Error)
+**Next.js 15 Handler:** async function with await context.params
+**Last Updated:** 2025-11-28
+
+### GET /api/ai/global/[id]/usage
+
+**Purpose:** Gets AI usage statistics for a specific global conversation.
+**Auth Required:** Yes
+**Request Schema:**
+- id: string (dynamic parameter - must await context.params in Next.js 15)
+**Response Schema:** Usage statistics object with token counts and costs.
+**Status Codes:** 200 (OK), 401 (Unauthorized), 404 (Not Found), 500 (Internal Server Error)
+**Next.js 15 Handler:** async function with await context.params
+**Last Updated:** 2025-11-28
+
+### GET /api/ai/global/active
+
+**Purpose:** Retrieves the most recent active global AI conversation for the user.
 **Auth Required:** Yes
 **Request Schema:** None
 **Response Schema:** Global AI conversation object or null.
@@ -376,7 +404,7 @@ The Global AI Conversations system provides persistent, context-aware AI assista
 - Does not auto-create - returns null if none exists
 **Status Codes:** 200 (OK), 401 (Unauthorized), 500 (Internal Server Error)
 **Next.js 15 Handler:** async function returning NextResponse
-**Last Updated:** 2025-08-21
+**Last Updated:** 2025-11-28
 
 ---
 
