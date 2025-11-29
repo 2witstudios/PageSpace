@@ -92,18 +92,16 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     iconName: 'Layout', // Choose from available Lucide icons
     emoji: '📋',
     capabilities: {
-      canHaveChildren: false,
       canAcceptUploads: false,
       canBeConverted: false,
       supportsRealtime: true,
       supportsVersioning: true,
       supportsAI: false,
     },
-    defaultContent: () => JSON.stringify({ 
-      columns: [], 
-      cards: [] 
+    defaultContent: () => JSON.stringify({
+      columns: [],
+      cards: []
     }),
-    allowedChildTypes: [],
     apiValidation: {
       optionalFields: ['columns', 'cards'],
       customValidation: (data) => {
@@ -275,11 +273,10 @@ After implementing your new page type:
 The centralized system provides several helper functions you can use:
 
 ```typescript
-import { 
+import {
   getPageTypeConfig,      // Get full config for a type
   getPageTypeIconName,    // Get icon name for a type
   getPageTypeEmoji,       // Get emoji for a type
-  canPageTypeHaveChildren, // Check if type can have children
   getDefaultContent,      // Get default content for a type
   getPageTypeComponent,   // Get component name for a type
   getLayoutViewType,      // Get layout view type
@@ -324,7 +321,6 @@ Here's a complete example of adding a "TIMELINE" page type:
      iconName: 'Clock',
      emoji: '⏰',
      capabilities: {
-       canHaveChildren: false,
        canAcceptUploads: false,
        canBeConverted: false,
        supportsRealtime: false,
@@ -332,7 +328,6 @@ Here's a complete example of adding a "TIMELINE" page type:
        supportsAI: false,
      },
      defaultContent: () => JSON.stringify({ events: [] }),
-     allowedChildTypes: [],
      uiComponent: 'TimelineView',
      layoutViewType: 'document',
    }
@@ -346,4 +341,4 @@ Here's a complete example of adding a "TIMELINE" page type:
 
 7. **Run migrations and test**
 
-**Last Updated:** 2025-01-02
+**Last Updated:** 2025-11-29

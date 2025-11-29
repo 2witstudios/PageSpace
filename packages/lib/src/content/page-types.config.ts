@@ -2,7 +2,6 @@ import { PageType } from '../utils/enums';
 import { createEmptySheet, serializeSheetContent } from '../sheets/sheet';
 
 export interface PageTypeCapabilities {
-  canHaveChildren: boolean;
   canAcceptUploads: boolean;
   canBeConverted: boolean;
   supportsRealtime: boolean;
@@ -20,11 +19,10 @@ export interface PageTypeConfig {
   type: PageType;
   displayName: string;
   description: string;
-  iconName: 'Folder' | 'FileText' | 'MessageSquare' | 'Sparkles' | 'Palette' | 'FileIcon' | 'Table';
+  iconName: 'Folder' | 'FileText' | 'MessageSquare' | 'Sparkles' | 'Palette' | 'FileIcon' | 'Table' | 'CheckSquare';
   emoji: string;
   capabilities: PageTypeCapabilities;
   defaultContent: () => any;
-  allowedChildTypes: PageType[];
   apiValidation?: PageTypeApiValidation;
   uiComponent: string;
   layoutViewType: 'document' | 'folder' | 'channel' | 'ai' | 'canvas';
@@ -38,7 +36,6 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     iconName: 'Folder',
     emoji: '📁',
     capabilities: {
-      canHaveChildren: true,
       canAcceptUploads: true,
       canBeConverted: false,
       supportsRealtime: false,
@@ -46,7 +43,6 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsAI: false,
     },
     defaultContent: () => ({ children: [] }),
-    allowedChildTypes: Object.values(PageType),
     uiComponent: 'FolderView',
     layoutViewType: 'folder',
   },
@@ -57,7 +53,6 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     iconName: 'FileText',
     emoji: '📄',
     capabilities: {
-      canHaveChildren: false,
       canAcceptUploads: false,
       canBeConverted: true,
       supportsRealtime: true,
@@ -65,7 +60,6 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsAI: false,
     },
     defaultContent: () => '',
-    allowedChildTypes: [],
     uiComponent: 'DocumentView',
     layoutViewType: 'document',
   },
@@ -76,7 +70,6 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     iconName: 'MessageSquare',
     emoji: '💬',
     capabilities: {
-      canHaveChildren: false,
       canAcceptUploads: false,
       canBeConverted: false,
       supportsRealtime: true,
@@ -84,7 +77,6 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsAI: false,
     },
     defaultContent: () => ({ messages: [] }),
-    allowedChildTypes: [],
     uiComponent: 'ChannelView',
     layoutViewType: 'channel',
   },
@@ -95,7 +87,6 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     iconName: 'Sparkles',
     emoji: '🤖',
     capabilities: {
-      canHaveChildren: false,
       canAcceptUploads: false,
       canBeConverted: false,
       supportsRealtime: true,
@@ -103,7 +94,6 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsAI: true,
     },
     defaultContent: () => ({ messages: [] }),
-    allowedChildTypes: [],
     apiValidation: {
       optionalFields: ['systemPrompt', 'enabledTools', 'aiProvider', 'aiModel'],
     },
@@ -117,7 +107,6 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     iconName: 'Palette',
     emoji: '🎨',
     capabilities: {
-      canHaveChildren: false,
       canAcceptUploads: false,
       canBeConverted: false,
       supportsRealtime: false,
@@ -125,7 +114,6 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsAI: false,
     },
     defaultContent: () => '',
-    allowedChildTypes: [],
     uiComponent: 'CanvasPageView',
     layoutViewType: 'canvas',
   },
@@ -136,7 +124,6 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     iconName: 'FileIcon',
     emoji: '📎',
     capabilities: {
-      canHaveChildren: false,
       canAcceptUploads: false,
       canBeConverted: true,
       supportsRealtime: false,
@@ -144,7 +131,6 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsAI: false,
     },
     defaultContent: () => '',
-    allowedChildTypes: [],
     uiComponent: 'FileViewer',
     layoutViewType: 'document',
   },
@@ -155,7 +141,6 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     iconName: 'Table',
     emoji: '📊',
     capabilities: {
-      canHaveChildren: false,
       canAcceptUploads: false,
       canBeConverted: false,
       supportsRealtime: true,
@@ -163,8 +148,24 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsAI: true,
     },
     defaultContent: () => serializeSheetContent(createEmptySheet()),
-    allowedChildTypes: [],
     uiComponent: 'SheetView',
+    layoutViewType: 'document',
+  },
+  [PageType.TASK_LIST]: {
+    type: PageType.TASK_LIST,
+    displayName: 'Task List',
+    description: 'Table-based task management',
+    iconName: 'CheckSquare',
+    emoji: '✅',
+    capabilities: {
+      canAcceptUploads: false,
+      canBeConverted: false,
+      supportsRealtime: true,
+      supportsVersioning: false,
+      supportsAI: true,
+    },
+    defaultContent: () => JSON.stringify({}),
+    uiComponent: 'TaskListView',
     layoutViewType: 'document',
   },
 };
@@ -176,10 +177,6 @@ export function getPageTypeConfig(type: PageType): PageTypeConfig {
 
 export function getPageTypeIconName(type: PageType): string {
   return PAGE_TYPE_CONFIGS[type]?.iconName || 'FileText';
-}
-
-export function canPageTypeHaveChildren(type: PageType): boolean {
-  return PAGE_TYPE_CONFIGS[type]?.capabilities.canHaveChildren || false;
 }
 
 export function canPageTypeAcceptUploads(type: PageType): boolean {
@@ -230,10 +227,6 @@ export function canBeConverted(type: PageType): boolean {
   return PAGE_TYPE_CONFIGS[type]?.capabilities.canBeConverted || false;
 }
 
-export function getAllowedChildTypes(type: PageType): PageType[] {
-  return PAGE_TYPE_CONFIGS[type]?.allowedChildTypes || [];
-}
-
 export function getPageTypeDisplayName(type: PageType): string {
   return PAGE_TYPE_CONFIGS[type]?.displayName || 'Document';
 }
@@ -260,4 +253,8 @@ export function isChannelPage(type: PageType): boolean {
 
 export function isAIChatPage(type: PageType): boolean {
   return type === PageType.AI_CHAT;
+}
+
+export function isTaskListPage(type: PageType): boolean {
+  return type === PageType.TASK_LIST;
 }

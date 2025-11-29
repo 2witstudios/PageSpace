@@ -6,6 +6,7 @@ import { loggers } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
+// Note: taskItems linked to this page are automatically deleted via FK cascade (onDelete: 'cascade')
 async function recursivelyDelete(pageId: string, tx: typeof db) {
     const children = await tx.select({ id: pages.id }).from(pages).where(eq(pages.parentId, pageId));
 

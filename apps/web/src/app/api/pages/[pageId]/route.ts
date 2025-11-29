@@ -121,6 +121,8 @@ async function syncMentions(sourcePageId: string, content: unknown, tx: Transact
 }
 
 // Helper function for recursive trashing
+// Note: Tasks linked to trashed pages are NOT deleted - they remain linked
+// and are filtered out in TaskListView queries. This allows restore to work.
 async function recursivelyTrash(pageId: string, tx: TransactionType | DatabaseType) {
     const children = await tx.select({ id: pages.id }).from(pages).where(eq(pages.parentId, pageId));
 

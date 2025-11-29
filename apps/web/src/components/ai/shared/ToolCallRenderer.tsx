@@ -61,10 +61,8 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
   // Task management tools - render with TodoListMessage components
   const taskManagementTools = [
     'create_task_list',
-    'update_task_status',
-    'add_task',
+    'update_task',
     'get_task_list',
-    'resume_task_list'
   ];
 
   if (taskManagementTools.includes(toolName)) {

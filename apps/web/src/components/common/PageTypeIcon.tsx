@@ -6,7 +6,8 @@ import {
   Sparkles,
   Palette,
   FileIcon,
-  Table
+  Table,
+  CheckSquare
 } from 'lucide-react';
 import { PageType, getPageTypeIconName } from '@pagespace/lib/client-safe';
 
@@ -24,6 +25,7 @@ const iconMap = {
   Palette,
   FileIcon,
   Table,
+  CheckSquare,
 } as const;
 
 export function PageTypeIcon({ type, className }: PageTypeIconProps) {

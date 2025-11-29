@@ -14,7 +14,7 @@ const loggers = browserLoggers;
 export type PageOperation = 'created' | 'updated' | 'moved' | 'deleted' | 'restored' | 'trashed' | 'content-updated';
 export type DriveOperation = 'created' | 'updated' | 'deleted';
 export type DriveMemberOperation = 'member_added' | 'member_role_changed' | 'member_removed';
-export type TaskOperation = 'task_list_created' | 'task_added' | 'task_updated' | 'task_completed';
+export type TaskOperation = 'task_list_created' | 'task_added' | 'task_updated' | 'task_completed' | 'task_deleted' | 'tasks_reordered';
 export type UsageOperation = 'updated';
 
 export interface PageEventPayload {
@@ -46,6 +46,7 @@ export interface TaskEventPayload {
   type: TaskOperation;
   taskId?: string;
   taskListId?: string;
+  pageId?: string;
   userId: string;
   data: {
     [key: string]: unknown;

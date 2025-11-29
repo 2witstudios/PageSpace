@@ -25,8 +25,7 @@ const WRITE_TOOLS = new Set([
   'update_agent_config',
   // Task operations
   'create_task_list',
-  'add_task',
-  'update_task_status',
+  'update_task',
 ]);
 
 /**
@@ -67,7 +66,6 @@ export function getToolsSummary(isReadOnly: boolean): {
     'list_agents',
     'multi_drive_list_agents',
     'get_task_list',
-    'resume_task_list',
     // Search tools
     'regex_search',
     'glob_search',
