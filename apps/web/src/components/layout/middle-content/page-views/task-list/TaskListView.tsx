@@ -22,7 +22,6 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
   Select,
@@ -43,8 +42,6 @@ import {
   MoreHorizontal,
   Pencil,
   Trash2,
-  Calendar,
-  User,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { AssigneeSelect } from './AssigneeSelect';
@@ -309,23 +306,6 @@ export default function TaskListView({ page }: TaskListViewProps) {
     } catch {
       toast.error('Failed to update due date');
     }
-  };
-
-  // Format due date
-  const formatDueDate = (dateStr: string | null) => {
-    if (!dateStr) return null;
-    const date = new Date(dateStr);
-    const now = new Date();
-    const diffDays = Math.ceil((date.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-
-    const formatted = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-
-    if (diffDays < 0) {
-      return { text: formatted, className: 'text-red-600 font-medium' };
-    } else if (diffDays <= 3) {
-      return { text: formatted, className: 'text-amber-600' };
-    }
-    return { text: formatted, className: 'text-muted-foreground' };
   };
 
   // Stats
