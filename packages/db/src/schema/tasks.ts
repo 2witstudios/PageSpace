@@ -29,12 +29,15 @@ export const taskLists = pgTable('task_lists', {
 
 /**
  * Task Items - Individual tasks within a task list
+ * For page-based task lists, each task has a linked document page (pageId)
+ * For conversation-based task lists, description field is used instead
  */
 export const taskItems = pgTable('task_items', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   taskListId: text('taskListId').notNull().references(() => taskLists.id, { onDelete: 'cascade' }),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
   assigneeId: text('assigneeId').references(() => users.id, { onDelete: 'set null' }),
+  pageId: text('pageId').references(() => pages.id, { onDelete: 'cascade' }),
   title: text('title').notNull(),
   description: text('description'),
   status: text('status', { enum: ['pending', 'in_progress', 'completed', 'blocked'] }).notNull().default('pending'),
@@ -50,6 +53,7 @@ export const taskItems = pgTable('task_items', {
     taskListIdx: index('task_items_task_list_id_idx').on(table.taskListId),
     taskListStatusIdx: index('task_items_task_list_status_idx').on(table.taskListId, table.status),
     assigneeIdx: index('task_items_assignee_id_idx').on(table.assigneeId),
+    pageIdx: index('task_items_page_id_idx').on(table.pageId),
   };
 });
 
@@ -83,5 +87,9 @@ export const taskItemsRelations = relations(taskItems, ({ one }) => ({
     fields: [taskItems.assigneeId],
     references: [users.id],
     relationName: 'assignee',
+  }),
+  page: one(pages, {
+    fields: [taskItems.pageId],
+    references: [pages.id],
   }),
 }));
