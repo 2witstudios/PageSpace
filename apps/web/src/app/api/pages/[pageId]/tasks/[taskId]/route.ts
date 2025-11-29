@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
-import { db, taskItems, taskLists, eq, and } from '@pagespace/db';
+import { db, taskItems, taskLists, pages, eq, and } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/server';
-import { broadcastTaskEvent } from '@/lib/websocket/socket-utils';
+import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket/socket-utils';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -97,11 +97,29 @@ export async function PATCH(
     updates.position = position;
   }
 
-  // Update task
-  const [updatedTask] = await db.update(taskItems)
-    .set(updates)
-    .where(eq(taskItems.id, taskId))
-    .returning();
+  // Get task list page for driveId (needed for page broadcasts)
+  const taskListPage = await db.query.pages.findFirst({
+    where: eq(pages.id, pageId),
+    columns: { driveId: true },
+  });
+
+  // Update task and sync title to linked page if needed
+  const [updatedTask] = await db.transaction(async (tx) => {
+    // Update the task
+    const [task] = await tx.update(taskItems)
+      .set(updates)
+      .where(eq(taskItems.id, taskId))
+      .returning();
+
+    // If title changed and task has a linked page, update the page title too
+    if (updates.title && existingTask.pageId) {
+      await tx.update(pages)
+        .set({ title: updates.title, updatedAt: new Date() })
+        .where(eq(pages.id, existingTask.pageId));
+    }
+
+    return [task];
+  });
 
   // Fetch with relations
   const taskWithRelations = await db.query.taskItems.findFirst({
@@ -128,22 +146,39 @@ export async function PATCH(
     return NextResponse.json({ error: 'Task not found after update' }, { status: 404 });
   }
 
-  // Broadcast task update
-  await broadcastTaskEvent({
-    type: 'task_updated',
-    taskId,
-    taskListId: taskList.id,
-    userId,
-    pageId,
-    data: taskWithRelations,
-  });
+  // Broadcast events
+  const broadcasts: Promise<void>[] = [
+    broadcastTaskEvent({
+      type: 'task_updated',
+      taskId,
+      taskListId: taskList.id,
+      userId,
+      pageId,
+      data: taskWithRelations,
+    }),
+  ];
+
+  // If title changed and task has a linked page, broadcast page update
+  if (updates.title && existingTask.pageId && taskListPage) {
+    broadcasts.push(
+      broadcastPageEvent(
+        createPageEventPayload(taskListPage.driveId, existingTask.pageId, 'updated', {
+          title: updates.title,
+        }),
+      ),
+    );
+  }
+
+  await Promise.all(broadcasts);
 
   return NextResponse.json(taskWithRelations);
 }
 
 /**
  * DELETE /api/pages/[pageId]/tasks/[taskId]
- * Delete a task
+ * "Delete" a task by trashing its linked page
+ * The task record remains but is filtered out in queries (page.isTrashed = true)
+ * Restoring the page will restore the task to the list
  */
 export async function DELETE(
   req: Request,
@@ -162,6 +197,12 @@ export async function DELETE(
       error: 'You need edit permission to delete tasks',
     }, { status: 403 });
   }
+
+  // Get task list page for driveId (needed for page broadcasts)
+  const taskListPage = await db.query.pages.findFirst({
+    where: eq(pages.id, pageId),
+    columns: { driveId: true },
+  });
 
   // Verify task belongs to this page's task list
   const taskList = await db.query.taskLists.findFirst({
@@ -183,18 +224,54 @@ export async function DELETE(
     return NextResponse.json({ error: 'Task not found' }, { status: 404 });
   }
 
-  // Delete task
-  await db.delete(taskItems).where(eq(taskItems.id, taskId));
+  const linkedPageId = existingTask.pageId;
 
-  // Broadcast task deletion
-  await broadcastTaskEvent({
-    type: 'task_deleted',
-    taskId,
-    taskListId: taskList.id,
-    userId,
-    pageId,
-    data: { id: taskId },
-  });
+  if (!linkedPageId) {
+    // Task without a page (conversation-based) - delete the task record directly
+    await db.delete(taskItems).where(eq(taskItems.id, taskId));
+
+    await broadcastTaskEvent({
+      type: 'task_deleted',
+      taskId,
+      taskListId: taskList.id,
+      userId,
+      pageId,
+      data: { id: taskId },
+    });
+
+    return NextResponse.json({ success: true });
+  }
+
+  // Task has a linked page - trash the page (task remains but is filtered out)
+  await db.update(pages)
+    .set({ isTrashed: true, trashedAt: new Date() })
+    .where(eq(pages.id, linkedPageId));
+
+  // Broadcast events
+  const broadcasts: Promise<void>[] = [
+    broadcastTaskEvent({
+      type: 'task_deleted',
+      taskId,
+      taskListId: taskList.id,
+      userId,
+      pageId,
+      data: { id: taskId },
+    }),
+  ];
+
+  // Broadcast page trashed event for sidebar update
+  if (taskListPage) {
+    broadcasts.push(
+      broadcastPageEvent(
+        createPageEventPayload(taskListPage.driveId, linkedPageId, 'trashed', {
+          title: existingTask.title,
+          parentId: pageId,
+        }),
+      ),
+    );
+  }
+
+  await Promise.all(broadcasts);
 
   return NextResponse.json({ success: true });
 }

@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
-import { db, taskLists, taskItems, eq, and, asc, desc } from '@pagespace/db';
+import { db, taskLists, taskItems, pages, eq, and, asc, desc } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
-import { broadcastTaskEvent } from '@/lib/websocket/socket-utils';
+import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket/socket-utils';
+import { getDefaultContent, PageType } from '@pagespace/lib';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -59,12 +60,31 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   const sortOrder = url.searchParams.get('sortOrder') || 'asc';
 
   // Build query - always sort by position for consistent ordering
+  // Include pageId for navigation to task pages
+  // Include page relation to filter out tasks with trashed pages
   const query = db.query.taskItems.findMany({
     where: and(
       eq(taskItems.taskListId, taskList.id),
       status ? eq(taskItems.status, status as 'pending' | 'in_progress' | 'completed' | 'blocked') : undefined,
       assigneeId ? eq(taskItems.assigneeId, assigneeId) : undefined,
     ),
+    columns: {
+      id: true,
+      taskListId: true,
+      userId: true,
+      assigneeId: true,
+      pageId: true,
+      title: true,
+      description: true,
+      status: true,
+      priority: true,
+      position: true,
+      dueDate: true,
+      metadata: true,
+      completedAt: true,
+      createdAt: true,
+      updatedAt: true,
+    },
     with: {
       assignee: {
         columns: {
@@ -80,6 +100,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
           image: true,
         },
       },
+      page: {
+        columns: {
+          id: true,
+          isTrashed: true,
+        },
+      },
     },
     orderBy: sortOrder === 'desc'
       ? [desc(taskItems.position)]
@@ -87,6 +113,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   });
 
   let tasks = await query;
+
+  // Filter out tasks whose pages are trashed
+  // Tasks without a pageId (conversation-based) are always included
+  tasks = tasks.filter(task => !task.page?.isTrashed);
 
   // Apply search filter in memory (for title/description)
   if (search) {
@@ -111,7 +141,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 
 /**
  * POST /api/pages/[pageId]/tasks
- * Create a new task
+ * Create a new task with an auto-created document page
  */
 export async function POST(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
   const { pageId } = await params;
@@ -135,32 +165,67 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     return NextResponse.json({ error: 'Title is required' }, { status: 400 });
   }
 
+  // Get the task list page to find its driveId
+  const taskListPage = await db.query.pages.findFirst({
+    where: eq(pages.id, pageId),
+    columns: { id: true, driveId: true },
+  });
+
+  if (!taskListPage) {
+    return NextResponse.json({ error: 'Task list page not found' }, { status: 404 });
+  }
+
   // Get or create task list
   const taskList = await getOrCreateTaskListForPage(pageId, userId);
 
-  // Get highest position for new task
-  const lastTask = await db.query.taskItems.findFirst({
-    where: eq(taskItems.taskListId, taskList.id),
-    orderBy: [desc(taskItems.position)],
+  // Get highest position for new task and new page
+  const [lastTask, lastChildPage] = await Promise.all([
+    db.query.taskItems.findFirst({
+      where: eq(taskItems.taskListId, taskList.id),
+      orderBy: [desc(taskItems.position)],
+    }),
+    db.query.pages.findFirst({
+      where: and(eq(pages.parentId, pageId), eq(pages.isTrashed, false)),
+      orderBy: [desc(pages.position)],
+    }),
+  ]);
+
+  const nextTaskPosition = (lastTask?.position ?? -1) + 1;
+  const nextPagePosition = (lastChildPage?.position ?? 0) + 1;
+
+  // Create task and its document page in a transaction
+  const result = await db.transaction(async (tx) => {
+    // Create document page for the task
+    const [taskPage] = await tx.insert(pages).values({
+      title: title.trim(),
+      type: 'DOCUMENT',
+      parentId: pageId, // Child of the task list page
+      driveId: taskListPage.driveId,
+      content: getDefaultContent(PageType.DOCUMENT),
+      position: nextPagePosition,
+      updatedAt: new Date(),
+    }).returning();
+
+    // Create task with link to the page
+    const [newTask] = await tx.insert(taskItems).values({
+      taskListId: taskList.id,
+      userId,
+      pageId: taskPage.id, // Link to the document page
+      title: title.trim(),
+      description: description?.trim() || null,
+      status: status || 'pending',
+      priority: priority || 'medium',
+      assigneeId: assigneeId || null,
+      dueDate: dueDate ? new Date(dueDate) : null,
+      position: nextTaskPosition,
+    }).returning();
+
+    return { task: newTask, page: taskPage };
   });
-  const nextPosition = (lastTask?.position ?? -1) + 1;
 
-  // Create task
-  const [newTask] = await db.insert(taskItems).values({
-    taskListId: taskList.id,
-    userId,
-    title: title.trim(),
-    description: description?.trim() || null,
-    status: status || 'pending',
-    priority: priority || 'medium',
-    assigneeId: assigneeId || null,
-    dueDate: dueDate ? new Date(dueDate) : null,
-    position: nextPosition,
-  }).returning();
-
-  // Fetch with relations
+  // Fetch task with relations
   const taskWithRelations = await db.query.taskItems.findFirst({
-    where: eq(taskItems.id, newTask.id),
+    where: eq(taskItems.id, result.task.id),
     with: {
       assignee: {
         columns: {
@@ -179,18 +244,33 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     },
   });
 
-  // Broadcast task creation
-  await broadcastTaskEvent({
-    type: 'task_added',
-    taskId: newTask.id,
-    taskListId: taskList.id,
-    userId,
-    pageId,
-    data: {
-      title: newTask.title,
-      priority: newTask.priority,
-    },
-  });
+  // Broadcast events
+  await Promise.all([
+    // Broadcast task creation
+    broadcastTaskEvent({
+      type: 'task_added',
+      taskId: result.task.id,
+      taskListId: taskList.id,
+      userId,
+      pageId,
+      data: {
+        title: result.task.title,
+        priority: result.task.priority,
+        pageId: result.page.id,
+      },
+    }),
+    // Broadcast page creation for sidebar tree update
+    broadcastPageEvent(
+      createPageEventPayload(taskListPage.driveId, result.page.id, 'created', {
+        parentId: pageId,
+        title: result.task.title,
+        type: 'DOCUMENT',
+      }),
+    ),
+  ]);
 
-  return NextResponse.json(taskWithRelations, { status: 201 });
+  return NextResponse.json({
+    ...taskWithRelations,
+    pageId: result.page.id,
+  }, { status: 201 });
 }
