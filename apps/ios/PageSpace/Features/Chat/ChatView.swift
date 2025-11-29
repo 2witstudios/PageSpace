@@ -264,35 +264,16 @@ struct ChatView: View {
                     }
                     .padding()
                 }
+                .defaultScrollAnchor(.bottom)  // Simple: always show newest content
                 .scrollDismissesKeyboard(.immediately)
-                // Consolidated onChange handler - replaces duplicate handlers
+                // Handle pagination anchor - restore scroll position after prepending older messages
                 .onChange(of: conversationManager.messageState.count) { oldCount, newCount in
-                    // Only auto-scroll if scroll state allows it
                     guard conversationManager.scrollState.shouldScrollOnNewContent else { return }
-
-                    // Handle pagination anchor - restore scroll position after prepending older messages
                     if let anchorId = conversationManager.scrollState.paginationAnchorId {
                         withAnimation {
                             proxy.scrollTo(anchorId, anchor: .top)
                         }
                         conversationManager.scrollState.clearPaginationAnchor()
-                    }
-                    // NOTE: No user message scroll here - causes blank screen due to LazyVStack
-                    // The streaming onChange handler manages scroll when AI response starts
-                }
-                .onChange(of: conversationManager.streamingState.streamingMessage?.id) { _, streamingId in
-                    // Only auto-scroll if scroll state allows it
-                    guard conversationManager.scrollState.shouldScrollOnNewContent else { return }
-
-                    if streamingId != nil {
-                        // When streaming starts, ensure the last user message is at the top
-                        // This gives maximum viewport space for the AI response
-                        if let lastUserMessage = conversationManager.messageState.messages.last(where: { $0.role == .user }) {
-                            withAnimation {
-                                proxy.scrollTo(lastUserMessage.id, anchor: .top)
-                            }
-                        }
-                        // No fallback - if there's no user message, don't force scroll
                     }
                 }
             }
