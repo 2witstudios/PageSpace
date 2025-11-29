@@ -44,7 +44,7 @@ export const pageReadTools = {
             // Add type indicator emoji
             const typeIndicator = getPageTypeEmoji(page.type as PageType);
             
-            pages.push(`${typeIndicator} ID: ${page.id} Path: ${currentPath}`);
+            pages.push(`${typeIndicator} [${page.type}] ID: ${page.id} Path: ${currentPath}`);
             
             // Recursively add children
             pages.push(...buildPageList(page.id, currentPath));

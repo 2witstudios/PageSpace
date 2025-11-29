@@ -2250,3 +2250,67 @@ export function sanitizeSheetData(sheet: SheetData): SheetData {
 export function isSheetType(type: PageType): boolean {
   return type === PageType.SHEET;
 }
+
+/**
+ * Cell update interface for batch editing
+ */
+export interface SheetCellUpdate {
+  address: string;
+  value: string;
+}
+
+/**
+ * Validates a cell address is in valid A1 format
+ */
+export function isValidCellAddress(address: string): boolean {
+  const normalized = address.trim().toUpperCase();
+  return cellRegex.test(normalized);
+}
+
+/**
+ * Update multiple cells in a SheetData object
+ * Returns a new SheetData with the updated cells
+ */
+export function updateSheetCells(
+  sheet: SheetData,
+  updates: SheetCellUpdate[]
+): SheetData {
+  // Clone the cells to avoid mutation
+  const newCells = cloneCells(sheet.cells);
+  let maxRow = sheet.rowCount;
+  let maxColumn = sheet.columnCount;
+
+  for (const update of updates) {
+    const normalizedAddress = update.address.trim().toUpperCase();
+
+    // Validate cell address
+    if (!cellRegex.test(normalizedAddress)) {
+      throw new Error(`Invalid cell address: "${update.address}". Use A1-style format (e.g., A1, B2, AA100).`);
+    }
+
+    // Update the cell
+    const trimmedValue = update.value.trim();
+    if (trimmedValue === '') {
+      // Empty value - remove the cell
+      delete newCells[normalizedAddress];
+    } else {
+      newCells[normalizedAddress] = update.value;
+    }
+
+    // Track max row/column to potentially expand the sheet
+    try {
+      const { row, column } = decodeCellAddress(normalizedAddress);
+      maxRow = Math.max(maxRow, row + 1);
+      maxColumn = Math.max(maxColumn, column + 1);
+    } catch {
+      // If decode fails, we already validated above, so this shouldn't happen
+    }
+  }
+
+  return {
+    ...sheet,
+    rowCount: maxRow,
+    columnCount: maxColumn,
+    cells: newCells,
+  };
+}
