@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { io, Socket } from 'socket.io-client';
+import { getCookieValue } from '@/lib/utils/get-cookie-value';
 
 interface SocketStore {
   socket: Socket | null;
@@ -50,12 +51,9 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
         } catch (error) {
           console.error('🚨 Failed to get JWT from Electron for Socket.IO:', error);
         }
-      } else if (typeof document !== 'undefined') {
-        // Web: Extract from cookies
-        accessToken = document.cookie
-          .split('; ')
-          .find(row => row.startsWith('accessToken='))
-          ?.split('=')[1];
+      } else {
+        // Web: Extract from cookies using safe utility
+        accessToken = getCookieValue('accessToken') ?? undefined;
       }
 
       // Only log when actually creating a new connection

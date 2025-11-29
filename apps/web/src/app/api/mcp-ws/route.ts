@@ -32,6 +32,7 @@ import {
   isToolExecuteMessage,
   isToolResultMessage,
 } from '@/lib/websocket/ws-message-schemas';
+import { getCookieValueFromHeader } from '@/lib/utils/get-cookie-value';
 
 // Initialize cleanup interval on module load
 // This prevents memory leaks from stale connections
@@ -119,10 +120,7 @@ export async function UPGRADE(
 
   // SECURITY CHECK 4: Extract JWT and set expiry timer for automatic disconnection
   const cookieHeader = request.headers.get('cookie');
-  const accessToken = cookieHeader
-    ?.split(';')
-    .find((c) => c.trim().startsWith('accessToken='))
-    ?.split('=')[1];
+  const accessToken = getCookieValueFromHeader(cookieHeader, 'accessToken');
 
   if (accessToken) {
     const payload = await decodeToken(accessToken);
@@ -224,13 +222,10 @@ export async function UPGRADE(
       // Handle challenge response (must be first message after connection)
       if (isChallengeResponseMessage(message)) {
         // Get session ID from JWT for challenge verification
-        const cookieHeader = request.headers.get('cookie');
-        const accessToken = cookieHeader
-          ?.split(';')
-          .find((c) => c.trim().startsWith('accessToken='))
-          ?.split('=')[1];
+        const challengeCookieHeader = request.headers.get('cookie');
+        const challengeAccessToken = getCookieValueFromHeader(challengeCookieHeader, 'accessToken');
 
-        if (!accessToken) {
+        if (!challengeAccessToken) {
           logSecurityEvent('ws_challenge_failed_no_token', {
             userId,
             severity: 'error',
@@ -240,7 +235,7 @@ export async function UPGRADE(
         }
 
         // Decode JWT to get session ID
-        decodeToken(accessToken).then((payload) => {
+        decodeToken(challengeAccessToken).then((payload) => {
           if (!payload) {
             logSecurityEvent('ws_challenge_failed_invalid_token', {
               userId,

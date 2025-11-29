@@ -4,28 +4,11 @@
  */
 
 import { post } from '@/lib/auth/auth-fetch';
+import { getCookieValue } from '@/lib/utils/get-cookie-value';
 
 const ACTIVE_CONVERSATION_COOKIE = 'activeConversationId';
 const ACTIVE_AGENT_COOKIE = 'activeAgentId';
 const COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
-
-/**
- * Get a cookie value by name (client-side only)
- * Properly handles values containing '=' and URL-encoded characters
- */
-const getCookieValue = (name: string): string | null => {
-  if (typeof document === 'undefined') return null;
-  try {
-    const cookies = document.cookie.split(';');
-    const cookie = cookies.find(c => c.trim().startsWith(`${name}=`));
-    if (!cookie) return null;
-    // Use substring to handle values containing '=' characters
-    const value = cookie.substring(cookie.indexOf('=') + 1);
-    return decodeURIComponent(value);
-  } catch {
-    return null;
-  }
-};
 
 /**
  * Client-side utilities for conversation state

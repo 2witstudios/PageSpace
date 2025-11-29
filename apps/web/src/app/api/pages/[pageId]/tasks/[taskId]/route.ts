@@ -2,8 +2,7 @@ import { NextResponse } from 'next/server';
 import { db, taskItems, taskLists, eq, and } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/server';
-import { loggers } from '@pagespace/lib/server';
-import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
+import { broadcastTaskEvent } from '@/lib/websocket/socket-utils';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -125,24 +124,19 @@ export async function PATCH(
     },
   });
 
-  // Broadcast task update
-  if (process.env.INTERNAL_REALTIME_URL) {
-    try {
-      const requestBody = JSON.stringify({
-        pageId,
-        event: 'task_updated',
-        payload: taskWithRelations,
-      });
-
-      await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
-        method: 'POST',
-        headers: createSignedBroadcastHeaders(requestBody),
-        body: requestBody,
-      });
-    } catch (error) {
-      loggers.realtime.error('Failed to broadcast task update:', error as Error);
-    }
+  if (!taskWithRelations) {
+    return NextResponse.json({ error: 'Task not found after update' }, { status: 404 });
   }
+
+  // Broadcast task update
+  await broadcastTaskEvent({
+    type: 'task_updated',
+    taskId,
+    taskListId: taskList.id,
+    userId,
+    pageId,
+    data: taskWithRelations,
+  });
 
   return NextResponse.json(taskWithRelations);
 }
@@ -193,23 +187,14 @@ export async function DELETE(
   await db.delete(taskItems).where(eq(taskItems.id, taskId));
 
   // Broadcast task deletion
-  if (process.env.INTERNAL_REALTIME_URL) {
-    try {
-      const requestBody = JSON.stringify({
-        pageId,
-        event: 'task_deleted',
-        payload: { id: taskId },
-      });
-
-      await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
-        method: 'POST',
-        headers: createSignedBroadcastHeaders(requestBody),
-        body: requestBody,
-      });
-    } catch (error) {
-      loggers.realtime.error('Failed to broadcast task deletion:', error as Error);
-    }
-  }
+  await broadcastTaskEvent({
+    type: 'task_deleted',
+    taskId,
+    taskListId: taskList.id,
+    userId,
+    pageId,
+    data: { id: taskId },
+  });
 
   return NextResponse.json({ success: true });
 }

@@ -2,8 +2,7 @@ import { NextResponse } from 'next/server';
 import { db, taskItems, taskLists, eq } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/server';
-import { loggers } from '@pagespace/lib/server';
-import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
+import { broadcastTaskEvent } from '@/lib/websocket/socket-utils';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -64,23 +63,14 @@ export async function PATCH(
   });
 
   // Broadcast reorder event
-  if (process.env.INTERNAL_REALTIME_URL) {
-    try {
-      const requestBody = JSON.stringify({
-        pageId,
-        event: 'tasks_reordered',
-        payload: { tasks },
-      });
-
-      await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
-        method: 'POST',
-        headers: createSignedBroadcastHeaders(requestBody),
-        body: requestBody,
-      });
-    } catch (error) {
-      loggers.realtime.error('Failed to broadcast task reorder:', error as Error);
-    }
-  }
+  await broadcastTaskEvent({
+    type: 'tasks_reordered',
+    taskId: tasks[0]?.id ?? '',
+    taskListId: taskList.id,
+    userId,
+    pageId,
+    data: { tasks },
+  });
 
   return NextResponse.json({ success: true });
 }

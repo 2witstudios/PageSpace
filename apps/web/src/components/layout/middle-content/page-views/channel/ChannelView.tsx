@@ -14,6 +14,7 @@ import ChatInput, { ChatInputRef } from '@/components/messages/ChatInput';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Lock } from 'lucide-react';
 import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { getCookieValue } from '@/lib/utils/get-cookie-value';
 
 interface ChannelViewProps {
   page: TreePage;
@@ -46,10 +47,7 @@ export default function ChannelView({ page }: ChannelViewProps) {
     const socketUrl = process.env.NEXT_PUBLIC_REALTIME_URL;
     const socket = io(socketUrl, {
       auth: {
-        token: document.cookie
-          .split('; ')
-          .find(row => row.startsWith('accessToken='))
-          ?.split('=')[1],
+        token: getCookieValue('accessToken'),
       },
     });
     socketRef.current = socket;

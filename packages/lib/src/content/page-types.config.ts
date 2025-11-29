@@ -20,7 +20,7 @@ export interface PageTypeConfig {
   type: PageType;
   displayName: string;
   description: string;
-  iconName: 'Folder' | 'FileText' | 'MessageSquare' | 'Sparkles' | 'Palette' | 'FileIcon' | 'Table';
+  iconName: 'Folder' | 'FileText' | 'MessageSquare' | 'Sparkles' | 'Palette' | 'FileIcon' | 'Table' | 'CheckSquare';
   emoji: string;
   capabilities: PageTypeCapabilities;
   defaultContent: () => any;
@@ -167,6 +167,25 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     uiComponent: 'SheetView',
     layoutViewType: 'document',
   },
+  [PageType.TASK_LIST]: {
+    type: PageType.TASK_LIST,
+    displayName: 'Task List',
+    description: 'Table-based task management',
+    iconName: 'CheckSquare',
+    emoji: '✅',
+    capabilities: {
+      canHaveChildren: false,
+      canAcceptUploads: false,
+      canBeConverted: false,
+      supportsRealtime: true,
+      supportsVersioning: false,
+      supportsAI: true,
+    },
+    defaultContent: () => JSON.stringify({}),
+    allowedChildTypes: [],
+    uiComponent: 'TaskListView',
+    layoutViewType: 'document',
+  },
 };
 
 // Helper functions
@@ -260,4 +279,8 @@ export function isChannelPage(type: PageType): boolean {
 
 export function isAIChatPage(type: PageType): boolean {
   return type === PageType.AI_CHAT;
+}
+
+export function isTaskListPage(type: PageType): boolean {
+  return type === PageType.TASK_LIST;
 }

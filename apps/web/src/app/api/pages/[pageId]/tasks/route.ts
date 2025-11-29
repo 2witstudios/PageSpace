@@ -2,8 +2,7 @@ import { NextResponse } from 'next/server';
 import { db, taskLists, taskItems, eq, and, asc, desc } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
-import { loggers } from '@pagespace/lib/server';
-import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
+import { broadcastTaskEvent } from '@/lib/websocket/socket-utils';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -104,6 +103,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       title: taskList.title,
       description: taskList.description,
       status: taskList.status,
+      updatedAt: taskList.updatedAt,
     },
     tasks,
   });
@@ -180,23 +180,17 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   });
 
   // Broadcast task creation
-  if (process.env.INTERNAL_REALTIME_URL) {
-    try {
-      const requestBody = JSON.stringify({
-        pageId,
-        event: 'task_created',
-        payload: taskWithRelations,
-      });
-
-      await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
-        method: 'POST',
-        headers: createSignedBroadcastHeaders(requestBody),
-        body: requestBody,
-      });
-    } catch (error) {
-      loggers.realtime.error('Failed to broadcast task creation:', error as Error);
-    }
-  }
+  await broadcastTaskEvent({
+    type: 'task_added',
+    taskId: newTask.id,
+    taskListId: taskList.id,
+    userId,
+    pageId,
+    data: {
+      title: newTask.title,
+      priority: newTask.priority,
+    },
+  });
 
   return NextResponse.json(taskWithRelations, { status: 201 });
 }

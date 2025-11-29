@@ -15,6 +15,7 @@ import { getPageTypeComponent } from '@pagespace/lib/client-safe';
 import CanvasPageView from './page-views/canvas/CanvasPageView';
 import GlobalAssistantView from './page-views/dashboard/GlobalAssistantView';
 import SheetView from './page-views/sheet/SheetView';
+import TaskListView from './page-views/task-list/TaskListView';
 
 
 const PageContent = ({ pageId }: { pageId: string | null }) => {
@@ -46,6 +47,7 @@ const PageContent = ({ pageId }: { pageId: string | null }) => {
     CanvasPageView,
     FileViewer,
     SheetView,
+    TaskListView,
   };
   
   const componentName = getPageTypeComponent(page.type);

@@ -54,6 +54,9 @@ export const taskItems = pgTable('task_items', {
 });
 
 // Relations
+// Note: The reverse relation (pages.taskList) would cause circular dependency,
+// so pages → taskLists lookups are handled through direct queries:
+// const taskList = await db.query.taskLists.findFirst({ where: eq(taskLists.pageId, pageId) });
 export const taskListsRelations = relations(taskLists, ({ one, many }) => ({
   user: one(users, {
     fields: [taskLists.userId],
