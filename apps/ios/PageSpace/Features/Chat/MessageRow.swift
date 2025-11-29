@@ -31,6 +31,7 @@ struct MessageRow: View {
     let onEdit: (() -> Void)?
     let onRetry: (() -> Void)?
     let onDelete: (() -> Void)?
+    var isStreaming: Bool = false
 
     /// Groups consecutive tool parts of the same type together
     private var groupedParts: [GroupedPart] {
@@ -67,62 +68,73 @@ struct MessageRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(groupedParts) { groupedPart in
-                    GroupedPartView(groupedPart: groupedPart, role: message.role)
-                }
+            if isInitialLoading {
+                LoadingIndicator()
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(groupedParts) { groupedPart in
+                        GroupedPartView(groupedPart: groupedPart, role: message.role)
+                    }
 
-                HStack(spacing: 6) {
-                    Text(message.createdAt, style: .time)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
+                    if isStreaming && message.role == .assistant {
+                        LoadingIndicator()
+                            .padding(.top, 4)
+                    }
 
-                    if message.editedAt != nil {
-                        Text("Edited")
+                    HStack(spacing: 6) {
+                        Text(message.createdAt, style: .time)
                             .font(.caption2)
                             .foregroundColor(.secondary)
-                    }
 
-                    Spacer(minLength: 8)
+                        if message.editedAt != nil {
+                            Text("Edited")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
 
-                    if let onRetry = onRetry {
-                        actionButton(
-                            systemImage: "arrow.clockwise",
-                            accessibilityLabel: "Retry response",
-                            action: onRetry
-                        )
-                    }
+                        Spacer(minLength: 8)
 
-                    if let onDelete = onDelete {
-                        actionButton(
-                            systemImage: "trash",
-                            accessibilityLabel: "Delete message",
-                            action: onDelete
-                        )
-                    }
+                        if let onRetry = onRetry {
+                            actionButton(
+                                systemImage: "arrow.clockwise",
+                                accessibilityLabel: "Retry response",
+                                action: onRetry
+                            )
+                        }
 
-                    if let onEdit = onEdit {
-                        actionButton(
-                            systemImage: "square.and.pencil",
-                            accessibilityLabel: "Edit message",
-                            action: onEdit
-                        )
-                    }
+                        if let onDelete = onDelete {
+                            actionButton(
+                                systemImage: "trash",
+                                accessibilityLabel: "Delete message",
+                                action: onDelete
+                            )
+                        }
 
-                    if let onCopy = onCopy {
-                        actionButton(
-                            systemImage: "doc.on.doc",
-                            accessibilityLabel: "Copy message",
-                            action: onCopy
-                        )
+                        if let onEdit = onEdit {
+                            actionButton(
+                                systemImage: "square.and.pencil",
+                                accessibilityLabel: "Edit message",
+                                action: onEdit
+                            )
+                        }
+
+                        if let onCopy = onCopy {
+                            actionButton(
+                                systemImage: "doc.on.doc",
+                                accessibilityLabel: "Copy message",
+                                action: onCopy
+                            )
+                        }
                     }
+                    .padding(.top, hasActions ? 4 : 0)
                 }
-                .padding(.top, hasActions ? 4 : 0)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(messageBackground)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(messageBackground)
         }
     }
 
@@ -137,6 +149,21 @@ struct MessageRow: View {
 
     private var hasActions: Bool {
         onCopy != nil || onEdit != nil || onRetry != nil || onDelete != nil
+    }
+
+    private var isContentEmpty: Bool {
+        if message.parts.isEmpty { return true }
+        // Check if all text parts are empty and no tools
+        return message.parts.allSatisfy { part in
+            if case .text(let textPart) = part {
+                return textPart.text.isEmpty
+            }
+            return false // Tool parts are considered content
+        }
+    }
+
+    private var isInitialLoading: Bool {
+        message.role == .assistant && isStreaming && isContentEmpty
     }
 
     private func actionButton(systemImage: String, accessibilityLabel: String, action: @escaping () -> Void) -> some View {

@@ -24,6 +24,10 @@ final class ScrollState {
     /// Whether scroll updates should be suppressed (during rapid updates)
     private(set) var scrollSuppressed: Bool = false
 
+    /// Message ID to anchor scroll position during pagination
+    /// When set, scroll will restore to this message after prepending older messages
+    private(set) var paginationAnchorId: String?
+
     /// Threshold in points for considering "near bottom"
     let bottomThreshold: CGFloat
 
@@ -92,6 +96,18 @@ final class ScrollState {
         shouldAutoScroll = true
         isNearBottom = true
         scrollSuppressed = false
+        paginationAnchorId = nil
+    }
+
+    /// Set pagination anchor to preserve scroll position when loading older messages
+    /// Call this before prepending older messages to the array
+    func setPaginationAnchor(_ id: String?) {
+        paginationAnchorId = id
+    }
+
+    /// Clear pagination anchor after scroll position has been restored
+    func clearPaginationAnchor() {
+        paginationAnchorId = nil
     }
 
     /// Check if auto-scroll should occur for new content

@@ -315,6 +315,11 @@ class ConversationManager: ObservableObject {
         paginationState.setLoading(true)
 
         do {
+            // Set anchor BEFORE loading - this is the first message currently visible
+            // After prepending, we'll scroll back to this message to preserve position
+            let anchorId = messageState.messages.first?.id
+            scrollState.setPaginationAnchor(anchorId)
+
             let response = try await aiService.loadMessages(
                 conversationId: conversationId,
                 limit: paginationState.limit,
@@ -334,6 +339,8 @@ class ConversationManager: ObservableObject {
 
             print("✅ Loaded \(response.messages.count) more messages (total: \(messageState.count))")
         } catch {
+            // Clear anchor on error to prevent stale state
+            scrollState.clearPaginationAnchor()
             paginationState.setError("Failed to load more messages: \(error.localizedDescription)")
             print("❌ Failed to load more messages: \(error)")
         }
