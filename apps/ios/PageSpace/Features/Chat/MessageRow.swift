@@ -73,68 +73,78 @@ struct MessageRow: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
             } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(groupedParts) { groupedPart in
-                        GroupedPartView(groupedPart: groupedPart, role: message.role)
-                    }
-
-                    if isStreaming && message.role == .assistant {
-                        LoadingIndicator()
-                            .padding(.top, 4)
-                    }
-
-                    HStack(spacing: 6) {
-                        Text(message.createdAt, style: .time)
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-
-                        if message.editedAt != nil {
-                            Text("Edited")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                        }
-
-                        Spacer(minLength: 8)
-
-                        if let onRetry = onRetry {
-                            actionButton(
-                                systemImage: "arrow.clockwise",
-                                accessibilityLabel: "Retry response",
-                                action: onRetry
-                            )
-                        }
-
-                        if let onDelete = onDelete {
-                            actionButton(
-                                systemImage: "trash",
-                                accessibilityLabel: "Delete message",
-                                action: onDelete
-                            )
-                        }
-
-                        if let onEdit = onEdit {
-                            actionButton(
-                                systemImage: "square.and.pencil",
-                                accessibilityLabel: "Edit message",
-                                action: onEdit
-                            )
-                        }
-
-                        if let onCopy = onCopy {
-                            actionButton(
-                                systemImage: "doc.on.doc",
-                                accessibilityLabel: "Copy message",
-                                action: onCopy
-                            )
-                        }
-                    }
-                    .padding(.top, hasActions ? 4 : 0)
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(messageBackground)
+                messageContent
             }
+        }
+    }
+
+    @ViewBuilder
+    private var messageContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(groupedParts) { groupedPart in
+                GroupedPartView(groupedPart: groupedPart, role: message.role)
+            }
+
+            if isStreaming && message.role == .assistant {
+                LoadingIndicator()
+                    .padding(.top, 4)
+            }
+
+            HStack(spacing: 6) {
+                Text(message.createdAt, style: .time)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+
+                if message.editedAt != nil {
+                    Text("Edited")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+
+                Spacer(minLength: 8)
+
+                if let onRetry = onRetry {
+                    actionButton(
+                        systemImage: "arrow.clockwise",
+                        accessibilityLabel: "Retry response",
+                        action: onRetry
+                    )
+                }
+
+                if let onDelete = onDelete {
+                    actionButton(
+                        systemImage: "trash",
+                        accessibilityLabel: "Delete message",
+                        action: onDelete
+                    )
+                }
+
+                if let onEdit = onEdit {
+                    actionButton(
+                        systemImage: "square.and.pencil",
+                        accessibilityLabel: "Edit message",
+                        action: onEdit
+                    )
+                }
+
+                if let onCopy = onCopy {
+                    actionButton(
+                        systemImage: "doc.on.doc",
+                        accessibilityLabel: "Copy message",
+                        action: onCopy
+                    )
+                }
+            }
+            .padding(.top, hasActions ? 4 : 0)
+        }
+        .padding(.horizontal, message.role == .user ? 12 : 4)
+        .padding(.vertical, message.role == .user ? 10 : 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(messageBackground)
+        .applyIf(message.role == .user) { view in
+            view
+                .cornerRadius(DesignTokens.CornerRadius.large)
+                .padding(.horizontal, 4)
         }
     }
 
@@ -143,7 +153,7 @@ struct MessageRow: View {
         if message.role == .user {
             DesignTokens.Colors.primary.opacity(0.08)
         } else {
-            DesignTokens.Colors.assistantMessageBackground
+            Color.clear  // No background for AI messages - Claude-style
         }
     }
 
@@ -185,11 +195,16 @@ struct GroupedPartView: View {
     let groupedPart: GroupedPart
     let role: MessageRole
 
+    /// Use larger font for assistant messages, standard for user
+    private var markdownTheme: Theme {
+        role == .assistant ? .pagespaceAssistant : .pagespace
+    }
+
     var body: some View {
         switch groupedPart {
         case .text(let textPart):
             Markdown(textPart.text)
-                .markdownTheme(.pagespace)
+                .markdownTheme(markdownTheme)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -727,6 +742,136 @@ extension Theme {
                 )
                 .markdownMargin(top: .em(0.5), bottom: .em(0.8))
         }
+
+    /// Assistant theme with larger font (17pt) for better readability
+    static let pagespaceAssistant = Theme()
+        .text {
+            ForegroundColor(.primary)
+            FontSize(17)
+        }
+        .code {
+            FontFamilyVariant(.monospaced)
+            FontSize(.em(0.94))
+            BackgroundColor(Color(.systemGray5).opacity(0.8))
+        }
+        .strong {
+            FontWeight(.semibold)
+        }
+        .emphasis {
+            FontStyle(.italic)
+        }
+        .link {
+            ForegroundColor(DesignTokens.Colors.primary)
+            UnderlineStyle(.single)
+        }
+        .heading1 { configuration in
+            VStack(alignment: .leading, spacing: 0) {
+                configuration.label
+                    .markdownMargin(top: .zero, bottom: .em(0.3))
+                    .markdownTextStyle {
+                        FontWeight(.bold)
+                        FontSize(.em(2))
+                    }
+                Divider()
+            }
+        }
+        .heading2 { configuration in
+            configuration.label
+                .markdownMargin(top: .em(0.5), bottom: .em(0.3))
+                .markdownTextStyle {
+                    FontWeight(.bold)
+                    FontSize(.em(1.5))
+                }
+        }
+        .heading3 { configuration in
+            configuration.label
+                .markdownMargin(top: .em(0.5), bottom: .em(0.3))
+                .markdownTextStyle {
+                    FontWeight(.semibold)
+                    FontSize(.em(1.25))
+                }
+        }
+        .heading4 { configuration in
+            configuration.label
+                .markdownMargin(top: .em(0.5), bottom: .em(0.3))
+                .markdownTextStyle {
+                    FontWeight(.semibold)
+                    FontSize(.em(1.1))
+                }
+        }
+        .heading5 { configuration in
+            configuration.label
+                .markdownMargin(top: .em(0.5), bottom: .em(0.3))
+                .markdownTextStyle {
+                    FontWeight(.semibold)
+                    FontSize(.em(1))
+                }
+        }
+        .heading6 { configuration in
+            configuration.label
+                .markdownMargin(top: .em(0.5), bottom: .em(0.3))
+                .markdownTextStyle {
+                    FontWeight(.semibold)
+                    FontSize(.em(0.9))
+                    ForegroundColor(.secondary)
+                }
+        }
+        .paragraph { configuration in
+            configuration.label
+                .markdownMargin(top: .zero, bottom: .em(0.8))
+        }
+        .listItem { configuration in
+            configuration.label
+                .markdownMargin(top: .em(0.2))
+        }
+        .codeBlock { configuration in
+            ScrollView(.horizontal, showsIndicators: false) {
+                configuration.label
+                    .padding(12)
+                    .markdownTextStyle {
+                        FontFamilyVariant(.monospaced)
+                        FontSize(.em(0.88))
+                    }
+            }
+            .background(Color(.systemGray5))
+            .cornerRadius(8)
+            .markdownMargin(top: .em(0.5), bottom: .em(0.8))
+        }
+        .blockquote { configuration in
+            HStack(spacing: 0) {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color.secondary.opacity(0.5))
+                    .frame(width: 4)
+                configuration.label
+                    .markdownTextStyle {
+                        ForegroundColor(.secondary)
+                    }
+                    .padding(.leading, 12)
+            }
+            .markdownMargin(top: .em(0.5), bottom: .em(0.8))
+        }
+        .table { configuration in
+            configuration.label
+                .markdownTableBorderStyle(.init(color: .secondary.opacity(0.3)))
+                .markdownTableBackgroundStyle(
+                    .alternatingRows(Color(.systemGray6).opacity(0.5), Color.clear)
+                )
+                .markdownMargin(top: .em(0.5), bottom: .em(0.8))
+        }
+}
+
+// MARK: - View Extension for Conditional Modifiers
+
+extension View {
+    /// Apply a modifier only when the condition is true
+    @ViewBuilder
+    func applyIf<Content: View>(_ condition: Bool, transform: (Self) -> Content) -> some View {
+        if condition {
+            transform(self)
+        } else {
+            self
+        }
+    }
 }
 
 #Preview {
