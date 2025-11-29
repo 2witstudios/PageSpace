@@ -154,24 +154,6 @@ export function canConvertToType(fromType: PageType, toType: PageType): boolean 
 }
 
 /**
- * Validates if a parent can have a child of a specific type
- */
-export function canParentHaveChildType(
-  parentType: PageType,
-  childType: PageType
-): boolean {
-  const config = getPageTypeConfig(parentType);
-  
-  // Check if parent can have children at all
-  if (!config.capabilities.canHaveChildren) {
-    return false;
-  }
-  
-  // Check if this specific child type is allowed
-  return config.allowedChildTypes.includes(childType);
-}
-
-/**
  * Validates page update data
  */
 export function validatePageUpdate(

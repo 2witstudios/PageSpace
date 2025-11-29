@@ -3,7 +3,6 @@ import {
   validatePageCreation,
   validatePageUpdate,
   canConvertToType,
-  canParentHaveChildType,
   getValidationRules,
   validateAIChatTools
 } from '../content/page-type-validators'
@@ -344,53 +343,6 @@ describe('page-type-validators', () => {
     })
   })
 
-  describe('canParentHaveChildType', () => {
-    it('allows FOLDER to have DOCUMENT child', () => {
-      const canHave = canParentHaveChildType(PageType.FOLDER, PageType.DOCUMENT)
-      expect(canHave).toBe(true)
-    })
-
-    it('allows FOLDER to have FOLDER child', () => {
-      const canHave = canParentHaveChildType(PageType.FOLDER, PageType.FOLDER)
-      expect(canHave).toBe(true)
-    })
-
-    it('allows FOLDER to have AI_CHAT child', () => {
-      const canHave = canParentHaveChildType(PageType.FOLDER, PageType.AI_CHAT)
-      expect(canHave).toBe(true)
-    })
-
-    it('disallows DOCUMENT to have children', () => {
-      const canHave = canParentHaveChildType(PageType.DOCUMENT, PageType.DOCUMENT)
-      expect(canHave).toBe(false)
-    })
-
-    it('disallows AI_CHAT to have children', () => {
-      const canHave = canParentHaveChildType(PageType.AI_CHAT, PageType.DOCUMENT)
-      expect(canHave).toBe(false)
-    })
-
-    it('disallows FILE to have children', () => {
-      const canHave = canParentHaveChildType(PageType.FILE, PageType.DOCUMENT)
-      expect(canHave).toBe(false)
-    })
-
-    it('disallows CHANNEL to have children', () => {
-      const canHave = canParentHaveChildType(PageType.CHANNEL, PageType.DOCUMENT)
-      expect(canHave).toBe(false)
-    })
-
-    it('disallows CANVAS to have children', () => {
-      const canHave = canParentHaveChildType(PageType.CANVAS, PageType.DOCUMENT)
-      expect(canHave).toBe(false)
-    })
-
-    it('disallows SHEET to have children', () => {
-      const canHave = canParentHaveChildType(PageType.SHEET, PageType.DOCUMENT)
-      expect(canHave).toBe(false)
-    })
-  })
-
   describe('getValidationRules', () => {
     it('returns validation rules for DOCUMENT', () => {
       const rules = getValidationRules(PageType.DOCUMENT)
@@ -412,14 +364,15 @@ describe('page-type-validators', () => {
     it('returns capabilities for FOLDER', () => {
       const rules = getValidationRules(PageType.FOLDER)
 
-      expect(rules.capabilities).toHaveProperty('canHaveChildren')
-      expect(rules.capabilities.canHaveChildren).toBe(true)
+      expect(rules.capabilities).toHaveProperty('canAcceptUploads')
+      expect(rules.capabilities.canAcceptUploads).toBe(true)
     })
 
     it('returns capabilities for FILE', () => {
       const rules = getValidationRules(PageType.FILE)
 
-      expect(rules.capabilities.canHaveChildren).toBe(false)
+      expect(rules.capabilities).toHaveProperty('canBeConverted')
+      expect(rules.capabilities.canBeConverted).toBe(true)
     })
   })
 
