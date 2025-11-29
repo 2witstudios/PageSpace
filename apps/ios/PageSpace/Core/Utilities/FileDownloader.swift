@@ -31,18 +31,23 @@ actor FileDownloader {
         }
 
         do {
+            // Fetch auth tokens on MainActor
+            let (token, csrfToken) = await MainActor.run {
+                (AuthManager.shared.getToken(), AuthManager.shared.getCSRFToken())
+            }
+
             // SECURITY: Create authenticated URLRequest
             var request = URLRequest(url: url)
             request.httpMethod = "GET"
 
             // Add authentication headers
-            if let token = AuthManager.shared.getToken() {
+            if let token = token {
                 request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             } else {
                 logger.warning("No JWT token available for file download")
             }
 
-            if let csrfToken = AuthManager.shared.getCSRFToken() {
+            if let csrfToken = csrfToken {
                 request.setValue(csrfToken, forHTTPHeaderField: "X-CSRF-Token")
             }
 

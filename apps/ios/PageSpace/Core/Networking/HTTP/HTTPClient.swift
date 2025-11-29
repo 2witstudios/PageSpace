@@ -63,8 +63,13 @@ class HTTPClient {
         var request = URLRequest(url: url)
         request.httpMethod = method.rawValue
 
+        // Fetch auth tokens on MainActor
+        let (token, csrfToken) = await MainActor.run {
+            (AuthManager.shared.getToken(), AuthManager.shared.getCSRFToken())
+        }
+
         // Add authentication headers
-        addAuthHeaders(to: &request, method: method)
+        addAuthHeaders(to: &request, token: token, csrfToken: csrfToken)
 
         // Add body if present
         if let body = body {
@@ -145,14 +150,14 @@ class HTTPClient {
         return url
     }
 
-    func addAuthHeaders(to request: inout URLRequest, method: HTTPMethod) {
+    func addAuthHeaders(to request: inout URLRequest, token: String?, csrfToken: String?) {
         // Add JWT token
-        if let token = AuthManager.shared.getToken() {
+        if let token = token {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
 
         // Add CSRF token for all authenticated requests (backend requires it for GET too)
-        if let csrfToken = AuthManager.shared.getCSRFToken() {
+        if let csrfToken = csrfToken {
             request.setValue(csrfToken, forHTTPHeaderField: "X-CSRF-Token")
         }
     }

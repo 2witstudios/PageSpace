@@ -84,7 +84,7 @@ class AuthManager: ObservableObject {
 
     // MARK: - Device Metadata Helpers
 
-    nonisolated private func ensureDeviceIdentifier() -> String {
+    private func ensureDeviceIdentifier() -> String {
         if let stored = loadDeviceIdentifier() {
             return stored
         }
@@ -98,11 +98,11 @@ class AuthManager: ObservableObject {
         return identifier
     }
 
-    nonisolated private func currentDeviceName() -> String {
+    private func currentDeviceName() -> String {
         UIDevice.current.name
     }
 
-    nonisolated private func currentUserAgent() -> String {
+    private func currentUserAgent() -> String {
         let device = UIDevice.current
         return "\(device.model)/\(device.systemName) \(device.systemVersion)"
     }

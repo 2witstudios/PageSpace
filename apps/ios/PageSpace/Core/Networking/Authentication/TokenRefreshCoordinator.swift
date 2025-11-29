@@ -36,8 +36,13 @@ actor TokenRefreshCoordinator {
             try await AuthManager.shared.refreshToken()
 
             // Verify we have a VALID (not expired) token
-            if let token = AuthManager.shared.getToken(),
-               !AuthManager.shared.isTokenExpired(token) {
+            let tokenValid = await MainActor.run {
+                if let token = AuthManager.shared.getToken() {
+                    return !AuthManager.shared.isTokenExpired(token)
+                }
+                return false
+            }
+            if tokenValid {
                 print("✅ Token refresh successful - token is valid")
                 resumeWaitingRequests(with: true)
                 return true

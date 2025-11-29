@@ -48,8 +48,13 @@ class SSEStreamHandler {
             request.httpMethod = method.rawValue
             request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
 
+            // Fetch auth tokens on MainActor
+            let (token, csrfToken) = await MainActor.run {
+                (AuthManager.shared.getToken(), AuthManager.shared.getCSRFToken())
+            }
+
             // Add authentication
-            HTTPClient.shared.addAuthHeaders(to: &request, method: method)
+            HTTPClient.shared.addAuthHeaders(to: &request, token: token, csrfToken: csrfToken)
 
             // Add body
             if let body = body {
