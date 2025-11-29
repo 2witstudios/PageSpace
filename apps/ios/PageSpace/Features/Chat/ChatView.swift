@@ -576,7 +576,7 @@ private struct MessageEditSheet: View {
         @StateObject private var agentService = AgentService.shared
 
         var body: some View {
-            NavigationView {
+            NavigationStack {
                 ChatView(isSidebarOpen: $isSidebarOpen)
                     .environmentObject(conversationManager)
                     .environmentObject(agentService)

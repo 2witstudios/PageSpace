@@ -32,7 +32,7 @@ struct ProviderModelPicker: View {
     }
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             Form {
                 Section {
                     // Provider Picker - Only show configured providers
