@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import useSWR, { mutate } from 'swr';
 import { io, Socket } from 'socket.io-client';
@@ -42,6 +43,7 @@ import {
   MoreHorizontal,
   Pencil,
   Trash2,
+  FileText,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { AssigneeSelect } from './AssigneeSelect';
@@ -52,6 +54,7 @@ interface TaskItem {
   taskListId: string;
   userId: string;
   assigneeId: string | null;
+  pageId: string | null;
   title: string;
   description: string | null;
   status: 'pending' | 'in_progress' | 'completed' | 'blocked';
@@ -108,6 +111,7 @@ const fetcher = async (url: string) => {
 };
 
 export default function TaskListView({ page }: TaskListViewProps) {
+  const router = useRouter();
   const { user } = useAuth();
   const { permissions } = usePermissions(page.id);
   const canEdit = permissions?.canEdit || false;
@@ -157,20 +161,20 @@ export default function TaskListView({ page }: TaskListViewProps) {
 
     socket.emit('join_page', page.id);
 
-    // Handle task events
-    socket.on('task_created', () => {
+    // Handle task events (event names match backend broadcast format: task:${operation})
+    socket.on('task:task_added', () => {
       mutate(`/api/pages/${page.id}/tasks`);
     });
 
-    socket.on('task_updated', () => {
+    socket.on('task:task_updated', () => {
       mutate(`/api/pages/${page.id}/tasks`);
     });
 
-    socket.on('task_deleted', () => {
+    socket.on('task:task_deleted', () => {
       mutate(`/api/pages/${page.id}/tasks`);
     });
 
-    socket.on('tasks_reordered', () => {
+    socket.on('task:tasks_reordered', () => {
       mutate(`/api/pages/${page.id}/tasks`);
     });
 
@@ -421,15 +425,24 @@ export default function TaskListView({ page }: TaskListViewProps) {
                       className="h-8"
                     />
                   ) : (
-                    <span
-                      className={cn(
-                        'cursor-pointer hover:text-primary',
-                        task.status === 'completed' && 'line-through'
+                    <div className="flex items-center gap-2">
+                      {task.pageId && (
+                        <FileText className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                       )}
-                      onClick={() => handleStartEdit(task)}
-                    >
-                      {task.title}
-                    </span>
+                      <span
+                        className={cn(
+                          'cursor-pointer hover:text-primary hover:underline',
+                          task.status === 'completed' && 'line-through'
+                        )}
+                        onClick={() => {
+                          if (task.pageId) {
+                            router.push(`/dashboard/${page.driveId}/${task.pageId}`);
+                          }
+                        }}
+                      >
+                        {task.title}
+                      </span>
+                    </div>
                   )}
                 </TableCell>
 
@@ -510,13 +523,20 @@ export default function TaskListView({ page }: TaskListViewProps) {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => handleStartEdit(task)}>
+                        {task.pageId && (
+                          <DropdownMenuItem onClick={() => router.push(`/dashboard/${page.driveId}/${task.pageId}`)}>
+                            <FileText className="h-4 w-4 mr-2" />
+                            Open
+                          </DropdownMenuItem>
+                        )}
+                        <DropdownMenuItem onClick={() => handleStartEdit(task)} disabled={!canEdit}>
                           <Pencil className="h-4 w-4 mr-2" />
-                          Edit
+                          Rename
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           onClick={() => handleDeleteTask(task.id)}
                           className="text-destructive"
+                          disabled={!canEdit}
                         >
                           <Trash2 className="h-4 w-4 mr-2" />
                           Delete
