@@ -1,9 +1,10 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { db, taskLists, taskItems, eq, and, desc, asc, ne, ilike, sql } from '@pagespace/db';
+import { db, taskLists, taskItems, pages, eq, and, desc, asc, ne, sql } from '@pagespace/db';
 import { ToolExecutionContext } from '../core/types';
-import { broadcastTaskEvent } from '@/lib/websocket/socket-utils';
+import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket/socket-utils';
 import { canUserEditPage } from '@pagespace/lib/server';
+import { getDefaultContent, PageType } from '@pagespace/lib';
 
 /**
  * Helper to verify page access for page-linked task lists
@@ -40,11 +41,20 @@ export const taskManagementTools = {
         throw new Error('User authentication required');
       }
 
-      // If pageId provided, verify user has edit access
+      // If pageId provided, verify user has edit access and get page info
+      let taskListPage: { id: string; driveId: string } | null = null;
       if (pageId) {
         const hasAccess = await verifyPageAccess(userId, pageId);
         if (!hasAccess) {
           throw new Error('You do not have permission to create tasks on this page');
+        }
+        // Get the task list page to find its driveId for creating child pages
+        const page = await db.query.pages.findFirst({
+          where: eq(pages.id, pageId),
+          columns: { id: true, driveId: true },
+        });
+        if (page) {
+          taskListPage = page;
         }
       }
 
@@ -64,42 +74,112 @@ export const taskManagementTools = {
             },
           }).returning();
 
-          // Batch create individual tasks
-          const taskValues = tasks.map((task, i) => ({
-            taskListId: taskList.id,
-            userId,
-            title: task.title,
-            description: task.description,
-            status: 'pending' as const,
-            priority: task.priority,
-            assigneeId: task.assigneeId || null,
-            dueDate: task.dueDate ? new Date(task.dueDate) : null,
-            position: i,
-            metadata: {
-              estimatedMinutes: task.estimatedMinutes,
-            },
-          }));
+          // For page-based task lists, create document pages for each task
+          const createdTasks: typeof taskItems.$inferSelect[] = [];
+          const createdPages: { taskIndex: number; page: typeof pages.$inferSelect }[] = [];
 
-          const createdTasks = taskValues.length > 0
-            ? await tx.insert(taskItems).values(taskValues).returning()
-            : [];
+          if (taskListPage && tasks.length > 0) {
+            // Get next page position
+            const lastChildPage = await tx.query.pages.findFirst({
+              where: and(eq(pages.parentId, pageId!), eq(pages.isTrashed, false)),
+              orderBy: [desc(pages.position)],
+            });
+            let nextPagePosition = (lastChildPage?.position ?? 0) + 1;
 
-          return { taskList, createdTasks };
+            // Create document page and task for each task
+            for (let i = 0; i < tasks.length; i++) {
+              const task = tasks[i];
+
+              // Create document page for the task
+              const [taskPage] = await tx.insert(pages).values({
+                title: task.title,
+                type: 'DOCUMENT',
+                parentId: pageId!,
+                driveId: taskListPage.driveId,
+                content: getDefaultContent(PageType.DOCUMENT),
+                position: nextPagePosition++,
+                updatedAt: new Date(),
+              }).returning();
+
+              createdPages.push({ taskIndex: i, page: taskPage });
+
+              // Create task with link to the page
+              const [newTask] = await tx.insert(taskItems).values({
+                taskListId: taskList.id,
+                userId,
+                pageId: taskPage.id,
+                title: task.title,
+                description: task.description,
+                status: 'pending' as const,
+                priority: task.priority,
+                assigneeId: task.assigneeId || null,
+                dueDate: task.dueDate ? new Date(task.dueDate) : null,
+                position: i,
+                metadata: {
+                  estimatedMinutes: task.estimatedMinutes,
+                },
+              }).returning();
+
+              createdTasks.push(newTask);
+            }
+          } else {
+            // Conversation-based task list: no document pages
+            const taskValues = tasks.map((task, i) => ({
+              taskListId: taskList.id,
+              userId,
+              title: task.title,
+              description: task.description,
+              status: 'pending' as const,
+              priority: task.priority,
+              assigneeId: task.assigneeId || null,
+              dueDate: task.dueDate ? new Date(task.dueDate) : null,
+              position: i,
+              metadata: {
+                estimatedMinutes: task.estimatedMinutes,
+              },
+            }));
+
+            if (taskValues.length > 0) {
+              const tasks = await tx.insert(taskItems).values(taskValues).returning();
+              createdTasks.push(...tasks);
+            }
+          }
+
+          return { taskList, createdTasks, createdPages };
         });
 
-        const { taskList, createdTasks } = result;
+        const { taskList, createdTasks, createdPages } = result;
 
         // Broadcast task creation event
-        await broadcastTaskEvent({
-          type: 'task_list_created',
-          taskListId: taskList.id,
-          userId,
-          pageId: pageId || undefined,
-          data: {
-            title: taskList.title,
-            taskCount: createdTasks.length,
-          },
-        });
+        const broadcasts: Promise<void>[] = [
+          broadcastTaskEvent({
+            type: 'task_list_created',
+            taskListId: taskList.id,
+            userId,
+            pageId: pageId || undefined,
+            data: {
+              title: taskList.title,
+              taskCount: createdTasks.length,
+            },
+          }),
+        ];
+
+        // Broadcast page creation events for page-based task lists
+        if (taskListPage && createdPages.length > 0) {
+          for (const { page } of createdPages) {
+            broadcasts.push(
+              broadcastPageEvent(
+                createPageEventPayload(taskListPage.driveId, page.id, 'created', {
+                  parentId: pageId,
+                  title: page.title,
+                  type: 'DOCUMENT',
+                }),
+              ),
+            );
+          }
+        }
+
+        await Promise.all(broadcasts);
 
         return {
           success: true,
@@ -122,9 +202,10 @@ export const taskManagementTools = {
             dueDate: t.dueDate,
             position: t.position,
             completedAt: t.completedAt,
+            pageId: t.pageId,
             metadata: t.metadata,
           })),
-          summary: `Created task list "${title}" with ${createdTasks.length} task${createdTasks.length === 1 ? '' : 's'}`,
+          summary: `Created task list "${title}" with ${createdTasks.length} task${createdTasks.length === 1 ? '' : 's'}${pageId ? ' (with document pages)' : ''}`,
           stats: {
             totalTasks: createdTasks.length,
             priorities: {
@@ -249,6 +330,7 @@ export const taskManagementTools = {
             position: t.position,
             completedAt: t.completedAt,
             dueDate: t.dueDate,
+            pageId: t.pageId,
             estimatedMinutes: (t.metadata as { estimatedMinutes?: number })?.estimatedMinutes,
           })),
           progress: {
@@ -419,11 +501,20 @@ export const taskManagementTools = {
             throw new Error('Task list not found');
           }
 
-          // Verify permissions
+          // Verify permissions and get task list page info
+          let taskListPage: { id: string; driveId: string } | null = null;
           if (taskList.pageId) {
             const hasAccess = await verifyPageAccess(userId, taskList.pageId);
             if (!hasAccess) {
               throw new Error('You do not have permission to add tasks to this page');
+            }
+            // Get the task list page to find its driveId for creating child pages
+            const page = await db.query.pages.findFirst({
+              where: eq(pages.id, taskList.pageId),
+              columns: { id: true, driveId: true },
+            });
+            if (page) {
+              taskListPage = page;
             }
           } else if (taskList.userId !== userId) {
             throw new Error('You do not have permission to add tasks to this list');
@@ -436,38 +527,104 @@ export const taskManagementTools = {
             .where(eq(taskItems.taskListId, taskListId!))
             .orderBy(desc(taskItems.position));
 
-          const nextPosition = position ?? (existingTasks.length > 0 ? (existingTasks[0]?.position || 0) + 1 : 0);
+          const nextTaskPosition = position ?? (existingTasks.length > 0 ? (existingTasks[0]?.position || 0) + 1 : 0);
 
-          // Create the task
-          const [newTask] = await db.insert(taskItems).values({
-            taskListId: taskListId!,
-            userId,
-            title: title!,
-            description: description || null,
-            status: status || 'pending',
-            priority: priority || 'medium',
-            assigneeId: assigneeId || null,
-            dueDate: dueDate ? new Date(dueDate) : null,
-            position: nextPosition,
-            metadata: {
-              createdAt: new Date().toISOString(),
-              note,
-            },
-          }).returning();
+          let createdPage: typeof pages.$inferSelect | null = null;
 
-          resultTask = newTask;
+          // For page-based task lists, create a document page for the task
+          if (taskListPage) {
+            // Get next page position
+            const lastChildPage = await db.query.pages.findFirst({
+              where: and(eq(pages.parentId, taskList.pageId!), eq(pages.isTrashed, false)),
+              orderBy: [desc(pages.position)],
+            });
+            const nextPagePosition = (lastChildPage?.position ?? 0) + 1;
 
-          // Broadcast creation event
-          await broadcastTaskEvent({
-            type: 'task_added',
-            taskId: newTask.id,
-            taskListId: taskListId!,
-            userId,
-            pageId: taskList.pageId || undefined,
-            data: { title: newTask.title, priority: newTask.priority },
-          });
+            // Create document page and task in transaction
+            const result = await db.transaction(async (tx) => {
+              // Create document page for the task
+              const [taskPage] = await tx.insert(pages).values({
+                title: title!,
+                type: 'DOCUMENT',
+                parentId: taskList!.pageId!,
+                driveId: taskListPage!.driveId,
+                content: getDefaultContent(PageType.DOCUMENT),
+                position: nextPagePosition,
+                updatedAt: new Date(),
+              }).returning();
 
-          message = `Created task "${newTask.title}"`;
+              // Create task with link to the page
+              const [newTask] = await tx.insert(taskItems).values({
+                taskListId: taskListId!,
+                userId,
+                pageId: taskPage.id,
+                title: title!,
+                description: description || null,
+                status: status || 'pending',
+                priority: priority || 'medium',
+                assigneeId: assigneeId || null,
+                dueDate: dueDate ? new Date(dueDate) : null,
+                position: nextTaskPosition,
+                metadata: {
+                  createdAt: new Date().toISOString(),
+                  note,
+                },
+              }).returning();
+
+              return { task: newTask, page: taskPage };
+            });
+
+            resultTask = result.task;
+            createdPage = result.page;
+          } else {
+            // Conversation-based task list: no document page
+            const [newTask] = await db.insert(taskItems).values({
+              taskListId: taskListId!,
+              userId,
+              title: title!,
+              description: description || null,
+              status: status || 'pending',
+              priority: priority || 'medium',
+              assigneeId: assigneeId || null,
+              dueDate: dueDate ? new Date(dueDate) : null,
+              position: nextTaskPosition,
+              metadata: {
+                createdAt: new Date().toISOString(),
+                note,
+              },
+            }).returning();
+
+            resultTask = newTask;
+          }
+
+          // Broadcast creation events
+          const broadcasts: Promise<void>[] = [
+            broadcastTaskEvent({
+              type: 'task_added',
+              taskId: resultTask.id,
+              taskListId: taskListId!,
+              userId,
+              pageId: taskList.pageId || undefined,
+              data: { title: resultTask.title, priority: resultTask.priority, pageId: createdPage?.id },
+            }),
+          ];
+
+          // Broadcast page creation for page-based task lists
+          if (taskListPage && createdPage) {
+            broadcasts.push(
+              broadcastPageEvent(
+                createPageEventPayload(taskListPage.driveId, createdPage.id, 'created', {
+                  parentId: taskList.pageId,
+                  title: createdPage.title,
+                  type: 'DOCUMENT',
+                }),
+              ),
+            );
+          }
+
+          await Promise.all(broadcasts);
+
+          message = `Created task "${resultTask.title}"${createdPage ? ' with linked document page' : ''}`;
         }
 
         // Get all tasks for response
@@ -495,6 +652,7 @@ export const taskManagementTools = {
             dueDate: resultTask.dueDate,
             position: resultTask.position,
             completedAt: resultTask.completedAt,
+            pageId: resultTask.pageId,
           },
           taskList: refreshedTaskList ? {
             id: refreshedTaskList.id,
@@ -513,142 +671,13 @@ export const taskManagementTools = {
             dueDate: t.dueDate,
             position: t.position,
             completedAt: t.completedAt,
+            pageId: t.pageId,
           })),
           message,
         };
       } catch (error) {
         console.error('Error in update_task:', error);
         throw new Error(`Failed to ${isUpdate ? 'update' : 'create'} task: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    },
-  }),
-
-  /**
-   * Resume a previous task list from another conversation
-   */
-  resume_task_list: tool({
-    description: 'Resume working on a task list from a previous conversation. Allows continuation of complex operations across sessions.',
-    inputSchema: z.object({
-      taskListId: z.string().optional().describe('Specific task list ID to resume'),
-      searchTitle: z.string().optional().describe('Search for task list by title if ID not known'),
-      pageId: z.string().optional().describe('Resume task list for a specific TASK_LIST page'),
-    }),
-    execute: async ({ taskListId, searchTitle, pageId }, { experimental_context: context }) => {
-      const userId = (context as ToolExecutionContext)?.userId;
-      const currentConversationId = (context as ToolExecutionContext)?.conversationId;
-
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
-
-      try {
-        let taskList;
-
-        if (taskListId) {
-          // Get specific task list
-          taskList = await db.query.taskLists.findFirst({
-            where: eq(taskLists.id, taskListId),
-          });
-        } else if (pageId) {
-          // Get task list for a specific page
-          taskList = await db.query.taskLists.findFirst({
-            where: eq(taskLists.pageId, pageId),
-          });
-        } else if (searchTitle) {
-          // Search by title
-          taskList = await db.query.taskLists.findFirst({
-            where: and(
-              eq(taskLists.userId, userId),
-              ilike(taskLists.title, `%${searchTitle}%`)
-            ),
-            orderBy: desc(taskLists.updatedAt),
-          });
-        } else {
-          // Get most recent incomplete task list
-          taskList = await db.query.taskLists.findFirst({
-            where: and(
-              eq(taskLists.userId, userId),
-              ne(taskLists.status, 'completed')
-            ),
-            orderBy: desc(taskLists.updatedAt),
-          });
-        }
-
-        if (!taskList) {
-          throw new Error('No matching task list found');
-        }
-
-        // Update conversation ID if this is a conversation-linked list
-        if (!taskList.pageId && currentConversationId && taskList.conversationId !== currentConversationId) {
-          await db
-            .update(taskLists)
-            .set({
-              conversationId: currentConversationId,
-              metadata: {
-                ...(typeof taskList.metadata === 'object' && taskList.metadata !== null ? taskList.metadata : {}),
-                resumedAt: new Date().toISOString(),
-                resumedFrom: taskList.conversationId || null,
-              },
-            })
-            .where(eq(taskLists.id, taskList.id));
-        }
-
-        // Get current status
-        const tasks = await db
-          .select()
-          .from(taskItems)
-          .where(eq(taskItems.taskListId, taskList.id))
-          .orderBy(asc(taskItems.position));
-
-        const completedTasks = tasks.filter(t => t.status === 'completed').length;
-        const pendingTasks = tasks.filter(t => t.status === 'pending');
-
-        return {
-          success: true,
-          taskList: {
-            id: taskList.id,
-            title: taskList.title,
-            description: taskList.description,
-            status: taskList.status,
-            pageId: taskList.pageId,
-            createdAt: taskList.createdAt,
-            updatedAt: taskList.updatedAt,
-          },
-          tasks: tasks.map(t => ({
-            id: t.id,
-            title: t.title,
-            description: t.description,
-            status: t.status,
-            priority: t.priority,
-            position: t.position,
-            completedAt: t.completedAt,
-            metadata: t.metadata,
-          })),
-          progress: {
-            totalTasks: tasks.length,
-            completedTasks,
-            remainingTasks: tasks.length - completedTasks,
-            nextPendingTask: pendingTasks[0] ? {
-              id: pendingTasks[0].id,
-              title: pendingTasks[0].title,
-              priority: pendingTasks[0].priority,
-            } : null,
-          },
-          message: `Resumed task list "${taskList.title}"`,
-          summary: `Resuming "${taskList.title}" - ${completedTasks}/${tasks.length} tasks completed`,
-          nextSteps: pendingTasks.length > 0 ? [
-            `Continue with next task: "${pendingTasks[0].title}"`,
-            'Use get_task_list to see full status',
-            'Use update_task as you complete tasks',
-          ] : [
-            'All tasks are completed',
-            'Consider marking the task list as complete',
-            'Review completed work',
-          ]
-        };
-      } catch (error) {
-        console.error('Error resuming task list:', error);
-        throw new Error(`Failed to resume task list: ${error instanceof Error ? error.message : String(error)}`);
       }
     },
   }),
