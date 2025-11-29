@@ -11,6 +11,7 @@ export * from './utils/enums';
 export * from './types';
 export * from './file-processing';
 export * from './services/subscription-utils';
+export * from './sheets';
 
 // OAuth utilities (server-only)
 export * from './auth/oauth-utils';

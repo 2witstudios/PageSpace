@@ -1,7 +1,18 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db, pages, drives, eq, and, desc, isNull, inArray } from '@pagespace/db';
-import { canUserEditPage, canUserDeletePage, PageType, isAIChatPage, isDocumentPage } from '@pagespace/lib/server';
+import {
+  canUserEditPage,
+  canUserDeletePage,
+  PageType,
+  isAIChatPage,
+  isDocumentPage,
+  parseSheetContent,
+  serializeSheetContent,
+  updateSheetCells,
+  isValidCellAddress,
+  isSheetType,
+} from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket/socket-utils';
 import { ToolExecutionContext } from '../core/types';
 import { pageSpaceTools } from '../core/ai-tools';
@@ -50,6 +61,21 @@ export const pageWriteTools = {
               title: page.title,
               type: page.type,
               mimeType: page.mimeType
+            }
+          };
+        }
+
+        // Check if this is a SHEET type page - use edit_sheet_cells instead
+        if (isSheetType(page.type as PageType)) {
+          return {
+            success: false,
+            error: 'Cannot use line editing on sheets',
+            message: 'Sheet pages use structured cell data. Use edit_sheet_cells tool instead for cell-level edits.',
+            suggestion: 'Use the edit_sheet_cells tool with cell addresses (A1, B2, etc.) to modify sheet content.',
+            pageInfo: {
+              pageId: page.id,
+              title: page.title,
+              type: page.type
             }
           };
         }
@@ -171,6 +197,21 @@ export const pageWriteTools = {
           };
         }
 
+        // Check if this is a SHEET type page - use edit_sheet_cells instead
+        if (isSheetType(page.type as PageType)) {
+          return {
+            success: false,
+            error: 'Cannot use line editing on sheets',
+            message: 'Sheet pages use structured cell data. Use edit_sheet_cells tool instead for cell-level edits.',
+            suggestion: 'Use the edit_sheet_cells tool with cell addresses (A1, B2, etc.) to modify sheet content.',
+            pageInfo: {
+              pageId: page.id,
+              title: page.title,
+              type: page.type
+            }
+          };
+        }
+
         // Check user permissions
         const canEdit = await canUserEditPage(userId, page.id);
         if (!canEdit) {
@@ -179,7 +220,7 @@ export const pageWriteTools = {
 
         // Split content into lines
         const lines = page.content.split('\n');
-        
+
         // Validate line number (can be 1 to lines.length + 1 for append)
         if (lineNumber < 1 || lineNumber > lines.length + 1) {
           throw new Error(`Invalid line number: ${lineNumber}. Document has ${lines.length} lines.`);
@@ -311,6 +352,16 @@ export const pageWriteTools = {
           .orderBy(desc(pages.position));
 
         const nextPosition = siblingPages.length > 0 ? siblingPages[0].position + 1 : 1;
+
+        // Validate SHEET pages cannot have content set directly
+        if (isSheetType(type as PageType) && content && content.trim() !== '') {
+          return {
+            success: false,
+            error: 'Cannot set content when creating sheets',
+            message: 'Sheet pages use structured cell data. Create the sheet first, then use edit_sheet_cells to populate cells.',
+            suggestion: 'Create the sheet without content, then use edit_sheet_cells tool with cell addresses (A1, B2, etc.) to add data.',
+          };
+        }
 
         // Validate agent configuration for AI_CHAT pages
         if (isAIChatPage(type as PageType)) {
@@ -817,6 +868,128 @@ export const pageWriteTools = {
       } catch (error) {
         console.error('Error moving page:', error);
         throw new Error(`Failed to move page from ${path}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+  }),
+
+  /**
+   * Edit cells in a sheet page
+   */
+  edit_sheet_cells: tool({
+    description: 'Edit one or more cells in a SHEET page. Use A1-style cell addresses. Supports batch updates for efficiency. Values starting with "=" are treated as formulas.',
+    inputSchema: z.object({
+      pageId: z.string().describe('The unique ID of the sheet page to edit'),
+      cells: z.array(z.object({
+        address: z.string().describe('Cell address in A1-style format (e.g., "A1", "B2", "AA100")'),
+        value: z.string().describe('Value to set in the cell. Values starting with "=" are formulas. Empty string clears the cell.'),
+      })).min(1).describe('Array of cell updates to apply'),
+    }),
+    execute: async ({ pageId, cells }, { experimental_context: context }) => {
+      const userId = (context as ToolExecutionContext)?.userId;
+      if (!userId) {
+        throw new Error('User authentication required');
+      }
+
+      try {
+        // Get the page directly by ID
+        const page = await db.query.pages.findFirst({
+          where: and(
+            eq(pages.id, pageId),
+            eq(pages.isTrashed, false)
+          ),
+        });
+
+        if (!page) {
+          throw new Error(`Page with ID "${pageId}" not found`);
+        }
+
+        // Verify this is a SHEET type page
+        if (!isSheetType(page.type as PageType)) {
+          return {
+            success: false,
+            error: 'Page is not a sheet',
+            message: `This page is a ${page.type}. Use edit_sheet_cells only on SHEET pages.`,
+            suggestion: 'Use replace_lines or insert_lines for document editing.',
+            pageInfo: {
+              pageId: page.id,
+              title: page.title,
+              type: page.type
+            }
+          };
+        }
+
+        // Check user permissions
+        const canEdit = await canUserEditPage(userId, page.id);
+        if (!canEdit) {
+          throw new Error('Insufficient permissions to edit this sheet');
+        }
+
+        // Validate all cell addresses upfront
+        const invalidAddresses = cells.filter(cell => !isValidCellAddress(cell.address));
+        if (invalidAddresses.length > 0) {
+          const examples = invalidAddresses.slice(0, 3).map(c => `"${c.address}"`).join(', ');
+          throw new Error(`Invalid cell addresses: ${examples}. Use A1-style format (e.g., A1, B2, AA100).`);
+        }
+
+        // Parse the existing sheet content
+        const sheetData = parseSheetContent(page.content);
+
+        // Apply the cell updates
+        const updatedSheet = updateSheetCells(sheetData, cells);
+
+        // Serialize back to TOML format
+        const newContent = serializeSheetContent(updatedSheet, { pageId: page.id });
+
+        // Update the page content in database
+        await db
+          .update(pages)
+          .set({
+            content: newContent,
+            updatedAt: new Date(),
+          })
+          .where(eq(pages.id, page.id));
+
+        // Broadcast content update event
+        await broadcastPageEvent(
+          createPageEventPayload(page.driveId, page.id, 'content-updated', {
+            title: page.title
+          })
+        );
+
+        // Summarize changes for response
+        const formulaCount = cells.filter(c => c.value.trim().startsWith('=')).length;
+        const valueCount = cells.filter(c => c.value.trim() !== '' && !c.value.trim().startsWith('=')).length;
+        const clearCount = cells.filter(c => c.value.trim() === '').length;
+
+        return {
+          success: true,
+          pageId: page.id,
+          title: page.title,
+          cellsUpdated: cells.length,
+          message: `Successfully updated ${cells.length} cell${cells.length === 1 ? '' : 's'} in "${page.title}"`,
+          summary: `Updated sheet "${page.title}": ${valueCount > 0 ? `${valueCount} values` : ''}${formulaCount > 0 ? `${valueCount > 0 ? ', ' : ''}${formulaCount} formulas` : ''}${clearCount > 0 ? `${valueCount + formulaCount > 0 ? ', ' : ''}${clearCount} cleared` : ''}`.trim(),
+          stats: {
+            totalCellsUpdated: cells.length,
+            valuesSet: valueCount,
+            formulasSet: formulaCount,
+            cellsCleared: clearCount,
+            sheetDimensions: {
+              rows: updatedSheet.rowCount,
+              columns: updatedSheet.columnCount
+            }
+          },
+          updatedCells: cells.map(c => ({
+            address: c.address.toUpperCase(),
+            type: c.value.trim() === '' ? 'cleared' : c.value.trim().startsWith('=') ? 'formula' : 'value'
+          })),
+          nextSteps: [
+            'Use read_page to verify the sheet content',
+            'Continue editing with additional edit_sheet_cells calls if needed'
+          ]
+        };
+      } catch (error) {
+        console.error('Error editing sheet cells:', error);
+        throw new Error(`Failed to edit sheet cells: ${error instanceof Error ? error.message : String(error)}`);
       }
     },
   }),
