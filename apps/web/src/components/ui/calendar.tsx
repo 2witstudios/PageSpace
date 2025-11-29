@@ -34,9 +34,9 @@ function Calendar({
           'h-7 w-7 bg-transparent p-0 opacity-50 hover:opacity-100 absolute right-1'
         ),
         month_grid: 'w-full border-collapse',
-        weekdays: 'flex',
+        weekdays: 'flex px-6',
         weekday: 'text-muted-foreground rounded-md w-8 font-normal text-[0.8rem]',
-        week: 'flex w-full mt-2',
+        week: 'flex w-full mt-2 px-6',
         day: 'relative p-0 text-center text-sm focus-within:relative focus-within:z-20 [&:has([aria-selected])]:bg-accent [&:has([aria-selected])]:rounded-md',
         day_button: cn(
           buttonVariants({ variant: 'ghost' }),

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { db, taskLists, taskItems, pages, eq, and, asc, desc } from '@pagespace/db';
+import { db, taskLists, taskItems, pages, eq, and, desc } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket/socket-utils';
@@ -104,12 +104,11 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
         columns: {
           id: true,
           isTrashed: true,
+          position: true,
         },
       },
     },
-    orderBy: sortOrder === 'desc'
-      ? [desc(taskItems.position)]
-      : [asc(taskItems.position)],
+    // Note: We sort in memory below to handle page.position as source of truth
   });
 
   let tasks = await query;
@@ -117,6 +116,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   // Filter out tasks whose pages are trashed
   // Tasks without a pageId (conversation-based) are always included
   tasks = tasks.filter(task => !task.page?.isTrashed);
+
+  // Sort by page.position (source of truth), fallback to task.position for conversation-based tasks
+  tasks.sort((a, b) => {
+    const posA = a.page?.position ?? a.position;
+    const posB = b.page?.position ?? b.position;
+    return sortOrder === 'desc' ? posB - posA : posA - posB;
+  });
 
   // Apply search filter in memory (for title/description)
   if (search) {

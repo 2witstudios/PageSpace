@@ -44,7 +44,23 @@ import {
   Pencil,
   Trash2,
   FileText,
+  GripVertical,
 } from 'lucide-react';
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+  arrayMove,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { cn } from '@/lib/utils';
 import { AssigneeSelect } from './AssigneeSelect';
 import { DueDatePicker } from './DueDatePicker';
@@ -73,6 +89,11 @@ interface TaskItem {
     id: string;
     name: string | null;
     image: string | null;
+  } | null;
+  page?: {
+    id: string;
+    isTrashed: boolean;
+    position: number;
   } | null;
 }
 
@@ -110,6 +131,56 @@ const fetcher = async (url: string) => {
   return res.json();
 };
 
+// Sortable row component for drag-and-drop
+interface SortableTaskRowProps {
+  task: TaskItem;
+  canEdit: boolean;
+  isCompleted: boolean;
+  children: React.ReactNode;
+}
+
+function SortableTaskRow({ task, canEdit, isCompleted, children }: SortableTaskRowProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: task.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
+  return (
+    <TableRow
+      ref={setNodeRef}
+      style={style}
+      className={cn(
+        'group',
+        isCompleted && 'opacity-60',
+        isDragging && 'opacity-50 bg-muted'
+      )}
+    >
+      {/* Drag handle */}
+      <TableCell className="w-8 px-2">
+        {canEdit && task.pageId && (
+          <button
+            {...attributes}
+            {...listeners}
+            className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground"
+          >
+            <GripVertical className="h-4 w-4" />
+          </button>
+        )}
+      </TableCell>
+      {children}
+    </TableRow>
+  );
+}
+
 export default function TaskListView({ page }: TaskListViewProps) {
   const router = useRouter();
   const { user } = useAuth();
@@ -123,6 +194,13 @@ export default function TaskListView({ page }: TaskListViewProps) {
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
   const socketRef = useRef<Socket | null>(null);
+
+  // Drag-and-drop sensors
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 8 },
+    })
+  );
 
   // Register/unregister editing state for UI refresh protection
   useEffect(() => {
@@ -312,6 +390,67 @@ export default function TaskListView({ page }: TaskListViewProps) {
     }
   };
 
+  // Handle drag end - reorder pages (page position is source of truth)
+  const handleDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id || !canEdit) return;
+
+    const tasks = filteredTasks;
+    const oldIndex = tasks.findIndex(t => t.id === active.id);
+    const newIndex = tasks.findIndex(t => t.id === over.id);
+    if (oldIndex === -1 || newIndex === -1) return;
+
+    const draggedTask = tasks[oldIndex];
+
+    // Only reorder tasks with pages
+    if (!draggedTask.pageId) {
+      toast.error('Cannot reorder tasks without pages');
+      return;
+    }
+
+    // Calculate new position (between neighbors)
+    let newPosition: number;
+    if (newIndex === 0) {
+      // Moving to first position
+      const firstTask = tasks[0];
+      newPosition = (firstTask.page?.position ?? firstTask.position) - 1;
+    } else if (newIndex === tasks.length - 1) {
+      // Moving to last position
+      const lastTask = tasks[tasks.length - 1];
+      newPosition = (lastTask.page?.position ?? lastTask.position) + 1;
+    } else {
+      // Moving between two tasks
+      const beforeTask = newIndex > oldIndex ? tasks[newIndex] : tasks[newIndex - 1];
+      const afterTask = newIndex > oldIndex ? tasks[newIndex + 1] : tasks[newIndex];
+      const beforePos = beforeTask.page?.position ?? beforeTask.position;
+      const afterPos = afterTask.page?.position ?? afterTask.position;
+      newPosition = (beforePos + afterPos) / 2;
+    }
+
+    // Optimistic update
+    const reorderedTasks = arrayMove(tasks, oldIndex, newIndex);
+    mutate(
+      `/api/pages/${page.id}/tasks`,
+      { ...data, tasks: reorderedTasks },
+      false
+    );
+
+    try {
+      // Call page reorder API (page position is source of truth)
+      await patch('/api/pages/reorder', {
+        pageId: draggedTask.pageId,
+        newParentId: page.id, // Keep same parent
+        newPosition,
+      });
+      // Refetch to get server state
+      mutate(`/api/pages/${page.id}/tasks`);
+    } catch {
+      // Revert on error
+      mutate(`/api/pages/${page.id}/tasks`);
+      toast.error('Failed to reorder task');
+    }
+  };
+
   // Stats
   const stats = {
     total: data?.tasks.length || 0,
@@ -380,35 +519,44 @@ export default function TaskListView({ page }: TaskListViewProps) {
 
       {/* Table */}
       <div className="flex-1 overflow-auto">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-10"></TableHead>
-              <TableHead className="min-w-[300px]">Task</TableHead>
-              <TableHead className="w-32">Status</TableHead>
-              <TableHead className="w-24">Priority</TableHead>
-              <TableHead className="w-32">Assignee</TableHead>
-              <TableHead className="w-28">Due Date</TableHead>
-              <TableHead className="w-16"></TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {filteredTasks.map((task) => (
-              <TableRow
-                key={task.id}
-                className={cn(
-                  'group',
-                  task.status === 'completed' && 'opacity-60'
-                )}
-              >
-                {/* Checkbox */}
-                <TableCell>
-                  <Checkbox
-                    checked={task.status === 'completed'}
-                    onCheckedChange={() => handleToggleComplete(task)}
-                    disabled={!canEdit}
-                  />
-                </TableCell>
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleDragEnd}
+        >
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-8"></TableHead>
+                <TableHead className="w-10"></TableHead>
+                <TableHead className="min-w-[300px]">Task</TableHead>
+                <TableHead className="w-32">Status</TableHead>
+                <TableHead className="w-28">Priority</TableHead>
+                <TableHead className="w-32">Assignee</TableHead>
+                <TableHead className="w-28">Due Date</TableHead>
+                <TableHead className="w-16"></TableHead>
+              </TableRow>
+            </TableHeader>
+            <SortableContext
+              items={filteredTasks.map(t => t.id)}
+              strategy={verticalListSortingStrategy}
+            >
+              <TableBody>
+                {filteredTasks.map((task) => (
+                  <SortableTaskRow
+                    key={task.id}
+                    task={task}
+                    canEdit={canEdit}
+                    isCompleted={task.status === 'completed'}
+                  >
+                    {/* Checkbox */}
+                    <TableCell>
+                      <Checkbox
+                        checked={task.status === 'completed'}
+                        onCheckedChange={() => handleToggleComplete(task)}
+                        disabled={!canEdit}
+                      />
+                    </TableCell>
 
                 {/* Title */}
                 <TableCell>
@@ -426,9 +574,6 @@ export default function TaskListView({ page }: TaskListViewProps) {
                     />
                   ) : (
                     <div className="flex items-center gap-2">
-                      {task.pageId && (
-                        <FileText className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                      )}
                       <span
                         className={cn(
                           'cursor-pointer hover:text-primary hover:underline',
@@ -477,7 +622,7 @@ export default function TaskListView({ page }: TaskListViewProps) {
                     onValueChange={(value) => handlePriorityChange(task.id, value)}
                     disabled={!canEdit}
                   >
-                    <SelectTrigger className="h-8 w-20">
+                    <SelectTrigger className="h-8 w-28">
                       <SelectValue>
                         <Badge className={cn('text-xs', PRIORITY_CONFIG[task.priority].color)}>
                           {PRIORITY_CONFIG[task.priority].label}
@@ -545,31 +690,36 @@ export default function TaskListView({ page }: TaskListViewProps) {
                     </DropdownMenu>
                   </div>
                 </TableCell>
-              </TableRow>
-            ))}
+                  </SortableTaskRow>
+                ))}
+              </TableBody>
+            </SortableContext>
 
-            {/* New task row */}
+            {/* New task row - outside SortableContext */}
             {canEdit && (
-              <TableRow>
-                <TableCell>
-                  <Checkbox disabled className="opacity-30" />
-                </TableCell>
-                <TableCell colSpan={6}>
-                  <Input
-                    id="new-task-input"
-                    placeholder="+ Add a new task..."
-                    value={newTaskTitle}
-                    onChange={(e) => setNewTaskTitle(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') handleCreateTask();
-                    }}
-                    className="border-0 shadow-none focus-visible:ring-0 px-0"
-                  />
-                </TableCell>
-              </TableRow>
+              <TableBody>
+                <TableRow>
+                  <TableCell></TableCell>
+                  <TableCell>
+                    <Checkbox disabled className="opacity-30" />
+                  </TableCell>
+                  <TableCell colSpan={6}>
+                    <Input
+                      id="new-task-input"
+                      placeholder="+ Add a new task..."
+                      value={newTaskTitle}
+                      onChange={(e) => setNewTaskTitle(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleCreateTask();
+                      }}
+                      className="border-0 shadow-none focus-visible:ring-0 px-0"
+                    />
+                  </TableCell>
+                </TableRow>
+              </TableBody>
             )}
-          </TableBody>
-        </Table>
+          </Table>
+        </DndContext>
 
         {filteredTasks.length === 0 && !canEdit && (
           <div className="text-center py-12 text-muted-foreground">
