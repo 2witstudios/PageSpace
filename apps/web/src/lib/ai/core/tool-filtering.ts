@@ -25,8 +25,7 @@ const WRITE_TOOLS = new Set([
   'update_agent_config',
   // Task operations
   'create_task_list',
-  'add_task',
-  'update_task_status',
+  'update_task',
 ]);
 
 /**
