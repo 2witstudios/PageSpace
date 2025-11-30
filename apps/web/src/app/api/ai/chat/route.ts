@@ -426,9 +426,24 @@ export async function POST(request: Request) {
     const readOnlyMode = isReadOnly === true;
     loggers.ai.debug('AI Page Chat API: Read-only mode', { isReadOnly: readOnlyMode });
 
-    // Filter tools based on custom enabled tools or use all tools if not configured
+    // Filter tools based on custom enabled tools configuration
+    // - null = no configuration → use all tools (default)
+    // - [] = explicitly no tools → use no PageSpace tools
+    // - ['tool1', 'tool2'] = specific tools → use only those
     let filteredTools;
-    if (enabledTools && enabledTools.length > 0) {
+    if (enabledTools === null) {
+      // No tool restrictions configured, use read-only filtering on all tools
+      filteredTools = filterToolsForReadOnly(pageSpaceTools, readOnlyMode);
+      loggers.ai.debug('AI Page Chat API: Using default tool filtering (no restrictions)', { isReadOnly: readOnlyMode });
+    } else if (enabledTools.length === 0) {
+      // Explicitly configured with no tools - return empty object
+      filteredTools = {};
+      loggers.ai.debug('AI Page Chat API: No tools enabled (explicit configuration)', {
+        totalTools: Object.keys(pageSpaceTools).length,
+        enabledTools: 0,
+        filteredTools: 0
+      });
+    } else {
       // Filter tools based on the page's enabled tools configuration
       // Simple object filtering approach to avoid complex TypeScript issues
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -448,10 +463,6 @@ export async function POST(request: Request) {
         filteredTools: Object.keys(filteredTools).length,
         isReadOnly: readOnlyMode
       });
-    } else {
-      // No tool restrictions configured, use read-only filtering on all tools
-      filteredTools = filterToolsForReadOnly(pageSpaceTools, readOnlyMode);
-      loggers.ai.debug('AI Page Chat API: Using default tool filtering', { isReadOnly: readOnlyMode });
     }
 
     // DESKTOP MCP INTEGRATION: Merge MCP tools from client if provided
