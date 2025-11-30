@@ -129,8 +129,8 @@ export async function POST(request: Request) {
       systemPrompt,
     };
 
-    // Add optional configuration
-    if (enabledTools && enabledTools.length > 0) {
+    // Add optional configuration (save even if empty array)
+    if (enabledTools !== undefined) {
       agentData.enabledTools = enabledTools;
     }
     if (aiProvider) {

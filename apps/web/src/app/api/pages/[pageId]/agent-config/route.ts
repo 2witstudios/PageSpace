@@ -138,9 +138,8 @@ export async function PATCH(
     }
     
     if (enabledTools !== undefined) {
-      updateData.enabledTools = Array.isArray(enabledTools) && enabledTools.length > 0 
-        ? enabledTools 
-        : null;
+      // Preserve empty arrays - don't convert to null
+      updateData.enabledTools = Array.isArray(enabledTools) ? enabledTools : null;
     }
     
     if (aiProvider !== undefined) {
