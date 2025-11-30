@@ -380,13 +380,19 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
             <div>
               <label className="text-sm font-medium mb-2 block">Agent Definition</label>
               <Textarea
-                {...register('agentDefinition')}
+                {...register('agentDefinition', { maxLength: 500 })}
                 placeholder="Describe what this agent does and when to consult it (e.g., 'Expert in financial analysis and budget planning. Consult for expense tracking, forecasting, and financial reports.')"
                 className="min-h-[100px] resize-none"
+                maxLength={500}
               />
-              <p className="text-xs text-muted-foreground mt-2">
-                This description helps the global assistant know when to use this agent. Keep it concise but informative.
-              </p>
+              <div className="flex justify-between mt-2">
+                <p className="text-xs text-muted-foreground">
+                  This description helps the global assistant know when to use this agent.
+                </p>
+                <span className={`text-xs ${(watch('agentDefinition')?.length || 0) > 450 ? 'text-orange-500' : 'text-muted-foreground'}`}>
+                  {watch('agentDefinition')?.length || 0}/500
+                </span>
+              </div>
             </div>
           </CardContent>
         </Card>
