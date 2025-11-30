@@ -82,6 +82,10 @@ export { rateLimitCache } from './services/rate-limit-cache';
 export type { ProviderType, UsageTrackingResult } from './services/rate-limit-cache';
 export { getTodayUTC, getTomorrowMidnightUTC, getSecondsUntilMidnightUTC } from './services/date-utils';
 
+// Agent awareness caching (server-only)
+export { agentAwarenessCache, getAgentAwarenessCache, AgentAwarenessCache } from './services/agent-awareness-cache';
+export type { CachedAgent, CachedDriveAgents } from './services/agent-awareness-cache';
+
 // File processing utilities (server-only)
 export * from './file-processing';
 

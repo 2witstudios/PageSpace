@@ -9,7 +9,7 @@ import {
   isDriveOwnerOrAdmin,
 } from '@pagespace/lib';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket/socket-utils';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, agentAwarenessCache } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
@@ -153,6 +153,11 @@ export async function POST(request: Request) {
         type,
       }),
     );
+
+    // Invalidate agent awareness cache when an AI_CHAT page is created
+    if (isAIChatPage(type)) {
+      await agentAwarenessCache.invalidateDriveAgents(driveId);
+    }
 
     trackPageOperation(userId, 'create', newPage.id, {
       title,

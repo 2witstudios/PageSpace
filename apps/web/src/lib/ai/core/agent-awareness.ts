@@ -3,11 +3,15 @@
  *
  * Builds a system prompt section that lists available AI agents
  * for the global assistant to be aware of and consult via ask_agent.
+ *
+ * Uses per-drive caching to reduce database queries. Cache is invalidated
+ * when agents are created, edited, or deleted.
  */
 
 import { db, pages, drives, eq, and } from '@pagespace/db';
-import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/server';
+import { getUserDriveAccess, canUserViewPage, agentAwarenessCache } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
+import type { CachedAgent } from '@pagespace/lib/server';
 
 interface VisibleAgent {
   id: string;
@@ -17,10 +21,49 @@ interface VisibleAgent {
 }
 
 /**
+ * Query visible agents for a drive from the database
+ * Returns agents that are:
+ * - Type AI_CHAT
+ * - Not trashed
+ * - Visible to global assistant (not explicitly hidden)
+ */
+async function queryDriveAgents(driveId: string): Promise<CachedAgent[]> {
+  const agents = await db
+    .select({
+      id: pages.id,
+      title: pages.title,
+      agentDefinition: pages.agentDefinition,
+      visibleToGlobalAssistant: pages.visibleToGlobalAssistant,
+    })
+    .from(pages)
+    .where(and(
+      eq(pages.driveId, driveId),
+      eq(pages.type, 'AI_CHAT'),
+      eq(pages.isTrashed, false)
+    ))
+    .orderBy(pages.title);
+
+  // Filter to only visible agents and map to CachedAgent format
+  return agents
+    .filter(agent => agent.visibleToGlobalAssistant !== false)
+    .map(agent => ({
+      id: agent.id,
+      title: agent.title,
+      definition: agent.agentDefinition,
+    }));
+}
+
+/**
  * Builds the agent awareness section for the global assistant's system prompt.
  *
  * Returns a formatted markdown section listing all visible AI agents
  * that the user has access to across all their drives.
+ *
+ * Uses per-drive caching to minimize database queries:
+ * - Cache key: driveId -> list of visible agents
+ * - Cache hit: Skip DB query for that drive
+ * - Cache miss: Query DB and populate cache
+ * - Per-user permission filtering still applied (uses cached permissions)
  *
  * @param userId - The authenticated user's ID
  * @returns A formatted string to append to the system prompt, or empty string if no agents
@@ -34,6 +77,7 @@ export async function buildAgentAwarenessPrompt(userId: string): Promise<string>
       .where(eq(drives.isTrashed, false));
 
     // Filter to drives the user has access to
+    // Note: getUserDriveAccess uses cached permissions
     const accessibleDrives: Array<{ id: string; name: string }> = [];
     for (const drive of allDrives) {
       const hasAccess = await getUserDriveAccess(userId, drive.id);
@@ -46,40 +90,37 @@ export async function buildAgentAwarenessPrompt(userId: string): Promise<string>
       return '';
     }
 
-    // Collect all visible agents
+    // Collect all visible agents using per-drive caching
     const visibleAgents: VisibleAgent[] = [];
+    let cacheHits = 0;
+    let cacheMisses = 0;
 
     for (const drive of accessibleDrives) {
-      // Query AI_CHAT pages that are visible to global assistant
-      const agents = await db
-        .select({
-          id: pages.id,
-          title: pages.title,
-          agentDefinition: pages.agentDefinition,
-          visibleToGlobalAssistant: pages.visibleToGlobalAssistant,
-        })
-        .from(pages)
-        .where(and(
-          eq(pages.driveId, drive.id),
-          eq(pages.type, 'AI_CHAT'),
-          eq(pages.isTrashed, false)
-        ))
-        .orderBy(pages.title);
+      // Check cache first
+      const cached = await agentAwarenessCache.getDriveAgents(drive.id);
 
-      // Filter by visibility flag and user permissions
-      for (const agent of agents) {
-        // Skip if explicitly hidden from global assistant
-        if (agent.visibleToGlobalAssistant === false) {
-          continue;
-        }
+      let driveAgents: CachedAgent[];
 
-        // Check user can view this agent
+      if (cached) {
+        // Cache hit - use cached agent list
+        driveAgents = cached.agents;
+        cacheHits++;
+      } else {
+        // Cache miss - query DB and populate cache
+        driveAgents = await queryDriveAgents(drive.id);
+        await agentAwarenessCache.setDriveAgents(drive.id, drive.name, driveAgents);
+        cacheMisses++;
+      }
+
+      // Filter by user permissions (still needed per-user)
+      // Note: canUserViewPage uses cached permissions
+      for (const agent of driveAgents) {
         const canView = await canUserViewPage(userId, agent.id);
         if (canView) {
           visibleAgents.push({
             id: agent.id,
             title: agent.title,
-            definition: agent.agentDefinition,
+            definition: agent.definition,
             driveName: drive.name,
           });
         }
@@ -107,6 +148,8 @@ export async function buildAgentAwarenessPrompt(userId: string): Promise<string>
       userId,
       agentCount: visibleAgents.length,
       driveCount: accessibleDrives.length,
+      cacheHits,
+      cacheMisses,
     });
 
     return prompt.trim();
