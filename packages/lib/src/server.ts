@@ -24,7 +24,7 @@ export * from './logging';
 export * from './notifications';
 
 // Agent awareness caching
-export { agentAwarenessCache, getAgentAwarenessCache, AgentAwarenessCache } from './services/agent-awareness-cache';
+export { agentAwarenessCache, AgentAwarenessCache } from './services/agent-awareness-cache';
 export type { CachedAgent, CachedDriveAgents } from './services/agent-awareness-cache';
 
 // Re-export specific functions for backward compatibility

@@ -1,5 +1,6 @@
-import Redis from 'ioredis';
+import type Redis from 'ioredis';
 import { loggers } from '../logging/logger-config';
+import { getSharedRedisClient, isSharedRedisAvailable } from './shared-redis';
 
 /**
  * Cached agent data for the agent awareness system
@@ -51,7 +52,7 @@ export class AgentAwarenessCache {
   private redis: Redis | null = null;
   private memoryCache = new Map<string, CachedDriveAgents>();
   private config: CacheConfig;
-  private isRedisAvailable = false;
+  private cleanupInterval: ReturnType<typeof setInterval> | null = null;
 
   private constructor(config: Partial<CacheConfig> = {}) {
     this.config = {
@@ -77,57 +78,33 @@ export class AgentAwarenessCache {
   }
 
   /**
-   * Initialize Redis connection with graceful fallback
+   * Initialize Redis connection using shared client
    */
   private async initializeRedis(): Promise<void> {
     if (!this.config.enableRedis) return;
 
     try {
-      const redisUrl = process.env.REDIS_URL;
-      if (!redisUrl) {
-        loggers.api.debug('REDIS_URL not configured, using memory-only agent cache');
-        return;
-      }
-
-      this.redis = new Redis(redisUrl, {
-        maxRetriesPerRequest: 3,
-        lazyConnect: true,
-        connectTimeout: 5000,
-        commandTimeout: 3000,
-      });
-
-      this.redis.on('connect', () => {
-        this.isRedisAvailable = true;
-        loggers.api.debug('Redis connected for agent awareness caching');
-      });
-
-      this.redis.on('error', (error: Error) => {
-        this.isRedisAvailable = false;
-        loggers.api.warn('Redis connection error for agent cache, falling back to memory', error);
-      });
-
-      this.redis.on('close', () => {
-        this.isRedisAvailable = false;
-      });
-
-      // Test connection
-      await this.redis.ping();
-      this.isRedisAvailable = true;
-
+      this.redis = await getSharedRedisClient();
     } catch (error) {
-      loggers.api.debug('Failed to initialize Redis for agent cache, using memory-only', {
+      loggers.api.warn('Failed to get shared Redis client for agent cache', {
         error: error instanceof Error ? error.message : String(error)
       });
       this.redis = null;
-      this.isRedisAvailable = false;
     }
+  }
+
+  /**
+   * Check if Redis is available (uses shared state)
+   */
+  private get isRedisAvailable(): boolean {
+    return isSharedRedisAvailable() && this.redis !== null;
   }
 
   /**
    * Cleanup expired entries from memory cache
    */
   private startMemoryCacheCleanup(): void {
-    setInterval(() => {
+    this.cleanupInterval = setInterval(() => {
       const now = Date.now();
       let cleanedCount = 0;
 
@@ -285,34 +262,42 @@ export class AgentAwarenessCache {
   }
 
   /**
+   * Clear all cache entries (use with caution, primarily for testing)
+   */
+  async clearAll(): Promise<void> {
+    this.memoryCache.clear();
+
+    if (this.isRedisAvailable && this.redis) {
+      try {
+        const keys = await this.redis.keys(`${this.config.keyPrefix}*`);
+        if (keys.length > 0) {
+          await this.redis.del(...keys);
+        }
+      } catch (error) {
+        loggers.api.warn('Redis clear all error for agent cache', { error });
+      }
+    }
+
+    loggers.api.debug('Cleared all agent cache entries');
+  }
+
+  /**
    * Graceful shutdown
+   * Note: Does not close the shared Redis connection - that's managed by shared-redis.ts
    */
   async shutdown(): Promise<void> {
-    if (this.redis) {
-      await this.redis.quit();
-      this.redis = null;
+    // Clear cleanup interval
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = null;
     }
+
+    // Just null out our reference - shared Redis is managed separately
+    this.redis = null;
     this.memoryCache.clear();
     AgentAwarenessCache.instance = null;
   }
 }
 
-// Lazy initialization helper
-let cacheInstance: AgentAwarenessCache | null = null;
-
-export function getAgentAwarenessCache(): AgentAwarenessCache {
-  if (!cacheInstance) {
-    cacheInstance = AgentAwarenessCache.getInstance();
-  }
-  return cacheInstance;
-}
-
-// Export for direct import
-export const agentAwarenessCache = {
-  getDriveAgents: (driveId: string) => getAgentAwarenessCache().getDriveAgents(driveId),
-  setDriveAgents: (driveId: string, driveName: string, agents: CachedAgent[], ttl?: number) =>
-    getAgentAwarenessCache().setDriveAgents(driveId, driveName, agents, ttl),
-  invalidateDriveAgents: (driveId: string) => getAgentAwarenessCache().invalidateDriveAgents(driveId),
-  invalidateAllAgents: () => getAgentAwarenessCache().invalidateAllAgents(),
-  getCacheStats: () => getAgentAwarenessCache().getCacheStats(),
-};
+// Export singleton instance (same pattern as PermissionCache)
+export const agentAwarenessCache = AgentAwarenessCache.getInstance();
