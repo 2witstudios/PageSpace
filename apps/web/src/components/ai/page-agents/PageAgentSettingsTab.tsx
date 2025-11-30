@@ -35,6 +35,7 @@ interface PageAgentSettingsTabProps {
   onProviderChange: (provider: string) => void;
   onModelChange: (model: string) => void;
   isProviderConfigured: (provider: string) => boolean;
+  onSavingChange?: (isSaving: boolean) => void;
 }
 
 export interface PageAgentSettingsTabRef {
@@ -62,7 +63,8 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   selectedModel,
   onProviderChange,
   onModelChange,
-  isProviderConfigured
+  isProviderConfigured,
+  onSavingChange
 }, ref) => {
   const [isSaving, setIsSaving] = useState(false);
 
@@ -170,6 +172,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
 
   const onSubmit = useCallback(async (data: FormData) => {
     setIsSaving(true);
+    onSavingChange?.(true);
     try {
       // Include the current provider and model from props
       const requestData = {
@@ -203,8 +206,9 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       toast.error('Failed to save configuration');
     } finally {
       setIsSaving(false);
+      onSavingChange?.(false);
     }
-  }, [pageId, config, onConfigUpdate, selectedProvider, selectedModel]);
+  }, [pageId, config, onConfigUpdate, selectedProvider, selectedModel, onSavingChange]);
 
   // Expose form submission to parent component
   useImperativeHandle(ref, () => ({
