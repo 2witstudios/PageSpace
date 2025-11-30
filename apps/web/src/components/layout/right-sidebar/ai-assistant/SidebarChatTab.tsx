@@ -11,37 +11,13 @@ import { AISelector } from '@/components/ai/shared/AISelector';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth, patch, del } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
+import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
 import { usePageAgentSidebarState, SidebarAgentInfo } from '@/hooks/page-agents/usePageAgentSidebarState';
 import { usePageAgentSidebarChat } from '@/hooks/page-agents/usePageAgentSidebarChat';
 import { toast } from 'sonner';
 import { AiUsageMonitor } from '@/components/ai/shared/AiUsageMonitor';
-
-interface ProviderSettings {
-  currentProvider: string;
-  currentModel: string;
-  providers: {
-    pagespace?: { isConfigured: boolean; hasApiKey: boolean };
-    openrouter: { isConfigured: boolean; hasApiKey: boolean };
-    google: { isConfigured: boolean; hasApiKey: boolean };
-  };
-  isAnyProviderConfigured: boolean;
-}
-
-interface LocationContext {
-  currentPage?: {
-    id: string;
-    title: string;
-    type: string;
-    path: string;
-  } | null;
-  currentDrive?: {
-    id: string;
-    name: string;
-    slug: string;
-  } | null;
-  breadcrumbs?: string[];
-}
+import { LocationContext } from '@/lib/ai/shared';
 
 /**
  * Assistant chat tab for the right sidebar.
@@ -135,17 +111,21 @@ const SidebarChatTab: React.FC = () => {
   const assistantName = selectedAgent ? selectedAgent.title : 'Global Assistant';
 
   // ============================================
+  // Centralized Assistant Settings (from store)
+  // ============================================
+  const showPageTree = useAssistantSettingsStore((state) => state.showPageTree);
+  const currentProvider = useAssistantSettingsStore((state) => state.currentProvider);
+  const currentModel = useAssistantSettingsStore((state) => state.currentModel);
+  const loadSettings = useAssistantSettingsStore((state) => state.loadSettings);
+  const isAnyProviderConfigured = useAssistantSettingsStore((state) => state.isAnyProviderConfigured);
+
+  // ============================================
   // Local Component State
   // ============================================
-  const [providerSettings, setProviderSettings] = useState<ProviderSettings | null>(null);
   const [input, setInput] = useState<string>('');
   const [isReadOnly, setIsReadOnly] = useState<boolean>(false);
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
-  const [showPageTree, setShowPageTree] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false;
-    return localStorage.getItem('pagespace:assistant:showPageTree') === 'true';
-  });
 
   // Refs
   const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -167,8 +147,8 @@ const SidebarChatTab: React.FC = () => {
     if (!input.trim()) return false;
     if (!currentConversationId) return false;
     if (selectedAgent) return true; // Agent mode has its own provider config
-    return providerSettings?.isAnyProviderConfigured ?? false;
-  }, [input, currentConversationId, selectedAgent, providerSettings]);
+    return isAnyProviderConfigured;
+  }, [input, currentConversationId, selectedAgent, isAnyProviderConfigured]);
 
   // ============================================
   // Effects: Drive Loading
@@ -348,49 +328,12 @@ const SidebarChatTab: React.FC = () => {
   }, [error]);
 
   // ============================================
-  // Effects: Provider Settings
+  // Effects: Initialize Settings Store
   // ============================================
   useEffect(() => {
-    const loadProviderSettings = async () => {
-      try {
-        const configResponse = await fetchWithAuth('/api/ai/settings');
-        const configData: ProviderSettings = await configResponse.json();
-        setProviderSettings(configData);
-      } catch {
-        // Silently fail - provider settings are optional in agent mode
-      }
-    };
-
-    loadProviderSettings();
-  }, []);
-
-  useEffect(() => {
-    const handleSettingsUpdate = async () => {
-      try {
-        const configResponse = await fetchWithAuth('/api/ai/settings');
-        const configData: ProviderSettings = await configResponse.json();
-        setProviderSettings(configData);
-      } catch {
-        // Silently fail
-      }
-    };
-
-    window.addEventListener('ai-settings-updated', handleSettingsUpdate);
-
-    // Listen for assistant settings updates (page tree toggle)
-    const handleAssistantSettingsUpdate = (event: Event) => {
-      const customEvent = event as CustomEvent<{ showPageTree?: boolean }>;
-      if (customEvent.detail?.showPageTree !== undefined) {
-        setShowPageTree(customEvent.detail.showPageTree);
-      }
-    };
-    window.addEventListener('assistant-settings-updated', handleAssistantSettingsUpdate);
-
-    return () => {
-      window.removeEventListener('ai-settings-updated', handleSettingsUpdate);
-      window.removeEventListener('assistant-settings-updated', handleAssistantSettingsUpdate);
-    };
-  }, []);
+    // Load provider settings from centralized store on mount
+    loadSettings();
+  }, [loadSettings]);
 
   // ============================================
   // Handlers
@@ -426,8 +369,8 @@ const SidebarChatTab: React.FC = () => {
           isReadOnly,
           showPageTree,
           locationContext: locationContext || undefined,
-          selectedProvider: providerSettings?.currentProvider,
-          selectedModel: providerSettings?.currentModel,
+          selectedProvider: currentProvider,
+          selectedModel: currentModel,
         };
 
     sendMessage({ text: input }, { body });
@@ -442,7 +385,8 @@ const SidebarChatTab: React.FC = () => {
     isReadOnly,
     showPageTree,
     locationContext,
-    providerSettings,
+    currentProvider,
+    currentModel,
     sendMessage,
     scrollToBottom,
   ]);

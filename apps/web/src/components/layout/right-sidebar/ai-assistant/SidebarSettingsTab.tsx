@@ -10,6 +10,7 @@ import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import { AI_PROVIDERS, getBackendProvider } from '@/lib/ai/core/ai-providers-config';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import type { AgentInfo } from '@/types/agent';
 
 // Using centralized AI providers configuration from ai-providers-config.ts
@@ -65,20 +66,9 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
   // Dynamic LM Studio models state
   const [lmstudioModels, setLmstudioModels] = useState<Record<string, string> | null>(null);
 
-  // Page tree context toggle (stored in localStorage)
-  const [showPageTree, setShowPageTree] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false;
-    return localStorage.getItem('pagespace:assistant:showPageTree') === 'true';
-  });
-
-  const handleShowPageTreeChange = useCallback((checked: boolean) => {
-    setShowPageTree(checked);
-    localStorage.setItem('pagespace:assistant:showPageTree', String(checked));
-    // Broadcast to other components that might need to know
-    window.dispatchEvent(new CustomEvent('assistant-settings-updated', {
-      detail: { showPageTree: checked }
-    }));
-  }, []);
+  // Page tree context toggle (from centralized store)
+  const showPageTree = useAssistantSettingsStore((state) => state.showPageTree);
+  const setShowPageTree = useAssistantSettingsStore((state) => state.setShowPageTree);
 
   // Fetch Ollama models dynamically
   const fetchOllamaModels = useCallback(async () => {
@@ -319,6 +309,9 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
     }
   };
 
+  // Get setProviderSettings from the centralized store
+  const setStoreProviderSettings = useAssistantSettingsStore((state) => state.setProviderSettings);
+
   const handleSaveSettings = async () => {
     setSaving(true);
     try {
@@ -330,7 +323,7 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
         provider: selectedProvider, // Send UI provider directly
         model: selectedModel,
       });
-      
+
       // Update local state to reflect the saved settings
       if (providerSettings) {
         const updatedSettings = {
@@ -340,15 +333,10 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
         };
         setProviderSettings(updatedSettings);
       }
-      
-      // Broadcast settings update event for other components
-      // Note: This uses CustomEvent (not Zustand) because AI settings sync spans
-      // beyond the sidebar - includes /settings/ai page and SidebarChatTab.
-      // A future refactor could consolidate into a dedicated AI settings store.
-      window.dispatchEvent(new CustomEvent('ai-settings-updated', {
-        detail: { provider: selectedProvider, model: selectedModel }
-      }));
-      
+
+      // Update centralized store (for SidebarChatTab and GlobalAssistantView)
+      setStoreProviderSettings(selectedProvider, selectedModel);
+
       toast.success(result.message || 'Settings saved successfully!');
     } catch (error) {
       console.error('Failed to save settings:', error);
@@ -642,7 +630,7 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
                 </div>
                 <Switch
                   checked={showPageTree}
-                  onCheckedChange={handleShowPageTreeChange}
+                  onCheckedChange={setShowPageTree}
                 />
               </div>
             </CardHeader>

@@ -72,11 +72,6 @@ vi.mock('@pagespace/db', () => {
     and: vi.fn((...conditions) => conditions),
     asc: vi.fn((col) => ({ type: 'asc', col })),
     desc: vi.fn((col) => ({ type: 'desc', col })),
-    // Export helpers for tests to configure transaction results
-    __setTransactionResults: (page: unknown[], task: unknown[]) => {
-      transactionPageResult = page as typeof transactionPageResult;
-      transactionTaskResult = task as typeof transactionTaskResult;
-    },
   };
 });
 
@@ -88,7 +83,7 @@ vi.mock('@/lib/websocket/socket-utils', () => ({
 
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
-import { db, __setTransactionResults } from '@pagespace/db';
+import { db } from '@pagespace/db';
 import { broadcastTaskEvent } from '@/lib/websocket/socket-utils';
 
 describe('Task API Routes', () => {
@@ -258,10 +253,8 @@ describe('Task API Routes', () => {
       };
 
       // Configure transaction to return expected values
-      (__setTransactionResults as Mock)(
-        [mockNewPage],  // First insert returns page
-        [mockNewTask]   // Second insert returns task
-      );
+      transactionPageResult = [mockNewPage];
+      transactionTaskResult = [mockNewTask];
 
       (authenticateRequestWithOptions as Mock).mockResolvedValue({ userId: mockUserId });
       (canUserEditPage as Mock).mockResolvedValue(true);
@@ -301,10 +294,8 @@ describe('Task API Routes', () => {
       };
 
       // Configure transaction to return expected values
-      (__setTransactionResults as Mock)(
-        [mockNewPage],  // First insert returns page
-        [mockNewTask]   // Second insert returns task
-      );
+      transactionPageResult = [mockNewPage];
+      transactionTaskResult = [mockNewTask];
 
       (authenticateRequestWithOptions as Mock).mockResolvedValue({ userId: mockUserId });
       (canUserEditPage as Mock).mockResolvedValue(true);
