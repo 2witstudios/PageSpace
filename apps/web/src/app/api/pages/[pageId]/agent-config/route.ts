@@ -70,6 +70,8 @@ export async function GET(
       aiModel: page.aiModel || '',
       includeDrivePrompt: page.includeDrivePrompt ?? false,
       drivePrompt,
+      agentDefinition: page.agentDefinition || '',
+      visibleToGlobalAssistant: page.visibleToGlobalAssistant ?? true,
     });
   } catch (error) {
     loggers.api.error('Error fetching page agent configuration:', error as Error);
@@ -94,7 +96,7 @@ export async function PATCH(
 
     const { pageId } = await context.params;
     const body = await request.json();
-    const { systemPrompt, enabledTools, aiProvider, aiModel, includeDrivePrompt } = body;
+    const { systemPrompt, enabledTools, aiProvider, aiModel, includeDrivePrompt, agentDefinition, visibleToGlobalAssistant } = body;
 
     // Check if user has permission to edit this page
     const canEdit = await canUserEditPage(userId, pageId);
@@ -151,6 +153,14 @@ export async function PATCH(
       updateData.includeDrivePrompt = Boolean(includeDrivePrompt);
     }
 
+    if (agentDefinition !== undefined) {
+      updateData.agentDefinition = agentDefinition.trim() || null;
+    }
+
+    if (visibleToGlobalAssistant !== undefined) {
+      updateData.visibleToGlobalAssistant = Boolean(visibleToGlobalAssistant);
+    }
+
     // Only update if there are changes
     if (Object.keys(updateData).length > 0) {
       await db
@@ -176,6 +186,8 @@ export async function PATCH(
       aiProvider: updateData.aiProvider,
       aiModel: updateData.aiModel,
       includeDrivePrompt: updateData.includeDrivePrompt,
+      agentDefinition: updateData.agentDefinition,
+      visibleToGlobalAssistant: updateData.visibleToGlobalAssistant,
     });
   } catch (error) {
     loggers.api.error('Error updating page agent configuration:', error as Error);

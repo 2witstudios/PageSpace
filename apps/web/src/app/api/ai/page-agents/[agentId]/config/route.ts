@@ -23,7 +23,7 @@ export async function PUT(
 
     const { agentId } = await context.params;
     const body = await request.json();
-    const { systemPrompt, enabledTools, aiProvider, aiModel } = body;
+    const { systemPrompt, enabledTools, aiProvider, aiModel, agentDefinition, visibleToGlobalAssistant } = body;
 
     // Get the agent page
     const [agent] = await db
@@ -73,6 +73,8 @@ export async function PUT(
       enabledTools?: string[] | null;
       aiProvider?: string | null;
       aiModel?: string | null;
+      agentDefinition?: string | null;
+      visibleToGlobalAssistant?: boolean;
     } = {};
     const updatedFields: string[] = [];
 
@@ -91,6 +93,14 @@ export async function PUT(
     if (aiModel !== undefined) {
       updateData.aiModel = aiModel;
       updatedFields.push('aiModel');
+    }
+    if (agentDefinition !== undefined) {
+      updateData.agentDefinition = agentDefinition?.trim() || null;
+      updatedFields.push('agentDefinition');
+    }
+    if (visibleToGlobalAssistant !== undefined) {
+      updateData.visibleToGlobalAssistant = Boolean(visibleToGlobalAssistant);
+      updatedFields.push('visibleToGlobalAssistant');
     }
 
     if (updatedFields.length === 0) {

@@ -25,6 +25,7 @@ import {
 import { processMentionsInMessage, buildMentionSystemPrompt } from '@/lib/ai/core/mention-processor';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
+import { buildAgentAwarenessPrompt } from '@/lib/ai/core/agent-awareness';
 import { filterToolsForReadOnly } from '@/lib/ai/core/tool-filtering';
 import { getModelCapabilities } from '@/lib/ai/core/model-capabilities';
 import { convertMCPToolsToAISDKSchemas, parseMCPToolName } from '@/lib/ai/core/mcp-tool-converter';
@@ -572,6 +573,12 @@ MENTION PROCESSING:
 • Let mentioned document content inform and enrich your response
 • Don't explicitly mention that you're reading @mentioned docs unless relevant to the conversation` + drivePromptSection;
 
+    // Build agent awareness prompt - lists visible AI agents for consultation
+    const agentAwarenessPrompt = await buildAgentAwarenessPrompt(userId);
+    const finalSystemPrompt = agentAwarenessPrompt
+      ? systemPrompt + '\n\n' + agentAwarenessPrompt
+      : systemPrompt;
+
     // Filter tools based on read-only mode
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let finalTools: Record<string, any> = filterToolsForReadOnly(pageSpaceTools, readOnlyMode);
@@ -659,7 +666,7 @@ MENTION PROCESSING:
 
     const result = streamText({
       model,
-      system: systemPrompt,
+      system: finalSystemPrompt,
       messages: modelMessages,
       tools: finalTools,
       stopWhen: stepCountIs(100),

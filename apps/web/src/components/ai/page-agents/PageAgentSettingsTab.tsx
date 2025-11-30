@@ -20,6 +20,8 @@ interface AgentConfig {
   aiModel?: string;
   includeDrivePrompt?: boolean;
   drivePrompt?: string | null;
+  agentDefinition?: string;
+  visibleToGlobalAssistant?: boolean;
 }
 
 interface PageAgentSettingsTabProps {
@@ -44,6 +46,8 @@ interface FormData {
   aiProvider: string;
   aiModel: string;
   includeDrivePrompt: boolean;
+  agentDefinition: string;
+  visibleToGlobalAssistant: boolean;
 }
 
 const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettingsTabProps>(({
@@ -71,6 +75,8 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       aiProvider: selectedProvider || '',
       aiModel: selectedModel || '',
       includeDrivePrompt: config?.includeDrivePrompt ?? false,
+      agentDefinition: config?.agentDefinition || '',
+      visibleToGlobalAssistant: config?.visibleToGlobalAssistant ?? true,
     }
   });
 
@@ -83,6 +89,8 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
         aiProvider: config.aiProvider || selectedProvider || '',
         aiModel: config.aiModel || selectedModel || '',
         includeDrivePrompt: config.includeDrivePrompt ?? false,
+        agentDefinition: config.agentDefinition || '',
+        visibleToGlobalAssistant: config.visibleToGlobalAssistant ?? true,
       });
     }
   }, [config, reset, selectedProvider, selectedModel]);
@@ -161,6 +169,8 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
         aiProvider: selectedProvider,
         aiModel: selectedModel,
         includeDrivePrompt: data.includeDrivePrompt,
+        agentDefinition: data.agentDefinition,
+        visibleToGlobalAssistant: data.visibleToGlobalAssistant,
       };
 
       await patch(`/api/pages/${pageId}/agent-config`, requestData);
@@ -171,6 +181,8 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
         aiProvider: selectedProvider,
         aiModel: selectedModel,
         includeDrivePrompt: data.includeDrivePrompt,
+        agentDefinition: data.agentDefinition,
+        visibleToGlobalAssistant: data.visibleToGlobalAssistant,
       } as AgentConfig;
       onConfigUpdate(updatedConfig);
       toast.success('Agent configuration saved successfully');
@@ -336,6 +348,46 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
             <p className="text-xs text-muted-foreground mt-2">
               Describe how you want your AI agent to behave, its role, expertise, and any specific instructions.
             </p>
+          </CardContent>
+        </Card>
+
+        {/* Agent Definition & Global Assistant Visibility */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-lg">Global Assistant Awareness</CardTitle>
+                <CardDescription>
+                  Control how the global assistant discovers and interacts with this agent.
+                </CardDescription>
+              </div>
+              <Controller
+                name="visibleToGlobalAssistant"
+                control={control}
+                render={({ field }) => (
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-muted-foreground">Visible</span>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </div>
+                )}
+              />
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <label className="text-sm font-medium mb-2 block">Agent Definition</label>
+              <Textarea
+                {...register('agentDefinition')}
+                placeholder="Describe what this agent does and when to consult it (e.g., 'Expert in financial analysis and budget planning. Consult for expense tracking, forecasting, and financial reports.')"
+                className="min-h-[100px] resize-none"
+              />
+              <p className="text-xs text-muted-foreground mt-2">
+                This description helps the global assistant know when to use this agent. Keep it concise but informative.
+              </p>
+            </div>
           </CardContent>
         </Card>
 
