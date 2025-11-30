@@ -13,38 +13,82 @@ vi.mock('@pagespace/lib/server', () => ({
   canUserEditPage: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
-  db: {
-    query: {
-      taskLists: {
-        findFirst: vi.fn(),
-      },
-      taskItems: {
-        findFirst: vi.fn(),
-        findMany: vi.fn(),
-      },
-    },
-    insert: vi.fn(() => ({
-      values: vi.fn(() => ({
-        returning: vi.fn(),
-      })),
-    })),
+vi.mock('@pagespace/lib', () => ({
+  PageType: {
+    DOCUMENT: 'DOCUMENT',
+    FOLDER: 'FOLDER',
+    TASK_LIST: 'TASK_LIST',
   },
-  taskLists: {},
-  taskItems: {},
-  eq: vi.fn((field, value) => ({ field, value })),
-  and: vi.fn((...conditions) => conditions),
-  asc: vi.fn((col) => ({ type: 'asc', col })),
-  desc: vi.fn((col) => ({ type: 'desc', col })),
+  getDefaultContent: vi.fn(() => '{}'),
 }));
+
+// Track mock values for transaction
+let transactionPageResult = [{ id: 'mock-page-id', title: 'Mock Page' }];
+let transactionTaskResult = [{ id: 'mock-task-id', title: 'Mock Task' }];
+
+vi.mock('@pagespace/db', () => {
+  const mockInsert = vi.fn(() => ({
+    values: vi.fn(() => ({
+      returning: vi.fn(),
+    })),
+  }));
+
+  return {
+    db: {
+      query: {
+        taskLists: {
+          findFirst: vi.fn(),
+        },
+        taskItems: {
+          findFirst: vi.fn(),
+          findMany: vi.fn(),
+        },
+        pages: {
+          findFirst: vi.fn(),
+        },
+      },
+      insert: mockInsert,
+      transaction: vi.fn(async (callback) => {
+        let insertCallCount = 0;
+        // Create a tx object that mimics the transaction context
+        const tx = {
+          insert: vi.fn(() => ({
+            values: vi.fn(() => ({
+              returning: vi.fn().mockImplementation(() => {
+                insertCallCount++;
+                // First insert is for pages, second is for taskItems
+                return Promise.resolve(insertCallCount === 1 ? transactionPageResult : transactionTaskResult);
+              }),
+            })),
+          })),
+        };
+        return callback(tx);
+      }),
+    },
+    taskLists: {},
+    taskItems: {},
+    pages: {},
+    eq: vi.fn((field, value) => ({ field, value })),
+    and: vi.fn((...conditions) => conditions),
+    asc: vi.fn((col) => ({ type: 'asc', col })),
+    desc: vi.fn((col) => ({ type: 'desc', col })),
+    // Export helpers for tests to configure transaction results
+    __setTransactionResults: (page: unknown[], task: unknown[]) => {
+      transactionPageResult = page as typeof transactionPageResult;
+      transactionTaskResult = task as typeof transactionTaskResult;
+    },
+  };
+});
 
 vi.mock('@/lib/websocket/socket-utils', () => ({
   broadcastTaskEvent: vi.fn(),
+  broadcastPageEvent: vi.fn(),
+  createPageEventPayload: vi.fn(() => ({})),
 }));
 
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
-import { db } from '@pagespace/db';
+import { db, __setTransactionResults } from '@pagespace/db';
 import { broadcastTaskEvent } from '@/lib/websocket/socket-utils';
 
 describe('Task API Routes', () => {
@@ -207,16 +251,23 @@ describe('Task API Routes', () => {
         priority: 'medium',
         position: 0,
       };
+      const mockNewPage = {
+        id: 'new-page',
+        title: 'New Task',
+        type: 'DOCUMENT',
+      };
+
+      // Configure transaction to return expected values
+      (__setTransactionResults as Mock)(
+        [mockNewPage],  // First insert returns page
+        [mockNewTask]   // Second insert returns task
+      );
 
       (authenticateRequestWithOptions as Mock).mockResolvedValue({ userId: mockUserId });
       (canUserEditPage as Mock).mockResolvedValue(true);
+      (db.query.pages.findFirst as Mock).mockResolvedValue({ id: mockPageId, driveId: 'drive-123' });
       (db.query.taskLists.findFirst as Mock).mockResolvedValue(mockTaskList);
       (db.query.taskItems.findFirst as Mock).mockResolvedValue(null);
-      (db.insert as Mock).mockReturnValue({
-        values: vi.fn().mockReturnValue({
-          returning: vi.fn().mockResolvedValue([mockNewTask]),
-        }),
-      });
       (db.query.taskItems.findFirst as Mock)
         .mockResolvedValueOnce(null) // For position calculation
         .mockResolvedValueOnce({ ...mockNewTask, assignee: null, user: null }); // For returning with relations
@@ -243,18 +294,25 @@ describe('Task API Routes', () => {
         dueDate: '2024-12-31',
         assigneeId: 'user-456',
       };
+      const mockNewPage = {
+        id: 'new-page',
+        title: 'Complete Task',
+        type: 'DOCUMENT',
+      };
+
+      // Configure transaction to return expected values
+      (__setTransactionResults as Mock)(
+        [mockNewPage],  // First insert returns page
+        [mockNewTask]   // Second insert returns task
+      );
 
       (authenticateRequestWithOptions as Mock).mockResolvedValue({ userId: mockUserId });
       (canUserEditPage as Mock).mockResolvedValue(true);
+      (db.query.pages.findFirst as Mock).mockResolvedValue({ id: mockPageId, driveId: 'drive-123' });
       (db.query.taskLists.findFirst as Mock).mockResolvedValue(mockTaskList);
       (db.query.taskItems.findFirst as Mock)
         .mockResolvedValueOnce({ position: 0 }) // For position calculation
         .mockResolvedValueOnce({ ...mockNewTask, assignee: { id: 'user-456', name: 'Assignee' }, user: null });
-      (db.insert as Mock).mockReturnValue({
-        values: vi.fn().mockReturnValue({
-          returning: vi.fn().mockResolvedValue([mockNewTask]),
-        }),
-      });
 
       const response = await POST(createRequest({
         title: 'Complete Task',
