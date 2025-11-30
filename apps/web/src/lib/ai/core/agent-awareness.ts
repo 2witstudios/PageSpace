@@ -96,7 +96,7 @@ export async function buildAgentAwarenessPrompt(userId: string): Promise<string>
     prompt += 'You can consult these agents using `ask_agent`. If the user references an agent not listed here, use `list_agents` or `multi_drive_list_agents` to find it.\n\n';
 
     for (const agent of visibleAgents) {
-      prompt += `- **${agent.title}** (ID: ${agent.id})\n`;
+      prompt += `- **${agent.title}** (ID: ${agent.id}) [${agent.driveName}]\n`;
       if (agent.definition) {
         prompt += `  ${agent.definition}\n`;
       }
