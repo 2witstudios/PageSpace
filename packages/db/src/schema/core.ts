@@ -34,6 +34,8 @@ export const pages = pgTable('pages', {
   systemPrompt: text('systemPrompt'),
   enabledTools: jsonb('enabledTools'),
   includeDrivePrompt: boolean('includeDrivePrompt').default(false), // Whether to include drive prompt for AI_CHAT pages
+  agentDefinition: text('agentDefinition'), // Tool-like description of what this agent does (for AI_CHAT pages)
+  visibleToGlobalAssistant: boolean('visibleToGlobalAssistant').default(true), // Whether this agent appears in global assistant's system prompt
   // File-specific fields
   fileSize: real('fileSize'),
   mimeType: text('mimeType'),

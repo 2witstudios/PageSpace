@@ -23,6 +23,10 @@ export * from './logging';
 // Notifications
 export * from './notifications';
 
+// Agent awareness caching
+export { agentAwarenessCache, AgentAwarenessCache } from './services/agent-awareness-cache';
+export type { CachedAgent, CachedDriveAgents } from './services/agent-awareness-cache';
+
 // Re-export specific functions for backward compatibility
 export {
   isUserDriveMember,

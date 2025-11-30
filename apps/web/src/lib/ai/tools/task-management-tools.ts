@@ -19,7 +19,15 @@ export const taskManagementTools = {
    * Can be linked to a page (pageId) or conversation (conversationId)
    */
   create_task_list: tool({
-    description: 'Create a task list to track progress on complex, multi-step operations. Tasks persist across AI conversations. Can be linked to a TASK_LIST page or exist as a conversation-scoped list.',
+    description: `Create a task list to track progress on complex, multi-step operations. Tasks persist across AI conversations.
+
+IMPORTANT - Page-linked task lists (when pageId is provided):
+- Each task automatically creates a DOCUMENT page as a child of the TASK_LIST page
+- These task-linked pages are system-managed and store task progress/notes
+- Task-linked pages appear with a special icon (FileCheck) in the sidebar
+- DO NOT manually delete task-linked pages - this breaks the task system. Use task tools instead.
+
+Conversation-scoped task lists (no pageId) do not create linked pages.`,
     inputSchema: z.object({
       title: z.string().describe('Title for the task list'),
       description: z.string().optional().describe('Description of what this task list is for'),
@@ -234,7 +242,10 @@ export const taskManagementTools = {
    * Get current task list status
    */
   get_task_list: tool({
-    description: 'Get the current status of a task list, including all tasks and their progress.',
+    description: `Get the current status of a task list, including all tasks and their progress.
+
+Each task may have a pageId field linking to its associated document page (for page-based task lists).
+These linked pages contain task notes and progress tracking - they are system-managed.`,
     inputSchema: z.object({
       taskListId: z.string().optional().describe('Specific task list ID'),
       pageId: z.string().optional().describe('Get task list for a specific TASK_LIST page'),
@@ -363,7 +374,13 @@ export const taskManagementTools = {
    * - If taskId is not provided but taskListId is, creates a new task
    */
   update_task: tool({
-    description: 'Update an existing task or create a new one. Provide taskId to update, or taskListId without taskId to create.',
+    description: `Update an existing task or create a new one. Provide taskId to update, or taskListId without taskId to create.
+
+When creating tasks on page-linked task lists:
+- A DOCUMENT page is automatically created as a child of the TASK_LIST page
+- This page is linked via the task's pageId field
+- The page title stays synced with the task title
+- DO NOT delete these pages directly - use this tool to manage tasks`,
     inputSchema: z.object({
       taskId: z.string().optional().describe('Task ID to update (omit to create new task)'),
       taskListId: z.string().optional().describe('Task list ID (required when creating new task)'),

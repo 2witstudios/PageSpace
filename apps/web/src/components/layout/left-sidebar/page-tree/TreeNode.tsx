@@ -222,6 +222,7 @@ export default function TreeNode({
           <Link href={linkHref} passHref className="flex items-center flex-1 min-w-0 ml-1 cursor-pointer" onClick={(e) => e.stopPropagation()}>
             <PageTypeIcon
               type={node.type}
+              isTaskLinked={node.isTaskLinked}
               className={`
               h-4 w-4 mr-1.5 flex-shrink-0
               ${hasChildren ? "text-primary" : "text-gray-500"}

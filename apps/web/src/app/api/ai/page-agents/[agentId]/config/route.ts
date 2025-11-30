@@ -3,7 +3,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 import { db, pages, eq } from '@pagespace/db';
-import { canUserEditPage } from '@pagespace/lib/server';
+import { canUserEditPage, agentAwarenessCache } from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket/socket-utils';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { loggers } from '@pagespace/lib/server';
@@ -23,7 +23,7 @@ export async function PUT(
 
     const { agentId } = await context.params;
     const body = await request.json();
-    const { systemPrompt, enabledTools, aiProvider, aiModel } = body;
+    const { systemPrompt, enabledTools, aiProvider, aiModel, agentDefinition, visibleToGlobalAssistant } = body;
 
     // Get the agent page
     const [agent] = await db
@@ -73,6 +73,8 @@ export async function PUT(
       enabledTools?: string[] | null;
       aiProvider?: string | null;
       aiModel?: string | null;
+      agentDefinition?: string | null;
+      visibleToGlobalAssistant?: boolean;
     } = {};
     const updatedFields: string[] = [];
 
@@ -91,6 +93,14 @@ export async function PUT(
     if (aiModel !== undefined) {
       updateData.aiModel = aiModel;
       updatedFields.push('aiModel');
+    }
+    if (agentDefinition !== undefined) {
+      updateData.agentDefinition = agentDefinition?.trim() || null;
+      updatedFields.push('agentDefinition');
+    }
+    if (visibleToGlobalAssistant !== undefined) {
+      updateData.visibleToGlobalAssistant = Boolean(visibleToGlobalAssistant);
+      updatedFields.push('visibleToGlobalAssistant');
     }
 
     if (updatedFields.length === 0) {
@@ -115,6 +125,11 @@ export async function PUT(
         type: updatedAgent.type
       })
     );
+
+    // Invalidate agent awareness cache if visibility or definition changed
+    if (updatedFields.includes('agentDefinition') || updatedFields.includes('visibleToGlobalAssistant')) {
+      await agentAwarenessCache.invalidateDriveAgents(updatedAgent.driveId);
+    }
 
     loggers.api.info('AI agent configuration updated', {
       agentId: updatedAgent.id,

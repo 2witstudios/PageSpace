@@ -14,6 +14,7 @@ export interface ToolExecutionContext {
       title: string;
       type: string;
       path: string;
+      isTaskLinked?: boolean;
     };
     currentDrive?: {
       id: string;

@@ -27,6 +27,7 @@ export interface LocationContext {
     title: string;
     type: string;
     path: string;
+    isTaskLinked?: boolean;
   };
   currentDrive?: {
     id: string;
@@ -125,6 +126,8 @@ export function buildCompleteRequest(
   if (contextType === 'page' && locationContext?.currentPage) {
     inlineInstructions = buildInlineInstructions({
       pageTitle: locationContext.currentPage.title,
+      pageType: locationContext.currentPage.type,
+      isTaskLinked: locationContext.currentPage.isTaskLinked,
       driveName: locationContext.currentDrive?.name,
       pagePath: locationContext.currentPage.path,
       driveSlug: locationContext.currentDrive?.slug,
