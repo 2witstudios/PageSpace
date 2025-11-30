@@ -676,11 +676,11 @@ export async function POST(request: Request) {
 
     // Build page tree context if enabled
     let pageTreePrompt = '';
-    if (page.includePageTree && pageContext?.driveId) {
+    if (page.includePageTree && page.driveId) {
       const pageTreeContext = await getPageTreeContext(userId, {
         scope: (page.pageTreeScope as 'children' | 'drive') || 'children',
         pageId: chatId,
-        driveId: pageContext.driveId,
+        driveId: page.driveId,
       });
       if (pageTreeContext) {
         pageTreePrompt = `\n\n## WORKSPACE STRUCTURE\n\nHere is the ${page.pageTreeScope === 'drive' ? 'complete workspace' : 'page subtree'} structure:\n\n${pageTreeContext}`;

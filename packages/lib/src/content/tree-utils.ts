@@ -100,7 +100,7 @@ export function calculateSafeDepth<T extends { children: T[] }>(
  * └── 📁 Archive
  * ```
  */
-export function formatTreeAsMarkdown<T extends { title: string; type: string; children: T[] }>(
+export function formatTreeAsMarkdown<T extends { id: string; title: string; type: string; children: T[] }>(
   tree: T[],
   options: FormatTreeOptions = {}
 ): string {
@@ -121,7 +121,7 @@ export function formatTreeAsMarkdown<T extends { title: string; type: string; ch
 
     const icon = showIcons ? (PAGE_TYPE_ICONS[node.type] || '📄') + ' ' : '';
     const connector = isLast ? '└── ' : '├── ';
-    lines.push(prefix + connector + icon + node.title);
+    lines.push(prefix + connector + icon + node.title + ` (id: ${node.id})`);
 
     if (node.children && node.children.length > 0 && depth < safeDepth) {
       const childPrefix = prefix + (isLast ? '    ' : '│   ');

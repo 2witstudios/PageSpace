@@ -137,19 +137,18 @@ export async function getDriveListSummary(userId: string): Promise<string> {
     // Filter to drives the user has access to (parallel permission checks)
     const accessChecks = await Promise.all(
       allDrives.map(async (drive) => ({
+        id: drive.id,
         name: drive.name,
         hasAccess: await getUserDriveAccess(userId, drive.id)
       }))
     );
-    const accessibleDrives = accessChecks
-      .filter(d => d.hasAccess)
-      .map(d => d.name);
+    const accessibleDrives = accessChecks.filter(d => d.hasAccess);
 
     if (accessibleDrives.length === 0) {
       return 'No accessible workspaces.';
     }
 
-    return `Available workspaces:\n${accessibleDrives.map(n => `- ${n}`).join('\n')}`;
+    return `Available workspaces:\n${accessibleDrives.map(d => `- ${d.name} (id: ${d.id})`).join('\n')}`;
 
   } catch (error) {
     loggers.ai.error('Failed to build drive list summary:', error as Error);
