@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { buildTree } from '@pagespace/lib/server';
-import { pages, drives, pagePermissions, driveMembers, db, and, eq, inArray, asc, sql } from '@pagespace/db';
+import { pages, drives, pagePermissions, driveMembers, taskItems, db, and, eq, inArray, asc, sql, isNotNull } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/api-utils';
@@ -117,7 +117,19 @@ export async function GET(
       pageResults = await getPermittedPages(drive.id, userId);
     }
 
-    const pageTree = buildTree(pageResults);
+    // Get all task-linked page IDs to mark them in the tree
+    const taskLinkedPageIds = await db.selectDistinct({ pageId: taskItems.pageId })
+      .from(taskItems)
+      .where(isNotNull(taskItems.pageId));
+    const taskLinkedSet = new Set(taskLinkedPageIds.map(t => t.pageId));
+
+    // Add isTaskLinked flag to each page
+    const pagesWithTaskInfo = pageResults.map(page => ({
+      ...page,
+      isTaskLinked: taskLinkedSet.has(page.id),
+    }));
+
+    const pageTree = buildTree(pagesWithTaskInfo);
     return jsonResponse(pageTree);
   } catch (error) {
     loggers.api.error('Error fetching pages:', error as Error);

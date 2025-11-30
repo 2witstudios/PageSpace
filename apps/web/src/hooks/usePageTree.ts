@@ -36,6 +36,7 @@ export type TreePage = Page & {
   children: TreePage[];
   aiChat: AiChat | null;
   messages: MessageWithUser[];
+  isTaskLinked?: boolean;
 };
 
 const fetcher = async (url: string) => {

@@ -7,6 +7,8 @@
 
 export interface InlineInstructionsContext {
   pageTitle?: string;
+  pageType?: string;
+  isTaskLinked?: boolean;
   driveName?: string;
   pagePath?: string;
   driveSlug?: string;
@@ -19,11 +21,15 @@ export interface InlineInstructionsContext {
 export function buildInlineInstructions(context: InlineInstructionsContext): string {
   const {
     pageTitle = 'current',
+    pageType = 'DOCUMENT',
+    isTaskLinked = false,
     driveName = 'current',
     pagePath = 'current-page',
     driveSlug = 'current-drive',
     driveId = 'current-drive-id',
   } = context;
+
+  const taskSuffix = isTaskLinked ? ' (Task-linked page)' : '';
 
   return `
 WORKSPACE RULES:
@@ -32,18 +38,21 @@ WORKSPACE RULES:
 • Provide both driveId and driveSlug for operations.
 
 CONTEXT:
-• Current location: "${pageTitle}" at ${pagePath} in "${driveName}"
+• Current location: "${pageTitle}" [${pageType}]${taskSuffix} at ${pagePath} in "${driveName}"
 • DriveSlug: ${driveSlug}, DriveId: ${driveId}
 • When user says "here" or "this", they mean this location
-• Explore current drive first (list_pages) before other drives
+• Explore current drive first (list_pages) before other drives${isTaskLinked ? `
+• This page is linked to a task - use task management tools to update task status` : ''}
 
 PAGE TYPES:
-• FOLDER: Organize content hierarchically
-• DOCUMENT: Written content (notes, reports, SOPs)
-• AI_CHAT: Contextual AI conversations for specific topics
-• CHANNEL: Team discussions and collaboration
-• CANVAS: Custom HTML/CSS pages for dashboards, portals, presentations
-• SHEET: Structured data (deprecated but available)
+• FOLDER: Container with list/icon view of children. Accepts file uploads via drag-drop.
+• DOCUMENT: Rich text stored as HTML. Use edit_page for content changes.
+• SHEET: Spreadsheet stored as TOML. Use edit_sheet_cells for cell-level edits.
+• CANVAS: Raw HTML/CSS for dashboards and custom visual layouts. Edit as HTML.
+• TASK_LIST: Task manager where each task auto-creates a linked child DOCUMENT page.
+• AI_CHAT: Custom AI agent with configurable system prompt and tool permissions.
+• CHANNEL: Team discussion thread with real-time messaging.
+• FILE: Uploaded file. Text-based files are readable via read_page.
 
 AFTER TOOLS:
 Provide a brief summary of what was done. Suggest logical next steps when appropriate.
@@ -84,6 +93,16 @@ CONTEXT:
 • Use list_drives to discover available workspaces
 • Check existing drives before suggesting new drive creation
 `}
+PAGE TYPES:
+• FOLDER: Container with list/icon view of children. Accepts file uploads via drag-drop.
+• DOCUMENT: Rich text stored as HTML. Use edit_page for content changes.
+• SHEET: Spreadsheet stored as TOML. Use edit_sheet_cells for cell-level edits.
+• CANVAS: Raw HTML/CSS for dashboards and custom visual layouts. Edit as HTML.
+• TASK_LIST: Task manager where each task auto-creates a linked child DOCUMENT page.
+• AI_CHAT: Custom AI agent with configurable system prompt and tool permissions.
+• CHANNEL: Team discussion thread with real-time messaging.
+• FILE: Uploaded file. Text-based files are readable via read_page.
+
 AFTER TOOLS:
 Provide a brief summary of what was done. Suggest logical next steps when appropriate.
 

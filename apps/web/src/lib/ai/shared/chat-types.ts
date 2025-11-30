@@ -77,6 +77,7 @@ export interface LocationContext {
     title: string;
     type: string;
     path: string;
+    isTaskLinked?: boolean;
   } | null;
   currentDrive?: {
     id: string;

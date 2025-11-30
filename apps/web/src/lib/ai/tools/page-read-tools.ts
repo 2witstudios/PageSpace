@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { db, pages, eq, and, asc } from '@pagespace/db';
+import { db, pages, taskItems, eq, and, asc, isNotNull } from '@pagespace/db';
 import { buildTree, getUserAccessLevel, getUserDriveAccess, getUserAccessiblePagesInDriveWithDetails, getPageTypeEmoji, isFolderPage, PageType } from '@pagespace/lib/server';
 import { ToolExecutionContext } from '../core/types';
 import { getSuggestedVisionModels } from '../core/model-capabilities';
@@ -10,7 +10,7 @@ export const pageReadTools = {
    * Explore the folder structure and find content within a workspace
    */
   list_pages: tool({
-    description: 'List all pages in a workspace with their paths and types. Returns hierarchical structure showing folders, documents, AI chats, channels, canvas pages, and databases.',
+    description: 'List all pages in a workspace with their paths and types. Returns hierarchical structure showing folders, documents, AI chats, channels, canvas pages, and databases. Pages marked with (Task) suffix are linked to task items - these are system-managed and should not be deleted directly.',
     inputSchema: z.object({
       driveSlug: z.string().optional().describe('The human-readable slug of the drive (for semantic understanding)'),
       driveId: z.string().describe('The unique ID of the drive (used for operations)'),
@@ -34,22 +34,30 @@ export const pageReadTools = {
         // Sort by position to maintain order
         visiblePages.sort((a, b) => a.position - b.position);
 
+        // Get task-linked page IDs to mark them
+        const taskLinkedPageIds = await db.selectDistinct({ pageId: taskItems.pageId })
+          .from(taskItems)
+          .where(isNotNull(taskItems.pageId));
+        const taskLinkedSet = new Set(taskLinkedPageIds.map(t => t.pageId));
+
         // Build flat list of paths with type indicators
         const buildPageList = (parentId: string | null = null, parentPath: string = `/${driveSlug || driveId}`): string[] => {
           const pages: string[] = [];
           const currentPages = visiblePages.filter(page => page.parentId === parentId);
-          
+
           for (const page of currentPages) {
             const currentPath = `${parentPath}/${page.title}`;
             // Add type indicator emoji
             const typeIndicator = getPageTypeEmoji(page.type as PageType);
-            
-            pages.push(`${typeIndicator} [${page.type}] ID: ${page.id} Path: ${currentPath}`);
-            
+            // Add (Task) suffix for task-linked pages
+            const taskSuffix = taskLinkedSet.has(page.id) ? ' (Task)' : '';
+
+            pages.push(`${typeIndicator} [${page.type}]${taskSuffix} ID: ${page.id} Path: ${currentPath}`);
+
             // Recursively add children
             pages.push(...buildPageList(page.id, currentPath));
           }
-          
+
           return pages;
         };
 
@@ -112,6 +120,13 @@ export const pageReadTools = {
         if (!accessLevel) {
           throw new Error('Insufficient permissions to read this document');
         }
+
+        // Check if this page is linked to a task
+        const taskLink = await db.query.taskItems.findFirst({
+          where: eq(taskItems.pageId, page.id),
+          columns: { id: true },
+        });
+        const isTaskLinked = !!taskLink;
 
         // Handle FILE type pages
         if (page.type === 'FILE') {
@@ -213,9 +228,10 @@ export const pageReadTools = {
           path,
           title: page.title,
           type: page.type,
+          isTaskLinked,
           content: numberedContent,
           lineCount: lines.length,
-          summary: `Read "${page.title}" (${lines.length} lines, ${page.type.toLowerCase()})`,
+          summary: `Read "${page.title}" (${lines.length} lines, ${page.type.toLowerCase()})${isTaskLinked ? ' - linked to task' : ''}`,
           stats: {
             documentType: page.type,
             lineCount: lines.length,
@@ -223,7 +239,11 @@ export const pageReadTools = {
             characterCount: page.content.length
           },
           ...(metadata && { fileMetadata: metadata }),
-          nextSteps: [
+          nextSteps: isTaskLinked ? [
+            'This page is linked to a task - use task management tools to update the task status',
+            'DO NOT delete this page directly - it would break the task link',
+            'Use the content for context in task progress tracking'
+          ] : [
             'Use the content for context in creating related documents',
             'Use edit tools to modify this document if needed',
             'Reference this content when answering user questions'
