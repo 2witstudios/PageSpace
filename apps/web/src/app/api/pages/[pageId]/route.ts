@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { pages, mentions, chatMessages, drives, db, and, eq, inArray } from '@pagespace/db';
-import { canUserViewPage, canUserEditPage, canUserDeletePage, agentAwarenessCache } from '@pagespace/lib/server';
+import { canUserViewPage, canUserEditPage, canUserDeletePage, agentAwarenessCache, pageTreeCache } from '@pagespace/lib/server';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
 import { z } from "zod/v4";
 import * as cheerio from 'cheerio';
@@ -300,6 +300,11 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
           })
         );
       }
+
+      // Invalidate page tree cache when structure changes (title or parent)
+      if (safeBody.title || safeBody.parentId !== undefined) {
+        await pageTreeCache.invalidateDriveTree(driveId);
+      }
     }
 
     // Track page update
@@ -381,6 +386,9 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
       if (pageInfo.type === 'AI_CHAT') {
         await agentAwarenessCache.invalidateDriveAgents(pageInfo.drive.id);
       }
+
+      // Invalidate page tree cache when structure changes
+      await pageTreeCache.invalidateDriveTree(pageInfo.drive.id);
     }
 
     // Track page deletion/trash

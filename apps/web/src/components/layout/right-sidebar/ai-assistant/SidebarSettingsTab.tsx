@@ -5,7 +5,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { CheckCircle, XCircle, Key, ExternalLink, Zap, Sparkles, Bot, Wrench } from 'lucide-react';
+import { CheckCircle, XCircle, Key, ExternalLink, Zap, Sparkles, Bot, Wrench, FolderTree } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import { AI_PROVIDERS, getBackendProvider } from '@/lib/ai/core/ai-providers-config';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -63,6 +64,21 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
 
   // Dynamic LM Studio models state
   const [lmstudioModels, setLmstudioModels] = useState<Record<string, string> | null>(null);
+
+  // Page tree context toggle (stored in localStorage)
+  const [showPageTree, setShowPageTree] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem('pagespace:assistant:showPageTree') === 'true';
+  });
+
+  const handleShowPageTreeChange = useCallback((checked: boolean) => {
+    setShowPageTree(checked);
+    localStorage.setItem('pagespace:assistant:showPageTree', String(checked));
+    // Broadcast to other components that might need to know
+    window.dispatchEvent(new CustomEvent('assistant-settings-updated', {
+      detail: { showPageTree: checked }
+    }));
+  }, []);
 
   // Fetch Ollama models dynamically
   const fetchOllamaModels = useCallback(async () => {
@@ -613,6 +629,27 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
               >
                 {saving ? 'Saving...' : 'Save Settings'}
               </Button>
+            </CardContent>
+          </Card>
+
+          {/* Workspace Structure Toggle */}
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <FolderTree className="h-4 w-4" />
+                  <CardTitle className="text-sm">Workspace Structure</CardTitle>
+                </div>
+                <Switch
+                  checked={showPageTree}
+                  onCheckedChange={handleShowPageTreeChange}
+                />
+              </div>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <p className="text-xs text-muted-foreground">
+                When enabled, the assistant can see your workspace page tree for better navigation awareness.
+              </p>
             </CardContent>
           </Card>
 

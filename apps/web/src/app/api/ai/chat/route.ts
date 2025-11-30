@@ -49,6 +49,7 @@ import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { buildInlineInstructions } from '@/lib/ai/core/inline-instructions';
 import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
 import { filterToolsForReadOnly } from '@/lib/ai/core/tool-filtering';
+import { getPageTreeContext } from '@/lib/ai/core/page-tree-context';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { trackFeature } from '@pagespace/lib/activity-tracker';
@@ -661,7 +662,25 @@ export async function POST(request: Request) {
     
     // Build timestamp system prompt for temporal awareness
     const timestampSystemPrompt = buildTimestampSystemPrompt();
-    
+
+    // Build page tree context if enabled
+    let pageTreePrompt = '';
+    if (page.includePageTree && pageContext?.driveId) {
+      const pageTreeContext = await getPageTreeContext(userId, {
+        scope: (page.pageTreeScope as 'children' | 'drive') || 'children',
+        pageId: chatId,
+        driveId: pageContext.driveId,
+      });
+      if (pageTreeContext) {
+        pageTreePrompt = `\n\n## WORKSPACE STRUCTURE\n\nHere is the ${page.pageTreeScope === 'drive' ? 'complete workspace' : 'page subtree'} structure:\n\n${pageTreeContext}`;
+        loggers.ai.debug('AI Chat API: Page tree context included', {
+          pageId: chatId,
+          scope: page.pageTreeScope,
+          contextLength: pageTreeContext.length
+        });
+      }
+    }
+
     loggers.ai.debug('AI Chat API: Tools configured for Page AI', { toolCount: Object.keys(filteredTools).length });
     loggers.ai.info('AI Chat API: Starting streamText for Page AI', { model: currentModel, pageName: page.title });
     
@@ -675,7 +694,7 @@ export async function POST(request: Request) {
           // Start the AI response
           const aiResult = streamText({
             model,
-            system: systemPrompt + mentionSystemPrompt + timestampSystemPrompt + buildInlineInstructions({
+            system: systemPrompt + mentionSystemPrompt + timestampSystemPrompt + pageTreePrompt + buildInlineInstructions({
               pageTitle: pageContext?.pageTitle,
               driveName: pageContext?.driveName,
               pagePath: pageContext?.pagePath,

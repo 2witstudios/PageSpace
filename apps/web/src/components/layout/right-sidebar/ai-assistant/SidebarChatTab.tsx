@@ -142,6 +142,10 @@ const SidebarChatTab: React.FC = () => {
   const [isReadOnly, setIsReadOnly] = useState<boolean>(false);
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
+  const [showPageTree, setShowPageTree] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem('pagespace:assistant:showPageTree') === 'true';
+  });
 
   // Refs
   const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -372,7 +376,20 @@ const SidebarChatTab: React.FC = () => {
     };
 
     window.addEventListener('ai-settings-updated', handleSettingsUpdate);
-    return () => window.removeEventListener('ai-settings-updated', handleSettingsUpdate);
+
+    // Listen for assistant settings updates (page tree toggle)
+    const handleAssistantSettingsUpdate = (event: Event) => {
+      const customEvent = event as CustomEvent<{ showPageTree?: boolean }>;
+      if (customEvent.detail?.showPageTree !== undefined) {
+        setShowPageTree(customEvent.detail.showPageTree);
+      }
+    };
+    window.addEventListener('assistant-settings-updated', handleAssistantSettingsUpdate);
+
+    return () => {
+      window.removeEventListener('ai-settings-updated', handleSettingsUpdate);
+      window.removeEventListener('assistant-settings-updated', handleAssistantSettingsUpdate);
+    };
   }, []);
 
   // ============================================
@@ -407,6 +424,7 @@ const SidebarChatTab: React.FC = () => {
         }
       : {
           isReadOnly,
+          showPageTree,
           locationContext: locationContext || undefined,
           selectedProvider: providerSettings?.currentProvider,
           selectedModel: providerSettings?.currentModel,
@@ -422,6 +440,7 @@ const SidebarChatTab: React.FC = () => {
     selectedAgent,
     agentConversationId,
     isReadOnly,
+    showPageTree,
     locationContext,
     providerSettings,
     sendMessage,
