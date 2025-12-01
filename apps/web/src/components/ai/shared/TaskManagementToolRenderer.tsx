@@ -61,7 +61,7 @@ interface TaskManagementToolRendererProps {
 
 /**
  * Renders task management tool results as interactive TodoListMessage components
- * Handles create_task_list, update_task, get_task_list
+ * Handles update_task tool results
  */
 export const TaskManagementToolRenderer: React.FC<TaskManagementToolRendererProps> = ({
   part,
@@ -180,12 +180,8 @@ export const TaskManagementToolRenderer: React.FC<TaskManagementToolRendererProp
 
 function getToolDisplayName(toolName: string): string {
   switch (toolName) {
-    case 'create_task_list':
-      return 'Create Task List';
     case 'update_task':
       return 'Update Task';
-    case 'get_task_list':
-      return 'Get Task List';
     default:
       return 'Task Management';
   }

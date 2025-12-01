@@ -119,11 +119,10 @@ if (enabledTools && enabledTools.length > 0) {
 - **glob_search**: Structural discovery (e.g., `**/README*`)
 - **multi_drive_search**: Cross-workspace search
 
-### 4. Task Management System
-- **create_task_list**: Persistent task tracking
-- **get_task_list/update_task_status**: Progress management (note parameter in update_task_status for progress updates)
-- **add_task**: Dynamic task expansion
-- **resume_task_list**: Cross-session continuity
+### 4. Task Management
+- **create_page** (type: TASK_LIST): Create task lists as pages
+- **read_page**: View task list progress (returns structured task data for TASK_LIST pages)
+- **update_task**: Add or update tasks on TASK_LIST pages (each task creates a linked DOCUMENT page)
 
 ### 5. Agent Management
 - **list_agents/multi_drive_list_agents**: Discover AI agents

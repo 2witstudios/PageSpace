@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { pages, db, and, eq } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, pageTreeCache } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket/socket-utils';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
@@ -65,6 +65,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
           type: page.type,
         }),
       );
+
+      // Invalidate page tree cache when structure changes
+      await pageTreeCache.invalidateDriveTree(page.drive.id);
     }
 
     trackPageOperation(auth.userId, 'restore', pageId, {

@@ -64,6 +64,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const [isReadOnly, setIsReadOnly] = useState<boolean>(false);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [editVersion, setEditVersion] = useState(0);
+  const [isSettingsSaving, setIsSettingsSaving] = useState(false);
 
   // Refs
   const messagesAreaRef = useRef<ChatMessagesAreaRef>(null);
@@ -371,10 +372,10 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             {activeTab === 'settings' && (
               <Button
                 onClick={() => agentSettingsRef.current?.submitForm()}
-                disabled={agentSettingsRef.current?.isSaving || false}
+                disabled={isSettingsSaving}
                 className="min-w-[100px] sm:min-w-[120px]"
               >
-                {agentSettingsRef.current?.isSaving ? (
+                {isSettingsSaving ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                     <span className="hidden sm:inline">Saving...</span>
@@ -451,6 +452,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             onProviderChange={setSelectedProvider}
             onModelChange={setSelectedModel}
             isProviderConfigured={isProviderConfigured}
+            onSavingChange={setIsSettingsSaving}
           />
         </TabsContent>
       </Tabs>

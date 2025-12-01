@@ -72,6 +72,8 @@ export async function GET(
       drivePrompt,
       agentDefinition: page.agentDefinition || '',
       visibleToGlobalAssistant: page.visibleToGlobalAssistant ?? true,
+      includePageTree: page.includePageTree ?? false,
+      pageTreeScope: page.pageTreeScope ?? 'children',
     });
   } catch (error) {
     loggers.api.error('Error fetching page agent configuration:', error as Error);
@@ -96,7 +98,7 @@ export async function PATCH(
 
     const { pageId } = await context.params;
     const body = await request.json();
-    const { systemPrompt, enabledTools, aiProvider, aiModel, includeDrivePrompt, agentDefinition, visibleToGlobalAssistant } = body;
+    const { systemPrompt, enabledTools, aiProvider, aiModel, includeDrivePrompt, agentDefinition, visibleToGlobalAssistant, includePageTree, pageTreeScope } = body;
 
     // Check if user has permission to edit this page
     const canEdit = await canUserEditPage(userId, pageId);
@@ -136,9 +138,8 @@ export async function PATCH(
     }
     
     if (enabledTools !== undefined) {
-      updateData.enabledTools = Array.isArray(enabledTools) && enabledTools.length > 0 
-        ? enabledTools 
-        : null;
+      // Preserve empty arrays - don't convert to null
+      updateData.enabledTools = Array.isArray(enabledTools) ? enabledTools : null;
     }
     
     if (aiProvider !== undefined) {
@@ -159,6 +160,17 @@ export async function PATCH(
 
     if (visibleToGlobalAssistant !== undefined) {
       updateData.visibleToGlobalAssistant = Boolean(visibleToGlobalAssistant);
+    }
+
+    if (includePageTree !== undefined) {
+      updateData.includePageTree = Boolean(includePageTree);
+    }
+
+    if (pageTreeScope !== undefined) {
+      // Validate scope value
+      if (pageTreeScope === 'children' || pageTreeScope === 'drive') {
+        updateData.pageTreeScope = pageTreeScope;
+      }
     }
 
     // Only update if there are changes
@@ -195,6 +207,8 @@ export async function PATCH(
       includeDrivePrompt: updateData.includeDrivePrompt,
       agentDefinition: updateData.agentDefinition,
       visibleToGlobalAssistant: updateData.visibleToGlobalAssistant,
+      includePageTree: updateData.includePageTree,
+      pageTreeScope: updateData.pageTreeScope,
     });
   } catch (error) {
     loggers.api.error('Error updating page agent configuration:', error as Error);

@@ -15,6 +15,7 @@ const WRITE_TOOLS = new Set([
   'trash_page',
   'restore_page',
   'move_page',
+  'edit_sheet_cells',
   // Drive operations
   'create_drive',
   'rename_drive',
@@ -24,7 +25,6 @@ const WRITE_TOOLS = new Set([
   'create_agent',
   'update_agent_config',
   // Task operations
-  'create_task_list',
   'update_task',
 ]);
 
@@ -65,12 +65,10 @@ export function getToolsSummary(isReadOnly: boolean): {
     'list_trash',
     'list_agents',
     'multi_drive_list_agents',
-    'get_task_list',
     // Search tools
     'regex_search',
     'glob_search',
     'multi_drive_search',
-    'search_pages',
     'web_search',
     // Agent communication
     'ask_agent',

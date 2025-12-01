@@ -50,6 +50,7 @@ import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
+import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
 import { usePageAgentDashboardStore } from '@/stores/page-agents/usePageAgentDashboardStore';
 import { AiUsageMonitor } from '@/components/ai/shared/AiUsageMonitor';
@@ -102,6 +103,14 @@ const GlobalAssistantView: React.FC = () => {
     createNewConversation: createAgentConversation,
     loadMostRecentConversation,
   } = usePageAgentDashboardStore();
+
+  // ============================================
+  // CENTRALIZED ASSISTANT SETTINGS (from store)
+  // ============================================
+  const showPageTree = useAssistantSettingsStore((state) => state.showPageTree);
+  const currentProvider = useAssistantSettingsStore((state) => state.currentProvider);
+  const currentModel = useAssistantSettingsStore((state) => state.currentModel);
+  const loadSettings = useAssistantSettingsStore((state) => state.loadSettings);
 
   // ============================================
   // LOCAL STATE
@@ -173,6 +182,11 @@ const GlobalAssistantView: React.FC = () => {
       setLocationContext(null);
     }
   }, [pathname, drives]);
+
+  // Initialize settings store on mount
+  useEffect(() => {
+    loadSettings();
+  }, [loadSettings]);
 
   // Load agent config when agent is selected
   useEffect(() => {
@@ -386,7 +400,10 @@ const GlobalAssistantView: React.FC = () => {
         }
       : {
           isReadOnly,
+          showPageTree,
           locationContext: locationContext || undefined,
+          selectedProvider: currentProvider,
+          selectedModel: currentModel,
           mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
         };
 

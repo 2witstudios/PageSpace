@@ -167,7 +167,7 @@ export function buildCompleteRequest(
     const toolAny = tool as any;
     toolsForExtraction[name] = {
       description: toolAny.description,
-      parameters: toolAny.parameters,
+      parameters: toolAny.inputSchema,  // AI SDK v5 uses inputSchema, not parameters
     };
   }
   const toolSchemas = extractToolSchemas(toolsForExtraction);

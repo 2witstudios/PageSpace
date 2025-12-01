@@ -44,11 +44,11 @@ import {
   sanitizeMessagesForModel,
   convertDbMessageToUIMessage
 } from '@/lib/ai/core/message-utils';
-import { processMentionsInMessage, buildMentionSystemPrompt } from '@/lib/ai/core/mention-processor';
+import { processMentionsInMessage } from '@/lib/ai/core/mention-processor';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
-import { buildInlineInstructions } from '@/lib/ai/core/inline-instructions';
 import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
 import { filterToolsForReadOnly } from '@/lib/ai/core/tool-filtering';
+import { getPageTreeContext } from '@/lib/ai/core/page-tree-context';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { trackFeature } from '@pagespace/lib/activity-tracker';
@@ -269,7 +269,6 @@ export async function POST(request: Request) {
     });
 
     // Process @mentions in the user's message
-    let mentionSystemPrompt = '';
     let mentionedPageIds: string[] = [];
 
     // Save user's message immediately to database (database-first approach)
@@ -286,7 +285,6 @@ export async function POST(request: Request) {
         mentionedPageIds = processedMessage.pageIds;
         
         if (processedMessage.mentions.length > 0) {
-          mentionSystemPrompt = buildMentionSystemPrompt(processedMessage.mentions);
           loggers.ai.info('AI Chat API: Found @mentions in user message', {
             mentionCount: processedMessage.mentions.length,
             pageIds: mentionedPageIds
@@ -425,9 +423,20 @@ export async function POST(request: Request) {
     const readOnlyMode = isReadOnly === true;
     loggers.ai.debug('AI Page Chat API: Read-only mode', { isReadOnly: readOnlyMode });
 
-    // Filter tools based on custom enabled tools or use all tools if not configured
+    // Filter tools based on custom enabled tools configuration
+    // - null or [] = no tools enabled (default behavior)
+    // - ['tool1', 'tool2'] = specific tools → use only those
     let filteredTools;
-    if (enabledTools && enabledTools.length > 0) {
+    if (enabledTools === null || enabledTools.length === 0) {
+      // No tools configured - default to no tools
+      filteredTools = {};
+      loggers.ai.debug('AI Page Chat API: No tools enabled', {
+        totalTools: Object.keys(pageSpaceTools).length,
+        enabledTools: 0,
+        filteredTools: 0,
+        isReadOnly: readOnlyMode
+      });
+    } else {
       // Filter tools based on the page's enabled tools configuration
       // Simple object filtering approach to avoid complex TypeScript issues
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -447,10 +456,6 @@ export async function POST(request: Request) {
         filteredTools: Object.keys(filteredTools).length,
         isReadOnly: readOnlyMode
       });
-    } else {
-      // No tool restrictions configured, use read-only filtering on all tools
-      filteredTools = filterToolsForReadOnly(pageSpaceTools, readOnlyMode);
-      loggers.ai.debug('AI Page Chat API: Using default tool filtering', { isReadOnly: readOnlyMode });
     }
 
     // DESKTOP MCP INTEGRATION: Merge MCP tools from client if provided
@@ -661,7 +666,25 @@ export async function POST(request: Request) {
     
     // Build timestamp system prompt for temporal awareness
     const timestampSystemPrompt = buildTimestampSystemPrompt();
-    
+
+    // Build page tree context if enabled
+    let pageTreePrompt = '';
+    if (page.includePageTree && page.driveId) {
+      const pageTreeContext = await getPageTreeContext(userId, {
+        scope: (page.pageTreeScope as 'children' | 'drive') || 'children',
+        pageId: chatId,
+        driveId: page.driveId,
+      });
+      if (pageTreeContext) {
+        pageTreePrompt = `\n\n## WORKSPACE STRUCTURE\n\nHere is the ${page.pageTreeScope === 'drive' ? 'complete workspace' : 'page subtree'} structure:\n\n${pageTreeContext}`;
+        loggers.ai.debug('AI Chat API: Page tree context included', {
+          pageId: chatId,
+          scope: page.pageTreeScope,
+          contextLength: pageTreeContext.length
+        });
+      }
+    }
+
     loggers.ai.debug('AI Chat API: Tools configured for Page AI', { toolCount: Object.keys(filteredTools).length });
     loggers.ai.info('AI Chat API: Starting streamText for Page AI', { model: currentModel, pageName: page.title });
     
@@ -675,13 +698,7 @@ export async function POST(request: Request) {
           // Start the AI response
           const aiResult = streamText({
             model,
-            system: systemPrompt + mentionSystemPrompt + timestampSystemPrompt + buildInlineInstructions({
-              pageTitle: pageContext?.pageTitle,
-              driveName: pageContext?.driveName,
-              pagePath: pageContext?.pagePath,
-              driveSlug: pageContext?.driveSlug,
-              driveId: pageContext?.driveId,
-            }),
+            system: systemPrompt + timestampSystemPrompt + pageTreePrompt,
             messages: modelMessages,
             tools: filteredTools,  // Use original tools directly
             stopWhen: stepCountIs(100), // Allow up to 100 tool calls per conversation turn

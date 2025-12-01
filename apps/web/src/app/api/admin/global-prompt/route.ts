@@ -17,6 +17,9 @@ import { extractToolSchemas, calculateTotalToolTokens } from '@/lib/ai/core/sche
 import { db, driveMembers, drives, pages, eq, and, asc } from '@pagespace/db';
 import { estimateSystemPromptTokens } from '@pagespace/lib/ai-context-calculator';
 import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
+import { buildAgentAwarenessPrompt } from '@/lib/ai/core/agent-awareness';
+import { getPageTreeContext, getDriveListSummary } from '@/lib/ai/core/page-tree-context';
+import { buildInlineInstructions, buildGlobalAssistantInstructions } from '@/lib/ai/core/inline-instructions';
 
 interface PromptSection {
   name: string;
@@ -55,9 +58,16 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const selectedDriveId = searchParams.get('driveId'); // null = dashboard context
     const selectedPageId = searchParams.get('pageId'); // null = drive or dashboard context
+    const showPageTree = searchParams.get('showPageTree') === 'true';
 
     // Get all drives the user has access to (for the picker)
-    const userDriveResults = await db
+    // 1. Get drives owned by the user
+    const ownedDrives = await db.query.drives.findMany({
+      where: and(eq(drives.ownerId, adminUser.id), eq(drives.isTrashed, false)),
+    });
+
+    // 2. Get drives shared with the user via driveMembers
+    const memberDrives = await db
       .select({
         driveId: driveMembers.driveId,
         role: driveMembers.role,
@@ -68,14 +78,32 @@ export async function GET(request: Request) {
       .leftJoin(drives, eq(driveMembers.driveId, drives.id))
       .where(eq(driveMembers.userId, adminUser.id));
 
-    const availableDrives = userDriveResults
-      .filter(d => d.driveName !== null)
-      .map(d => ({
-        id: d.driveId,
-        name: d.driveName!,
-        slug: d.driveSlug!,
-        role: d.role,
-      }));
+    // 3. Merge owned drives + shared drives, deduplicating
+    const allDrivesMap = new Map<string, { id: string; name: string; slug: string; role: string }>();
+
+    // Add owned drives first (role = OWNER)
+    for (const drive of ownedDrives) {
+      allDrivesMap.set(drive.id, {
+        id: drive.id,
+        name: drive.name,
+        slug: drive.slug,
+        role: 'OWNER',
+      });
+    }
+
+    // Add shared drives (don't override if already owned)
+    for (const drive of memberDrives) {
+      if (drive.driveName && !allDrivesMap.has(drive.driveId)) {
+        allDrivesMap.set(drive.driveId, {
+          id: drive.driveId,
+          name: drive.driveName,
+          slug: drive.driveSlug!,
+          role: drive.role,
+        });
+      }
+    }
+
+    const availableDrives = Array.from(allDrivesMap.values());
 
     // Get pages for the selected drive (for the page picker)
     let availablePages: Array<{ id: string; title: string; type: string; parentId: string | null }> = [];
@@ -167,6 +195,28 @@ export async function GET(request: Request) {
     }
     // If no drive selected (or invalid), locationContext remains undefined (dashboard context)
 
+    // Build async context sections (require DB queries, shared across modes)
+    const agentAwarenessPrompt = await buildAgentAwarenessPrompt(adminUser.id);
+
+    let pageTreePrompt = '';
+    if (showPageTree) {
+      if (selectedDriveId) {
+        const treeContext = await getPageTreeContext(adminUser.id, {
+          scope: 'drive',
+          driveId: selectedDriveId,
+        });
+        if (treeContext) {
+          pageTreePrompt = `\n\n## WORKSPACE STRUCTURE\n\nHere is the complete workspace structure:\n\n${treeContext}`;
+        }
+      } else {
+        // Dashboard context - show drive list summary
+        const driveSummary = await getDriveListSummary(adminUser.id);
+        if (driveSummary) {
+          pageTreePrompt = `\n\n## ACCESSIBLE WORKSPACES\n\n${driveSummary}`;
+        }
+      }
+    }
+
     // Build prompt data for both modes (Full Access and Read-Only)
     const modes: Array<{ key: 'fullAccess' | 'readOnly'; isReadOnly: boolean }> = [
       { key: 'fullAccess', isReadOnly: false },
@@ -197,30 +247,90 @@ export async function GET(request: Request) {
         isReadOnly
       );
 
+      // Build inline instructions based on context type
+      let inlineInstructions: string;
+      if (contextType === 'page' && locationContext?.currentPage) {
+        inlineInstructions = buildInlineInstructions({
+          pageTitle: locationContext.currentPage.title,
+          pageType: locationContext.currentPage.type,
+          isTaskLinked: locationContext.currentPage.isTaskLinked,
+          driveName: locationContext.currentDrive?.name,
+          pagePath: locationContext.currentPage.path,
+          driveSlug: locationContext.currentDrive?.slug,
+          driveId: locationContext.currentDrive?.id,
+        });
+      } else {
+        inlineInstructions = buildGlobalAssistantInstructions(
+          locationContext?.currentDrive
+            ? {
+                driveName: locationContext.currentDrive.name,
+                driveSlug: locationContext.currentDrive.slug,
+                driveId: locationContext.currentDrive.id,
+              }
+            : undefined
+        );
+      }
+
       // Build detailed sections with source annotations for the breakdown view
       const sections: PromptSection[] = [
         {
           name: 'System Prompt',
           content: systemPrompt,
-          source: 'apps/web/src/lib/ai/system-prompt.ts',
-          lines: '73-94',
+          source: 'apps/web/src/lib/ai/core/system-prompt.ts',
           tokens: estimateSystemPromptTokens(systemPrompt),
         },
         {
           name: 'Inline Instructions',
-          content: '(See complete payload for full instructions)',
-          source: 'apps/web/src/lib/ai/inline-instructions.ts',
-          lines: '19-53',
-          tokens: 0, // Already counted in complete payload
+          content: inlineInstructions,
+          source: 'apps/web/src/lib/ai/core/inline-instructions.ts',
+          tokens: estimateSystemPromptTokens(inlineInstructions),
         },
       ];
+
+      // Add async context sections
+      if (agentAwarenessPrompt) {
+        sections.push({
+          name: 'Agent Awareness',
+          content: agentAwarenessPrompt,
+          source: 'apps/web/src/lib/ai/core/agent-awareness.ts',
+          tokens: estimateSystemPromptTokens(agentAwarenessPrompt),
+        });
+      }
+
+      if (pageTreePrompt) {
+        sections.push({
+          name: 'Page Tree Context',
+          content: pageTreePrompt,
+          source: 'apps/web/src/lib/ai/core/page-tree-context.ts',
+          tokens: estimateSystemPromptTokens(pageTreePrompt),
+        });
+      }
 
       // Get tool permissions summary
       const toolsSummary = getToolsSummary(isReadOnly);
 
+      // Append async context sections to the full prompt
+      const fullPromptWithAsyncContext =
+        completePayload.request.system +
+        (agentAwarenessPrompt ? '\n\n' + agentAwarenessPrompt : '') +
+        pageTreePrompt;
+
+      // Update completePayload's system prompt to include async context
+      completePayload.request.system = fullPromptWithAsyncContext;
+
+      // Show the exact JSON payload sent to the LLM API
+      completePayload.formattedString = JSON.stringify(completePayload.request, null, 2);
+
+      // Update token estimates to include async sections
+      const asyncTokens =
+        (agentAwarenessPrompt ? estimateSystemPromptTokens(agentAwarenessPrompt) : 0) +
+        (pageTreePrompt ? estimateSystemPromptTokens(pageTreePrompt) : 0);
+      completePayload.tokenEstimates.systemPrompt += asyncTokens;
+      completePayload.tokenEstimates.total += asyncTokens;
+
       promptData[key] = {
         mode: key,
-        fullPrompt: completePayload.request.system,
+        fullPrompt: fullPromptWithAsyncContext,
         sections,
         totalTokens: completePayload.tokenEstimates.total,
         toolsAllowed: toolsSummary.allowed,
@@ -243,7 +353,7 @@ export async function GET(request: Request) {
       const toolAny = tool as any;
       toolsForExtraction[name] = {
         description: toolAny.description,
-        parameters: toolAny.parameters,
+        parameters: toolAny.inputSchema,  // AI SDK v5 uses inputSchema, not parameters
       };
     }
     const allToolSchemas = extractToolSchemas(toolsForExtraction);
@@ -285,6 +395,7 @@ export async function GET(request: Request) {
         selectedDriveId,
         selectedPageId,
         contextType,
+        showPageTree,
       },
     });
 

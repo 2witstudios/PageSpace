@@ -57,9 +57,7 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
 
   // Task management tools - render with CompactTodoListMessage components
   const taskManagementTools = [
-    'create_task_list',
     'update_task',
-    'get_task_list',
   ];
 
   if (taskManagementTools.includes(toolName)) {

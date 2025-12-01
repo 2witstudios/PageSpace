@@ -86,6 +86,10 @@ export { getTodayUTC, getTomorrowMidnightUTC, getSecondsUntilMidnightUTC } from 
 export { agentAwarenessCache, AgentAwarenessCache } from './services/agent-awareness-cache';
 export type { CachedAgent, CachedDriveAgents } from './services/agent-awareness-cache';
 
+// Page tree caching (server-only)
+export { pageTreeCache, PageTreeCache } from './services/page-tree-cache';
+export type { CachedTreeNode, CachedPageTree } from './services/page-tree-cache';
+
 // File processing utilities (server-only)
 export * from './file-processing';
 

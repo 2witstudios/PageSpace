@@ -5,10 +5,12 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { CheckCircle, XCircle, Key, ExternalLink, Zap, Sparkles, Bot, Wrench } from 'lucide-react';
+import { CheckCircle, XCircle, Key, ExternalLink, Zap, Sparkles, Bot, Wrench, FolderTree } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import { AI_PROVIDERS, getBackendProvider } from '@/lib/ai/core/ai-providers-config';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import type { AgentInfo } from '@/types/agent';
 
 // Using centralized AI providers configuration from ai-providers-config.ts
@@ -63,6 +65,10 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
 
   // Dynamic LM Studio models state
   const [lmstudioModels, setLmstudioModels] = useState<Record<string, string> | null>(null);
+
+  // Page tree context toggle (from centralized store)
+  const showPageTree = useAssistantSettingsStore((state) => state.showPageTree);
+  const setShowPageTree = useAssistantSettingsStore((state) => state.setShowPageTree);
 
   // Fetch Ollama models dynamically
   const fetchOllamaModels = useCallback(async () => {
@@ -303,6 +309,9 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
     }
   };
 
+  // Get setProviderSettings from the centralized store
+  const setStoreProviderSettings = useAssistantSettingsStore((state) => state.setProviderSettings);
+
   const handleSaveSettings = async () => {
     setSaving(true);
     try {
@@ -314,7 +323,7 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
         provider: selectedProvider, // Send UI provider directly
         model: selectedModel,
       });
-      
+
       // Update local state to reflect the saved settings
       if (providerSettings) {
         const updatedSettings = {
@@ -324,15 +333,10 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
         };
         setProviderSettings(updatedSettings);
       }
-      
-      // Broadcast settings update event for other components
-      // Note: This uses CustomEvent (not Zustand) because AI settings sync spans
-      // beyond the sidebar - includes /settings/ai page and SidebarChatTab.
-      // A future refactor could consolidate into a dedicated AI settings store.
-      window.dispatchEvent(new CustomEvent('ai-settings-updated', {
-        detail: { provider: selectedProvider, model: selectedModel }
-      }));
-      
+
+      // Update centralized store (for SidebarChatTab and GlobalAssistantView)
+      setStoreProviderSettings(selectedProvider, selectedModel);
+
       toast.success(result.message || 'Settings saved successfully!');
     } catch (error) {
       console.error('Failed to save settings:', error);
@@ -613,6 +617,27 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
               >
                 {saving ? 'Saving...' : 'Save Settings'}
               </Button>
+            </CardContent>
+          </Card>
+
+          {/* Workspace Structure Toggle */}
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <FolderTree className="h-4 w-4" />
+                  <CardTitle className="text-sm">Workspace Structure</CardTitle>
+                </div>
+                <Switch
+                  checked={showPageTree}
+                  onCheckedChange={setShowPageTree}
+                />
+              </div>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <p className="text-xs text-muted-foreground">
+                When enabled, the assistant can see your workspace page tree for better navigation awareness.
+              </p>
             </CardContent>
           </Card>
 

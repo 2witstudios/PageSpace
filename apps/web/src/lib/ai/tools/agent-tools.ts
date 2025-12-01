@@ -21,12 +21,17 @@ export const agentTools = {
       parentId: z.string().optional().describe('The unique ID of the parent page - REQUIRED when creating inside any page (folder, document, etc). Only omit for root-level agents.'),
       title: z.string().describe('The name/title of the AI agent (e.g., "Content Writer", "Code Assistant", "Research Helper")'),
       systemPrompt: z.string().describe('System prompt defining the agent\'s behavior, personality, expertise, and instructions. This controls how the agent responds and what role it plays.'),
-      enabledTools: z.array(z.string()).optional().describe('Array of tool names to enable for this agent. Available tools include: regex_search, glob_search, multi_drive_search, read_page, create_page, rename_page, replace_lines, insert_lines, create_task_list, move_page, trash_page, and more. Leave empty for a chat-only agent.'),
+      enabledTools: z.array(z.string()).optional().describe('Array of tool names to enable for this agent. Available tools include: regex_search, glob_search, multi_drive_search, read_page, create_page, rename_page, replace_lines, insert_lines, update_task, move_page, trash_page, and more. Leave empty for a chat-only agent.'),
       aiProvider: z.string().optional().describe('AI provider for this agent (e.g., "openrouter", "google", "anthropic"). Overrides user default.'),
       aiModel: z.string().optional().describe('AI model for this agent (e.g., "gpt-4", "claude-3-sonnet"). Overrides user default.'),
       welcomeMessage: z.string().optional().describe('Optional welcome message shown when users first interact with the agent.'),
+      agentDefinition: z.string().max(500).describe('Brief description of what this agent does (max 500 chars). Used for agent discovery and documentation.'),
+      visibleToGlobalAssistant: z.boolean().describe('Whether this agent appears in the global assistant\'s available agents list for cross-agent communication.'),
+      includeDrivePrompt: z.boolean().describe('Include drive-level AI instructions in the agent\'s context.'),
+      includePageTree: z.boolean().describe('Include page tree structure in the agent\'s context for workspace awareness.'),
+      pageTreeScope: z.enum(['children', 'drive']).describe('Scope for page tree: "children" (this page and descendants) or "drive" (entire drive structure).'),
     }),
-    execute: async ({ driveId, parentId, title, systemPrompt, enabledTools = [], aiProvider, aiModel, welcomeMessage }, { experimental_context: context }) => {
+    execute: async ({ driveId, parentId, title, systemPrompt, enabledTools = [], aiProvider, aiModel, welcomeMessage, agentDefinition, visibleToGlobalAssistant, includeDrivePrompt, includePageTree, pageTreeScope }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -108,6 +113,11 @@ export const agentTools = {
           enabledTools?: string[] | null;
           aiProvider?: string | null;
           aiModel?: string | null;
+          agentDefinition: string;
+          visibleToGlobalAssistant: boolean;
+          includeDrivePrompt: boolean;
+          includePageTree: boolean;
+          pageTreeScope: 'children' | 'drive';
         }
 
         const agentData: AgentInsertData = {
@@ -119,6 +129,11 @@ export const agentTools = {
           parentId: parentId || null,
           isTrashed: false,
           systemPrompt,
+          agentDefinition,
+          visibleToGlobalAssistant,
+          includeDrivePrompt,
+          includePageTree,
+          pageTreeScope,
         };
 
         // Add optional configuration
@@ -201,8 +216,13 @@ export const agentTools = {
       enabledTools: z.array(z.string()).optional().describe('New array of enabled tool names. Leave empty to keep current tools.'),
       aiProvider: z.string().optional().describe('New AI provider for the agent'),
       aiModel: z.string().optional().describe('New AI model for the agent'),
+      agentDefinition: z.string().max(500).optional().describe('New description of what this agent does (max 500 chars).'),
+      visibleToGlobalAssistant: z.boolean().optional().describe('Whether this agent appears in the global assistant\'s available agents list.'),
+      includeDrivePrompt: z.boolean().optional().describe('Include drive-level AI instructions in the agent\'s context.'),
+      includePageTree: z.boolean().optional().describe('Include page tree structure in the agent\'s context.'),
+      pageTreeScope: z.enum(['children', 'drive']).optional().describe('Scope for page tree: "children" or "drive".'),
     }),
-    execute: async ({ agentPath, agentId, systemPrompt, enabledTools, aiProvider, aiModel }, { experimental_context: context }) => {
+    execute: async ({ agentPath, agentId, systemPrompt, enabledTools, aiProvider, aiModel, agentDefinition, visibleToGlobalAssistant, includeDrivePrompt, includePageTree, pageTreeScope }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -244,6 +264,11 @@ export const agentTools = {
           enabledTools?: string[] | null;
           aiProvider?: string | null;
           aiModel?: string | null;
+          agentDefinition?: string | null;
+          visibleToGlobalAssistant?: boolean;
+          includeDrivePrompt?: boolean;
+          includePageTree?: boolean;
+          pageTreeScope?: 'children' | 'drive';
         }
 
         const updateData: AgentUpdateData = {
@@ -261,6 +286,21 @@ export const agentTools = {
         }
         if (aiModel !== undefined) {
           updateData.aiModel = aiModel || null;
+        }
+        if (agentDefinition !== undefined) {
+          updateData.agentDefinition = agentDefinition || null;
+        }
+        if (visibleToGlobalAssistant !== undefined) {
+          updateData.visibleToGlobalAssistant = visibleToGlobalAssistant;
+        }
+        if (includeDrivePrompt !== undefined) {
+          updateData.includeDrivePrompt = includeDrivePrompt;
+        }
+        if (includePageTree !== undefined) {
+          updateData.includePageTree = includePageTree;
+        }
+        if (pageTreeScope !== undefined) {
+          updateData.pageTreeScope = pageTreeScope;
         }
 
         // Update the agent configuration

@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { Loader2, Bot } from 'lucide-react';
+import { Loader2, Bot, FolderTree } from 'lucide-react';
 import { toast } from 'sonner';
 import { useForm, Controller } from 'react-hook-form';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -22,6 +22,8 @@ interface AgentConfig {
   drivePrompt?: string | null;
   agentDefinition?: string;
   visibleToGlobalAssistant?: boolean;
+  includePageTree?: boolean;
+  pageTreeScope?: 'children' | 'drive';
 }
 
 interface PageAgentSettingsTabProps {
@@ -33,6 +35,7 @@ interface PageAgentSettingsTabProps {
   onProviderChange: (provider: string) => void;
   onModelChange: (model: string) => void;
   isProviderConfigured: (provider: string) => boolean;
+  onSavingChange?: (isSaving: boolean) => void;
 }
 
 export interface PageAgentSettingsTabRef {
@@ -48,6 +51,8 @@ interface FormData {
   includeDrivePrompt: boolean;
   agentDefinition: string;
   visibleToGlobalAssistant: boolean;
+  includePageTree: boolean;
+  pageTreeScope: 'children' | 'drive';
 }
 
 const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettingsTabProps>(({
@@ -58,7 +63,8 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   selectedModel,
   onProviderChange,
   onModelChange,
-  isProviderConfigured
+  isProviderConfigured,
+  onSavingChange
 }, ref) => {
   const [isSaving, setIsSaving] = useState(false);
 
@@ -77,6 +83,8 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       includeDrivePrompt: config?.includeDrivePrompt ?? false,
       agentDefinition: config?.agentDefinition || '',
       visibleToGlobalAssistant: config?.visibleToGlobalAssistant ?? true,
+      includePageTree: config?.includePageTree ?? false,
+      pageTreeScope: config?.pageTreeScope ?? 'children',
     }
   });
 
@@ -91,6 +99,8 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
         includeDrivePrompt: config.includeDrivePrompt ?? false,
         agentDefinition: config.agentDefinition || '',
         visibleToGlobalAssistant: config.visibleToGlobalAssistant ?? true,
+        includePageTree: config.includePageTree ?? false,
+        pageTreeScope: config.pageTreeScope ?? 'children',
       });
     }
   }, [config, reset, selectedProvider, selectedModel]);
@@ -162,6 +172,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
 
   const onSubmit = useCallback(async (data: FormData) => {
     setIsSaving(true);
+    onSavingChange?.(true);
     try {
       // Include the current provider and model from props
       const requestData = {
@@ -171,6 +182,8 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
         includeDrivePrompt: data.includeDrivePrompt,
         agentDefinition: data.agentDefinition,
         visibleToGlobalAssistant: data.visibleToGlobalAssistant,
+        includePageTree: data.includePageTree,
+        pageTreeScope: data.pageTreeScope,
       };
 
       await patch(`/api/pages/${pageId}/agent-config`, requestData);
@@ -183,6 +196,8 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
         includeDrivePrompt: data.includeDrivePrompt,
         agentDefinition: data.agentDefinition,
         visibleToGlobalAssistant: data.visibleToGlobalAssistant,
+        includePageTree: data.includePageTree,
+        pageTreeScope: data.pageTreeScope,
       } as AgentConfig;
       onConfigUpdate(updatedConfig);
       toast.success('Agent configuration saved successfully');
@@ -191,8 +206,9 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       toast.error('Failed to save configuration');
     } finally {
       setIsSaving(false);
+      onSavingChange?.(false);
     }
-  }, [pageId, config, onConfigUpdate, selectedProvider, selectedModel]);
+  }, [pageId, config, onConfigUpdate, selectedProvider, selectedModel, onSavingChange]);
 
   // Expose form submission to parent component
   useImperativeHandle(ref, () => ({
@@ -395,6 +411,68 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
               </div>
             </div>
           </CardContent>
+        </Card>
+
+        {/* Workspace Structure Context */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <FolderTree className="h-5 w-5" />
+                <div>
+                  <CardTitle className="text-lg">Workspace Structure</CardTitle>
+                  <CardDescription>
+                    Include page tree in the AI&apos;s context for navigation awareness.
+                  </CardDescription>
+                </div>
+              </div>
+              <Controller
+                name="includePageTree"
+                control={control}
+                render={({ field }) => (
+                  <Switch
+                    checked={field.value}
+                    onCheckedChange={field.onChange}
+                  />
+                )}
+              />
+            </div>
+          </CardHeader>
+          {watch('includePageTree') && (
+            <CardContent className="space-y-4">
+              <div>
+                <label className="text-sm font-medium mb-2 block">Tree Scope</label>
+                <Controller
+                  name="pageTreeScope"
+                  control={control}
+                  render={({ field }) => (
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <SelectTrigger className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="children">
+                          <div className="flex flex-col">
+                            <span>This page and children</span>
+                            <span className="text-xs text-muted-foreground">Show subtree rooted at this page</span>
+                          </div>
+                        </SelectItem>
+                        <SelectItem value="drive">
+                          <div className="flex flex-col">
+                            <span>Entire workspace</span>
+                            <span className="text-xs text-muted-foreground">Show complete drive structure</span>
+                          </div>
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Large workspaces are automatically truncated to show complete depth levels up to 200 pages.
+              </p>
+            </CardContent>
+          )}
         </Card>
 
         {/* Tool Permissions */}

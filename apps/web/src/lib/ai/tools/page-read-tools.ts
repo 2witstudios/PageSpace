@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { db, pages, taskItems, eq, and, asc, isNotNull } from '@pagespace/db';
+import { db, pages, taskItems, taskLists, eq, and, asc, isNotNull } from '@pagespace/db';
 import { buildTree, getUserAccessLevel, getUserDriveAccess, getUserAccessiblePagesInDriveWithDetails, getPageTypeEmoji, isFolderPage, PageType } from '@pagespace/lib/server';
 import { ToolExecutionContext } from '../core/types';
 import { getSuggestedVisionModels } from '../core/model-capabilities';
@@ -205,6 +205,83 @@ export const pageReadTools = {
               // Normal text content available - continue to process below
               break;
           }
+        }
+
+        // Handle TASK_LIST pages - return structured task data
+        if (page.type === 'TASK_LIST') {
+          // Find or create task_list record for this page
+          let taskList = await db.query.taskLists.findFirst({
+            where: eq(taskLists.pageId, page.id),
+          });
+
+          if (!taskList) {
+            // Auto-create task_list record
+            const [newTaskList] = await db.insert(taskLists).values({
+              userId,
+              pageId: page.id,
+              title: page.title,
+              status: 'pending',
+              metadata: {
+                createdAt: new Date().toISOString(),
+                autoCreated: true,
+              },
+            }).returning();
+            taskList = newTaskList;
+          }
+
+          // Get all tasks ordered by position
+          const tasks = await db
+            .select()
+            .from(taskItems)
+            .where(eq(taskItems.taskListId, taskList.id))
+            .orderBy(asc(taskItems.position));
+
+          // Calculate progress
+          const totalTasks = tasks.length;
+          const completedTasks = tasks.filter(t => t.status === 'completed').length;
+          const inProgressTasks = tasks.filter(t => t.status === 'in_progress').length;
+          const pendingTasks = tasks.filter(t => t.status === 'pending').length;
+          const blockedTasks = tasks.filter(t => t.status === 'blocked').length;
+          const progressPercentage = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+
+          return {
+            success: true,
+            path,
+            title: page.title,
+            type: 'TASK_LIST',
+            taskListId: taskList.id,
+            tasks: tasks.map(t => ({
+              id: t.id,
+              title: t.title,
+              description: t.description,
+              status: t.status,
+              priority: t.priority,
+              position: t.position,
+              assigneeId: t.assigneeId,
+              dueDate: t.dueDate,
+              completedAt: t.completedAt,
+              linkedPageId: t.pageId,
+            })),
+            progress: {
+              total: totalTasks,
+              completed: completedTasks,
+              inProgress: inProgressTasks,
+              pending: pendingTasks,
+              blocked: blockedTasks,
+              percentage: progressPercentage,
+            },
+            summary: totalTasks > 0
+              ? `Task list "${page.title}" is ${progressPercentage}% complete (${completedTasks}/${totalTasks} tasks done)`
+              : `Task list "${page.title}" has no tasks yet`,
+            nextSteps: totalTasks === 0 ? [
+              'Use update_task with this pageId to add tasks',
+            ] : pendingTasks > 0 ? [
+              'Use update_task with taskId to update task status',
+              'Each task has a linked document page for notes',
+            ] : [
+              'All tasks are completed or in progress',
+            ],
+          };
         }
 
         // Split content into numbered lines for easy reference

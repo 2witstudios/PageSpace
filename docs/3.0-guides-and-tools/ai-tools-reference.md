@@ -448,34 +448,81 @@ multi_drive_search({
 
 ---
 
-## Task Management System
+## Task Management
 
-### create_task_list
+Task management in PageSpace uses the TASK_LIST page type. Create task lists as pages, then use `update_task` to add tasks. Each task automatically creates a linked DOCUMENT page for detailed notes.
 
-**Purpose:** Create persistent task lists for complex operations
-**Permission Level:** Write
-**Use Cases:** Multi-step operations, project management, progress tracking
+### Creating Task Lists
+
+Use `create_page` with `type: 'TASK_LIST'`:
 
 ```typescript
-create_task_list({
+create_page({
+  driveId: "drive-123",
   title: "Website Redesign Project",
-  description: "Complete website redesign with new branding",
-  tasks: [
+  type: "TASK_LIST",
+  parentId?: "page-456"
+})
+```
+
+### Reading Task Progress
+
+Use `read_page` on a TASK_LIST page to get structured task data:
+
+```typescript
+read_page({
+  pageId: "tasklist-page-123"
+})
+```
+
+**Response for TASK_LIST pages:**
+```json
+{
+  "success": true,
+  "title": "Website Redesign Project",
+  "type": "TASK_LIST",
+  "taskListId": "tasklist-456",
+  "tasks": [
     {
-      title: "Research competitor websites",
-      description: "Analyze top 5 competitors",
-      priority: "high",
-      estimatedDuration: "2 hours"
-    },
-    {
-      title: "Create wireframes",
-      description: "Design key page layouts",
-      priority: "medium",
-      estimatedDuration: "4 hours"
+      "id": "task-789",
+      "title": "Research competitor websites",
+      "status": "pending",
+      "priority": "high",
+      "position": 1,
+      "linkedPageId": "page-doc-123"
     }
   ],
-  dueDate?: "2024-03-15",
-  assigneeId?: "user-123"
+  "progress": {
+    "total": 2,
+    "completed": 0,
+    "inProgress": 1,
+    "pending": 1,
+    "percentage": 0
+  }
+}
+```
+
+### update_task
+
+**Purpose:** Add or update tasks on a TASK_LIST page
+**Permission Level:** Edit
+**Use Cases:** Task creation, status updates, progress tracking
+
+```typescript
+// Add a new task
+update_task({
+  pageId: "tasklist-page-123",
+  title: "Research competitor websites",
+  description: "Analyze top 5 competitors",
+  priority: "high", // low, medium, high
+  status: "pending" // pending, in_progress, completed, blocked
+})
+
+// Update existing task
+update_task({
+  taskId: "task-789",
+  status: "completed",
+  description: "Completed analysis of 5 competitors"
 })
 ```
 
@@ -483,96 +530,17 @@ create_task_list({
 ```json
 {
   "success": true,
-  "taskList": {
-    "id": "tasklist-456",
-    "title": "Website Redesign Project",
-    "status": "active",
-    "totalTasks": 2,
-    "completedTasks": 0,
-    "progress": 0,
-    "tasks": [
-      {
-        "id": "task-789",
-        "title": "Research competitor websites",
-        "status": "pending",
-        "priority": "high",
-        "position": 1
-      }
-    ]
-  }
+  "task": {
+    "id": "task-789",
+    "title": "Research competitor websites",
+    "status": "completed",
+    "linkedPageId": "page-doc-123"
+  },
+  "message": "Task updated successfully"
 }
 ```
 
----
-
-### get_task_list
-
-**Purpose:** Retrieve task list status and progress
-**Permission Level:** Read
-**Use Cases:** Progress monitoring, status updates
-
-```typescript
-get_task_list({
-  taskListId: "tasklist-456"
-})
-```
-
----
-
-### update_task_status
-
-**Purpose:** Update individual task progress
-**Permission Level:** Edit
-**Use Cases:** Progress tracking, workflow management
-
-```typescript
-update_task_status({
-  taskId: "task-789",
-  status: "completed", // pending, in_progress, completed, blocked
-  note?: "Completed analysis of 5 competitors",
-  completedAt?: "2024-01-20T14:30:00Z"
-})
-```
-
----
-
-### add_task
-
-**Purpose:** Add new tasks to existing lists
-**Permission Level:** Edit
-**Use Cases:** Dynamic task expansion, discovered requirements
-
-```typescript
-add_task({
-  taskListId: "tasklist-456",
-  title: "User testing session",
-  description: "Conduct usability testing with 5 users",
-  priority: "medium",
-  position?: 3, // Optional: specific position
-  dependencies?: ["task-789"] // Optional: task dependencies
-})
-```
-
-**Note:** To add notes or progress updates to tasks, use the `note` parameter in `update_task_status`.
-
----
-
-### resume_task_list
-
-**Purpose:** Resume task lists from previous sessions
-**Permission Level:** Read
-**Use Cases:** Cross-session continuity, project recovery
-
-```typescript
-resume_task_list({
-  filters?: {
-    status: "active",
-    assigneeId: "user-123",
-    priority: "high"
-  },
-  limit?: 5
-})
-```
+**Note:** Each task automatically creates a linked DOCUMENT page for detailed notes and content.
 
 ---
 
@@ -695,7 +663,7 @@ create_agent({
     "read_page",
     "replace_lines",
     "insert_lines",
-    "create_task_list",
+    "update_task",
     "regex_search"
   ],
   aiProvider?: "anthropic",
@@ -768,9 +736,9 @@ enabledTools: [
 
 // Example: Project management agent
 enabledTools: [
-  "create_task_list",
-  "update_task_status",
-  "add_task",
+  "create_page",
+  "read_page",
+  "update_task",
   "ask_agent"
 ]
 ```
@@ -810,18 +778,33 @@ await create_page({
   title: "Campaign AI",
   type: "AI_CHAT",
   systemPrompt: "Marketing campaign specialist...",
-  enabledTools: ["create_page", "replace_lines", "insert_lines", "create_task_list"],
+  enabledTools: ["create_page", "replace_lines", "insert_lines", "update_task"],
   parentId: parentFolder.id
 });
 
 // Step 4: Create task list for campaign
-await create_task_list({
+await create_page({
+  driveId: "drive-123",
   title: "Q1 Campaign Launch",
-  tasks: [
-    { title: "Market research", priority: "high" },
-    { title: "Creative development", priority: "medium" },
-    { title: "Campaign execution", priority: "high" }
-  ]
+  type: "TASK_LIST",
+  parentId: parentFolder.id
+});
+
+// Add tasks to the task list
+await update_task({
+  pageId: taskListPage.id,
+  title: "Market research",
+  priority: "high"
+});
+await update_task({
+  pageId: taskListPage.id,
+  title: "Creative development",
+  priority: "medium"
+});
+await update_task({
+  pageId: taskListPage.id,
+  title: "Campaign execution",
+  priority: "high"
 });
 ```
 
@@ -910,13 +893,20 @@ const outdatedContent = await regex_search({
 });
 
 // Step 2: Create task list for updates
-await create_task_list({
+const taskListPage = await create_page({
+  driveId: "drive-123",
   title: "Content Maintenance - 2024 Updates",
-  tasks: outdatedContent.matches.map(match => ({
+  type: "TASK_LIST"
+});
+
+// Add tasks for each outdated document
+for (const match of outdatedContent.matches) {
+  await update_task({
+    pageId: taskListPage.id,
     title: `Update ${match.title}`,
     description: `Update dates and references in ${match.path}`
-  }))
-});
+  });
+}
 
 // Step 3: Archive old files individually
 const oldFiles = await glob_search({

@@ -9,7 +9,7 @@ import {
   isDriveOwnerOrAdmin,
 } from '@pagespace/lib';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket/socket-utils';
-import { loggers, agentAwarenessCache } from '@pagespace/lib/server';
+import { loggers, agentAwarenessCache, pageTreeCache } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
@@ -158,6 +158,9 @@ export async function POST(request: Request) {
     if (isAIChatPage(type)) {
       await agentAwarenessCache.invalidateDriveAgents(driveId);
     }
+
+    // Invalidate page tree cache when structure changes
+    await pageTreeCache.invalidateDriveTree(driveId);
 
     trackPageOperation(userId, 'create', newPage.id, {
       title,

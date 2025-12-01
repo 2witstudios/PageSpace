@@ -1,7 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db, pages, drives, eq, and, driveMembers, pagePermissions, ne } from '@pagespace/db';
-import {} from '@pagespace/lib/server';
+import { slugify } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket/socket-utils';
 import { ToolExecutionContext } from '../core/types';
 
@@ -207,11 +207,12 @@ export const driveTools = {
           throw new Error('Drive not found or you do not have permission to rename it');
         }
 
-        // Update the drive name
+        // Update the drive name and regenerate slug
         const [updatedDrive] = await db
           .update(drives)
           .set({
             name: name.trim(),
+            slug: slugify(name.trim()),
             updatedAt: new Date(),
           })
           .where(eq(drives.id, drive.id))
@@ -245,7 +246,7 @@ export const driveTools = {
             driveSlug: updatedDrive.slug,
           },
           nextSteps: [
-            'The workspace slug remains the same for consistency',
+            `Workspace slug updated to "${updatedDrive.slug}"`,
             'All pages and content remain unchanged',
           ]
         };

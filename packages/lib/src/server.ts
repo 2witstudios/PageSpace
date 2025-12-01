@@ -27,6 +27,10 @@ export * from './notifications';
 export { agentAwarenessCache, AgentAwarenessCache } from './services/agent-awareness-cache';
 export type { CachedAgent, CachedDriveAgents } from './services/agent-awareness-cache';
 
+// Page tree caching
+export { pageTreeCache, PageTreeCache } from './services/page-tree-cache';
+export type { CachedTreeNode, CachedPageTree } from './services/page-tree-cache';
+
 // Re-export specific functions for backward compatibility
 export {
   isUserDriveMember,

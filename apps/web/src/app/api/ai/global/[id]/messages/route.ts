@@ -27,6 +27,7 @@ import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
 import { buildAgentAwarenessPrompt } from '@/lib/ai/core/agent-awareness';
 import { filterToolsForReadOnly } from '@/lib/ai/core/tool-filtering';
+import { getPageTreeContext, getDriveListSummary } from '@/lib/ai/core/page-tree-context';
 import { getModelCapabilities } from '@/lib/ai/core/model-capabilities';
 import { convertMCPToolsToAISDKSchemas, parseMCPToolName } from '@/lib/ai/core/mcp-tool-converter';
 import { getMCPBridge } from '@/lib/mcp/mcp-bridge';
@@ -223,6 +224,7 @@ export async function POST(
       glmApiKey,
       locationContext,
       isReadOnly,
+      showPageTree,
       mcpTools
     } = requestBody;
 
@@ -513,10 +515,10 @@ export async function POST(
 You are the Global Assistant for PageSpace - accessible from both the dashboard and sidebar.
 
 TASK MANAGEMENT:
-• Use create_task_list for any multi-step work (3+ actions) - this creates interactive UI components in the conversation
-• Break complex requests into trackable tasks immediately upon receiving them  
-• Update task status as you progress through work - users see real-time updates
-• Task lists persist across conversations and appear as conversation messages
+• Use create_page with type TASK_LIST to create task lists for tracking work
+• Use update_task with pageId to add tasks - each task creates a linked DOCUMENT page
+• Use read_page on TASK_LIST pages to view tasks and progress
+• Update task status as you progress - users see real-time updates
 
 CRITICAL NESTING PRINCIPLE:
 • NO RESTRICTIONS on what can contain what - organize based on logical user needs
@@ -575,9 +577,38 @@ MENTION PROCESSING:
 
     // Build agent awareness prompt - lists visible AI agents for consultation
     const agentAwarenessPrompt = await buildAgentAwarenessPrompt(userId);
-    const finalSystemPrompt = agentAwarenessPrompt
-      ? systemPrompt + '\n\n' + agentAwarenessPrompt
-      : systemPrompt;
+
+    // Build page tree context if enabled
+    let pageTreePrompt = '';
+    if (showPageTree) {
+      if (locationContext?.currentDrive?.id) {
+        // In drive context: show full drive tree
+        const treeContext = await getPageTreeContext(userId, {
+          scope: 'drive',
+          driveId: locationContext.currentDrive.id,
+        });
+        if (treeContext) {
+          pageTreePrompt = `\n\n## WORKSPACE STRUCTURE\n\nHere is the complete workspace structure:\n\n${treeContext}`;
+          loggers.api.debug('Global Assistant: Page tree context included', {
+            driveId: locationContext.currentDrive.id,
+            contextLength: treeContext.length
+          });
+        }
+      } else {
+        // Dashboard context: show drive list summary
+        const driveSummary = await getDriveListSummary(userId);
+        if (driveSummary) {
+          pageTreePrompt = `\n\n## ACCESSIBLE WORKSPACES\n\n${driveSummary}`;
+          loggers.api.debug('Global Assistant: Drive list summary included', {
+            summaryLength: driveSummary.length
+          });
+        }
+      }
+    }
+
+    const finalSystemPrompt = systemPrompt
+      + (agentAwarenessPrompt ? '\n\n' + agentAwarenessPrompt : '')
+      + pageTreePrompt;
 
     // Filter tools based on read-only mode
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
