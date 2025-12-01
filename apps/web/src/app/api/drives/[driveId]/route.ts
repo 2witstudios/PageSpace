@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { drives, db, eq, and, driveMembers } from '@pagespace/db';
 import { z } from 'zod';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, slugify } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket/socket-utils';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
@@ -119,11 +119,12 @@ export async function PATCH(
       return NextResponse.json({ error: 'Only drive owners and admins can update drive settings' }, { status: 403 });
     }
 
-    // Update the drive
+    // Update the drive (regenerate slug if name changes)
     await db
       .update(drives)
       .set({
         ...validatedBody,
+        ...(validatedBody.name && { slug: slugify(validatedBody.name) }),
         updatedAt: new Date(),
       })
       .where(eq(drives.id, drive.id));
