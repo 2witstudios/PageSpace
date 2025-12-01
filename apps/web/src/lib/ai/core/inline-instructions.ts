@@ -78,8 +78,9 @@ WORKSPACE RULES:
 • Provide both driveId and driveSlug for operations.
 
 TASK MANAGEMENT:
-• Use create_task_list for multi-step work (3+ actions)
-• Update task status as you progress - users see real-time updates
+• Use create_page with type TASK_LIST to create task lists
+• Use update_task with pageId to add tasks - each task creates a linked DOCUMENT page
+• Use read_page on TASK_LIST pages to view tasks and progress
 
 ${hasDriveContext ? `
 CONTEXT:

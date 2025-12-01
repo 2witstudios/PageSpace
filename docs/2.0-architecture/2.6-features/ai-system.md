@@ -283,14 +283,18 @@ const searchTools = {
 };
 ```
 
-#### Task Management System
+#### Task Management
 ```typescript
-const taskTools = {
-  create_task_list,      // Persistent task tracking across AI conversations
-  get_task_list,         // Progress monitoring with completion tracking
-  update_task_status,    // Status management (pending/in_progress/completed/blocked) with note parameter for progress updates
-  add_task,              // Dynamic task list expansion
-  resume_task_list,      // Cross-session task continuity
+// Task management uses TASK_LIST pages with the update_task tool
+const taskWorkflow = {
+  // Create a TASK_LIST page using create_page
+  createTaskList: create_page({ type: 'TASK_LIST', title: 'My Tasks', ... }),
+
+  // Read task status and progress
+  readTasks: read_page({ pageId: taskListPageId }), // Returns structured task data
+
+  // Add/update tasks - each creates a linked DOCUMENT page
+  updateTask: update_task({ pageId: taskListPageId, title: 'New Task', ... }),
 };
 ```
 
@@ -526,12 +530,11 @@ This architecture makes AI a collaborative workspace citizen rather than an isol
 - **Multi-provider support**: PageSpace, OpenRouter, Google, OpenAI, Anthropic, xAI, Ollama
 - **100+ AI models**: From free Qwen/DeepSeek to premium Claude 4.1/GPT-5
 - **Database-first persistence**: Messages stored immediately in PostgreSQL
-- **Comprehensive AI tool integration**: 13+ workspace automation tools across 6 categories
+- **Comprehensive AI tool integration**: Workspace automation tools across 5 categories
   - Core page operations (10 tools)
   - Content editing tools (4 tools)
   - Advanced search & discovery (3 tools)
-  - Task management system (6 tools)
-  - Batch operations (5 tools)
+  - Task management (1 tool - update_task, works with TASK_LIST pages)
   - Agent management & communication (5 tools)
 - **Agent role system**: PARTNER, PLANNER, and WRITER personalities with distinct capabilities
 - **Custom agent configuration**: Per-page system prompts, tool permissions, and AI provider settings

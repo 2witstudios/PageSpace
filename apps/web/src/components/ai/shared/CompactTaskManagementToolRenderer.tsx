@@ -1,5 +1,5 @@
 import React from 'react';
-import { CheckCircle, ListTodo, List, Loader2, AlertCircle } from 'lucide-react';
+import { CheckCircle, ListTodo, Loader2, AlertCircle } from 'lucide-react';
 import { CompactTodoListMessage } from './CompactTodoListMessage';
 
 interface Task {
@@ -74,12 +74,8 @@ export const CompactTaskManagementToolRenderer: React.FC<CompactTaskManagementTo
   const getToolIcon = (toolName: string) => {
     const iconClass = "h-3 w-3";
     switch (toolName) {
-      case 'create_task_list':
-        return <ListTodo className={iconClass} />;
       case 'update_task':
         return <CheckCircle className={iconClass} />;
-      case 'get_task_list':
-        return <List className={iconClass} />;
       default:
         return <ListTodo className={iconClass} />;
     }
@@ -89,12 +85,8 @@ export const CompactTaskManagementToolRenderer: React.FC<CompactTaskManagementTo
   // Get tool display name
   const getToolDisplayName = (toolName: string): string => {
     switch (toolName) {
-      case 'create_task_list':
-        return 'Create Task List';
       case 'update_task':
         return 'Update Task';
-      case 'get_task_list':
-        return 'Get Task List';
       default:
         return 'Task Management';
     }

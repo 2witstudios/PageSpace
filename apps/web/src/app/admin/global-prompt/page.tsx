@@ -6,6 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MessageSquare, AlertCircle, LayoutDashboard, FolderOpen, FileText } from "lucide-react";
 import { fetchWithAuth } from "@/lib/auth/auth-fetch";
@@ -19,13 +20,15 @@ export default function AdminGlobalPromptPage() {
   const [contextType, setContextType] = useState<'dashboard' | 'drive' | 'page'>('dashboard');
   const [selectedDriveId, setSelectedDriveId] = useState<string | null>(null);
   const [selectedPageId, setSelectedPageId] = useState<string | null>(null);
+  const [showPageTree, setShowPageTree] = useState(false);
 
-  const fetchPromptData = useCallback(async (driveId: string | null, pageId: string | null = null) => {
+  const fetchPromptData = useCallback(async (driveId: string | null, pageId: string | null = null, includePageTree: boolean = false) => {
     try {
       setLoading(true);
       const params = new URLSearchParams();
       if (driveId) params.set('driveId', driveId);
       if (pageId) params.set('pageId', pageId);
+      if (includePageTree) params.set('showPageTree', 'true');
       const url = params.toString()
         ? `/api/admin/global-prompt?${params.toString()}`
         : '/api/admin/global-prompt';
@@ -56,20 +59,20 @@ export default function AdminGlobalPromptPage() {
     if (newContextType === 'dashboard') {
       setSelectedDriveId(null);
       setSelectedPageId(null);
-      fetchPromptData(null);
+      fetchPromptData(null, null, showPageTree);
     } else if (newContextType === 'drive' && data?.availableDrives?.length) {
       // Auto-select first drive when switching to drive context
       const firstDrive = data.availableDrives[0];
       setSelectedDriveId(firstDrive.id);
       setSelectedPageId(null);
-      fetchPromptData(firstDrive.id);
+      fetchPromptData(firstDrive.id, null, showPageTree);
     } else if (newContextType === 'page' && data?.availableDrives?.length) {
       // Auto-select first drive, then will need to select a page
       const firstDrive = data.availableDrives[0];
       setSelectedDriveId(firstDrive.id);
       setSelectedPageId(null);
       // Fetch with drive to get pages, then user selects a page
-      fetchPromptData(firstDrive.id);
+      fetchPromptData(firstDrive.id, null, showPageTree);
     }
   };
 
@@ -79,16 +82,22 @@ export default function AdminGlobalPromptPage() {
     setSelectedPageId(null);
     if (contextType === 'page') {
       // Fetch to get pages for this drive
-      fetchPromptData(driveId);
+      fetchPromptData(driveId, null, showPageTree);
     } else {
-      fetchPromptData(driveId);
+      fetchPromptData(driveId, null, showPageTree);
     }
   };
 
   // Handle page selection change
   const handlePageChange = (pageId: string) => {
     setSelectedPageId(pageId);
-    fetchPromptData(selectedDriveId, pageId);
+    fetchPromptData(selectedDriveId, pageId, showPageTree);
+  };
+
+  // Handle page tree toggle change
+  const handlePageTreeToggle = (checked: boolean) => {
+    setShowPageTree(checked);
+    fetchPromptData(selectedDriveId, selectedPageId, checked);
   };
 
   if (loading && !data) {
@@ -259,6 +268,21 @@ export default function AdminGlobalPromptPage() {
                 </span>
               </div>
             )}
+
+            {/* Page Tree Toggle */}
+            <div className="flex items-center gap-2 pt-2 border-t">
+              <Switch
+                id="showPageTree"
+                checked={showPageTree}
+                onCheckedChange={handlePageTreeToggle}
+              />
+              <Label htmlFor="showPageTree" className="text-sm cursor-pointer">
+                Include Page Tree Context
+              </Label>
+              <span className="text-xs text-muted-foreground">
+                (Shows workspace structure in system prompt)
+              </span>
+            </div>
           </div>
 
           {/* Stats */}

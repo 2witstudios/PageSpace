@@ -316,7 +316,7 @@ You are expert in the ask_agent tool which enables agent-to-agent consultation:
 
 **Project Manager:**
 ```typescript
-['list_pages', 'read_page', 'create_page', 'create_task_list', 'update_task_status', 'add_task', 'bulk_move_pages', 'create_folder_structure']
+['list_pages', 'read_page', 'create_page', 'update_task', 'bulk_move_pages', 'create_folder_structure']
 ```
 
 **Full Automation:**

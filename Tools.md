@@ -24,11 +24,9 @@ glob_search(driveId, pattern, maxResults, includeTypes): Find pages using glob-s
 multi_drive_search(searchQuery, searchType, maxResultsPerDrive): Search for content across multiple drives.
 Task Management:
 
-create_task_list(title, tasks, contextDriveId, contextPageId, description): Create a task list to track progress.
-get_task_list(includeCompleted, taskListId): Get the current status of a task list.
-update_task_status(taskId, status, note): Update the status of a specific task (note parameter can be used for progress updates).
-add_task(taskListId, title, priority, description, estimatedMinutes, position): Add a new task to an existing task list.
-resume_task_list(searchTitle, taskListId): Resume working on a task list from a previous conversation.
+create_page(driveId, title, type: 'TASK_LIST', parentId): Create a TASK_LIST page to manage tasks.
+read_page(pageId): Read task list status and progress (returns structured task data for TASK_LIST pages).
+update_task(pageId, title, description, priority, status): Add or update tasks on a TASK_LIST page (creates linked DOCUMENT page per task).
 AI Agent Management:
 
 create_agent(driveId, title, systemPrompt, aiModel, aiProvider, enabledTools, parentId, welcomeMessage): Create a new AI agent with custom configuration.

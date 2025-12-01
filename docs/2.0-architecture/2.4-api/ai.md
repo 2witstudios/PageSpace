@@ -55,7 +55,7 @@ PageSpace's AI system implements a **database-first, message-as-row architecture
 1. **Core Page Operations** (8 tools): list_drives, list_pages, read_page, create_page, trash_page, restore_page, move_page, list_trash
 2. **Content Editing Tools** (2 tools): replace_lines, insert_lines
 3. **Advanced Search & Discovery** (3 tools): regex_search, glob_search, multi_drive_search
-4. **Task Management System** (5 tools): create_task_list, update_task_status, add_task, get_task_list, resume_task_list
+4. **Task Management** (1 tool): update_task (works with TASK_LIST pages created via create_page)
 5. **Agent Management** (5 tools): list_agents, ask_agent, create_agent, update_agent_config, multi_drive_list_agents
 
 **Tool Execution Flow:**
