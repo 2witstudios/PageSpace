@@ -63,7 +63,6 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const [showError, setShowError] = useState(true);
   const [isReadOnly, setIsReadOnly] = useState<boolean>(false);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
-  const [editVersion, setEditVersion] = useState(0);
   const [isSettingsSaving, setIsSettingsSaving] = useState(false);
 
   // Refs
@@ -128,7 +127,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
           return fetchWithAuth(urlString, options);
         },
       }),
-      experimental_throttle: 50,
+      experimental_throttle: 100, // Increased from 50ms for better performance
       onError: (error: Error) => {
         console.error('AiChatView: Chat error:', error);
       },
@@ -153,7 +152,6 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       messages,
       setMessages,
       regenerate,
-      onEditVersionChange: () => setEditVersion((v) => v + 1),
     });
 
   // ============================================
@@ -405,7 +403,6 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             onRetry={!isReadOnly ? handleRetry : undefined}
             lastAssistantMessageId={lastAssistantMessageId}
             lastUserMessageId={lastUserMessageId}
-            editVersion={editVersion}
             isReadOnly={isReadOnly}
           />
 

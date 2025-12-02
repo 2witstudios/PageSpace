@@ -2,7 +2,7 @@ import React, { useMemo, useState, useEffect } from 'react';
 import { UIMessage } from 'ai';
 import { CompactToolCallRenderer } from './CompactToolCallRenderer';
 import { CompactGroupedToolCallsRenderer } from './CompactGroupedToolCallsRenderer';
-import { MemoizedMarkdown } from './MemoizedMarkdown';
+import { StreamingMarkdown } from './StreamingMarkdown';
 import { MessageActionButtons } from './MessageActionButtons';
 import { MessageEditor } from './MessageEditor';
 import { DeleteMessageDialog } from './DeleteMessageDialog';
@@ -68,12 +68,15 @@ interface CompactTextBlockProps {
   isEditing?: boolean;
   onSaveEdit?: (newContent: string) => Promise<void>;
   onCancelEdit?: () => void;
+  /** Whether this message is currently being streamed (for progressive markdown rendering) */
+  isStreaming?: boolean;
 }
 
 /**
  * Compact text block for sidebar - minimal margins and padding
+ * Memoized to prevent unnecessary re-renders during streaming
  */
-const CompactTextBlock: React.FC<CompactTextBlockProps> = ({
+const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
   parts,
   role,
   messageId,
@@ -84,7 +87,8 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = ({
   onRetry,
   isEditing,
   onSaveEdit,
-  onCancelEdit
+  onCancelEdit,
+  isStreaming = false
 }) => {
   const content = parts.map(part => part.text).join('');
 
@@ -129,7 +133,7 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = ({
       ) : (
         <>
           <div className={`text-gray-900 dark:text-gray-100 prose prose-xs dark:prose-invert max-w-full overflow-hidden ${styles.compactProseContent}`}>
-            <MemoizedMarkdown content={content} id={`${messageId}-text`} />
+            <StreamingMarkdown content={content} id={`${messageId}-text`} isStreaming={isStreaming} />
           </div>
           {createdAt && (
             <div className="text-[10px] text-gray-500 mt-1">
@@ -145,7 +149,9 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = ({
       )}
     </div>
   );
-};
+});
+
+CompactTextBlock.displayName = 'CompactTextBlock';
 
 interface CompactMessageRendererProps {
   message: ConversationMessage;
@@ -155,6 +161,8 @@ interface CompactMessageRendererProps {
   onTaskUpdate?: (taskId: string, newStatus: 'pending' | 'in_progress' | 'completed' | 'blocked') => void;
   isLastAssistantMessage?: boolean;
   isLastUserMessage?: boolean;
+  /** Whether this message is currently being streamed (for progressive markdown rendering) */
+  isStreaming?: boolean;
 }
 
 /**
@@ -168,7 +176,8 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
   onRetry,
   onTaskUpdate,
   isLastAssistantMessage = false,
-  isLastUserMessage = false
+  isLastUserMessage = false,
+  isStreaming = false
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -457,7 +466,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
   // ============================================
   return (
     <>
-      <div key={message.id} className="mb-2">
+      <div key={message.id} className="mb-2" style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 80px' }}>
         {groupedParts.map((group, index) => {
           if (group.type === 'text-group') {
             // Type narrowing: we know this is a TextGroupPart
@@ -478,6 +487,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
                 isEditing={isEditing}
                 onSaveEdit={handleSaveEdit}
                 onCancelEdit={() => setIsEditing(false)}
+                isStreaming={isStreaming}
               />
             );
           } else if (group.type === 'tool-calls-group') {

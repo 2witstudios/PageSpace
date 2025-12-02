@@ -26,12 +26,13 @@ export const StreamingIndicator: React.FC<StreamingIndicatorProps> = ({
   return (
     <div
       className={`mb-4 p-3 rounded-lg bg-gray-50 dark:bg-gray-800/50 mr-8 ${className || ''}`}
+      style={{ contain: 'layout style paint' }}
     >
       <div className="text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
         {assistantName}
       </div>
       <div className="flex items-center space-x-2 text-gray-500">
-        <Loader2 className="h-4 w-4 animate-spin" />
+        <Loader2 className="h-4 w-4 animate-spin" style={{ willChange: 'transform' }} />
         <span>{message}</span>
       </div>
     </div>

@@ -123,7 +123,6 @@ const GlobalAssistantView: React.FC = () => {
   // Agent mode state (provider/model settings)
   const [agentSelectedProvider, setAgentSelectedProvider] = useState<string>('pagespace');
   const [agentSelectedModel, setAgentSelectedModel] = useState<string>('');
-  const [editVersion, setEditVersion] = useState(0);
 
   // Refs
   const messagesAreaRef = useRef<ChatMessagesAreaRef>(null);
@@ -225,7 +224,7 @@ const GlobalAssistantView: React.FC = () => {
           return fetchWithAuth(urlString, options);
         },
       }),
-      experimental_throttle: 50,
+      experimental_throttle: 100, // Increased from 50ms for better performance
       onError: (error: Error) => {
         console.error('Agent Chat error:', error);
       },
@@ -288,7 +287,6 @@ const GlobalAssistantView: React.FC = () => {
             setGlobalLocalMessages(msgs);
           },
       regenerate,
-      onEditVersionChange: () => setEditVersion((v) => v + 1),
     });
 
   // ============================================
@@ -513,7 +511,6 @@ const GlobalAssistantView: React.FC = () => {
         onRetry={handleRetry}
         lastAssistantMessageId={lastAssistantMessageId}
         lastUserMessageId={lastUserMessageId}
-        editVersion={editVersion}
       />
 
       <ChatInputArea

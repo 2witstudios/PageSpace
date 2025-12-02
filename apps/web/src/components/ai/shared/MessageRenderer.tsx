@@ -2,7 +2,7 @@ import React, { useMemo, useState, useEffect } from 'react';
 import { UIMessage } from 'ai';
 import { ToolCallRenderer } from './ToolCallRenderer';
 import { GroupedToolCallsRenderer } from './GroupedToolCallsRenderer';
-import { MemoizedMarkdown } from './MemoizedMarkdown';
+import { StreamingMarkdown } from './StreamingMarkdown';
 import { MessageActionButtons } from './MessageActionButtons';
 import { MessageEditor } from './MessageEditor';
 import { DeleteMessageDialog } from './DeleteMessageDialog';
@@ -67,6 +67,8 @@ interface TextBlockProps {
   isEditing?: boolean;
   onSaveEdit?: (newContent: string) => Promise<void>;
   onCancelEdit?: () => void;
+  /** Whether this message is currently being streamed (for progressive markdown rendering) */
+  isStreaming?: boolean;
 }
 
 /**
@@ -83,7 +85,8 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({
   onRetry,
   isEditing,
   onSaveEdit,
-  onCancelEdit
+  onCancelEdit,
+  isStreaming = false
 }) => {
   const content = parts.map(part => part.text).join('');
 
@@ -125,7 +128,7 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({
         <>
           <div className="text-gray-900 dark:text-gray-100 prose prose-sm dark:prose-invert max-w-full overflow-hidden prose-pre:bg-gray-100 dark:prose-pre:bg-gray-800">
             <div className="break-words overflow-wrap-anywhere">
-              <MemoizedMarkdown content={content} id={`${messageId}-text`} />
+              <StreamingMarkdown content={content} id={`${messageId}-text`} isStreaming={isStreaming} />
             </div>
           </div>
           {createdAt && (
@@ -154,6 +157,8 @@ interface MessageRendererProps {
   onTaskUpdate?: (taskId: string, newStatus: 'pending' | 'in_progress' | 'completed' | 'blocked') => void;
   isLastAssistantMessage?: boolean;
   isLastUserMessage?: boolean;
+  /** Whether this message is currently being streamed (for progressive markdown rendering) */
+  isStreaming?: boolean;
 }
 
 /**
@@ -168,7 +173,8 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
   onRetry,
   onTaskUpdate,
   isLastAssistantMessage = false,
-  isLastUserMessage = false
+  isLastUserMessage = false,
+  isStreaming = false
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -458,7 +464,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
   // ============================================
   return (
     <>
-      <div key={message.id} className="mb-4">
+      <div key={message.id} className="mb-4" style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 100px' }}>
         {groupedParts.map((group, index) => {
           if (group.type === 'text-group') {
             // Type narrowing: we know this is a TextGroupPart
@@ -479,6 +485,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
                 isEditing={isEditing}
                 onSaveEdit={handleSaveEdit}
                 onCancelEdit={() => setIsEditing(false)}
+                isStreaming={isStreaming}
               />
             );
           } else if (group.type === 'tool-calls-group') {
