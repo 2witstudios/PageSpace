@@ -258,6 +258,13 @@ export const AI_PROVIDERS = {
       'glm-4.5-air': 'GLM-4.5 Air (Fast)',
     },
   },
+  minimax: {
+    name: 'MiniMax',
+    models: {
+      'MiniMax-M2': 'MiniMax M2',
+      'MiniMax-M2-Stable': 'MiniMax M2 Stable',
+    },
+  },
 } as const;
 
 /**

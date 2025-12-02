@@ -32,6 +32,8 @@ import {
   createLMStudioSettings,
   getUserGLMSettings,
   createGLMSettings,
+  getUserMiniMaxSettings,
+  createMiniMaxSettings,
 } from './ai-utils';
 
 export interface ProviderRequest {
@@ -45,6 +47,7 @@ export interface ProviderRequest {
   ollamaBaseUrl?: string;
   lmstudioBaseUrl?: string;
   glmApiKey?: string;
+  minimaxApiKey?: string;
 }
 
 export interface ProviderResult {
@@ -77,6 +80,7 @@ export async function createAIProvider(
     ollamaBaseUrl,
     lmstudioBaseUrl,
     glmApiKey,
+    minimaxApiKey,
   } = request;
 
   // Get user's current AI provider settings
@@ -333,6 +337,29 @@ export async function createAIProvider(
         baseURL: 'https://api.z.ai/api/coding/paas/v4',
       });
       model = glmProvider(currentModel);
+
+    } else if (currentProvider === 'minimax') {
+      // Handle MiniMax setup - uses Anthropic-compatible API
+      let minimaxSettings = await getUserMiniMaxSettings(userId);
+
+      if (!minimaxSettings && minimaxApiKey) {
+        await createMiniMaxSettings(userId, minimaxApiKey);
+        minimaxSettings = { apiKey: minimaxApiKey, isConfigured: true };
+      }
+
+      if (!minimaxSettings) {
+        return {
+          error: 'MiniMax API key not configured. Please configure your MiniMax API key in Settings > AI.',
+          status: 400,
+        };
+      }
+
+      // Create MiniMax provider instance using Anthropic-compatible endpoint
+      const minimax = createAnthropic({
+        apiKey: minimaxSettings.apiKey,
+        baseURL: 'https://api.minimax.io/anthropic',
+      });
+      model = minimax(currentModel);
 
     } else {
       return {

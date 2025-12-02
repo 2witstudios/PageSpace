@@ -26,7 +26,10 @@ import {
   deleteLMStudioSettings,
   getUserGLMSettings,
   createGLMSettings,
-  deleteGLMSettings
+  deleteGLMSettings,
+  getUserMiniMaxSettings,
+  createMiniMaxSettings,
+  deleteMiniMaxSettings,
 } from '@/lib/ai/core/ai-utils';
 import { db, users, eq } from '@pagespace/db';
 import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
@@ -73,6 +76,9 @@ export async function GET(request: Request) {
     // Check GLM settings
     const glmSettings = await getUserGLMSettings(userId);
 
+    // Check MiniMax settings
+    const minimaxSettings = await getUserMiniMaxSettings(userId);
+
     return NextResponse.json({
       currentProvider: user?.currentAiProvider || 'pagespace',
       currentModel: user?.currentAiModel || 'glm-4.5-air',
@@ -114,8 +120,12 @@ export async function GET(request: Request) {
           isConfigured: !!glmSettings?.isConfigured,
           hasApiKey: !!glmSettings?.apiKey,
         },
+        minimax: {
+          isConfigured: !!minimaxSettings?.isConfigured,
+          hasApiKey: !!minimaxSettings?.apiKey,
+        },
       },
-      isAnyProviderConfigured: !!(pageSpaceSettings?.isConfigured || openRouterSettings?.isConfigured || googleSettings?.isConfigured || openAISettings?.isConfigured || anthropicSettings?.isConfigured || xaiSettings?.isConfigured || ollamaSettings?.isConfigured || lmstudioSettings?.isConfigured || glmSettings?.isConfigured),
+      isAnyProviderConfigured: !!(pageSpaceSettings?.isConfigured || openRouterSettings?.isConfigured || googleSettings?.isConfigured || openAISettings?.isConfigured || anthropicSettings?.isConfigured || xaiSettings?.isConfigured || ollamaSettings?.isConfigured || lmstudioSettings?.isConfigured || glmSettings?.isConfigured || minimaxSettings?.isConfigured),
     });
   } catch (error) {
     loggers.ai.error('Failed to get AI settings', error as Error);
@@ -140,9 +150,9 @@ export async function POST(request: Request) {
     const { provider, apiKey, baseUrl } = body;
 
     // Validate input
-    if (!provider || !['openrouter', 'google', 'openai', 'anthropic', 'xai', 'ollama', 'lmstudio', 'glm'].includes(provider)) {
+    if (!provider || !['openrouter', 'google', 'openai', 'anthropic', 'xai', 'ollama', 'lmstudio', 'glm', 'minimax'].includes(provider)) {
       return NextResponse.json(
-        { error: 'Invalid provider. Must be "openrouter", "google", "openai", "anthropic", "xai", "ollama", "lmstudio", or "glm"' },
+        { error: 'Invalid provider. Must be "openrouter", "google", "openai", "anthropic", "xai", "ollama", "lmstudio", "glm", or "minimax"' },
         { status: 400 }
       );
     }
@@ -186,6 +196,8 @@ export async function POST(request: Request) {
         await createLMStudioSettings(userId, sanitizedBaseUrl);
       } else if (provider === 'glm') {
         await createGLMSettings(userId, sanitizedApiKey);
+      } else if (provider === 'minimax') {
+        await createMiniMaxSettings(userId, sanitizedApiKey);
       }
 
       // Return success with minimal information (don't echo back the key/URL)
@@ -197,7 +209,8 @@ export async function POST(request: Request) {
         xai: 'xAI',
         ollama: 'Ollama',
         lmstudio: 'LM Studio',
-        glm: 'GLM Coder Plan'
+        glm: 'GLM Coder Plan',
+        minimax: 'MiniMax'
       };
       
       return NextResponse.json(
@@ -238,9 +251,9 @@ export async function PATCH(request: Request) {
     const { provider, model } = body;
 
     // Validate input - pagespace and openrouter_free are valid providers
-    if (!provider || !['pagespace', 'openrouter', 'openrouter_free', 'google', 'openai', 'anthropic', 'xai', 'ollama', 'lmstudio', 'glm'].includes(provider)) {
+    if (!provider || !['pagespace', 'openrouter', 'openrouter_free', 'google', 'openai', 'anthropic', 'xai', 'ollama', 'lmstudio', 'glm', 'minimax'].includes(provider)) {
       return NextResponse.json(
-        { error: 'Invalid provider. Must be "pagespace", "openrouter", "openrouter_free", "google", "openai", "anthropic", "xai", "ollama", "lmstudio", or "glm"' },
+        { error: 'Invalid provider. Must be "pagespace", "openrouter", "openrouter_free", "google", "openai", "anthropic", "xai", "ollama", "lmstudio", "glm", or "minimax"' },
         { status: 400 }
       );
     }
@@ -322,9 +335,9 @@ export async function DELETE(request: Request) {
     const { provider } = body;
 
     // Validate input
-    if (!provider || !['openrouter', 'google', 'openai', 'anthropic', 'xai', 'ollama', 'lmstudio', 'glm'].includes(provider)) {
+    if (!provider || !['openrouter', 'google', 'openai', 'anthropic', 'xai', 'ollama', 'lmstudio', 'glm', 'minimax'].includes(provider)) {
       return NextResponse.json(
-        { error: 'Invalid provider. Must be "openrouter", "google", "openai", "anthropic", "xai", "ollama", "lmstudio", or "glm"' },
+        { error: 'Invalid provider. Must be "openrouter", "google", "openai", "anthropic", "xai", "ollama", "lmstudio", "glm", or "minimax"' },
         { status: 400 }
       );
     }
@@ -347,6 +360,8 @@ export async function DELETE(request: Request) {
         await deleteLMStudioSettings(userId);
       } else if (provider === 'glm') {
         await deleteGLMSettings(userId);
+      } else if (provider === 'minimax') {
+        await deleteMiniMaxSettings(userId);
       }
 
       // Return success with 204 No Content

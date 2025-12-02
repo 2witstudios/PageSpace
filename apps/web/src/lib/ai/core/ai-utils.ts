@@ -806,5 +806,96 @@ export async function deleteGLMSettings(userId: string): Promise<void> {
   }
 }
 
+/**
+ * Gets user's MiniMax API settings
+ * Returns decrypted API key for use with MiniMax provider
+ */
+export async function getUserMiniMaxSettings(userId: string): Promise<{
+  apiKey: string;
+  isConfigured: boolean;
+} | null> {
+  const settings = await db.query.userAiSettings.findFirst({
+    where: and(
+      eq(userAiSettings.userId, userId),
+      eq(userAiSettings.provider, 'minimax')
+    ),
+  });
+
+  if (!settings || !settings.encryptedApiKey) {
+    return null;
+  }
+
+  try {
+    const apiKey = await decrypt(settings.encryptedApiKey);
+    return {
+      apiKey,
+      isConfigured: true,
+    };
+  } catch (error) {
+    aiLogger.error('Failed to decrypt MiniMax API key', error instanceof Error ? error : undefined, {
+      userId: maskIdentifier(userId),
+    });
+    return null;
+  }
+}
+
+/**
+ * Creates MiniMax provider settings for a user
+ * Encrypts and stores the API key securely
+ */
+export async function createMiniMaxSettings(
+  userId: string,
+  apiKey: string
+): Promise<void> {
+  const { encrypt } = await import('@pagespace/lib/server');
+  const encryptedApiKey = await encrypt(apiKey);
+
+  // Check if settings already exist
+  const existingSettings = await db.query.userAiSettings.findFirst({
+    where: and(
+      eq(userAiSettings.userId, userId),
+      eq(userAiSettings.provider, 'minimax')
+    ),
+  });
+
+  if (existingSettings) {
+    // Update existing settings
+    await db
+      .update(userAiSettings)
+      .set({
+        encryptedApiKey,
+        updatedAt: new Date(),
+      })
+      .where(eq(userAiSettings.id, existingSettings.id));
+  } else {
+    // Create new settings
+    await db.insert(userAiSettings).values({
+      id: createId(),
+      userId,
+      provider: 'minimax',
+      encryptedApiKey,
+    });
+  }
+}
+
+/**
+ * Deletes MiniMax provider settings for a user
+ * Removes the encrypted API key from database
+ */
+export async function deleteMiniMaxSettings(userId: string): Promise<void> {
+  const existingSettings = await db.query.userAiSettings.findFirst({
+    where: and(
+      eq(userAiSettings.userId, userId),
+      eq(userAiSettings.provider, 'minimax')
+    ),
+  });
+
+  if (existingSettings) {
+    await db
+      .delete(userAiSettings)
+      .where(eq(userAiSettings.id, existingSettings.id));
+  }
+}
+
 // Note: Message management functions are now in ChatStorageAdapter
 // This provides a cleaner separation of concerns

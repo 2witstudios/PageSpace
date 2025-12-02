@@ -27,6 +27,7 @@ interface ProviderSettings {
     ollama: { isConfigured: boolean; hasBaseUrl: boolean };
     lmstudio: { isConfigured: boolean; hasBaseUrl: boolean };
     glm: { isConfigured: boolean; hasApiKey: boolean };
+    minimax: { isConfigured: boolean; hasApiKey: boolean };
   };
   isAnyProviderConfigured: boolean;
 }
@@ -47,12 +48,14 @@ export default function AiSettingsPage() {
   const [ollamaBaseUrl, setOllamaBaseUrl] = useState<string>('');
   const [lmstudioBaseUrl, setLmstudioBaseUrl] = useState<string>('');
   const [glmApiKey, setGlmApiKey] = useState<string>('');
+  const [minimaxApiKey, setMinimaxApiKey] = useState<string>('');
   const [showOpenRouterKey, setShowOpenRouterKey] = useState<boolean>(false);
   const [showGoogleKey, setShowGoogleKey] = useState<boolean>(false);
   const [showOpenAIKey, setShowOpenAIKey] = useState<boolean>(false);
   const [showAnthropicKey, setShowAnthropicKey] = useState<boolean>(false);
   const [showXaiKey, setShowXaiKey] = useState<boolean>(false);
   const [showGlmKey, setShowGlmKey] = useState<boolean>(false);
+  const [showMinimaxKey, setShowMinimaxKey] = useState<boolean>(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -82,7 +85,7 @@ export default function AiSettingsPage() {
     return providerSettings?.providers[provider as keyof typeof providerSettings.providers]?.isConfigured || false;
   };
 
-  const handleSaveApiKey = async (provider: 'openrouter' | 'google' | 'openai' | 'anthropic' | 'xai' | 'glm') => {
+  const handleSaveApiKey = async (provider: 'openrouter' | 'google' | 'openai' | 'anthropic' | 'xai' | 'glm' | 'minimax') => {
     setSaving(true);
     try {
       let apiKey = '';
@@ -104,6 +107,9 @@ export default function AiSettingsPage() {
           break;
         case 'glm':
           apiKey = glmApiKey;
+          break;
+        case 'minimax':
+          apiKey = minimaxApiKey;
           break;
       }
 
@@ -154,6 +160,9 @@ export default function AiSettingsPage() {
           break;
         case 'glm':
           setGlmApiKey('');
+          break;
+        case 'minimax':
+          setMinimaxApiKey('');
           break;
       }
 
@@ -891,6 +900,69 @@ export default function AiSettingsPage() {
             <p className="mt-1">
               <strong>Subscription required:</strong> You need an active GLM Coder Plan subscription from Z.AI to use these models.
             </p>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* MiniMax API Key */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between">
+            <span>MiniMax API Key</span>
+            {isProviderConfigured('minimax') && (
+              <Badge variant="default" className="bg-green-500">
+                <CheckCircle className="h-3 w-3 mr-1" />
+                Configured
+              </Badge>
+            )}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <label className="text-sm font-medium">API Key</label>
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <Input
+                  type={showMinimaxKey ? "text" : "password"}
+                  placeholder="Enter your MiniMax API key"
+                  value={minimaxApiKey}
+                  onChange={(e) => setMinimaxApiKey(e.target.value)}
+                  className="pr-10"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="absolute right-0 top-0 h-full px-3"
+                  onClick={() => setShowMinimaxKey(!showMinimaxKey)}
+                >
+                  {showMinimaxKey ? (
+                    <EyeOff className="h-4 w-4" />
+                  ) : (
+                    <Eye className="h-4 w-4" />
+                  )}
+                </Button>
+              </div>
+              <Button
+                onClick={() => handleSaveApiKey('minimax')}
+                disabled={!minimaxApiKey.trim() || saving}
+              >
+                {saving ? 'Saving...' : 'Save Key'}
+              </Button>
+            </div>
+          </div>
+          <div className="text-sm text-muted-foreground">
+            <p>Get your API key from{' '}
+              <a
+                href="https://platform.minimax.io"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 hover:underline"
+              >
+                platform.minimax.io
+              </a>
+            </p>
+            <p className="mt-2">MiniMax provides access to MiniMax-M2 models with advanced reasoning and agentic capabilities.</p>
           </div>
         </CardContent>
       </Card>
