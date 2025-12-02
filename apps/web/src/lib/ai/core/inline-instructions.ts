@@ -46,7 +46,7 @@ CONTEXT:
 
 PAGE TYPES:
 • FOLDER: Container with list/icon view of children. Accepts file uploads via drag-drop.
-• DOCUMENT: Rich text stored as HTML. Use edit_page for content changes.
+• DOCUMENT: Rich text stored as HTML. Use replace_lines for content changes.
 • SHEET: Spreadsheet stored as TOML. Use edit_sheet_cells for cell-level edits.
 • CANVAS: Raw HTML/CSS for dashboards and custom visual layouts. Edit as HTML.
 • TASK_LIST: Task manager where each task auto-creates a linked child DOCUMENT page.
@@ -96,7 +96,7 @@ CONTEXT:
 `}
 PAGE TYPES:
 • FOLDER: Container with list/icon view of children. Accepts file uploads via drag-drop.
-• DOCUMENT: Rich text stored as HTML. Use edit_page for content changes.
+• DOCUMENT: Rich text stored as HTML. Use replace_lines for content changes.
 • SHEET: Spreadsheet stored as TOML. Use edit_sheet_cells for cell-level edits.
 • CANVAS: Raw HTML/CSS for dashboards and custom visual layouts. Edit as HTML.
 • TASK_LIST: Task manager where each task auto-creates a linked child DOCUMENT page.

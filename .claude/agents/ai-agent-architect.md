@@ -311,7 +311,7 @@ You are expert in the ask_agent tool which enables agent-to-agent consultation:
 
 **Content Creator:**
 ```typescript
-['list_pages', 'read_page', 'create_page', 'append_to_page', 'replace_lines', 'regex_search']
+['list_pages', 'read_page', 'create_page', 'replace_lines', 'regex_search']
 ```
 
 **Project Manager:**
