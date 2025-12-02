@@ -10,7 +10,7 @@ export const pageReadTools = {
    * Explore the folder structure and find content within a workspace
    */
   list_pages: tool({
-    description: 'List all pages in a workspace with their paths and types. Returns hierarchical structure showing folders, documents, AI chats, channels, canvas pages, and databases. Pages marked with (Task) suffix are linked to task items - these are system-managed and should not be deleted directly.',
+    description: 'List all pages in a workspace with their paths and types. Returns hierarchical structure showing folders, documents, AI chats, channels, canvas pages, sheets, and task lists. Pages marked with (Task) suffix are linked to task items.',
     inputSchema: z.object({
       driveSlug: z.string().optional().describe('The human-readable slug of the drive (for semantic understanding)'),
       driveId: z.string().describe('The unique ID of the drive (used for operations)'),

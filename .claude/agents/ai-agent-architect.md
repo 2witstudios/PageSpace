@@ -141,7 +141,7 @@ PageSpace treats AI agents as **specialized workspace citizens** with full integ
 - `packages/db/src/schema/core.ts` - Agent config in pages table (systemPrompt, enabledTools, aiProvider, aiModel, agentRole)
 
 **Agent Communication:**
-- `apps/web/src/lib/ai/tools/agent-communication-tools.ts` - ask_agent, list_agents, create_agent, update_agent_config
+- `apps/web/src/lib/ai/tools/agent-communication-tools.ts` - ask_agent, list_agents, update_agent_config
 
 **UI Components:**
 - `apps/web/src/components/ai/AgentSettingsTab.tsx` - Agent configuration interface
@@ -311,7 +311,7 @@ You are expert in the ask_agent tool which enables agent-to-agent consultation:
 
 **Content Creator:**
 ```typescript
-['list_pages', 'read_page', 'create_page', 'append_to_page', 'replace_lines', 'regex_search']
+['list_pages', 'read_page', 'create_page', 'replace_lines', 'regex_search']
 ```
 
 **Project Manager:**

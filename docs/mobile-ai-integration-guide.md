@@ -320,12 +320,11 @@ Core tools available to AI agents:
 - `list_drives` - List all accessible drives
 - `list_pages` - List pages in a drive
 - `read_page` - Read page content
-- `create_page` - Create new page (FOLDER, DOCUMENT, AI_CHAT, CHANNEL, CANVAS)
+- `create_page` - Create new page (FOLDER, DOCUMENT, AI_CHAT, CHANNEL, CANVAS, SHEET, TASK_LIST)
 - `rename_page` - Rename page
 - `replace_lines` - Replace content lines (use empty content to delete)
-- `insert_lines` - Insert content (use lineNumber 1 to prepend, lineCount+1 to append)
-- `trash_page` - Delete page (use withChildren: true for recursive deletion)
-- `restore_page` - Restore from trash
+- `trash` - Move page or drive to trash (use withChildren: true for recursive)
+- `restore` - Restore page or drive from trash
 - `move_page` - Move/reorder pages
 - `list_trash` - List trashed pages
 

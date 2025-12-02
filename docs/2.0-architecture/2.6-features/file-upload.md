@@ -236,7 +236,6 @@ if (page.type === 'FILE') {
 
 **Protected Operations**:
 - replace_lines (use empty content to delete lines)
-- insert_lines (use lineNumber 1 for prepend, lineCount+1 for append)
 
 ### Vision Model Support
 1. Check if model has vision capabilities

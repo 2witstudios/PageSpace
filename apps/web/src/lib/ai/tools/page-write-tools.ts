@@ -12,10 +12,169 @@ import {
   updateSheetCells,
   isValidCellAddress,
   isSheetType,
+  loggers,
 } from '@pagespace/lib/server';
-import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket/socket-utils';
+import { broadcastPageEvent, createPageEventPayload, broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket/socket-utils';
 import { ToolExecutionContext } from '../core/types';
-import { pageSpaceTools } from '../core/ai-tools';
+import { maskIdentifier } from '@/lib/logging/mask';
+
+const pageWriteLogger = loggers.ai.child({ module: 'page-write-tools' });
+
+// Helper: Trash a single page or recursively with children
+async function trashPage(
+  userId: string,
+  pageId: string,
+  withChildren: boolean
+): Promise<{ page: { id: string; title: string; type: string; driveId: string; parentId: string | null }; childrenCount: number }> {
+  const page = await db.query.pages.findFirst({
+    where: and(eq(pages.id, pageId), eq(pages.isTrashed, false)),
+  });
+
+  if (!page) {
+    throw new Error(`Page with ID "${pageId}" not found`);
+  }
+
+  if (withChildren) {
+    const canDelete = await canUserDeletePage(userId, page.id);
+    if (!canDelete) {
+      throw new Error('Insufficient permissions to trash this page and its children');
+    }
+  } else {
+    const canEdit = await canUserEditPage(userId, page.id);
+    if (!canEdit) {
+      throw new Error('Insufficient permissions to trash this page');
+    }
+  }
+
+  let childrenCount = 0;
+
+  if (withChildren) {
+    const getAllChildPages = async (parentId: string): Promise<string[]> => {
+      const children = await db
+        .select({ id: pages.id })
+        .from(pages)
+        .where(and(eq(pages.driveId, page.driveId), eq(pages.parentId, parentId), eq(pages.isTrashed, false)));
+
+      const childIds = children.map(child => child.id);
+      const grandChildIds: string[] = [];
+      for (const child of children) {
+        grandChildIds.push(...await getAllChildPages(child.id));
+      }
+      return [...childIds, ...grandChildIds];
+    };
+
+    const childPageIds = await getAllChildPages(page.id);
+    childrenCount = childPageIds.length;
+    const allPageIds = [page.id, ...childPageIds];
+
+    await db
+      .update(pages)
+      .set({ isTrashed: true, trashedAt: new Date(), updatedAt: new Date() })
+      .where(and(eq(pages.driveId, page.driveId), inArray(pages.id, allPageIds)));
+  } else {
+    await db
+      .update(pages)
+      .set({ isTrashed: true, trashedAt: new Date(), updatedAt: new Date() })
+      .where(eq(pages.id, page.id));
+  }
+
+  await broadcastPageEvent(
+    createPageEventPayload(page.driveId, page.id, 'trashed', { title: page.title, parentId: page.parentId })
+  );
+
+  return { page: { id: page.id, title: page.title, type: page.type, driveId: page.driveId, parentId: page.parentId }, childrenCount };
+}
+
+// Helper: Trash a drive
+async function trashDrive(
+  userId: string,
+  driveId: string,
+  confirmDriveName: string
+): Promise<{ id: string; name: string; slug: string }> {
+  const drive = await db.query.drives.findFirst({
+    where: and(eq(drives.id, driveId), eq(drives.ownerId, userId)),
+  });
+
+  if (!drive) {
+    throw new Error('Drive not found or you do not have permission to delete it');
+  }
+
+  if (drive.name !== confirmDriveName) {
+    throw new Error(`Drive name confirmation failed. Expected "${drive.name}" but got "${confirmDriveName}"`);
+  }
+
+  if (drive.isTrashed) {
+    throw new Error('Drive is already in trash');
+  }
+
+  await db
+    .update(drives)
+    .set({ isTrashed: true, trashedAt: new Date(), updatedAt: new Date() })
+    .where(eq(drives.id, drive.id));
+
+  await broadcastDriveEvent(createDriveEventPayload(drive.id, 'deleted', { name: drive.name, slug: drive.slug }));
+
+  return { id: drive.id, name: drive.name, slug: drive.slug };
+}
+
+// Helper: Restore a page from trash
+async function restorePage(
+  userId: string,
+  pageId: string
+): Promise<{ id: string; title: string; type: string; driveId: string; parentId: string | null }> {
+  const trashedPage = await db.query.pages.findFirst({
+    where: and(eq(pages.id, pageId), eq(pages.isTrashed, true)),
+  });
+
+  if (!trashedPage) {
+    throw new Error(`Trashed page with ID "${pageId}" not found`);
+  }
+
+  const canEdit = await canUserEditPage(userId, trashedPage.id);
+  if (!canEdit) {
+    throw new Error('Insufficient permissions to restore this page');
+  }
+
+  const [restoredPage] = await db
+    .update(pages)
+    .set({ isTrashed: false, trashedAt: null, updatedAt: new Date() })
+    .where(eq(pages.id, trashedPage.id))
+    .returning({ id: pages.id, title: pages.title, type: pages.type, parentId: pages.parentId });
+
+  await broadcastPageEvent(
+    createPageEventPayload(trashedPage.driveId, restoredPage.id, 'restored', { title: restoredPage.title, parentId: restoredPage.parentId })
+  );
+
+  return { id: restoredPage.id, title: restoredPage.title, type: restoredPage.type, driveId: trashedPage.driveId, parentId: restoredPage.parentId };
+}
+
+// Helper: Restore a drive from trash
+async function restoreDrive(
+  userId: string,
+  driveId: string
+): Promise<{ id: string; name: string; slug: string }> {
+  const drive = await db.query.drives.findFirst({
+    where: and(eq(drives.id, driveId), eq(drives.ownerId, userId)),
+  });
+
+  if (!drive) {
+    throw new Error('Drive not found or you do not have permission to restore it');
+  }
+
+  if (!drive.isTrashed) {
+    throw new Error('Drive is not in trash');
+  }
+
+  const [restoredDrive] = await db
+    .update(drives)
+    .set({ isTrashed: false, trashedAt: null, updatedAt: new Date() })
+    .where(eq(drives.id, drive.id))
+    .returning({ id: drives.id, name: drives.name, slug: drives.slug });
+
+  await broadcastDriveEvent(createDriveEventPayload(restoredDrive.id, 'updated', { name: restoredDrive.name, slug: restoredDrive.slug }));
+
+  return { id: restoredDrive.id, name: restoredDrive.name, slug: restoredDrive.slug };
+}
 
 export const pageWriteTools = {
   /**
@@ -145,133 +304,12 @@ export const pageWriteTools = {
           ]
         };
       } catch (error) {
-        console.error('Error replacing lines:', error);
-        throw new Error(`Failed to replace lines in ${path}: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    },
-  }),
-
-  /**
-   * Insert new content at a specific line
-   */
-  insert_lines: tool({
-    description: 'Insert new content at a specific line number in a document. Content is inserted before the specified line.',
-    inputSchema: z.object({
-      path: z.string().describe('The document path using titles like "/driveSlug/Folder Name/Document Title" for semantic context'),
-      pageId: z.string().describe('The unique ID of the page to edit'),
-      lineNumber: z.number().describe('Line number where to insert content (1-based)'),
-      content: z.string().describe('Content to insert'),
-    }),
-    execute: async ({ path, pageId, lineNumber, content }, { experimental_context: context }) => {
-      const userId = (context as ToolExecutionContext)?.userId;
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
-
-      try {
-        // Get the page directly by ID
-        const page = await db.query.pages.findFirst({
-          where: and(
-            eq(pages.id, pageId),
-            eq(pages.isTrashed, false)
-          ),
-        });
-
-        if (!page) {
-          throw new Error(`Page with ID "${pageId}" not found`);
-        }
-
-        // Check if this is a FILE type page - these are read-only
-        if (page.type === 'FILE') {
-          return {
-            success: false,
-            error: 'Cannot edit FILE pages',
-            message: 'This is an uploaded file. File content is read-only and managed by the system.',
-            suggestion: 'To modify content, create a new document page instead of editing the uploaded file.',
-            pageInfo: {
-              pageId: page.id,
-              title: page.title,
-              type: page.type,
-              mimeType: page.mimeType
-            }
-          };
-        }
-
-        // Check if this is a SHEET type page - use edit_sheet_cells instead
-        if (isSheetType(page.type as PageType)) {
-          return {
-            success: false,
-            error: 'Cannot use line editing on sheets',
-            message: 'Sheet pages use structured cell data. Use edit_sheet_cells tool instead for cell-level edits.',
-            suggestion: 'Use the edit_sheet_cells tool with cell addresses (A1, B2, etc.) to modify sheet content.',
-            pageInfo: {
-              pageId: page.id,
-              title: page.title,
-              type: page.type
-            }
-          };
-        }
-
-        // Check user permissions
-        const canEdit = await canUserEditPage(userId, page.id);
-        if (!canEdit) {
-          throw new Error('Insufficient permissions to edit this document');
-        }
-
-        // Split content into lines
-        const lines = page.content.split('\n');
-
-        // Validate line number (can be 1 to lines.length + 1 for append)
-        if (lineNumber < 1 || lineNumber > lines.length + 1) {
-          throw new Error(`Invalid line number: ${lineNumber}. Document has ${lines.length} lines.`);
-        }
-
-        // Insert content (convert to 0-based indexing)
-        const newLines = [
-          ...lines.slice(0, lineNumber - 1),
-          content,
-          ...lines.slice(lineNumber - 1),
-        ];
-
-        const newContent = newLines.join('\n');
-
-        // Update the page content
-        await db
-          .update(pages)
-          .set({
-            content: newContent,
-            updatedAt: new Date(),
-          })
-          .where(eq(pages.id, page.id));
-
-        // Broadcast content update event
-        await broadcastPageEvent(
-          createPageEventPayload(page.driveId, page.id, 'content-updated', {
-            title: page.title
-          })
-        );
-
-        return {
-          success: true,
+        pageWriteLogger.error('Failed to replace lines', error instanceof Error ? error : undefined, {
+          userId: maskIdentifier(userId),
+          pageId: maskIdentifier(pageId),
           path,
-          title: page.title,
-          insertedAt: lineNumber,
-          newLineCount: newLines.length,
-          message: `Successfully inserted content at line ${lineNumber}`,
-          summary: `Added new content to "${page.title}" at line ${lineNumber}`,
-          stats: {
-            insertPosition: lineNumber,
-            totalLines: newLines.length,
-            changeType: 'insertion'
-          },
-          nextSteps: [
-            'Review the document to ensure the insertion flows well',
-            'Make additional edits if needed to improve readability'
-          ]
-        };
-      } catch (error) {
-        console.error('Error inserting at line:', error);
-        throw new Error(`Failed to insert content in ${path}: ${error instanceof Error ? error.message : String(error)}`);
+        });
+        throw new Error(`Failed to replace lines in ${path}: ${error instanceof Error ? error.message : String(error)}`);
       }
     },
   }),
@@ -280,20 +318,14 @@ export const pageWriteTools = {
    * Create new documents, folders, or other content
    */
   create_page: tool({
-    description: 'Create new pages in the workspace. Supports all page types: FOLDER (hierarchical organization), DOCUMENT (text content), AI_CHAT (AI conversation spaces with optional agent configuration), CHANNEL (team discussions), CANVAS (custom HTML/CSS pages), DATABASE (deprecated). Any page type can contain any other page type as children with infinite nesting. For AI_CHAT pages, can optionally configure system prompt and enabled tools.',
+    description: 'Create new pages in the workspace. Supports all page types: FOLDER (hierarchical organization), DOCUMENT (text content), AI_CHAT (AI conversation spaces), CHANNEL (team discussions), CANVAS (custom HTML/CSS pages), SHEET (spreadsheets with formulas), TASK_LIST (table-based task management). Any page type can contain any other page type as children with infinite nesting. For AI_CHAT pages, use update_agent_config after creation to configure agent behavior.',
     inputSchema: z.object({
       driveId: z.string().describe('The unique ID of the drive to create the page in'),
       parentId: z.string().optional().describe('The unique ID of the parent page from list_pages - REQUIRED when creating inside any page (folder, document, channel, etc). Only omit for root-level pages in the drive.'),
       title: z.string().describe('The title of the new page'),
-      type: z.enum(['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET']).describe('The type of page to create'),
-      content: z.string().optional().describe('Optional initial content for the page'),
-      // Agent configuration fields (only for AI_CHAT type)
-      systemPrompt: z.string().optional().describe('System prompt for AI agent behavior (only for AI_CHAT pages). Defines how the agent should behave and respond.'),
-      enabledTools: z.array(z.string()).optional().describe('Array of tool names to enable for this AI agent (only for AI_CHAT pages). Available tools include: regex_search, glob_search, read_page, create_page, etc.'),
-      aiProvider: z.string().optional().describe('AI provider override for this agent (only for AI_CHAT pages). Overrides user default provider.'),
-      aiModel: z.string().optional().describe('AI model override for this agent (only for AI_CHAT pages). Overrides user default model.'),
+      type: z.enum(['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET', 'TASK_LIST']).describe('The type of page to create'),
     }),
-    execute: async ({ driveId, parentId, title, type, content = '', systemPrompt, enabledTools, aiProvider, aiModel }, { experimental_context: context }) => {
+    execute: async ({ driveId, parentId, title, type }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -353,73 +385,16 @@ export const pageWriteTools = {
 
         const nextPosition = siblingPages.length > 0 ? siblingPages[0].position + 1 : 1;
 
-        // Validate SHEET pages cannot have content set directly
-        if (isSheetType(type as PageType) && content && content.trim() !== '') {
-          return {
-            success: false,
-            error: 'Cannot set content when creating sheets',
-            message: 'Sheet pages use structured cell data. Create the sheet first, then use edit_sheet_cells to populate cells.',
-            suggestion: 'Create the sheet without content, then use edit_sheet_cells tool with cell addresses (A1, B2, etc.) to add data.',
-          };
-        }
-
-        // Validate agent configuration for AI_CHAT pages
-        if (isAIChatPage(type as PageType)) {
-          // Validate enabled tools if provided
-          if (enabledTools && enabledTools.length > 0) {
-            const availableToolNames = Object.keys(pageSpaceTools);
-            const invalidTools = enabledTools.filter(toolName => !availableToolNames.includes(toolName));
-            if (invalidTools.length > 0) {
-              throw new Error(`Invalid tools specified: ${invalidTools.join(', ')}. Available tools: ${availableToolNames.join(', ')}`);
-            }
-          }
-        } else {
-          // Non-AI_CHAT pages should not have agent configuration
-          if (systemPrompt || enabledTools || aiProvider || aiModel) {
-            throw new Error('Agent configuration (systemPrompt, enabledTools, aiProvider, aiModel) can only be used with AI_CHAT page type');
-          }
-        }
-
-        // Prepare page data with proper typing
-        interface PageInsertData {
-          title: string;
-          type: 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'SHEET';
-          content: string;
-          position: number;
-          driveId: string;
-          parentId: string | null;
-          isTrashed: boolean;
-          systemPrompt?: string | null;
-          enabledTools?: string[] | null;
-          aiProvider?: string | null;
-          aiModel?: string | null;
-        }
-
-        const pageData: PageInsertData = {
+        // Prepare page data
+        const pageData = {
           title,
           type,
-          content,
+          content: '',
           position: nextPosition,
           driveId: drive.id,
           parentId: parentId || null,
           isTrashed: false,
         };
-
-        // Add agent-specific fields for AI_CHAT pages
-        if (isAIChatPage(type as PageType)) {
-          if (systemPrompt) {
-            pageData.systemPrompt = systemPrompt;
-          }
-          if (enabledTools && enabledTools.length > 0) {
-            pageData.enabledTools = enabledTools;
-          }
-          if (aiProvider) {
-            pageData.aiProvider = aiProvider;
-          }
-          if (aiModel) {
-            pageData.aiModel = aiModel;
-          }
-        }
 
         // Create the page
         const [newPage] = await db
@@ -436,73 +411,40 @@ export const pageWriteTools = {
           })
         );
 
-        // Build response with agent configuration info if applicable
-        interface PageCreationResponse {
-          success: boolean;
-          id: string;
-          title: string;
-          type: string;
-          parentId: string;
-          message: string;
-          summary: string;
-          stats: {
-            pageType: string;
-            location: string;
-            hasContent: boolean;
-          };
-          nextSteps: string[];
-          agentConfig?: {
-            hasSystemPrompt: boolean;
-            enabledToolsCount: number;
-            enabledTools: string[];
-            aiProvider: string;
-            aiModel: string;
-          };
+        // Build response
+        const nextSteps: string[] = [];
+        if (isDocumentPage(type as PageType)) {
+          nextSteps.push('Add content to the new document');
+        } else if (isAIChatPage(type as PageType)) {
+          nextSteps.push('Use update_agent_config to configure the agent behavior');
+          nextSteps.push('Start chatting with your new AI agent');
+        } else {
+          nextSteps.push('Organize related pages');
         }
+        nextSteps.push(`New page ID: ${newPage.id} - use this for further operations`);
 
-        const response: PageCreationResponse = {
+        return {
           success: true,
           id: newPage.id,
           title: newPage.title,
           type: newPage.type,
           parentId: parentId || 'root',
-          message: `Successfully created ${type.toLowerCase()} page "${title}"${isAIChatPage(type as PageType) && (systemPrompt || enabledTools) ? ' with agent configuration' : ''}`,
-          summary: `Created new ${type.toLowerCase()} "${title}" in ${parentId ? `parent ${parentId}` : 'drive root'}${isAIChatPage(type as PageType) && systemPrompt ? ' with custom system prompt' : ''}`,
+          message: `Successfully created ${type.toLowerCase()} page "${title}"`,
+          summary: `Created new ${type.toLowerCase()} "${title}" in ${parentId ? `parent ${parentId}` : 'drive root'}`,
           stats: {
             pageType: newPage.type,
             location: parentId ? `Parent ID: ${parentId}` : 'Drive root',
-            hasContent: content.length > 0
           },
-          nextSteps: [
-            isDocumentPage(type as PageType) ? 'Add content to the new document' : 
-            isAIChatPage(type as PageType) ? 'Start chatting with your new AI agent' : 
-            'Organize related pages in this folder',
-            'Use read_page to verify the content was created correctly',
-            `New page ID: ${newPage.id} - use this for further operations`
-          ]
+          nextSteps
         };
-
-        // Add agent configuration details to response if applicable
-        if (isAIChatPage(type as PageType)) {
-          response.agentConfig = {
-            hasSystemPrompt: !!systemPrompt,
-            enabledToolsCount: enabledTools?.length || 0,
-            enabledTools: enabledTools || [],
-            aiProvider: aiProvider || 'default',
-            aiModel: aiModel || 'default'
-          };
-          
-          if (systemPrompt || enabledTools) {
-            response.nextSteps.unshift(
-              systemPrompt ? 'AI agent is configured with custom behavior' : 'AI agent created with default behavior',
-              enabledTools?.length ? `Agent has access to ${enabledTools.length} tools: ${enabledTools.join(', ')}` : 'Agent has no additional tools enabled'
-            );
-          }
-        }
-
-        return response;
       } catch (error) {
-        console.error('Error creating page:', error);
+        pageWriteLogger.error('Failed to create page', error instanceof Error ? error : undefined, {
+          userId: maskIdentifier(userId),
+          driveId: maskIdentifier(driveId),
+          parentId: maskIdentifier(parentId || undefined),
+          title,
+          type,
+        });
         throw new Error(`Failed to create page: ${error instanceof Error ? error.message : String(error)}`);
       }
     },
@@ -579,198 +521,120 @@ export const pageWriteTools = {
           ]
         };
       } catch (error) {
-        console.error('Error renaming page:', error);
+        pageWriteLogger.error('Failed to rename page', error instanceof Error ? error : undefined, {
+          userId: maskIdentifier(userId),
+          pageId: maskIdentifier(pageId),
+          path,
+          newTitle: title,
+        });
         throw new Error(`Failed to rename page at ${path}: ${error instanceof Error ? error.message : String(error)}`);
       }
     },
   }),
 
   /**
-   * Move a page to trash (soft delete)
+   * Move a page or drive to trash (soft delete)
    */
-  trash_page: tool({
-    description: 'Move a page to trash. Optionally trash all children recursively.',
+  trash: tool({
+    description: 'Move a page or drive to trash. For pages, optionally trash all children recursively. For drives, requires name confirmation for safety.',
     inputSchema: z.object({
-      path: z.string().describe('The page path using titles like "/driveSlug/Folder Name/Page Title" for semantic context'),
-      pageId: z.string().describe('The unique ID of the page to trash'),
-      withChildren: z.boolean().default(false).describe('Whether to trash all children recursively'),
+      type: z.enum(['page', 'drive']).describe('Whether to trash a page or a drive'),
+      id: z.string().describe('The unique ID of the page or drive to trash'),
+      path: z.string().optional().describe('For pages: the path using titles for semantic context'),
+      withChildren: z.boolean().optional().default(false).describe('For pages: whether to trash all children recursively'),
+      confirmDriveName: z.string().optional().describe('For drives: the exact name of the drive (required for safety confirmation)'),
     }),
-    execute: async ({ path, pageId, withChildren = false }, { experimental_context: context }) => {
+    execute: async ({ type, id, path, withChildren = false, confirmDriveName }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
       }
 
       try {
-        // Get the page directly by ID
-        const page = await db.query.pages.findFirst({
-          where: and(
-            eq(pages.id, pageId),
-            eq(pages.isTrashed, false)
-          ),
-        });
-
-        if (!page) {
-          throw new Error(`Page with ID "${pageId}" not found`);
-        }
-
-        // Check permissions (need DELETE access for recursive trash)
-        if (withChildren) {
-          const canDelete = await canUserDeletePage(userId, page.id);
-          if (!canDelete) {
-            throw new Error('Insufficient permissions to trash this page and its children');
-          }
-        } else {
-          const canEdit = await canUserEditPage(userId, page.id);
-          if (!canEdit) {
-            throw new Error('Insufficient permissions to trash this page');
-          }
-        }
-
-        const driveId = page.driveId;
-        let childrenCount = 0;
-
-        if (withChildren) {
-          // Recursively find all child pages
-          const getAllChildPages = async (parentId: string): Promise<string[]> => {
-            const children = await db
-              .select({ id: pages.id })
-              .from(pages)
-              .where(and(
-                eq(pages.driveId, driveId),
-                eq(pages.parentId, parentId),
-                eq(pages.isTrashed, false)
-              ));
-
-            const childIds = children.map(child => child.id);
-
-            // Recursively get grandchildren
-            const grandChildIds = [];
-            for (const child of children) {
-              const grandChildren = await getAllChildPages(child.id);
-              grandChildIds.push(...grandChildren);
-            }
-
-            return [...childIds, ...grandChildIds];
-          };
-
-          const childPageIds = await getAllChildPages(page.id);
-          childrenCount = childPageIds.length;
-          const allPageIds = [page.id, ...childPageIds];
-
-          // Trash all pages (parent and children)
-          await db
-            .update(pages)
-            .set({
-              isTrashed: true,
-              trashedAt: new Date(),
-              updatedAt: new Date(),
-            })
-            .where(and(
-              eq(pages.driveId, driveId),
-              inArray(pages.id, allPageIds)
-            ));
-        } else {
-          // Move single page to trash
-          await db
-            .update(pages)
-            .set({
-              isTrashed: true,
-              trashedAt: new Date(),
-              updatedAt: new Date(),
-            })
-            .where(eq(pages.id, page.id));
-        }
-
-        // Broadcast page deletion event
-        await broadcastPageEvent(
-          createPageEventPayload(page.driveId, page.id, 'trashed', {
+        if (type === 'page') {
+          const { page, childrenCount } = await trashPage(userId, id, withChildren);
+          return {
+            success: true,
+            type: 'page',
+            path,
+            id: page.id,
             title: page.title,
-            parentId: page.parentId
-          })
-        );
-
-        return {
-          success: true,
-          path,
-          id: page.id,
-          title: page.title,
-          type: page.type,
-          childrenCount: withChildren ? childrenCount : undefined,
-          message: withChildren
-            ? `Successfully moved "${page.title}" and ${childrenCount} children to trash`
-            : `Successfully moved "${page.title}" to trash`,
-        };
+            pageType: page.type,
+            childrenCount: withChildren ? childrenCount : undefined,
+            message: withChildren
+              ? `Successfully moved "${page.title}" and ${childrenCount} children to trash`
+              : `Successfully moved "${page.title}" to trash`,
+          };
+        } else {
+          if (!confirmDriveName) {
+            throw new Error('Drive name confirmation is required for trashing drives (confirmDriveName parameter)');
+          }
+          const drive = await trashDrive(userId, id, confirmDriveName);
+          return {
+            success: true,
+            type: 'drive',
+            id: drive.id,
+            name: drive.name,
+            slug: drive.slug,
+            message: `Successfully moved workspace "${drive.name}" to trash`,
+            warning: 'The drive and all its pages are now inaccessible but can be restored',
+          };
+        }
       } catch (error) {
-        console.error('Error trashing page:', error);
-        throw new Error(`Failed to trash page at ${path}: ${error instanceof Error ? error.message : String(error)}`);
+        pageWriteLogger.error('Failed to trash', error instanceof Error ? error : undefined, {
+          userId: maskIdentifier(userId),
+          type,
+          id: maskIdentifier(id),
+        });
+        throw new Error(`Failed to trash ${type}: ${error instanceof Error ? error.message : String(error)}`);
       }
     },
   }),
 
   /**
-   * Restore a page from trash
+   * Restore a page or drive from trash
    */
-  restore_page: tool({
-    description: 'Restore a trashed page back to its original location in the workspace.',
+  restore: tool({
+    description: 'Restore a trashed page or drive back to its original location.',
     inputSchema: z.object({
-      path: z.string().describe('The page title for semantic context (e.g., "Page Title" or "/driveSlug/Page Title")'),
-      pageId: z.string().describe('The unique ID of the trashed page to restore'),
+      type: z.enum(['page', 'drive']).describe('Whether to restore a page or a drive'),
+      id: z.string().describe('The unique ID of the page or drive to restore'),
     }),
-    execute: async ({ path, pageId }, { experimental_context: context }) => {
+    execute: async ({ type, id }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
       }
 
       try {
-        // Get the trashed page directly by ID
-        const trashedPage = await db.query.pages.findFirst({
-          where: and(
-            eq(pages.id, pageId),
-            eq(pages.isTrashed, true)
-          ),
-        });
-
-        if (!trashedPage) {
-          throw new Error(`Trashed page with ID "${pageId}" not found`);
+        if (type === 'page') {
+          const page = await restorePage(userId, id);
+          return {
+            success: true,
+            type: 'page',
+            id: page.id,
+            title: page.title,
+            pageType: page.type,
+            message: `Successfully restored "${page.title}" from trash`,
+          };
+        } else {
+          const drive = await restoreDrive(userId, id);
+          return {
+            success: true,
+            type: 'drive',
+            id: drive.id,
+            name: drive.name,
+            slug: drive.slug,
+            message: `Successfully restored workspace "${drive.name}" from trash`,
+          };
         }
-
-        // Check permissions
-        const canEdit = await canUserEditPage(userId, trashedPage.id);
-        if (!canEdit) {
-          throw new Error('Insufficient permissions to restore this page');
-        }
-
-        // Restore the page
-        const [restoredPage] = await db
-          .update(pages)
-          .set({
-            isTrashed: false,
-            trashedAt: null,
-            updatedAt: new Date(),
-          })
-          .where(eq(pages.id, trashedPage.id))
-          .returning({ id: pages.id, title: pages.title, type: pages.type, parentId: pages.parentId });
-
-        // Broadcast page restore event
-        await broadcastPageEvent(
-          createPageEventPayload(trashedPage.driveId, restoredPage.id, 'restored', {
-            title: restoredPage.title,
-            parentId: restoredPage.parentId
-          })
-        );
-
-        return {
-          success: true,
-          id: restoredPage.id,
-          title: restoredPage.title,
-          type: restoredPage.type,
-          message: `Successfully restored "${restoredPage.title}" from trash`,
-        };
       } catch (error) {
-        console.error('Error restoring page:', error);
-        throw new Error(`Failed to restore page "${path}": ${error instanceof Error ? error.message : String(error)}`);
+        pageWriteLogger.error('Failed to restore', error instanceof Error ? error : undefined, {
+          userId: maskIdentifier(userId),
+          type,
+          id: maskIdentifier(id),
+        });
+        throw new Error(`Failed to restore ${type}: ${error instanceof Error ? error.message : String(error)}`);
       }
     },
   }),
@@ -866,7 +730,12 @@ export const pageWriteTools = {
           message: `Successfully moved "${movedPage.title}" to ${newParentPath} at position ${position}`,
         };
       } catch (error) {
-        console.error('Error moving page:', error);
+        pageWriteLogger.error('Failed to move page', error instanceof Error ? error : undefined, {
+          userId: maskIdentifier(userId),
+          pageId: maskIdentifier(pageId),
+          path,
+          newParentId: maskIdentifier(newParentId || undefined),
+        });
         throw new Error(`Failed to move page from ${path}: ${error instanceof Error ? error.message : String(error)}`);
       }
     },
@@ -909,7 +778,7 @@ export const pageWriteTools = {
             success: false,
             error: 'Page is not a sheet',
             message: `This page is a ${page.type}. Use edit_sheet_cells only on SHEET pages.`,
-            suggestion: 'Use replace_lines or insert_lines for document editing.',
+            suggestion: 'Use replace_lines for document editing.',
             pageInfo: {
               pageId: page.id,
               title: page.title,
@@ -988,7 +857,11 @@ export const pageWriteTools = {
           ]
         };
       } catch (error) {
-        console.error('Error editing sheet cells:', error);
+        pageWriteLogger.error('Failed to edit sheet cells', error instanceof Error ? error : undefined, {
+          userId: maskIdentifier(userId),
+          pageId: maskIdentifier(pageId),
+          cellCount: cells.length,
+        });
         throw new Error(`Failed to edit sheet cells: ${error instanceof Error ? error.message : String(error)}`);
       }
     },

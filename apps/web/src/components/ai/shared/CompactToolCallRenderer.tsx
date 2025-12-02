@@ -89,15 +89,14 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
       case 'read_page':
         return <Eye className={iconClass} />;
       case 'replace_lines':
-      case 'insert_lines':
         return <Edit className={iconClass} />;
       case 'create_page':
         return <Plus className={iconClass} />;
       case 'rename_page':
         return <FilePlus className={iconClass} />;
-      case 'trash_page':
+      case 'trash':
         return <Trash className={iconClass} />;
-      case 'restore_page':
+      case 'restore':
         return <RotateCcw className={iconClass} />;
       case 'move_page':
         return <Move className={iconClass} />;
@@ -133,11 +132,10 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
       'list_pages': 'List Pages',
       'read_page': 'Read',
       'replace_lines': 'Replace',
-      'insert_lines': 'Insert',
       'create_page': 'Create',
       'rename_page': 'Rename',
-      'trash_page': 'Trash',
-      'restore_page': 'Restore',
+      'trash': 'Trash',
+      'restore': 'Restore',
       'move_page': 'Move',
       'list_trash': 'List Trash'
     };
