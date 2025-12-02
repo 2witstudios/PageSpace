@@ -355,9 +355,10 @@ export async function createAIProvider(
       }
 
       // Create MiniMax provider instance using Anthropic-compatible endpoint
+      // Note: @ai-sdk/anthropic appends /messages directly, so /v1 must be in baseURL
       const minimax = createAnthropic({
         apiKey: minimaxSettings.apiKey,
-        baseURL: 'https://api.minimax.io/anthropic',
+        baseURL: 'https://api.minimax.io/anthropic/v1',
       });
       model = minimax(currentModel);
 
