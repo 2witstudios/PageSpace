@@ -11,18 +11,15 @@ const WRITE_TOOLS = new Set([
   'create_page',
   'rename_page',
   'replace_lines',
-  'insert_lines',
-  'trash_page',
-  'restore_page',
   'move_page',
   'edit_sheet_cells',
   // Drive operations
   'create_drive',
   'rename_drive',
-  'trash_drive',
-  'restore_drive',
+  // Unified trash/restore (pages and drives)
+  'trash',
+  'restore',
   // Agent operations
-  'create_agent',
   'update_agent_config',
   // Task operations
   'update_task',

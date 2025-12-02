@@ -107,28 +107,29 @@ if (enabledTools && enabledTools.length > 0) {
 - **read_page**: Access document content
 - **create_page**: Generate new content (all page types)
 - **rename_page**: Update page titles
-- **trash_page/restore_page**: Manage page lifecycle
+- **move_page**: Reorganize page structure
 
 ### 2. Content Editing Tools
 - **replace_lines**: Precise line-based editing (use empty content to delete lines)
-- **insert_lines**: Add content at specific positions (lineNumber 1 for prepend, lineCount+1 for append)
-- **move_page**: Reorganize page structure
 
-### 3. Advanced Search & Discovery
+### 3. Trash Operations
+- **trash**: Move pages or drives to trash (unified tool)
+- **restore**: Restore pages or drives from trash (unified tool)
+
+### 4. Advanced Search & Discovery
 - **regex_search**: Pattern-based content search
 - **glob_search**: Structural discovery (e.g., `**/README*`)
 - **multi_drive_search**: Cross-workspace search
 
-### 4. Task Management
+### 5. Task Management
 - **create_page** (type: TASK_LIST): Create task lists as pages
 - **read_page**: View task list progress (returns structured task data for TASK_LIST pages)
 - **update_task**: Add or update tasks on TASK_LIST pages (each task creates a linked DOCUMENT page)
 
-### 5. Agent Management
+### 6. Agent Management
 - **list_agents/multi_drive_list_agents**: Discover AI agents
 - **ask_agent**: Agent-to-agent communication
-- **create_agent**: Configure new AI assistants
-- **update_agent_config**: Modify agent settings
+- **update_agent_config**: Modify agent settings (create agents with create_page type: AI_CHAT first)
 
 ## Tool Execution Flow
 
@@ -277,7 +278,7 @@ const agents = await multi_drive_list_agents({
         {
           title: "Content Strategy AI",
           path: "/marketing/Content Strategy AI",
-          enabledTools: ["create_page", "read_page", "replace_lines", "insert_lines"],
+          enabledTools: ["create_page", "read_page", "replace_lines"],
           hasConversationHistory: true
         }
       ]

@@ -112,15 +112,14 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
       case 'read_page':
         return <Eye className="h-4 w-4" />;
       case 'replace_lines':
-      case 'insert_lines':
         return <Edit className="h-4 w-4" />;
       case 'create_page':
         return <Plus className="h-4 w-4" />;
       case 'rename_page':
         return <FilePlus className="h-4 w-4" />;
-      case 'trash_page':
+      case 'trash':
         return <Trash className="h-4 w-4" />;
-      case 'restore_page':
+      case 'restore':
         return <RotateCcw className="h-4 w-4" />;
       case 'move_page':
         return <Move className="h-4 w-4" />;
@@ -139,11 +138,10 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
       'list_pages': 'List Pages',
       'read_page': 'Read Page',
       'replace_lines': 'Replace Lines',
-      'insert_lines': 'Insert Lines',
       'create_page': 'Create Page',
       'rename_page': 'Rename Page',
-      'trash_page': 'Trash Page',
-      'restore_page': 'Restore Page',
+      'trash': 'Trash',
+      'restore': 'Restore',
       'move_page': 'Move Page',
       'list_trash': 'List Trash'
     };
@@ -212,14 +210,16 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
           return `${baseTitle}: ${action} "${result.title}"`;
         }
         
-        // For trash operations
-        if (toolName === 'trash_page' && result.title) {
-          return `${baseTitle}: Moved "${result.title}" to trash`;
+        // For trash operations (unified trash tool for pages and drives)
+        if (toolName === 'trash' && (result.title || result.name)) {
+          const itemName = result.title || result.name;
+          return `${baseTitle}: Moved "${itemName}" to trash`;
         }
-        
-        // For restore operations
-        if (toolName === 'restore_page' && result.title) {
-          return `${baseTitle}: Restored "${result.title}"`;
+
+        // For restore operations (unified restore tool for pages and drives)
+        if (toolName === 'restore' && (result.title || result.name)) {
+          const itemName = result.title || result.name;
+          return `${baseTitle}: Restored "${itemName}"`;
         }
         
         // For move operations
@@ -315,7 +315,7 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
         );
       }
 
-      if (['replace_lines', 'insert_lines'].includes(toolName)) {
+      if (toolName === 'replace_lines') {
         return (
           <TaskItem status="completed">
             {result.message || `Successfully completed ${formatToolName(toolName).toLowerCase()}`}
@@ -326,7 +326,7 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
         );
       }
 
-      if (['create_page', 'rename_page', 'trash_page', 'restore_page', 'move_page'].includes(toolName)) {
+      if (['create_page', 'rename_page', 'trash', 'restore', 'move_page'].includes(toolName)) {
         return (
           <TaskItem status="completed">
             {result.message || `Successfully completed ${formatToolName(toolName).toLowerCase()}`}

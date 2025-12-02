@@ -257,12 +257,12 @@ const coreTools = {
   list_drives,           // List all accessible workspaces
   list_pages,            // Explore page hierarchies with tree structure
   read_page,             // Read document content with metadata
-  create_page,           // Create new pages (DOCUMENT, FOLDER, AI_CHAT, CHANNEL, CANVAS)
+  create_page,           // Create new pages (DOCUMENT, FOLDER, AI_CHAT, CHANNEL, CANVAS, SHEET, TASK_LIST)
   rename_page,           // Rename existing pages
-  trash_page,            // Delete pages (withChildren: true for recursive deletion)
-  restore_page,          // Restore from trash
   move_page,             // Move/reorder pages in hierarchy
   list_trash,            // View trashed items
+  trash,                 // Unified trash for pages and drives (withChildren for recursive)
+  restore,               // Unified restore for pages and drives
 };
 ```
 
@@ -270,7 +270,6 @@ const coreTools = {
 ```typescript
 const editingTools = {
   replace_lines,         // Precise line-based editing (use empty content to delete lines)
-  insert_lines,          // Insert content at specific positions (lineNumber 1 for prepend, lineCount+1 for append)
 };
 ```
 
@@ -304,8 +303,7 @@ const agentTools = {
   list_agents,           // Discover AI agents within specific drives
   multi_drive_list_agents, // Discover agents across all accessible drives
   ask_agent,             // Agent-to-agent communication for specialized consultation
-  create_agent,          // Create fully configured AI agents with custom prompts
-  update_agent_config,   // Modify existing agent settings and capabilities
+  update_agent_config,   // Modify agent settings (create with create_page type: AI_CHAT first)
 };
 ```
 

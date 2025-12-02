@@ -146,7 +146,7 @@ read_page({
 
 ### create_page
 
-**Purpose:** Create new pages of any type with optional AI agent configuration
+**Purpose:** Create new pages of any type
 **Permission Level:** Write
 **Use Cases:** Content creation, workspace organization
 
@@ -154,18 +154,12 @@ read_page({
 create_page({
   driveId: "drive-123",
   title: "New Document",
-  type: "DOCUMENT", // DOCUMENT, FOLDER, AI_CHAT, CHANNEL, CANVAS
+  type: "DOCUMENT", // DOCUMENT, FOLDER, AI_CHAT, CHANNEL, CANVAS, SHEET, TASK_LIST
   parentId?: "page-456", // Optional: parent page
-  content?: "Initial content...", // Optional: initial content
-  position?: 1, // Optional: position within parent
-
-  // AI Agent Configuration (for AI_CHAT pages only)
-  systemPrompt?: "You are a marketing assistant...",
-  enabledTools?: ["create_page", "read_page", "replace_lines", "insert_lines"],
-  aiProvider?: "anthropic",
-  aiModel?: "claude-3-5-sonnet-20241022"
 })
 ```
+
+> **Note:** For AI_CHAT pages, use `update_agent_config` after creation to configure agent behavior.
 
 **Response:**
 ```json
@@ -213,36 +207,53 @@ rename_page({
 
 ---
 
-### trash_page
+### trash
 
-**Purpose:** Move pages to trash (soft delete)
-**Permission Level:** Delete
+**Purpose:** Move pages or drives to trash (soft delete)
+**Permission Level:** Delete for pages, Owner for drives
 **Use Cases:** Content cleanup, organization
 
 ```typescript
 // Delete single page
-trash_page({
-  pageId: "page-123"
+trash({
+  type: "page",
+  id: "page-123"
 })
 
 // Delete page and all children recursively
-trash_page({
-  pageId: "page-123",
+trash({
+  type: "page",
+  id: "page-123",
   withChildren: true
+})
+
+// Delete a drive (requires name confirmation)
+trash({
+  type: "drive",
+  id: "drive-123",
+  confirmDriveName: "My Workspace"
 })
 ```
 
 ---
 
-### restore_page
+### restore
 
-**Purpose:** Restore pages from trash
-**Permission Level:** Edit
+**Purpose:** Restore pages or drives from trash
+**Permission Level:** Edit for pages, Owner for drives
 **Use Cases:** Content recovery
 
 ```typescript
-restore_page({
-  pageId: "page-123"
+// Restore a page
+restore({
+  type: "page",
+  id: "page-123"
+})
+
+// Restore a drive
+restore({
+  type: "drive",
+  id: "drive-123"
 })
 ```
 
@@ -280,39 +291,6 @@ replace_lines({
   content: "Updated content for lines 5-7"
 })
 ```
-
----
-
-### insert_lines
-
-**Purpose:** Insert content at specific line positions
-**Permission Level:** Edit
-**Use Cases:** Adding content mid-document, prepending, appending
-
-```typescript
-// Insert at specific line
-insert_lines({
-  pageId: "page-123",
-  lineNumber: 10,
-  content: "New content inserted at line 10"
-})
-
-// Prepend to beginning (line 1)
-insert_lines({
-  pageId: "page-123",
-  lineNumber: 1,
-  content: "# Executive Summary\nOverview content...\n\n"
-})
-
-// Append to end (use line count + 1)
-insert_lines({
-  pageId: "page-123",
-  lineNumber: 101, // If document has 100 lines
-  content: "\n\n## Additional Section\nNew content here..."
-})
-```
-
-**Note:** Use `lineNumber: 1` for prepend, `lineNumber: lineCount + 1` for append
 
 ---
 
@@ -593,7 +571,7 @@ multi_drive_list_agents({
           "id": "page-ai-123",
           "title": "Content Strategy AI",
           "path": "/marketing/Content Strategy AI",
-          "enabledTools": ["create_page", "replace_lines", "insert_lines"],
+          "enabledTools": ["create_page", "replace_lines"],
           "aiProvider": "anthropic",
           "aiModel": "claude-3-5-sonnet-20241022",
           "hasConversationHistory": true
@@ -646,35 +624,9 @@ ask_agent({
 
 ---
 
-### create_agent
-
-**Purpose:** Create fully configured AI agents
-**Permission Level:** Write
-**Use Cases:** Specialized assistant creation, workflow automation
-
-```typescript
-create_agent({
-  driveId: "drive-123",
-  title: "Marketing Campaign AI",
-  parentId?: "page-456",
-  systemPrompt: "You are a marketing campaign specialist. Focus on data-driven insights and creative strategy...",
-  enabledTools: [
-    "create_page",
-    "read_page",
-    "replace_lines",
-    "insert_lines",
-    "update_task",
-    "regex_search"
-  ],
-  aiProvider?: "anthropic",
-  aiModel?: "claude-3-5-sonnet-20241022",
-  description?: "AI assistant for marketing campaign planning and execution"
-})
-```
-
----
-
 ### update_agent_config
+
+> **Note:** To create an AI agent, use `create_page` with `type: "AI_CHAT"` first, then configure with `update_agent_config`.
 
 **Purpose:** Modify existing AI agent settings
 **Permission Level:** Edit
@@ -722,8 +674,7 @@ Pages can define custom tool sets via `enabledTools` array:
 enabledTools: [
   "read_page",
   "create_page",
-  "replace_lines",
-  "insert_lines"
+  "replace_lines"
 ]
 
 // Example: Analysis-focused agent
@@ -773,13 +724,18 @@ await create_page({
 });
 
 // Step 3: Create Campaign AI agent
-await create_page({
+const agentPage = await create_page({
   driveId: "drive-123",
   title: "Campaign AI",
   type: "AI_CHAT",
-  systemPrompt: "Marketing campaign specialist...",
-  enabledTools: ["create_page", "replace_lines", "insert_lines", "update_task"],
   parentId: parentFolder.id
+});
+
+// Step 3b: Configure the agent
+await update_agent_config({
+  pageId: agentPage.id,
+  systemPrompt: "Marketing campaign specialist...",
+  enabledTools: ["create_page", "replace_lines", "update_task"]
 });
 
 // Step 4: Create task list for campaign

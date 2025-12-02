@@ -141,7 +141,7 @@ PageSpace treats AI agents as **specialized workspace citizens** with full integ
 - `packages/db/src/schema/core.ts` - Agent config in pages table (systemPrompt, enabledTools, aiProvider, aiModel, agentRole)
 
 **Agent Communication:**
-- `apps/web/src/lib/ai/tools/agent-communication-tools.ts` - ask_agent, list_agents, create_agent, update_agent_config
+- `apps/web/src/lib/ai/tools/agent-communication-tools.ts` - ask_agent, list_agents, update_agent_config
 
 **UI Components:**
 - `apps/web/src/components/ai/AgentSettingsTab.tsx` - Agent configuration interface

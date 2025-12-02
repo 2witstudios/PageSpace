@@ -52,11 +52,12 @@ PageSpace's AI system implements a **database-first, message-as-row architecture
 - **Real-Time Broadcasting**: Tool execution results broadcast to all connected users
 
 **Tool Categories Available:**
-1. **Core Page Operations** (8 tools): list_drives, list_pages, read_page, create_page, trash_page, restore_page, move_page, list_trash
-2. **Content Editing Tools** (2 tools): replace_lines, insert_lines
-3. **Advanced Search & Discovery** (3 tools): regex_search, glob_search, multi_drive_search
-4. **Task Management** (1 tool): update_task (works with TASK_LIST pages created via create_page)
-5. **Agent Management** (5 tools): list_agents, ask_agent, create_agent, update_agent_config, multi_drive_list_agents
+1. **Core Page Operations** (6 tools): list_drives, list_pages, read_page, create_page, move_page, list_trash
+2. **Content Editing Tools** (1 tool): replace_lines
+3. **Trash Operations** (2 tools): trash, restore (unified for pages and drives)
+4. **Advanced Search & Discovery** (3 tools): regex_search, glob_search, multi_drive_search
+5. **Task Management** (1 tool): update_task (works with TASK_LIST pages created via create_page)
+6. **Agent Management** (4 tools): list_agents, ask_agent, update_agent_config, multi_drive_list_agents
 
 **Tool Execution Flow:**
 1. **Capability Detection**: Model capabilities (vision, tools) automatically detected
