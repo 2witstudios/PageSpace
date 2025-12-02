@@ -28,6 +28,7 @@ interface ProviderSettings {
     ollama: { isConfigured: boolean; hasBaseUrl: boolean };
     lmstudio: { isConfigured: boolean; hasBaseUrl: boolean };
     glm: { isConfigured: boolean; hasApiKey: boolean };
+    minimax: { isConfigured: boolean; hasApiKey: boolean };
   };
   isAnyProviderConfigured: boolean;
   userSubscriptionTier?: string;
@@ -283,6 +284,12 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
     // (not the OpenAI configuration, even though GLM uses OpenAI-compatible backend)
     if (provider === 'glm') {
       return providerSettings.providers.glm?.isConfigured || false;
+    }
+
+    // MiniMax provider should check its own configuration directly
+    // (not the Anthropic configuration, even though MiniMax uses Anthropic-compatible backend)
+    if (provider === 'minimax') {
+      return providerSettings.providers.minimax?.isConfigured || false;
     }
 
     // Map UI provider to backend provider for checking configuration

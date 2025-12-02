@@ -403,6 +403,17 @@ export default function AiSettingsPage() {
                 <Badge variant="secondary">Not Configured</Badge>
               )}
             </div>
+            <div className="flex items-center justify-between p-3 border rounded-lg">
+              <span className="font-medium">MiniMax</span>
+              {isProviderConfigured('minimax') ? (
+                <Badge variant="default" className="bg-green-500">
+                  <CheckCircle className="h-3 w-3 mr-1" />
+                  Configured
+                </Badge>
+              ) : (
+                <Badge variant="secondary">Not Configured</Badge>
+              )}
+            </div>
           </div>
         </CardContent>
       </Card>
