@@ -73,7 +73,7 @@ const SidebarChatTab: React.FC = () => {
           return fetchWithAuth(urlString, options);
         },
       }),
-      experimental_throttle: 50,
+      experimental_throttle: 100, // Increased from 50ms for better performance
       onError: (error: Error) => {
         console.error('Sidebar Agent Chat error:', error);
         toast.error('Chat error. Please try again.');
@@ -559,6 +559,7 @@ const SidebarChatTab: React.FC = () => {
                   onRetry={handleRetry}
                   isLastAssistantMessage={message.id === lastAssistantMessageId}
                   isLastUserMessage={message.id === lastUserMessageId}
+                  isStreaming={isStreaming && message.id === lastAssistantMessageId && message.role === 'assistant'}
                 />
               ))
             )}

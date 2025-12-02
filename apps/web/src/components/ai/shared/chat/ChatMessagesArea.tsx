@@ -31,8 +31,6 @@ interface ChatMessagesAreaProps {
   lastAssistantMessageId?: string;
   /** Last user message ID */
   lastUserMessageId?: string;
-  /** Edit version for forcing re-renders after edits */
-  editVersion?: number;
   /** Whether user has read-only access */
   isReadOnly?: boolean;
 }
@@ -58,7 +56,6 @@ export const ChatMessagesArea = forwardRef<ChatMessagesAreaRef, ChatMessagesArea
       onRetry,
       lastAssistantMessageId,
       lastUserMessageId,
-      editVersion = 0,
       isReadOnly = false,
     },
     ref
@@ -124,13 +121,14 @@ export const ChatMessagesArea = forwardRef<ChatMessagesAreaRef, ChatMessagesArea
               ) : (
                 messages.map((message) => (
                   <MessageRenderer
-                    key={`${message.id}-${editVersion}`}
+                    key={message.id}
                     message={message}
                     onEdit={!isReadOnly ? onEdit : undefined}
                     onDelete={!isReadOnly ? onDelete : undefined}
                     onRetry={!isReadOnly ? onRetry : undefined}
                     isLastAssistantMessage={message.id === lastAssistantMessageId}
                     isLastUserMessage={message.id === lastUserMessageId}
+                    isStreaming={isStreaming && message.id === lastAssistantMessageId && message.role === 'assistant'}
                   />
                 ))
               )}

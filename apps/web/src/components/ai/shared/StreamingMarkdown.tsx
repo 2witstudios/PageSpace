@@ -1,0 +1,175 @@
+/**
+ * StreamingMarkdown - Optimized markdown rendering for AI streaming
+ *
+ * Uses Streamdown (Vercel's streaming-optimized markdown renderer) with:
+ * - Progressive formatting during streaming
+ * - Handles incomplete markdown syntax gracefully
+ * - Built-in memoization for performance
+ * - Custom mention rendering support
+ */
+
+import { memo, useMemo, AnchorHTMLAttributes, HTMLAttributes, TableHTMLAttributes, ReactNode } from 'react';
+import { Streamdown } from 'streamdown';
+
+/**
+ * Regex pattern for mention preprocessing
+ * Matches @[Label](id:type) format
+ * Moved to module scope to avoid recreation on every function call
+ */
+const MENTION_REGEX = /@\[([^\]]+)\]\(([^:]+):([^)]+)\)/g;
+
+/**
+ * Pre-process content to convert @mentions into markdown links with special protocol
+ * Converts @[Label](id:type) format to [mention:@Label](mention://id/type)
+ * which Streamdown will render as a link that we handle specially
+ */
+function preprocessMentions(content: string): string {
+  // Reset lastIndex since we're reusing the regex (it's stateful with /g flag)
+  MENTION_REGEX.lastIndex = 0;
+  return content.replace(MENTION_REGEX, (_, label, id, type) => {
+    // Convert to a special link format that we'll intercept in the component
+    return `[mention:${label}](mention://${id}/${type})`;
+  });
+}
+
+// Custom anchor component for mentions and regular links
+function CustomAnchor({ href, children, ...props }: AnchorHTMLAttributes<HTMLAnchorElement> & { children?: ReactNode }) {
+  // Check if this is a mention link
+  if (typeof href === 'string' && href.startsWith('mention://')) {
+    // Extract the label from children (format: "mention:Label")
+    const label = typeof children === 'string'
+      ? children.replace(/^mention:/, '')
+      : Array.isArray(children) && typeof children[0] === 'string'
+        ? children[0].replace(/^mention:/, '')
+        : children;
+
+    return (
+      <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-primary/20 text-primary dark:bg-primary/30 dark:text-primary text-sm font-medium mx-1">
+        @{label}
+      </span>
+    );
+  }
+
+  // Regular link
+  return (
+    <a href={href} className="max-w-full break-words inline-block" {...props}>
+      {children}
+    </a>
+  );
+}
+
+// Custom code component with proper overflow handling
+function CustomCode({ className, children, ...props }: HTMLAttributes<HTMLElement> & { children?: ReactNode }) {
+  const isInline = !className?.includes('language-');
+  if (isInline) {
+    return (
+      <code className={`${className || ''} max-w-full`} {...props}>
+        {children}
+      </code>
+    );
+  }
+  return (
+    <code className={`${className || ''} max-w-full block`} {...props}>
+      {children}
+    </code>
+  );
+}
+
+// Custom pre component with overflow handling
+function CustomPre({ children, ...props }: HTMLAttributes<HTMLPreElement> & { children?: ReactNode }) {
+  return (
+    <pre className="max-w-full overflow-x-auto" {...props}>
+      {children}
+    </pre>
+  );
+}
+
+// Custom paragraph component with word breaking
+function CustomParagraph({ children, ...props }: HTMLAttributes<HTMLParagraphElement> & { children?: ReactNode }) {
+  return (
+    <p className="max-w-full break-words" {...props}>
+      {children}
+    </p>
+  );
+}
+
+// Custom table component with horizontal scroll
+function CustomTable({ children, ...props }: TableHTMLAttributes<HTMLTableElement> & { children?: ReactNode }) {
+  return (
+    <div className="max-w-full overflow-x-auto">
+      <table {...props}>{children}</table>
+    </div>
+  );
+}
+
+/**
+ * Custom components for Streamdown rendering
+ * Includes width constraints, overflow handling, and mention support
+ */
+const streamdownComponents = {
+  a: CustomAnchor,
+  code: CustomCode,
+  pre: CustomPre,
+  p: CustomParagraph,
+  table: CustomTable,
+};
+
+interface StreamingMarkdownProps {
+  content: string;
+  /** @deprecated id is no longer used - kept for backward compatibility */
+  id?: string;
+  /** Whether to use streaming mode (progressive formatting) or static mode */
+  isStreaming?: boolean;
+  /** Additional CSS class */
+  className?: string;
+}
+
+/**
+ * Streaming-optimized markdown renderer
+ *
+ * Features:
+ * - Handles incomplete markdown during streaming
+ * - Progressive formatting (applies styles to partial content)
+ * - Built-in memoization
+ * - Custom mention rendering
+ */
+export const StreamingMarkdown = memo(
+  ({ content, isStreaming = false, className }: StreamingMarkdownProps) => {
+    // Pre-process mentions before rendering
+    const processedContent = useMemo(() => preprocessMentions(content), [content]);
+
+    return (
+      <Streamdown
+        mode={isStreaming ? 'streaming' : 'static'}
+        components={streamdownComponents}
+        className={className}
+        // Disable controls for chat messages (copy/download buttons on code blocks)
+        controls={false}
+      >
+        {processedContent}
+      </Streamdown>
+    );
+  },
+  (prevProps, nextProps) => {
+    // Custom equality check for better memoization
+    return prevProps.content === nextProps.content &&
+           prevProps.isStreaming === nextProps.isStreaming &&
+           prevProps.className === nextProps.className;
+  }
+);
+
+StreamingMarkdown.displayName = 'StreamingMarkdown';
+
+/**
+ * Legacy alias for backward compatibility
+ * Can be used as a drop-in replacement for MemoizedMarkdown
+ */
+export const MemoizedMarkdown = memo(
+  ({ content, id }: { content: string; id: string }) => {
+    return <StreamingMarkdown content={content} id={id} isStreaming={false} />;
+  }
+);
+
+MemoizedMarkdown.displayName = 'MemoizedMarkdown';
+
+export default StreamingMarkdown;
