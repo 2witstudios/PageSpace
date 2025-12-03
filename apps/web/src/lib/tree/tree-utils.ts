@@ -64,6 +64,8 @@ export function mergeChildren(
     if (node.id === parentId) {
       // It's crucial to ensure the new children also have a `children` array property
       const newChildren = children.map(c => ({ ...c, children: c.children || [] }));
+      // Sort by position to ensure consistent ordering
+      newChildren.sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
       return { ...node, children: newChildren };
     }
     if (node.children && node.children.length > 0) {
@@ -74,9 +76,10 @@ export function mergeChildren(
 }
 
 
-export function buildTree<T extends { id: string; parentId: string | null }>(nodes: T[]): (T & { children: T[] })[] {
-    const nodeMap = new Map(nodes.map(node => [node.id, { ...node, children: [] as (T & { children: T[] })[] }]));
-    const tree: (T & { children: T[] })[] = [];
+export function buildTree<T extends { id: string; parentId: string | null; position?: number }>(nodes: T[]): (T & { children: (T & { children: T[] })[] })[] {
+    type NodeWithChildren = T & { children: NodeWithChildren[] };
+    const nodeMap = new Map(nodes.map(node => [node.id, { ...node, children: [] as NodeWithChildren[] }]));
+    const tree: NodeWithChildren[] = [];
 
     for (const node of nodes) {
         const nodeWithChildren = nodeMap.get(node.id)!;
@@ -87,6 +90,18 @@ export function buildTree<T extends { id: string; parentId: string | null }>(nod
             tree.push(nodeWithChildren);
         }
     }
+
+    // Sort all children arrays by position to ensure consistent ordering
+    function sortByPosition(nodes: NodeWithChildren[]): void {
+        nodes.sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+        for (const node of nodes) {
+            if (node.children.length > 0) {
+                sortByPosition(node.children);
+            }
+        }
+    }
+
+    sortByPosition(tree);
 
     return tree;
 }
