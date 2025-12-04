@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useDocumentManagerStore, DocumentState } from '@/stores/useDocumentManagerStore';
+import { useDirtyStore } from '@/stores/useDirtyStore';
 import { toast } from 'sonner';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useSocket } from './useSocket';
@@ -86,6 +87,8 @@ export const useDocumentSaving = (pageId: string) => {
             currentDoc.content === content &&
             currentDoc.lastUpdateTime < saveStartTime) {
           markAsSaved(pageId);
+          // Clear dirty flag from useDirtyStore on successful save
+          useDirtyStore.getState().clearDirty(pageId);
         } else {
           // Content changed while saving - remove from saving state but keep dirty
           const state = useDocumentManagerStore.getState();
@@ -181,6 +184,9 @@ export const useDocument = (pageId: string, initialContent?: string) => {
         lastUpdateTime: Date.now(), // Track when content was last updated
         isDirty: true, // Always mark as dirty on user edits
       });
+
+      // Also update useDirtyStore for browser "unsaved changes" warning
+      useDirtyStore.getState().setDirty(pageId, true);
     },
     [pageId]
   );

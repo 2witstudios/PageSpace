@@ -5,6 +5,8 @@ interface DirtyStore {
   setDirty: (id: string, isDirty: boolean) => void;
   isDirty: (id: string) => boolean;
   hasDirtyDocuments: () => boolean;
+  clearDirty: (id: string) => void;
+  clearAllDirty: () => void;
 }
 
 export const useDirtyStore = create<DirtyStore>((set, get) => ({
@@ -22,5 +24,14 @@ export const useDirtyStore = create<DirtyStore>((set, get) => ({
   },
   hasDirtyDocuments: () => {
     return Object.values(get().dirtyFlags).some(Boolean);
+  },
+  clearDirty: (id) => {
+    set((state) => {
+      const { [id]: _, ...rest } = state.dirtyFlags;
+      return { dirtyFlags: rest };
+    });
+  },
+  clearAllDirty: () => {
+    set({ dirtyFlags: {} });
   },
 }));

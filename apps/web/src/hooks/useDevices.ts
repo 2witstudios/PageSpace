@@ -1,5 +1,6 @@
 import useSWR from 'swr';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { useEditingStore } from '@/stores/useEditingStore';
 
 export interface Device {
   id: string;
@@ -27,10 +28,13 @@ const fetcher = async (url: string): Promise<Device[]> => {
 };
 
 export function useDevices() {
+  const isAnyActive = useEditingStore((state) => state.isAnyActive());
+
   const { data, error, mutate } = useSWR<Device[]>(
     '/api/account/devices',
     fetcher,
     {
+      isPaused: () => isAnyActive,
       refreshInterval: 60000, // Refresh every minute
       revalidateOnFocus: true,
       revalidateOnReconnect: true,

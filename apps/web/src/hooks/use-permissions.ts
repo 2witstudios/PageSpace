@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import useSWR from 'swr';
 import { useAuth } from './use-auth';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { useEditingStore } from '@/stores/useEditingStore';
 
 export interface PagePermissions {
   canView: boolean;
@@ -32,6 +33,7 @@ const defaultPermissions: PagePermissions = {
 export function usePermissions(pageId?: string | null, driveOwnerId?: string): UsePermissionsResult {
   const { user } = useAuth();
   const [isOwner, setIsOwner] = useState(false);
+  const isAnyActive = useEditingStore((state) => state.isAnyActive());
 
   // Check if user is drive owner
   useEffect(() => {
@@ -54,6 +56,7 @@ export function usePermissions(pageId?: string | null, driveOwnerId?: string): U
       return response.json();
     },
     {
+      isPaused: () => isAnyActive,
       revalidateOnFocus: false,
       dedupingInterval: 60000, // Cache for 1 minute
     }
