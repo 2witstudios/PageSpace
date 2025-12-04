@@ -124,11 +124,11 @@ export default function InlineSearch() {
     // Navigate based on result type
     switch (result.type) {
       case 'drive':
-        router.push(`/dashboard?driveId=${result.id}`);
+        router.push(`/dashboard/${result.id}`);
         break;
       case 'page':
         if (result.driveId) {
-          router.push(`/dashboard?driveId=${result.driveId}&pageId=${result.id}`);
+          router.push(`/dashboard/${result.driveId}/${result.id}`);
         }
         break;
       case 'user':

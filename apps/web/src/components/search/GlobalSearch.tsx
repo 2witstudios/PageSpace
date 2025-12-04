@@ -89,12 +89,12 @@ export default function GlobalSearch({ open, onOpenChange }: GlobalSearchProps) 
     switch (result.type) {
       case 'drive':
         // Navigate to drive dashboard
-        router.push(`/dashboard?driveId=${result.id}`);
+        router.push(`/dashboard/${result.id}`);
         break;
       case 'page':
         // Navigate to page within drive
         if (result.driveId) {
-          router.push(`/dashboard?driveId=${result.driveId}&pageId=${result.id}`);
+          router.push(`/dashboard/${result.driveId}/${result.id}`);
         }
         break;
       case 'user':
