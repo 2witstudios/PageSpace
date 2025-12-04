@@ -156,6 +156,11 @@
       "types": "./dist/email-templates/VerificationEmail.d.ts",
       "import": "./dist/email-templates/VerificationEmail.js",
       "require": "./dist/email-templates/VerificationEmail.js"
+    },
+    "./test/auth-helpers": {
+      "types": "./dist/test/auth-helpers.d.ts",
+      "import": "./dist/test/auth-helpers.js",
+      "require": "./dist/test/auth-helpers.js"
     }
   },
   "typesVersions": {
@@ -243,6 +248,9 @@
       ],
       "email-templates/VerificationEmail": [
         "./dist/email-templates/VerificationEmail.d.ts"
+      ],
+      "test/auth-helpers": [
+        "./dist/test/auth-helpers.d.ts"
       ]
     }
   },

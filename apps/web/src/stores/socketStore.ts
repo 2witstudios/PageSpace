@@ -2,6 +2,9 @@ import { create } from 'zustand';
 import { io, Socket } from 'socket.io-client';
 import { getCookieValue } from '@/lib/utils/get-cookie-value';
 
+// Handler for auth:refreshed event - defined at module level for cleanup
+let handleAuthRefresh: (() => void) | null = null;
+
 interface SocketStore {
   socket: Socket | null;
   connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error';
@@ -127,7 +130,20 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
 
               if (response.ok) {
                 console.log('🔄 Token refreshed, reconnecting socket...');
-                // Re-enable reconnection and connect
+
+                // Re-fetch the new token from storage/cookies
+                let newToken: string | undefined;
+                if (isDesktopNow) {
+                  newToken = await window.electron?.auth.getJWT() ?? undefined;
+                } else {
+                  newToken = getCookieValue('accessToken') ?? undefined;
+                }
+
+                // Update socket auth with new token BEFORE reconnecting
+                if (newToken) {
+                  newSocket.auth = { token: newToken };
+                }
+
                 newSocket.io.opts.reconnection = true;
                 newSocket.connect();
               } else {
@@ -152,10 +168,29 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
         }
       });
 
-      set({ 
-        socket: newSocket, 
-        isInitialized: true 
+      set({
+        socket: newSocket,
+        isInitialized: true
       });
+
+      // Listen for token refresh events to proactively reconnect
+      if (typeof window !== 'undefined') {
+        // Remove any existing listener to prevent duplicates
+        if (handleAuthRefresh) {
+          window.removeEventListener('auth:refreshed', handleAuthRefresh);
+        }
+
+        // Create new handler that captures the current store reference
+        handleAuthRefresh = () => {
+          const currentSocket = get().socket;
+          if (currentSocket?.connected) {
+            console.log('🔄 Token refreshed, proactively reconnecting socket...');
+            get().connect(true); // Force reconnect with new token
+          }
+        };
+
+        window.addEventListener('auth:refreshed', handleAuthRefresh);
+      }
     }
   },
 
@@ -163,10 +198,17 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
     const { socket } = get();
     if (socket) {
       socket.disconnect();
-      set({ 
-        socket: null, 
+
+      // Clean up auth refresh listener
+      if (typeof window !== 'undefined' && handleAuthRefresh) {
+        window.removeEventListener('auth:refreshed', handleAuthRefresh);
+        handleAuthRefresh = null;
+      }
+
+      set({
+        socket: null,
         connectionStatus: 'disconnected',
-        isInitialized: false 
+        isInitialized: false
       });
     }
   },
