@@ -4,7 +4,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
+import { renderHook } from '@testing-library/react';
+import type { SWRResponse } from 'swr';
 
 // Mock dependencies before imports
 vi.mock('swr', () => ({
@@ -43,7 +44,7 @@ describe('usePermissions', () => {
         isLoading: false,
         mutate: vi.fn(),
         isValidating: false,
-      } as any);
+      } as SWRResponse);
 
       // Act: Render hook
       renderHook(() => usePermissions('page-123'));
@@ -68,7 +69,7 @@ describe('usePermissions', () => {
         isLoading: false,
         mutate: vi.fn(),
         isValidating: false,
-      } as any);
+      } as SWRResponse);
 
       // Act: Render hook
       renderHook(() => usePermissions('page-123'));
@@ -91,7 +92,7 @@ describe('usePermissions', () => {
         isLoading: false,
         mutate: vi.fn(),
         isValidating: false,
-      } as any);
+      } as SWRResponse);
 
       // Act: Render hook
       renderHook(() => usePermissions('page-123'));

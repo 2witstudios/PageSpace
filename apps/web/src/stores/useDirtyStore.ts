@@ -27,7 +27,8 @@ export const useDirtyStore = create<DirtyStore>((set, get) => ({
   },
   clearDirty: (id) => {
     set((state) => {
-      const { [id]: _, ...rest } = state.dirtyFlags;
+      const { [id]: _removed, ...rest } = state.dirtyFlags;
+      void _removed; // Intentionally unused - destructuring to remove key
       return { dirtyFlags: rest };
     });
   },

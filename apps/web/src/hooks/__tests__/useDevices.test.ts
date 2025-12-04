@@ -5,6 +5,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
+import type { SWRResponse } from 'swr';
 
 // Mock dependencies before imports
 vi.mock('swr', () => ({
@@ -39,7 +40,7 @@ describe('useDevices', () => {
         isLoading: false,
         mutate: vi.fn(),
         isValidating: false,
-      } as any);
+      } as SWRResponse);
 
       // Act: Render hook
       renderHook(() => useDevices());
@@ -64,7 +65,7 @@ describe('useDevices', () => {
         isLoading: false,
         mutate: vi.fn(),
         isValidating: false,
-      } as any);
+      } as SWRResponse);
 
       // Act: Render hook
       renderHook(() => useDevices());
@@ -87,7 +88,7 @@ describe('useDevices', () => {
         isLoading: false,
         mutate: vi.fn(),
         isValidating: false,
-      } as any);
+      } as SWRResponse);
 
       // Act: Render hook
       renderHook(() => useDevices());
