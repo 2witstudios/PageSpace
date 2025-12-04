@@ -209,6 +209,8 @@ export interface Projection {
   maxDepth: number;
   minDepth: number;
   parentId: string | null;
+  dropPosition: 'before' | 'after' | 'inside';
+  insertionIndex: number;
 }
 
 /**
@@ -225,6 +227,7 @@ export function getProjection<T extends TreeItem>(
   const overItemIndex = items.findIndex(({ item }) => item.id === overId);
   const activeItemIndex = items.findIndex(({ item }) => item.id === activeId);
   const activeItem = items[activeItemIndex];
+  const overItem = items[overItemIndex];
 
   // Calculate new depth based on horizontal offset
   const projectedDepth = activeItem.depth + Math.round(dragOffset / indentationWidth);
@@ -266,11 +269,43 @@ export function getProjection<T extends TreeItem>(
     return newParent?.item.id ?? null;
   }
 
+  const parentId = getParentId();
+
+  // Calculate drop position and insertion index
+  // This is the source of truth for visual indicators AND actual placement
+  let dropPosition: 'before' | 'after' | 'inside';
+
+  if (depth > overItem.depth) {
+    // Dropping deeper than the over item = inside it (as first child)
+    dropPosition = 'inside';
+  } else if (activeItemIndex < overItemIndex) {
+    // Dragging down = dropping after the over item
+    dropPosition = 'after';
+  } else {
+    // Dragging up = dropping before the over item
+    dropPosition = 'before';
+  }
+
+  // Calculate insertion index among siblings at the new parent
+  // This counts how many siblings come before our insertion point
+  let insertionIndex = 0;
+  for (let i = 0; i < overItemIndex; i++) {
+    if (newItems[i].parentId === parentId && newItems[i].item.id !== activeId) {
+      insertionIndex++;
+    }
+  }
+  // For "after" drops, we insert after the over item if it's a sibling
+  if (dropPosition === 'after' && overItem.parentId === parentId) {
+    insertionIndex++;
+  }
+
   return {
     depth,
     maxDepth,
     minDepth,
-    parentId: getParentId(),
+    parentId,
+    dropPosition,
+    insertionIndex,
   };
 }
 

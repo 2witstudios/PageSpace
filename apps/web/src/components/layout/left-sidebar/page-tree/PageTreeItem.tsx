@@ -47,6 +47,8 @@ export interface PageTreeItemProps {
   depth: number;
   isActive: boolean;
   isOver: boolean;
+  dropPosition: DropPosition;
+  projectedDepth?: number | null;
   projected: Projection | null;
   handleProps: HandleProps;
   wrapperProps: WrapperProps;
@@ -67,6 +69,8 @@ export function PageTreeItem({
   depth,
   isActive,
   isOver,
+  dropPosition: internalDropPosition,
+  projectedDepth,
   projected,
   handleProps,
   wrapperProps,
@@ -77,6 +81,12 @@ export function PageTreeItem({
   isTrashView = false,
   fileDragState,
 }: PageTreeItemProps) {
+  // Silence unused var - projected is passed but only needed for future use
+  void projected;
+
+  // Use projected depth for indicator positioning when available
+  const indicatorDepth = projectedDepth ?? depth;
+
   const [isHovered, setIsHovered] = useState(false);
   const [isConfirmTrashOpen, setConfirmTrashOpen] = useState(false);
   const [isRenameOpen, setRenameOpen] = useState(false);
@@ -93,12 +103,10 @@ export function PageTreeItem({
 
   // Determine drop position:
   // - For file drags: use fileDragState.dropPosition
-  // - For internal drags: use projected.parentId to detect "inside" vs "after"
+  // - For internal drags: use dropPosition from SortableTree
   const dropPosition: DropPosition = isFileDragOver
     ? fileDragState?.dropPosition ?? null
-    : isInternalDragOver && projected
-      ? (projected.parentId === item.id ? "inside" : "after")
-      : null;
+    : internalDropPosition ?? null;
 
   const handleRename = async (newName: string) => {
     const toastId = toast.loading("Renaming page...");
@@ -175,7 +183,7 @@ export function PageTreeItem({
           <div className="relative">
             <div
               className="absolute left-0 right-0 h-0.5 bg-primary -top-[1px] pointer-events-none z-10"
-              style={{ left: `${depth * 24 + 8}px` }}
+              style={{ left: `${indicatorDepth * 24 + 8}px` }}
             />
             <div className="h-0.5 w-full" />
           </div>
@@ -184,10 +192,9 @@ export function PageTreeItem({
         <div
           ref={handleProps.ref}
           {...handleProps.attributes}
-          {...handleProps.listeners}
           data-tree-node-id={item.id}
           className={cn(
-            "group flex items-center px-1 py-1.5 rounded-lg transition-all duration-200 cursor-grab active:cursor-grabbing",
+            "group flex items-center px-1 py-1.5 rounded-lg transition-all duration-200",
             showDropIndicator && dropPosition === "inside" &&
               "bg-primary/10 dark:bg-primary/20 ring-2 ring-primary ring-inset",
             !isActive && !showDropIndicator &&
@@ -216,24 +223,27 @@ export function PageTreeItem({
             </button>
           )}
 
-          {/* Icon and Title */}
-          <Link
-            href={linkHref}
-            passHref
-            className="flex items-center flex-1 min-w-0 ml-1 cursor-pointer"
-            onClick={(e) => e.stopPropagation()}
+          {/* Icon - Drag Handle */}
+          <div
+            {...handleProps.listeners}
+            className="cursor-grab active:cursor-grabbing p-0.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700"
           >
             <PageTypeIcon
               type={item.type}
               isTaskLinked={item.isTaskLinked}
               className={cn(
-                "h-4 w-4 mr-1.5 flex-shrink-0",
+                "h-4 w-4 flex-shrink-0",
                 hasChildren ? "text-primary" : "text-gray-500"
               )}
             />
-            <span className="truncate text-sm font-medium text-gray-900 dark:text-gray-100">
-              {item.title}
-            </span>
+          </div>
+
+          {/* Title - Click to Navigate */}
+          <Link
+            href={linkHref}
+            className="flex-1 min-w-0 ml-1.5 truncate text-sm font-medium text-gray-900 dark:text-gray-100 hover:underline"
+          >
+            {item.title}
           </Link>
 
           {/* Action Buttons */}
@@ -322,7 +332,7 @@ export function PageTreeItem({
             <div className="h-0.5 w-full" />
             <div
               className="absolute left-0 right-0 h-0.5 bg-primary -bottom-[1px] pointer-events-none z-10"
-              style={{ left: `${depth * 24 + 8}px` }}
+              style={{ left: `${indicatorDepth * 24 + 8}px` }}
             />
           </div>
         )}

@@ -14,7 +14,6 @@ import { cn } from "@/lib/utils";
 import { SortableTree } from "@/components/ui/sortable-tree";
 import { Projection, TreeItem } from "@/lib/tree/sortable-tree";
 import { PageTreeItem, DropPosition } from "./PageTreeItem";
-import DragOverlayItem from "./DragOverlayItem";
 import { KeyedMutator } from "swr";
 
 interface PageTreeProps {
@@ -106,25 +105,40 @@ export default function PageTree({
 
   // Handle move from SortableTree
   const handleMove = useCallback(
-    async (activeId: string, overId: string, projection: Projection) => {
+    async (activeId: string, _overId: string, projection: Projection) => {
       const activeInfo = findNodeAndParent(tree, activeId);
-      const overInfo = findNodeAndParent(tree, overId);
-
-      if (!activeInfo || !overInfo) return;
+      if (!activeInfo) return;
 
       const newParentId = projection.parentId;
 
-      // Find siblings at the new location
+      // Get siblings at the new parent location
       const newParent = newParentId ? findNodeAndParent(tree, newParentId)?.node : null;
       const siblings = newParent ? newParent.children : tree;
 
-      // Find the over item's index in siblings
-      const overIndex = siblings.findIndex((s) => s.id === overId);
+      // Filter out the active item from siblings (it's being moved)
+      const siblingsWithoutActive = siblings.filter(s => s.id !== activeId);
 
-      // Calculate position
-      const prev = siblings[overIndex - 1];
-      const next = siblings[overIndex + 1];
-      const newPosition = ((prev?.position || 0) + (next?.position || (prev?.position || 0) + 2)) / 2;
+      // Use projection.insertionIndex for correct position calculation
+      const insertAt = projection.insertionIndex;
+
+      let newPosition: number;
+      if (siblingsWithoutActive.length === 0) {
+        // No siblings - first child
+        newPosition = 1;
+      } else if (insertAt === 0) {
+        // Insert at beginning
+        const firstSibling = siblingsWithoutActive[0];
+        newPosition = (firstSibling?.position ?? 1) / 2;
+      } else if (insertAt >= siblingsWithoutActive.length) {
+        // Insert at end
+        const lastSibling = siblingsWithoutActive[siblingsWithoutActive.length - 1];
+        newPosition = (lastSibling?.position ?? 0) + 1;
+      } else {
+        // Insert between two items
+        const prev = siblingsWithoutActive[insertAt - 1];
+        const next = siblingsWithoutActive[insertAt];
+        newPosition = ((prev?.position ?? 0) + (next?.position ?? (prev?.position ?? 0) + 2)) / 2;
+      }
 
       // Auto-expand parent if dropping inside
       if (newParentId && !expandedNodes.has(newParentId)) {
@@ -284,12 +298,14 @@ export default function PageTree({
           collapsedIds={collapsedIds}
           indentationWidth={24}
           onMove={handleMove}
-          renderItem={({ item, depth, isActive, isOver, projected, handleProps, wrapperProps }) => (
+          renderItem={({ item, depth, isActive, isOver, dropPosition, projectedDepth, projected, handleProps, wrapperProps }) => (
             <PageTreeItem
               item={item as TreePage}
               depth={depth}
               isActive={isActive}
               isOver={isOver}
+              dropPosition={dropPosition}
+              projectedDepth={projectedDepth}
               projected={projected}
               handleProps={handleProps}
               wrapperProps={wrapperProps}
@@ -301,7 +317,6 @@ export default function PageTree({
               fileDragState={fileDragState}
             />
           )}
-          renderDragOverlay={(item) => <DragOverlayItem node={item as TreePage} />}
         />
 
         {/* Empty state drop zone */}

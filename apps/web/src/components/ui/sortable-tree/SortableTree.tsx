@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useMemo, useCallback, ReactNode } from "react";
-import { createPortal } from "react-dom";
 import {
   DndContext,
   DragEndEvent,
@@ -12,12 +11,9 @@ import {
   KeyboardSensor,
   useSensor,
   useSensors,
-  DragOverlay,
   closestCenter,
   MeasuringStrategy,
   UniqueIdentifier,
-  DropAnimation,
-  defaultDropAnimationSideEffects,
 } from "@dnd-kit/core";
 import {
   SortableContext,
@@ -34,16 +30,6 @@ import {
 import { SortableTreeItem } from "./SortableTreeItem";
 import { useSortable } from "@dnd-kit/sortable";
 
-const dropAnimation: DropAnimation = {
-  sideEffects: defaultDropAnimationSideEffects({
-    styles: {
-      active: {
-        opacity: "0.5",
-      },
-    },
-  }),
-};
-
 const measuring = {
   droppable: {
     strategy: MeasuringStrategy.Always,
@@ -51,6 +37,7 @@ const measuring = {
 };
 
 type SortableReturnType = ReturnType<typeof useSortable>;
+type DropPosition = "before" | "after" | "inside" | null;
 
 export interface SortableTreeProps<T extends TreeItem> {
   items: T[];
@@ -62,6 +49,8 @@ export interface SortableTreeProps<T extends TreeItem> {
     depth: number;
     isActive: boolean;
     isOver: boolean;
+    dropPosition: DropPosition;
+    projectedDepth: number | null;
     projected: Projection | null;
     handleProps: {
       ref: (element: HTMLElement | null) => void;
@@ -73,7 +62,6 @@ export interface SortableTreeProps<T extends TreeItem> {
       style: React.CSSProperties;
     };
   }) => ReactNode;
-  renderDragOverlay?: (item: T, depth: number) => ReactNode;
 }
 
 export function SortableTree<T extends TreeItem>({
@@ -82,7 +70,6 @@ export function SortableTree<T extends TreeItem>({
   indentationWidth = 24,
   onMove,
   renderItem,
-  renderDragOverlay,
 }: SortableTreeProps<T>) {
   const [activeId, setActiveId] = useState<UniqueIdentifier | null>(null);
   const [overId, setOverId] = useState<UniqueIdentifier | null>(null);
@@ -121,12 +108,6 @@ export function SortableTree<T extends TreeItem>({
     if (!activeId || !overId) return null;
     return getProjection(sortableItems, activeId, overId, offsetLeft, indentationWidth);
   }, [sortableItems, activeId, overId, offsetLeft, indentationWidth]);
-
-  // Get active item for overlay
-  const activeItem = useMemo(
-    () => flattenedItems.find(({ item }) => item.id === activeId),
-    [flattenedItems, activeId]
-  );
 
   const handleDragStart = useCallback(({ active }: DragStartEvent) => {
     setActiveId(active.id);
@@ -178,6 +159,11 @@ export function SortableTree<T extends TreeItem>({
       sensors={sensors}
       collisionDetection={closestCenter}
       measuring={measuring}
+      autoScroll={{
+        // Disable horizontal auto-scroll (x: 0) while keeping vertical (y: 0.2 = 20% threshold)
+        // This prevents unwanted horizontal scrolling when dragging right to change nesting depth
+        threshold: { x: 0, y: 0.2 },
+      }}
       onDragStart={handleDragStart}
       onDragMove={handleDragMove}
       onDragOver={handleDragOver}
@@ -201,6 +187,10 @@ export function SortableTree<T extends TreeItem>({
                 depth: flatItem.depth,
                 isActive: activeId === flatItem.item.id,
                 isOver: overId === flatItem.item.id,
+                // Derive dropPosition from projection - single source of truth
+                dropPosition: overId === flatItem.item.id && projected ? projected.dropPosition : null,
+                // Pass projectedDepth to over item for indicator positioning
+                projectedDepth: overId === flatItem.item.id && projected ? projected.depth : null,
                 projected: activeId === flatItem.item.id ? projected : null,
                 handleProps,
                 wrapperProps,
@@ -209,47 +199,6 @@ export function SortableTree<T extends TreeItem>({
           </SortableTreeItem>
         ))}
       </SortableContext>
-
-      {typeof document !== "undefined" &&
-        createPortal(
-          <DragOverlay dropAnimation={dropAnimation}>
-            {activeItem && renderDragOverlay ? (
-              renderDragOverlay(activeItem.item, activeItem.depth)
-            ) : activeItem ? (
-              <div
-                style={{
-                  paddingLeft: activeItem.depth * indentationWidth,
-                  opacity: 0.8,
-                }}
-              >
-                {renderItem({
-                  item: activeItem.item,
-                  depth: activeItem.depth,
-                  isActive: true,
-                  isOver: false,
-                  projected: null,
-                  handleProps: {
-                    ref: () => {},
-                    listeners: undefined,
-                    attributes: {
-                      role: "button",
-                      tabIndex: 0,
-                      "aria-disabled": false,
-                      "aria-pressed": false,
-                      "aria-roledescription": "sortable",
-                      "aria-describedby": "",
-                    },
-                  },
-                  wrapperProps: {
-                    ref: () => {},
-                    style: {},
-                  },
-                })}
-              </div>
-            ) : null}
-          </DragOverlay>,
-          document.body
-        )}
     </DndContext>
   );
 }
