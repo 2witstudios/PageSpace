@@ -1,46 +1,19 @@
 "use client";
 
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { FileIcon } from "lucide-react";
-import { patch } from '@/lib/auth/auth-fetch';
-import {
-  DndContext,
-  DragEndEvent,
-  DragOverEvent, 
-  DragStartEvent,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  DragOverlay,
-  closestCenter,
-  MeasuringStrategy
-} from "@dnd-kit/core";
-import { 
-  SortableContext, 
-  verticalListSortingStrategy
-} from "@dnd-kit/sortable";
-import { TreePage } from "../../../../hooks/usePageTree";
-import { usePageTreeSocket } from "../../../../hooks/usePageTreeSocket";
-import { findNodeAndParent, removeNode, addNode } from "@/lib/tree/tree-utils";
-import TreeNode from "./TreeNode";
-import DragOverlayItem from "./DragOverlayItem";
+import { patch } from "@/lib/auth/auth-fetch";
+import { TreePage } from "@/hooks/usePageTree";
+import { usePageTreeSocket } from "@/hooks/usePageTreeSocket";
+import { findNodeAndParent } from "@/lib/tree/tree-utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import CreatePageDialog from "../CreatePageDialog";
 import { useTreeState } from "@/hooks/useUI";
 import { useFileDrop } from "@/hooks/useFileDrop";
 import { cn } from "@/lib/utils";
-
-export type DropPosition = 'before' | 'after' | 'inside' | null;
-
-export interface DragState {
-  overId: string | null;
-  dropPosition: DropPosition;
-  isExternalFile?: boolean;
-  displacedNodes?: Set<string>; // Nodes that should animate out of the way
-  mousePosition?: { x: number; y: number }; // Track mouse for external drags
-  dragStartPos?: { x: number; y: number }; // Track drag start position for delta calculation
-}
-
+import { SortableTree } from "@/components/ui/sortable-tree";
+import { Projection, TreeItem } from "@/lib/tree/sortable-tree";
+import { PageTreeItem, DropPosition } from "./PageTreeItem";
 import { KeyedMutator } from "swr";
 
 interface PageTreeProps {
@@ -51,133 +24,147 @@ interface PageTreeProps {
   searchQuery?: string;
 }
 
-export default function PageTree({ driveId, initialTree, mutate: externalMutate, isTrashView = false, searchQuery = '' }: PageTreeProps) {
+// Extend TreePage to satisfy TreeItem interface
+type SortableTreePage = TreePage & TreeItem;
+
+export default function PageTree({
+  driveId,
+  initialTree,
+  mutate: externalMutate,
+  isTrashView = false,
+  searchQuery = "",
+}: PageTreeProps) {
   const { tree: fetchedTree, isLoading, mutate: internalMutate } = usePageTreeSocket(driveId, isTrashView);
   const tree = initialTree ?? fetchedTree;
   const mutate = externalMutate ?? internalMutate;
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const [optimisticTree, setOptimisticTree] = useState<TreePage[] | null>(null);
-  const [dragState, setDragState] = useState<DragState>({
-    overId: null,
-    dropPosition: null,
-    displacedNodes: new Set()
-  });
   const { expanded: expandedNodes, toggleExpanded } = useTreeState();
+
   const [createPageInfo, setCreatePageInfo] = useState<{
     isOpen: boolean;
     parentId: string | null;
   }>({ isOpen: false, parentId: null });
-  const [expandTimer, setExpandTimer] = useState<NodeJS.Timeout | null>(null);
+
+  // File drag state (native HTML5 drag, separate from dnd-kit)
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
-  
+  const [fileDragState, setFileDragState] = useState<{
+    overId: string | null;
+    dropPosition: DropPosition;
+    dragStartPos: { x: number; y: number } | null;
+  }>({
+    overId: null,
+    dropPosition: null,
+    dragStartPos: null,
+  });
+
   // File upload handling
-  const {
-    isUploading,
-    uploadProgress,
-    handleFileDrop
-  } = useFileDrop({
+  const { isUploading, uploadProgress, handleFileDrop } = useFileDrop({
     driveId,
     parentId: null,
-    onUploadComplete: () => {
-      mutate();
-    }
+    onUploadComplete: () => mutate(),
   });
-  
-  // Auto-expand pages when dragging over them (if they have children)
-  useEffect(() => {
-    if (dragState.overId && dragState.dropPosition === 'inside') {
-      const currentTree = optimisticTree ?? tree;
-      const targetNode = findNodeAndParent(currentTree, dragState.overId)?.node;
-      
-      // Any page with children can be expanded
-      if (targetNode && targetNode.children && targetNode.children.length > 0 && !expandedNodes.has(dragState.overId)) {
-        // Clear any existing timer
-        if (expandTimer) {
-          clearTimeout(expandTimer);
-        }
-        
-        // Set new timer to expand after 500ms
-        const timer = setTimeout(() => {
-          toggleExpanded(dragState.overId!);
-        }, 500);
-        
-        setExpandTimer(timer);
-      }
-    } else {
-      // Clear timer if not hovering over expandable page
-      if (expandTimer) {
-        clearTimeout(expandTimer);
-        setExpandTimer(null);
-      }
-    }
-    
-    return () => {
-      if (expandTimer) {
-        clearTimeout(expandTimer);
-      }
-    };
-  }, [dragState.overId, dragState.dropPosition, tree, optimisticTree, expandedNodes, toggleExpanded, expandTimer]);
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 8,
-      },
-    })
-  );
+  // Filter tree by search query
+  const filterTree = useCallback((nodes: TreePage[], query: string): TreePage[] => {
+    if (!query) return nodes;
+    const lowerQuery = query.toLowerCase();
 
-  const filterTree = (nodes: TreePage[], query: string): TreePage[] => {
-   if (!query) return nodes;
-
-   const lowerCaseQuery = query.toLowerCase();
-
-   function filter(items: TreePage[]): TreePage[] {
-       return items.reduce<TreePage[]>((acc, item) => {
-           const children = item.children ? filter(item.children) : [];
-           
-           if (item.title.toLowerCase().includes(lowerCaseQuery) || children.length > 0) {
-               acc.push({ ...item, children });
-           }
-           
-           return acc;
-       }, []);
-   }
-
-   return filter(nodes);
-  };
-
-  const displayedTree = useMemo(() => {
-   const currentTree = optimisticTree ?? tree;
-   if (!searchQuery.trim()) return currentTree;
-   return filterTree(currentTree, searchQuery);
-  }, [optimisticTree, tree, searchQuery]);
-
-  const flattenedItems = useMemo(() => {
-    const flatten = (items: TreePage[]): string[] => {
-      if (!Array.isArray(items)) {
-        return [];
-      }
-      return items.reduce<string[]>((acc, item) => {
-        acc.push(item.id);
-        if (item.children && expandedNodes.has(item.id)) {
-          acc.push(...flatten(item.children));
+    function filter(items: TreePage[]): TreePage[] {
+      return items.reduce<TreePage[]>((acc, item) => {
+        const children = item.children ? filter(item.children) : [];
+        if (item.title.toLowerCase().includes(lowerQuery) || children.length > 0) {
+          acc.push({ ...item, children });
         }
         return acc;
       }, []);
+    }
+
+    return filter(nodes);
+  }, []);
+
+  const displayedTree = useMemo(() => {
+    if (!searchQuery.trim()) return tree;
+    return filterTree(tree, searchQuery);
+  }, [tree, searchQuery, filterTree]);
+
+  // Collapsed IDs for SortableTree (inverted from expanded)
+  const collapsedIds = useMemo(() => {
+    const allIds = new Set<string>();
+    const collectIds = (items: TreePage[]) => {
+      for (const item of items) {
+        if (!expandedNodes.has(item.id)) {
+          allIds.add(item.id);
+        }
+        if (item.children?.length) {
+          collectIds(item.children);
+        }
+      }
     };
-    return flatten(displayedTree);
+    collectIds(displayedTree);
+    return allIds;
   }, [displayedTree, expandedNodes]);
 
-  const activeNode = useMemo(() => {
-    if (!activeId) return null;
-    const currentTree = optimisticTree ?? tree; // Search in the original tree
-    const result = findNodeAndParent(currentTree, activeId);
-    return result?.node || null;
-  }, [activeId, optimisticTree, tree]);
+  // Handle move from SortableTree
+  const handleMove = useCallback(
+    async (activeId: string, _overId: string, projection: Projection) => {
+      const activeInfo = findNodeAndParent(tree, activeId);
+      if (!activeInfo) return;
 
-  const handleToggleExpand = useCallback((id: string) => {
-    toggleExpanded(id);
-  }, [toggleExpanded]);
+      const newParentId = projection.parentId;
+
+      // Get siblings at the new parent location
+      const newParent = newParentId ? findNodeAndParent(tree, newParentId)?.node : null;
+      const siblings = newParent ? newParent.children : tree;
+
+      // Filter out the active item from siblings (it's being moved)
+      const siblingsWithoutActive = siblings.filter(s => s.id !== activeId);
+
+      // Use projection.insertionIndex for correct position calculation
+      const insertAt = projection.insertionIndex;
+
+      let newPosition: number;
+      if (siblingsWithoutActive.length === 0) {
+        // No siblings - first child
+        newPosition = 1;
+      } else if (insertAt === 0) {
+        // Insert at beginning
+        const firstSibling = siblingsWithoutActive[0];
+        newPosition = (firstSibling?.position ?? 1) / 2;
+      } else if (insertAt >= siblingsWithoutActive.length) {
+        // Insert at end
+        const lastSibling = siblingsWithoutActive[siblingsWithoutActive.length - 1];
+        newPosition = (lastSibling?.position ?? 0) + 1;
+      } else {
+        // Insert between two items
+        const prev = siblingsWithoutActive[insertAt - 1];
+        const next = siblingsWithoutActive[insertAt];
+        newPosition = ((prev?.position ?? 0) + (next?.position ?? (prev?.position ?? 0) + 2)) / 2;
+      }
+
+      // Auto-expand parent if dropping inside
+      if (newParentId && !expandedNodes.has(newParentId)) {
+        toggleExpanded(newParentId);
+      }
+
+      try {
+        await patch("/api/pages/reorder", {
+          pageId: activeId,
+          newParentId: newParentId,
+          newPosition: newPosition,
+        });
+        await mutate();
+      } catch (error) {
+        console.error("Failed to reorder page:", error);
+      }
+    },
+    [tree, mutate, expandedNodes, toggleExpanded]
+  );
+
+  const handleToggleExpand = useCallback(
+    (id: string) => {
+      toggleExpanded(id);
+    },
+    [toggleExpanded]
+  );
 
   const handleOpenCreateDialog = useCallback((parentId: string | null) => {
     setCreatePageInfo({ isOpen: true, parentId });
@@ -187,112 +174,105 @@ export default function PageTree({ driveId, initialTree, mutate: externalMutate,
     mutate();
   }, [mutate]);
 
-  const handleDragStart = (event: DragStartEvent) => {
-    setActiveId(event.active.id as string);
-  };
-
-  const handleDragOver = (event: DragOverEvent) => {
-    const { over, active, delta } = event;
-    
-    if (!over || !active) {
-      setDragState({ overId: null, dropPosition: null });
-      return;
+  // File drop handlers (native HTML5 drag events)
+  const handleFileDragEnter = useCallback((e: React.DragEvent) => {
+    if (e.dataTransfer?.types?.includes("Files")) {
+      e.preventDefault();
+      setIsDraggingFiles(true);
+      setFileDragState((prev) => ({
+        ...prev,
+        dragStartPos: { x: e.clientX, y: e.clientY },
+      }));
     }
+  }, []);
 
-    const overId = over.id as string;
-    const activeId = active.id as string;
-    
-    if (overId === activeId) {
-      setDragState({ overId: null, dropPosition: null });
-      return;
+  const handleFileDragLeave = useCallback((e: React.DragEvent) => {
+    if (e.currentTarget === e.target) {
+      setIsDraggingFiles(false);
+      setFileDragState({ overId: null, dropPosition: null, dragStartPos: null });
     }
+  }, []);
 
-    let dropPosition: DropPosition;
-    
-    if (delta.x > 30) {
-      dropPosition = 'inside';
-    } else {
-      dropPosition = delta.y > 0 ? 'after' : 'before';
-    }
+  const handleFileDragOver = useCallback(
+    (e: React.DragEvent) => {
+      if (isDraggingFiles && fileDragState.dragStartPos) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
 
-    setDragState({ overId, dropPosition });
-  };
+        const deltaX = e.clientX - fileDragState.dragStartPos.x;
+        const target = e.target as HTMLElement;
+        const treeNode = target.closest("[data-tree-node-id]");
 
-  const handleDragEnd = async (event: DragEndEvent) => {
-    const { active, over } = event;
-    
-    if (!over || !driveId || active.id === over.id || !dragState.dropPosition) {
-      setActiveId(null);
-      setDragState({ overId: null, dropPosition: null });
-      return;
-    }
+        if (treeNode) {
+          const nodeId = treeNode.getAttribute("data-tree-node-id");
+          const rect = treeNode.getBoundingClientRect();
+          const relativeY = e.clientY - rect.top;
+          const heightPercent = relativeY / rect.height;
 
-    const currentTree = optimisticTree ?? tree;
-    const activeInfo = findNodeAndParent(currentTree, active.id as string);
-    const overInfo = findNodeAndParent(currentTree, over.id as string);
+          let dropPosition: DropPosition;
+          if (deltaX > 30) {
+            dropPosition = "inside";
+          } else if (heightPercent < 0.4) {
+            dropPosition = "before";
+          } else if (heightPercent > 0.6) {
+            dropPosition = "after";
+          } else {
+            dropPosition = fileDragState.dropPosition || "after";
+          }
 
-    if (!activeInfo || !overInfo) return;
-
-    const { node: activeNode } = activeInfo;
-    const { parent: overParent } = overInfo;
-
-    let newTree = removeNode(currentTree, active.id as string);
-    let newParentId: string | null;
-    let newIndex: number;
-
-    if (dragState.dropPosition === 'inside') {
-      newParentId = over.id as string;
-      newIndex = 0;
-      // Ensure the target node is expanded when dropping inside
-      if (!expandedNodes.has(over.id as string)) {
-        toggleExpanded(over.id as string);
+          setFileDragState((prev) => ({
+            ...prev,
+            overId: nodeId,
+            dropPosition,
+          }));
+        } else {
+          setFileDragState((prev) => ({
+            ...prev,
+            overId: null,
+            dropPosition: null,
+          }));
+        }
       }
-    } else {
-      newParentId = overParent ? overParent.id : driveId;
-      const siblings = overParent ? overParent.children : newTree;
-      const overIndex = siblings.findIndex((s: TreePage) => s.id === over.id);
-      newIndex = dragState.dropPosition === 'after' ? overIndex + 1 : overIndex;
-    }
-    
-    const treeParentId = newParentId === driveId ? null : newParentId;
-    newTree = addNode(newTree, activeNode, treeParentId, newIndex);
-    setOptimisticTree(newTree);
+    },
+    [isDraggingFiles, fileDragState.dragStartPos, fileDragState.dropPosition]
+  );
 
-    const parentChildren = (newParentId && newParentId !== driveId)
-      ? findNodeAndParent(newTree, newParentId)?.node.children
-      : newTree;
-    const finalIndex = parentChildren?.findIndex((item: TreePage) => item.id === active.id) ?? -1;
-    
-    if (finalIndex === -1) {
-      setOptimisticTree(null); // Revert
-      return;
-    }
+  const handleFileDropEvent = useCallback(
+    async (e: React.DragEvent) => {
+      if (isDraggingFiles) {
+        e.preventDefault();
+        e.stopPropagation();
 
-    const prev = parentChildren?.[finalIndex - 1];
-    const next = parentChildren?.[finalIndex + 1];
-    const newPosition = ((prev?.position || 0) + (next?.position || (prev?.position || 0) + 2)) / 2;
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+          if (fileDragState.overId) {
+            const targetInfo = findNodeAndParent(tree, fileDragState.overId);
+            if (targetInfo) {
+              let parentId: string | null = null;
+              let position: "before" | "after" | null = null;
+              let afterNodeId: string | null = null;
 
-    try {
-      await patch('/api/pages/reorder', {
-        pageId: active.id,
-        newParentId: treeParentId,
-        newPosition: newPosition,
-      });
-      await mutate();
-    } catch (error) {
-      console.error("Failed to reorder page:", error);
-      setOptimisticTree(null);
-    } finally {
-      setActiveId(null);
-      setDragState({ overId: null, dropPosition: null });
-      setOptimisticTree(null);
-    }
-  };
+              if (fileDragState.dropPosition === "inside") {
+                parentId = fileDragState.overId;
+              } else if (fileDragState.dropPosition) {
+                parentId = targetInfo.parent?.id || null;
+                position = fileDragState.dropPosition;
+                afterNodeId = fileDragState.overId;
+              }
 
-  const handleDragCancel = () => {
-    setActiveId(null);
-    setDragState({ overId: null, dropPosition: null });
-  };
+              await handleFileDrop(e, parentId, position, afterNodeId);
+            }
+          } else {
+            await handleFileDrop(e, null, null, null);
+          }
+        }
+
+        setIsDraggingFiles(false);
+        setFileDragState({ overId: null, dropPosition: null, dragStartPos: null });
+      }
+    },
+    [isDraggingFiles, fileDragState, tree, handleFileDrop]
+  );
 
   if (isLoading) {
     return (
@@ -305,247 +285,94 @@ export default function PageTree({ driveId, initialTree, mutate: externalMutate,
   }
 
   return (
-    <DndContext
-      sensors={sensors}
-      collisionDetection={closestCenter}
-      onDragStart={handleDragStart}
-      onDragOver={handleDragOver}
-      onDragEnd={handleDragEnd}
-      onDragCancel={handleDragCancel}
-      measuring={{
-        droppable: {
-          strategy: MeasuringStrategy.Always
-        }
-      }}
+    <div
+      className={cn("relative h-full", isDraggingFiles && "bg-primary/5")}
+      onDragEnter={handleFileDragEnter}
+      onDragLeave={handleFileDragLeave}
+      onDragOver={handleFileDragOver}
+      onDrop={handleFileDropEvent}
     >
-      <div 
-        className={cn(
-          "relative h-full",
-          isDraggingFiles && "bg-primary/5"
-        )}
-        onDragEnter={(e) => {
-          // Check if dragging files from outside
-          if (e.dataTransfer?.types?.includes('Files')) {
-            e.preventDefault();
-            setIsDraggingFiles(true);
-            // Capture drag start position
-            setDragState(prev => ({
-              ...prev,
-              dragStartPos: { x: e.clientX, y: e.clientY }
-            }));
-          }
-        }}
-        onDragLeave={(e) => {
-          // Only reset if leaving the entire container
-          if (e.currentTarget === e.target) {
-            setIsDraggingFiles(false);
-            setDragState({ overId: null, dropPosition: null, displacedNodes: new Set() });
-          }
-        }}
-        onDragOver={(e) => {
-          if (isDraggingFiles && dragState.dragStartPos) {
-            e.preventDefault();
-            e.dataTransfer.dropEffect = 'copy';
-            
-            // Calculate delta from drag start position (like native @dnd-kit)
-            const deltaX = e.clientX - dragState.dragStartPos.x;
-            
-            // Find which element we're over
-            const target = e.target as HTMLElement;
-            const treeNode = target.closest('[data-tree-node-id]');
-            
-            if (treeNode) {
-              const nodeId = treeNode.getAttribute('data-tree-node-id');
-              const rect = treeNode.getBoundingClientRect();
-              const relativeY = e.clientY - rect.top;
-              const heightPercent = relativeY / rect.height;
-              
-              let dropPosition: DropPosition;
-              const displacedNodes = new Set<string>();
-              
-              // Check for "inside" drop first (drag 30px right from start)
-              if (deltaX > 30) {
-                dropPosition = 'inside';
-              } else {
-                // Use position within element for before/after
-                // Top 40% = before, Bottom 40% = after, Middle 20% = default to after
-                if (heightPercent < 0.4) {
-                  dropPosition = 'before';
-                } else if (heightPercent > 0.6) {
-                  dropPosition = 'after';
-                } else {
-                  // Middle zone - use previous position to prevent flipping
-                  dropPosition = dragState.dropPosition || 'after';
-                }
-              }
-                
-              // Find nodes that should be displaced only for before/after
-              if (dropPosition !== 'inside') {
-                const currentTree = optimisticTree ?? tree;
-                const targetInfo = findNodeAndParent(currentTree, nodeId!);
-                if (targetInfo) {
-                  const siblings = targetInfo.parent?.children || currentTree;
-                  const targetIndex = siblings.findIndex((s: TreePage) => s.id === nodeId);
-                  
-                  if (dropPosition === 'before') {
-                    // All siblings from target onwards should move down
-                    for (let i = targetIndex; i < siblings.length; i++) {
-                      displacedNodes.add(siblings[i].id);
-                    }
-                  } else if (dropPosition === 'after') {
-                    // All siblings after target should move down
-                    for (let i = targetIndex + 1; i < siblings.length; i++) {
-                      displacedNodes.add(siblings[i].id);
-                    }
-                  }
-                }
-              }
-              
-              setDragState(prev => ({ 
-                ...prev,
-                overId: nodeId, 
-                dropPosition, 
-                isExternalFile: true,
-                displacedNodes,
-                mousePosition: { x: e.clientX, y: e.clientY }
-              }));
-            } else {
-              setDragState(prev => ({ 
-                ...prev,
-                overId: null, 
-                dropPosition: null, 
-                isExternalFile: true,
-                displacedNodes: new Set(),
-                mousePosition: { x: e.clientX, y: e.clientY }
-              }));
-            }
-          }
-        }}
-        onDrop={async (e) => {
-          if (isDraggingFiles) {
-            e.preventDefault();
-            e.stopPropagation();
-            
-            const files = e.dataTransfer.files;
-            if (files.length > 0) {
-              // Handle file upload based on drop position
-              if (dragState.overId) {
-                // Dropping on a specific node
-                const currentTree = optimisticTree ?? tree;
-                const targetInfo = findNodeAndParent(currentTree, dragState.overId);
-                
-                if (targetInfo) {
-                  let parentId: string | null = null;
-                  let position: 'before' | 'after' | null = null;
-                  let afterNodeId: string | null = null;
-                  
-                  if (dragState.dropPosition === 'inside') {
-                    // Drop inside the target
-                    parentId = dragState.overId;
-                  } else if (dragState.dropPosition === 'before' || dragState.dropPosition === 'after') {
-                    // Drop before/after - use same parent as target
-                    parentId = targetInfo.parent?.id || null;
-                    position = dragState.dropPosition;
-                    afterNodeId = dragState.overId;
-                  }
-                  
-                  // Upload files with position data
-                  await handleFileDrop(e as React.DragEvent, parentId, position, afterNodeId);
-                }
-              } else {
-                // Dropping on empty space - add to root
-                await handleFileDrop(e as React.DragEvent, null, null, null);
-              }
-            }
-            
-            setIsDraggingFiles(false);
-            setDragState({ overId: null, dropPosition: null, displacedNodes: new Set() });
-          }
-        }}
-      >
-        <SortableContext items={flattenedItems} strategy={verticalListSortingStrategy}>
-          <nav className="px-1 py-2 min-h-[200px]">
-            {displayedTree.map(node => (
-              <TreeNode
-                key={node.id}
-                node={node}
-                depth={0}
-                onToggleExpand={handleToggleExpand}
-                isExpanded={expandedNodes.has(node.id)}
-                dragState={dragState}
-                activeId={activeId}
-                onOpenCreateDialog={handleOpenCreateDialog}
-                mutate={mutate}
-                isTrashView={isTrashView}
-                expandedNodes={expandedNodes}
-              />
-            ))}
-            {/* Drop zone indicator for empty space */}
-            {isDraggingFiles && !dragState.overId && displayedTree.length === 0 && (
-              <div className="flex items-center justify-center py-8 px-4 border-2 border-dashed border-primary/20 rounded-lg bg-primary/5">
-                <div className="text-center">
-                  <FileIcon className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
-                  <p className="text-sm text-muted-foreground">Drop files here to upload</p>
-                </div>
-              </div>
-            )}
-            {/* Drop indicator at the bottom when dragging over empty space below items */}
-            {isDraggingFiles && !dragState.overId && displayedTree.length > 0 && (
-              <div className="mt-2 py-2 px-4 border-2 border-dashed border-primary/20 rounded-lg bg-primary/5">
-                <p className="text-sm text-muted-foreground text-center">Drop here to add to root</p>
-              </div>
-            )}
-          </nav>
-        </SortableContext>
-        
-        <DragOverlay>
-          {activeNode && <DragOverlayItem node={activeNode} />}
-        </DragOverlay>
-        
-        {/* External file drag overlay */}
-        {isDraggingFiles && dragState.mousePosition && (
-          <div
-            className="fixed pointer-events-none z-[9999]"
-            style={{
-              left: dragState.mousePosition.x + 10,
-              top: dragState.mousePosition.y - 10,
-            }}
-          >
-            <div className="flex items-center px-3 py-2 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 opacity-90">
-              <FileIcon className="h-4 w-4 text-gray-500 mr-2" />
-              <span className="text-sm font-medium">Upload files</span>
+      <nav className="px-1 py-2 min-h-[200px]">
+        <SortableTree
+          items={displayedTree as SortableTreePage[]}
+          collapsedIds={collapsedIds}
+          indentationWidth={24}
+          onMove={handleMove}
+          renderItem={({ item, depth, isActive, isOver, dropPosition, projectedDepth, projected, handleProps, wrapperProps }) => (
+            <PageTreeItem
+              item={item as TreePage}
+              depth={depth}
+              isActive={isActive}
+              isOver={isOver}
+              dropPosition={dropPosition}
+              projectedDepth={projectedDepth}
+              projected={projected}
+              handleProps={handleProps}
+              wrapperProps={wrapperProps}
+              isExpanded={expandedNodes.has(item.id)}
+              onToggleExpand={handleToggleExpand}
+              onOpenCreateDialog={handleOpenCreateDialog}
+              mutate={mutate}
+              isTrashView={isTrashView}
+              fileDragState={fileDragState}
+            />
+          )}
+        />
+
+        {/* Empty state drop zone */}
+        {isDraggingFiles && !fileDragState.overId && displayedTree.length === 0 && (
+          <div className="flex items-center justify-center py-8 px-4 border-2 border-dashed border-primary/20 rounded-lg bg-primary/5">
+            <div className="text-center">
+              <FileIcon className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">Drop files here to upload</p>
             </div>
           </div>
         )}
 
-        <CreatePageDialog
-          isOpen={createPageInfo.isOpen}
-          setIsOpen={(isOpen) => setCreatePageInfo({ ...createPageInfo, isOpen })}
-          parentId={createPageInfo.parentId}
-          onPageCreated={handlePageCreated}
-          driveId={driveId}
-        />
-        
-        {/* File upload overlay - show drop position */}
-        {isDraggingFiles && dragState.overId && (
-          <div className="absolute inset-0 pointer-events-none z-50">
-            {/* Visual indicator will be handled by TreeNode's existing drop indicators */}
+        {/* Drop zone at bottom */}
+        {isDraggingFiles && !fileDragState.overId && displayedTree.length > 0 && (
+          <div className="mt-2 py-2 px-4 border-2 border-dashed border-primary/20 rounded-lg bg-primary/5">
+            <p className="text-sm text-muted-foreground text-center">Drop here to add to root</p>
           </div>
         )}
-        
-        {/* Upload progress indicator */}
-        {isUploading && (
-          <div className="absolute bottom-4 right-4 bg-background border rounded-lg p-3 shadow-lg z-50">
-            <p className="text-sm font-medium mb-2">Uploading files...</p>
-            <div className="w-48 h-2 bg-secondary rounded-full overflow-hidden">
-              <div 
-                className="h-full bg-primary transition-all duration-300" 
-                style={{ width: `${uploadProgress}%` }}
-              />
-            </div>
+      </nav>
+
+      {/* File drag overlay */}
+      {isDraggingFiles && fileDragState.dragStartPos && (
+        <div
+          className="fixed pointer-events-none z-[9999]"
+          style={{
+            left: fileDragState.dragStartPos.x + 10,
+            top: fileDragState.dragStartPos.y - 10,
+          }}
+        >
+          <div className="flex items-center px-3 py-2 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 opacity-90">
+            <FileIcon className="h-4 w-4 text-gray-500 mr-2" />
+            <span className="text-sm font-medium">Upload files</span>
           </div>
-        )}
-      </div>
-    </DndContext>
+        </div>
+      )}
+
+      <CreatePageDialog
+        isOpen={createPageInfo.isOpen}
+        setIsOpen={(isOpen) => setCreatePageInfo({ ...createPageInfo, isOpen })}
+        parentId={createPageInfo.parentId}
+        onPageCreated={handlePageCreated}
+        driveId={driveId}
+      />
+
+      {/* Upload progress indicator */}
+      {isUploading && (
+        <div className="absolute bottom-4 right-4 bg-background border rounded-lg p-3 shadow-lg z-50">
+          <p className="text-sm font-medium mb-2">Uploading files...</p>
+          <div className="w-48 h-2 bg-secondary rounded-full overflow-hidden">
+            <div
+              className="h-full bg-primary transition-all duration-300"
+              style={{ width: `${uploadProgress}%` }}
+            />
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

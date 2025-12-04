@@ -1,6 +1,6 @@
 export type TreeNode<T> = T & { children: TreeNode<T>[] };
 
-export function buildTree<T extends { id: string; parentId: string | null }>(nodes: T[]): TreeNode<T>[] {
+export function buildTree<T extends { id: string; parentId: string | null; position?: number }>(nodes: T[]): TreeNode<T>[] {
     // Deduplicate nodes by ID - last occurrence wins
     const nodeMap = new Map<string, T>();
     for (const node of nodes) {
@@ -24,6 +24,18 @@ export function buildTree<T extends { id: string; parentId: string | null }>(nod
             tree.push(nodeWithChildren);
         }
     }
+
+    // Sort all children arrays by position to ensure consistent ordering
+    function sortByPosition(nodes: TreeNode<T>[]): void {
+        nodes.sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+        for (const node of nodes) {
+            if (node.children.length > 0) {
+                sortByPosition(node.children);
+            }
+        }
+    }
+
+    sortByPosition(tree);
 
     return tree;
 }
