@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { History, MessageSquare, Settings } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -50,6 +50,17 @@ export default function RightPanel({ className }: RightPanelProps) {
 
   // Local tab state for page context (independent from dashboard)
   const [localActiveTab, setLocalActiveTab] = useState<SidebarTab>(showChatTab ? "chat" : "history");
+
+  // Auto-switch to chat tab when navigating from dashboard to page context
+  // This ensures streaming continues visibly in the sidebar
+  const prevIsDashboardContext = useRef(isDashboardContext);
+  useEffect(() => {
+    // Only switch when transitioning FROM dashboard TO page context
+    if (prevIsDashboardContext.current && !isDashboardContext) {
+      setLocalActiveTab('chat');
+    }
+    prevIsDashboardContext.current = isDashboardContext;
+  }, [isDashboardContext]);
 
   // Use appropriate tab state based on context
   const activeTab = isDashboardContext ? dashboardActiveTab : localActiveTab;
