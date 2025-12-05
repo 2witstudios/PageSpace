@@ -11,6 +11,8 @@ interface DriveState {
   lastFetched: number;
   fetchDrives: (includeTrash?: boolean, forceRefresh?: boolean) => Promise<void>;
   addDrive: (drive: Drive) => void;
+  removeDrive: (driveId: string) => void;
+  updateDrive: (driveId: string, updates: Partial<Drive>) => void;
   setCurrentDrive: (driveId: string | null) => void;
 }
 
@@ -46,9 +48,17 @@ export const useDriveStore = create<DriveState>()(
           set({ isLoading: false });
         }
       },
-      addDrive: (drive: Drive) => set((state) => ({ 
+      addDrive: (drive: Drive) => set((state) => ({
         drives: [...state.drives, drive],
-        lastFetched: Date.now() // Reset cache when adding new drive
+        lastFetched: Date.now()
+      })),
+      removeDrive: (driveId: string) => set((state) => ({
+        drives: state.drives.filter(d => d.id !== driveId),
+        lastFetched: Date.now()
+      })),
+      updateDrive: (driveId: string, updates: Partial<Drive>) => set((state) => ({
+        drives: state.drives.map(d => d.id === driveId ? { ...d, ...updates } : d),
+        lastFetched: Date.now()
       })),
       setCurrentDrive: (driveId: string | null) => set({ currentDriveId: driveId }),
     }),

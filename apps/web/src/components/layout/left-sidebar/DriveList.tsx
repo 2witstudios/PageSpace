@@ -161,6 +161,7 @@ export default function DriveList() {
   // Use selective Zustand subscriptions to prevent unnecessary re-renders
   const drives = useDriveStore(state => state.drives);
   const fetchDrives = useDriveStore(state => state.fetchDrives);
+  const removeDrive = useDriveStore(state => state.removeDrive);
   const isLoading = useDriveStore(state => state.isLoading);
   const setCurrentDrive = useDriveStore(state => state.setCurrentDrive);
   const currentDriveId = useDriveStore(state => state.currentDriveId);
@@ -234,9 +235,13 @@ export default function DriveList() {
     const toastId = toast.loading("Permanently deleting drive...");
     try {
       await del(`/api/trash/drives/${drive.id}`);
-      await fetchDrives(true, true); // Force refresh
+      // Optimistic update: remove from store immediately
+      removeDrive(drive.id);
       toast.success("Drive permanently deleted.", { id: toastId });
+      // Background refresh for consistency
+      fetchDrives(true, true);
     } catch {
+      fetchDrives(true, true);
       toast.error("Error permanently deleting drive.", { id: toastId });
     }
   };
