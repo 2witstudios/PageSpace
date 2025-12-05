@@ -24,6 +24,10 @@ interface AgentState {
   isConversationLoading: boolean;
   conversationAgentId: string | null; // Track which agent the conversation belongs to
 
+  // Streaming state (for agent mode sync between GlobalAssistantView and sidebar)
+  isAgentStreaming: boolean;
+  agentStopStreaming: (() => void) | null;
+
   // Sidebar tab state (for dashboard context only - GlobalAssistantView <-> RightPanel sync)
   activeTab: SidebarTab;
 
@@ -38,6 +42,10 @@ interface AgentState {
   setConversationMessages: (messages: UIMessage[]) => void;
   clearConversation: () => void;
   loadMostRecentConversation: () => Promise<void>;
+
+  // Streaming methods
+  setAgentStreaming: (isStreaming: boolean) => void;
+  setAgentStopStreaming: (stop: (() => void) | null) => void;
 }
 
 export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
@@ -47,6 +55,8 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
   conversationMessages: [],
   isConversationLoading: false,
   conversationAgentId: null,
+  isAgentStreaming: false,
+  agentStopStreaming: null,
   activeTab: 'history', // Default for dashboard (no chat tab in dashboard context)
 
   /**
@@ -349,5 +359,19 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
       // Try to create a new one
       await get().createNewConversation();
     }
+  },
+
+  /**
+   * Set agent streaming state (for sync between GlobalAssistantView and sidebar)
+   */
+  setAgentStreaming: (isStreaming: boolean) => {
+    set({ isAgentStreaming: isStreaming });
+  },
+
+  /**
+   * Set agent stop streaming function (for sync between GlobalAssistantView and sidebar)
+   */
+  setAgentStopStreaming: (stop: (() => void) | null) => {
+    set({ agentStopStreaming: stop });
   },
 }));

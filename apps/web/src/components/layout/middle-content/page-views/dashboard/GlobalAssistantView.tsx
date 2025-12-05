@@ -102,6 +102,8 @@ const GlobalAssistantView: React.FC = () => {
     setConversationMessages: setAgentStoreMessages,
     createNewConversation: createAgentConversation,
     loadMostRecentConversation,
+    setAgentStreaming,
+    setAgentStopStreaming,
   } = usePageAgentDashboardStore();
 
   // ============================================
@@ -128,6 +130,7 @@ const GlobalAssistantView: React.FC = () => {
   const messagesAreaRef = useRef<ChatMessagesAreaRef>(null);
   const inputAreaRef = useRef<ChatInputAreaRef>(null);
   const prevStatusRef = useRef<string>('ready');
+  const prevAgentStatusRef = useRef<string>('ready');
 
   // ============================================
   // SHARED HOOKS
@@ -337,6 +340,33 @@ const GlobalAssistantView: React.FC = () => {
       setGlobalStopStreaming(null);
     }
   }, [selectedAgent, globalStatus, globalStop, setGlobalStopStreaming]);
+
+  // ============================================
+  // AGENT MODE SYNC EFFECTS
+  // ============================================
+
+  // Sync streaming status to dashboard store (agent mode only)
+  useEffect(() => {
+    if (!selectedAgent) return;
+    const isCurrentlyStreaming = agentStatus === 'submitted' || agentStatus === 'streaming';
+    const wasStreaming = prevAgentStatusRef.current === 'submitted' || prevAgentStatusRef.current === 'streaming';
+    if (isCurrentlyStreaming && !wasStreaming) {
+      setAgentStreaming(true);
+    } else if (!isCurrentlyStreaming && wasStreaming) {
+      setAgentStreaming(false);
+    }
+    prevAgentStatusRef.current = agentStatus;
+  }, [selectedAgent, agentStatus, setAgentStreaming]);
+
+  // Register stop function to dashboard store (agent mode only)
+  useEffect(() => {
+    if (!selectedAgent) return;
+    if (agentStatus === 'submitted' || agentStatus === 'streaming') {
+      setAgentStopStreaming(() => agentStop);
+    } else {
+      setAgentStopStreaming(null);
+    }
+  }, [selectedAgent, agentStatus, agentStop, setAgentStopStreaming]);
 
   // Register streaming state with editing store
   useEffect(() => {

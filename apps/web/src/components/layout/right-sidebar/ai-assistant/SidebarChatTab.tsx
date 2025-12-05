@@ -15,6 +15,7 @@ import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
 import { usePageAgentSidebarState, SidebarAgentInfo } from '@/hooks/page-agents/usePageAgentSidebarState';
 import { usePageAgentSidebarChat } from '@/hooks/page-agents/usePageAgentSidebarChat';
+import { usePageAgentDashboardStore } from '@/stores/page-agents/usePageAgentDashboardStore';
 import { toast } from 'sonner';
 import { AiUsageMonitor } from '@/components/ai/shared/AiUsageMonitor';
 import { LocationContext } from '@/lib/ai/shared';
@@ -105,6 +106,12 @@ const SidebarChatTab: React.FC = () => {
     globalChatConfig,
     agentChatConfig,
   });
+
+  // ============================================
+  // Dashboard Streaming State (for agent mode sync)
+  // ============================================
+  const dashboardIsStreaming = usePageAgentDashboardStore(state => state.isAgentStreaming);
+  const dashboardStopStreaming = usePageAgentDashboardStore(state => state.agentStopStreaming);
 
   // ============================================
   // Derived State
@@ -481,13 +488,18 @@ const SidebarChatTab: React.FC = () => {
 
   // Stop handler that uses appropriate stop function based on mode
   const handleStop = useCallback(() => {
-    // Use context stop function for global mode if available
+    // Use the appropriate stop function based on mode
     if (!selectedAgent && contextStopStreaming) {
+      // Global mode: use context stop function
       contextStopStreaming();
+    } else if (selectedAgent && dashboardStopStreaming) {
+      // Agent mode: use dashboard store stop function
+      dashboardStopStreaming();
     } else {
+      // Fallback: use local useChat stop
       stop();
     }
-  }, [selectedAgent, contextStopStreaming, stop]);
+  }, [selectedAgent, contextStopStreaming, dashboardStopStreaming, stop]);
 
   // ============================================
   // Computed Values for Rendering
@@ -497,8 +509,12 @@ const SidebarChatTab: React.FC = () => {
   // Context messages are updated by GlobalAssistantView and shared across components
   const displayMessages = selectedAgent ? messages : contextMessages;
 
-  // For global mode, use context streaming state for accurate status
-  const displayIsStreaming = selectedAgent ? isStreaming : (isStreaming || contextIsStreaming);
+  // Use streaming state from the appropriate source:
+  // - Agent mode: Check both local useChat and dashboard store (for seamless transfer)
+  // - Global mode: Check both local useChat and context (for seamless transfer)
+  const displayIsStreaming = selectedAgent
+    ? (isStreaming || dashboardIsStreaming)
+    : (isStreaming || contextIsStreaming);
 
   const lastAssistantMessageId = displayMessages
     .filter(m => m.role === 'assistant')
