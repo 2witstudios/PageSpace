@@ -75,7 +75,7 @@ const DriveListItem = ({
           isDraggingFiles && !drive.isTrashed && "bg-primary/10 border border-dashed border-primary"
         )}
       >
-        <Link href={`/dashboard/${drive.id}`} className="flex items-center gap-2 flex-1">
+        <Link href={`/dashboard/${drive.id}`} className="flex items-center gap-2 flex-1 min-w-0">
           <Folder className="h-4 w-4" />
           <span className="truncate">{drive.name}</span>
         </Link>
