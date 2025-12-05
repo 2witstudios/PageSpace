@@ -3,7 +3,6 @@
 import { useEffect } from 'react';
 import { useParams } from 'next/navigation';
 import { usePageStore } from '@/hooks/usePage';
-import CenterPanel from '@/components/layout/middle-content';
 
 export default function Page() {
   const params = useParams();
@@ -25,5 +24,6 @@ export default function Page() {
     };
   }, [setPageId]);
 
-  return <CenterPanel />;
+  // Layout always renders CenterPanel - route pages return null for seamless navigation
+  return null;
 }

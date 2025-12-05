@@ -16,8 +16,9 @@ import AiSettingsView from './page-views/settings/ai-api/AiSettingsView';
 import MCPSettingsView from './page-views/settings/mcp/MCPSettingsView';
 import CanvasPageView from './page-views/canvas/CanvasPageView';
 import GlobalAssistantView from './page-views/dashboard/GlobalAssistantView';
-import { memo } from 'react';
+import { memo, useState, useEffect } from 'react';
 import { useLayoutStore } from '@/stores/useLayoutStore';
+import { cn } from '@/lib/utils';
 
 // Memoized page content component to prevent unnecessary re-renders
 const PageContent = memo(({ pageId }: { pageId: string | null }) => {
@@ -132,21 +133,45 @@ export default function CenterPanel() {
   const pathname = usePathname();
   const activePageId = params.pageId as string || null;
 
+  // Determine visibility states
+  const isSettingsRoute = pathname.endsWith('/settings') || pathname.endsWith('/settings/mcp');
+  const showGlobalAssistant = !activePageId && !isSettingsRoute;
+  const showPageContent = activePageId || isSettingsRoute;
+
+  // Track if GlobalAssistantView has ever been rendered (lazy mount, then persist)
+  // This ensures we don't mount it until the user visits dashboard, but once mounted it stays
+  const [hasRenderedGlobalAssistant, setHasRenderedGlobalAssistant] = useState(false);
+
+  useEffect(() => {
+    if (showGlobalAssistant && !hasRenderedGlobalAssistant) {
+      setHasRenderedGlobalAssistant(true);
+    }
+  }, [showGlobalAssistant, hasRenderedGlobalAssistant]);
+
   return (
     <div className="h-full flex flex-col relative">
-      {/* Main content area */}
-      {activePageId || pathname.endsWith('/settings') || pathname.endsWith('/settings/mcp') ? (
-        <>
+      {/* GlobalAssistantView - mount once on first dashboard visit, never unmount */}
+      {hasRenderedGlobalAssistant && (
+        <div
+          className={cn(
+            "absolute inset-0 z-10",
+            showGlobalAssistant ? "flex flex-col" : "hidden pointer-events-none"
+          )}
+          aria-hidden={!showGlobalAssistant}
+        >
+          <GlobalAssistantView />
+        </div>
+      )}
+
+      {/* PageContent - renders when viewing a page or settings */}
+      {showPageContent && (
+        <div className="h-full flex flex-col z-10">
           <OptimizedViewHeader />
           <div className="flex-1 min-h-0 relative overflow-hidden">
             <CustomScrollArea className="h-full">
               <PageContent pageId={activePageId} />
             </CustomScrollArea>
           </div>
-        </>
-      ) : (
-        <div key="dashboard" className="h-full transition-opacity duration-200">
-          <GlobalAssistantView />
         </div>
       )}
     </div>
