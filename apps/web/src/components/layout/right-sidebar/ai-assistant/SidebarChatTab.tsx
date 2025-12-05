@@ -36,6 +36,9 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   const {
     chatConfig: globalChatConfig,
+    messages: contextMessages, // Direct access to context messages for seamless display
+    isStreaming: contextIsStreaming,
+    stopStreaming: contextStopStreaming,
     setMessages: setGlobalContextMessages,
     setIsStreaming: setGlobalIsStreaming,
     setStopStreaming: setGlobalStopStreaming,
@@ -319,9 +322,10 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   // Effects: UI State
   // ============================================
+  // Scroll to bottom when messages change (using individual deps to satisfy exhaustive-deps)
   useEffect(() => {
     scrollToBottom();
-  }, [messages.length, status, scrollToBottom]);
+  }, [selectedAgent, messages.length, contextMessages.length, status, scrollToBottom]);
 
   useEffect(() => {
     if (error) setShowError(true);
@@ -475,14 +479,32 @@ const SidebarChatTab: React.FC = () => {
     selectAgent(agent);
   }, [selectAgent]);
 
+  // Stop handler that uses appropriate stop function based on mode
+  const handleStop = useCallback(() => {
+    // Use context stop function for global mode if available
+    if (!selectedAgent && contextStopStreaming) {
+      contextStopStreaming();
+    } else {
+      stop();
+    }
+  }, [selectedAgent, contextStopStreaming, stop]);
+
   // ============================================
   // Computed Values for Rendering
   // ============================================
-  const lastAssistantMessageId = messages
+
+  // For global mode, use context messages directly for seamless display during navigation
+  // Context messages are updated by GlobalAssistantView and shared across components
+  const displayMessages = selectedAgent ? messages : contextMessages;
+
+  // For global mode, use context streaming state for accurate status
+  const displayIsStreaming = selectedAgent ? isStreaming : (isStreaming || contextIsStreaming);
+
+  const lastAssistantMessageId = displayMessages
     .filter(m => m.role === 'assistant')
     .slice(-1)[0]?.id;
 
-  const lastUserMessageId = messages
+  const lastUserMessageId = displayMessages
     .filter(m => m.role === 'user')
     .slice(-1)[0]?.id;
 
@@ -538,7 +560,7 @@ const SidebarChatTab: React.FC = () => {
       <div className="flex-1 min-h-0 overflow-hidden max-w-full" style={{ contain: 'layout' }}>
         <ScrollArea className="h-full p-3 max-w-full" ref={scrollAreaRef}>
           <div className="space-y-3 max-w-full">
-            {messages.length === 0 ? (
+            {displayMessages.length === 0 ? (
               <div className="flex items-center justify-center h-20 text-muted-foreground text-xs text-center">
                 <div>
                   <p className="font-medium">{assistantName}</p>
@@ -550,7 +572,7 @@ const SidebarChatTab: React.FC = () => {
                 </div>
               </div>
             ) : (
-              messages.map(message => (
+              displayMessages.map(message => (
                 <CompactMessageRenderer
                   key={message.id}
                   message={message}
@@ -559,12 +581,12 @@ const SidebarChatTab: React.FC = () => {
                   onRetry={handleRetry}
                   isLastAssistantMessage={message.id === lastAssistantMessageId}
                   isLastUserMessage={message.id === lastUserMessageId}
-                  isStreaming={isStreaming && message.id === lastAssistantMessageId && message.role === 'assistant'}
+                  isStreaming={displayIsStreaming && message.id === lastAssistantMessageId && message.role === 'assistant'}
                 />
               ))
             )}
 
-            {isStreaming && (
+            {displayIsStreaming && (
               <div className="p-2 rounded-lg bg-gray-50 dark:bg-gray-800/50">
                 <div className="text-xs font-medium mb-1 text-gray-700 dark:text-gray-300">
                   {assistantName}
@@ -627,9 +649,9 @@ const SidebarChatTab: React.FC = () => {
             driveId={locationContext?.currentDrive?.id}
             crossDrive={true}
           />
-          {isStreaming ? (
+          {displayIsStreaming ? (
             <Button
-              onClick={() => stop()}
+              onClick={handleStop}
               variant="destructive"
               size="sm"
               className="h-8 px-3"

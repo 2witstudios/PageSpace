@@ -556,4 +556,165 @@ describe('usePageAgentSidebarState', () => {
       expect(result.current.selectedAgent).toEqual(agentWithOptionals);
     });
   });
+
+  // ============================================
+  // transferFromDashboard Tests
+  // ============================================
+  describe('transferFromDashboard', () => {
+    it('should transfer agent state from dashboard store', () => {
+      const mockMessages = [
+        { id: 'msg-1', role: 'user', content: 'Hello' },
+        { id: 'msg-2', role: 'assistant', content: 'Hi!' },
+      ] as never[];
+
+      const { result } = renderHook(() => usePageAgentSidebarState());
+
+      // Initially empty
+      expect(result.current.selectedAgent).toBeNull();
+      expect(result.current.conversationId).toBeNull();
+      expect(result.current.initialMessages).toEqual([]);
+      expect(result.current.isInitialized).toBe(false);
+
+      // Transfer state from dashboard
+      act(() => {
+        useSidebarAgentStore.getState().transferFromDashboard({
+          agent: mockAgent,
+          conversationId: 'conv-from-dashboard',
+          messages: mockMessages,
+        });
+      });
+
+      // Verify state was transferred
+      expect(result.current.selectedAgent).toEqual(mockAgent);
+      expect(result.current.conversationId).toBe('conv-from-dashboard');
+      expect(result.current.initialMessages).toEqual(mockMessages);
+      expect(result.current.isInitialized).toBe(true);
+    });
+
+    it('should transfer agent with null conversationId', () => {
+      const { result } = renderHook(() => usePageAgentSidebarState());
+
+      act(() => {
+        useSidebarAgentStore.getState().transferFromDashboard({
+          agent: mockAgent,
+          conversationId: null,
+          messages: [],
+        });
+      });
+
+      expect(result.current.selectedAgent).toEqual(mockAgent);
+      expect(result.current.conversationId).toBeNull();
+      expect(result.current.initialMessages).toEqual([]);
+      expect(result.current.isInitialized).toBe(true);
+    });
+
+    it('should override existing sidebar state when transferring', () => {
+      const { result } = renderHook(() => usePageAgentSidebarState());
+
+      // Set up initial state
+      act(() => {
+        result.current.selectAgent(mockAgent2);
+      });
+
+      // Wait for initialization
+      act(() => {
+        useSidebarAgentStore.setState({
+          conversationId: 'existing-conv',
+          initialMessages: [{ id: 'old-msg', role: 'user', content: 'Old' }] as never[],
+          isInitialized: true,
+          agentIdForConversation: mockAgent2.id,
+        });
+      });
+
+      // Transfer new state from dashboard
+      const newMessages = [{ id: 'new-msg', role: 'user', content: 'New' }] as never[];
+      act(() => {
+        useSidebarAgentStore.getState().transferFromDashboard({
+          agent: mockAgent,
+          conversationId: 'dashboard-conv',
+          messages: newMessages,
+        });
+      });
+
+      // Verify state was replaced
+      expect(result.current.selectedAgent).toEqual(mockAgent);
+      expect(result.current.conversationId).toBe('dashboard-conv');
+      expect(result.current.initialMessages).toEqual(newMessages);
+    });
+
+    it('should clear loading state when transferring', () => {
+      const { result } = renderHook(() => usePageAgentSidebarState());
+
+      // Simulate loading state
+      act(() => {
+        useSidebarAgentStore.setState({
+          _loadingAgentId: 'some-agent',
+          isInitialized: false,
+        });
+      });
+
+      // Transfer should clear loading
+      act(() => {
+        useSidebarAgentStore.getState().transferFromDashboard({
+          agent: mockAgent,
+          conversationId: 'conv-123',
+          messages: [],
+        });
+      });
+
+      // Verify loading state is cleared
+      expect(result.current.isInitialized).toBe(true);
+      expect(useSidebarAgentStore.getState()._loadingAgentId).toBeNull();
+    });
+
+    it('should set correct agentIdForConversation when transferring', () => {
+      act(() => {
+        useSidebarAgentStore.getState().transferFromDashboard({
+          agent: mockAgent,
+          conversationId: 'conv-123',
+          messages: [],
+        });
+      });
+
+      expect(useSidebarAgentStore.getState().agentIdForConversation).toBe(mockAgent.id);
+    });
+
+    it('should handle empty messages array', () => {
+      const { result } = renderHook(() => usePageAgentSidebarState());
+
+      act(() => {
+        useSidebarAgentStore.getState().transferFromDashboard({
+          agent: mockAgent,
+          conversationId: 'conv-123',
+          messages: [],
+        });
+      });
+
+      expect(result.current.initialMessages).toEqual([]);
+      expect(result.current.isInitialized).toBe(true);
+    });
+
+    it('should transfer large message arrays efficiently', () => {
+      const { result } = renderHook(() => usePageAgentSidebarState());
+
+      // Create a large message array
+      const largeMessages = Array.from({ length: 100 }, (_, i) => ({
+        id: `msg-${i}`,
+        role: i % 2 === 0 ? 'user' : 'assistant',
+        content: `Message ${i}`,
+      })) as never[];
+
+      act(() => {
+        useSidebarAgentStore.getState().transferFromDashboard({
+          agent: mockAgent,
+          conversationId: 'conv-large',
+          messages: largeMessages,
+        });
+      });
+
+      expect(result.current.initialMessages).toHaveLength(100);
+      expect(result.current.initialMessages[0]).toEqual(largeMessages[0]);
+      expect(result.current.initialMessages[99]).toEqual(largeMessages[99]);
+    });
+  });
 });

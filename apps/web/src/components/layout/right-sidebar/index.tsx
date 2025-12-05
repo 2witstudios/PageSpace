@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { History, MessageSquare, Settings } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import { usePageAgentSidebarState } from "@/hooks/page-agents/usePageAgentSidebarState";
+import { usePageAgentSidebarState, useSidebarAgentStore } from "@/hooks/page-agents/usePageAgentSidebarState";
 import { useDashboardContext } from "@/hooks/useDashboardContext";
 import { usePageAgentDashboardStore, type SidebarTab } from "@/stores/page-agents/usePageAgentDashboardStore";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -53,11 +53,22 @@ export default function RightPanel({ className }: RightPanelProps) {
 
   // Auto-switch to chat tab when navigating from dashboard to page context
   // This ensures streaming continues visibly in the sidebar
+  // Also transfer agent state from dashboard to sidebar for seamless conversation handoff
   const prevIsDashboardContext = useRef(isDashboardContext);
   useEffect(() => {
     // Only switch when transitioning FROM dashboard TO page context
     if (prevIsDashboardContext.current && !isDashboardContext) {
       setLocalActiveTab('chat');
+
+      // Transfer agent state from dashboard to sidebar for seamless handoff
+      const dashboardState = usePageAgentDashboardStore.getState();
+      if (dashboardState.selectedAgent) {
+        useSidebarAgentStore.getState().transferFromDashboard({
+          agent: dashboardState.selectedAgent,
+          conversationId: dashboardState.conversationId,
+          messages: dashboardState.conversationMessages,
+        });
+      }
     }
     prevIsDashboardContext.current = isDashboardContext;
   }, [isDashboardContext]);

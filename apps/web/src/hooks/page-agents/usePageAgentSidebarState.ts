@@ -16,6 +16,12 @@ export type SidebarAgentInfo = AgentInfo;
 // Zustand Store
 // ============================================
 
+interface TransferFromDashboardPayload {
+  agent: SidebarAgentInfo;
+  conversationId: string | null;
+  messages: UIMessage[];
+}
+
 interface SidebarAgentStoreState {
   // Agent selection
   selectedAgent: SidebarAgentInfo | null;
@@ -37,6 +43,8 @@ interface SidebarAgentStoreState {
   setConversationError: (agentId: string) => void;
   updateMessages: (messages: UIMessage[]) => void;
   setLoadingAgentId: (agentId: string | null) => void;
+  /** Transfer state from dashboard store for seamless navigation */
+  transferFromDashboard: (payload: TransferFromDashboardPayload) => void;
 }
 
 export const useSidebarAgentStore = create<SidebarAgentStoreState>()(
@@ -102,6 +110,22 @@ export const useSidebarAgentStore = create<SidebarAgentStoreState>()(
 
       setLoadingAgentId: (agentId) => {
         set({ _loadingAgentId: agentId });
+      },
+
+      /**
+       * Transfer state from dashboard store for seamless navigation.
+       * Called when navigating from dashboard to a page while an agent is selected.
+       * This ensures the sidebar picks up the streaming conversation.
+       */
+      transferFromDashboard: (payload) => {
+        set({
+          selectedAgent: payload.agent,
+          conversationId: payload.conversationId,
+          initialMessages: payload.messages,
+          isInitialized: true,
+          agentIdForConversation: payload.agent.id,
+          _loadingAgentId: null,
+        });
       },
     }),
     {
