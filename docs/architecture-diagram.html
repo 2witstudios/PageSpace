@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>PageSpace Architecture</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #0d1117;
+            color: #c9d1d9;
+            padding: 30px;
+            min-height: 100vh;
+        }
+        h1 { text-align: center; font-size: 1.3rem; color: #58a6ff; margin-bottom: 25px; }
+        .row { display: flex; justify-content: center; gap: 12px; margin-bottom: 12px; }
+        .box {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 10px 16px;
+            font-size: 0.8rem;
+            text-align: center;
+            min-width: 120px;
+        }
+        .box small { display: block; color: #8b949e; font-size: 0.65rem; margin-top: 3px; }
+        .client { border-color: #58a6ff; }
+        .service { border-color: #a371f7; }
+        .ai { border-color: #f78166; }
+        .data { border-color: #3fb950; }
+        .arrow {
+            text-align: center;
+            color: #484f58;
+            font-size: 1.2rem;
+            margin: 8px 0;
+        }
+        .section {
+            color: #8b949e;
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            text-align: center;
+            margin: 15px 0 8px;
+        }
+        .highlight {
+            background: #1c2128;
+            border: 2px solid #f78166;
+        }
+        .note {
+            text-align: center;
+            font-size: 0.7rem;
+            color: #8b949e;
+            margin-top: 20px;
+            padding: 12px;
+            background: #161b22;
+            border-radius: 6px;
+            max-width: 500px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>PageSpace Architecture</h1>
+
+    <div class="section">Clients</div>
+    <div class="row">
+        <div class="box client">Web App<small>Next.js 15</small></div>
+        <div class="box client">Desktop<small>Electron</small></div>
+        <div class="box client">iOS App<small>Swift</small></div>
+        <div class="box client">Claude / Cursor<small>MCP Protocol</small></div>
+    </div>
+
+    <div class="arrow">&#8595;</div>
+
+    <div class="section">Services</div>
+    <div class="row">
+        <div class="box service">API Server<small>:3000</small></div>
+        <div class="box service">Realtime<small>Socket.IO :3001</small></div>
+        <div class="box service">Processor<small>File uploads :3003</small></div>
+    </div>
+
+    <div class="arrow">&#8595;</div>
+
+    <div class="section">AI Layer</div>
+    <div class="row">
+        <div class="box ai">AI Provider Factory<small>Vercel AI SDK</small></div>
+        <div class="box ai">Tool Executor<small>search, create, edit, delete pages...</small></div>
+    </div>
+
+    <div class="arrow">&#8595;</div>
+
+    <div class="section">Storage</div>
+    <div class="row">
+        <div class="box data">PostgreSQL<small>Pages, messages, files metadata</small></div>
+    </div>
+
+    <div class="note">
+        <strong>No vector embeddings</strong> - Pure lexical search with regex patterns.<br>
+        AI tools query your knowledge base the same way developers do.
+    </div>
+</body>
+</html>
