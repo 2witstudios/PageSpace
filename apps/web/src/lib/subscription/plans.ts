@@ -41,12 +41,19 @@ export interface PlanDefinition {
   };
   features: PlanFeature[];
   highlighted?: boolean;
+  /** @deprecated Use stripePriceId for embedded checkout instead */
   stripePaymentLink?: string;
+  /** Stripe Price ID for embedded checkout subscription creation */
+  stripePriceId?: string;
 }
 
-// Stripe Payment Links
+// Stripe Payment Links (deprecated - use embedded checkout)
 const STRIPE_PRO_PAYMENT_LINK = 'https://buy.stripe.com/8x2fZjdczc7ffz0eF0eEo01';
 const STRIPE_BUSINESS_PAYMENT_LINK = 'https://buy.stripe.com/dRm9AV1tRfjrcmOdAWeEo03';
+
+// Stripe Price IDs for embedded checkout (from environment)
+const STRIPE_PRICE_ID_PRO = process.env.STRIPE_PRICE_ID_PRO;
+const STRIPE_PRICE_ID_BUSINESS = process.env.STRIPE_PRICE_ID_BUSINESS;
 
 export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
   free: {
@@ -107,6 +114,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     description: 'Best for professionals and growing teams',
     highlighted: true,
     stripePaymentLink: STRIPE_PRO_PAYMENT_LINK,
+    stripePriceId: STRIPE_PRICE_ID_PRO,
     limits: {
       aiCalls: 100,
       pro: 50,
@@ -151,6 +159,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     accentColor: 'border-purple-200 bg-purple-50 dark:border-purple-800 dark:bg-purple-950/20',
     description: 'Enterprise-grade features for large teams',
     stripePaymentLink: STRIPE_BUSINESS_PAYMENT_LINK,
+    stripePriceId: STRIPE_PRICE_ID_BUSINESS,
     limits: {
       aiCalls: 500,
       pro: 100,
