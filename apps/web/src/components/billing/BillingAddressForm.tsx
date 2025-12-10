@@ -87,7 +87,7 @@ export function BillingAddressForm({
       onUpdate();
 
       setTimeout(() => setSuccess(false), 3000);
-    } catch (err) {
+    } catch {
       setError('Failed to update billing address');
     } finally {
       setLoading(false);

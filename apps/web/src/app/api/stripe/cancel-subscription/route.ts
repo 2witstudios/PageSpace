@@ -42,7 +42,7 @@ export async function POST(request: NextRequest) {
     const subscription = await stripe.subscriptions.update(
       currentSubscription.stripeSubscriptionId,
       { cancel_at_period_end: true }
-    );
+    ) as unknown as Stripe.Subscription & { current_period_end: number };
 
     // Update local record
     await db.update(subscriptions)

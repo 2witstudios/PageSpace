@@ -1,12 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import {
   ArrowLeft,
@@ -79,21 +78,7 @@ export default function BillingPage() {
   const pmAdded = searchParams.get('pm_added');
   const success = searchParams.get('success');
 
-  useEffect(() => {
-    fetchAllData();
-  }, []);
-
-  // Clear URL params after showing alerts
-  useEffect(() => {
-    if (pmAdded || success) {
-      const timer = setTimeout(() => {
-        router.replace('/settings/billing');
-      }, 5000);
-      return () => clearTimeout(timer);
-    }
-  }, [pmAdded, success, router]);
-
-  const fetchAllData = async () => {
+  const fetchAllData = useCallback(async () => {
     setLoading(true);
     setError(null);
 
@@ -110,7 +95,21 @@ export default function BillingPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    fetchAllData();
+  }, [fetchAllData]);
+
+  // Clear URL params after showing alerts
+  useEffect(() => {
+    if (pmAdded || success) {
+      const timer = setTimeout(() => {
+        router.replace('/settings/billing');
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [pmAdded, success, router]);
 
   const fetchSubscription = async () => {
     const res = await fetchWithAuth('/api/subscriptions/status');

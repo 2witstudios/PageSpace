@@ -1,10 +1,8 @@
 'use client';
 
-import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { FileText, Download, ExternalLink, Loader2 } from 'lucide-react';
-import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 export interface Invoice {
   id: string;

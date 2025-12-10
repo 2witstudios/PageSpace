@@ -44,7 +44,12 @@ export async function GET(request: NextRequest) {
     }
 
     // Build upcoming invoice params
-    const params: Stripe.InvoiceRetrieveUpcomingParams = {
+    const params: {
+      customer: string;
+      subscription: string;
+      subscription_items?: Array<{ id: string; price: string }>;
+      subscription_proration_behavior?: string;
+    } = {
       customer: user.stripeCustomerId,
       subscription: currentSubscription.stripeSubscriptionId,
     };
@@ -65,12 +70,15 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const invoice = await stripe.invoices.retrieveUpcoming(params);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const invoice = await (stripe.invoices as any).retrieveUpcoming(params) as Stripe.Invoice;
+
+    // Extended line item type for proration property
+    type LineItemWithProration = Stripe.InvoiceLineItem & { proration?: boolean };
+    const lines = invoice.lines.data as LineItemWithProration[];
 
     // Calculate proration if this is a preview
-    const prorationItems = invoice.lines.data.filter(
-      line => line.proration
-    );
+    const prorationItems = lines.filter(line => line.proration);
 
     const prorationAmount = prorationItems.reduce(
       (sum, item) => sum + item.amount,
@@ -88,7 +96,7 @@ export async function GET(request: NextRequest) {
         nextPaymentAttempt: invoice.next_payment_attempt
           ? new Date(invoice.next_payment_attempt * 1000).toISOString()
           : null,
-        lines: invoice.lines.data.map(line => ({
+        lines: lines.map(line => ({
           description: line.description,
           amount: line.amount,
           proration: line.proration,

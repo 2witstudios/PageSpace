@@ -90,7 +90,7 @@ export function PlanChangeConfirmation({
     setError(null);
 
     try {
-      const response = await post('/api/stripe/update-subscription', {
+      const response = await post<{ error?: string }>('/api/stripe/update-subscription', {
         priceId: targetPlan.stripePriceId,
         isDowngrade,
       });
@@ -101,7 +101,7 @@ export function PlanChangeConfirmation({
         onSuccess();
         onOpenChange(false);
       }
-    } catch (err) {
+    } catch {
       setError('Failed to update subscription');
     } finally {
       setLoading(false);

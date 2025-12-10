@@ -59,7 +59,7 @@ export function EmbeddedCheckoutForm({
       } else if (result.paymentIntent?.status === 'succeeded') {
         onSuccess();
       }
-    } catch (err) {
+    } catch {
       setError('An unexpected error occurred');
       setProcessing(false);
     }

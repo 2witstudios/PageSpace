@@ -136,7 +136,7 @@ export function AddPaymentMethodForm({
       } else {
         setError('Failed to initialize payment form');
       }
-    } catch (err) {
+    } catch {
       setError('Failed to initialize payment form');
     } finally {
       setLoading(false);

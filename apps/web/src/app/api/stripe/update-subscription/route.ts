@@ -90,7 +90,7 @@ export async function POST(request: NextRequest) {
           // Use cancel_at_period_end pattern for downgrades
           // The new price takes effect at the next billing cycle
         }
-      );
+      ) as unknown as Stripe.Subscription & { current_period_end: number };
 
       return NextResponse.json({
         subscriptionId: updatedSubscription.id,
