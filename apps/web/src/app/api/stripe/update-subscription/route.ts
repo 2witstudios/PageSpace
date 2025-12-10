@@ -56,9 +56,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Fetch subscription from Stripe
+    // Fetch subscription from Stripe - expand items to get current_period_end
     const subscription = await stripe.subscriptions.retrieve(
-      currentSubscription.stripeSubscriptionId
+      currentSubscription.stripeSubscriptionId,
+      { expand: ['items'] }
     );
 
     if (!['active', 'trialing'].includes(subscription.status)) {

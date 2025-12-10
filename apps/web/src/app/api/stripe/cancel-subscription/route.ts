@@ -38,10 +38,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Cancel at period end
+    // Cancel at period end - expand items to get current_period_end
     const subscription = await stripe.subscriptions.update(
       currentSubscription.stripeSubscriptionId,
-      { cancel_at_period_end: true }
+      { cancel_at_period_end: true, expand: ['items'] }
     );
 
     // Get current_period_end from subscription item (properly typed in Stripe SDK v18)
