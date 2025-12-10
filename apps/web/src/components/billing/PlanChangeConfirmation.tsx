@@ -80,16 +80,32 @@ export function PlanChangeConfirmation({
     fetchPreview();
   }, [open, targetPlan.stripePriceId]);
 
-  const handleConfirm = async () => {
-    if (!targetPlan.stripePriceId) {
-      setError('Invalid plan configuration');
-      return;
-    }
+  const isDowngradeToFree = targetPlan.id === 'free';
 
+  const handleConfirm = async () => {
     setLoading(true);
     setError(null);
 
     try {
+      // Downgrading to Free tier uses cancellation flow (cancel at period end)
+      if (isDowngradeToFree) {
+        const response = await post<{ error?: string }>('/api/stripe/cancel-subscription', {});
+
+        if (response.error) {
+          setError(response.error);
+        } else {
+          onSuccess();
+          onOpenChange(false);
+        }
+        return;
+      }
+
+      // Paid-to-paid plan changes require a valid price ID
+      if (!targetPlan.stripePriceId) {
+        setError('Invalid plan configuration');
+        return;
+      }
+
       const response = await post<{ error?: string }>('/api/stripe/update-subscription', {
         priceId: targetPlan.stripePriceId,
         isDowngrade,
@@ -187,7 +203,11 @@ export function PlanChangeConfirmation({
               <AlertCircle className="h-4 w-4" />
               <AlertDescription>
                 Your {currentPlan.name} features will remain active until your next billing date.
-                After that, you&apos;ll be on the {targetPlan.name} plan at {targetPlan.price.formatted}/month.
+                {isDowngradeToFree ? (
+                  <> After that, your subscription will end and you&apos;ll be on the Free plan.</>
+                ) : (
+                  <> After that, you&apos;ll be on the {targetPlan.name} plan at {targetPlan.price.formatted}/month.</>
+                )}
               </AlertDescription>
             </Alert>
           )}

@@ -78,25 +78,51 @@ export async function POST(request: NextRequest) {
 
     // Update subscription
     if (isDowngrade) {
-      // Schedule downgrade at period end
-      const updatedSubscription = await stripe.subscriptions.update(
-        subscription.id,
-        {
-          items: [{
-            id: currentItemId,
-            price: priceId,
-          }],
-          proration_behavior: 'none',
-          // Use cancel_at_period_end pattern for downgrades
-          // The new price takes effect at the next billing cycle
-        }
-      ) as unknown as Stripe.Subscription & { current_period_end: number };
+      // Use subscription schedule to properly defer downgrade to period end.
+      // This ensures the user keeps their current plan features until the
+      // billing cycle ends, then automatically switches to the new plan.
+      const subscriptionItem = subscription.items.data[0];
+      const currentPriceId = subscriptionItem.price.id;
+      const currentPeriodEnd = subscriptionItem.current_period_end;
+
+      // Check if subscription already has a schedule attached
+      let schedule: Stripe.SubscriptionSchedule;
+      if (subscription.schedule) {
+        // Retrieve existing schedule (schedule can be string or SubscriptionSchedule)
+        const scheduleId = typeof subscription.schedule === 'string'
+          ? subscription.schedule
+          : subscription.schedule.id;
+        schedule = await stripe.subscriptionSchedules.retrieve(scheduleId);
+      } else {
+        // Create a new schedule from the existing subscription
+        schedule = await stripe.subscriptionSchedules.create({
+          from_subscription: subscription.id,
+        });
+      }
+
+      // Update schedule with two phases:
+      // 1. Current plan until period end
+      // 2. New (downgraded) plan starting at period end
+      await stripe.subscriptionSchedules.update(schedule.id, {
+        phases: [
+          {
+            items: [{ price: currentPriceId }],
+            start_date: schedule.phases[0].start_date,
+            end_date: currentPeriodEnd,
+          },
+          {
+            items: [{ price: priceId }],
+            start_date: currentPeriodEnd,
+          },
+        ],
+      });
 
       return NextResponse.json({
-        subscriptionId: updatedSubscription.id,
-        status: updatedSubscription.status,
+        subscriptionId: subscription.id,
+        scheduleId: schedule.id,
+        status: 'scheduled',
         message: 'Plan change scheduled for next billing period',
-        effectiveDate: new Date(updatedSubscription.current_period_end * 1000).toISOString(),
+        effectiveDate: new Date(currentPeriodEnd * 1000).toISOString(),
       });
 
     } else {
