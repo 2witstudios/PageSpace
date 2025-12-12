@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db, eq, users, subscriptions } from '@pagespace/db';
+import { db, eq, and, inArray, desc, users, subscriptions } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
 import { loggers } from '@pagespace/lib/server';
@@ -42,10 +42,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Get current subscription
+    // Get current active subscription (filter by status to avoid returning stale records)
     const [currentSubscription] = await db.select()
       .from(subscriptions)
-      .where(eq(subscriptions.userId, userId));
+      .where(and(
+        eq(subscriptions.userId, userId),
+        inArray(subscriptions.status, ['active', 'trialing', 'past_due'])
+      ))
+      .orderBy(desc(subscriptions.updatedAt))
+      .limit(1);
 
     if (!currentSubscription?.stripeSubscriptionId) {
       return NextResponse.json(

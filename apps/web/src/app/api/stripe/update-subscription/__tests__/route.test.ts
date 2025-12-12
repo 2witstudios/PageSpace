@@ -52,13 +52,20 @@ vi.mock('@pagespace/db', () => {
     db: {
       select: vi.fn(() => ({
         from: vi.fn(() => ({
-          where: mockSelectWhere,
+          where: vi.fn(() => ({
+            orderBy: vi.fn(() => ({
+              limit: mockSelectWhere,
+            })),
+          })),
         })),
       })),
     },
     users: {},
     subscriptions: {},
     eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
+    and: vi.fn((...args: unknown[]) => ({ args, type: 'and' })),
+    inArray: vi.fn((field: unknown, values: unknown) => ({ field, values, type: 'inArray' })),
+    desc: vi.fn((field: unknown) => ({ field, type: 'desc' })),
   };
 });
 
@@ -102,10 +109,12 @@ const mockDbSubscription = (overrides: Partial<{
   id: string;
   userId: string;
   stripeSubscriptionId: string | null;
+  status: string;
 }> = {}) => ({
   id: overrides.id ?? 'local_sub_123',
   userId: overrides.userId ?? 'user_123',
   stripeSubscriptionId: overrides.stripeSubscriptionId ?? 'sub_123',
+  status: overrides.status ?? 'active',
 });
 
 // Helper to create mock Stripe subscription

@@ -243,7 +243,7 @@ export default function PlanPage() {
 
       {/* Plan Cards - Only show when not in checkout */}
       {!checkoutPlan && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="flex overflow-x-auto gap-4 pt-6 pb-4 snap-x snap-mandatory -mx-6 px-6 justify-center">
           {plans.map((plan) => (
             <PlanCard
               key={plan.id}
@@ -251,6 +251,7 @@ export default function PlanPage() {
               currentTier={subscriptionData?.subscriptionTier || 'free'}
               isCurrentPlan={plan.id === subscriptionData?.subscriptionTier}
               onUpgrade={handlePlanSelect}
+              onManageBilling={() => router.push('/settings/billing')}
               className={plan.highlighted ? 'relative z-10' : ''}
             />
           ))}
@@ -293,7 +294,7 @@ export default function PlanPage() {
                     {plans.map((plan) => (
                       <td key={plan.id} className="text-center py-4 px-4">
                         {plan.limits.pro > 0 ? (
-                          <span className="font-semibold text-yellow-600">{plan.limits.pro}</span>
+                          <span className="font-semibold">{plan.limits.pro}</span>
                         ) : (
                           <span className="text-muted-foreground">—</span>
                         )}

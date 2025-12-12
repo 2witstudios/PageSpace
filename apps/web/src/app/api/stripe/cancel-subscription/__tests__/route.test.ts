@@ -28,17 +28,31 @@ vi.mock('@/lib/stripe', () => ({
 }));
 
 // Mock database
-const mockSelectWhere = vi.fn();
+const mockUserQuery = vi.fn();
+const mockSubscriptionQuery = vi.fn();
 const mockUpdateWhere = vi.fn();
 const mockUpdateSet = vi.fn();
+
+// Symbols to identify table types
+const usersTable = Symbol('users');
+const subscriptionsTable = Symbol('subscriptions');
 
 vi.mock('@pagespace/db', () => {
   return {
     db: {
       select: vi.fn(() => ({
-        from: vi.fn(() => ({
-          where: mockSelectWhere,
-        })),
+        from: vi.fn((table: symbol) => {
+          if (table === usersTable) {
+            return { where: mockUserQuery };
+          }
+          return {
+            where: vi.fn(() => ({
+              orderBy: vi.fn(() => ({
+                limit: mockSubscriptionQuery,
+              })),
+            })),
+          };
+        }),
       })),
       update: vi.fn(() => ({
         set: mockUpdateSet.mockReturnValue({
@@ -46,9 +60,12 @@ vi.mock('@pagespace/db', () => {
         }),
       })),
     },
-    users: {},
-    subscriptions: {},
+    users: usersTable,
+    subscriptions: subscriptionsTable,
     eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
+    and: vi.fn((...args: unknown[]) => ({ args, type: 'and' })),
+    inArray: vi.fn((field: unknown, values: unknown) => ({ field, values, type: 'inArray' })),
+    desc: vi.fn((field: unknown) => ({ field, type: 'desc' })),
   };
 });
 
@@ -88,10 +105,12 @@ const mockDbSubscription = (overrides: Partial<{
   id: string;
   userId: string;
   stripeSubscriptionId: string | null;
+  status: string;
 }> = {}) => ({
   id: overrides.id ?? 'local_sub_123',
   userId: overrides.userId ?? 'user_123',
   stripeSubscriptionId: 'stripeSubscriptionId' in overrides ? overrides.stripeSubscriptionId : 'sub_123',
+  status: overrides.status ?? 'active',
 });
 
 describe('POST /api/stripe/cancel-subscription', () => {
@@ -106,14 +125,8 @@ describe('POST /api/stripe/cancel-subscription', () => {
     vi.mocked(isAuthError).mockReturnValue(false);
 
     // Setup default database responses
-    let selectCallCount = 0;
-    mockSelectWhere.mockImplementation(() => {
-      selectCallCount++;
-      if (selectCallCount === 1) {
-        return Promise.resolve([mockUser()]);
-      }
-      return Promise.resolve([mockDbSubscription()]);
-    });
+    mockUserQuery.mockResolvedValue([mockUser()]);
+    mockSubscriptionQuery.mockResolvedValue([mockDbSubscription()]);
 
     mockUpdateWhere.mockResolvedValue(undefined);
     mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
@@ -176,7 +189,7 @@ describe('POST /api/stripe/cancel-subscription', () => {
   });
 
   it('should return 404 when user not found', async () => {
-    mockSelectWhere.mockResolvedValue([]);
+    mockUserQuery.mockResolvedValue([]);
 
     const request = new Request('https://example.com/api/stripe/cancel-subscription', {
       method: 'POST',
@@ -191,14 +204,8 @@ describe('POST /api/stripe/cancel-subscription', () => {
   });
 
   it('should return 400 when no active subscription', async () => {
-    let selectCallCount = 0;
-    mockSelectWhere.mockImplementation(() => {
-      selectCallCount++;
-      if (selectCallCount === 1) {
-        return Promise.resolve([mockUser()]);
-      }
-      return Promise.resolve([]); // No subscription
-    });
+    mockUserQuery.mockResolvedValue([mockUser()]);
+    mockSubscriptionQuery.mockResolvedValue([]); // No subscription
 
     const request = new Request('https://example.com/api/stripe/cancel-subscription', {
       method: 'POST',
@@ -213,14 +220,8 @@ describe('POST /api/stripe/cancel-subscription', () => {
   });
 
   it('should return 400 when subscription has no stripeSubscriptionId', async () => {
-    let selectCallCount = 0;
-    mockSelectWhere.mockImplementation(() => {
-      selectCallCount++;
-      if (selectCallCount === 1) {
-        return Promise.resolve([mockUser()]);
-      }
-      return Promise.resolve([mockDbSubscription({ stripeSubscriptionId: null })]);
-    });
+    mockUserQuery.mockResolvedValue([mockUser()]);
+    mockSubscriptionQuery.mockResolvedValue([mockDbSubscription({ stripeSubscriptionId: null })]);
 
     const request = new Request('https://example.com/api/stripe/cancel-subscription', {
       method: 'POST',

@@ -63,7 +63,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     },
     icon: Zap,
     iconColor: 'text-blue-500',
-    accentColor: 'border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/20',
+    accentColor: 'border-zinc-200 bg-zinc-50/50 dark:border-zinc-800 dark:bg-zinc-900/50',
     description: 'Perfect for getting started with PageSpace',
     limits: {
       aiCalls: 50,
@@ -102,11 +102,11 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     badge: {
       text: 'Most Popular',
       variant: 'default',
-      className: 'bg-yellow-500 text-white border-yellow-500',
+      className: 'bg-zinc-900 text-white border-zinc-900 dark:bg-zinc-100 dark:text-zinc-900 dark:border-zinc-100',
     },
     icon: Crown,
-    iconColor: 'text-yellow-500',
-    accentColor: 'border-yellow-200 bg-yellow-50 dark:border-yellow-800 dark:bg-yellow-950/20',
+    iconColor: 'text-amber-500',
+    accentColor: 'border-zinc-300 bg-zinc-100/80 dark:border-zinc-700 dark:bg-zinc-800/80',
     description: 'Best for professionals and growing teams',
     highlighted: true,
     stripePriceId: STRIPE_PRICE_ID_PRO,
@@ -147,11 +147,11 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     badge: {
       text: 'Best Value',
       variant: 'outline',
-      className: 'bg-emerald-500 text-white border-emerald-500',
+      className: 'bg-zinc-700 text-white border-zinc-700 dark:bg-zinc-300 dark:text-zinc-900 dark:border-zinc-300',
     },
     icon: Star,
     iconColor: 'text-emerald-500',
-    accentColor: 'border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/20',
+    accentColor: 'border-zinc-200 bg-zinc-50/50 dark:border-zinc-800 dark:bg-zinc-900/50',
     description: 'For power users who want maximum value',
     stripePriceId: STRIPE_PRICE_ID_FOUNDER,
     limits: {
@@ -189,8 +189,8 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
       formatted: '$100',
     },
     icon: Shield,
-    iconColor: 'text-purple-500',
-    accentColor: 'border-purple-200 bg-purple-50 dark:border-purple-800 dark:bg-purple-950/20',
+    iconColor: 'text-violet-500',
+    accentColor: 'border-zinc-200 bg-zinc-50/50 dark:border-zinc-800 dark:bg-zinc-900/50',
     description: 'Enterprise-grade features for large teams',
     stripePriceId: STRIPE_PRICE_ID_BUSINESS,
     limits: {

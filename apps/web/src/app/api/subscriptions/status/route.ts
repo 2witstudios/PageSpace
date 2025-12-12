@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
-import { db, eq, subscriptions, users } from '@pagespace/db';
+import { db, eq, and, inArray, desc, subscriptions, users } from '@pagespace/db';
 import { getStorageConfigFromSubscription, type SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 
 export async function GET(request: NextRequest) {
@@ -21,12 +21,16 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Get current subscription info
+    // Get current active subscription (filter by status to avoid returning stale records)
     let subscription = null;
     if (user.stripeCustomerId) {
       const subscriptionRecord = await db.select()
         .from(subscriptions)
-        .where(eq(subscriptions.userId, user.id))
+        .where(and(
+          eq(subscriptions.userId, user.id),
+          inArray(subscriptions.status, ['active', 'trialing', 'past_due'])
+        ))
+        .orderBy(desc(subscriptions.updatedAt))
         .limit(1);
 
       if (subscriptionRecord.length > 0) {
