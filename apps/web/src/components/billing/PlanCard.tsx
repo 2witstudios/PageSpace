@@ -109,9 +109,9 @@ export function PlanCard({
   return (
     <Card
       className={cn(
-        'relative transition-all duration-300 hover:shadow-lg flex flex-col',
-        plan.highlighted && 'ring-2 ring-yellow-400 shadow-lg',
-        isCurrentPlan && 'ring-2 ring-green-400',
+        'relative transition-all duration-300 hover:shadow-lg flex flex-col min-w-[280px] shrink-0 snap-center',
+        plan.highlighted && 'ring-2 ring-zinc-400 dark:ring-zinc-500 shadow-lg',
+        isCurrentPlan && 'ring-2 ring-zinc-900 dark:ring-zinc-100',
         plan.accentColor,
         className
       )}
@@ -134,7 +134,7 @@ export function PlanCard({
       {/* Current Plan Badge */}
       {isCurrentPlan && (
         <div className="absolute -top-3 right-4">
-          <Badge className="bg-green-500 text-white border-green-500">
+          <Badge className="bg-zinc-900 text-white border-zinc-900 dark:bg-zinc-100 dark:text-zinc-900 dark:border-zinc-100">
             Current Plan
           </Badge>
         </div>

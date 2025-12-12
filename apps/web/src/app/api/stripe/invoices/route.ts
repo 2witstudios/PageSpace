@@ -2,9 +2,41 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db, eq, users } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
+import { getTierFromPrice } from '@/lib/stripe/price-config';
+import { PLANS } from '@/lib/subscription/plans';
 import { loggers } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: false };
+
+/**
+ * Get a friendly plan name from invoice line items.
+ * For proration invoices, finds the new plan (positive amount line).
+ * Falls back to Stripe's description if plan can't be determined.
+ */
+function getInvoiceDescription(invoice: Stripe.Invoice): string {
+  // Filter to subscription-related line items with pricing info
+  const subscriptionLines = invoice.lines.data.filter(
+    line => line.parent?.subscription_item_details && line.pricing?.price_details?.price
+  );
+
+  // Prefer the positive-amount line (new plan charge) over credits
+  const targetLine = subscriptionLines.find(line => line.amount > 0)
+    || subscriptionLines[0];
+
+  const priceId = targetLine?.pricing?.price_details?.price;
+  if (priceId) {
+    // Parse unit_amount_decimal to get cents for fallback tier detection
+    const unitAmount = targetLine.pricing?.unit_amount_decimal
+      ? Math.round(parseFloat(targetLine.pricing.unit_amount_decimal) * 100)
+      : null;
+    const tier = getTierFromPrice(priceId, unitAmount);
+    if (tier !== 'free') {
+      return PLANS[tier].displayName;
+    }
+  }
+
+  return invoice.description || invoice.lines.data[0]?.description || 'Subscription';
+}
 
 /**
  * GET /api/stripe/invoices
@@ -58,7 +90,7 @@ export async function GET(request: NextRequest) {
           : null,
         hostedInvoiceUrl: invoice.hosted_invoice_url,
         invoicePdf: invoice.invoice_pdf,
-        description: invoice.description || invoice.lines.data[0]?.description,
+        description: getInvoiceDescription(invoice),
       })),
       hasMore: invoices.has_more,
     });
