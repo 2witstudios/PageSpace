@@ -60,6 +60,10 @@ export async function POST(request: NextRequest) {
           await handlePaymentFailed(event.data.object as Stripe.Invoice);
           break;
 
+        case 'invoice.paid':
+          await handleInvoicePaid(event.data.object as Stripe.Invoice);
+          break;
+
         default:
           console.log(`Unhandled event type: ${event.type}`);
       }
@@ -122,19 +126,25 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
   // Determine subscription tier based on price or subscription status
   const isEntitled = ['active', 'trialing'].includes(subscription.status);
 
-  let subscriptionTier: 'free' | 'pro' | 'business';
+  let subscriptionTier: 'free' | 'pro' | 'founder' | 'business';
 
   if (!isEntitled) {
-    // If not active/trialing, set to normal regardless of price
+    // If not active/trialing, set to free regardless of price
     subscriptionTier = 'free';
   } else {
     // For active subscriptions, determine tier from price amount
     const priceAmount = subscription.items.data[0].price.unit_amount; // in cents
 
-    // Determine tier by price amount: $199.99 = Business, $29.99 = Pro
-    if (priceAmount === 19999) { // $199.99 in cents
+    // Determine tier by price amount (new prices and legacy support)
+    if (priceAmount === 10000) {        // $100 = Business (new)
       subscriptionTier = 'business';
-    } else if (priceAmount === 2999) { // $29.99 in cents
+    } else if (priceAmount === 19999) { // $199.99 = Business (legacy)
+      subscriptionTier = 'business';
+    } else if (priceAmount === 5000) {  // $50 = Founder (new)
+      subscriptionTier = 'founder';
+    } else if (priceAmount === 1500) {  // $15 = Pro (new)
+      subscriptionTier = 'pro';
+    } else if (priceAmount === 2999) {  // $29.99 = Pro (legacy)
       subscriptionTier = 'pro';
     } else {
       // Fallback to pro for any other paid subscription
@@ -247,4 +257,28 @@ async function handlePaymentFailed(invoice: Stripe.Invoice) {
   // Payment failure is handled by subscription status changes
   // This is mainly for logging and potential notification logic
   console.log(`Payment failed for user ${user[0].id}`);
+}
+
+async function handleInvoicePaid(invoice: Stripe.Invoice) {
+  const customerId = invoice.customer as string;
+
+  // Find user by stripe customer ID
+  const user = await db.select()
+    .from(users)
+    .where(eq(users.stripeCustomerId, customerId))
+    .limit(1);
+
+  if (!user.length) {
+    console.warn(`User not found for customer ID: ${customerId}`);
+    return;
+  }
+
+  // Log successful payment
+  // This confirms payment was received (more reliable than subscription status alone)
+  console.log(`Invoice paid for user ${user[0].id}: ${invoice.id}, amount: ${invoice.amount_paid}`);
+
+  // Future: Track discount info for "You saved $X" display
+  // if (invoice.discount) {
+  //   console.log(`Discount applied: ${invoice.discount.coupon?.name}`);
+  // }
 }

@@ -61,6 +61,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Create subscription with incomplete status to collect payment
+    // Use confirmation_secret expansion (newer API) instead of payment_intent
     const subscription = await stripe.subscriptions.create({
       customer: customerId,
       items: [{ price: priceId }],
@@ -68,14 +69,18 @@ export async function POST(request: NextRequest) {
       payment_settings: {
         save_default_payment_method: 'on_subscription',
       },
-      expand: ['latest_invoice.payment_intent'],
+      expand: ['latest_invoice.confirmation_secret'],
       metadata: { userId: user.id },
     });
 
-    const invoice = subscription.latest_invoice as Stripe.Invoice & { payment_intent: Stripe.PaymentIntent };
-    const paymentIntent = invoice.payment_intent;
+    const invoice = subscription.latest_invoice as Stripe.Invoice & {
+      confirmation_secret?: { client_secret: string; type: string };
+    };
 
-    if (!paymentIntent?.client_secret) {
+    const clientSecret = invoice.confirmation_secret?.client_secret;
+
+    if (!clientSecret) {
+      console.error('No client secret found in confirmation_secret');
       return NextResponse.json(
         { error: 'Failed to create payment intent' },
         { status: 500 }
@@ -84,7 +89,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       subscriptionId: subscription.id,
-      clientSecret: paymentIntent.client_secret,
+      clientSecret,
       status: subscription.status,
     });
 

@@ -62,7 +62,7 @@ export function PlanCard({
     }
 
     // Determine if this is an upgrade or downgrade
-    const planOrder = ['free', 'pro', 'business'];
+    const planOrder = ['free', 'pro', 'founder', 'business'];
     const currentIndex = planOrder.indexOf(currentTier);
     const targetIndex = planOrder.indexOf(plan.id);
     const isUpgrade = targetIndex > currentIndex;

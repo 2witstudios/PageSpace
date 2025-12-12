@@ -1,7 +1,8 @@
-import { Crown, Zap, Shield } from 'lucide-react';
+import { Crown, Zap, Shield, Star } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { stripeConfig } from '../stripe-config';
 
-export type SubscriptionTier = 'free' | 'pro' | 'business';
+export type SubscriptionTier = 'free' | 'pro' | 'founder' | 'business';
 
 export interface PlanFeature {
   name: string;
@@ -41,19 +42,14 @@ export interface PlanDefinition {
   };
   features: PlanFeature[];
   highlighted?: boolean;
-  /** @deprecated Use stripePriceId for embedded checkout instead */
-  stripePaymentLink?: string;
   /** Stripe Price ID for embedded checkout subscription creation */
   stripePriceId?: string;
 }
 
-// Stripe Payment Links (deprecated - use embedded checkout)
-const STRIPE_PRO_PAYMENT_LINK = 'https://buy.stripe.com/8x2fZjdczc7ffz0eF0eEo01';
-const STRIPE_BUSINESS_PAYMENT_LINK = 'https://buy.stripe.com/dRm9AV1tRfjrcmOdAWeEo03';
-
-// Stripe Price IDs for embedded checkout (from environment)
-const STRIPE_PRICE_ID_PRO = process.env.STRIPE_PRICE_ID_PRO;
-const STRIPE_PRICE_ID_BUSINESS = process.env.STRIPE_PRICE_ID_BUSINESS;
+// Stripe Price IDs from hardcoded config (avoids Next.js build-time env var issues)
+const STRIPE_PRICE_ID_PRO = stripeConfig.priceIds.pro;
+const STRIPE_PRICE_ID_FOUNDER = stripeConfig.priceIds.founder;
+const STRIPE_PRICE_ID_BUSINESS = stripeConfig.priceIds.business;
 
 export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
   free: {
@@ -70,7 +66,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     accentColor: 'border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/20',
     description: 'Perfect for getting started with PageSpace',
     limits: {
-      aiCalls: 20,
+      aiCalls: 50,
       pro: 0,
       storage: {
         bytes: 500 * 1024 * 1024, // 500MB
@@ -82,7 +78,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
       },
     },
     features: [
-      { name: '20 AI calls per day', included: true },
+      { name: '50 AI calls per day', included: true },
       { name: '500MB storage', included: true },
       { name: '20MB max file size', included: true },
       { name: 'Basic processing', included: true },
@@ -99,9 +95,9 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     name: 'Pro',
     displayName: 'Pro Plan',
     price: {
-      monthly: 29.99,
+      monthly: 15,
       currency: 'USD',
-      formatted: '$29.99',
+      formatted: '$15',
     },
     badge: {
       text: 'Most Popular',
@@ -113,10 +109,9 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     accentColor: 'border-yellow-200 bg-yellow-50 dark:border-yellow-800 dark:bg-yellow-950/20',
     description: 'Best for professionals and growing teams',
     highlighted: true,
-    stripePaymentLink: STRIPE_PRO_PAYMENT_LINK,
     stripePriceId: STRIPE_PRICE_ID_PRO,
     limits: {
-      aiCalls: 100,
+      aiCalls: 200,
       pro: 50,
       storage: {
         bytes: 2 * 1024 * 1024 * 1024, // 2GB
@@ -128,9 +123,53 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
       },
     },
     features: [
-      { name: '100 AI calls per day', included: true, description: '5x more than Free' },
+      { name: '200 AI calls per day', included: true, description: '4x more than Free' },
       { name: '50 Pro AI calls', included: true, description: 'Advanced AI reasoning' },
       { name: '2GB storage', included: true, description: '4x more than Free' },
+      { name: '50MB max file size', included: true, description: '2.5x larger files' },
+      { name: 'Priority processing', included: true },
+      { name: 'Advanced AI models', included: true },
+      { name: 'Priority support', included: true },
+      { name: 'Pro AI calls', included: true },
+      { name: 'Community support', included: true },
+      { name: 'Enterprise features', included: false },
+    ],
+  },
+  founder: {
+    id: 'founder',
+    name: 'Founder',
+    displayName: 'Founder Plan',
+    price: {
+      monthly: 50,
+      currency: 'USD',
+      formatted: '$50',
+    },
+    badge: {
+      text: 'Best Value',
+      variant: 'outline',
+      className: 'bg-emerald-500 text-white border-emerald-500',
+    },
+    icon: Star,
+    iconColor: 'text-emerald-500',
+    accentColor: 'border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/20',
+    description: 'For power users who want maximum value',
+    stripePriceId: STRIPE_PRICE_ID_FOUNDER,
+    limits: {
+      aiCalls: 500,
+      pro: 100,
+      storage: {
+        bytes: 10 * 1024 * 1024 * 1024, // 10GB
+        formatted: '10GB',
+      },
+      maxFileSize: {
+        bytes: 50 * 1024 * 1024, // 50MB
+        formatted: '50MB',
+      },
+    },
+    features: [
+      { name: '500 AI calls per day', included: true, description: '10x more than Free' },
+      { name: '100 Pro AI calls', included: true, description: 'Advanced AI reasoning' },
+      { name: '10GB storage', included: true, description: '20x more than Free' },
       { name: '50MB max file size', included: true, description: '2.5x larger files' },
       { name: 'Priority processing', included: true },
       { name: 'Advanced AI models', included: true },
@@ -145,24 +184,18 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     name: 'Business',
     displayName: 'Business Plan',
     price: {
-      monthly: 199.99,
+      monthly: 100,
       currency: 'USD',
-      formatted: '$199.99',
-    },
-    badge: {
-      text: 'Best Value',
-      variant: 'outline',
-      className: 'bg-purple-500 text-white border-purple-500',
+      formatted: '$100',
     },
     icon: Shield,
     iconColor: 'text-purple-500',
     accentColor: 'border-purple-200 bg-purple-50 dark:border-purple-800 dark:bg-purple-950/20',
     description: 'Enterprise-grade features for large teams',
-    stripePaymentLink: STRIPE_BUSINESS_PAYMENT_LINK,
     stripePriceId: STRIPE_PRICE_ID_BUSINESS,
     limits: {
-      aiCalls: 500,
-      pro: 100,
+      aiCalls: 1000,
+      pro: 500,
       storage: {
         bytes: 50 * 1024 * 1024 * 1024, // 50GB
         formatted: '50GB',
@@ -173,8 +206,8 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
       },
     },
     features: [
-      { name: '500 AI calls per day', included: true, description: '25x more than Free' },
-      { name: '100 Pro AI calls', included: true, description: 'Maximum AI reasoning' },
+      { name: '1000 AI calls per day', included: true, description: '20x more than Free' },
+      { name: '500 Pro AI calls', included: true, description: 'Maximum AI reasoning' },
       { name: '50GB storage', included: true, description: '100x more than Free' },
       { name: '100MB max file size', included: true, description: '5x larger files' },
       { name: 'Enterprise processing', included: true },
@@ -187,7 +220,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
   },
 };
 
-export const PLAN_ORDER: SubscriptionTier[] = ['free', 'pro', 'business'];
+export const PLAN_ORDER: SubscriptionTier[] = ['free', 'pro', 'founder', 'business'];
 
 export function getPlan(tier: SubscriptionTier): PlanDefinition {
   return PLANS[tier] || PLANS['free'];

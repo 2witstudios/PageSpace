@@ -3,8 +3,8 @@
  * This replaces the complex sync logic with simple computed values
  */
 
-export type SubscriptionTier = 'free' | 'pro' | 'business';
-export type StorageTier = 'free' | 'pro' | 'business';
+export type SubscriptionTier = 'free' | 'pro' | 'founder' | 'business';
+export type StorageTier = 'free' | 'pro' | 'founder' | 'business';
 
 export interface StorageConfig {
   tier: StorageTier;
@@ -20,6 +20,7 @@ export interface StorageConfig {
  */
 export function getStorageTierFromSubscription(subscriptionTier: SubscriptionTier): StorageTier {
   if (subscriptionTier === 'business') return 'business';
+  if (subscriptionTier === 'founder') return 'founder';
   if (subscriptionTier === 'pro') return 'pro';
   return 'free';
 }
@@ -29,8 +30,9 @@ export function getStorageTierFromSubscription(subscriptionTier: SubscriptionTie
  */
 export function getStorageQuotaFromSubscription(subscriptionTier: SubscriptionTier): number {
   if (subscriptionTier === 'business') return 50 * 1024 * 1024 * 1024; // 50GB for business
-  if (subscriptionTier === 'pro') return 2 * 1024 * 1024 * 1024;      // 2GB for pro
-  return 500 * 1024 * 1024;                                          // 500MB for free
+  if (subscriptionTier === 'founder') return 10 * 1024 * 1024 * 1024;  // 10GB for founder
+  if (subscriptionTier === 'pro') return 2 * 1024 * 1024 * 1024;       // 2GB for pro
+  return 500 * 1024 * 1024;                                            // 500MB for free
 }
 
 /**
@@ -45,6 +47,17 @@ export function getStorageConfigFromSubscription(subscriptionTier: SubscriptionT
       maxConcurrentUploads: 10,
       maxFileCount: 5000,
       features: ['50GB storage', '100MB per file']
+    };
+  }
+
+  if (subscriptionTier === 'founder') {
+    return {
+      tier: 'founder',
+      quotaBytes: 10 * 1024 * 1024 * 1024,    // 10GB
+      maxFileSize: 50 * 1024 * 1024,          // 50MB
+      maxConcurrentUploads: 3,
+      maxFileCount: 500,
+      features: ['10GB storage', '50MB per file']
     };
   }
 

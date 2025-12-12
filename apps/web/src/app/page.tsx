@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { GitMerge, Folder, Code, MessageSquare, Check, Shield, Zap, Users, HardDrive } from "lucide-react";
+import { GitMerge, Folder, Code, MessageSquare, Shield, Zap, Users, HardDrive } from "lucide-react";
 import AuthButtons from "@/components/shared/AuthButtons";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -83,13 +83,19 @@ export default function Home() {
       },
       {
         "@type": "Offer",
-        "price": "29.99",
+        "price": "15",
         "priceCurrency": "USD",
         "name": "Pro Plan"
       },
       {
         "@type": "Offer",
-        "price": "199.99",
+        "price": "50",
+        "priceCurrency": "USD",
+        "name": "Founder Plan"
+      },
+      {
+        "@type": "Offer",
+        "price": "100",
         "priceCurrency": "USD",
         "name": "Business Plan"
       }
@@ -219,111 +225,122 @@ export default function Home() {
                   Choose Your PageSpace Plan
                 </h2>
                 <p className="mx-auto max-w-[800px] text-lg text-muted-foreground md:text-xl">
-                  Start free, upgrade to Pro, or scale to enterprise deployment.
+                  Start free with full features, upgrade for more AI calls and storage.
                 </p>
               </div>
+
+              {/* Free Tier - Full Width */}
+              <Card className="w-full max-w-4xl border-2 hover:border-primary/50 transition-colors">
+                <CardHeader className="text-center">
+                  <Badge variant="secondary" className="w-fit mx-auto mb-2">Always Free</Badge>
+                  <CardTitle className="text-2xl">Start with PageSpace Free</CardTitle>
+                  <CardDescription>Full features with daily limits - upgrade anytime</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-6 text-sm">
+                    <div className="flex flex-col items-center gap-2 text-center">
+                      <HardDrive className="w-5 h-5 text-primary" />
+                      <span>500MB storage</span>
+                    </div>
+                    <div className="flex flex-col items-center gap-2 text-center">
+                      <Zap className="w-5 h-5 text-primary" />
+                      <span>50 daily AI calls</span>
+                    </div>
+                    <div className="flex flex-col items-center gap-2 text-center">
+                      <Code className="w-5 h-5 text-primary" />
+                      <span>Your own API keys (unlimited)</span>
+                    </div>
+                    <div className="flex flex-col items-center gap-2 text-center">
+                      <Users className="w-5 h-5 text-primary" />
+                      <span>Real-time collaboration</span>
+                    </div>
+                    <div className="flex flex-col items-center gap-2 text-center">
+                      <GitMerge className="w-5 h-5 text-primary" />
+                      <span>Hierarchical AI agents</span>
+                    </div>
+                  </div>
+                </CardContent>
+                <CardFooter className="justify-center">
+                  <Button asChild variant="outline" size="lg">
+                    <Link href="/auth/signup">Get Started Free</Link>
+                  </Button>
+                </CardFooter>
+              </Card>
+
+              {/* Paid Tiers - 3 Column Grid */}
               <div className="grid gap-8 lg:grid-cols-3 max-w-6xl w-full">
-                {/* Free Tier */}
+                {/* Pro Tier */}
                 <Card className="relative border-2 hover:border-primary/50 transition-colors flex flex-col">
                   <CardHeader>
                     <div className="flex items-center justify-between">
-                      <Badge variant="secondary">Get Started</Badge>
+                      <Badge variant="secondary">Pro</Badge>
                       <div className="text-right">
-                        <div className="text-3xl font-bold">Free</div>
-                      </div>
-                    </div>
-                    <CardTitle>Free</CardTitle>
-                    <CardDescription>
-                      Full PageSpace features with daily limits
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-4 flex-grow">
-                    <ul className="space-y-3">
-                      <li className="flex items-center gap-3">
-                        <Check className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>500MB storage</span>
-                      </li>
-                      <li className="flex items-center gap-3">
-                        <Zap className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>20 daily PageSpace AI calls</span>
-                      </li>
-                      <li className="flex items-center gap-3">
-                        <Code className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>Bring your own AI API keys</span>
-                      </li>
-                      <li className="flex items-center gap-3">
-                        <Users className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>Real-time collaboration</span>
-                      </li>
-                      <li className="flex items-center gap-3">
-                        <GitMerge className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>Hierarchical AI agents</span>
-                      </li>
-                    </ul>
-                    <div className="pt-4 border-t">
-                      <p className="text-sm text-muted-foreground">
-                        Perfect for trying out PageSpace
-                      </p>
-                    </div>
-                  </CardContent>
-                  <CardFooter>
-                    <Button asChild variant="outline" className="w-full" size="lg">
-                      <Link href="/auth/signup">
-                        Get Started
-                      </Link>
-                    </Button>
-                  </CardFooter>
-                </Card>
-
-                {/* Pro Tier */}
-                <Card className="relative border-2 border-primary hover:border-primary/70 transition-colors flex flex-col">
-                  <CardHeader>
-                    <div className="flex items-center justify-between">
-                      <Badge variant="default">Most Popular</Badge>
-                      <div className="text-right">
-                        <div className="text-3xl font-bold">$29.99</div>
+                        <div className="text-3xl font-bold">$15</div>
                         <div className="text-sm text-muted-foreground">/month</div>
                       </div>
                     </div>
                     <CardTitle>Pro</CardTitle>
                     <CardDescription>
-                      Everything you need for individual productivity
+                      For individuals and freelancers
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4 flex-grow">
                     <ul className="space-y-3">
                       <li className="flex items-center gap-3">
-                        <Check className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>2GB storage for documents, PDFs, and images</span>
+                        <HardDrive className="w-5 h-5 text-primary flex-shrink-0" />
+                        <span>2GB storage</span>
                       </li>
                       <li className="flex items-center gap-3">
                         <Zap className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>100 daily PageSpace AI calls</span>
+                        <span>200 daily AI calls</span>
                       </li>
                       <li className="flex items-center gap-3">
                         <Shield className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>50 daily &quot;Pro AI&quot; sessions (advanced reasoning)</span>
-                      </li>
-                      <li className="flex items-center gap-3">
-                        <Users className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>Real-time collaboration</span>
-                      </li>
-                      <li className="flex items-center gap-3">
-                        <GitMerge className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>Hierarchical AI agents</span>
+                        <span>50 daily Pro AI sessions</span>
                       </li>
                     </ul>
-                    <div className="pt-4 border-t">
-                      <p className="text-sm text-muted-foreground">
-                        Perfect for individuals, freelancers, and personal projects
-                      </p>
-                    </div>
                   </CardContent>
                   <CardFooter>
-                    <Button asChild className="w-full" size="lg">
-                      <Link href="/settings/billing">
-                        Get Started
-                      </Link>
+                    <Button asChild variant="outline" className="w-full" size="lg">
+                      <Link href="/settings/billing">Upgrade to Pro</Link>
+                    </Button>
+                  </CardFooter>
+                </Card>
+
+                {/* Founder Tier */}
+                <Card className="relative border-2 border-emerald-500 hover:border-emerald-400 transition-colors flex flex-col">
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <Badge className="bg-emerald-500 hover:bg-emerald-600">Best Value</Badge>
+                      <div className="text-right">
+                        <div className="text-3xl font-bold">$50</div>
+                        <div className="text-sm text-muted-foreground">/month</div>
+                      </div>
+                    </div>
+                    <CardTitle>Founder</CardTitle>
+                    <CardDescription>
+                      For power users who want maximum value
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4 flex-grow">
+                    <ul className="space-y-3">
+                      <li className="flex items-center gap-3">
+                        <HardDrive className="w-5 h-5 text-emerald-500 flex-shrink-0" />
+                        <span>10GB storage</span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                        <Zap className="w-5 h-5 text-emerald-500 flex-shrink-0" />
+                        <span>500 daily AI calls</span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                        <Shield className="w-5 h-5 text-emerald-500 flex-shrink-0" />
+                        <span>100 daily Pro AI sessions</span>
+                      </li>
+                    </ul>
+                  </CardContent>
+                  <CardFooter>
+                    <Button asChild className="w-full bg-emerald-500 hover:bg-emerald-600" size="lg">
+                      <Link href="/settings/billing">Upgrade to Founder</Link>
                     </Button>
                   </CardFooter>
                 </Card>
@@ -334,49 +351,34 @@ export default function Home() {
                     <div className="flex items-center justify-between">
                       <Badge variant="outline">Business</Badge>
                       <div className="text-right">
-                        <div className="text-3xl font-bold">$199.99</div>
+                        <div className="text-3xl font-bold">$100</div>
                         <div className="text-sm text-muted-foreground">/month</div>
                       </div>
                     </div>
                     <CardTitle>Business</CardTitle>
                     <CardDescription>
-                      High-volume usage for businesses and teams
+                      For teams and high-volume users
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4 flex-grow">
                     <ul className="space-y-3">
                       <li className="flex items-center gap-3">
                         <HardDrive className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>50GB storage for large projects</span>
+                        <span>50GB storage</span>
                       </li>
                       <li className="flex items-center gap-3">
                         <Zap className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>500 daily PageSpace AI calls</span>
+                        <span>1000 daily AI calls</span>
                       </li>
                       <li className="flex items-center gap-3">
                         <Shield className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>100 daily &quot;Pro AI&quot; sessions</span>
-                      </li>
-                      <li className="flex items-center gap-3">
-                        <Users className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>Real-time collaboration</span>
-                      </li>
-                      <li className="flex items-center gap-3">
-                        <GitMerge className="w-5 h-5 text-primary flex-shrink-0" />
-                        <span>Hierarchical AI agents</span>
+                        <span>500 daily Pro AI sessions</span>
                       </li>
                     </ul>
-                    <div className="pt-4 border-t">
-                      <p className="text-sm text-muted-foreground">
-                        Perfect for businesses and high-volume users
-                      </p>
-                    </div>
                   </CardContent>
                   <CardFooter>
                     <Button asChild variant="outline" className="w-full" size="lg">
-                      <Link href="/settings/billing">
-                        Get Started
-                      </Link>
+                      <Link href="/settings/billing">Upgrade to Business</Link>
                     </Button>
                   </CardFooter>
                 </Card>

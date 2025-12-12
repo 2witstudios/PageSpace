@@ -14,15 +14,17 @@ const verboseUsageLogging = process.env.AI_DEBUG_LOGGING === 'true' || process.e
  */
 export function getUsageLimits(subscriptionTier: string, providerType: ProviderType): number {
   if (providerType === 'standard') {
-    // Free tier: 20 calls/day, Pro tier: 100 calls/day, Business tier: 500 calls/day
-    if (subscriptionTier === 'business') return 500;
-    if (subscriptionTier === 'pro') return 100;
-    return 20; // free tier
+    // Standard AI calls per day by tier
+    if (subscriptionTier === 'business') return 1000;
+    if (subscriptionTier === 'founder') return 500;
+    if (subscriptionTier === 'pro') return 200;
+    return 50; // free tier
   }
 
   if (providerType === 'pro') {
-    // Pro AI: 0 calls for free, 50 calls for pro, 100 calls for business
-    if (subscriptionTier === 'business') return 100;
+    // Pro AI calls per day by tier
+    if (subscriptionTier === 'business') return 500;
+    if (subscriptionTier === 'founder') return 100;
     if (subscriptionTier === 'pro') return 50;
     return 0; // free tier
   }

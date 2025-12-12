@@ -23,13 +23,13 @@ export function PlanComparisonTable({
       <div className="text-center space-y-2">
         <h2 className="text-3xl font-bold">Choose Your Plan</h2>
         <p className="text-muted-foreground max-w-2xl mx-auto">
-          Upgrade to Pro or Business for more AI calls, storage, and advanced features.
+          Upgrade to Pro, Founder, or Business for more AI calls, storage, and advanced features.
           All plans include your own API key support with no limits.
         </p>
       </div>
 
       {/* Responsive Layout */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         {plans.map((plan) => (
           <PlanCard
             key={plan.id}
@@ -169,14 +169,14 @@ export function PlanComparisonTable({
             <h4 className="font-medium mb-2">What is Pro AI?</h4>
             <p className="text-sm text-muted-foreground">
               Pro AI enables advanced AI reasoning capabilities for complex problems.
-              Available for Pro (50/day) and Business (100/day) users.
+              Available for Pro (50/day), Founder (100/day), and Business (500/day) users.
             </p>
           </div>
 
           <div>
             <h4 className="font-medium mb-2">Can I cancel anytime?</h4>
             <p className="text-sm text-muted-foreground">
-              Yes! You can cancel your Pro or Business subscription anytime through the billing portal.
+              Yes! You can cancel your subscription anytime through the billing portal.
               You&apos;ll keep your paid features until the end of your current billing period.
             </p>
           </div>

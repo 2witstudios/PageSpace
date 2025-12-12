@@ -1,11 +1,19 @@
 'use client';
 
-import { loadStripe } from '@stripe/stripe-js';
+import { loadStripe, Stripe } from '@stripe/stripe-js';
 import { Elements } from '@stripe/react-stripe-js';
 import type { StripeElementsOptions } from '@stripe/stripe-js';
+import { stripeConfig } from '@/lib/stripe-config';
 
-// Initialize Stripe outside component to avoid recreating on every render
-const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!);
+// Lazy-load Stripe to prevent crashes if key is missing
+let stripePromise: Promise<Stripe | null> | null = null;
+
+function getStripe(): Promise<Stripe | null> | null {
+  if (!stripePromise && stripeConfig.publishableKey) {
+    stripePromise = loadStripe(stripeConfig.publishableKey);
+  }
+  return stripePromise;
+}
 
 interface StripeProviderProps {
   children: React.ReactNode;
@@ -25,7 +33,7 @@ interface StripeProviderProps {
  */
 export function StripeProvider({ children, options }: StripeProviderProps) {
   return (
-    <Elements stripe={stripePromise} options={options}>
+    <Elements stripe={getStripe()} options={options}>
       {children}
     </Elements>
   );
@@ -36,5 +44,5 @@ export function StripeProvider({ children, options }: StripeProviderProps) {
  * Useful when you need Stripe outside of Elements context.
  */
 export function useStripePromise() {
-  return stripePromise;
+  return getStripe();
 }
