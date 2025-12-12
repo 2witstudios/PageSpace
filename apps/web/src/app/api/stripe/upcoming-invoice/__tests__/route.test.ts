@@ -37,22 +37,43 @@ vi.mock('@/lib/stripe', () => ({
   },
 }));
 
-// Mock database
-const mockSelectWhere = vi.fn();
-let selectCallCount = 0;
+// Mock database - use vi.hoisted for variables used in vi.mock
+const {
+  mockUserQuery,
+  mockSubscriptionQuery,
+  usersTable,
+  subscriptionsTable,
+} = vi.hoisted(() => ({
+  mockUserQuery: vi.fn(),
+  mockSubscriptionQuery: vi.fn(),
+  usersTable: Symbol('users'),
+  subscriptionsTable: Symbol('subscriptions'),
+}));
 
 vi.mock('@pagespace/db', () => {
   return {
     db: {
       select: vi.fn(() => ({
-        from: vi.fn(() => ({
-          where: mockSelectWhere,
-        })),
+        from: vi.fn((table: symbol) => {
+          if (table === usersTable) {
+            return { where: mockUserQuery };
+          }
+          return {
+            where: vi.fn(() => ({
+              orderBy: vi.fn(() => ({
+                limit: mockSubscriptionQuery,
+              })),
+            })),
+          };
+        }),
       })),
     },
-    users: {},
-    subscriptions: {},
+    users: usersTable,
+    subscriptions: subscriptionsTable,
     eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
+    and: vi.fn((...args: unknown[]) => ({ args, type: 'and' })),
+    inArray: vi.fn((field: unknown, values: unknown) => ({ field, values, type: 'inArray' })),
+    desc: vi.fn((field: unknown) => ({ field, type: 'desc' })),
   };
 });
 
@@ -93,9 +114,11 @@ const mockUser = (overrides: Partial<{
 const mockSubscription = (overrides: Partial<{
   userId: string;
   stripeSubscriptionId: string | null;
+  status: string;
 }> = {}) => ({
   userId: overrides.userId ?? 'user_123',
   stripeSubscriptionId: 'stripeSubscriptionId' in overrides ? overrides.stripeSubscriptionId : 'sub_123',
+  status: overrides.status ?? 'active',
 });
 
 // Helper to create mock Stripe subscription (from Stripe API)
@@ -157,20 +180,14 @@ describe('Upcoming Invoice API', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    selectCallCount = 0;
 
     // Setup default auth success
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
 
-    // Setup default sequential database responses
-    mockSelectWhere.mockImplementation(() => {
-      selectCallCount++;
-      if (selectCallCount === 1) {
-        return Promise.resolve([mockUser()]);
-      }
-      return Promise.resolve([mockSubscription()]);
-    });
+    // Setup default database responses
+    mockUserQuery.mockResolvedValue([mockUser()]);
+    mockSubscriptionQuery.mockResolvedValue([mockSubscription()]);
 
     // Setup default Stripe mocks
     mockStripeInvoicesCreatePreview.mockResolvedValue(mockInvoicePreview());
@@ -192,7 +209,7 @@ describe('Upcoming Invoice API', () => {
     });
 
     it('should return 404 when user not found', async () => {
-      mockSelectWhere.mockResolvedValue([]);
+      mockUserQuery.mockResolvedValue([]);
 
       const request = new Request('https://example.com/api/stripe/upcoming-invoice', {
         method: 'GET',
@@ -206,7 +223,7 @@ describe('Upcoming Invoice API', () => {
     });
 
     it('should return null invoice when user has no Stripe customer', async () => {
-      mockSelectWhere.mockResolvedValue([mockUser({ stripeCustomerId: null })]);
+      mockUserQuery.mockResolvedValue([mockUser({ stripeCustomerId: null })]);
 
       const request = new Request('https://example.com/api/stripe/upcoming-invoice', {
         method: 'GET',
@@ -221,14 +238,8 @@ describe('Upcoming Invoice API', () => {
     });
 
     it('should return null invoice when user has no subscription', async () => {
-      selectCallCount = 0;
-      mockSelectWhere.mockImplementation(() => {
-        selectCallCount++;
-        if (selectCallCount === 1) {
-          return Promise.resolve([mockUser()]);
-        }
-        return Promise.resolve([]); // No subscription
-      });
+      mockUserQuery.mockResolvedValue([mockUser()]);
+      mockSubscriptionQuery.mockResolvedValue([]); // No subscription
 
       const request = new Request('https://example.com/api/stripe/upcoming-invoice', {
         method: 'GET',
@@ -243,14 +254,8 @@ describe('Upcoming Invoice API', () => {
     });
 
     it('should return null invoice when subscription has no Stripe ID', async () => {
-      selectCallCount = 0;
-      mockSelectWhere.mockImplementation(() => {
-        selectCallCount++;
-        if (selectCallCount === 1) {
-          return Promise.resolve([mockUser()]);
-        }
-        return Promise.resolve([mockSubscription({ stripeSubscriptionId: null })]);
-      });
+      mockUserQuery.mockResolvedValue([mockUser()]);
+      mockSubscriptionQuery.mockResolvedValue([mockSubscription({ stripeSubscriptionId: null })]);
 
       const request = new Request('https://example.com/api/stripe/upcoming-invoice', {
         method: 'GET',

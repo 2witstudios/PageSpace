@@ -27,15 +27,22 @@ vi.mock('@/lib/stripe', () => ({
   },
 }));
 
-// Mock database
-const mockUserQuery = vi.fn();
-const mockSubscriptionQuery = vi.fn();
-const mockUpdateWhere = vi.fn();
-const mockUpdateSet = vi.fn();
-
-// Symbols to identify table types
-const usersTable = Symbol('users');
-const subscriptionsTable = Symbol('subscriptions');
+// Mock database - use vi.hoisted for variables used in vi.mock
+const {
+  mockUserQuery,
+  mockSubscriptionQuery,
+  mockUpdateWhere,
+  mockUpdateSet,
+  usersTable,
+  subscriptionsTable,
+} = vi.hoisted(() => ({
+  mockUserQuery: vi.fn(),
+  mockSubscriptionQuery: vi.fn(),
+  mockUpdateWhere: vi.fn(),
+  mockUpdateSet: vi.fn(),
+  usersTable: Symbol('users'),
+  subscriptionsTable: Symbol('subscriptions'),
+}));
 
 vi.mock('@pagespace/db', () => {
   return {

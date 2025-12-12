@@ -44,24 +44,39 @@ vi.mock('@/lib/stripe', () => ({
   },
 }));
 
-// Mock database
-const mockSelectWhere = vi.fn();
+// Mock database - use vi.hoisted for variables used in vi.mock
+const {
+  mockUserQuery,
+  mockSubscriptionQuery,
+  usersTable,
+  subscriptionsTable,
+} = vi.hoisted(() => ({
+  mockUserQuery: vi.fn(),
+  mockSubscriptionQuery: vi.fn(),
+  usersTable: Symbol('users'),
+  subscriptionsTable: Symbol('subscriptions'),
+}));
 
 vi.mock('@pagespace/db', () => {
   return {
     db: {
       select: vi.fn(() => ({
-        from: vi.fn(() => ({
-          where: vi.fn(() => ({
-            orderBy: vi.fn(() => ({
-              limit: mockSelectWhere,
+        from: vi.fn((table: symbol) => {
+          if (table === usersTable) {
+            return { where: mockUserQuery };
+          }
+          return {
+            where: vi.fn(() => ({
+              orderBy: vi.fn(() => ({
+                limit: mockSubscriptionQuery,
+              })),
             })),
-          })),
-        })),
+          };
+        }),
       })),
     },
-    users: {},
-    subscriptions: {},
+    users: usersTable,
+    subscriptions: subscriptionsTable,
     eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
     and: vi.fn((...args: unknown[]) => ({ args, type: 'and' })),
     inArray: vi.fn((field: unknown, values: unknown) => ({ field, values, type: 'inArray' })),
@@ -148,15 +163,8 @@ describe('POST /api/stripe/update-subscription', () => {
     vi.mocked(isAuthError).mockReturnValue(false);
 
     // Setup default database responses
-    // First call returns user, second returns subscription
-    let selectCallCount = 0;
-    mockSelectWhere.mockImplementation(() => {
-      selectCallCount++;
-      if (selectCallCount === 1) {
-        return Promise.resolve([mockUser()]);
-      }
-      return Promise.resolve([mockDbSubscription()]);
-    });
+    mockUserQuery.mockResolvedValue([mockUser()]);
+    mockSubscriptionQuery.mockResolvedValue([mockDbSubscription()]);
 
     // Setup default Stripe mocks
     mockStripeSubscriptionsRetrieve.mockResolvedValue(mockStripeSubscription());
@@ -272,7 +280,7 @@ describe('POST /api/stripe/update-subscription', () => {
     });
 
     it('should return 404 when user not found', async () => {
-      mockSelectWhere.mockResolvedValue([]);
+      mockUserQuery.mockResolvedValue([]);
 
       const request = new Request('https://example.com/api/stripe/update-subscription', {
         method: 'POST',
@@ -287,9 +295,7 @@ describe('POST /api/stripe/update-subscription', () => {
     });
 
     it('should return 400 when no Stripe customer', async () => {
-      // User without stripeCustomerId - both calls return this same pattern
-      mockSelectWhere.mockReset();
-      mockSelectWhere.mockResolvedValue([mockUser({ stripeCustomerId: null })]);
+      mockUserQuery.mockResolvedValue([mockUser({ stripeCustomerId: null })]);
 
       const request = new Request('https://example.com/api/stripe/update-subscription', {
         method: 'POST',
@@ -304,14 +310,8 @@ describe('POST /api/stripe/update-subscription', () => {
     });
 
     it('should return 400 when no active subscription', async () => {
-      let selectCallCount = 0;
-      mockSelectWhere.mockImplementation(() => {
-        selectCallCount++;
-        if (selectCallCount === 1) {
-          return Promise.resolve([mockUser()]);
-        }
-        return Promise.resolve([]); // No subscription
-      });
+      mockUserQuery.mockResolvedValue([mockUser()]);
+      mockSubscriptionQuery.mockResolvedValue([]); // No subscription
 
       const request = new Request('https://example.com/api/stripe/update-subscription', {
         method: 'POST',
