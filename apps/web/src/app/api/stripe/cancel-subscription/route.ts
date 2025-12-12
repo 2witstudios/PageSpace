@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Stripe from 'stripe';
 import { db, eq, users, subscriptions } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { stripe, Stripe } from '@/lib/stripe';
+import { loggers } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -11,9 +12,6 @@ const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
  * User keeps access until the end of their billing period.
  */
 export async function POST(request: NextRequest) {
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-    apiVersion: '2025-08-27.basil',
-  });
 
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
@@ -45,7 +43,14 @@ export async function POST(request: NextRequest) {
     );
 
     // Get current_period_end from subscription item (properly typed in Stripe SDK v18)
-    const currentPeriodEnd = subscription.items.data[0].current_period_end;
+    const firstItem = subscription.items?.data?.[0];
+    if (!firstItem) {
+      return NextResponse.json(
+        { error: 'Subscription has no items' },
+        { status: 400 }
+      );
+    }
+    const currentPeriodEnd = firstItem.current_period_end;
 
     // Update local record
     await db.update(subscriptions)
@@ -60,7 +65,7 @@ export async function POST(request: NextRequest) {
     });
 
   } catch (error) {
-    console.error('Error cancelling subscription:', error);
+    loggers.api.error('Error cancelling subscription', error instanceof Error ? error : undefined, { error });
 
     if (error instanceof Stripe.errors.StripeError) {
       return NextResponse.json(

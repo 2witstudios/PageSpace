@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Stripe from 'stripe';
 import { db, eq, users } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { stripe, Stripe } from '@/lib/stripe';
+import { loggers } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: false };
 
@@ -13,9 +14,6 @@ const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: false };
  * - starting_after: string (invoice ID for pagination)
  */
 export async function GET(request: NextRequest) {
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-    apiVersion: '2025-08-27.basil',
-  });
 
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
@@ -66,7 +64,7 @@ export async function GET(request: NextRequest) {
     });
 
   } catch (error) {
-    console.error('Error listing invoices:', error);
+    loggers.api.error('Error listing invoices', error instanceof Error ? error : undefined);
 
     if (error instanceof Stripe.errors.StripeError) {
       return NextResponse.json(

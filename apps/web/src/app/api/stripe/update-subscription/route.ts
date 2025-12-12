@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Stripe from 'stripe';
 import { db, eq, users, subscriptions } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { stripe, Stripe } from '@/lib/stripe';
+import { loggers } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -12,9 +13,6 @@ const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
  * - Downgrades: Scheduled at period end (no proration)
  */
 export async function POST(request: NextRequest) {
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-    apiVersion: '2025-08-27.basil',
-  });
 
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
@@ -135,7 +133,7 @@ export async function POST(request: NextRequest) {
             id: currentItemId,
             price: priceId,
           }],
-          proration_behavior: 'create_prorations',
+          proration_behavior: 'always_invoice',
         }
       );
 
@@ -147,7 +145,7 @@ export async function POST(request: NextRequest) {
     }
 
   } catch (error) {
-    console.error('Error updating subscription:', error);
+    loggers.api.error('Error updating subscription', error instanceof Error ? error : undefined);
 
     if (error instanceof Stripe.errors.StripeError) {
       return NextResponse.json(

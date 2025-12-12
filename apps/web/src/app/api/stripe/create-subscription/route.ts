@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Stripe from 'stripe';
 import { db, eq, users } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { stripe, Stripe } from '@/lib/stripe';
+import { loggers } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -11,9 +12,6 @@ const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
  * Returns clientSecret for PaymentElement confirmation.
  */
 export async function POST(request: NextRequest) {
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-    apiVersion: '2025-08-27.basil',
-  });
 
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
@@ -44,7 +42,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Get or create Stripe customer
+    // Get or create Stripe customer with rollback on failure
     let customerId = user.stripeCustomerId;
 
     if (!customerId) {
@@ -55,9 +53,15 @@ export async function POST(request: NextRequest) {
       });
       customerId = customer.id;
 
-      await db.update(users)
-        .set({ stripeCustomerId: customerId, updatedAt: new Date() })
-        .where(eq(users.id, userId));
+      try {
+        await db.update(users)
+          .set({ stripeCustomerId: customerId, updatedAt: new Date() })
+          .where(eq(users.id, userId));
+      } catch (dbError) {
+        // Rollback: delete the orphaned Stripe customer
+        await stripe.customers.del(customerId);
+        throw dbError;
+      }
     }
 
     // Create subscription with incomplete status to collect payment
@@ -80,7 +84,7 @@ export async function POST(request: NextRequest) {
     const clientSecret = invoice.confirmation_secret?.client_secret;
 
     if (!clientSecret) {
-      console.error('No client secret found in confirmation_secret');
+      loggers.api.error('No client secret found in confirmation_secret', { subscriptionId: subscription.id });
       return NextResponse.json(
         { error: 'Failed to create payment intent' },
         { status: 500 }
@@ -94,7 +98,7 @@ export async function POST(request: NextRequest) {
     });
 
   } catch (error) {
-    console.error('Error creating subscription:', error);
+    loggers.api.error('Error creating subscription', error instanceof Error ? error : undefined, { error });
 
     if (error instanceof Stripe.errors.StripeError) {
       return NextResponse.json(

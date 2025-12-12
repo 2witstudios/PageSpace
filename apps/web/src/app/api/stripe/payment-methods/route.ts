@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Stripe from 'stripe';
 import { db, eq, users } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { stripe, Stripe } from '@/lib/stripe';
+import { loggers } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
@@ -11,9 +12,6 @@ const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
  * List all payment methods for the current user.
  */
 export async function GET(request: NextRequest) {
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-    apiVersion: '2025-08-27.basil',
-  });
 
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
@@ -57,7 +55,7 @@ export async function GET(request: NextRequest) {
     });
 
   } catch (error) {
-    console.error('Error listing payment methods:', error);
+    loggers.api.error('Error listing payment methods', error instanceof Error ? error : undefined);
     return NextResponse.json(
       { error: 'Failed to list payment methods' },
       { status: 500 }
@@ -71,9 +69,6 @@ export async function GET(request: NextRequest) {
  * Body: { paymentMethodId: string }
  */
 export async function DELETE(request: NextRequest) {
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-    apiVersion: '2025-08-27.basil',
-  });
 
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
@@ -118,7 +113,7 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ success: true });
 
   } catch (error) {
-    console.error('Error detaching payment method:', error);
+    loggers.api.error('Error detaching payment method', error instanceof Error ? error : undefined);
 
     if (error instanceof Stripe.errors.StripeError) {
       return NextResponse.json(
@@ -140,9 +135,6 @@ export async function DELETE(request: NextRequest) {
  * Body: { paymentMethodId: string }
  */
 export async function PATCH(request: NextRequest) {
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-    apiVersion: '2025-08-27.basil',
-  });
 
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
@@ -191,7 +183,7 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ success: true, defaultPaymentMethodId: paymentMethodId });
 
   } catch (error) {
-    console.error('Error setting default payment method:', error);
+    loggers.api.error('Error setting default payment method', error instanceof Error ? error : undefined);
 
     if (error instanceof Stripe.errors.StripeError) {
       return NextResponse.json(

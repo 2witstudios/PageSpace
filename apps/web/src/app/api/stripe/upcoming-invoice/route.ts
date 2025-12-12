@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Stripe from 'stripe';
 import { db, eq, users, subscriptions } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { stripe, Stripe } from '@/lib/stripe';
+import { loggers } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: false };
 
@@ -12,9 +13,6 @@ const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: false };
  * - priceId: (optional) New price ID to simulate plan change
  */
 export async function GET(request: NextRequest) {
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-    apiVersion: '2025-08-27.basil',
-  });
 
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
@@ -44,12 +42,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Build upcoming invoice params
-    const params: {
-      customer: string;
-      subscription: string;
-      subscription_items?: Array<{ id: string; price: string }>;
-      subscription_proration_behavior?: string;
-    } = {
+    const params: Stripe.InvoiceCreatePreviewParams = {
       customer: user.stripeCustomerId,
       subscription: currentSubscription.stripeSubscriptionId,
     };
@@ -62,16 +55,17 @@ export async function GET(request: NextRequest) {
       const currentItemId = subscription.items.data[0]?.id;
 
       if (currentItemId) {
-        params.subscription_items = [{
-          id: currentItemId,
-          price: newPriceId,
-        }];
-        params.subscription_proration_behavior = 'create_prorations';
+        params.subscription_details = {
+          items: [{
+            id: currentItemId,
+            price: newPriceId,
+          }],
+          proration_behavior: 'create_prorations',
+        };
       }
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const invoice = await (stripe.invoices as any).retrieveUpcoming(params) as Stripe.Invoice;
+    const invoice = await stripe.invoices.createPreview(params);
 
     // Extended line item type for proration property
     type LineItemWithProration = Stripe.InvoiceLineItem & { proration?: boolean };
@@ -116,7 +110,7 @@ export async function GET(request: NextRequest) {
     });
 
   } catch (error) {
-    console.error('Error fetching upcoming invoice:', error);
+    loggers.api.error('Error fetching upcoming invoice', error instanceof Error ? error : undefined);
 
     if (error instanceof Stripe.errors.StripeError) {
       // No upcoming invoice is common for cancelled subscriptions

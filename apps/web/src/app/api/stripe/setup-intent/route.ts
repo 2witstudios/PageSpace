@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Stripe from 'stripe';
 import { db, eq, users } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { stripe, Stripe } from '@/lib/stripe';
+import { loggers } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -11,9 +12,6 @@ const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
  * Returns clientSecret for PaymentElement.
  */
 export async function POST(request: NextRequest) {
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-    apiVersion: '2025-08-27.basil',
-  });
 
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
@@ -26,7 +24,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    // Get or create customer
+    // Get or create customer with rollback on failure
     let customerId = user.stripeCustomerId;
     if (!customerId) {
       const customer = await stripe.customers.create({
@@ -36,9 +34,15 @@ export async function POST(request: NextRequest) {
       });
       customerId = customer.id;
 
-      await db.update(users)
-        .set({ stripeCustomerId: customerId, updatedAt: new Date() })
-        .where(eq(users.id, userId));
+      try {
+        await db.update(users)
+          .set({ stripeCustomerId: customerId, updatedAt: new Date() })
+          .where(eq(users.id, userId));
+      } catch (dbError) {
+        // Rollback: delete the orphaned Stripe customer
+        await stripe.customers.del(customerId);
+        throw dbError;
+      }
     }
 
     // Create SetupIntent
@@ -53,7 +57,7 @@ export async function POST(request: NextRequest) {
     });
 
   } catch (error) {
-    console.error('Error creating setup intent:', error);
+    loggers.api.error('Error creating setup intent', error instanceof Error ? error : undefined);
 
     if (error instanceof Stripe.errors.StripeError) {
       return NextResponse.json(

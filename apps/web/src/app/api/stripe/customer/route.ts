@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Stripe from 'stripe';
 import { db, eq, users } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { stripe } from '@/lib/stripe';
+import { loggers } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -10,9 +11,6 @@ const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
  * Get current user's Stripe customer details
  */
 export async function GET(request: NextRequest) {
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-    apiVersion: '2025-08-27.basil',
-  });
 
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
@@ -51,7 +49,7 @@ export async function GET(request: NextRequest) {
     });
 
   } catch (error) {
-    console.error('Error fetching Stripe customer:', error);
+    loggers.api.error('Error fetching Stripe customer', error instanceof Error ? error : undefined);
     return NextResponse.json(
       { error: 'Failed to fetch customer' },
       { status: 500 }
@@ -64,9 +62,6 @@ export async function GET(request: NextRequest) {
  * Create or get Stripe customer for current user
  */
 export async function POST(request: NextRequest) {
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-    apiVersion: '2025-08-27.basil',
-  });
 
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
@@ -109,10 +104,16 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // Save customer ID to user
-    await db.update(users)
-      .set({ stripeCustomerId: customer.id, updatedAt: new Date() })
-      .where(eq(users.id, userId));
+    // Save customer ID to user with rollback on failure
+    try {
+      await db.update(users)
+        .set({ stripeCustomerId: customer.id, updatedAt: new Date() })
+        .where(eq(users.id, userId));
+    } catch (dbError) {
+      // Rollback: delete the orphaned Stripe customer
+      await stripe.customers.del(customer.id);
+      throw dbError;
+    }
 
     return NextResponse.json({
       customer: {
@@ -126,7 +127,7 @@ export async function POST(request: NextRequest) {
     });
 
   } catch (error) {
-    console.error('Error creating Stripe customer:', error);
+    loggers.api.error('Error creating Stripe customer', error instanceof Error ? error : undefined);
     return NextResponse.json(
       { error: 'Failed to create customer' },
       { status: 500 }

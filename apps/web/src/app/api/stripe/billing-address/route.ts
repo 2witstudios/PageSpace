@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Stripe from 'stripe';
 import { db, eq, users } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { stripe, Stripe } from '@/lib/stripe';
+import { loggers } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
@@ -11,9 +12,6 @@ const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
  * Get the billing address for the current user.
  */
 export async function GET(request: NextRequest) {
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-    apiVersion: '2025-08-27.basil',
-  });
 
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
@@ -43,7 +41,7 @@ export async function GET(request: NextRequest) {
     });
 
   } catch (error) {
-    console.error('Error fetching billing address:', error);
+    loggers.api.error('Error fetching billing address', error instanceof Error ? error : undefined);
     return NextResponse.json(
       { error: 'Failed to fetch billing address' },
       { status: 500 }
@@ -57,9 +55,6 @@ export async function GET(request: NextRequest) {
  * Body: { name?: string, address: { line1, line2?, city, state, postal_code, country } }
  */
 export async function PUT(request: NextRequest) {
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-    apiVersion: '2025-08-27.basil',
-  });
 
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
@@ -83,7 +78,7 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    // Get or create customer
+    // Get or create customer with rollback on failure
     let customerId = user.stripeCustomerId;
     if (!customerId) {
       const customer = await stripe.customers.create({
@@ -101,9 +96,15 @@ export async function PUT(request: NextRequest) {
       });
       customerId = customer.id;
 
-      await db.update(users)
-        .set({ stripeCustomerId: customerId, updatedAt: new Date() })
-        .where(eq(users.id, userId));
+      try {
+        await db.update(users)
+          .set({ stripeCustomerId: customerId, updatedAt: new Date() })
+          .where(eq(users.id, userId));
+      } catch (dbError) {
+        // Rollback: delete the orphaned Stripe customer
+        await stripe.customers.del(customerId);
+        throw dbError;
+      }
 
       return NextResponse.json({
         success: true,
@@ -132,7 +133,7 @@ export async function PUT(request: NextRequest) {
     });
 
   } catch (error) {
-    console.error('Error updating billing address:', error);
+    loggers.api.error('Error updating billing address', error instanceof Error ? error : undefined);
 
     if (error instanceof Stripe.errors.StripeError) {
       return NextResponse.json(
