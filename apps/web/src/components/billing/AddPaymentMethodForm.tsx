@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { toast } from 'sonner';
 import { useStripe, useElements, PaymentElement } from '@stripe/react-stripe-js';
 import {
   Dialog,
@@ -145,6 +146,7 @@ export function AddPaymentMethodForm({
 
   const handleSuccess = () => {
     setClientSecret(null);
+    toast.success('Card added successfully');
     onSuccess();
     onOpenChange(false);
   };
@@ -161,6 +163,10 @@ export function AddPaymentMethodForm({
           <DialogTitle>Add Payment Method</DialogTitle>
           <DialogDescription>
             Add a new card to your account for future payments.
+            <br />
+            <span className="text-xs text-muted-foreground mt-1 block">
+              Note: Adding the same card again will create a new entry.
+            </span>
           </DialogDescription>
         </DialogHeader>
 

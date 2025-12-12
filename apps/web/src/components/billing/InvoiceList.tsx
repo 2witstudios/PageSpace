@@ -103,6 +103,7 @@ export function InvoiceList({
                   variant="ghost"
                   size="sm"
                   onClick={() => window.open(invoice.hostedInvoiceUrl!, '_blank')}
+                  aria-label="View invoice online"
                 >
                   <ExternalLink className="h-4 w-4" />
                 </Button>
@@ -112,6 +113,7 @@ export function InvoiceList({
                   variant="ghost"
                   size="sm"
                   onClick={() => window.open(invoice.invoicePdf!, '_blank')}
+                  aria-label="Download invoice PDF"
                 >
                   <Download className="h-4 w-4" />
                 </Button>
