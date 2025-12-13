@@ -277,7 +277,7 @@ export default function PlanPage() {
                 appearance: {
                   theme: resolvedTheme === 'dark' ? 'night' : 'stripe',
                   variables: {
-                    colorPrimary: '#0F172A',
+                    colorPrimary: resolvedTheme === 'dark' ? '#818cf8' : '#0F172A',
                   },
                 },
               }}

@@ -154,7 +154,13 @@ export function EmbeddedCheckoutForm({
                 <div className="text-2xl font-bold text-green-600 dark:text-green-400">
                   {formatAmount(discountedPriceCents)}
                 </div>
-                <div className="text-sm text-muted-foreground">per month</div>
+                <div className="text-sm text-muted-foreground">
+                  {appliedPromo.coupon.duration === 'once'
+                    ? 'for the first month'
+                    : appliedPromo.coupon.duration === 'repeating'
+                      ? `per month for ${appliedPromo.coupon.durationInMonths} months`
+                      : 'per month'}
+                </div>
               </>
             ) : (
               <>
