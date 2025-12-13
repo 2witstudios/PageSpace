@@ -189,6 +189,10 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
       currentPeriodStart,
       currentPeriodEnd,
       cancelAtPeriodEnd: subscription.cancel_at_period_end,
+      // Clear schedule fields on insert (schedule details set by update-subscription route)
+      stripeScheduleId: subscription.schedule ? String(subscription.schedule) : null,
+      scheduledPriceId: null,
+      scheduledChangeDate: null,
     }).onConflictDoUpdate({
       target: subscriptions.stripeSubscriptionId,
       set: {
@@ -196,6 +200,12 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
         currentPeriodStart,
         currentPeriodEnd,
         cancelAtPeriodEnd: subscription.cancel_at_period_end,
+        // Clear schedule fields if schedule was released/completed
+        ...(subscription.schedule === null && {
+          stripeScheduleId: null,
+          scheduledPriceId: null,
+          scheduledChangeDate: null,
+        }),
         updatedAt: new Date(),
       }
     });
