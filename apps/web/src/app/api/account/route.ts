@@ -3,10 +3,11 @@ import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createServiceToken, verifyServiceToken, type ServiceTokenClaims } from '@pagespace/lib/auth-utils';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
 
 export async function GET(req: Request) {
-  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_READ);
   if (isAuthError(auth)) {
     return auth.error;
   }
@@ -37,7 +38,7 @@ export async function GET(req: Request) {
 }
 
 export async function PATCH(req: Request) {
-  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) {
     return auth.error;
   }
@@ -135,7 +136,7 @@ async function createAvatarServiceToken(userId: string, expirationTime: string):
 }
 
 export async function DELETE(req: Request) {
-  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) {
     return auth.error;
   }

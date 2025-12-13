@@ -10,7 +10,8 @@ import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/api-utils';
 
-const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['jwt', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 
 // Content sanitization utility
 function sanitizeEmptyContent(content: string): string {
@@ -135,7 +136,7 @@ async function recursivelyTrash(pageId: string, tx: TransactionType | DatabaseTy
 
 export async function GET(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
   const { pageId } = await params;
-  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_READ);
   if (isAuthError(auth)) {
     return auth.error;
   }
@@ -194,7 +195,7 @@ const patchSchema = z.object({
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
   const { pageId } = await params;
-  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) {
     return auth.error;
   }
@@ -330,7 +331,7 @@ const deleteSchema = z.object({
 
 export async function DELETE(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
   const { pageId } = await params;
-  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) {
     return auth.error;
   }

@@ -3,7 +3,8 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, conversations, eq, and } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
 
 /**
  * GET - Get a specific conversation with its messages
@@ -13,7 +14,7 @@ export async function GET(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 
@@ -52,7 +53,7 @@ export async function PATCH(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 
@@ -95,7 +96,7 @@ export async function DELETE(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 

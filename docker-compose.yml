@@ -51,7 +51,11 @@ services:
       context: .
       dockerfile: apps/web/Dockerfile
       args:
+        # NEXT_PUBLIC_* vars must be passed at build time for Next.js to inline them
+        # Note: Stripe keys are hardcoded in stripe-config.ts to simplify builds
         - NEXT_PUBLIC_REALTIME_URL=${NEXT_PUBLIC_REALTIME_URL}
+        - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL}
+        - NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB=${NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB}
     ports:
       - "3000:3000"
     depends_on:

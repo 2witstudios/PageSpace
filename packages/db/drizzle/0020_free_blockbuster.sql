@@ -1,0 +1,1 @@
+CREATE INDEX IF NOT EXISTS "subscriptions_stripe_schedule_id_idx" ON "subscriptions" USING btree ("stripeScheduleId");

@@ -29,8 +29,15 @@ RUN corepack enable && corepack prepare pnpm@10.13.1 --activate
 COPY --from=deps /app .
 
 # Accept build arguments for Next.js environment variables
+# NEXT_PUBLIC_* vars must be available at build time for Next.js to inline them
+# Note: Stripe keys are hardcoded in stripe-config.ts to simplify Docker builds
 ARG NEXT_PUBLIC_REALTIME_URL
+ARG NEXT_PUBLIC_APP_URL
+ARG NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB
+
 ENV NEXT_PUBLIC_REALTIME_URL=$NEXT_PUBLIC_REALTIME_URL
+ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
+ENV NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB=$NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB
 
 # Next.js collects telemetry data by default.
 # Learn more here: https://nextjs.org/telemetry

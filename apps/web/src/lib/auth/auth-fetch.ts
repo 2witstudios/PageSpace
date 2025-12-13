@@ -628,8 +628,19 @@ class AuthFetch {
     });
 
     if (!response.ok) {
-      const error = await response.text().catch(() => 'Request failed');
-      throw new Error(error);
+      const text = await response.text().catch(() => 'Request failed');
+      // Try to parse JSON error response and extract error message
+      try {
+        const json = JSON.parse(text);
+        throw new Error(json.error || json.message || text);
+      } catch (parseError) {
+        // If parsing fails, it's not JSON - use the raw text
+        if (parseError instanceof SyntaxError) {
+          throw new Error(text);
+        }
+        // Re-throw if it's our Error from above
+        throw parseError;
+      }
     }
 
     return response.json();

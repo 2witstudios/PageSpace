@@ -134,6 +134,20 @@
       "when": 1764470978595,
       "tag": "0018_jazzy_kid_colt",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1765604970542,
+      "tag": "0019_dizzy_tinkerer",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1765606395898,
+      "tag": "0020_free_blockbuster",
+      "breakpoints": true
     }
   ]
 }

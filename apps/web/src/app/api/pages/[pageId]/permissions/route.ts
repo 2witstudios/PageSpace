@@ -7,10 +7,11 @@ import { z } from 'zod/v4';
 import { createPermissionNotification } from '@pagespace/lib';
 import { loggers } from '@pagespace/lib/server';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
 
 export async function GET(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
-  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_READ);
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
 
@@ -107,7 +108,7 @@ const postSchema = z.object({
 });
 
 export async function POST(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
-  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
   const currentUserId = auth.userId;
 
@@ -213,7 +214,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 }
 
 export async function DELETE(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
-  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
   const currentUserId = auth.userId;
 

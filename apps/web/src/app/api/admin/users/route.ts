@@ -1,15 +1,20 @@
-import { 
-  db, 
-  users, 
-  drives, 
-  pages, 
-  chatMessages, 
+import {
+  db,
+  users,
+  drives,
+  pages,
+  chatMessages,
   messages,
   refreshTokens,
   userAiSettings,
+  subscriptions,
   eq,
+
+  inArray,
+  desc,
   count
 } from '@pagespace/db';
+import { stripe } from '@/lib/stripe';
 import { loggers } from '@pagespace/lib/server';
 import { verifyAdminAuth } from '@/lib/auth';
 
@@ -17,7 +22,7 @@ export async function GET(request: Request) {
   try {
     // Verify user is authenticated and is an admin
     const adminUser = await verifyAdminAuth(request);
-    
+
     if (!adminUser) {
       return Response.json(
         { error: 'Unauthorized: Admin access required' },
@@ -36,9 +41,22 @@ export async function GET(request: Request) {
         currentAiModel: users.currentAiModel,
         tokenVersion: users.tokenVersion,
         subscriptionTier: users.subscriptionTier,
+        stripeCustomerId: users.stripeCustomerId,
       })
       .from(users)
       .orderBy(users.name);
+
+    // Get active subscriptions for all users
+    const activeSubscriptions = await db
+      .select()
+      .from(subscriptions)
+      .where(inArray(subscriptions.status, ['active', 'trialing']))
+      .orderBy(desc(subscriptions.updatedAt));
+
+    // Create a map of userId to subscription
+    const subscriptionsByUserId = new Map(
+      activeSubscriptions.map(sub => [sub.userId, sub])
+    );
 
     // Get stats for each user
     const usersWithStats = await Promise.all(
@@ -103,11 +121,41 @@ export async function GET(request: Request) {
       .from(refreshTokens)
       .orderBy(refreshTokens.createdAt);
 
+    // Fetch Stripe subscription details to check if gifted
+    const stripeSubscriptionDetails = new Map<string, { isGifted: boolean; giftedBy?: string; reason?: string }>();
+
+    // Batch fetch Stripe subscriptions for users with active subscriptions
+    const usersWithSubscriptions = allUsers.filter(user =>
+      subscriptionsByUserId.has(user.id)
+    );
+
+    await Promise.all(
+      usersWithSubscriptions.map(async (user) => {
+        const sub = subscriptionsByUserId.get(user.id);
+        if (sub) {
+          try {
+            const stripeSub = await stripe.subscriptions.retrieve(sub.stripeSubscriptionId);
+            const metadata = stripeSub.metadata || {};
+            stripeSubscriptionDetails.set(user.id, {
+              isGifted: metadata.type === 'gift_subscription',
+              giftedBy: metadata.giftedBy,
+              reason: metadata.reason,
+            });
+          } catch {
+            // Subscription may not exist in Stripe anymore
+            stripeSubscriptionDetails.set(user.id, { isGifted: false });
+          }
+        }
+      })
+    );
+
     // Combine the data
     const enrichedUsers = usersWithStats.map(user => {
       const userAiSettings = allAiSettings.filter(setting => setting.userId === user.id);
       const userTokens = recentTokens.filter(token => token.userId === user.id);
-      
+      const subscription = subscriptionsByUserId.get(user.id);
+      const stripeDetails = stripeSubscriptionDetails.get(user.id);
+
       return {
         ...user,
         stats: {
@@ -120,26 +168,36 @@ export async function GET(request: Request) {
           totalMessages: user.chatMessagesCount + user.globalMessagesCount
         },
         aiSettings: userAiSettings,
-        recentTokens: userTokens.slice(-3) // Last 3 tokens
+        recentTokens: userTokens.slice(-3), // Last 3 tokens
+        subscription: subscription ? {
+          id: subscription.id,
+          stripeSubscriptionId: subscription.stripeSubscriptionId,
+          status: subscription.status,
+          currentPeriodEnd: subscription.currentPeriodEnd,
+          cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
+          isGifted: stripeDetails?.isGifted || false,
+          giftedBy: stripeDetails?.giftedBy,
+          giftReason: stripeDetails?.reason,
+        } : null,
       };
     });
 
     // Remove the count fields from the response
     const cleanUsers = enrichedUsers.map((userData) => {
-      const { 
+      const {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        drivesCount, 
+        drivesCount,
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        pagesCount, 
+        pagesCount,
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        chatMessagesCount, 
+        chatMessagesCount,
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         globalMessagesCount,
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         refreshTokensCount,
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         aiSettingsCount,
-        ...user 
+        ...user
       } = userData;
       return user;
     });

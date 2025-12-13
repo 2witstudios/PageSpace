@@ -5,7 +5,8 @@ import { loggers, slugify } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket/socket-utils';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
-const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['jwt', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 
 const patchSchema = z.object({
   name: z.string().optional(),
@@ -24,7 +25,7 @@ export async function GET(
 ) {
   try {
     const { driveId } = await context.params;
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) {
       return auth.error;
     }
@@ -80,7 +81,7 @@ export async function PATCH(
 ) {
   try {
     const { driveId } = await context.params;
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) {
       return auth.error;
     }
@@ -164,7 +165,7 @@ export async function DELETE(
 ) {
   try {
     const { driveId } = await context.params;
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) {
       return auth.error;
     }

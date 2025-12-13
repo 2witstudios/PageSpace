@@ -1,0 +1,280 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { NextRequest, NextResponse } from 'next/server';
+import type { WebAuthResult, AuthError } from '@/lib/auth';
+
+// Helper to create mock NextRequest for testing
+const createMockRequest = (url: string, init?: RequestInit): NextRequest => {
+  return new Request(url, init) as unknown as NextRequest;
+};
+
+// Mock Stripe - use vi.hoisted to ensure mocks are available before vi.mock
+const { mockStripeSubscriptionsRetrieve, mockStripeSubscriptionsUpdate, StripeError } = vi.hoisted(() => {
+  const StripeError = class extends Error {
+    constructor(message: string) {
+      super(message);
+      this.name = 'StripeError';
+    }
+  };
+  return {
+    mockStripeSubscriptionsRetrieve: vi.fn(),
+    mockStripeSubscriptionsUpdate: vi.fn(),
+    StripeError,
+  };
+});
+
+vi.mock('@/lib/stripe', () => ({
+  stripe: {
+    subscriptions: {
+      retrieve: mockStripeSubscriptionsRetrieve,
+      update: mockStripeSubscriptionsUpdate,
+    },
+  },
+  Stripe: {
+    errors: { StripeError },
+  },
+}));
+
+// Mock database - use vi.hoisted for variables used in vi.mock
+const {
+  mockUserQuery,
+  mockSubscriptionQuery,
+  mockUpdateWhere,
+  mockUpdateSet,
+  usersTable,
+  subscriptionsTable,
+} = vi.hoisted(() => ({
+  mockUserQuery: vi.fn(),
+  mockSubscriptionQuery: vi.fn(),
+  mockUpdateWhere: vi.fn(),
+  mockUpdateSet: vi.fn(),
+  usersTable: Symbol('users'),
+  subscriptionsTable: Symbol('subscriptions'),
+}));
+
+vi.mock('@pagespace/db', () => {
+  return {
+    db: {
+      select: vi.fn(() => ({
+        from: vi.fn((table: symbol) => {
+          if (table === usersTable) {
+            return { where: mockUserQuery };
+          }
+          return {
+            where: vi.fn(() => ({
+              orderBy: vi.fn(() => ({
+                limit: mockSubscriptionQuery,
+              })),
+            })),
+          };
+        }),
+      })),
+      update: vi.fn(() => ({
+        set: mockUpdateSet.mockReturnValue({
+          where: mockUpdateWhere,
+        }),
+      })),
+    },
+    users: usersTable,
+    subscriptions: subscriptionsTable,
+    eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
+    and: vi.fn((...args: unknown[]) => ({ args, type: 'and' })),
+    inArray: vi.fn((field: unknown, values: unknown) => ({ field, values, type: 'inArray' })),
+    desc: vi.fn((field: unknown) => ({ field, type: 'desc' })),
+  };
+});
+
+// Mock auth
+vi.mock('@/lib/auth', () => ({
+  authenticateRequestWithOptions: vi.fn(),
+  isAuthError: vi.fn(),
+}));
+
+// Import after mocks
+import { POST } from '../route';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+
+// Helper to create mock WebAuthResult
+const mockWebAuth = (userId: string): WebAuthResult => ({
+  userId,
+  tokenVersion: 0,
+  tokenType: 'jwt',
+  source: 'cookie',
+  role: 'user',
+});
+
+// Helper to create mock AuthError
+const mockAuthError = (status = 401): AuthError => ({
+  error: NextResponse.json({ error: 'Unauthorized' }, { status }),
+});
+
+// Helper to create mock user
+const mockUser = (overrides: Partial<{ id: string }> = {}) => ({
+  id: overrides.id ?? 'user_123',
+});
+
+// Helper to create mock subscription (from database)
+const mockDbSubscription = (overrides: Partial<{
+  id: string;
+  userId: string;
+  stripeSubscriptionId: string | null;
+  status: string;
+}> = {}) => ({
+  id: overrides.id ?? 'local_sub_123',
+  userId: overrides.userId ?? 'user_123',
+  stripeSubscriptionId: 'stripeSubscriptionId' in overrides ? overrides.stripeSubscriptionId : 'sub_123',
+  status: overrides.status ?? 'active',
+});
+
+describe('POST /api/stripe/reactivate-subscription', () => {
+  const mockUserId = 'user_123';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    // Setup default auth success
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(isAuthError).mockReturnValue(false);
+
+    // Setup default database responses
+    mockUserQuery.mockResolvedValue([mockUser()]);
+    mockSubscriptionQuery.mockResolvedValue([mockDbSubscription()]);
+
+    mockUpdateWhere.mockResolvedValue(undefined);
+    mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
+
+    // Setup default Stripe mocks - subscription scheduled for cancellation
+    mockStripeSubscriptionsRetrieve.mockResolvedValue({
+      id: 'sub_123',
+      cancel_at_period_end: true,
+      status: 'active',
+    });
+
+    mockStripeSubscriptionsUpdate.mockResolvedValue({
+      id: 'sub_123',
+      cancel_at_period_end: false,
+      status: 'active',
+    });
+  });
+
+  it('should reactivate subscription successfully', async () => {
+    const request = createMockRequest('https://example.com/api/stripe/reactivate-subscription', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+
+    const response = await POST(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.subscriptionId).toBe('sub_123');
+    expect(body.cancelAtPeriodEnd).toBe(false);
+    expect(body.status).toBe('active');
+    expect(body.message).toBe('Subscription reactivated successfully');
+  });
+
+  it('should update Stripe subscription with cancel_at_period_end false', async () => {
+    const request = createMockRequest('https://example.com/api/stripe/reactivate-subscription', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+
+    await POST(request);
+
+    expect(mockStripeSubscriptionsUpdate).toHaveBeenCalledWith(
+      'sub_123',
+      { cancel_at_period_end: false }
+    );
+  });
+
+  it('should update local database record', async () => {
+    const request = createMockRequest('https://example.com/api/stripe/reactivate-subscription', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+
+    await POST(request);
+
+    expect(mockUpdateSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cancelAtPeriodEnd: false,
+      })
+    );
+  });
+
+  it('should return 400 when subscription is not scheduled for cancellation', async () => {
+    mockStripeSubscriptionsRetrieve.mockResolvedValue({
+      id: 'sub_123',
+      cancel_at_period_end: false, // Not scheduled for cancellation
+      status: 'active',
+    });
+
+    const request = createMockRequest('https://example.com/api/stripe/reactivate-subscription', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+
+    const response = await POST(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe('Subscription is not scheduled for cancellation');
+  });
+
+  it('should return 404 when user not found', async () => {
+    mockUserQuery.mockResolvedValue([]);
+
+    const request = createMockRequest('https://example.com/api/stripe/reactivate-subscription', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+
+    const response = await POST(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(404);
+    expect(body.error).toBe('User not found');
+  });
+
+  it('should return 400 when no subscription found', async () => {
+    mockUserQuery.mockResolvedValue([mockUser()]);
+    mockSubscriptionQuery.mockResolvedValue([]); // No subscription
+
+    const request = createMockRequest('https://example.com/api/stripe/reactivate-subscription', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+
+    const response = await POST(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe('No subscription found');
+  });
+
+  it('should return 401 when not authenticated', async () => {
+    vi.mocked(isAuthError).mockReturnValue(true);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
+
+    const request = createMockRequest('https://example.com/api/stripe/reactivate-subscription', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(401);
+  });
+
+  it('should retrieve subscription to check cancellation status first', async () => {
+    const request = createMockRequest('https://example.com/api/stripe/reactivate-subscription', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+
+    await POST(request);
+
+    expect(mockStripeSubscriptionsRetrieve).toHaveBeenCalledWith('sub_123');
+    // Verify retrieve was called (update is called after)
+    expect(mockStripeSubscriptionsUpdate).toHaveBeenCalled();
+  });
+});
