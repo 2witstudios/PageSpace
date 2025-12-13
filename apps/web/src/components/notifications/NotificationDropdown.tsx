@@ -122,8 +122,8 @@ export default function NotificationDropdown() {
   const unreadCount = notifications.filter(n => !n.isRead).length;
 
   return (
-    <div className="flex flex-col h-[500px]">
-      <div className="p-4 border-b">
+    <div className="flex flex-col h-[500px] overflow-hidden">
+      <div className="p-4 border-b shrink-0">
         <div className="flex items-center justify-between">
           <h3 className="font-semibold">Notifications</h3>
           {unreadCount > 0 && (
@@ -140,7 +140,7 @@ export default function NotificationDropdown() {
         </div>
       </div>
 
-      <ScrollArea className="flex-1">
+      <ScrollArea className="flex-1 min-h-0 overflow-hidden">
         {isLoading ? (
           <div className="p-4 text-center text-muted-foreground">
             Loading notifications...
@@ -284,8 +284,8 @@ export default function NotificationDropdown() {
         )}
       </ScrollArea>
 
-      <Separator />
-      <div className="p-2">
+      <Separator className="shrink-0" />
+      <div className="p-2 shrink-0">
         <Link href="/notifications" className="w-full">
           <Button 
             variant="ghost" 
