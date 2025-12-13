@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useTheme } from 'next-themes';
 import { toast } from 'sonner';
 import { useStripe, useElements, PaymentElement } from '@stripe/react-stripe-js';
 import {
@@ -117,6 +118,7 @@ export function AddPaymentMethodForm({
   onOpenChange,
   onSuccess,
 }: AddPaymentMethodFormProps) {
+  const { resolvedTheme } = useTheme();
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -189,7 +191,7 @@ export function AddPaymentMethodForm({
             options={{
               clientSecret,
               appearance: {
-                theme: 'stripe',
+                theme: resolvedTheme === 'dark' ? 'night' : 'stripe',
                 variables: {
                   colorPrimary: '#0F172A',
                 },

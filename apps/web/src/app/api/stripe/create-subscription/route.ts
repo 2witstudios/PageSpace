@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db, eq, users } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
+import { getOrCreateStripeCustomer } from '@/lib/stripe-customer';
+import { getUserFriendlyStripeError } from '@/lib/stripe-errors';
 import { loggers } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
@@ -42,27 +44,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Get or create Stripe customer with rollback on failure
-    let customerId = user.stripeCustomerId;
-
-    if (!customerId) {
-      const customer = await stripe.customers.create({
-        email: user.email,
-        name: user.name || undefined,
-        metadata: { userId: user.id },
-      });
-      customerId = customer.id;
-
-      try {
-        await db.update(users)
-          .set({ stripeCustomerId: customerId, updatedAt: new Date() })
-          .where(eq(users.id, userId));
-      } catch (dbError) {
-        // Rollback: delete the orphaned Stripe customer
-        await stripe.customers.del(customerId);
-        throw dbError;
-      }
-    }
+    // Get or create Stripe customer (handles stale customer IDs)
+    const customerId = await getOrCreateStripeCustomer(user);
 
     // Create subscription with incomplete status to collect payment
     // Use confirmation_secret expansion (newer API) instead of payment_intent
@@ -106,7 +89,7 @@ export async function POST(request: NextRequest) {
 
     if (error instanceof Stripe.errors.StripeError) {
       return NextResponse.json(
-        { error: error.message },
+        { error: getUserFriendlyStripeError(error) },
         { status: 400 }
       );
     }

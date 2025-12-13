@@ -2,18 +2,18 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { useTheme } from 'next-themes';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { ArrowLeft, CheckCircle, XCircle, Loader2, Tag, ChevronDown } from 'lucide-react';
+import { ArrowLeft, CheckCircle, XCircle, Loader2 } from 'lucide-react';
 import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import { StripeProvider } from '@/components/billing/StripeProvider';
 import { EmbeddedCheckoutForm } from '@/components/billing/EmbeddedCheckoutForm';
 import { PlanChangeConfirmation } from '@/components/billing/PlanChangeConfirmation';
 import { PlanCard } from '@/components/billing/PlanCard';
-import { PromoCodeInput, type AppliedPromo } from '@/components/billing/PromoCodeInput';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { getAllPlans, getPlan, getTierFromPriceId, type SubscriptionTier, type PlanDefinition } from '@/lib/subscription/plans';
+import type { AppliedPromo } from '@/components/billing/PromoCodeInput';
 
 interface SubscriptionData {
   subscriptionTier: SubscriptionTier;
@@ -30,6 +30,7 @@ interface SubscriptionData {
 export default function PlanPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { resolvedTheme } = useTheme();
   const [subscriptionData, setSubscriptionData] = useState<SubscriptionData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -37,15 +38,14 @@ export default function PlanPage() {
   // Checkout state
   const [checkoutPlan, setCheckoutPlan] = useState<PlanDefinition | null>(null);
   const [clientSecret, setClientSecret] = useState<string | null>(null);
+  const [subscriptionId, setSubscriptionId] = useState<string | null>(null);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [appliedPromo, setAppliedPromo] = useState<AppliedPromo | null>(null);
+  const [applyingPromo, setApplyingPromo] = useState(false);
 
   // Plan change dialog state
   const [changePlanDialog, setChangePlanDialog] = useState(false);
   const [targetPlan, setTargetPlan] = useState<PlanDefinition | null>(null);
-
-  // Promo code state
-  const [appliedPromo, setAppliedPromo] = useState<AppliedPromo | null>(null);
-  const [promoOpen, setPromoOpen] = useState(false);
 
   // Schedule cancellation
   const [cancellingSchedule, setCancellingSchedule] = useState(false);
@@ -116,18 +116,15 @@ export default function PlanPage() {
       await post('/api/stripe/customer', {});
 
       // Create subscription and get client secret
-      // Include promotion code if one is applied
       const result = await post<{ clientSecret: string; subscriptionId: string }>(
         '/api/stripe/create-subscription',
-        {
-          priceId: plan.stripePriceId,
-          ...(appliedPromo && { promotionCodeId: appliedPromo.promotionCodeId }),
-        }
+        { priceId: plan.stripePriceId }
       );
 
-      if (result.clientSecret) {
+      if (result.clientSecret && result.subscriptionId) {
         setCheckoutPlan(plan);
         setClientSecret(result.clientSecret);
+        setSubscriptionId(result.subscriptionId);
       } else {
         setError('Failed to initialize checkout');
       }
@@ -141,8 +138,8 @@ export default function PlanPage() {
   const handleCheckoutSuccess = () => {
     setCheckoutPlan(null);
     setClientSecret(null);
+    setSubscriptionId(null);
     setAppliedPromo(null);
-    setPromoOpen(false);
     fetchSubscriptionData();
     router.replace('/settings/plan?success=true');
   };
@@ -150,7 +147,14 @@ export default function PlanPage() {
   const handleCheckoutCancel = () => {
     setCheckoutPlan(null);
     setClientSecret(null);
-    // Keep the promo code so user can try again
+    setSubscriptionId(null);
+    setAppliedPromo(null);
+  };
+
+  // Handle subscription recreation (when promo code is applied)
+  const handleSubscriptionRecreated = (newSubscriptionId: string, newClientSecret: string) => {
+    setSubscriptionId(newSubscriptionId);
+    setClientSecret(newClientSecret);
   };
 
   const handlePlanChangeSuccess = () => {
@@ -251,17 +255,27 @@ export default function PlanPage() {
       )}
 
       {/* Embedded Checkout */}
-      {checkoutPlan && clientSecret && (
-        <Card className="max-w-lg mx-auto">
+      {checkoutPlan && clientSecret && subscriptionId && (
+        <Card className="max-w-lg mx-auto relative">
           <CardHeader>
             <CardTitle>Complete Your Subscription</CardTitle>
           </CardHeader>
           <CardContent>
+            {/* Loading overlay during promo application */}
+            {applyingPromo && (
+              <div className="absolute inset-0 bg-background/80 backdrop-blur-sm z-10 flex items-center justify-center rounded-lg">
+                <div className="text-center">
+                  <Loader2 className="h-8 w-8 animate-spin mx-auto mb-2" />
+                  <p className="text-sm font-medium">Applying promo code...</p>
+                </div>
+              </div>
+            )}
             <StripeProvider
+              key={clientSecret}
               options={{
                 clientSecret,
                 appearance: {
-                  theme: 'stripe',
+                  theme: resolvedTheme === 'dark' ? 'night' : 'stripe',
                   variables: {
                     colorPrimary: '#0F172A',
                   },
@@ -270,44 +284,17 @@ export default function PlanPage() {
             >
               <EmbeddedCheckoutForm
                 plan={checkoutPlan}
+                subscriptionId={subscriptionId}
+                appliedPromo={appliedPromo}
+                onPromoApplied={setAppliedPromo}
+                onApplyingPromoChange={setApplyingPromo}
                 onSuccess={handleCheckoutSuccess}
                 onCancel={handleCheckoutCancel}
-                appliedPromo={appliedPromo}
+                onSubscriptionRecreated={handleSubscriptionRecreated}
               />
             </StripeProvider>
           </CardContent>
         </Card>
-      )}
-
-      {/* Promo Code Section - Only show for free users before checkout */}
-      {!checkoutPlan && subscriptionData?.subscriptionTier === 'free' && (
-        <div className="max-w-md mx-auto">
-          <Collapsible open={promoOpen} onOpenChange={setPromoOpen}>
-            <CollapsibleTrigger asChild>
-              <Button
-                variant="ghost"
-                className="w-full flex items-center justify-center gap-2 text-muted-foreground hover:text-foreground"
-              >
-                <Tag className="h-4 w-4" />
-                {appliedPromo ? (
-                  <span className="text-green-600 dark:text-green-400">
-                    {appliedPromo.code} - {appliedPromo.discount.savingsFormatted} off applied
-                  </span>
-                ) : (
-                  <span>Have a promo code?</span>
-                )}
-                <ChevronDown className={`h-4 w-4 transition-transform ${promoOpen ? 'rotate-180' : ''}`} />
-              </Button>
-            </CollapsibleTrigger>
-            <CollapsibleContent className="pt-4">
-              <PromoCodeInput
-                priceId={getPlan('pro').stripePriceId || ''}
-                onPromoApplied={setAppliedPromo}
-                disabled={checkoutLoading}
-              />
-            </CollapsibleContent>
-          </Collapsible>
-        </div>
       )}
 
       {/* Plan Cards - Only show when not in checkout */}

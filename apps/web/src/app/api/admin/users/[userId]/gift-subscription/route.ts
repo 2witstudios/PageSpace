@@ -2,56 +2,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db, eq, users, subscriptions, and, inArray, desc } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
+import { getOrCreateStripeCustomer } from '@/lib/stripe-customer';
+import { getUserFriendlyStripeError } from '@/lib/stripe-errors';
 import { stripeConfig } from '@/lib/stripe-config';
 import { loggers } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
 type GiftTier = 'pro' | 'founder' | 'business';
-
-/**
- * Get or create a Stripe customer for a user.
- * Handles stale customer IDs that no longer exist in Stripe.
- */
-async function getOrCreateStripeCustomer(
-  user: { id: string; email: string; name: string | null; stripeCustomerId: string | null }
-): Promise<string> {
-  let customerId = user.stripeCustomerId;
-
-  // Verify existing customer still exists in Stripe
-  if (customerId) {
-    try {
-      await stripe.customers.retrieve(customerId);
-    } catch (error) {
-      if (error instanceof Stripe.errors.StripeError &&
-          error.code === 'resource_missing') {
-        // Customer doesn't exist in Stripe, clear it and create new
-        customerId = null;
-      } else {
-        throw error;
-      }
-    }
-  }
-
-  // Create new customer if needed
-  if (!customerId) {
-    const customer = await stripe.customers.create({
-      email: user.email,
-      name: user.name || undefined,
-      metadata: { userId: user.id },
-    });
-    customerId = customer.id;
-
-    // Update database with new customer ID
-    await db.update(users)
-      .set({ stripeCustomerId: customerId, updatedAt: new Date() })
-      .where(eq(users.id, user.id));
-  }
-
-  return customerId;
-}
-
-
 
 /**
  * POST /api/admin/users/[userId]/gift-subscription
@@ -194,7 +152,7 @@ export async function POST(
 
     if (error instanceof Stripe.errors.StripeError) {
       return NextResponse.json(
-        { error: error.message },
+        { error: getUserFriendlyStripeError(error) },
         { status: 400 }
       );
     }
@@ -288,7 +246,7 @@ export async function DELETE(
 
     if (error instanceof Stripe.errors.StripeError) {
       return NextResponse.json(
-        { error: error.message },
+        { error: getUserFriendlyStripeError(error) },
         { status: 400 }
       );
     }

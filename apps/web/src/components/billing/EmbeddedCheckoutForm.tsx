@@ -7,13 +7,30 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Loader2, AlertCircle, Tag } from 'lucide-react';
 import type { PlanDefinition } from '@/lib/subscription/plans';
-import type { AppliedPromo } from './PromoCodeInput';
+import { PromoCodeInput, type AppliedPromo } from './PromoCodeInput';
+import { post } from '@/lib/auth/auth-fetch';
+
+interface ApplyPromoResponse {
+  success: boolean;
+  subscriptionId: string;
+  clientSecret?: string;
+  amountDue: number;
+  discount: {
+    couponId: string;
+    percentOff: number | null;
+    amountOff: number | null;
+  } | null;
+}
 
 interface EmbeddedCheckoutFormProps {
   plan: PlanDefinition;
+  subscriptionId: string;
+  appliedPromo: AppliedPromo | null;
+  onPromoApplied: (promo: AppliedPromo | null) => void;
+  onApplyingPromoChange: (applying: boolean) => void;
   onSuccess: () => void;
   onCancel: () => void;
-  appliedPromo?: AppliedPromo | null;
+  onSubscriptionRecreated?: (newSubscriptionId: string, newClientSecret: string) => void;
 }
 
 /**
@@ -22,9 +39,13 @@ interface EmbeddedCheckoutFormProps {
  */
 export function EmbeddedCheckoutForm({
   plan,
+  subscriptionId,
+  appliedPromo,
+  onPromoApplied,
+  onApplyingPromoChange,
   onSuccess,
   onCancel,
-  appliedPromo,
+  onSubscriptionRecreated,
 }: EmbeddedCheckoutFormProps) {
   const stripe = useStripe();
   const elements = useElements();
@@ -44,6 +65,38 @@ export function EmbeddedCheckoutForm({
   const discountedPriceCents = appliedPromo
     ? appliedPromo.discount.discountedAmount
     : originalPriceCents;
+
+  // Handle promo code application - cancels old subscription and recreates with promo
+  const handlePromoApplied = async (promo: AppliedPromo | null) => {
+    if (!promo) {
+      onPromoApplied(null);
+      return;
+    }
+
+    onApplyingPromoChange(true);
+    setError(null);
+
+    try {
+      // Apply promo by recreating subscription with promo applied from the start
+      // This is necessary for "first-time customer" promos to work
+      const result = await post<ApplyPromoResponse>('/api/stripe/apply-promo', {
+        subscriptionId,
+        promotionCodeId: promo.promotionCodeId,
+      });
+
+      // Update promo state BEFORE triggering recreation so it survives the remount
+      onPromoApplied(promo);
+
+      // If subscription was recreated, update parent with new subscription details
+      if (result.clientSecret && onSubscriptionRecreated) {
+        onSubscriptionRecreated(result.subscriptionId, result.clientSecret);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to apply promotion code');
+    } finally {
+      onApplyingPromoChange(false);
+    }
+  };
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -124,6 +177,15 @@ export function EmbeddedCheckoutForm({
           </div>
         )}
       </div>
+
+      {/* Promo Code Input */}
+      {plan.stripePriceId && !appliedPromo && (
+        <PromoCodeInput
+          priceId={plan.stripePriceId}
+          onPromoApplied={handlePromoApplied}
+          disabled={processing}
+        />
+      )}
 
       {/* Payment Element */}
       <div className="space-y-2">
