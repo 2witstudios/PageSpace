@@ -20,6 +20,14 @@ vi.mock('@pagespace/lib', () => ({
     TASK_LIST: 'TASK_LIST',
   },
   getDefaultContent: vi.fn(() => '{}'),
+  logger: {
+    child: vi.fn(() => ({
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    })),
+  },
 }));
 
 // Track mock values for transaction
@@ -75,7 +83,7 @@ vi.mock('@pagespace/db', () => {
   };
 });
 
-vi.mock('@/lib/websocket/socket-utils', () => ({
+vi.mock('@/lib/websocket', () => ({
   broadcastTaskEvent: vi.fn(),
   broadcastPageEvent: vi.fn(),
   createPageEventPayload: vi.fn(() => ({})),
