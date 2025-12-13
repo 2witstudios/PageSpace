@@ -234,7 +234,7 @@ export async function PATCH(
   context: { params: Promise<{ conversationId: string }> }
 ) {
   try {
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 

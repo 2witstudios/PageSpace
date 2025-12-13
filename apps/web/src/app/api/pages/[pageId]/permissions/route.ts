@@ -214,7 +214,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 }
 
 export async function DELETE(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
-  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
   const currentUserId = auth.userId;
 
