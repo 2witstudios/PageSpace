@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -14,6 +14,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Loader2, AlertCircle, ArrowUp, ArrowDown } from 'lucide-react';
 import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import type { PlanDefinition } from '@/lib/subscription/plans';
+import { PromoCodeInput, type AppliedPromo } from './PromoCodeInput';
 
 interface PlanChangeConfirmationProps {
   open: boolean;
@@ -53,32 +54,43 @@ export function PlanChangeConfirmation({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<UpcomingInvoiceResponse | null>(null);
+  const [appliedPromo, setAppliedPromo] = useState<AppliedPromo | null>(null);
 
   const isDowngrade = targetPlan.price.monthly < currentPlan.price.monthly;
 
-  // Fetch proration preview for upgrades
+  // Fetch proration preview for upgrades (with optional promo code)
+  const fetchPreview = useCallback(async (promoId?: string) => {
+    if (!targetPlan.stripePriceId) return;
+
+    setPreviewLoading(true);
+    try {
+      const promoParam = promoId ? `&promotionCodeId=${promoId}` : '';
+      const res = await fetchWithAuth(
+        `/api/stripe/upcoming-invoice?priceId=${targetPlan.stripePriceId}${promoParam}`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setPreview(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch preview:', err);
+    } finally {
+      setPreviewLoading(false);
+    }
+  }, [targetPlan.stripePriceId]);
+
+  // Fetch preview when dialog opens
   useEffect(() => {
     if (!open || !targetPlan.stripePriceId) return;
+    fetchPreview(appliedPromo?.promotionCodeId);
+  }, [open, targetPlan.stripePriceId, fetchPreview, appliedPromo?.promotionCodeId]);
 
-    const fetchPreview = async () => {
-      setPreviewLoading(true);
-      try {
-        const res = await fetchWithAuth(
-          `/api/stripe/upcoming-invoice?priceId=${targetPlan.stripePriceId}`
-        );
-        if (res.ok) {
-          const data = await res.json();
-          setPreview(data);
-        }
-      } catch (err) {
-        console.error('Failed to fetch preview:', err);
-      } finally {
-        setPreviewLoading(false);
-      }
-    };
-
-    fetchPreview();
-  }, [open, targetPlan.stripePriceId]);
+  // Reset promo when dialog closes
+  useEffect(() => {
+    if (!open) {
+      setAppliedPromo(null);
+    }
+  }, [open]);
 
   const isDowngradeToFree = targetPlan.id === 'free';
 
@@ -109,6 +121,7 @@ export function PlanChangeConfirmation({
       const response = await post<{ error?: string }>('/api/stripe/update-subscription', {
         priceId: targetPlan.stripePriceId,
         isDowngrade,
+        ...(appliedPromo && { promotionCodeId: appliedPromo.promotionCodeId }),
       });
 
       if (response.error) {
@@ -169,6 +182,15 @@ export function PlanChangeConfirmation({
               <div className="text-lg">{targetPlan.price.formatted}</div>
             </div>
           </div>
+
+          {/* Promo Code Input - Only for upgrades */}
+          {!isDowngrade && targetPlan.stripePriceId && (
+            <PromoCodeInput
+              priceId={targetPlan.stripePriceId}
+              onPromoApplied={setAppliedPromo}
+              disabled={loading || previewLoading}
+            />
+          )}
 
           {/* Proration preview for upgrades */}
           {!isDowngrade && previewLoading && (

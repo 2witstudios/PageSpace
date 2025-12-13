@@ -9,6 +9,7 @@ const {
   mockStripeSubscriptionSchedulesCreate,
   mockStripeSubscriptionSchedulesRetrieve,
   mockStripeSubscriptionSchedulesUpdate,
+  mockStripeSubscriptionSchedulesRelease,
   StripeError,
 } = vi.hoisted(() => {
   const StripeError = class extends Error {
@@ -23,6 +24,7 @@ const {
     mockStripeSubscriptionSchedulesCreate: vi.fn(),
     mockStripeSubscriptionSchedulesRetrieve: vi.fn(),
     mockStripeSubscriptionSchedulesUpdate: vi.fn(),
+    mockStripeSubscriptionSchedulesRelease: vi.fn(),
     StripeError,
   };
 });
@@ -37,6 +39,7 @@ vi.mock('@/lib/stripe', () => ({
       create: mockStripeSubscriptionSchedulesCreate,
       retrieve: mockStripeSubscriptionSchedulesRetrieve,
       update: mockStripeSubscriptionSchedulesUpdate,
+      release: mockStripeSubscriptionSchedulesRelease,
     },
   },
   Stripe: {
@@ -48,11 +51,15 @@ vi.mock('@/lib/stripe', () => ({
 const {
   mockUserQuery,
   mockSubscriptionQuery,
+  mockUpdateSet,
+  mockUpdateWhere,
   usersTable,
   subscriptionsTable,
 } = vi.hoisted(() => ({
   mockUserQuery: vi.fn(),
   mockSubscriptionQuery: vi.fn(),
+  mockUpdateSet: vi.fn(),
+  mockUpdateWhere: vi.fn(),
   usersTable: Symbol('users'),
   subscriptionsTable: Symbol('subscriptions'),
 }));
@@ -72,6 +79,11 @@ vi.mock('@pagespace/db', () => {
               })),
             })),
           };
+        }),
+      })),
+      update: vi.fn(() => ({
+        set: mockUpdateSet.mockReturnValue({
+          where: mockUpdateWhere,
         }),
       })),
     },
@@ -165,6 +177,8 @@ describe('POST /api/stripe/update-subscription', () => {
     // Setup default database responses
     mockUserQuery.mockResolvedValue([mockUser()]);
     mockSubscriptionQuery.mockResolvedValue([mockDbSubscription()]);
+    mockUpdateWhere.mockResolvedValue(undefined);
+    mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
 
     // Setup default Stripe mocks
     mockStripeSubscriptionsRetrieve.mockResolvedValue(mockStripeSubscription());
@@ -176,6 +190,7 @@ describe('POST /api/stripe/update-subscription', () => {
     mockStripeSubscriptionSchedulesUpdate.mockResolvedValue({
       id: 'sch_123',
     });
+    mockStripeSubscriptionSchedulesRelease.mockResolvedValue({});
   });
 
   describe('Upgrade flow (immediate)', () => {

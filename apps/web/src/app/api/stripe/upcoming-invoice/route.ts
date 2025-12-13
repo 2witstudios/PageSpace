@@ -21,6 +21,7 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const newPriceId = searchParams.get('priceId');
+    const promotionCodeId = searchParams.get('promotionCodeId');
 
     // Get user
     const [user] = await db.select().from(users).where(eq(users.id, userId));
@@ -50,6 +51,10 @@ export async function GET(request: NextRequest) {
     const params: Stripe.InvoiceCreatePreviewParams = {
       customer: user.stripeCustomerId,
       subscription: currentSubscription.stripeSubscriptionId,
+      // Apply promotion code to preview if provided
+      ...(promotionCodeId && {
+        discounts: [{ promotion_code: promotionCodeId }],
+      }),
     };
 
     // If simulating a plan change, include the new price

@@ -5,13 +5,15 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { ArrowLeft, CheckCircle, XCircle, Loader2 } from 'lucide-react';
+import { ArrowLeft, CheckCircle, XCircle, Loader2, Tag, ChevronDown } from 'lucide-react';
 import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import { StripeProvider } from '@/components/billing/StripeProvider';
 import { EmbeddedCheckoutForm } from '@/components/billing/EmbeddedCheckoutForm';
 import { PlanChangeConfirmation } from '@/components/billing/PlanChangeConfirmation';
 import { PlanCard } from '@/components/billing/PlanCard';
-import { getAllPlans, getPlan, type SubscriptionTier, type PlanDefinition } from '@/lib/subscription/plans';
+import { PromoCodeInput, type AppliedPromo } from '@/components/billing/PromoCodeInput';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { getAllPlans, getPlan, getTierFromPriceId, type SubscriptionTier, type PlanDefinition } from '@/lib/subscription/plans';
 
 interface SubscriptionData {
   subscriptionTier: SubscriptionTier;
@@ -20,6 +22,8 @@ interface SubscriptionData {
     currentPeriodStart: string;
     currentPeriodEnd: string;
     cancelAtPeriodEnd: boolean;
+    scheduledPriceId?: string | null;
+    scheduledChangeDate?: string | null;
   };
 }
 
@@ -38,6 +42,13 @@ export default function PlanPage() {
   // Plan change dialog state
   const [changePlanDialog, setChangePlanDialog] = useState(false);
   const [targetPlan, setTargetPlan] = useState<PlanDefinition | null>(null);
+
+  // Promo code state
+  const [appliedPromo, setAppliedPromo] = useState<AppliedPromo | null>(null);
+  const [promoOpen, setPromoOpen] = useState(false);
+
+  // Schedule cancellation
+  const [cancellingSchedule, setCancellingSchedule] = useState(false);
 
   const success = searchParams.get('success');
   const canceled = searchParams.get('canceled');
@@ -105,9 +116,13 @@ export default function PlanPage() {
       await post('/api/stripe/customer', {});
 
       // Create subscription and get client secret
+      // Include promotion code if one is applied
       const result = await post<{ clientSecret: string; subscriptionId: string }>(
         '/api/stripe/create-subscription',
-        { priceId: plan.stripePriceId }
+        {
+          priceId: plan.stripePriceId,
+          ...(appliedPromo && { promotionCodeId: appliedPromo.promotionCodeId }),
+        }
       );
 
       if (result.clientSecret) {
@@ -126,6 +141,8 @@ export default function PlanPage() {
   const handleCheckoutSuccess = () => {
     setCheckoutPlan(null);
     setClientSecret(null);
+    setAppliedPromo(null);
+    setPromoOpen(false);
     fetchSubscriptionData();
     router.replace('/settings/plan?success=true');
   };
@@ -133,12 +150,29 @@ export default function PlanPage() {
   const handleCheckoutCancel = () => {
     setCheckoutPlan(null);
     setClientSecret(null);
+    // Keep the promo code so user can try again
   };
 
   const handlePlanChangeSuccess = () => {
     setChangePlanDialog(false);
     setTargetPlan(null);
     fetchSubscriptionData();
+  };
+
+  const handleCancelSchedule = async () => {
+    setCancellingSchedule(true);
+    try {
+      const result = await post<{ success?: boolean; error?: string }>('/api/stripe/cancel-schedule', {});
+      if (result.success) {
+        await fetchSubscriptionData();
+      } else {
+        setError(result.error || 'Failed to cancel pending plan change');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to cancel pending plan change');
+    } finally {
+      setCancellingSchedule(false);
+    }
   };
 
   if (loading) {
@@ -156,6 +190,9 @@ export default function PlanPage() {
 
   const plans = getAllPlans();
   const currentPlan = subscriptionData ? getPlan(subscriptionData.subscriptionTier) : getPlan('free');
+  const scheduledTier = subscriptionData?.subscription?.scheduledPriceId
+    ? getTierFromPriceId(subscriptionData.subscription.scheduledPriceId)
+    : null;
 
   return (
     <div className="container mx-auto p-6 space-y-8">
@@ -235,10 +272,42 @@ export default function PlanPage() {
                 plan={checkoutPlan}
                 onSuccess={handleCheckoutSuccess}
                 onCancel={handleCheckoutCancel}
+                appliedPromo={appliedPromo}
               />
             </StripeProvider>
           </CardContent>
         </Card>
+      )}
+
+      {/* Promo Code Section - Only show for free users before checkout */}
+      {!checkoutPlan && subscriptionData?.subscriptionTier === 'free' && (
+        <div className="max-w-md mx-auto">
+          <Collapsible open={promoOpen} onOpenChange={setPromoOpen}>
+            <CollapsibleTrigger asChild>
+              <Button
+                variant="ghost"
+                className="w-full flex items-center justify-center gap-2 text-muted-foreground hover:text-foreground"
+              >
+                <Tag className="h-4 w-4" />
+                {appliedPromo ? (
+                  <span className="text-green-600 dark:text-green-400">
+                    {appliedPromo.code} - {appliedPromo.discount.savingsFormatted} off applied
+                  </span>
+                ) : (
+                  <span>Have a promo code?</span>
+                )}
+                <ChevronDown className={`h-4 w-4 transition-transform ${promoOpen ? 'rotate-180' : ''}`} />
+              </Button>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="pt-4">
+              <PromoCodeInput
+                priceId={getPlan('pro').stripePriceId || ''}
+                onPromoApplied={setAppliedPromo}
+                disabled={checkoutLoading}
+              />
+            </CollapsibleContent>
+          </Collapsible>
+        </div>
       )}
 
       {/* Plan Cards - Only show when not in checkout */}
@@ -250,8 +319,11 @@ export default function PlanPage() {
               plan={plan}
               currentTier={subscriptionData?.subscriptionTier || 'free'}
               isCurrentPlan={plan.id === subscriptionData?.subscriptionTier}
+              isScheduledPlan={plan.id === scheduledTier}
               onUpgrade={handlePlanSelect}
               onManageBilling={() => router.push('/settings/billing')}
+              onCancelSchedule={handleCancelSchedule}
+              cancellingSchedule={cancellingSchedule}
               className={plan.highlighted ? 'relative z-10' : ''}
             />
           ))}

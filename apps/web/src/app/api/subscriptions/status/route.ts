@@ -50,6 +50,8 @@ export async function GET(request: NextRequest) {
         currentPeriodStart: subscription.currentPeriodStart,
         currentPeriodEnd: subscription.currentPeriodEnd,
         cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
+        scheduledPriceId: subscription.scheduledPriceId,
+        scheduledChangeDate: subscription.scheduledChangeDate,
       } : null,
       storage: {
         used: user.storageUsedBytes || 0,

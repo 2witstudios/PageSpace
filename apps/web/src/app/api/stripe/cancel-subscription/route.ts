@@ -41,6 +41,19 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // First retrieve subscription to check for schedule
+    const stripeSubscription = await stripe.subscriptions.retrieve(
+      currentSubscription.stripeSubscriptionId
+    );
+
+    // If managed by a schedule, release it first (user chose to cancel, discarding pending downgrade)
+    if (stripeSubscription.schedule) {
+      const scheduleId = typeof stripeSubscription.schedule === 'string'
+        ? stripeSubscription.schedule
+        : stripeSubscription.schedule.id;
+      await stripe.subscriptionSchedules.release(scheduleId);
+    }
+
     // Cancel at period end - expand items to get current_period_end
     const subscription = await stripe.subscriptions.update(
       currentSubscription.stripeSubscriptionId,
@@ -57,9 +70,15 @@ export async function POST(request: NextRequest) {
     }
     const currentPeriodEnd = firstItem.current_period_end;
 
-    // Update local record
+    // Update local record - also clear any schedule info
     await db.update(subscriptions)
-      .set({ cancelAtPeriodEnd: true, updatedAt: new Date() })
+      .set({
+        cancelAtPeriodEnd: true,
+        stripeScheduleId: null,
+        scheduledPriceId: null,
+        scheduledChangeDate: null,
+        updatedAt: new Date(),
+      })
       .where(eq(subscriptions.id, currentSubscription.id));
 
     return NextResponse.json({

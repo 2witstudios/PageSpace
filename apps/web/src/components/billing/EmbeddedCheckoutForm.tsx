@@ -4,13 +4,16 @@ import { useState } from 'react';
 import { useStripe, useElements, PaymentElement } from '@stripe/react-stripe-js';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Loader2, AlertCircle } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Loader2, AlertCircle, Tag } from 'lucide-react';
 import type { PlanDefinition } from '@/lib/subscription/plans';
+import type { AppliedPromo } from './PromoCodeInput';
 
 interface EmbeddedCheckoutFormProps {
   plan: PlanDefinition;
   onSuccess: () => void;
   onCancel: () => void;
+  appliedPromo?: AppliedPromo | null;
 }
 
 /**
@@ -21,11 +24,26 @@ export function EmbeddedCheckoutForm({
   plan,
   onSuccess,
   onCancel,
+  appliedPromo,
 }: EmbeddedCheckoutFormProps) {
   const stripe = useStripe();
   const elements = useElements();
   const [error, setError] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
+
+  // Format amount in cents to currency string
+  const formatAmount = (cents: number) => {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+    }).format(cents / 100);
+  };
+
+  // Calculate discounted price if promo is applied
+  const originalPriceCents = plan.price.monthly * 100;
+  const discountedPriceCents = appliedPromo
+    ? appliedPromo.discount.discountedAmount
+    : originalPriceCents;
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -75,10 +93,36 @@ export function EmbeddedCheckoutForm({
             <p className="text-sm text-muted-foreground">{plan.description}</p>
           </div>
           <div className="text-right">
-            <div className="text-2xl font-bold">{plan.price.formatted}</div>
-            <div className="text-sm text-muted-foreground">per month</div>
+            {appliedPromo ? (
+              <>
+                <div className="text-lg line-through text-muted-foreground">
+                  {plan.price.formatted}
+                </div>
+                <div className="text-2xl font-bold text-green-600 dark:text-green-400">
+                  {formatAmount(discountedPriceCents)}
+                </div>
+                <div className="text-sm text-muted-foreground">per month</div>
+              </>
+            ) : (
+              <>
+                <div className="text-2xl font-bold">{plan.price.formatted}</div>
+                <div className="text-sm text-muted-foreground">per month</div>
+              </>
+            )}
           </div>
         </div>
+        {/* Promo Code Badge */}
+        {appliedPromo && (
+          <div className="mt-3 pt-3 border-t flex items-center gap-2">
+            <Tag className="h-4 w-4 text-green-600 dark:text-green-400" />
+            <span className="text-sm font-medium text-green-600 dark:text-green-400">
+              {appliedPromo.code}
+            </span>
+            <Badge variant="secondary" className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
+              {appliedPromo.discount.savingsFormatted} off
+            </Badge>
+          </div>
+        )}
       </div>
 
       {/* Payment Element */}

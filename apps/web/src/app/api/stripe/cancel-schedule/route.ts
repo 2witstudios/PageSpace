@@ -7,9 +7,9 @@ import { loggers } from '@pagespace/lib/server';
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
 /**
- * POST /api/stripe/reactivate-subscription
- * Reactivate a subscription that was scheduled for cancellation.
- * Removes the cancel_at_period_end flag.
+ * POST /api/stripe/cancel-schedule
+ * Cancel a pending plan change (downgrade) without cancelling the subscription.
+ * Releases the subscription schedule and clears schedule info from database.
  */
 export async function POST(request: NextRequest) {
 
@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    // Get current active subscription (filter by status to avoid returning stale records)
+    // Get current active subscription
     const [currentSubscription] = await db.select()
       .from(subscriptions)
       .where(and(
@@ -36,41 +36,25 @@ export async function POST(request: NextRequest) {
 
     if (!currentSubscription?.stripeSubscriptionId) {
       return NextResponse.json(
-        { error: 'No subscription found' },
+        { error: 'No active subscription found' },
         { status: 400 }
       );
     }
 
-    // Check if subscription is actually scheduled for cancellation
-    const stripeSubscription = await stripe.subscriptions.retrieve(
-      currentSubscription.stripeSubscriptionId
-    );
-
-    if (!stripeSubscription.cancel_at_period_end) {
+    // Check if there's a schedule to cancel
+    if (!currentSubscription.stripeScheduleId) {
       return NextResponse.json(
-        { error: 'Subscription is not scheduled for cancellation' },
+        { error: 'No pending plan change to cancel' },
         { status: 400 }
       );
     }
 
-    // If managed by a schedule, release it first
-    if (stripeSubscription.schedule) {
-      const scheduleId = typeof stripeSubscription.schedule === 'string'
-        ? stripeSubscription.schedule
-        : stripeSubscription.schedule.id;
-      await stripe.subscriptionSchedules.release(scheduleId);
-    }
+    // Release the schedule in Stripe
+    await stripe.subscriptionSchedules.release(currentSubscription.stripeScheduleId);
 
-    // Reactivate subscription
-    const subscription = await stripe.subscriptions.update(
-      currentSubscription.stripeSubscriptionId,
-      { cancel_at_period_end: false }
-    );
-
-    // Update local record - also clear any schedule info
+    // Clear schedule info from database
     await db.update(subscriptions)
       .set({
-        cancelAtPeriodEnd: false,
         stripeScheduleId: null,
         scheduledPriceId: null,
         scheduledChangeDate: null,
@@ -79,14 +63,12 @@ export async function POST(request: NextRequest) {
       .where(eq(subscriptions.id, currentSubscription.id));
 
     return NextResponse.json({
-      subscriptionId: subscription.id,
-      cancelAtPeriodEnd: false,
-      status: subscription.status,
-      message: 'Subscription reactivated successfully',
+      success: true,
+      message: 'Pending plan change cancelled successfully',
     });
 
   } catch (error) {
-    loggers.api.error('Error reactivating subscription', error instanceof Error ? error : undefined);
+    loggers.api.error('Error cancelling schedule', error instanceof Error ? error : undefined);
 
     if (error instanceof Stripe.errors.StripeError) {
       return NextResponse.json(
@@ -96,7 +78,7 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json(
-      { error: 'Failed to reactivate subscription' },
+      { error: 'Failed to cancel pending plan change' },
       { status: 500 }
     );
   }

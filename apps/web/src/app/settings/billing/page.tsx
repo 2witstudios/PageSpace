@@ -25,7 +25,8 @@ import { AddPaymentMethodForm } from '@/components/billing/AddPaymentMethodForm'
 import { InvoiceList, type Invoice } from '@/components/billing/InvoiceList';
 import { UpcomingInvoice } from '@/components/billing/UpcomingInvoice';
 import { BillingAddressForm, type BillingAddress } from '@/components/billing/BillingAddressForm';
-import { getPlan, type SubscriptionTier } from '@/lib/subscription/plans';
+import { getPlan, getPlanFromPriceId, type SubscriptionTier } from '@/lib/subscription/plans';
+import { post } from '@/lib/auth/auth-fetch';
 
 interface SubscriptionData {
   subscriptionTier: SubscriptionTier;
@@ -34,6 +35,8 @@ interface SubscriptionData {
     currentPeriodStart: string;
     currentPeriodEnd: string;
     cancelAtPeriodEnd: boolean;
+    scheduledPriceId?: string | null;
+    scheduledChangeDate?: string | null;
   };
 }
 
@@ -73,6 +76,9 @@ export default function BillingPage() {
   // Billing Address
   const [billingAddress, setBillingAddress] = useState<BillingAddress | null>(null);
   const [billingName, setBillingName] = useState<string | null>(null);
+
+  // Schedule cancellation
+  const [cancellingSchedule, setCancellingSchedule] = useState(false);
 
   // URL params
   const pmAdded = searchParams.get('pm_added');
@@ -171,6 +177,23 @@ export default function BillingPage() {
     }
   };
 
+  const handleCancelSchedule = async () => {
+    setCancellingSchedule(true);
+    try {
+      const result = await post<{ success?: boolean; error?: string }>('/api/stripe/cancel-schedule', {});
+      if (result.success) {
+        await fetchSubscription();
+        await fetchUpcomingInvoice();
+      } else {
+        setError(result.error || 'Failed to cancel pending plan change');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to cancel pending plan change');
+    } finally {
+      setCancellingSchedule(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="container mx-auto p-6">
@@ -187,6 +210,9 @@ export default function BillingPage() {
   const plan = subscriptionData ? getPlan(subscriptionData.subscriptionTier) : getPlan('free');
   const isPaid = subscriptionData?.subscriptionTier !== 'free';
   const isCanceling = subscriptionData?.subscription?.cancelAtPeriodEnd;
+  const scheduledPriceId = subscriptionData?.subscription?.scheduledPriceId;
+  const scheduledPlan = scheduledPriceId ? getPlanFromPriceId(scheduledPriceId) : null;
+  const scheduledChangeDate = subscriptionData?.subscription?.scheduledChangeDate;
 
   return (
     <div className="container mx-auto p-6 space-y-8 max-w-4xl">
@@ -287,6 +313,34 @@ export default function BillingPage() {
                 Your subscription will end on{' '}
                 {new Date(subscriptionData!.subscription!.currentPeriodEnd).toLocaleDateString()}.
                 You can reactivate anytime before then.
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {scheduledPlan && !isCanceling && (
+            <Alert className="mt-4 border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/20">
+              <Clock className="h-4 w-4 text-blue-600" />
+              <AlertDescription className="text-blue-800 dark:text-blue-200 flex items-center justify-between">
+                <span>
+                  Changing to {scheduledPlan.displayName} on{' '}
+                  {scheduledChangeDate ? new Date(scheduledChangeDate).toLocaleDateString() : 'next billing period'}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleCancelSchedule}
+                  disabled={cancellingSchedule}
+                  className="ml-4"
+                >
+                  {cancellingSchedule ? (
+                    <>
+                      <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                      Cancelling...
+                    </>
+                  ) : (
+                    'Keep Current Plan'
+                  )}
+                </Button>
               </AlertDescription>
             </Alert>
           )}

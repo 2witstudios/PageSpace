@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { ExternalLink } from 'lucide-react';
+import { ExternalLink, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { PlanDefinition, SubscriptionTier } from '@/lib/subscription/plans';
 
@@ -12,8 +12,11 @@ interface PlanCardProps {
   plan: PlanDefinition;
   currentTier: SubscriptionTier;
   isCurrentPlan?: boolean;
+  isScheduledPlan?: boolean;
   onUpgrade?: (targetTier: SubscriptionTier) => void;
   onManageBilling?: () => void;
+  onCancelSchedule?: () => void;
+  cancellingSchedule?: boolean;
   className?: string;
 }
 
@@ -21,8 +24,11 @@ export function PlanCard({
   plan,
   currentTier,
   isCurrentPlan = false,
+  isScheduledPlan = false,
   onUpgrade,
   onManageBilling,
+  onCancelSchedule,
+  cancellingSchedule = false,
   className,
 }: PlanCardProps) {
   const [isProcessing, setIsProcessing] = useState(false);
@@ -47,6 +53,27 @@ export function PlanCard({
   };
 
   const getActionButton = () => {
+    // If this plan is scheduled, show cancel button
+    if (isScheduledPlan) {
+      return (
+        <Button
+          variant="outline"
+          onClick={onCancelSchedule}
+          disabled={cancellingSchedule}
+          className="w-full"
+        >
+          {cancellingSchedule ? (
+            <>
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              Cancelling...
+            </>
+          ) : (
+            'Keep Current Plan'
+          )}
+        </Button>
+      );
+    }
+
     if (isCurrentPlan) {
       return (
         <Button
@@ -112,6 +139,7 @@ export function PlanCard({
         'relative transition-all duration-300 hover:shadow-lg flex flex-col min-w-[280px] shrink-0 snap-center',
         plan.highlighted && 'ring-2 ring-zinc-400 dark:ring-zinc-500 shadow-lg',
         isCurrentPlan && 'ring-2 ring-zinc-900 dark:ring-zinc-100',
+        isScheduledPlan && !isCurrentPlan && 'ring-2 ring-blue-400 dark:ring-blue-500',
         plan.accentColor,
         className
       )}
@@ -136,6 +164,15 @@ export function PlanCard({
         <div className="absolute -top-3 right-4">
           <Badge className="bg-zinc-900 text-white border-zinc-900 dark:bg-zinc-100 dark:text-zinc-900 dark:border-zinc-100">
             Current Plan
+          </Badge>
+        </div>
+      )}
+
+      {/* Scheduled Plan Badge */}
+      {isScheduledPlan && !isCurrentPlan && (
+        <div className="absolute -top-3 right-4">
+          <Badge variant="secondary" className="bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900 dark:text-blue-200 dark:border-blue-800">
+            Scheduled
           </Badge>
         </div>
       )}

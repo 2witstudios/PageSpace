@@ -259,3 +259,17 @@ export function canDowngrade(currentTier: SubscriptionTier): boolean {
 export function getAllPlans(): PlanDefinition[] {
   return PLAN_ORDER.map(tier => PLANS[tier]);
 }
+
+export function getTierFromPriceId(priceId: string): SubscriptionTier | null {
+  for (const tier of PLAN_ORDER) {
+    if (PLANS[tier].stripePriceId === priceId) {
+      return tier;
+    }
+  }
+  return null;
+}
+
+export function getPlanFromPriceId(priceId: string): PlanDefinition | null {
+  const tier = getTierFromPriceId(priceId);
+  return tier ? PLANS[tier] : null;
+}

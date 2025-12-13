@@ -12,12 +12,17 @@ export const subscriptions = pgTable('subscriptions', {
   currentPeriodStart: timestamp('currentPeriodStart', { mode: 'date' }).notNull(),
   currentPeriodEnd: timestamp('currentPeriodEnd', { mode: 'date' }).notNull(),
   cancelAtPeriodEnd: boolean('cancelAtPeriodEnd').default(false).notNull(),
+  // Schedule tracking for pending plan changes (downgrades)
+  stripeScheduleId: text('stripeScheduleId'),
+  scheduledPriceId: text('scheduledPriceId'),
+  scheduledChangeDate: timestamp('scheduledChangeDate', { mode: 'date' }),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
 }, (table) => {
   return {
     userIdx: index('subscriptions_user_id_idx').on(table.userId),
     stripeSubscriptionIdx: index('subscriptions_stripe_subscription_id_idx').on(table.stripeSubscriptionId),
+    stripeScheduleIdx: index('subscriptions_stripe_schedule_id_idx').on(table.stripeScheduleId),
   }
 });
 

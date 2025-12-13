@@ -3,7 +3,12 @@ import { NextResponse } from 'next/server';
 import type { WebAuthResult, AuthError } from '@/lib/auth';
 
 // Mock Stripe - use vi.hoisted to ensure mocks are available before vi.mock
-const { mockStripeSubscriptionsUpdate, StripeError } = vi.hoisted(() => {
+const {
+  mockStripeSubscriptionsRetrieve,
+  mockStripeSubscriptionsUpdate,
+  mockStripeSubscriptionSchedulesRelease,
+  StripeError,
+} = vi.hoisted(() => {
   const StripeError = class extends Error {
     constructor(message: string) {
       super(message);
@@ -11,7 +16,9 @@ const { mockStripeSubscriptionsUpdate, StripeError } = vi.hoisted(() => {
     }
   };
   return {
+    mockStripeSubscriptionsRetrieve: vi.fn(),
     mockStripeSubscriptionsUpdate: vi.fn(),
+    mockStripeSubscriptionSchedulesRelease: vi.fn(),
     StripeError,
   };
 });
@@ -19,7 +26,11 @@ const { mockStripeSubscriptionsUpdate, StripeError } = vi.hoisted(() => {
 vi.mock('@/lib/stripe', () => ({
   stripe: {
     subscriptions: {
+      retrieve: mockStripeSubscriptionsRetrieve,
       update: mockStripeSubscriptionsUpdate,
+    },
+    subscriptionSchedules: {
+      release: mockStripeSubscriptionSchedulesRelease,
     },
   },
   Stripe: {
@@ -138,7 +149,12 @@ describe('POST /api/stripe/cancel-subscription', () => {
     mockUpdateWhere.mockResolvedValue(undefined);
     mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
 
-    // Setup default Stripe mock
+    // Setup default Stripe mocks
+    // Retrieve returns subscription without schedule by default
+    mockStripeSubscriptionsRetrieve.mockResolvedValue({
+      id: 'sub_123',
+      schedule: null,
+    });
     mockStripeSubscriptionsUpdate.mockResolvedValue({
       id: 'sub_123',
       cancel_at_period_end: true,
@@ -148,6 +164,7 @@ describe('POST /api/stripe/cancel-subscription', () => {
         }],
       },
     });
+    mockStripeSubscriptionSchedulesRelease.mockResolvedValue({});
   });
 
   it('should cancel subscription at period end', async () => {

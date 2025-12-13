@@ -20,7 +20,7 @@ export async function POST(request: NextRequest) {
     const userId = auth.userId;
 
     const body = await request.json();
-    const { priceId, isDowngrade = false } = body;
+    const { priceId, isDowngrade = false, promotionCodeId } = body;
 
     if (!priceId) {
       return NextResponse.json(
@@ -121,6 +121,16 @@ export async function POST(request: NextRequest) {
         ],
       });
 
+      // Save schedule info to database for UI display
+      await db.update(subscriptions)
+        .set({
+          stripeScheduleId: schedule.id,
+          scheduledPriceId: priceId,
+          scheduledChangeDate: new Date(currentPeriodEnd * 1000),
+          updatedAt: new Date(),
+        })
+        .where(eq(subscriptions.stripeSubscriptionId, subscription.id));
+
       return NextResponse.json({
         subscriptionId: subscription.id,
         scheduleId: schedule.id,
@@ -130,6 +140,14 @@ export async function POST(request: NextRequest) {
       });
 
     } else {
+      // If there's an existing schedule (pending downgrade), release it before upgrading
+      if (subscription.schedule) {
+        const scheduleId = typeof subscription.schedule === 'string'
+          ? subscription.schedule
+          : subscription.schedule.id;
+        await stripe.subscriptionSchedules.release(scheduleId);
+      }
+
       // Apply upgrade immediately with proration
       const updatedSubscription = await stripe.subscriptions.update(
         subscription.id,
@@ -139,8 +157,22 @@ export async function POST(request: NextRequest) {
             price: priceId,
           }],
           proration_behavior: 'always_invoice',
+          // Apply promotion code if provided
+          ...(promotionCodeId && {
+            discounts: [{ promotion_code: promotionCodeId }],
+          }),
         }
       );
+
+      // Clear any schedule info from database
+      await db.update(subscriptions)
+        .set({
+          stripeScheduleId: null,
+          scheduledPriceId: null,
+          scheduledChangeDate: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(subscriptions.stripeSubscriptionId, subscription.id));
 
       return NextResponse.json({
         subscriptionId: updatedSubscription.id,

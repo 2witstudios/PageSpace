@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
     const userId = auth.userId;
 
     const body = await request.json();
-    const { priceId } = body;
+    const { priceId, promotionCodeId } = body;
 
     if (!priceId) {
       return NextResponse.json(
@@ -75,6 +75,10 @@ export async function POST(request: NextRequest) {
       },
       expand: ['latest_invoice.confirmation_secret'],
       metadata: { userId: user.id },
+      // Apply promotion code if provided
+      ...(promotionCodeId && {
+        discounts: [{ promotion_code: promotionCodeId }],
+      }),
     });
 
     const invoice = subscription.latest_invoice as Stripe.Invoice & {
