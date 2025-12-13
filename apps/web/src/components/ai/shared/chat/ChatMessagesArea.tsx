@@ -148,5 +148,3 @@ export const ChatMessagesArea = forwardRef<ChatMessagesAreaRef, ChatMessagesArea
 );
 
 ChatMessagesArea.displayName = 'ChatMessagesArea';
-
-export default ChatMessagesArea;

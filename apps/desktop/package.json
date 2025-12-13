@@ -29,7 +29,6 @@
   "devDependencies": {
     "@types/node": "^20.17.12",
     "@types/ws": "^8.18.1",
-    "cross-env": "^7.0.3",
     "electron": "^33.3.1",
     "electron-builder": "^26.0.8",
     "electron-vite": "^4.0.1",

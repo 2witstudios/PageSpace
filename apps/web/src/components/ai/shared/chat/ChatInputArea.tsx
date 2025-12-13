@@ -162,5 +162,3 @@ export const ChatInputArea = forwardRef<ChatInputAreaRef, ChatInputAreaProps>(
 );
 
 ChatInputArea.displayName = 'ChatInputArea';
-
-export default ChatInputArea;

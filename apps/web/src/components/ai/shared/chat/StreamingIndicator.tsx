@@ -38,5 +38,3 @@ export const StreamingIndicator: React.FC<StreamingIndicatorProps> = ({
     </div>
   );
 };
-
-export default StreamingIndicator;
