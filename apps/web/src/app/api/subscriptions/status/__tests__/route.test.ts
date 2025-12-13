@@ -4,6 +4,7 @@ import type { WebAuthResult } from '@/lib/auth';
 
 // Mock database
 const mockSelectWhere = vi.fn();
+const mockSelectOrderBy = vi.fn();
 const mockSelectLimit = vi.fn();
 
 vi.mock('@pagespace/db', () => {
@@ -11,15 +12,16 @@ vi.mock('@pagespace/db', () => {
     db: {
       select: vi.fn(() => ({
         from: vi.fn(() => ({
-          where: mockSelectWhere.mockReturnValue({
-            limit: mockSelectLimit,
-          }),
+          where: (...args: unknown[]) => mockSelectWhere(...args),
         })),
       })),
     },
     users: {},
     subscriptions: {},
     eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
+    and: vi.fn((...conditions: unknown[]) => ({ type: 'and', conditions })),
+    inArray: vi.fn((field: unknown, values: unknown[]) => ({ field, values, type: 'inArray' })),
+    desc: vi.fn((field: unknown) => ({ field, type: 'desc' })),
   };
 });
 
@@ -82,8 +84,17 @@ describe('GET /api/subscriptions/status', () => {
     vi.mocked(requireAuth).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
 
-    // Default: first call returns user, second returns subscription
-    mockSelectWhere.mockReturnValue({ limit: mockSelectLimit });
+    mockSelectWhere.mockReset();
+    mockSelectOrderBy.mockReset();
+    mockSelectLimit.mockReset();
+
+    // Default: user lookup returns array, subscription lookup returns query builder chain
+    mockSelectOrderBy.mockImplementation(() => ({
+      limit: mockSelectLimit,
+    }));
+    mockSelectWhere.mockImplementation(() => ({
+      orderBy: mockSelectOrderBy,
+    }));
     mockSelectLimit.mockResolvedValue([]);
   });
 

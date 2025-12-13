@@ -8,6 +8,17 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Users, AlertCircle, Shield, MessageCircle, Database } from "lucide-react";
 import { fetchWithAuth } from "@/lib/auth/auth-fetch";
 
+interface SubscriptionData {
+  id: string;
+  stripeSubscriptionId: string;
+  status: string;
+  currentPeriodEnd: string;
+  cancelAtPeriodEnd: boolean;
+  isGifted: boolean;
+  giftedBy?: string;
+  giftReason?: string;
+}
+
 interface UserData {
   id: string;
   name: string;
@@ -17,7 +28,8 @@ interface UserData {
   currentAiProvider: string;
   currentAiModel: string;
   tokenVersion: number;
-  subscriptionTier: 'free' | 'pro' | 'business';
+  subscriptionTier: 'free' | 'pro' | 'founder' | 'business';
+  stripeCustomerId: string | null;
   stats: {
     drives: number;
     pages: number;
@@ -40,6 +52,7 @@ interface UserData {
     userAgent: string | null;
     createdAt: string;
   }>;
+  subscription: SubscriptionData | null;
 }
 
 export default function AdminUsersPage() {
