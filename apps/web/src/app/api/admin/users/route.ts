@@ -9,7 +9,7 @@ import {
   userAiSettings,
   subscriptions,
   eq,
-  and,
+
   inArray,
   desc,
   count
@@ -22,7 +22,7 @@ export async function GET(request: Request) {
   try {
     // Verify user is authenticated and is an admin
     const adminUser = await verifyAdminAuth(request);
-    
+
     if (!adminUser) {
       return Response.json(
         { error: 'Unauthorized: Admin access required' },
@@ -184,20 +184,20 @@ export async function GET(request: Request) {
 
     // Remove the count fields from the response
     const cleanUsers = enrichedUsers.map((userData) => {
-      const { 
+      const {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        drivesCount, 
+        drivesCount,
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        pagesCount, 
+        pagesCount,
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        chatMessagesCount, 
+        chatMessagesCount,
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         globalMessagesCount,
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         refreshTokensCount,
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         aiSettingsCount,
-        ...user 
+        ...user
       } = userData;
       return user;
     });

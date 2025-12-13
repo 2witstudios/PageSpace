@@ -13,7 +13,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { ChevronDown, ChevronRight, Search, Shield, MessageCircle, Database, Settings, Crown, CreditCard, CheckCircle, Gift, ExternalLink, AlertTriangle, XCircle } from "lucide-react";
+import { ChevronDown, ChevronRight, Search, Shield, MessageCircle, Database, Settings, Crown, CreditCard, CheckCircle, Gift, ExternalLink, XCircle } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { put, del } from "@/lib/auth/auth-fetch";
 
@@ -198,8 +198,8 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
       <div className="grid gap-4">
         {filteredUsers.map((user) => (
           <Card key={user.id}>
-            <Collapsible 
-              open={expandedUsers[user.id]} 
+            <Collapsible
+              open={expandedUsers[user.id]}
               onOpenChange={() => toggleUser(user.id)}
             >
               <CollapsibleTrigger asChild>
@@ -211,29 +211,29 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
                       ) : (
                         <ChevronRight className="h-4 w-4" />
                       )}
-                      
+
                       <Avatar className="h-10 w-10">
                         <AvatarImage src={user.image || undefined} />
                         <AvatarFallback>{getUserInitials(user.name)}</AvatarFallback>
                       </Avatar>
-                      
+
                       <div>
                         <CardTitle className="text-lg">{user.name}</CardTitle>
                         <p className="text-sm text-muted-foreground">{user.email}</p>
                       </div>
                     </div>
-                    
+
                     <div className="flex items-center space-x-2">
                       <Badge variant={user.emailVerified ? "default" : "secondary"}>
                         <Shield className="h-3 w-3 mr-1" />
                         {user.emailVerified ? "Verified" : "Unverified"}
                       </Badge>
-                      
+
                       <Badge variant="outline">
                         <Database className="h-3 w-3 mr-1" />
                         {user.stats.drives} drives
                       </Badge>
-                      
+
                       <Badge variant="outline">
                         <MessageCircle className="h-3 w-3 mr-1" />
                         {user.stats.totalMessages} messages
@@ -241,8 +241,8 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
 
                       <Badge variant={
                         user.subscriptionTier === 'business' ? "destructive" :
-                        user.subscriptionTier === 'founder' ? "default" :
-                        user.subscriptionTier === 'pro' ? "default" : "secondary"
+                          user.subscriptionTier === 'founder' ? "default" :
+                            user.subscriptionTier === 'pro' ? "default" : "secondary"
                       }>
                         {user.subscription?.isGifted ? (
                           <Gift className="h-3 w-3 mr-1" />
@@ -252,8 +252,8 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
                           <CreditCard className="h-3 w-3 mr-1" />
                         )}
                         {user.subscriptionTier === 'business' ? 'Business' :
-                         user.subscriptionTier === 'founder' ? 'Founder' :
-                         user.subscriptionTier === 'pro' ? 'Pro' : 'Free'}
+                          user.subscriptionTier === 'founder' ? 'Founder' :
+                            user.subscriptionTier === 'pro' ? 'Pro' : 'Free'}
                         {user.subscription?.isGifted && ' 🎁'}
                       </Badge>
                     </div>
@@ -346,15 +346,15 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
                             <span className="text-sm text-muted-foreground">Current Plan:</span>
                             <Badge variant={
                               user.subscriptionTier === 'business' ? "destructive" :
-                              user.subscriptionTier === 'founder' ? "default" :
-                              user.subscriptionTier === 'pro' ? "default" : "secondary"
+                                user.subscriptionTier === 'founder' ? "default" :
+                                  user.subscriptionTier === 'pro' ? "default" : "secondary"
                             }>
                               {user.subscription?.isGifted && <Gift className="h-3 w-3 mr-1" />}
                               {!user.subscription?.isGifted && user.subscriptionTier !== 'free' && <Crown className="h-3 w-3 mr-1" />}
                               {user.subscriptionTier === 'free' && <CreditCard className="h-3 w-3 mr-1" />}
                               {user.subscriptionTier === 'business' ? 'Business' :
-                               user.subscriptionTier === 'founder' ? 'Founder' :
-                               user.subscriptionTier === 'pro' ? 'Pro' : 'Free'}
+                                user.subscriptionTier === 'founder' ? 'Founder' :
+                                  user.subscriptionTier === 'pro' ? 'Pro' : 'Free'}
                               {user.subscription?.isGifted && ' (Gifted)'}
                             </Badge>
                           </div>
