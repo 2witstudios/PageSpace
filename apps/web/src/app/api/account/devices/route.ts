@@ -3,7 +3,8 @@ import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getUserDeviceTokens, revokeAllUserDeviceTokens, decodeDeviceToken, createDeviceTokenRecord, revokeExpiredDeviceTokens } from '@pagespace/lib/device-auth-utils';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
 
 interface DeviceResponse {
   id: string;
@@ -23,7 +24,7 @@ interface DeviceResponse {
 }
 
 export async function GET(req: Request) {
-  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_READ);
   if (isAuthError(auth)) {
     return auth.error;
   }
@@ -62,7 +63,7 @@ export async function GET(req: Request) {
 }
 
 export async function DELETE(req: Request) {
-  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) {
     return auth.error;
   }

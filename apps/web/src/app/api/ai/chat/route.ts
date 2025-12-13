@@ -13,7 +13,8 @@ import { requiresProSubscription, createRateLimitResponse } from '@/lib/subscrip
 import { broadcastUsageEvent } from '@/lib/websocket/socket-utils';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
-const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['jwt', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
 import {
   createAIProvider,
@@ -83,7 +84,7 @@ export async function POST(request: Request) {
     loggers.ai.info('AI Chat API: Starting request processing');
 
     // Authenticate the request
-    const authResult = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    const authResult = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(authResult)) {
       loggers.ai.warn('AI Chat API: Authentication failed');
       return authResult.error;
@@ -1022,7 +1023,7 @@ export async function POST(request: Request) {
  */
 export async function GET(request: Request) {
   try {
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 

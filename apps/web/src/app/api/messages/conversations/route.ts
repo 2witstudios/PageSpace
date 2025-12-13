@@ -4,12 +4,13 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 import { isEmailVerified } from '@pagespace/lib';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
 
 // GET /api/messages/conversations - Get user's DM conversations with pagination
 export async function GET(request: Request) {
   try {
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 
@@ -154,7 +155,7 @@ export async function GET(request: Request) {
 // POST /api/messages/conversations - Create a new conversation
 export async function POST(request: Request) {
   try {
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 

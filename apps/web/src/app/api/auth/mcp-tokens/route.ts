@@ -5,7 +5,8 @@ import * as crypto from 'crypto';
 import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/server';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
 
 // Generate a secure MCP token with prefix
 function generateMCPToken(): string {
@@ -20,7 +21,7 @@ const createTokenSchema = z.object({
 
 // POST: Create a new MCP token
 export async function POST(req: NextRequest) {
-  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
 
@@ -56,7 +57,7 @@ export async function POST(req: NextRequest) {
 
 // GET: List user's MCP tokens (without the actual token values)
 export async function GET(req: NextRequest) {
-  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_READ);
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
 

@@ -40,7 +40,8 @@ import { calculateTotalContextSize } from '@pagespace/lib/ai-context-calculator'
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
 
 /**
  * GET - Get all messages for a conversation
@@ -50,7 +51,7 @@ export async function GET(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 
@@ -175,7 +176,7 @@ export async function POST(
     const usageLogger = loggers.api.child({ module: 'global-assistant-usage' });
     loggers.api.debug('🚀 Global Assistant Chat API: Starting request processing', {});
 
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) {
       loggers.api.debug('❌ Global Assistant Chat API: Authentication failed', {});
       return auth.error;

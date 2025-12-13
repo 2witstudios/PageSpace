@@ -5,7 +5,8 @@ import { loggers } from '@pagespace/lib/server';
 import { createOrUpdateMessageNotification, isEmailVerified } from '@pagespace/lib';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
 
 // GET /api/messages/[conversationId] - Get messages in a conversation
 export async function GET(
@@ -13,7 +14,7 @@ export async function GET(
   context: { params: Promise<{ conversationId: string }> }
 ) {
   try {
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 
@@ -114,7 +115,7 @@ export async function POST(
   context: { params: Promise<{ conversationId: string }> }
 ) {
   try {
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 

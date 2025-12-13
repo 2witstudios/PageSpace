@@ -3,7 +3,8 @@ import { db, eq, and, asc } from '@pagespace/db';
 import { driveRoles, driveMembers, drives } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
 
 // Type for role permissions structure (Record<pageId, permissions>)
 type RolePermissions = Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
@@ -31,7 +32,7 @@ export async function GET(
   context: { params: Promise<{ driveId: string }> }
 ) {
   try {
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 
@@ -81,7 +82,7 @@ export async function POST(
   context: { params: Promise<{ driveId: string }> }
 ) {
   try {
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 

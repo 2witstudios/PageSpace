@@ -3,7 +3,8 @@ import { db, emailNotificationPreferences, eq, and } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
 
 // All available notification types
 const NOTIFICATION_TYPES = [
@@ -23,7 +24,7 @@ const NOTIFICATION_TYPES = [
 // GET /api/settings/notification-preferences - Get user's email notification preferences
 export async function GET(request: Request) {
   try {
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 
@@ -57,7 +58,7 @@ export async function GET(request: Request) {
 // PATCH /api/settings/notification-preferences - Update email notification preferences
 export async function PATCH(request: Request) {
   try {
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 

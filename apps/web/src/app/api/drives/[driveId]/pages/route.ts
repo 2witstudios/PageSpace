@@ -5,7 +5,7 @@ import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/api-utils';
 
-const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: false };
 
 async function getPermittedPages(driveId: string, userId: string) {
   // Check if user is a drive member - currently unused but will be needed for member-level permissions
