@@ -11,17 +11,20 @@
 import 'dotenv/config';
 import Stripe from 'stripe';
 import { db, users, subscriptions, eq, and, inArray, ne } from '@pagespace/db';
+import { stripeConfig, stripeMode } from '../apps/web/src/lib/stripe-config';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-08-27.basil',
 });
 
-// Price IDs from stripe-config.ts
+// Use centralized config (automatically selects test/live based on environment)
 const PRICE_IDS: Record<string, string> = {
-  pro: 'price_1Sdbh6PCGvbSozob1IBfmSuv',
-  founder: 'price_1SdbhePCGvbSozobuNjSn5j0',
-  business: 'price_1SdbhfPCGvbSozobpTMXfqkX',
+  pro: stripeConfig.priceIds.pro,
+  founder: stripeConfig.priceIds.founder,
+  business: stripeConfig.priceIds.business,
 };
+
+console.log(`Using Stripe ${stripeMode} mode`);
 
 async function main() {
   console.log('Finding legacy users (tier != free, no active subscription)...\n');

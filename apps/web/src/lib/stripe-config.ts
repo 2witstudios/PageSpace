@@ -29,12 +29,11 @@ const config: Record<'test' | 'live', StripeConfig> = {
     },
   },
   live: {
-    // TODO: Add production keys when ready to go live
-    publishableKey: '',
+    publishableKey: 'pk_live_51S2LlQPRnBcvXFso7Y3yM21QcIuHM3b6Iz1VdOZ7d51aVaZvITRSs7M5KVpKF3jih2p2t59xwlR4Jr8DwIydW9Ht00KeOaUd35',
     priceIds: {
-      pro: '',
-      founder: '',
-      business: '',
+      pro: 'price_1SdfbXPRnBcvXFsoRbjnaQFS',        // $15/month
+      founder: 'price_1SdfbbPRnBcvXFsofn7L1leP',    // $50/month
+      business: 'price_1SdfbePRnBcvXFsoCvpJsSxw',   // $100/month
     },
   },
 };
