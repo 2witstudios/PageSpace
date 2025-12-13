@@ -9,6 +9,48 @@ const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
 type GiftTier = 'pro' | 'founder' | 'business';
 
+/**
+ * Get or create a Stripe customer for a user.
+ * Handles stale customer IDs that no longer exist in Stripe.
+ */
+async function getOrCreateStripeCustomer(
+  user: { id: string; email: string; name: string | null; stripeCustomerId: string | null }
+): Promise<string> {
+  let customerId = user.stripeCustomerId;
+
+  // Verify existing customer still exists in Stripe
+  if (customerId) {
+    try {
+      await stripe.customers.retrieve(customerId);
+    } catch (error) {
+      if (error instanceof Stripe.errors.StripeError &&
+          error.code === 'resource_missing') {
+        // Customer doesn't exist in Stripe, clear it and create new
+        customerId = null;
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  // Create new customer if needed
+  if (!customerId) {
+    const customer = await stripe.customers.create({
+      email: user.email,
+      name: user.name || undefined,
+      metadata: { userId: user.id },
+    });
+    customerId = customer.id;
+
+    // Update database with new customer ID
+    await db.update(users)
+      .set({ stripeCustomerId: customerId, updatedAt: new Date() })
+      .where(eq(users.id, user.id));
+  }
+
+  return customerId;
+}
+
 
 
 /**
@@ -86,27 +128,8 @@ export async function POST(
       );
     }
 
-    // Get or create Stripe customer
-    let customerId = targetUser.stripeCustomerId;
-
-    if (!customerId) {
-      const customer = await stripe.customers.create({
-        email: targetUser.email,
-        name: targetUser.name || undefined,
-        metadata: { userId: targetUser.id },
-      });
-      customerId = customer.id;
-
-      try {
-        await db.update(users)
-          .set({ stripeCustomerId: customerId, updatedAt: new Date() })
-          .where(eq(users.id, targetUserId));
-      } catch (dbError) {
-        // Rollback: delete the orphaned Stripe customer
-        await stripe.customers.del(customerId);
-        throw dbError;
-      }
-    }
+    // Get or create Stripe customer (handles stale customer IDs)
+    const customerId = await getOrCreateStripeCustomer(targetUser);
 
     // Get price ID for the tier
     const priceId = stripeConfig.priceIds[giftTier];
