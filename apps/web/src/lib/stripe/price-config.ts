@@ -1,5 +1,6 @@
 import { stripeConfig } from '../stripe-config';
 import type { SubscriptionTier } from '../subscription/plans';
+import { loggers } from '@pagespace/lib/server';
 
 /**
  * Mapping from Stripe price IDs to subscription tiers.
@@ -42,12 +43,12 @@ export function getTierFromPrice(priceId: string, priceAmount?: number | null): 
   if (priceAmount != null) {
     const tierFromAmount = LEGACY_PRICE_AMOUNTS[priceAmount];
     if (tierFromAmount) {
-      console.warn(`Unknown Stripe price ID "${priceId}", falling back to amount-based tier: ${tierFromAmount}`);
+      loggers.api.warn('Unknown Stripe price ID, falling back to amount-based tier', { priceId, tierFromAmount });
       return tierFromAmount;
     }
   }
 
   // Log unknown price for debugging - this shouldn't happen in production
-  console.error(`Unknown Stripe price: id="${priceId}", amount=${priceAmount}. Defaulting to free.`);
+  loggers.api.error('Unknown Stripe price, defaulting to free', undefined, { priceId, priceAmount });
   return 'free';
 }
