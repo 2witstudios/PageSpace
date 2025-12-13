@@ -15,7 +15,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ChevronDown, ChevronRight, Search, Shield, MessageCircle, Database, Settings, Crown, CreditCard, CheckCircle, Gift, ExternalLink, XCircle } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { put, del } from "@/lib/auth/auth-fetch";
+import { post, del } from "@/lib/auth/auth-fetch";
 
 interface UserStats {
   drives: number;
@@ -123,7 +123,7 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
     setUpdatingUsers(prev => ({ ...prev, [userId]: true }));
 
     try {
-      const result = await put(`/api/admin/users/${userId}/gift-subscription`, {
+      const result = await post(`/api/admin/users/${userId}/gift-subscription`, {
         tier,
         reason: 'Admin gift'
       });
