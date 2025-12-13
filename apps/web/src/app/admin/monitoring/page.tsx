@@ -13,7 +13,7 @@ import type {
   UserActivityData,
   AiUsageData,
   ErrorAnalyticsData
-} from '@/lib/monitoring/monitoring-types';
+} from '@/lib/monitoring';
 
 // Component imports
 import SystemHealthWidget from './components/SystemHealthWidget';

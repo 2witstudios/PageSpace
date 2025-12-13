@@ -1,7 +1,7 @@
 import { useEffect, useCallback, useRef } from 'react';
 import { useSocket } from './useSocket';
 import { useDriveStore } from './useDrive';
-import { DriveEventPayload, DriveMemberEventPayload } from '@/lib/websocket/socket-utils';
+import { DriveEventPayload, DriveMemberEventPayload } from '@/lib/websocket';
 
 /**
  * Hook that listens for global drive events and updates the drive store

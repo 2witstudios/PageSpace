@@ -23,6 +23,8 @@ export * from './system-prompt';
 export * from './inline-instructions';
 export * from './mention-processor';
 export * from './timestamp-utils';
+export * from './agent-awareness';
+export * from './page-tree-context';
 
 // Tools
 export * from './ai-tools';

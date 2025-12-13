@@ -59,14 +59,14 @@ import {
   registerConnection,
   verifyConnectionFingerprint,
   isChallengeVerified,
-} from '@/lib/websocket/ws-connections';
+} from '@/lib/websocket';
 import {
   generateChallenge,
   verifyChallengeResponse,
   getConnectionFingerprint,
   logSecurityEvent,
   validateMessageSize,
-} from '@/lib/websocket/ws-security';
+} from '@/lib/websocket';
 
 describe('WebSocket MCP Bridge - Security Tests', () => {
   let mockClient: WebSocket;

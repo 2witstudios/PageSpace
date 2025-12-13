@@ -2,7 +2,7 @@ import React from 'react';
 import { Loader2, AlertCircle } from 'lucide-react';
 import { Task, TaskTrigger, TaskContent, TaskItem, TaskStatus } from '@/components/ai/task';
 import { Badge } from '@/components/ui/badge';
-import { MemoizedMarkdown } from '@/components/ai/shared/MemoizedMarkdown';
+import { MemoizedMarkdown } from '@/components/ai/shared';
 
 interface AgentConversationOutput {
   success: boolean;

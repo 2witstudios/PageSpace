@@ -6,7 +6,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
 } from 'recharts';
 import { format } from 'date-fns';
-import type { AiUsageData, DetailedWidgetProps } from '@/lib/monitoring/monitoring-types';
+import type { AiUsageData, DetailedWidgetProps } from '@/lib/monitoring';
 
 type AiUsageBreakdownProps = DetailedWidgetProps<AiUsageData>;
 

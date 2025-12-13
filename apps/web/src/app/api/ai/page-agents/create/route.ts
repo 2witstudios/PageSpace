@@ -4,8 +4,8 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 import { db, pages, drives, eq, and, desc, isNull } from '@pagespace/db';
 import { canUserEditPage, agentAwarenessCache } from '@pagespace/lib/server';
-import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket/socket-utils';
-import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
+import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { pageSpaceTools } from '@/lib/ai/core';
 import { loggers } from '@pagespace/lib/server';
 
 /**

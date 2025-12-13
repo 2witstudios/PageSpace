@@ -2,8 +2,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { db, pages, taskItems, taskLists, eq, and, asc, isNotNull } from '@pagespace/db';
 import { buildTree, getUserAccessLevel, getUserDriveAccess, getUserAccessiblePagesInDriveWithDetails, getPageTypeEmoji, isFolderPage, PageType } from '@pagespace/lib/server';
-import { ToolExecutionContext } from '../core/types';
-import { getSuggestedVisionModels } from '../core/model-capabilities';
+import { type ToolExecutionContext, getSuggestedVisionModels } from '../core';
 
 export const pageReadTools = {
   /**

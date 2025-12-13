@@ -3,10 +3,9 @@ import { z } from 'zod';
 import { db, pages, eq, and } from '@pagespace/db';
 import { canUserEditPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
-import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket/socket-utils';
+import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { maskIdentifier } from '@/lib/logging/mask';
-import { ToolExecutionContext } from '../core/types';
-import { pageSpaceTools } from '../core/ai-tools';
+import { type ToolExecutionContext, pageSpaceTools } from '../core';
 
 const agentLogger = loggers.ai.child({ module: 'agent-tools' });
 

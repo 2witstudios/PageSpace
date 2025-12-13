@@ -14,8 +14,8 @@ import {
   isSheetType,
   loggers,
 } from '@pagespace/lib/server';
-import { broadcastPageEvent, createPageEventPayload, broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket/socket-utils';
-import { ToolExecutionContext } from '../core/types';
+import { broadcastPageEvent, createPageEventPayload, broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
+import { type ToolExecutionContext } from '../core';
 import { maskIdentifier } from '@/lib/logging/mask';
 
 const pageWriteLogger = loggers.ai.child({ module: 'page-write-tools' });

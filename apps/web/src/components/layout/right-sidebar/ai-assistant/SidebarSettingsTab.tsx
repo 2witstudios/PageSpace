@@ -8,7 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { CheckCircle, XCircle, Key, ExternalLink, Zap, Sparkles, Bot, Wrench, FolderTree } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
-import { AI_PROVIDERS, getBackendProvider } from '@/lib/ai/core/ai-providers-config';
+import { AI_PROVIDERS, getBackendProvider } from '@/lib/ai/core';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import type { AgentInfo } from '@/types/agent';

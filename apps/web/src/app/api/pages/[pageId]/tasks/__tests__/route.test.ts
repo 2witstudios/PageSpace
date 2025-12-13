@@ -84,7 +84,7 @@ vi.mock('@/lib/websocket/socket-utils', () => ({
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
 import { db } from '@pagespace/db';
-import { broadcastTaskEvent } from '@/lib/websocket/socket-utils';
+import { broadcastTaskEvent } from '@/lib/websocket';
 
 describe('Task API Routes', () => {
   const mockUserId = 'user-123';

@@ -2,7 +2,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { db, pages, drives, eq, and, sql, inArray } from '@pagespace/db';
 import { getUserDriveAccess, getUserAccessiblePagesInDriveWithDetails } from '@pagespace/lib/server';
-import { ToolExecutionContext } from '../core/types';
+import { type ToolExecutionContext } from '../core';
 
 export const searchTools = {
   /**

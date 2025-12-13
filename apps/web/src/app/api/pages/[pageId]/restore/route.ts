@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { pages, db, and, eq } from '@pagespace/db';
 import { loggers, pageTreeCache } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
-import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket/socket-utils';
+import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };

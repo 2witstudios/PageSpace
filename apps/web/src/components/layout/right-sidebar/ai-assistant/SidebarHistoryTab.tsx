@@ -7,8 +7,8 @@ import { Trash2, Search, MessageSquare, Sparkles, Bot } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
-import { usePageAgentSidebarState } from '@/hooks/page-agents/usePageAgentSidebarState';
-import { usePageAgentDashboardStore } from '@/stores/page-agents/usePageAgentDashboardStore';
+import { usePageAgentSidebarState } from '@/hooks/page-agents';
+import { usePageAgentDashboardStore } from '@/stores/page-agents';
 import type { AgentInfo } from '@/types/agent';
 
 interface Conversation {

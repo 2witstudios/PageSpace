@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { pages, drives, driveMembers, db, and, eq } from '@pagespace/db';
 import { z } from 'zod/v4';
-import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket/socket-utils';
+import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers, pageTreeCache } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';

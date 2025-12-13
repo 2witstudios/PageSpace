@@ -7,12 +7,12 @@ const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 import {
   createAIProvider,
   isProviderError,
-  type ProviderRequest
-} from '@/lib/ai/core/provider-factory';
+  type ProviderRequest,
+  pageSpaceTools,
+  buildTimestampSystemPrompt,
+  type ToolExecutionContext,
+} from '@/lib/ai/core';
 import { db, pages, drives, eq, chatMessages } from '@pagespace/db';
-import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
-import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
-import { ToolExecutionContext } from '@/lib/ai/core/types';
 import { loggers } from '@pagespace/lib/server';
 
 /**

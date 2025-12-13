@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { drives, db, eq, and, driveMembers } from '@pagespace/db';
 import { z } from 'zod';
 import { loggers, slugify } from '@pagespace/lib/server';
-import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket/socket-utils';
+import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 const AUTH_OPTIONS_READ = { allow: ['jwt', 'mcp'] as const, requireCSRF: false };

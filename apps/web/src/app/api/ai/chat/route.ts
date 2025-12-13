@@ -10,7 +10,7 @@ import {
 } from 'ai';
 import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
 import { requiresProSubscription, createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
-import { broadcastUsageEvent } from '@/lib/websocket/socket-utils';
+import { broadcastUsageEvent } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 const AUTH_OPTIONS_READ = { allow: ['jwt', 'mcp'] as const, requireCSRF: false };
@@ -21,9 +21,7 @@ import {
   updateUserProviderSettings,
   createProviderErrorResponse,
   isProviderError,
-  type ProviderRequest
-} from '@/lib/ai/core/provider-factory';
-import {
+  type ProviderRequest,
   getUserOpenRouterSettings,
   getUserGoogleSettings,
   getDefaultPageSpaceSettings,
@@ -33,31 +31,30 @@ import {
   getUserOllamaSettings,
   getUserLMStudioSettings,
   getUserGLMSettings,
-} from '@/lib/ai/core/ai-utils';
-import { db, users, chatMessages, pages, drives, eq, and } from '@pagespace/db';
-import { createId } from '@paralleldrive/cuid2';
-import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
-import {
+  pageSpaceTools,
   extractMessageContent,
   extractToolCalls,
   extractToolResults,
   saveMessageToDatabase,
   sanitizeMessagesForModel,
-  convertDbMessageToUIMessage
-} from '@/lib/ai/core/message-utils';
-import { processMentionsInMessage } from '@/lib/ai/core/mention-processor';
-import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
-import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
-import { filterToolsForReadOnly } from '@/lib/ai/core/tool-filtering';
-import { getPageTreeContext } from '@/lib/ai/core/page-tree-context';
+  convertDbMessageToUIMessage,
+  processMentionsInMessage,
+  buildTimestampSystemPrompt,
+  buildSystemPrompt,
+  filterToolsForReadOnly,
+  getPageTreeContext,
+  getModelCapabilities,
+  convertMCPToolsToAISDKSchemas,
+  parseMCPToolName,
+} from '@/lib/ai/core';
+import { db, users, chatMessages, pages, drives, eq, and } from '@pagespace/db';
+import { createId } from '@paralleldrive/cuid2';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { trackFeature } from '@pagespace/lib/activity-tracker';
 import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
-import { getModelCapabilities } from '@/lib/ai/core/model-capabilities';
-import { convertMCPToolsToAISDKSchemas, parseMCPToolName } from '@/lib/ai/core/mcp-tool-converter';
 import type { MCPTool } from '@/types/mcp';
-import { getMCPBridge } from '@/lib/mcp/mcp-bridge';
+import { getMCPBridge } from '@/lib/mcp';
 
 
 // Allow streaming responses up to 5 minutes for complex AI agent interactions

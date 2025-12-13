@@ -1,7 +1,7 @@
 import type { WebSocket, WebSocketServer } from 'ws';
 import type { NextRequest } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
-import { getMCPBridge } from '@/lib/mcp/mcp-bridge';
+import { getMCPBridge } from '@/lib/mcp';
 import {
   registerConnection,
   unregisterConnection,
@@ -12,8 +12,6 @@ import {
   checkConnectionHealth,
   setJWTExpiryTimer,
   verifyConnectionFingerprint,
-} from '@/lib/websocket/ws-connections';
-import {
   generateChallenge,
   verifyChallengeResponse,
   clearChallenge,
@@ -22,16 +20,14 @@ import {
   logSecurityEvent,
   isSecureConnection,
   getSessionIdFromPayload,
-} from '@/lib/websocket/ws-security';
-import { decodeToken } from '@pagespace/lib/server';
-import {
   validateIncomingMessageWithError,
   type IncomingMessage,
   isPingMessage,
   isChallengeResponseMessage,
   isToolExecuteMessage,
   isToolResultMessage,
-} from '@/lib/websocket/ws-message-schemas';
+} from '@/lib/websocket';
+import { decodeToken } from '@pagespace/lib/server';
 import { getCookieValueFromHeader } from '@/lib/utils/get-cookie-value';
 
 // Initialize cleanup interval on module load
