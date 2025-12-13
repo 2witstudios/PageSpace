@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useTheme } from 'next-themes';
 import { Button } from '@/components/ui/button';
@@ -50,6 +50,9 @@ export default function PlanPage() {
   // Schedule cancellation
   const [cancellingSchedule, setCancellingSchedule] = useState(false);
 
+  // Ref to track subscriptionId for cleanup (avoids stale closure)
+  const subscriptionIdRef = useRef<string | null>(null);
+
   const success = searchParams.get('success');
   const canceled = searchParams.get('canceled');
 
@@ -66,6 +69,50 @@ export default function PlanPage() {
       return () => clearTimeout(timer);
     }
   }, [success, canceled, router]);
+
+  // Keep ref in sync with subscriptionId state
+  useEffect(() => {
+    subscriptionIdRef.current = subscriptionId;
+  }, [subscriptionId]);
+
+  // Cleanup incomplete subscription on unmount (client-side navigation)
+  useEffect(() => {
+    return () => {
+      if (subscriptionIdRef.current) {
+        post('/api/stripe/cancel-checkout', {
+          subscriptionId: subscriptionIdRef.current,
+        }).catch((err) => console.error('Checkout cleanup failed:', err));
+      }
+    };
+  }, []);
+
+  // Cleanup incomplete subscription on browser/tab close
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (!subscriptionIdRef.current) return;
+
+      // Get CSRF token from cookie
+      const csrfToken = document.cookie
+        .split('; ')
+        .find((row) => row.startsWith('csrf_token='))
+        ?.split('=')[1];
+
+      // Use fetch with keepalive - continues after page unloads
+      fetch('/api/stripe/cancel-checkout', {
+        method: 'POST',
+        keepalive: true,
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(csrfToken && { 'X-CSRF-Token': csrfToken }),
+        },
+        body: JSON.stringify({ subscriptionId: subscriptionIdRef.current }),
+      });
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, []);
 
   const fetchSubscriptionData = async () => {
     try {
