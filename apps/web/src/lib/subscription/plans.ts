@@ -106,7 +106,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     },
     icon: Crown,
     iconColor: 'text-amber-500',
-    accentColor: 'border-zinc-300 bg-zinc-100/80 dark:border-zinc-700 dark:bg-zinc-800/80',
+    accentColor: 'border-zinc-300 bg-zinc-100/80 dark:border-zinc-600 dark:bg-zinc-900/90',
     description: 'Best for professionals and growing teams',
     highlighted: true,
     stripePriceId: STRIPE_PRICE_ID_PRO,

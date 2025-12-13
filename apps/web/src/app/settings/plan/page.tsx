@@ -320,6 +320,7 @@ export default function PlanPage() {
               currentTier={subscriptionData?.subscriptionTier || 'free'}
               isCurrentPlan={plan.id === subscriptionData?.subscriptionTier}
               isScheduledPlan={plan.id === scheduledTier}
+              hasPendingSchedule={!!scheduledTier}
               onUpgrade={handlePlanSelect}
               onManageBilling={() => router.push('/settings/billing')}
               onCancelSchedule={handleCancelSchedule}

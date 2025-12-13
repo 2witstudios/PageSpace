@@ -13,6 +13,7 @@ interface PlanCardProps {
   currentTier: SubscriptionTier;
   isCurrentPlan?: boolean;
   isScheduledPlan?: boolean;
+  hasPendingSchedule?: boolean;
   onUpgrade?: (targetTier: SubscriptionTier) => void;
   onManageBilling?: () => void;
   onCancelSchedule?: () => void;
@@ -25,6 +26,7 @@ export function PlanCard({
   currentTier,
   isCurrentPlan = false,
   isScheduledPlan = false,
+  hasPendingSchedule = false,
   onUpgrade,
   onManageBilling,
   onCancelSchedule,
@@ -53,28 +55,44 @@ export function PlanCard({
   };
 
   const getActionButton = () => {
-    // If this plan is scheduled, show cancel button
+    // If this plan is scheduled (where they're downgrading TO), show manage billing
     if (isScheduledPlan) {
       return (
         <Button
           variant="outline"
-          onClick={onCancelSchedule}
-          disabled={cancellingSchedule}
-          className="w-full"
+          onClick={handleAction}
+          disabled={isProcessing}
+          className="w-full flex items-center gap-2"
         >
-          {cancellingSchedule ? (
-            <>
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-              Cancelling...
-            </>
-          ) : (
-            'Keep Current Plan'
-          )}
+          <ExternalLink className="h-4 w-4" />
+          {isProcessing ? "Opening..." : "Manage Billing"}
         </Button>
       );
     }
 
     if (isCurrentPlan) {
+      // If there's a pending schedule (downgrade), show cancel button
+      if (hasPendingSchedule) {
+        return (
+          <Button
+            variant="outline"
+            onClick={onCancelSchedule}
+            disabled={cancellingSchedule}
+            className="w-full"
+          >
+            {cancellingSchedule ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Cancelling...
+              </>
+            ) : (
+              'Cancel Downgrade'
+            )}
+          </Button>
+        );
+      }
+
+      // Normal case - show manage billing
       return (
         <Button
           variant="outline"
@@ -114,7 +132,7 @@ export function PlanCard({
           onClick={handleAction}
           disabled={isProcessing}
           className="w-full"
-          variant="outline"
+          variant="secondary"
         >
           {isProcessing ? "Processing..." : `Downgrade to ${plan.displayName}`}
         </Button>
@@ -196,7 +214,7 @@ export function PlanCard({
         <CardDescription className="text-center text-sm mb-4 h-10">
           {plan.description}
         </CardDescription>
-        
+
         <div className="mt-auto">
           {getActionButton()}
         </div>
