@@ -354,7 +354,8 @@ describe('POST /api/stripe/validate-promo-code', () => {
 
       expect(response.status).toBe(400);
       expect(body.valid).toBe(false);
-      expect(body.error).toBe('Invalid API key');
+      // getUserFriendlyStripeError returns generic message for unknown errors
+      expect(body.error).toBe('Unable to process this request. Please try again.');
     });
 
     it('should return 500 on unexpected error', async () => {

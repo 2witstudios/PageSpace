@@ -8,7 +8,7 @@ const createMockRequest = (url: string, init?: RequestInit): NextRequest => {
 };
 
 // Mock Stripe - use vi.hoisted to ensure mocks are available before vi.mock
-const { mockStripeCustomersCreate, mockStripeCustomersDel, mockStripeSubscriptionsCreate, StripeError } = vi.hoisted(() => {
+const { mockStripeSubscriptionsCreate, mockGetOrCreateStripeCustomer, StripeError } = vi.hoisted(() => {
   const StripeError = class extends Error {
     constructor(message: string) {
       super(message);
@@ -16,19 +16,14 @@ const { mockStripeCustomersCreate, mockStripeCustomersDel, mockStripeSubscriptio
     }
   };
   return {
-    mockStripeCustomersCreate: vi.fn(),
-    mockStripeCustomersDel: vi.fn(),
     mockStripeSubscriptionsCreate: vi.fn(),
+    mockGetOrCreateStripeCustomer: vi.fn(),
     StripeError,
   };
 });
 
 vi.mock('@/lib/stripe', () => ({
   stripe: {
-    customers: {
-      create: mockStripeCustomersCreate,
-      del: mockStripeCustomersDel,
-    },
     subscriptions: {
       create: mockStripeSubscriptionsCreate,
     },
@@ -38,10 +33,13 @@ vi.mock('@/lib/stripe', () => ({
   },
 }));
 
+// Mock stripe-customer module
+vi.mock('@/lib/stripe-customer', () => ({
+  getOrCreateStripeCustomer: mockGetOrCreateStripeCustomer,
+}));
+
 // Mock database - using inline factory
 const mockSelectWhere = vi.fn();
-const mockUpdateWhere = vi.fn();
-const mockUpdateSet = vi.fn();
 
 vi.mock('@pagespace/db', () => {
   return {
@@ -50,11 +48,6 @@ vi.mock('@pagespace/db', () => {
         from: vi.fn(() => ({
           where: mockSelectWhere,
         })),
-      })),
-      update: vi.fn(() => ({
-        set: mockUpdateSet.mockReturnValue({
-          where: mockUpdateWhere,
-        }),
       })),
     },
     users: {},
@@ -114,14 +107,11 @@ describe('POST /api/stripe/create-subscription', () => {
 
     // Setup default user (free tier, no stripe customer)
     mockSelectWhere.mockResolvedValue([mockUser()]);
-    mockUpdateWhere.mockResolvedValue(undefined);
-    mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
+
+    // Setup default stripe-customer mock (returns customer ID)
+    mockGetOrCreateStripeCustomer.mockResolvedValue('cus_new123');
 
     // Setup default Stripe mocks
-    mockStripeCustomersCreate.mockResolvedValue({
-      id: 'cus_new123',
-    });
-
     mockStripeSubscriptionsCreate.mockResolvedValue({
       id: 'sub_123',
       status: 'incomplete',
@@ -149,7 +139,7 @@ describe('POST /api/stripe/create-subscription', () => {
     expect(body.status).toBe('incomplete');
   });
 
-  it('should create Stripe customer if not exists', async () => {
+  it('should call getOrCreateStripeCustomer with user', async () => {
     const request = createMockRequest('https://example.com/api/stripe/create-subscription', {
       method: 'POST',
       body: JSON.stringify({ priceId: mockPriceId }),
@@ -157,14 +147,19 @@ describe('POST /api/stripe/create-subscription', () => {
 
     await POST(request);
 
-    expect(mockStripeCustomersCreate).toHaveBeenCalledWith({
-      email: 'test@example.com',
-      name: 'Test User',
-      metadata: { userId: mockUserId },
-    });
+    // Verify getOrCreateStripeCustomer was called with the user object
+    expect(mockGetOrCreateStripeCustomer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: mockUserId,
+        email: 'test@example.com',
+        name: 'Test User',
+      })
+    );
   });
 
-  it('should use existing Stripe customer if available', async () => {
+  it('should use customer ID from getOrCreateStripeCustomer', async () => {
+    // Mock returns an existing customer ID
+    mockGetOrCreateStripeCustomer.mockResolvedValue('cus_existing123');
     mockSelectWhere.mockResolvedValue([mockUser({ stripeCustomerId: 'cus_existing123' })]);
 
     const request = createMockRequest('https://example.com/api/stripe/create-subscription', {
@@ -174,7 +169,7 @@ describe('POST /api/stripe/create-subscription', () => {
 
     await POST(request);
 
-    expect(mockStripeCustomersCreate).not.toHaveBeenCalled();
+    // The customer ID from getOrCreateStripeCustomer should be used
     expect(mockStripeSubscriptionsCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         customer: 'cus_existing123',
@@ -261,6 +256,7 @@ describe('POST /api/stripe/create-subscription', () => {
   });
 
   it('should create subscription with correct parameters', async () => {
+    mockGetOrCreateStripeCustomer.mockResolvedValue('cus_test');
     mockSelectWhere.mockResolvedValue([mockUser({ stripeCustomerId: 'cus_test' })]);
 
     const request = createMockRequest('https://example.com/api/stripe/create-subscription', {
@@ -282,18 +278,4 @@ describe('POST /api/stripe/create-subscription', () => {
     });
   });
 
-  it('should save new customer ID to database', async () => {
-    const request = createMockRequest('https://example.com/api/stripe/create-subscription', {
-      method: 'POST',
-      body: JSON.stringify({ priceId: mockPriceId }),
-    });
-
-    await POST(request);
-
-    expect(mockUpdateSet).toHaveBeenCalledWith(
-      expect.objectContaining({
-        stripeCustomerId: 'cus_new123',
-      })
-    );
-  });
 });

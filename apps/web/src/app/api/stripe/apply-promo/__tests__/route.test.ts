@@ -24,8 +24,9 @@ vi.mock('@pagespace/db', () => ({
 // Mock Stripe - use vi.hoisted to ensure mocks are available before vi.mock
 const {
   mockStripeSubscriptionsRetrieve,
-  mockStripeSubscriptionsUpdate,
-  mockStripeInvoicesRetrieve,
+  mockStripeSubscriptionsCancel,
+  mockStripeSubscriptionsCreate,
+  mockStripePaymentIntentsCancel,
   StripeError,
 } = vi.hoisted(() => {
   const StripeError = class extends Error {
@@ -36,8 +37,9 @@ const {
   };
   return {
     mockStripeSubscriptionsRetrieve: vi.fn(),
-    mockStripeSubscriptionsUpdate: vi.fn(),
-    mockStripeInvoicesRetrieve: vi.fn(),
+    mockStripeSubscriptionsCancel: vi.fn(),
+    mockStripeSubscriptionsCreate: vi.fn(),
+    mockStripePaymentIntentsCancel: vi.fn(),
     StripeError,
   };
 });
@@ -46,10 +48,11 @@ vi.mock('@/lib/stripe', () => ({
   stripe: {
     subscriptions: {
       retrieve: mockStripeSubscriptionsRetrieve,
-      update: mockStripeSubscriptionsUpdate,
+      cancel: mockStripeSubscriptionsCancel,
+      create: mockStripeSubscriptionsCreate,
     },
-    invoices: {
-      retrieve: mockStripeInvoicesRetrieve,
+    paymentIntents: {
+      cancel: mockStripePaymentIntentsCancel,
     },
   },
   Stripe: {
@@ -102,34 +105,54 @@ const mockUser = (overrides: Partial<{
   subscriptionTier: overrides.subscriptionTier ?? 'free',
 });
 
-// Helper to create mock subscription
-const mockSubscription = (overrides: Partial<{
+// Helper to create mock subscription with expanded invoice (for retrieve)
+const mockOldSubscription = (overrides: Partial<{
   id: string;
   status: string;
   metadata: { userId?: string };
-  latest_invoice: string;
+  items: { data: Array<{ price: { id: string } }> };
+  customer: string;
+  latest_invoice: {
+    id: string;
+    payment_intent: { id: string; status: string } | null;
+  };
 }> = {}) => ({
   id: overrides.id ?? 'sub_123',
   status: overrides.status ?? 'incomplete',
   metadata: overrides.metadata ?? { userId: 'user_123' },
-  latest_invoice: overrides.latest_invoice ?? 'in_123',
+  items: overrides.items ?? { data: [{ price: { id: 'price_pro_monthly' } }] },
+  customer: overrides.customer ?? 'cus_123',
+  latest_invoice: overrides.latest_invoice ?? {
+    id: 'in_123',
+    payment_intent: { id: 'pi_123', status: 'requires_payment_method' },
+  },
 });
 
-// Helper to create mock invoice
-const mockInvoice = (overrides: Partial<{
+// Helper to create mock new subscription (for create - after promo applied)
+const mockNewSubscription = (overrides: Partial<{
   id: string;
-  amount_due: number;
-  discounts: Array<{ coupon: { id: string; percent_off: number | null; amount_off: number | null } }>;
+  status: string;
+  latest_invoice: {
+    id: string;
+    amount_due: number;
+    confirmation_secret: { client_secret: string };
+    discounts: Array<{ coupon: { id: string; percent_off: number | null; amount_off: number | null } }>;
+  };
 }> = {}) => ({
-  id: overrides.id ?? 'in_123',
-  amount_due: overrides.amount_due ?? 1600, // $16.00 (after discount)
-  discounts: overrides.discounts ?? [{
-    coupon: {
-      id: 'coupon_123',
-      percent_off: 20,
-      amount_off: null,
-    },
-  }],
+  id: overrides.id ?? 'sub_new_456',
+  status: overrides.status ?? 'incomplete',
+  latest_invoice: overrides.latest_invoice ?? {
+    id: 'in_new_456',
+    amount_due: 1600, // $16.00 (after 20% discount)
+    confirmation_secret: { client_secret: 'pi_secret_new_456' },
+    discounts: [{
+      coupon: {
+        id: 'coupon_123',
+        percent_off: 20,
+        amount_off: null,
+      },
+    }],
+  },
 });
 
 describe('POST /api/stripe/apply-promo', () => {
@@ -145,14 +168,15 @@ describe('POST /api/stripe/apply-promo', () => {
     // Setup default database mock
     mockDbSelect.mockResolvedValue([mockUser()]);
 
-    // Setup default Stripe mocks
-    mockStripeSubscriptionsRetrieve.mockResolvedValue(mockSubscription());
-    mockStripeSubscriptionsUpdate.mockResolvedValue(mockSubscription());
-    mockStripeInvoicesRetrieve.mockResolvedValue(mockInvoice());
+    // Setup default Stripe mocks for cancel-and-recreate flow
+    mockStripeSubscriptionsRetrieve.mockResolvedValue(mockOldSubscription());
+    mockStripePaymentIntentsCancel.mockResolvedValue({ id: 'pi_123', status: 'canceled' });
+    mockStripeSubscriptionsCancel.mockResolvedValue({ id: 'sub_123', status: 'canceled' });
+    mockStripeSubscriptionsCreate.mockResolvedValue(mockNewSubscription());
   });
 
   describe('Success cases', () => {
-    it('should apply promo code to incomplete subscription', async () => {
+    it('should apply promo code to incomplete subscription via cancel-recreate', async () => {
       const request = createMockRequest('https://example.com/api/stripe/apply-promo', {
         method: 'POST',
         body: JSON.stringify({
@@ -166,7 +190,9 @@ describe('POST /api/stripe/apply-promo', () => {
 
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
-      expect(body.subscriptionId).toBe('sub_123');
+      // Returns the NEW subscription ID after recreation
+      expect(body.subscriptionId).toBe('sub_new_456');
+      expect(body.clientSecret).toBe('pi_secret_new_456');
       expect(body.amountDue).toBe(1600);
       expect(body.discount).toEqual({
         couponId: 'coupon_123',
@@ -175,7 +201,7 @@ describe('POST /api/stripe/apply-promo', () => {
       });
     });
 
-    it('should call Stripe subscriptions.update with discounts array', async () => {
+    it('should cancel old subscription and create new one with promo', async () => {
       const request = createMockRequest('https://example.com/api/stripe/apply-promo', {
         method: 'POST',
         body: JSON.stringify({
@@ -184,19 +210,35 @@ describe('POST /api/stripe/apply-promo', () => {
         }),
       });
 
+      // Setup mock for this specific subscription
+      mockStripeSubscriptionsRetrieve.mockResolvedValue(mockOldSubscription({ id: 'sub_456' }));
+
       await POST(request);
 
-      expect(mockStripeSubscriptionsUpdate).toHaveBeenCalledWith('sub_456', {
-        discounts: [{ promotion_code: 'promo_789' }],
-      });
+      // Should cancel the payment intent first
+      expect(mockStripePaymentIntentsCancel).toHaveBeenCalledWith('pi_123');
+      // Should cancel the old subscription
+      expect(mockStripeSubscriptionsCancel).toHaveBeenCalledWith('sub_456');
+      // Should create new subscription with promo applied
+      expect(mockStripeSubscriptionsCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          customer: 'cus_123',
+          items: [{ price: 'price_pro_monthly' }],
+          discounts: [{ promotion_code: 'promo_789' }],
+          metadata: { userId: 'user_123' },
+        })
+      );
     });
 
     it('should return null discount when invoice has no discounts', async () => {
-      mockStripeInvoicesRetrieve.mockResolvedValue({
-        id: 'in_123',
-        amount_due: 2000,
-        discounts: [],
-      });
+      mockStripeSubscriptionsCreate.mockResolvedValue(mockNewSubscription({
+        latest_invoice: {
+          id: 'in_new_456',
+          amount_due: 2000,
+          confirmation_secret: { client_secret: 'pi_secret_new_456' },
+          discounts: [],
+        },
+      }));
 
       const request = createMockRequest('https://example.com/api/stripe/apply-promo', {
         method: 'POST',
@@ -261,7 +303,7 @@ describe('POST /api/stripe/apply-promo', () => {
 
     it('should return 404 when subscription does not belong to user', async () => {
       mockStripeSubscriptionsRetrieve.mockResolvedValue(
-        mockSubscription({ metadata: { userId: 'other_user' } })
+        mockOldSubscription({ metadata: { userId: 'other_user' } })
       );
 
       const request = createMockRequest('https://example.com/api/stripe/apply-promo', {
@@ -281,7 +323,7 @@ describe('POST /api/stripe/apply-promo', () => {
 
     it('should return 400 when subscription is not incomplete', async () => {
       mockStripeSubscriptionsRetrieve.mockResolvedValue(
-        mockSubscription({ status: 'active' })
+        mockOldSubscription({ status: 'active' })
       );
 
       const request = createMockRequest('https://example.com/api/stripe/apply-promo', {
@@ -319,7 +361,7 @@ describe('POST /api/stripe/apply-promo', () => {
     });
 
     it('should return 400 on Stripe API error', async () => {
-      mockStripeSubscriptionsUpdate.mockRejectedValue(
+      mockStripeSubscriptionsCreate.mockRejectedValue(
         new StripeError('Invalid promotion code')
       );
 
@@ -335,11 +377,12 @@ describe('POST /api/stripe/apply-promo', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBe('Invalid promotion code');
+      // getUserFriendlyStripeError returns generic message for unknown errors
+      expect(body.error).toBe('Unable to process this request. Please try again.');
     });
 
     it('should return 500 on unexpected error', async () => {
-      mockStripeSubscriptionsUpdate.mockRejectedValue(new Error('Network error'));
+      mockStripeSubscriptionsCreate.mockRejectedValue(new Error('Network error'));
 
       const request = createMockRequest('https://example.com/api/stripe/apply-promo', {
         method: 'POST',
