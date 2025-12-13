@@ -153,10 +153,21 @@ export default function PlanPage() {
   };
 
   const handleCheckoutCancel = () => {
+    // Capture subscriptionId before clearing
+    const currentSubscriptionId = subscriptionId;
+
+    // Clear UI immediately
     setCheckoutPlan(null);
     setClientSecret(null);
     setSubscriptionId(null);
     setAppliedPromo(null);
+
+    // Cleanup Stripe resources (fire-and-forget)
+    if (currentSubscriptionId) {
+      post('/api/stripe/cancel-checkout', {
+        subscriptionId: currentSubscriptionId,
+      }).catch((err) => console.error('Checkout cleanup failed:', err));
+    }
   };
 
   // Handle subscription recreation (when promo code is applied)
