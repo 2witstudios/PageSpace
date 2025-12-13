@@ -1193,7 +1193,7 @@ async function validateProviderModel(
  */
 export async function PATCH(request: Request) {
   try {
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) return auth.error;
 
     const body = await request.json();
