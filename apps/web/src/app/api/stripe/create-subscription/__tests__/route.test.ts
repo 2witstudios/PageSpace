@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import type { WebAuthResult, AuthError } from '@/lib/auth';
+
+// Helper to create mock NextRequest for testing
+const createMockRequest = (url: string, init?: RequestInit): NextRequest => {
+  return new Request(url, init) as unknown as NextRequest;
+};
 
 // Mock Stripe - use vi.hoisted to ensure mocks are available before vi.mock
 const { mockStripeCustomersCreate, mockStripeCustomersDel, mockStripeSubscriptionsCreate, StripeError } = vi.hoisted(() => {
@@ -130,7 +135,7 @@ describe('POST /api/stripe/create-subscription', () => {
   });
 
   it('should create subscription successfully for free user', async () => {
-    const request = new Request('https://example.com/api/stripe/create-subscription', {
+    const request = createMockRequest('https://example.com/api/stripe/create-subscription', {
       method: 'POST',
       body: JSON.stringify({ priceId: mockPriceId }),
     });
@@ -145,7 +150,7 @@ describe('POST /api/stripe/create-subscription', () => {
   });
 
   it('should create Stripe customer if not exists', async () => {
-    const request = new Request('https://example.com/api/stripe/create-subscription', {
+    const request = createMockRequest('https://example.com/api/stripe/create-subscription', {
       method: 'POST',
       body: JSON.stringify({ priceId: mockPriceId }),
     });
@@ -162,7 +167,7 @@ describe('POST /api/stripe/create-subscription', () => {
   it('should use existing Stripe customer if available', async () => {
     mockSelectWhere.mockResolvedValue([mockUser({ stripeCustomerId: 'cus_existing123' })]);
 
-    const request = new Request('https://example.com/api/stripe/create-subscription', {
+    const request = createMockRequest('https://example.com/api/stripe/create-subscription', {
       method: 'POST',
       body: JSON.stringify({ priceId: mockPriceId }),
     });
@@ -178,7 +183,7 @@ describe('POST /api/stripe/create-subscription', () => {
   });
 
   it('should return 400 when priceId is missing', async () => {
-    const request = new Request('https://example.com/api/stripe/create-subscription', {
+    const request = createMockRequest('https://example.com/api/stripe/create-subscription', {
       method: 'POST',
       body: JSON.stringify({}),
     });
@@ -193,7 +198,7 @@ describe('POST /api/stripe/create-subscription', () => {
   it('should return 404 when user not found', async () => {
     mockSelectWhere.mockResolvedValue([]);
 
-    const request = new Request('https://example.com/api/stripe/create-subscription', {
+    const request = createMockRequest('https://example.com/api/stripe/create-subscription', {
       method: 'POST',
       body: JSON.stringify({ priceId: mockPriceId }),
     });
@@ -208,7 +213,7 @@ describe('POST /api/stripe/create-subscription', () => {
   it('should return 400 when user already has paid subscription', async () => {
     mockSelectWhere.mockResolvedValue([mockUser({ subscriptionTier: 'pro' })]);
 
-    const request = new Request('https://example.com/api/stripe/create-subscription', {
+    const request = createMockRequest('https://example.com/api/stripe/create-subscription', {
       method: 'POST',
       body: JSON.stringify({ priceId: mockPriceId }),
     });
@@ -224,7 +229,7 @@ describe('POST /api/stripe/create-subscription', () => {
     vi.mocked(isAuthError).mockReturnValue(true);
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
-    const request = new Request('https://example.com/api/stripe/create-subscription', {
+    const request = createMockRequest('https://example.com/api/stripe/create-subscription', {
       method: 'POST',
       body: JSON.stringify({ priceId: mockPriceId }),
     });
@@ -243,7 +248,7 @@ describe('POST /api/stripe/create-subscription', () => {
       },
     });
 
-    const request = new Request('https://example.com/api/stripe/create-subscription', {
+    const request = createMockRequest('https://example.com/api/stripe/create-subscription', {
       method: 'POST',
       body: JSON.stringify({ priceId: mockPriceId }),
     });
@@ -258,7 +263,7 @@ describe('POST /api/stripe/create-subscription', () => {
   it('should create subscription with correct parameters', async () => {
     mockSelectWhere.mockResolvedValue([mockUser({ stripeCustomerId: 'cus_test' })]);
 
-    const request = new Request('https://example.com/api/stripe/create-subscription', {
+    const request = createMockRequest('https://example.com/api/stripe/create-subscription', {
       method: 'POST',
       body: JSON.stringify({ priceId: mockPriceId }),
     });
@@ -278,7 +283,7 @@ describe('POST /api/stripe/create-subscription', () => {
   });
 
   it('should save new customer ID to database', async () => {
-    const request = new Request('https://example.com/api/stripe/create-subscription', {
+    const request = createMockRequest('https://example.com/api/stripe/create-subscription', {
       method: 'POST',
       body: JSON.stringify({ priceId: mockPriceId }),
     });

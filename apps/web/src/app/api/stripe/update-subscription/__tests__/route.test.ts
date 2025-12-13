@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import type { WebAuthResult, AuthError } from '@/lib/auth';
+
+// Helper to create mock NextRequest for testing
+const createMockRequest = (url: string, init?: RequestInit): NextRequest => {
+  return new Request(url, init) as unknown as NextRequest;
+};
 
 // Mock Stripe - use vi.hoisted to ensure mocks are available before vi.mock
 const {
@@ -195,7 +200,7 @@ describe('POST /api/stripe/update-subscription', () => {
 
   describe('Upgrade flow (immediate)', () => {
     it('should upgrade subscription immediately with proration', async () => {
-      const request = new Request('https://example.com/api/stripe/update-subscription', {
+      const request = createMockRequest('https://example.com/api/stripe/update-subscription', {
         method: 'POST',
         body: JSON.stringify({ priceId: mockPriceId, isDowngrade: false }),
       });
@@ -209,7 +214,7 @@ describe('POST /api/stripe/update-subscription', () => {
     });
 
     it('should update subscription with proration behavior', async () => {
-      const request = new Request('https://example.com/api/stripe/update-subscription', {
+      const request = createMockRequest('https://example.com/api/stripe/update-subscription', {
         method: 'POST',
         body: JSON.stringify({ priceId: mockPriceId }),
       });
@@ -231,7 +236,7 @@ describe('POST /api/stripe/update-subscription', () => {
 
   describe('Downgrade flow (scheduled)', () => {
     it('should schedule downgrade at period end', async () => {
-      const request = new Request('https://example.com/api/stripe/update-subscription', {
+      const request = createMockRequest('https://example.com/api/stripe/update-subscription', {
         method: 'POST',
         body: JSON.stringify({ priceId: mockPriceId, isDowngrade: true }),
       });
@@ -247,7 +252,7 @@ describe('POST /api/stripe/update-subscription', () => {
     });
 
     it('should create subscription schedule for downgrade', async () => {
-      const request = new Request('https://example.com/api/stripe/update-subscription', {
+      const request = createMockRequest('https://example.com/api/stripe/update-subscription', {
         method: 'POST',
         body: JSON.stringify({ priceId: mockPriceId, isDowngrade: true }),
       });
@@ -268,7 +273,7 @@ describe('POST /api/stripe/update-subscription', () => {
         phases: [{ start_date: Math.floor(Date.now() / 1000) }],
       });
 
-      const request = new Request('https://example.com/api/stripe/update-subscription', {
+      const request = createMockRequest('https://example.com/api/stripe/update-subscription', {
         method: 'POST',
         body: JSON.stringify({ priceId: mockPriceId, isDowngrade: true }),
       });
@@ -282,7 +287,7 @@ describe('POST /api/stripe/update-subscription', () => {
 
   describe('Error handling', () => {
     it('should return 400 when priceId is missing', async () => {
-      const request = new Request('https://example.com/api/stripe/update-subscription', {
+      const request = createMockRequest('https://example.com/api/stripe/update-subscription', {
         method: 'POST',
         body: JSON.stringify({}),
       });
@@ -297,7 +302,7 @@ describe('POST /api/stripe/update-subscription', () => {
     it('should return 404 when user not found', async () => {
       mockUserQuery.mockResolvedValue([]);
 
-      const request = new Request('https://example.com/api/stripe/update-subscription', {
+      const request = createMockRequest('https://example.com/api/stripe/update-subscription', {
         method: 'POST',
         body: JSON.stringify({ priceId: mockPriceId }),
       });
@@ -312,7 +317,7 @@ describe('POST /api/stripe/update-subscription', () => {
     it('should return 400 when no Stripe customer', async () => {
       mockUserQuery.mockResolvedValue([mockUser({ stripeCustomerId: null })]);
 
-      const request = new Request('https://example.com/api/stripe/update-subscription', {
+      const request = createMockRequest('https://example.com/api/stripe/update-subscription', {
         method: 'POST',
         body: JSON.stringify({ priceId: mockPriceId }),
       });
@@ -328,7 +333,7 @@ describe('POST /api/stripe/update-subscription', () => {
       mockUserQuery.mockResolvedValue([mockUser()]);
       mockSubscriptionQuery.mockResolvedValue([]); // No subscription
 
-      const request = new Request('https://example.com/api/stripe/update-subscription', {
+      const request = createMockRequest('https://example.com/api/stripe/update-subscription', {
         method: 'POST',
         body: JSON.stringify({ priceId: mockPriceId }),
       });
@@ -345,7 +350,7 @@ describe('POST /api/stripe/update-subscription', () => {
         mockStripeSubscription({ status: 'canceled' })
       );
 
-      const request = new Request('https://example.com/api/stripe/update-subscription', {
+      const request = createMockRequest('https://example.com/api/stripe/update-subscription', {
         method: 'POST',
         body: JSON.stringify({ priceId: mockPriceId }),
       });
@@ -362,7 +367,7 @@ describe('POST /api/stripe/update-subscription', () => {
         mockStripeSubscription({ items: { data: [] } })
       );
 
-      const request = new Request('https://example.com/api/stripe/update-subscription', {
+      const request = createMockRequest('https://example.com/api/stripe/update-subscription', {
         method: 'POST',
         body: JSON.stringify({ priceId: mockPriceId }),
       });
@@ -378,7 +383,7 @@ describe('POST /api/stripe/update-subscription', () => {
       vi.mocked(isAuthError).mockReturnValue(true);
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
-      const request = new Request('https://example.com/api/stripe/update-subscription', {
+      const request = createMockRequest('https://example.com/api/stripe/update-subscription', {
         method: 'POST',
         body: JSON.stringify({ priceId: mockPriceId }),
       });
@@ -391,7 +396,7 @@ describe('POST /api/stripe/update-subscription', () => {
 
   describe('Business rules', () => {
     it('should default isDowngrade to false', async () => {
-      const request = new Request('https://example.com/api/stripe/update-subscription', {
+      const request = createMockRequest('https://example.com/api/stripe/update-subscription', {
         method: 'POST',
         body: JSON.stringify({ priceId: mockPriceId }), // No isDowngrade
       });
@@ -404,7 +409,7 @@ describe('POST /api/stripe/update-subscription', () => {
     });
 
     it('should fetch subscription with expanded items', async () => {
-      const request = new Request('https://example.com/api/stripe/update-subscription', {
+      const request = createMockRequest('https://example.com/api/stripe/update-subscription', {
         method: 'POST',
         body: JSON.stringify({ priceId: mockPriceId }),
       });
@@ -422,7 +427,7 @@ describe('POST /api/stripe/update-subscription', () => {
         mockStripeSubscription({ status: 'trialing' })
       );
 
-      const request = new Request('https://example.com/api/stripe/update-subscription', {
+      const request = createMockRequest('https://example.com/api/stripe/update-subscription', {
         method: 'POST',
         body: JSON.stringify({ priceId: mockPriceId }),
       });

@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import type { WebAuthResult, AuthError } from '@/lib/auth';
+
+// Helper to create mock NextRequest for testing
+const createMockRequest = (url: string, init?: RequestInit): NextRequest => {
+  return new Request(url, init) as unknown as NextRequest;
+};
 
 // Mock Stripe - use vi.hoisted to ensure mocks are available before vi.mock
 const {
@@ -168,7 +173,7 @@ describe('POST /api/stripe/cancel-subscription', () => {
   });
 
   it('should cancel subscription at period end', async () => {
-    const request = new Request('https://example.com/api/stripe/cancel-subscription', {
+    const request = createMockRequest('https://example.com/api/stripe/cancel-subscription', {
       method: 'POST',
       body: JSON.stringify({}),
     });
@@ -184,7 +189,7 @@ describe('POST /api/stripe/cancel-subscription', () => {
   });
 
   it('should update Stripe subscription with cancel_at_period_end', async () => {
-    const request = new Request('https://example.com/api/stripe/cancel-subscription', {
+    const request = createMockRequest('https://example.com/api/stripe/cancel-subscription', {
       method: 'POST',
       body: JSON.stringify({}),
     });
@@ -198,7 +203,7 @@ describe('POST /api/stripe/cancel-subscription', () => {
   });
 
   it('should update local database record', async () => {
-    const request = new Request('https://example.com/api/stripe/cancel-subscription', {
+    const request = createMockRequest('https://example.com/api/stripe/cancel-subscription', {
       method: 'POST',
       body: JSON.stringify({}),
     });
@@ -215,7 +220,7 @@ describe('POST /api/stripe/cancel-subscription', () => {
   it('should return 404 when user not found', async () => {
     mockUserQuery.mockResolvedValue([]);
 
-    const request = new Request('https://example.com/api/stripe/cancel-subscription', {
+    const request = createMockRequest('https://example.com/api/stripe/cancel-subscription', {
       method: 'POST',
       body: JSON.stringify({}),
     });
@@ -231,7 +236,7 @@ describe('POST /api/stripe/cancel-subscription', () => {
     mockUserQuery.mockResolvedValue([mockUser()]);
     mockSubscriptionQuery.mockResolvedValue([]); // No subscription
 
-    const request = new Request('https://example.com/api/stripe/cancel-subscription', {
+    const request = createMockRequest('https://example.com/api/stripe/cancel-subscription', {
       method: 'POST',
       body: JSON.stringify({}),
     });
@@ -247,7 +252,7 @@ describe('POST /api/stripe/cancel-subscription', () => {
     mockUserQuery.mockResolvedValue([mockUser()]);
     mockSubscriptionQuery.mockResolvedValue([mockDbSubscription({ stripeSubscriptionId: null })]);
 
-    const request = new Request('https://example.com/api/stripe/cancel-subscription', {
+    const request = createMockRequest('https://example.com/api/stripe/cancel-subscription', {
       method: 'POST',
       body: JSON.stringify({}),
     });
@@ -263,7 +268,7 @@ describe('POST /api/stripe/cancel-subscription', () => {
     vi.mocked(isAuthError).mockReturnValue(true);
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
-    const request = new Request('https://example.com/api/stripe/cancel-subscription', {
+    const request = createMockRequest('https://example.com/api/stripe/cancel-subscription', {
       method: 'POST',
       body: JSON.stringify({}),
     });
@@ -274,7 +279,7 @@ describe('POST /api/stripe/cancel-subscription', () => {
   });
 
   it('should return correct period end date', async () => {
-    const request = new Request('https://example.com/api/stripe/cancel-subscription', {
+    const request = createMockRequest('https://example.com/api/stripe/cancel-subscription', {
       method: 'POST',
       body: JSON.stringify({}),
     });

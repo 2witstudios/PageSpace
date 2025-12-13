@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import type { WebAuthResult, AuthError } from '@/lib/auth';
+
+// Helper to create mock NextRequest for testing
+const createMockRequest = (url: string, init?: RequestInit): NextRequest => {
+  return new Request(url, init) as unknown as NextRequest;
+};
 
 // Mock Stripe - use vi.hoisted to ensure mocks are available before vi.mock
 const {
@@ -149,7 +154,7 @@ describe('POST /api/stripe/cancel-schedule', () => {
 
   describe('Success cases', () => {
     it('should cancel pending schedule and clear database fields', async () => {
-      const request = new Request('https://example.com/api/stripe/cancel-schedule', {
+      const request = createMockRequest('https://example.com/api/stripe/cancel-schedule', {
         method: 'POST',
         body: JSON.stringify({}),
       });
@@ -163,7 +168,7 @@ describe('POST /api/stripe/cancel-schedule', () => {
     });
 
     it('should release schedule in Stripe', async () => {
-      const request = new Request('https://example.com/api/stripe/cancel-schedule', {
+      const request = createMockRequest('https://example.com/api/stripe/cancel-schedule', {
         method: 'POST',
         body: JSON.stringify({}),
       });
@@ -174,7 +179,7 @@ describe('POST /api/stripe/cancel-schedule', () => {
     });
 
     it('should clear schedule info in database', async () => {
-      const request = new Request('https://example.com/api/stripe/cancel-schedule', {
+      const request = createMockRequest('https://example.com/api/stripe/cancel-schedule', {
         method: 'POST',
         body: JSON.stringify({}),
       });
@@ -196,7 +201,7 @@ describe('POST /api/stripe/cancel-schedule', () => {
       vi.mocked(isAuthError).mockReturnValue(true);
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
-      const request = new Request('https://example.com/api/stripe/cancel-schedule', {
+      const request = createMockRequest('https://example.com/api/stripe/cancel-schedule', {
         method: 'POST',
         body: JSON.stringify({}),
       });
@@ -209,7 +214,7 @@ describe('POST /api/stripe/cancel-schedule', () => {
     it('should return 404 when user not found', async () => {
       mockUserQuery.mockResolvedValue([]);
 
-      const request = new Request('https://example.com/api/stripe/cancel-schedule', {
+      const request = createMockRequest('https://example.com/api/stripe/cancel-schedule', {
         method: 'POST',
         body: JSON.stringify({}),
       });
@@ -224,7 +229,7 @@ describe('POST /api/stripe/cancel-schedule', () => {
     it('should return 400 when no active subscription found', async () => {
       mockSubscriptionQuery.mockResolvedValue([]);
 
-      const request = new Request('https://example.com/api/stripe/cancel-schedule', {
+      const request = createMockRequest('https://example.com/api/stripe/cancel-schedule', {
         method: 'POST',
         body: JSON.stringify({}),
       });
@@ -239,7 +244,7 @@ describe('POST /api/stripe/cancel-schedule', () => {
     it('should return 400 when no pending schedule exists', async () => {
       mockSubscriptionQuery.mockResolvedValue([mockDbSubscription({ stripeScheduleId: null })]);
 
-      const request = new Request('https://example.com/api/stripe/cancel-schedule', {
+      const request = createMockRequest('https://example.com/api/stripe/cancel-schedule', {
         method: 'POST',
         body: JSON.stringify({}),
       });
@@ -256,7 +261,7 @@ describe('POST /api/stripe/cancel-schedule', () => {
         new StripeError('Invalid schedule')
       );
 
-      const request = new Request('https://example.com/api/stripe/cancel-schedule', {
+      const request = createMockRequest('https://example.com/api/stripe/cancel-schedule', {
         method: 'POST',
         body: JSON.stringify({}),
       });
@@ -271,7 +276,7 @@ describe('POST /api/stripe/cancel-schedule', () => {
     it('should return 500 on unexpected error', async () => {
       mockStripeSubscriptionSchedulesRelease.mockRejectedValue(new Error('Unexpected error'));
 
-      const request = new Request('https://example.com/api/stripe/cancel-schedule', {
+      const request = createMockRequest('https://example.com/api/stripe/cancel-schedule', {
         method: 'POST',
         body: JSON.stringify({}),
       });

@@ -91,7 +91,7 @@ vi.mock('@pagespace/db', () => {
 import { POST } from '../route';
 
 // Helper to create mock Stripe event
-const mockStripeEvent = (type: string, data: unknown): Stripe.Event => ({
+const mockStripeEvent = (type: string, data: unknown) => ({
   id: `evt_${Date.now()}`,
   type,
   data: {
@@ -103,7 +103,7 @@ const mockStripeEvent = (type: string, data: unknown): Stripe.Event => ({
   object: 'event',
   pending_webhooks: 0,
   request: null,
-});
+}) as Stripe.Event;
 
 // Helper to create mock subscription
 const mockSubscription = (overrides: Partial<{

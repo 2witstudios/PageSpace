@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import type { WebAuthResult, AuthError } from '@/lib/auth';
+
+// Helper to create mock NextRequest for testing
+const createMockRequest = (url: string, init?: RequestInit): NextRequest => {
+  return new Request(url, init) as unknown as NextRequest;
+};
 
 // Mock Stripe - use vi.hoisted to ensure mocks are available before vi.mock
 const { mockStripeSubscriptionsRetrieve, mockStripeSubscriptionsUpdate, StripeError } = vi.hoisted(() => {
@@ -152,7 +157,7 @@ describe('POST /api/stripe/reactivate-subscription', () => {
   });
 
   it('should reactivate subscription successfully', async () => {
-    const request = new Request('https://example.com/api/stripe/reactivate-subscription', {
+    const request = createMockRequest('https://example.com/api/stripe/reactivate-subscription', {
       method: 'POST',
       body: JSON.stringify({}),
     });
@@ -168,7 +173,7 @@ describe('POST /api/stripe/reactivate-subscription', () => {
   });
 
   it('should update Stripe subscription with cancel_at_period_end false', async () => {
-    const request = new Request('https://example.com/api/stripe/reactivate-subscription', {
+    const request = createMockRequest('https://example.com/api/stripe/reactivate-subscription', {
       method: 'POST',
       body: JSON.stringify({}),
     });
@@ -182,7 +187,7 @@ describe('POST /api/stripe/reactivate-subscription', () => {
   });
 
   it('should update local database record', async () => {
-    const request = new Request('https://example.com/api/stripe/reactivate-subscription', {
+    const request = createMockRequest('https://example.com/api/stripe/reactivate-subscription', {
       method: 'POST',
       body: JSON.stringify({}),
     });
@@ -203,7 +208,7 @@ describe('POST /api/stripe/reactivate-subscription', () => {
       status: 'active',
     });
 
-    const request = new Request('https://example.com/api/stripe/reactivate-subscription', {
+    const request = createMockRequest('https://example.com/api/stripe/reactivate-subscription', {
       method: 'POST',
       body: JSON.stringify({}),
     });
@@ -218,7 +223,7 @@ describe('POST /api/stripe/reactivate-subscription', () => {
   it('should return 404 when user not found', async () => {
     mockUserQuery.mockResolvedValue([]);
 
-    const request = new Request('https://example.com/api/stripe/reactivate-subscription', {
+    const request = createMockRequest('https://example.com/api/stripe/reactivate-subscription', {
       method: 'POST',
       body: JSON.stringify({}),
     });
@@ -234,7 +239,7 @@ describe('POST /api/stripe/reactivate-subscription', () => {
     mockUserQuery.mockResolvedValue([mockUser()]);
     mockSubscriptionQuery.mockResolvedValue([]); // No subscription
 
-    const request = new Request('https://example.com/api/stripe/reactivate-subscription', {
+    const request = createMockRequest('https://example.com/api/stripe/reactivate-subscription', {
       method: 'POST',
       body: JSON.stringify({}),
     });
@@ -250,7 +255,7 @@ describe('POST /api/stripe/reactivate-subscription', () => {
     vi.mocked(isAuthError).mockReturnValue(true);
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
-    const request = new Request('https://example.com/api/stripe/reactivate-subscription', {
+    const request = createMockRequest('https://example.com/api/stripe/reactivate-subscription', {
       method: 'POST',
       body: JSON.stringify({}),
     });
@@ -261,7 +266,7 @@ describe('POST /api/stripe/reactivate-subscription', () => {
   });
 
   it('should retrieve subscription to check cancellation status first', async () => {
-    const request = new Request('https://example.com/api/stripe/reactivate-subscription', {
+    const request = createMockRequest('https://example.com/api/stripe/reactivate-subscription', {
       method: 'POST',
       body: JSON.stringify({}),
     });

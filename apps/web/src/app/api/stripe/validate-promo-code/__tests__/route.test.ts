@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import type { WebAuthResult, AuthError } from '@/lib/auth';
+
+// Helper to create mock NextRequest for testing
+const createMockRequest = (url: string, init?: RequestInit): NextRequest => {
+  return new Request(url, init) as unknown as NextRequest;
+};
 
 // Mock Stripe - use vi.hoisted to ensure mocks are available before vi.mock
 const {
@@ -120,7 +125,7 @@ describe('POST /api/stripe/validate-promo-code', () => {
 
   describe('Success cases', () => {
     it('should validate a percentage discount code', async () => {
-      const request = new Request('https://example.com/api/stripe/validate-promo-code', {
+      const request = createMockRequest('https://example.com/api/stripe/validate-promo-code', {
         method: 'POST',
         body: JSON.stringify({ code: 'SAVE20', priceId: 'price_pro' }),
       });
@@ -154,7 +159,7 @@ describe('POST /api/stripe/validate-promo-code', () => {
         })],
       });
 
-      const request = new Request('https://example.com/api/stripe/validate-promo-code', {
+      const request = createMockRequest('https://example.com/api/stripe/validate-promo-code', {
         method: 'POST',
         body: JSON.stringify({ code: 'SAVE5', priceId: 'price_pro' }),
       });
@@ -172,7 +177,7 @@ describe('POST /api/stripe/validate-promo-code', () => {
     });
 
     it('should normalize code to uppercase', async () => {
-      const request = new Request('https://example.com/api/stripe/validate-promo-code', {
+      const request = createMockRequest('https://example.com/api/stripe/validate-promo-code', {
         method: 'POST',
         body: JSON.stringify({ code: 'save20', priceId: 'price_pro' }),
       });
@@ -187,7 +192,7 @@ describe('POST /api/stripe/validate-promo-code', () => {
     });
 
     it('should trim whitespace from code', async () => {
-      const request = new Request('https://example.com/api/stripe/validate-promo-code', {
+      const request = createMockRequest('https://example.com/api/stripe/validate-promo-code', {
         method: 'POST',
         body: JSON.stringify({ code: '  SAVE20  ', priceId: 'price_pro' }),
       });
@@ -204,7 +209,7 @@ describe('POST /api/stripe/validate-promo-code', () => {
 
   describe('Validation errors', () => {
     it('should return 400 when code is missing', async () => {
-      const request = new Request('https://example.com/api/stripe/validate-promo-code', {
+      const request = createMockRequest('https://example.com/api/stripe/validate-promo-code', {
         method: 'POST',
         body: JSON.stringify({ priceId: 'price_pro' }),
       });
@@ -218,7 +223,7 @@ describe('POST /api/stripe/validate-promo-code', () => {
     });
 
     it('should return 400 when priceId is missing', async () => {
-      const request = new Request('https://example.com/api/stripe/validate-promo-code', {
+      const request = createMockRequest('https://example.com/api/stripe/validate-promo-code', {
         method: 'POST',
         body: JSON.stringify({ code: 'SAVE20' }),
       });
@@ -234,7 +239,7 @@ describe('POST /api/stripe/validate-promo-code', () => {
     it('should return invalid when promo code not found', async () => {
       mockStripePromotionCodesList.mockResolvedValue({ data: [] });
 
-      const request = new Request('https://example.com/api/stripe/validate-promo-code', {
+      const request = createMockRequest('https://example.com/api/stripe/validate-promo-code', {
         method: 'POST',
         body: JSON.stringify({ code: 'INVALID', priceId: 'price_pro' }),
       });
@@ -263,7 +268,7 @@ describe('POST /api/stripe/validate-promo-code', () => {
         })],
       });
 
-      const request = new Request('https://example.com/api/stripe/validate-promo-code', {
+      const request = createMockRequest('https://example.com/api/stripe/validate-promo-code', {
         method: 'POST',
         body: JSON.stringify({ code: 'EXPIRED', priceId: 'price_pro' }),
       });
@@ -284,7 +289,7 @@ describe('POST /api/stripe/validate-promo-code', () => {
         })],
       });
 
-      const request = new Request('https://example.com/api/stripe/validate-promo-code', {
+      const request = createMockRequest('https://example.com/api/stripe/validate-promo-code', {
         method: 'POST',
         body: JSON.stringify({ code: 'MAXED', priceId: 'price_pro' }),
       });
@@ -305,7 +310,7 @@ describe('POST /api/stripe/validate-promo-code', () => {
         })],
       });
 
-      const request = new Request('https://example.com/api/stripe/validate-promo-code', {
+      const request = createMockRequest('https://example.com/api/stripe/validate-promo-code', {
         method: 'POST',
         body: JSON.stringify({ code: 'EXPIRED', priceId: 'price_pro' }),
       });
@@ -324,7 +329,7 @@ describe('POST /api/stripe/validate-promo-code', () => {
       vi.mocked(isAuthError).mockReturnValue(true);
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
-      const request = new Request('https://example.com/api/stripe/validate-promo-code', {
+      const request = createMockRequest('https://example.com/api/stripe/validate-promo-code', {
         method: 'POST',
         body: JSON.stringify({ code: 'SAVE20', priceId: 'price_pro' }),
       });
@@ -339,7 +344,7 @@ describe('POST /api/stripe/validate-promo-code', () => {
         new StripeError('Invalid API key')
       );
 
-      const request = new Request('https://example.com/api/stripe/validate-promo-code', {
+      const request = createMockRequest('https://example.com/api/stripe/validate-promo-code', {
         method: 'POST',
         body: JSON.stringify({ code: 'SAVE20', priceId: 'price_pro' }),
       });
@@ -355,7 +360,7 @@ describe('POST /api/stripe/validate-promo-code', () => {
     it('should return 500 on unexpected error', async () => {
       mockStripePromotionCodesList.mockRejectedValue(new Error('Network error'));
 
-      const request = new Request('https://example.com/api/stripe/validate-promo-code', {
+      const request = createMockRequest('https://example.com/api/stripe/validate-promo-code', {
         method: 'POST',
         body: JSON.stringify({ code: 'SAVE20', priceId: 'price_pro' }),
       });
@@ -386,7 +391,7 @@ describe('POST /api/stripe/validate-promo-code', () => {
         })],
       });
 
-      const request = new Request('https://example.com/api/stripe/validate-promo-code', {
+      const request = createMockRequest('https://example.com/api/stripe/validate-promo-code', {
         method: 'POST',
         body: JSON.stringify({ code: 'SAVE30X3', priceId: 'price_pro' }),
       });

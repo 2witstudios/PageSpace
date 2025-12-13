@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import type { WebAuthResult, AuthError } from '@/lib/auth';
+
+// Helper to create mock NextRequest for testing
+const createMockRequest = (url: string, init?: RequestInit): NextRequest => {
+  return new Request(url, init) as unknown as NextRequest;
+};
 
 // Mock database
 const mockDbSelect = vi.fn();
@@ -148,7 +153,7 @@ describe('POST /api/stripe/apply-promo', () => {
 
   describe('Success cases', () => {
     it('should apply promo code to incomplete subscription', async () => {
-      const request = new Request('https://example.com/api/stripe/apply-promo', {
+      const request = createMockRequest('https://example.com/api/stripe/apply-promo', {
         method: 'POST',
         body: JSON.stringify({
           subscriptionId: 'sub_123',
@@ -171,7 +176,7 @@ describe('POST /api/stripe/apply-promo', () => {
     });
 
     it('should call Stripe subscriptions.update with discounts array', async () => {
-      const request = new Request('https://example.com/api/stripe/apply-promo', {
+      const request = createMockRequest('https://example.com/api/stripe/apply-promo', {
         method: 'POST',
         body: JSON.stringify({
           subscriptionId: 'sub_456',
@@ -193,7 +198,7 @@ describe('POST /api/stripe/apply-promo', () => {
         discounts: [],
       });
 
-      const request = new Request('https://example.com/api/stripe/apply-promo', {
+      const request = createMockRequest('https://example.com/api/stripe/apply-promo', {
         method: 'POST',
         body: JSON.stringify({
           subscriptionId: 'sub_123',
@@ -211,7 +216,7 @@ describe('POST /api/stripe/apply-promo', () => {
 
   describe('Validation errors', () => {
     it('should return 400 when subscriptionId is missing', async () => {
-      const request = new Request('https://example.com/api/stripe/apply-promo', {
+      const request = createMockRequest('https://example.com/api/stripe/apply-promo', {
         method: 'POST',
         body: JSON.stringify({ promotionCodeId: 'promo_123' }),
       });
@@ -224,7 +229,7 @@ describe('POST /api/stripe/apply-promo', () => {
     });
 
     it('should return 400 when promotionCodeId is missing', async () => {
-      const request = new Request('https://example.com/api/stripe/apply-promo', {
+      const request = createMockRequest('https://example.com/api/stripe/apply-promo', {
         method: 'POST',
         body: JSON.stringify({ subscriptionId: 'sub_123' }),
       });
@@ -239,7 +244,7 @@ describe('POST /api/stripe/apply-promo', () => {
     it('should return 404 when user is not found', async () => {
       mockDbSelect.mockResolvedValue([]);
 
-      const request = new Request('https://example.com/api/stripe/apply-promo', {
+      const request = createMockRequest('https://example.com/api/stripe/apply-promo', {
         method: 'POST',
         body: JSON.stringify({
           subscriptionId: 'sub_123',
@@ -259,7 +264,7 @@ describe('POST /api/stripe/apply-promo', () => {
         mockSubscription({ metadata: { userId: 'other_user' } })
       );
 
-      const request = new Request('https://example.com/api/stripe/apply-promo', {
+      const request = createMockRequest('https://example.com/api/stripe/apply-promo', {
         method: 'POST',
         body: JSON.stringify({
           subscriptionId: 'sub_123',
@@ -279,7 +284,7 @@ describe('POST /api/stripe/apply-promo', () => {
         mockSubscription({ status: 'active' })
       );
 
-      const request = new Request('https://example.com/api/stripe/apply-promo', {
+      const request = createMockRequest('https://example.com/api/stripe/apply-promo', {
         method: 'POST',
         body: JSON.stringify({
           subscriptionId: 'sub_123',
@@ -300,7 +305,7 @@ describe('POST /api/stripe/apply-promo', () => {
       vi.mocked(isAuthError).mockReturnValue(true);
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
-      const request = new Request('https://example.com/api/stripe/apply-promo', {
+      const request = createMockRequest('https://example.com/api/stripe/apply-promo', {
         method: 'POST',
         body: JSON.stringify({
           subscriptionId: 'sub_123',
@@ -318,7 +323,7 @@ describe('POST /api/stripe/apply-promo', () => {
         new StripeError('Invalid promotion code')
       );
 
-      const request = new Request('https://example.com/api/stripe/apply-promo', {
+      const request = createMockRequest('https://example.com/api/stripe/apply-promo', {
         method: 'POST',
         body: JSON.stringify({
           subscriptionId: 'sub_123',
@@ -336,7 +341,7 @@ describe('POST /api/stripe/apply-promo', () => {
     it('should return 500 on unexpected error', async () => {
       mockStripeSubscriptionsUpdate.mockRejectedValue(new Error('Network error'));
 
-      const request = new Request('https://example.com/api/stripe/apply-promo', {
+      const request = createMockRequest('https://example.com/api/stripe/apply-promo', {
         method: 'POST',
         body: JSON.stringify({
           subscriptionId: 'sub_123',
