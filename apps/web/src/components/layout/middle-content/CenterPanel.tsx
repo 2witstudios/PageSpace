@@ -10,6 +10,8 @@ import AiChatView from './page-views/ai-page/AiChatView';
 import ChannelView from './page-views/channel/ChannelView';
 import DocumentView from './page-views/document/DocumentView';
 import FileViewer from './page-views/file/FileViewer';
+import SheetView from './page-views/sheet/SheetView';
+import TaskListView from './page-views/task-list/TaskListView';
 import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 import { getPageTypeComponent } from '@pagespace/lib/client-safe';
 import AiSettingsView from './page-views/settings/ai-api/AiSettingsView';
@@ -68,6 +70,8 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
     DocumentView,
     CanvasPageView,
     FileViewer,
+    SheetView,
+    TaskListView,
   };
   
   const componentName = getPageTypeComponent(page.type);
