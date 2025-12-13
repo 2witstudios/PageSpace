@@ -135,13 +135,21 @@ export default function PlanPage() {
     }
   };
 
-  const handleCheckoutSuccess = () => {
+  const handleCheckoutSuccess = async () => {
+    // Clear checkout UI
     setCheckoutPlan(null);
     setClientSecret(null);
     setSubscriptionId(null);
     setAppliedPromo(null);
-    fetchSubscriptionData();
-    router.replace('/settings/plan?success=true');
+
+    // Show loading state while webhook processes
+    setLoading(true);
+
+    // Brief delay for webhook to process
+    await new Promise(r => setTimeout(r, 2000));
+
+    // Hard refresh - guaranteed fresh data for both plan page and navbar
+    window.location.href = '/settings/plan?success=true';
   };
 
   const handleCheckoutCancel = () => {
