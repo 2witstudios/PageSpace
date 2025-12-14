@@ -80,6 +80,8 @@ describe('useFileDrop', () => {
     onUploadError: vi.fn(),
   };
 
+  const originalMaxFileSize = process.env.NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB;
+
   beforeEach(() => {
     vi.clearAllMocks();
     // Mock environment variable
@@ -93,6 +95,8 @@ describe('useFileDrop', () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+    // Restore original environment variable to avoid cross-test leakage
+    process.env.NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB = originalMaxFileSize;
   });
 
   describe('initial state', () => {
