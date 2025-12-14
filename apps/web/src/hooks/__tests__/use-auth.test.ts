@@ -1,12 +1,17 @@
 /**
  * useAuth Hook Tests
  * Tests for authentication hook integration with auth store
+ *
+ * These tests validate observable behavior:
+ * - Hook returns correct auth state from store
+ * - Actions trigger appropriate state transitions
+ * - Error states are properly exposed
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 
-// Create hoisted mocks
+// Create hoisted mocks with state simulation
 const {
   mockPush,
   mockPost,
@@ -22,34 +27,49 @@ const {
   mockGetSessionDuration,
   mockShouldLoadSession,
   mockInitializeEventListeners,
-} = vi.hoisted(() => ({
-  mockPush: vi.fn(),
-  mockPost: vi.fn(),
-  mockClearJWTCache: vi.fn(),
-  mockGetOrCreateDeviceId: vi.fn(() => 'device-123'),
-  mockGetDeviceName: vi.fn(() => 'Test Device'),
-  mockRefreshToken: vi.fn(),
-  mockStartTokenRefresh: vi.fn(),
-  mockStopTokenRefresh: vi.fn(),
-  mockAuthStore: {
+} = vi.hoisted(() => {
+  const store = {
     user: null as { id: string; name: string; email: string } | null,
     isLoading: false,
     isAuthenticated: false,
     isRefreshing: false,
     hasHydrated: true,
-    setUser: vi.fn(),
-    setLoading: vi.fn(),
-    setHydrated: vi.fn(),
+    // Simulate actual state transitions
+    setUser: vi.fn((user) => {
+      store.user = user;
+      store.isAuthenticated = !!user;
+    }),
+    setLoading: vi.fn((loading) => {
+      store.isLoading = loading;
+    }),
+    setHydrated: vi.fn((hydrated) => {
+      store.hasHydrated = hydrated;
+    }),
     startSession: vi.fn(),
-    endSession: vi.fn(),
+    endSession: vi.fn(() => {
+      store.user = null;
+      store.isAuthenticated = false;
+    }),
     updateActivity: vi.fn(),
-  },
-  mockLoadSession: vi.fn(),
-  mockIsSessionExpired: vi.fn(() => false),
-  mockGetSessionDuration: vi.fn(() => 0),
-  mockShouldLoadSession: vi.fn(() => false),
-  mockInitializeEventListeners: vi.fn(),
-}));
+  };
+
+  return {
+    mockPush: vi.fn(),
+    mockPost: vi.fn(),
+    mockClearJWTCache: vi.fn(),
+    mockGetOrCreateDeviceId: vi.fn(() => 'device-123'),
+    mockGetDeviceName: vi.fn(() => 'Test Device'),
+    mockRefreshToken: vi.fn(),
+    mockStartTokenRefresh: vi.fn(),
+    mockStopTokenRefresh: vi.fn(),
+    mockAuthStore: store,
+    mockLoadSession: vi.fn(),
+    mockIsSessionExpired: vi.fn(() => false),
+    mockGetSessionDuration: vi.fn(() => 0),
+    mockShouldLoadSession: vi.fn(() => false),
+    mockInitializeEventListeners: vi.fn(),
+  };
+});
 
 // Mock dependencies with hoisted mocks
 vi.mock('next/navigation', () => ({
@@ -85,7 +105,6 @@ vi.mock('@/stores/auth-store', () => {
     }
     return mockAuthStore;
   });
-  // Add getState as a static method (Zustand pattern)
   useAuthStoreMock.getState = () => mockAuthStore;
 
   return {
@@ -115,7 +134,6 @@ const mockLocalStorage = (() => {
 })();
 Object.defineProperty(global, 'localStorage', { value: mockLocalStorage });
 
-// Mock fetch
 const originalFetch = global.fetch;
 
 describe('useAuth', () => {
@@ -130,7 +148,6 @@ describe('useAuth', () => {
     mockAuthStore.isRefreshing = false;
     mockAuthStore.hasHydrated = true;
 
-    // Reset fetch mock
     global.fetch = vi.fn();
   });
 
@@ -143,17 +160,20 @@ describe('useAuth', () => {
     it('given no user in store, should return unauthenticated state', () => {
       const { result } = renderHook(() => useAuth());
 
+      // Observable: hook exposes store state
       expect(result.current.user).toBeNull();
       expect(result.current.isAuthenticated).toBe(false);
     });
 
     it('given user in store, should return authenticated state', () => {
-      mockAuthStore.user = { id: 'user-123', name: 'Test User', email: 'test@example.com' };
+      const userData = { id: 'user-123', name: 'Test User', email: 'test@example.com' };
+      mockAuthStore.user = userData;
       mockAuthStore.isAuthenticated = true;
 
       const { result } = renderHook(() => useAuth());
 
-      expect(result.current.user).toEqual(mockAuthStore.user);
+      // Observable: hook exposes stored user
+      expect(result.current.user).toEqual(userData);
       expect(result.current.isAuthenticated).toBe(true);
     });
 
@@ -167,7 +187,7 @@ describe('useAuth', () => {
   });
 
   describe('login', () => {
-    it('given valid credentials, should call API and update store', async () => {
+    it('given valid credentials, should update store with user and return success', async () => {
       const userData = { id: 'user-123', name: 'Test User', email: 'test@example.com' };
       vi.mocked(global.fetch).mockResolvedValue({
         ok: true,
@@ -181,12 +201,16 @@ describe('useAuth', () => {
         loginResult = await result.current.actions.login('test@example.com', 'password123');
       });
 
+      // Primary: observable return value
       expect(loginResult).toEqual({ success: true });
+      // Primary: observable state change - user is now set
       expect(mockAuthStore.setUser).toHaveBeenCalledWith(userData);
-      expect(mockAuthStore.startSession).toHaveBeenCalled();
+      // Verify state transition occurred
+      expect(mockAuthStore.user).toEqual(userData);
+      expect(mockAuthStore.isAuthenticated).toBe(true);
     });
 
-    it('given invalid credentials, should return error', async () => {
+    it('given invalid credentials, should return error without changing auth state', async () => {
       vi.mocked(global.fetch).mockResolvedValue({
         ok: false,
         json: () => Promise.resolve({ error: 'Invalid credentials' }),
@@ -199,10 +223,14 @@ describe('useAuth', () => {
         loginResult = await result.current.actions.login('test@example.com', 'wrongpassword');
       });
 
+      // Primary: observable error return
       expect(loginResult).toEqual({ success: false, error: 'Invalid credentials' });
+      // Primary: state unchanged
+      expect(mockAuthStore.user).toBeNull();
+      expect(mockAuthStore.isAuthenticated).toBe(false);
     });
 
-    it('given network error, should return generic error', async () => {
+    it('given network error, should return generic error without changing auth state', async () => {
       vi.mocked(global.fetch).mockRejectedValue(new Error('Network error'));
       const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -213,11 +241,31 @@ describe('useAuth', () => {
         loginResult = await result.current.actions.login('test@example.com', 'password');
       });
 
+      // Primary: observable error return
       expect(loginResult).toEqual({ success: false, error: 'Network error. Please try again.' });
+      // Primary: state unchanged
+      expect(mockAuthStore.user).toBeNull();
       consoleError.mockRestore();
     });
 
-    it('should include device information in login request', async () => {
+    it('given deviceToken in response, should persist to localStorage', async () => {
+      const userData = { id: 'user-123', deviceToken: 'device-token-abc' };
+      vi.mocked(global.fetch).mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(userData),
+      } as Response);
+
+      const { result } = renderHook(() => useAuth());
+
+      await act(async () => {
+        await result.current.actions.login('test@example.com', 'password');
+      });
+
+      // Observable: deviceToken persisted
+      expect(mockLocalStorage.setItem).toHaveBeenCalledWith('deviceToken', 'device-token-abc');
+    });
+
+    it('should include device information in login request body', async () => {
       vi.mocked(global.fetch).mockResolvedValue({
         ok: true,
         json: () => Promise.resolve({ id: 'user-123' }),
@@ -229,6 +277,7 @@ describe('useAuth', () => {
         await result.current.actions.login('test@example.com', 'password');
       });
 
+      // Observable: API called with correct payload
       expect(global.fetch).toHaveBeenCalledWith(
         '/api/auth/login',
         expect.objectContaining({
@@ -236,26 +285,33 @@ describe('useAuth', () => {
         })
       );
     });
+  });
 
-    it('given deviceToken returned, should store in localStorage', async () => {
-      vi.mocked(global.fetch).mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ id: 'user-123', deviceToken: 'device-token-abc' }),
-      } as Response);
+  describe('logout', () => {
+    it('should clear session and redirect to signin', async () => {
+      // Setup authenticated state
+      mockAuthStore.user = { id: 'user-123', name: 'Test', email: 'test@example.com' };
+      mockAuthStore.isAuthenticated = true;
+      mockPost.mockResolvedValue({ ok: true });
 
       const { result } = renderHook(() => useAuth());
 
       await act(async () => {
-        await result.current.actions.login('test@example.com', 'password');
+        await result.current.actions.logout();
       });
 
-      expect(mockLocalStorage.setItem).toHaveBeenCalledWith('deviceToken', 'device-token-abc');
+      // Primary: observable state transition
+      expect(mockAuthStore.endSession).toHaveBeenCalled();
+      expect(mockAuthStore.user).toBeNull();
+      expect(mockAuthStore.isAuthenticated).toBe(false);
+      // Primary: observable navigation
+      expect(mockPush).toHaveBeenCalledWith('/auth/signin');
     });
-  });
 
-  describe('logout', () => {
-    it('should call logout API and redirect to signin', async () => {
-      mockPost.mockResolvedValue({ ok: true });
+    it('given logout API fails, should still clear session and redirect', async () => {
+      mockPost.mockRejectedValue(new Error('API error'));
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
       mockAuthStore.user = { id: 'user-123', name: 'Test', email: 'test@example.com' };
       mockAuthStore.isAuthenticated = true;
 
@@ -265,21 +321,7 @@ describe('useAuth', () => {
         await result.current.actions.logout();
       });
 
-      expect(mockPost).toHaveBeenCalledWith('/api/auth/logout');
-      expect(mockAuthStore.endSession).toHaveBeenCalled();
-      expect(mockPush).toHaveBeenCalledWith('/auth/signin');
-    });
-
-    it('given logout API fails, should still clear session', async () => {
-      mockPost.mockRejectedValue(new Error('API error'));
-      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-      const { result } = renderHook(() => useAuth());
-
-      await act(async () => {
-        await result.current.actions.logout();
-      });
-
+      // Primary: session cleared despite API failure (graceful degradation)
       expect(mockAuthStore.endSession).toHaveBeenCalled();
       expect(mockPush).toHaveBeenCalledWith('/auth/signin');
       consoleError.mockRestore();
@@ -294,12 +336,13 @@ describe('useAuth', () => {
         await result.current.actions.logout();
       });
 
+      // Observable: localStorage cleared
       expect(mockLocalStorage.removeItem).toHaveBeenCalledWith('deviceToken');
     });
   });
 
   describe('refreshAuth', () => {
-    it('given refresh succeeds, should reload session', async () => {
+    it('given refresh succeeds, should trigger session reload', async () => {
       mockRefreshToken.mockResolvedValue(true);
 
       const { result } = renderHook(() => useAuth());
@@ -308,13 +351,16 @@ describe('useAuth', () => {
         await result.current.actions.refreshAuth();
       });
 
-      expect(mockRefreshToken).toHaveBeenCalled();
+      // Primary: session reload triggered with force=true
       expect(mockLoadSession).toHaveBeenCalledWith(true);
     });
 
-    it('given refresh fails, should logout', async () => {
+    it('given refresh fails, should end session', async () => {
       mockRefreshToken.mockResolvedValue(false);
       mockPost.mockResolvedValue({ ok: true });
+
+      mockAuthStore.user = { id: 'user-123', name: 'Test', email: 'test@example.com' };
+      mockAuthStore.isAuthenticated = true;
 
       const { result } = renderHook(() => useAuth());
 
@@ -322,12 +368,15 @@ describe('useAuth', () => {
         await result.current.actions.refreshAuth();
       });
 
+      // Primary: observable state transition - session ended
       expect(mockAuthStore.endSession).toHaveBeenCalled();
     });
   });
 
   describe('checkAuth', () => {
-    it('should call loadSession from helpers', async () => {
+    it('given not loading, should trigger session load', async () => {
+      mockAuthStore.isLoading = false;
+
       const { result } = renderHook(() => useAuth());
 
       await act(async () => {
@@ -337,7 +386,7 @@ describe('useAuth', () => {
       expect(mockLoadSession).toHaveBeenCalled();
     });
 
-    it('given already loading, should skip auth check', async () => {
+    it('given already loading, should skip redundant auth check', async () => {
       mockAuthStore.isLoading = true;
       mockLoadSession.mockClear();
 
@@ -347,40 +396,44 @@ describe('useAuth', () => {
         await result.current.actions.checkAuth();
       });
 
+      // Observable: no redundant load when already loading
       expect(mockLoadSession).not.toHaveBeenCalled();
     });
   });
 
   describe('sessionDuration', () => {
-    it('should return duration from helpers', () => {
+    it('should expose session duration from helpers', () => {
       mockGetSessionDuration.mockReturnValue(60000);
 
       const { result } = renderHook(() => useAuth());
 
+      // Observable: duration exposed
       expect(result.current.sessionDuration).toBe(60000);
     });
   });
 
-  describe('legacy properties', () => {
-    it('given not authenticated, should return isError', () => {
+  describe('error state (legacy compatibility)', () => {
+    it('given not authenticated after hydration, should expose isError', () => {
       mockAuthStore.isAuthenticated = false;
       mockAuthStore.isLoading = false;
       mockAuthStore.hasHydrated = true;
 
       const { result } = renderHook(() => useAuth());
 
+      // Observable: error state for unauthenticated users
       expect(result.current.isError).toBeInstanceOf(Error);
     });
 
-    it('given authenticated, should not return isError', () => {
+    it('given authenticated, should not expose isError', () => {
       mockAuthStore.isAuthenticated = true;
+      mockAuthStore.user = { id: 'user-123', name: 'Test', email: 'test@example.com' };
 
       const { result } = renderHook(() => useAuth());
 
       expect(result.current.isError).toBeUndefined();
     });
 
-    it('should provide mutate as alias for checkAuth', () => {
+    it('should expose mutate as alias for checkAuth', () => {
       const { result } = renderHook(() => useAuth());
 
       expect(result.current.mutate).toBeDefined();
@@ -389,7 +442,10 @@ describe('useAuth', () => {
   });
 
   describe('token refresh lifecycle', () => {
-    it('given authenticated and hydrated, should start token refresh', async () => {
+    // REVIEW: Token refresh timing depends on effect execution order and
+    // may vary based on React version and strict mode. These tests verify
+    // the refresh is scheduled when appropriate, not exact timing.
+    it('given authenticated and hydrated, should schedule token refresh', async () => {
       mockAuthStore.isAuthenticated = true;
       mockAuthStore.user = { id: 'user-123', name: 'Test', email: 'test@example.com' };
       mockAuthStore.hasHydrated = true;
@@ -401,36 +457,34 @@ describe('useAuth', () => {
       });
     });
 
-    it('given unauthenticated from start, should not start token refresh', async () => {
-      // Start unauthenticated
+    it('given unauthenticated, should not schedule token refresh', async () => {
       mockAuthStore.isAuthenticated = false;
       mockAuthStore.user = null;
       mockAuthStore.hasHydrated = true;
 
       renderHook(() => useAuth());
 
-      // Give time for effects to potentially run
+      // Give effects time to run
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      // Should NOT have called startTokenRefresh when not authenticated
+      // Observable: no refresh scheduled for unauthenticated users
       expect(mockStartTokenRefresh).not.toHaveBeenCalled();
     });
   });
 
-  describe('event listener initialization', () => {
+  describe('initialization', () => {
     it('should initialize event listeners on mount', () => {
       renderHook(() => useAuth());
 
       expect(mockInitializeEventListeners).toHaveBeenCalled();
     });
-  });
 
-  describe('hydration', () => {
-    it('given not hydrated, should set hydrated on mount', () => {
+    it('given not hydrated, should mark as hydrated on mount', () => {
       mockAuthStore.hasHydrated = false;
 
       renderHook(() => useAuth());
 
+      // Observable: hydration state updated
       expect(mockAuthStore.setHydrated).toHaveBeenCalledWith(true);
     });
   });

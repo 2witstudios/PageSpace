@@ -130,7 +130,7 @@ describe('usePageTree', () => {
   });
 
   describe('updateNode', () => {
-    it('given a node ID and updates, should call mutate with updated tree', () => {
+    it('given a node ID and updates, should optimistically update tree without refetch', () => {
       const mockTree = [
         createMockTreePage({ id: 'page-1', title: 'Old Title' }),
       ];
@@ -142,13 +142,16 @@ describe('usePageTree', () => {
         result.current.updateNode('page-1', { title: 'New Title' });
       });
 
-      expect(mockMutate).toHaveBeenCalled();
-      const updateFn = mockMutate.mock.calls[0][0];
-      expect(Array.isArray(updateFn)).toBe(true);
-      expect(updateFn[0].title).toBe('New Title');
+      // Observable: tree updated with new title
+      const updatedTree = mockMutate.mock.calls[0][0];
+      expect(Array.isArray(updatedTree)).toBe(true);
+      expect(updatedTree[0].title).toBe('New Title');
+
+      /** @boundary-contract Optimistic update: mutate with revalidate=false to prevent refetch */
+      expect(mockMutate).toHaveBeenCalledWith(expect.any(Array), false);
     });
 
-    it('given a nested node, should update it correctly', () => {
+    it('given a nested node, should optimistically update nested tree', () => {
       const mockTree = [
         createMockTreePage({
           id: 'parent',
@@ -165,10 +168,15 @@ describe('usePageTree', () => {
         result.current.updateNode('child', { title: 'Updated Child' });
       });
 
-      expect(mockMutate).toHaveBeenCalled();
+      // Observable: nested child updated
+      const updatedTree = mockMutate.mock.calls[0][0];
+      expect(updatedTree[0].children[0].title).toBe('Updated Child');
+
+      /** @boundary-contract Optimistic update: no refetch for nested updates */
+      expect(mockMutate).toHaveBeenCalledWith(expect.any(Array), false);
     });
 
-    it('given a non-existent node, should not throw', () => {
+    it('given a non-existent node, should not throw and not mutate', () => {
       mockSWRState.data = [createMockTreePage({ id: 'page-1' })];
 
       const { result } = renderHook(() => usePageTree('drive-123'));
@@ -182,9 +190,9 @@ describe('usePageTree', () => {
   });
 
   describe('fetchAndMergeChildren', () => {
-    it('given a page ID, should fetch children and merge', async () => {
+    it('given a page ID, should fetch children and merge optimistically', async () => {
       mockSWRState.data = [createMockTreePage({ id: 'parent', children: [] })];
-      const mockChildren = [createMockTreePage({ id: 'child-1' })];
+      const mockChildren = [createMockTreePage({ id: 'child-1', title: 'Child 1' })];
       mockFetchWithAuth.mockResolvedValue({
         ok: true,
         json: () => Promise.resolve(mockChildren),
@@ -196,8 +204,16 @@ describe('usePageTree', () => {
         await result.current.fetchAndMergeChildren('parent');
       });
 
+      // Observable: API was called to fetch children
       expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/pages/parent/children');
-      expect(mockMutate).toHaveBeenCalled();
+
+      // Observable: tree was updated with merged children
+      const updatedTree = mockMutate.mock.calls[0][0];
+      expect(updatedTree[0].children).toHaveLength(1);
+      expect(updatedTree[0].children[0].id).toBe('child-1');
+
+      /** @boundary-contract Optimistic merge: update tree without refetch */
+      expect(mockMutate).toHaveBeenCalledWith(expect.any(Array), false);
     });
 
     it('given API error, should log error and not throw', async () => {
@@ -211,6 +227,7 @@ describe('usePageTree', () => {
         await result.current.fetchAndMergeChildren('parent');
       });
 
+      // Observable: error logged but no throw
       expect(consoleError).toHaveBeenCalled();
       consoleError.mockRestore();
     });
