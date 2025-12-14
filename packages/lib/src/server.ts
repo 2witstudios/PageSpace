@@ -19,6 +19,9 @@ export * from './services/drive-service';
 // Drive member service
 export * from './services/drive-member-service';
 
+// Drive role service
+export * from './services/drive-role-service';
+
 // OAuth utilities (server-only)
 export * from './auth/oauth-utils';
 export * from './auth/oauth-types';

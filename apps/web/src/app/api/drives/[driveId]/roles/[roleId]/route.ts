@@ -1,30 +1,15 @@
 import { NextResponse } from 'next/server';
-import { db, eq, and } from '@pagespace/db';
-import { driveRoles, driveMembers, drives } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import {
+  checkDriveAccessForRoles,
+  getRoleById,
+  updateDriveRole,
+  deleteDriveRole,
+  validateRolePermissions,
+} from '@pagespace/lib/server';
 
 const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
-
-// Type for role permissions structure (Record<pageId, permissions>)
-type RolePermissions = Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
-
-// Validate that permissions has the correct structure
-function validatePermissions(permissions: unknown): permissions is RolePermissions {
-  if (!permissions || typeof permissions !== 'object' || Array.isArray(permissions)) return false;
-
-  // Validate each page's permissions
-  for (const [pageId, perms] of Object.entries(permissions)) {
-    if (typeof pageId !== 'string') return false;
-    if (!perms || typeof perms !== 'object') return false;
-    const p = perms as Record<string, unknown>;
-    if (typeof p.canView !== 'boolean' ||
-        typeof p.canEdit !== 'boolean' ||
-        typeof p.canShare !== 'boolean') return false;
-  }
-
-  return true;
-}
 
 // GET /api/drives/[driveId]/roles/[roleId] - Get a specific role
 export async function GET(
@@ -38,37 +23,18 @@ export async function GET(
 
     const { driveId, roleId } = await context.params;
 
-    // Get drive and check access
-    const drive = await db.select()
-      .from(drives)
-      .where(eq(drives.id, driveId))
-      .limit(1);
+    // Check if user has access to this drive
+    const access = await checkDriveAccessForRoles(driveId, userId);
 
-    if (drive.length === 0) {
+    if (!access.drive) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    // Check if user is owner or member of the drive
-    const isOwner = drive[0].ownerId === userId;
-    if (!isOwner) {
-      const membership = await db.query.driveMembers.findFirst({
-        where: and(
-          eq(driveMembers.driveId, driveId),
-          eq(driveMembers.userId, userId)
-        ),
-      });
-
-      if (!membership) {
-        return NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 });
-      }
+    if (!access.isOwner && !access.isMember) {
+      return NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 });
     }
 
-    const role = await db.query.driveRoles.findFirst({
-      where: and(
-        eq(driveRoles.id, roleId),
-        eq(driveRoles.driveId, driveId)
-      ),
-    });
+    const role = await getRoleById(driveId, roleId);
 
     if (!role) {
       return NextResponse.json({ error: 'Role not found' }, { status: 404 });
@@ -93,44 +59,19 @@ export async function PATCH(
 
     const { driveId, roleId } = await context.params;
 
-    // Get drive and check ownership
-    const drive = await db.select()
-      .from(drives)
-      .where(eq(drives.id, driveId))
-      .limit(1);
+    // Check if user is owner or admin
+    const access = await checkDriveAccessForRoles(driveId, userId);
 
-    if (drive.length === 0) {
+    if (!access.drive) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    // Check if user is owner or admin
-    const isOwner = drive[0].ownerId === userId;
-    let isAdmin = false;
-
-    if (!isOwner) {
-      const adminMembership = await db.select()
-        .from(driveMembers)
-        .where(and(
-          eq(driveMembers.driveId, driveId),
-          eq(driveMembers.userId, userId),
-          eq(driveMembers.role, 'ADMIN')
-        ))
-        .limit(1);
-
-      isAdmin = adminMembership.length > 0;
-    }
-
-    if (!isOwner && !isAdmin) {
+    if (!access.isOwner && !access.isAdmin) {
       return NextResponse.json({ error: 'Only owners and admins can update roles' }, { status: 403 });
     }
 
     // Check role exists
-    const existingRole = await db.query.driveRoles.findFirst({
-      where: and(
-        eq(driveRoles.id, roleId),
-        eq(driveRoles.driveId, driveId)
-      ),
-    });
+    const existingRole = await getRoleById(driveId, roleId);
 
     if (!existingRole) {
       return NextResponse.json({ error: 'Role not found' }, { status: 404 });
@@ -148,31 +89,17 @@ export async function PATCH(
     }
 
     // Validate permissions structure if provided
-    if (permissions !== undefined && !validatePermissions(permissions)) {
+    if (permissions !== undefined && !validateRolePermissions(permissions)) {
       return NextResponse.json({ error: 'Invalid permissions structure' }, { status: 400 });
     }
 
-    // If setting as default, unset other defaults
-    if (isDefault && !existingRole.isDefault) {
-      await db.update(driveRoles)
-        .set({ isDefault: false })
-        .where(eq(driveRoles.driveId, driveId));
-    }
-
-    const [updatedRole] = await db.update(driveRoles)
-      .set({
-        ...(name !== undefined && { name: name.trim() }),
-        ...(description !== undefined && { description }),
-        ...(color !== undefined && { color }),
-        ...(isDefault !== undefined && { isDefault }),
-        ...(permissions !== undefined && { permissions }),
-        updatedAt: new Date(),
-      })
-      .where(and(
-        eq(driveRoles.id, roleId),
-        eq(driveRoles.driveId, driveId)
-      ))
-      .returning();
+    const { role: updatedRole } = await updateDriveRole(driveId, roleId, {
+      name,
+      description,
+      color,
+      isDefault,
+      permissions,
+    });
 
     return NextResponse.json({ role: updatedRole });
   } catch (error) {
@@ -196,55 +123,25 @@ export async function DELETE(
 
     const { driveId, roleId } = await context.params;
 
-    // Get drive and check ownership
-    const drive = await db.select()
-      .from(drives)
-      .where(eq(drives.id, driveId))
-      .limit(1);
+    // Check if user is owner or admin
+    const access = await checkDriveAccessForRoles(driveId, userId);
 
-    if (drive.length === 0) {
+    if (!access.drive) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    // Check if user is owner or admin
-    const isOwner = drive[0].ownerId === userId;
-    let isAdmin = false;
-
-    if (!isOwner) {
-      const adminMembership = await db.select()
-        .from(driveMembers)
-        .where(and(
-          eq(driveMembers.driveId, driveId),
-          eq(driveMembers.userId, userId),
-          eq(driveMembers.role, 'ADMIN')
-        ))
-        .limit(1);
-
-      isAdmin = adminMembership.length > 0;
-    }
-
-    if (!isOwner && !isAdmin) {
+    if (!access.isOwner && !access.isAdmin) {
       return NextResponse.json({ error: 'Only owners and admins can delete roles' }, { status: 403 });
     }
 
     // Check role exists
-    const existingRole = await db.query.driveRoles.findFirst({
-      where: and(
-        eq(driveRoles.id, roleId),
-        eq(driveRoles.driveId, driveId)
-      ),
-    });
+    const existingRole = await getRoleById(driveId, roleId);
 
     if (!existingRole) {
       return NextResponse.json({ error: 'Role not found' }, { status: 404 });
     }
 
-    // Delete the role (members with this role will have customRoleId set to null via FK)
-    await db.delete(driveRoles)
-      .where(and(
-        eq(driveRoles.id, roleId),
-        eq(driveRoles.driveId, driveId)
-      ));
+    await deleteDriveRole(driveId, roleId);
 
     return NextResponse.json({ success: true });
   } catch (error) {

@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
-import { db, eq, and } from '@pagespace/db';
-import { driveRoles, driveMembers, drives } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import {
+  checkDriveAccessForRoles,
+  reorderDriveRoles,
+} from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -17,34 +19,14 @@ export async function PATCH(
 
     const { driveId } = await context.params;
 
-    // Get drive and check ownership
-    const drive = await db.select()
-      .from(drives)
-      .where(eq(drives.id, driveId))
-      .limit(1);
+    // Check if user is owner or admin
+    const access = await checkDriveAccessForRoles(driveId, userId);
 
-    if (drive.length === 0) {
+    if (!access.drive) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    // Check if user is owner or admin
-    const isOwner = drive[0].ownerId === userId;
-    let isAdmin = false;
-
-    if (!isOwner) {
-      const adminMembership = await db.select()
-        .from(driveMembers)
-        .where(and(
-          eq(driveMembers.driveId, driveId),
-          eq(driveMembers.userId, userId),
-          eq(driveMembers.role, 'ADMIN')
-        ))
-        .limit(1);
-
-      isAdmin = adminMembership.length > 0;
-    }
-
-    if (!isOwner && !isAdmin) {
+    if (!access.isOwner && !access.isAdmin) {
       return NextResponse.json({ error: 'Only owners and admins can reorder roles' }, { status: 403 });
     }
 
@@ -55,34 +37,14 @@ export async function PATCH(
       return NextResponse.json({ error: 'roleIds must be an array' }, { status: 400 });
     }
 
-    // Validate that all roleIds belong to this drive
-    const existingRoles = await db.query.driveRoles.findMany({
-      where: eq(driveRoles.driveId, driveId),
-      columns: { id: true },
-    });
-    const existingIds = new Set(existingRoles.map(r => r.id));
-    const invalidIds = roleIds.filter((id: string) => !existingIds.has(id));
-
-    if (invalidIds.length > 0) {
-      return NextResponse.json({ error: 'Invalid role IDs' }, { status: 400 });
-    }
-
-    // Update positions for each role in a transaction to prevent race conditions
-    await db.transaction(async (tx) => {
-      for (let index = 0; index < roleIds.length; index++) {
-        const roleId = roleIds[index];
-        await tx.update(driveRoles)
-          .set({ position: index, updatedAt: new Date() })
-          .where(and(
-            eq(driveRoles.id, roleId),
-            eq(driveRoles.driveId, driveId)
-          ));
-      }
-    });
+    await reorderDriveRoles(driveId, roleIds);
 
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Error reordering roles:', error);
+    if (error instanceof Error && error.message === 'Invalid role IDs') {
+      return NextResponse.json({ error: 'Invalid role IDs' }, { status: 400 });
+    }
     return NextResponse.json({ error: 'Failed to reorder roles' }, { status: 500 });
   }
 }
