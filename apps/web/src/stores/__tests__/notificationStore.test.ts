@@ -34,7 +34,7 @@ type Notification = LegacyNotification & {
 
 // Helper to create mock notifications
 const createMockNotification = (overrides: Partial<Notification> = {}): Notification => ({
-  id: 'notif-' + Math.random().toString(36).substr(2, 9),
+  id: 'notif-' + Math.random().toString(36).slice(2, 11),
   type: 'NEW_DIRECT_MESSAGE',
   title: 'Test Notification',
   message: 'Test message content',
@@ -345,7 +345,7 @@ describe('useNotificationStore', () => {
       const { handleNotificationRead } = useNotificationStore.getState();
       await handleNotificationRead('notif-123');
 
-      // Note: The store marks as read before API completes, so this behavior may vary
+      // The API call is awaited first, so on error the local state is not updated
       expect(consoleError).toHaveBeenCalled();
       consoleError.mockRestore();
     });

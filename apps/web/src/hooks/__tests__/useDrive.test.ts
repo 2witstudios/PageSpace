@@ -27,14 +27,15 @@ Object.defineProperty(global, 'localStorage', { value: mockLocalStorage });
 
 // Helper to create mock drive
 const createMockDrive = (overrides: Partial<Drive> = {}): Drive => ({
-  id: 'drive-' + Math.random().toString(36).substr(2, 9),
+  id: 'drive-' + Math.random().toString(36).slice(2, 11),
   name: 'Test Drive',
   slug: 'test-drive',
   createdAt: new Date(),
   updatedAt: new Date(),
   ownerId: 'user-123',
-  isDeleted: false,
-  deletedAt: null,
+  isTrashed: false,
+  trashedAt: null,
+  isOwned: true,
   ...overrides,
 });
 

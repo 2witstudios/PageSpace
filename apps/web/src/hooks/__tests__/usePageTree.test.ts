@@ -66,7 +66,7 @@ import { usePageTree, type TreePage } from '../usePageTree';
 
 // Helper to create mock tree page
 const createMockTreePage = (overrides: Partial<TreePage> = {}): TreePage => ({
-  id: 'page-' + Math.random().toString(36).substr(2, 9),
+  id: 'page-' + Math.random().toString(36).slice(2, 11),
   title: 'Test Page',
   type: 'DOCUMENT',
   parentId: null,
@@ -75,8 +75,8 @@ const createMockTreePage = (overrides: Partial<TreePage> = {}): TreePage => ({
   content: '',
   createdAt: new Date(),
   updatedAt: new Date(),
-  isDeleted: false,
-  deletedAt: null,
+  isTrashed: false,
+  trashedAt: null,
   children: [],
   aiChat: null,
   messages: [],
