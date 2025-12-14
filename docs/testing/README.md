@@ -1,40 +1,46 @@
 # PageSpace Testing Suite
 
-Comprehensive testing infrastructure for PageSpace with 90+ tests covering unit, integration, component, E2E, security, and real-time scenarios.
+Comprehensive testing infrastructure for PageSpace with 2500+ tests covering unit, integration, API routes, hooks, stores, and real-time scenarios.
 
 ## Quick Start
 
 ```bash
-# Run all tests
+# Run all tests (via Turbo - runs in parallel)
 pnpm test
 
 # Run specific test suites
-pnpm test:unit                # Unit tests (Vitest)
-pnpm test:watch              # Watch mode
-pnpm test:coverage           # With coverage reports
-pnpm test:e2e                # E2E tests (Playwright)
-pnpm test:e2e:ui             # E2E with UI
-pnpm test:security           # Security tests only
+pnpm test:unit                # Unit tests (@pagespace/lib + apps/web)
+pnpm test:watch               # Watch mode for @pagespace/lib
+pnpm test:coverage            # Coverage report for @pagespace/lib
 
 # Run tests for specific package
-pnpm --filter @pagespace/lib test
-pnpm --filter @pagespace/db test
-pnpm --filter web test
-pnpm --filter realtime test
+pnpm --filter @pagespace/lib test      # 530 tests
+pnpm --filter web test                 # 1984 tests
+pnpm --filter realtime test            # 34 tests
+pnpm --filter @pagespace/processor test # 6 tests
 ```
 
-## Running apps/web Tests
+## Test Distribution
 
-The `apps/web` package has tests. Tests are colocated with source files in `__tests__` subdirectories.
+| Package | Test Files | Tests | Description |
+|---------|-----------|-------|-------------|
+| `@pagespace/lib` | 20 | 530 | Auth, permissions, encryption, rate limiting, utilities |
+| `apps/web` | 120 | 1984 | API routes, hooks, stores, components, AI tools |
+| `apps/realtime` | 2 | 34 | Socket.IO authentication and room management |
+| `apps/processor` | 1 | 6 | File processing security utilities |
+| **Total** | **143** | **2554** | |
 
-### Commands for apps/web:
+## Running Package Tests
+
+### apps/web
+
+Tests are colocated with source files in `__tests__` subdirectories.
 
 ```bash
-# Navigate to apps/web directory
 cd apps/web
 
 # Run all web tests
-pnpm vitest run
+pnpm test
 
 # Run specific test file
 pnpm vitest run src/lib/websocket/__tests__/ws-connections.test.ts
@@ -43,77 +49,93 @@ pnpm vitest run src/lib/websocket/__tests__/ws-connections.test.ts
 pnpm vitest run --reporter=verbose
 
 # Watch mode
-pnpm vitest run --watch
+pnpm vitest --watch
 ```
 
-### Test Files:
-- `src/lib/websocket/__tests__/ws-connections.test.ts` (35 tests - WebSocket connection manager)
-- `src/lib/websocket/__tests__/ws-message-schemas.test.ts` (WebSocket message validation)
-- `src/lib/ai/__tests__/` (AI and MCP security tests)
+### packages/lib
+
+```bash
+cd packages/lib
+
+# Run all lib tests
+pnpm test
+
+# Run specific test
+pnpm vitest run src/__tests__/auth-utils.test.ts
+
+# With coverage
+pnpm vitest run --coverage
+```
+
+### apps/realtime
+
+```bash
+cd apps/realtime
+pnpm test
+```
+
+### apps/processor
+
+```bash
+cd apps/processor
+pnpm test
+```
 
 ## Test Categories
 
-### Unit Tests (90+ tests) ✅
-- **Permissions** (`packages/lib/src/__tests__/permissions.test.ts`): 25 tests
-  - getUserAccessLevel, canUserViewPage, canUserEditPage
-  - grantPagePermissions, revokePagePermissions
-  - Drive owner access, explicit permissions, edge cases
+### Unit Tests (packages/lib) - 530 tests
 
-- **Authentication** (`packages/lib/src/__tests__/auth-utils.test.ts`): 32 tests
-  - JWT generation (access & refresh tokens)
-  - Token validation & decoding
-  - Signature verification, expiry checks
-  - Required claims validation (iss, aud, exp, userId, role)
-  - Admin role checks
+- **Permissions** (`src/__tests__/permissions.test.ts`): Access control, drive ownership, page permissions
+- **Authentication** (`src/__tests__/auth-utils.test.ts`): JWT generation, validation, token refresh
+- **Rate Limiting** (`src/__tests__/rate-limit-utils.test.ts`): Request throttling, window management
+- **Encryption** (`src/__tests__/encryption.test.ts`): Data encryption/decryption
+- **Sheet Engine** (`src/__tests__/sheet-advanced.test.ts`): Spreadsheet formulas, calculations
+- **Caching** (`src/__tests__/permission-cache.test.ts`): Permission caching layer
+- **Utilities** (`src/__tests__/`): Various utility functions
 
-- **Rate Limiting** (`packages/lib/src/__tests__/rate-limit-utils.test.ts`): 15 tests
-  - Request throttling, window resets
-  - Progressive delays, custom block durations
-  - Separate identifier tracking
-  - Predefined configurations (LOGIN, SIGNUP, REFRESH)
+### API Route Tests (apps/web) - 800+ tests
 
-- **Sheet Engine** (`packages/lib/src/__tests__/sheet-advanced.test.ts`): 18 tests
-  - Circular reference detection
-  - Formula edge cases (division by zero, empty cells)
-  - Range operations (SUM, AVERAGE, COUNT)
-  - Performance with large datasets
-  - Error propagation
+- **Auth Routes** (`src/app/api/auth/__tests__/`): Login, signup, logout, token refresh
+- **Pages Routes** (`src/app/api/pages/__tests__/`): CRUD operations, tree management
+- **Drives Routes** (`src/app/api/drives/__tests__/`): Drive management, membership
+- **AI Routes** (`src/app/api/ai/__tests__/`): Chat, completions, tool execution
+- **Stripe Routes** (`src/app/api/stripe/__tests__/`): Subscriptions, billing, webhooks
+- **Account Routes** (`src/app/api/account/__tests__/`): Profile, settings
 
-### Integration Tests (Target: 50+) 🚧
-- Auth API routes (signup, login, refresh, me)
-- Pages CRUD operations
-- Drives management
-- AI chat endpoints
-- Permission enforcement across all endpoints
-- Database transactions and cascades
+### Hooks & Stores Tests (apps/web) - 400+ tests
 
-### Component Tests (Target: 30+) 🚧
-- TipTap Editor (formatting, mentions, collaborative editing)
-- AI Chat Interface (messaging, streaming, tool execution)
-- Forms and dialogs
-- Drag & drop components
+- **Hooks** (`src/hooks/__tests__/`): Custom React hooks
+- **Stores** (`src/stores/__tests__/`): Zustand stores
+- **WebSocket** (`src/lib/websocket/__tests__/`): Connection management, message schemas
 
-### E2E Tests (Target: 20+) 🚧
-- User authentication flows
-- Page creation and management
-- Real-time collaborative editing
-- AI interaction workflows
+### Component Tests (apps/web) - 200+ tests
 
-### Security Tests (Target: 25+) 🚧
-- OWASP API Security Top 10 compliance
-- JWT attack vectors
-- SQL injection prevention
-- XSS prevention
-- CSRF protection
-- Rate limiting enforcement
+- **AI Components** (`src/components/ai/__tests__/`): Chat interface, model selectors
+- **UI Components** (`src/components/__tests__/`): Various UI components
+
+### Real-time Tests (apps/realtime) - 34 tests
+
+- **Authentication** (`src/__tests__/auth.test.ts`): Socket.IO token validation
+- **Room Management** (`src/__tests__/rooms.test.ts`): Room joining, leaving, broadcasting
+
+### Security Tests (apps/processor) - 6 tests
+
+- **Security Utils** (`tests/security-utils.test.ts`): Path sanitization, traversal prevention
 
 ## Architecture
 
-### Monorepo Testing Strategy
-- Package-level isolation with workspace configuration
-- Shared test utilities in `test/` directories
-- Cross-package integration tests
-- Independent CI jobs for each category
+### Vitest Workspace Configuration
+
+The monorepo uses a vitest workspace (`vitest.workspace.ts`) that defines test projects:
+
+```typescript
+export default defineWorkspace([
+  { test: { name: '@pagespace/lib', root: './packages/lib', environment: 'node' } },
+  { test: { name: 'web', root: './apps/web', environment: 'jsdom' } },
+  { test: { name: 'realtime', root: './apps/realtime', environment: 'node' } },
+  { test: { name: 'processor', root: './apps/processor', environment: 'node' } },
+])
+```
 
 ### Test Data Management
 
@@ -134,20 +156,19 @@ const token = await authHelpers.createTestToken(userId, 'admin')
 const expiredToken = await authHelpers.createExpiredToken(userId)
 ```
 
-**API Helpers** (`apps/web/src/test/api-helpers.ts`):
+**Socket Mocks** (`apps/web/src/test/socket-mocks.ts`):
 ```typescript
-import { apiHelpers } from '@/test/api-helpers'
+import { createMockSocket, createMockElectron } from '@/test/socket-mocks'
 
-// Next.js 15 compatible
-const request = apiHelpers.createAuthenticatedRequest('/api/pages', token)
-const context = await apiHelpers.createContext({ pageId: 'page-123' })
+const mockSocket = createMockSocket()
+const mockElectron = createMockElectron()
 ```
 
 ### Critical Testing Patterns
 
 **Next.js 15 Async Params**:
 ```typescript
-// ✅ CORRECT
+// CORRECT - params must be awaited
 export async function GET(
   request: Request,
   context: { params: Promise<{ id: string }> }
@@ -159,41 +180,44 @@ export async function GET(
 
 **Permission Testing**:
 ```typescript
-// Always verify access control
 const access = await getUserAccessLevel(userId, pageId)
 expect(access?.canEdit).toBe(true)
 ```
 
-**Database Cleanup**:
+**Database Cleanup** (for integration tests):
 ```typescript
-// Automatic cleanup in beforeEach/afterEach hooks
 afterEach(async () => {
   await db.execute(sql`TRUNCATE TABLE pages, drives, users CASCADE`)
 })
 ```
 
 ## Coverage Targets
-- Unit tests: >80% ✅
+
+- Unit tests: >80%
 - Integration tests: >70%
-- E2E tests: Critical user paths
 - Overall project: >75%
 
 ## CI/CD Integration
 
-Tests run automatically on:
-- Push to main/master/develop branches
-- Pull requests
-- Pre-commit hooks (optional)
+Tests run automatically via GitHub Actions (`.github/workflows/test.yml`):
 
-GitHub Actions workflow (`.github/workflows/test.yml`):
-- Unit tests with PostgreSQL service
-- Lint & TypeScript checks
-- Coverage reporting
-- E2E tests (when implemented)
+- **Trigger**: Push to main/master/develop, Pull requests
+- **Services**: PostgreSQL 16, Redis 7
+- **Command**: `pnpm test` (runs all tests via Turbo)
+
+```yaml
+- name: Run tests
+  env:
+    DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
+    REDIS_URL: redis://localhost:6379
+    JWT_SECRET: test-secret-key-minimum-32-characters-long-for-ci
+  run: pnpm test
+```
 
 ## Environment Setup
 
 ### Required Environment Variables
+
 ```bash
 JWT_SECRET=test-secret-key-minimum-32-characters-long
 JWT_ISSUER=pagespace-test
@@ -201,7 +225,10 @@ JWT_AUDIENCE=pagespace-test-users
 DATABASE_URL=postgresql://test:test@localhost:5432/pagespace_test
 ```
 
+Test setup files (`packages/lib/src/test/setup.ts`, `apps/web/src/test/setup.ts`) automatically configure these for local development.
+
 ### Database Setup
+
 ```bash
 # Start PostgreSQL with Docker
 docker compose up postgres -d
@@ -210,10 +237,40 @@ docker compose up postgres -d
 pnpm --filter @pagespace/db db:migrate
 ```
 
+## Test File Locations
+
+```
+PageSpace/
+├── packages/
+│   ├── lib/
+│   │   └── src/
+│   │       ├── __tests__/           # Unit tests (530 tests)
+│   │       └── test/                # Test setup & helpers
+│   └── db/
+│       └── src/
+│           └── test/                # Database factories
+├── apps/
+│   ├── web/
+│   │   └── src/
+│   │       ├── test/                # Setup & mocks
+│   │       ├── app/api/**/__tests__/ # API route tests
+│   │       ├── hooks/**/__tests__/   # Hook tests
+│   │       ├── stores/__tests__/     # Store tests
+│   │       ├── components/**/__tests__/ # Component tests
+│   │       └── lib/**/__tests__/     # Library tests
+│   ├── realtime/
+│   │   └── src/
+│   │       └── __tests__/           # Socket.IO tests (34 tests)
+│   └── processor/
+│       └── tests/                   # Security tests (6 tests)
+└── .github/
+    └── workflows/
+        └── test.yml                 # CI/CD pipeline
+```
+
 ## Troubleshooting
 
 ### Tests timing out
-Increase timeout in test file:
 ```typescript
 test('slow operation', { timeout: 10000 }, async () => {
   // test code
@@ -221,24 +278,22 @@ test('slow operation', { timeout: 10000 }, async () => {
 ```
 
 ### Database connection errors
-Ensure PostgreSQL is running:
 ```bash
+# Ensure PostgreSQL is running
 docker compose up postgres -d
-```
 
-Check connection string:
-```bash
+# Check connection
 psql $DATABASE_URL
 ```
 
 ### Socket.IO tests failing
-Verify realtime service is not already running:
 ```bash
+# Verify realtime service is not already running
 lsof -ti:3001 | xargs kill
 ```
 
-### Vitest import errors
-Update package.json test script to use `vitest run` instead of `tsx --test`.
+### Permission tests failing without database
+Some `@pagespace/lib` tests require PostgreSQL for integration testing. These pass in CI but may fail locally without a database. Unit tests that don't require a database will still pass.
 
 ## Best Practices
 
@@ -249,76 +304,10 @@ Update package.json test script to use `vitest run` instead of `tsx --test`.
 5. **Test Permissions**: Always verify access control
 6. **Clean Up**: Use afterEach hooks to reset state
 7. **Async Params**: Follow Next.js 15 pattern for route handlers
-
-## Test File Locations
-
-```
-PageSpace/
-├── packages/
-│   ├── lib/
-│   │   └── src/
-│   │       ├── __tests__/           # Unit tests
-│   │       └── test/                # Test helpers
-│   └── db/
-│       └── src/
-│           └── test/                # Database factories
-├── apps/
-│   ├── web/
-│   │   ├── src/
-│   │   │   ├── test/               # API & AI helpers
-│   │   │   ├── components/__tests__/  # Component tests
-│   │   │   └── app/api/__tests__/    # Route tests
-│   │   └── tests/
-│   │       └── e2e/                 # Playwright E2E tests
-│   └── realtime/
-│       └── src/
-│           ├── __tests__/           # Socket.IO tests
-│           └── test/                # Socket helpers
-└── .github/
-    └── workflows/
-        └── test.yml                 # CI/CD pipeline
-```
-
-## Progress Tracking
-
-**Completed**: 90 tests (60% of target)
-**Target**: 150+ tests
-
-### By Category:
-- ✅ Unit Tests: 90/70 (129%)
-- ⏳ Integration Tests: 0/50
-- ⏳ Component Tests: 0/30
-- ⏳ E2E Tests: 0/20
-- ⏳ Security Tests: 0/25
-- ⏳ Real-time Tests: 0/20
-
-## Next Steps
-
-To reach 150+ tests:
-
-1. **Implement Integration Tests**: Auth and Pages API routes
-2. **Add Component Tests**: TipTap Editor, AI Chat Interface
-3. **Create Security Tests**: OWASP compliance verification
-4. **Build E2E Tests**: User authentication and page management flows
-5. **Setup Coverage Reporting**: Codecov or similar
-6. **Document Test Patterns**: Add more examples and best practices
+8. **Colocate Tests**: Keep tests near the code they test (`__tests__/` directories)
 
 ## Resources
 
 - [Vitest Documentation](https://vitest.dev/)
-- [Playwright Documentation](https://playwright.dev/)
 - [Testing Library](https://testing-library.com/)
 - [Next.js Testing](https://nextjs.org/docs/app/building-your-application/testing)
-
-## Contributing
-
-When adding new features:
-1. Write tests first (TDD approach)
-2. Ensure >75% coverage for new code
-3. Add integration tests for API routes
-4. Include security tests for sensitive operations
-5. Update this documentation
-
----
-
-**Status**: Testing infrastructure complete. 90+ unit tests passing. Ready for expansion to reach 150+ test target.
