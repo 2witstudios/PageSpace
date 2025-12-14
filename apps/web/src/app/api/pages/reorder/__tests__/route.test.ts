@@ -136,7 +136,7 @@ describe('PATCH /api/pages/reorder', () => {
       }));
       const body = await response.json();
 
-      expect(response.status).toBe(500);
+      expect(response.status).toBe(400);
       expect(body.error).toBeDefined();
     });
 
@@ -147,7 +147,7 @@ describe('PATCH /api/pages/reorder', () => {
       }));
       const body = await response.json();
 
-      expect(response.status).toBe(500);
+      expect(response.status).toBe(400);
       expect(body.error).toBeDefined();
     });
 
@@ -159,7 +159,7 @@ describe('PATCH /api/pages/reorder', () => {
       }));
       const body = await response.json();
 
-      expect(response.status).toBe(500);
+      expect(response.status).toBe(400);
       expect(body.error).toBeDefined();
     });
 
@@ -182,7 +182,7 @@ describe('PATCH /api/pages/reorder', () => {
   });
 
   describe('authorization', () => {
-    it('returns 500 with error when user is not owner or admin', async () => {
+    it('returns 403 when user is not owner or admin', async () => {
       (db.transaction as Mock).mockImplementation(async (callback) => {
         const tx = {
           select: vi.fn()
@@ -218,7 +218,7 @@ describe('PATCH /api/pages/reorder', () => {
       }));
       const body = await response.json();
 
-      expect(response.status).toBe(500);
+      expect(response.status).toBe(403);
       expect(body.error).toBe('Only drive owners and admins can reorder pages.');
     });
 
@@ -356,7 +356,7 @@ describe('PATCH /api/pages/reorder', () => {
       expect(response.status).toBe(200);
     });
 
-    it('returns 500 when parent page does not exist', async () => {
+    it('returns 404 when parent page does not exist', async () => {
       (db.transaction as Mock).mockImplementation(async (callback) => {
         const tx = {
           select: vi.fn()
@@ -392,11 +392,11 @@ describe('PATCH /api/pages/reorder', () => {
       }));
       const body = await response.json();
 
-      expect(response.status).toBe(500);
+      expect(response.status).toBe(404);
       expect(body.error).toBe('Parent page not found.');
     });
 
-    it('returns 500 when moving page between different drives', async () => {
+    it('returns 400 when moving page between different drives', async () => {
       (db.transaction as Mock).mockImplementation(async (callback) => {
         const tx = {
           select: vi.fn()
@@ -434,11 +434,11 @@ describe('PATCH /api/pages/reorder', () => {
       }));
       const body = await response.json();
 
-      expect(response.status).toBe(500);
+      expect(response.status).toBe(400);
       expect(body.error).toBe('Cannot move pages between different drives.');
     });
 
-    it('returns 500 when page not found', async () => {
+    it('returns 404 when page not found', async () => {
       (db.transaction as Mock).mockImplementation(async (callback) => {
         const tx = {
           select: vi.fn().mockReturnValue({
@@ -461,7 +461,7 @@ describe('PATCH /api/pages/reorder', () => {
       }));
       const body = await response.json();
 
-      expect(response.status).toBe(500);
+      expect(response.status).toBe(404);
       expect(body.error).toBe('Page not found.');
     });
   });
@@ -525,17 +525,16 @@ describe('PATCH /api/pages/reorder', () => {
       expect(response.status).toBe(200);
     });
 
-    it('accepts negative position values', async () => {
-      // Note: The API may allow negative values depending on implementation
-      // This test verifies the behavior
+    it('returns 400 for negative position values', async () => {
       const response = await PATCH(createRequest({
         pageId: mockPageId,
         newParentId: null,
         newPosition: -1,
       }));
+      const body = await response.json();
 
-      // Should succeed as Zod only checks for number type
-      expect(response.status).toBe(200);
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Position must be a non-negative integer');
     });
   });
 });

@@ -211,6 +211,7 @@ describe('GET /api/pages/[pageId]', () => {
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
 
+      expect(response.status).toBe(200);
       expect(body.content).toBe('');
     });
 
@@ -221,6 +222,7 @@ describe('GET /api/pages/[pageId]', () => {
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
 
+      expect(response.status).toBe(200);
       expect(body.content).toBe('<p>Hello world</p>');
     });
   });
@@ -322,10 +324,9 @@ describe('PATCH /api/pages/[pageId]', () => {
   });
 
   describe('validation', () => {
-    it('returns 400 for invalid body schema', async () => {
+    it('accepts unknown fields and returns 200 (Zod strips unknown fields)', async () => {
       const response = await PATCH(createRequest({ unknownField: 'value' }), { params: mockParams });
 
-      // Zod will strip unknown fields but not error, so this should still work
       expect(response.status).toBe(200);
     });
 
