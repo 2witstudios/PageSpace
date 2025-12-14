@@ -195,7 +195,6 @@ describe('GET /api/pages/[pageId]/permissions', () => {
       (getUserAccessLevel as Mock).mockResolvedValue(null);
 
       const response = await GET(createRequest(), { params: mockParams });
-      const body = await response.json();
 
       expect(response.status).toBe(403);
     });
@@ -347,7 +346,6 @@ describe('POST /api/pages/[pageId]/permissions', () => {
         createRequest({ canView: true }),
         { params: mockParams }
       );
-      const body = await response.json();
 
       expect(response.status).toBe(400);
     });
@@ -357,7 +355,6 @@ describe('POST /api/pages/[pageId]/permissions', () => {
         createRequest({ userId: 'user_456', canView: 'yes' }),
         { params: mockParams }
       );
-      const body = await response.json();
 
       expect(response.status).toBe(400);
     });
