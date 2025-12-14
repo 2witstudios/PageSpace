@@ -18,7 +18,7 @@ export type {
   PermissionManagementService,
 } from './permission-management-service';
 
-export { pageService, sanitizeEmptyContent } from './page-service';
+export { pageService } from './page-service';
 export type {
   PageType,
   PageData,

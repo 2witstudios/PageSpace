@@ -137,12 +137,7 @@ describe('POST /api/pages', () => {
 
   describe('validation', () => {
     it('returns 400 when title is missing', async () => {
-      (pageService.createPage as Mock).mockResolvedValue({
-        success: false,
-        error: 'Missing required fields',
-        status: 400,
-      });
-
+      // Route-level Zod validation - service not called
       const response = await POST(createRequest({
         type: 'DOCUMENT',
         driveId: mockDriveId,
@@ -150,16 +145,12 @@ describe('POST /api/pages', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toMatch(/missing|required/i);
+      expect(body.error).toBeDefined();
+      expect(pageService.createPage).not.toHaveBeenCalled();
     });
 
     it('returns 400 when type is missing', async () => {
-      (pageService.createPage as Mock).mockResolvedValue({
-        success: false,
-        error: 'Missing required fields',
-        status: 400,
-      });
-
+      // Route-level Zod validation - service not called
       const response = await POST(createRequest({
         title: 'Test Page',
         driveId: mockDriveId,
@@ -167,16 +158,12 @@ describe('POST /api/pages', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toMatch(/missing|required/i);
+      expect(body.error).toBeDefined();
+      expect(pageService.createPage).not.toHaveBeenCalled();
     });
 
     it('returns 400 when driveId is missing', async () => {
-      (pageService.createPage as Mock).mockResolvedValue({
-        success: false,
-        error: 'Missing required fields',
-        status: 400,
-      });
-
+      // Route-level Zod validation - service not called
       const response = await POST(createRequest({
         title: 'Test Page',
         type: 'DOCUMENT',
@@ -184,7 +171,8 @@ describe('POST /api/pages', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toMatch(/missing|required/i);
+      expect(body.error).toBeDefined();
+      expect(pageService.createPage).not.toHaveBeenCalled();
     });
 
     it('returns 400 when page validation fails', async () => {
@@ -365,22 +353,31 @@ describe('POST /api/pages', () => {
   });
 
   describe('side effects (boundary obligations)', () => {
-    it('broadcasts page created event with correct payload', async () => {
+    it('broadcasts page created event with correct payload from result values', async () => {
+      // Mock service to return specific values that should be used in broadcast
+      (pageService.createPage as Mock).mockResolvedValue({
+        success: true,
+        page: { ...mockPage, title: 'Created Document', parentId: 'parent_123' },
+        driveId: mockDriveId,
+        isAIChatPage: false,
+      });
+
       await POST(createRequest({
-        title: 'New Document',
+        title: 'Input Title',  // Route should use result values, not input
         type: 'DOCUMENT',
         driveId: mockDriveId,
-        parentId: 'parent_123',
+        parentId: 'input_parent',  // Route should use result values, not input
       }));
 
+      // Verify route uses result.page values, not request body values
       expect(createPageEventPayload).toHaveBeenCalledWith(
         mockDriveId,
         mockPageId,
         'created',
         expect.objectContaining({
-          title: 'New Document',
+          title: 'Created Document',  // From result.page.title
           type: 'DOCUMENT',
-          parentId: 'parent_123',
+          parentId: 'parent_123',  // From result.page.parentId
         })
       );
       expect(broadcastPageEvent).toHaveBeenCalled();

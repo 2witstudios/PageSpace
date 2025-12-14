@@ -1,4 +1,4 @@
-import { db, pages, drives, users, mentions, chatMessages, eq, and, desc, inArray } from '@pagespace/db';
+import { db, pages, drives, users, mentions, chatMessages, eq, and, desc, inArray, isNull } from '@pagespace/db';
 import { canUserViewPage, canUserEditPage, canUserDeletePage } from '@pagespace/lib/server';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
 import {
@@ -14,9 +14,51 @@ import * as cheerio from 'cheerio';
 import { loggers } from '@pagespace/lib/server';
 
 /**
- * Content sanitization utility - cleans empty TipTap structures
+ * Helper to convert DB page result to PageData type
  */
-export function sanitizeEmptyContent(content: string): string {
+function toPageData(dbPage: {
+  id: string;
+  title: string | null;
+  type: string;
+  content: string | null;
+  parentId: string | null;
+  driveId: string;
+  position: number;
+  createdAt: Date;
+  updatedAt: Date;
+  isTrashed: boolean;
+  trashedAt: Date | null;
+  aiProvider: string | null;
+  aiModel: string | null;
+  systemPrompt: string | null;
+  enabledTools: unknown;
+  isPaginated: boolean | null;
+}): PageData {
+  return {
+    id: dbPage.id,
+    title: dbPage.title,
+    type: dbPage.type as PageType,
+    content: dbPage.content,
+    parentId: dbPage.parentId,
+    driveId: dbPage.driveId,
+    position: dbPage.position,
+    createdAt: dbPage.createdAt,
+    updatedAt: dbPage.updatedAt,
+    isTrashed: dbPage.isTrashed,
+    trashedAt: dbPage.trashedAt,
+    aiProvider: dbPage.aiProvider,
+    aiModel: dbPage.aiModel,
+    systemPrompt: dbPage.systemPrompt,
+    enabledTools: dbPage.enabledTools as string[] | null,
+    isPaginated: dbPage.isPaginated,
+  };
+}
+
+/**
+ * Content sanitization utility - cleans empty TipTap structures
+ * Internal utility - not exported from module
+ */
+function sanitizeEmptyContent(content: string): string {
   if (!content || content.trim() === '') {
     return '';
   }
@@ -335,13 +377,13 @@ export const pageService = {
       })
     ]);
 
+    const pageData = toPageData(page);
     return {
       success: true,
       page: {
-        ...page,
-        type: page.type as PageType,
-        content: sanitizeEmptyContent(page.content || ''),
-        children: children as PageData[],
+        ...pageData,
+        content: sanitizeEmptyContent(pageData.content || ''),
+        children: children.map(toPageData),
         messages: messages as unknown as MessageWithUser[],
       },
       driveId: page.driveId,
@@ -400,12 +442,12 @@ export const pageService = {
       return { success: false, error: 'Page not found after update', status: 404 };
     }
 
+    const pageData = toPageData(updatedPage);
     return {
       success: true,
       page: {
-        ...updatedPage,
-        type: updatedPage.type as PageType,
-        children: children as PageData[],
+        ...pageData,
+        children: children.map(toPageData),
         messages: messages as unknown as MessageWithUser[],
       },
       driveId: updatedPage.driveId,
@@ -442,10 +484,9 @@ export const pageService = {
       if (options.trashChildren) {
         await recursivelyTrash(pageId, tx);
       } else {
-        // Move children to grandparent
-        const page = await tx.query.pages.findFirst({ where: eq(pages.id, pageId) });
+        // Move children to grandparent (use pageInfo.parentId which we already fetched)
         await tx.update(pages).set({
-          parentId: page?.parentId,
+          parentId: pageInfo.parentId,
           originalParentId: pageId
         }).where(eq(pages.parentId, pageId));
 
@@ -487,9 +528,12 @@ export const pageService = {
       return { success: false, error: 'Only drive owners and admins can create pages', status: 403 };
     }
 
-    // Calculate position
+    // Calculate position - use isNull when parentId is null/undefined
+    const parentIdCondition = params.parentId
+      ? eq(pages.parentId, params.parentId)
+      : isNull(pages.parentId);
     const lastPage = await db.query.pages.findFirst({
-      where: and(eq(pages.parentId, params.parentId ?? null), eq(pages.driveId, drive.id)),
+      where: and(parentIdCondition, eq(pages.driveId, drive.id)),
       orderBy: [desc(pages.position)],
     });
     const newPosition = (lastPage?.position || 0) + 1;
@@ -582,7 +626,7 @@ export const pageService = {
 
     return {
       success: true,
-      page: newPage as PageData,
+      page: toPageData(newPage),
       driveId: params.driveId,
       isAIChatPage: isAIChatPage(params.type),
     };

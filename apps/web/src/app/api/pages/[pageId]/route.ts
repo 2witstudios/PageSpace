@@ -54,10 +54,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
 
   try {
     const body = await req.json();
-    loggers.api.debug(`--- Updating Page ${pageId} ---`);
-    loggers.api.debug('Request Body:', body);
     const safeBody = patchSchema.parse(body);
-    loggers.api.debug('Validated Body:', safeBody);
 
     const result = await pageService.updatePage(pageId, userId, safeBody);
 
@@ -131,7 +128,14 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
   const userId = auth.userId;
 
   try {
-    const body = await req.json();
+    // Safely parse JSON body - handle empty or malformed bodies
+    let body: unknown = null;
+    try {
+      body = await req.json();
+    } catch {
+      // Empty or invalid JSON body - use null which schema allows
+      body = null;
+    }
     const parsedBody = deleteSchema.parse(body);
     const trashChildren = parsedBody?.trash_children ?? false;
 

@@ -32,7 +32,7 @@ export interface PermissionEntry {
   canEdit: boolean;
   canShare: boolean;
   canDelete: boolean;
-  grantedBy: string;
+  grantedBy: string | null;  // Can be null if granter is deleted (onDelete: 'set null')
   grantedAt: Date;
   user: PermissionUser | null;
 }
