@@ -8,10 +8,18 @@ import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard'
 
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 
+// Custom error class for HTTP errors with status codes
+class HttpError extends Error {
+  constructor(message: string, public status: number) {
+    super(message);
+    this.name = 'HttpError';
+  }
+}
+
 const reorderSchema = z.object({
   pageId: z.string(),
   newParentId: z.string().nullable(),
-  newPosition: z.number(),
+  newPosition: z.number().int().gte(0, 'Position must be a non-negative integer'),
 });
 
 export async function PATCH(request: Request) {
@@ -50,7 +58,7 @@ export async function PATCH(request: Request) {
         .limit(1);
 
       if (!pageInfo) {
-        throw new Error('Page not found.');
+        throw new HttpError('Page not found.', 404);
       }
 
       driveId = pageInfo.driveId;
@@ -74,7 +82,7 @@ export async function PATCH(request: Request) {
       }
 
       if (!isOwner && !isAdmin) {
-        throw new Error('Only drive owners and admins can reorder pages.');
+        throw new HttpError('Only drive owners and admins can reorder pages.', 403);
       }
 
       if (newParentId) {
@@ -85,11 +93,11 @@ export async function PATCH(request: Request) {
           .limit(1);
 
         if (!parentPage) {
-          throw new Error('Parent page not found.');
+          throw new HttpError('Parent page not found.', 404);
         }
 
         if (parentPage.driveId !== driveId) {
-          throw new Error('Cannot move pages between different drives.');
+          throw new HttpError('Cannot move pages between different drives.', 400);
         }
       }
 
@@ -117,6 +125,17 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ message: 'Page reordered successfully' });
   } catch (error) {
     loggers.api.error('Error reordering page:', error as Error);
+
+    // Handle Zod validation errors
+    if (error instanceof z.ZodError) {
+      return NextResponse.json({ error: error.issues[0]?.message || 'Validation failed' }, { status: 400 });
+    }
+
+    // Handle custom HTTP errors with status codes
+    if (error instanceof HttpError) {
+      return NextResponse.json({ error: error.message }, { status: error.status });
+    }
+
     const errorMessage = error instanceof Error ? error.message : 'Failed to reorder page';
     return NextResponse.json({ error: errorMessage }, { status: 500 });
   }
