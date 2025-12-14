@@ -74,7 +74,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
       await broadcastPageEvent(
         createPageEventPayload(driveId, pageId, 'updated', {
           title: safeBody.title,
-          parentId: result.page.parentId,
+          parentId: result.page.parentId ?? undefined,
           socketId
         })
       );
@@ -89,8 +89,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
     if (safeBody.content) {
       await broadcastPageEvent(
         createPageEventPayload(driveId, pageId, 'content-updated', {
-          title: result.page.title,
-          parentId: result.page.parentId,
+          title: result.page.title ?? undefined,
+          parentId: result.page.parentId ?? undefined,
           socketId
         })
       );
@@ -144,8 +144,8 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
     // Side effects: broadcast and cache invalidation
     await broadcastPageEvent(
       createPageEventPayload(result.driveId, pageId, 'trashed', {
-        title: result.pageTitle,
-        parentId: result.parentId
+        title: result.pageTitle ?? undefined,
+        parentId: result.parentId ?? undefined
       })
     );
 
