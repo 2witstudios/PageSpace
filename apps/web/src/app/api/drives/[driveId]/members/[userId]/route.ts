@@ -1,8 +1,13 @@
 import { NextResponse } from 'next/server';
-import { db, eq, and } from '@pagespace/db';
-import { drives, driveMembers, users, userProfiles, pagePermissions, pages } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import {
+  loggers,
+  checkDriveAccess,
+  getDriveMemberDetails,
+  getMemberPermissions,
+  updateMemberRole,
+  updateMemberPermissions,
+} from '@pagespace/lib/server';
 import { createDriveNotification } from '@pagespace/lib';
 import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
 
@@ -20,94 +25,38 @@ export async function GET(
 
     const { driveId, userId } = await context.params;
 
-    // Get drive and check ownership
-    const drive = await db.select()
-      .from(drives)
-      .where(eq(drives.id, driveId))
-      .limit(1);
+    // Check if user is owner or admin
+    const access = await checkDriveAccess(driveId, currentUserId);
 
-    if (drive.length === 0) {
+    if (!access.drive) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    // Check if user is owner or admin
-    const isOwner = drive[0].ownerId === currentUserId;
-    let isAdmin = false;
-
-    if (!isOwner) {
-      const adminMembership = await db.select()
-        .from(driveMembers)
-        .where(and(
-          eq(driveMembers.driveId, driveId),
-          eq(driveMembers.userId, currentUserId),
-          eq(driveMembers.role, 'ADMIN')
-        ))
-        .limit(1);
-
-      isAdmin = adminMembership.length > 0;
-    }
-
-    if (!isOwner && !isAdmin) {
+    if (!access.isOwner && !access.isAdmin) {
       return NextResponse.json({ error: 'Only drive owners and admins can manage member settings' }, { status: 403 });
     }
 
-    // Get member details with profile
-    const memberData = await db.select({
-      id: driveMembers.id,
-      userId: driveMembers.userId,
-      role: driveMembers.role,
-      customRoleId: driveMembers.customRoleId,
-      invitedAt: driveMembers.invitedAt,
-      acceptedAt: driveMembers.acceptedAt,
-      user: {
-        id: users.id,
-        email: users.email,
-        name: users.name,
-      },
-      profile: {
-        username: userProfiles.username,
-        displayName: userProfiles.displayName,
-        avatarUrl: userProfiles.avatarUrl,
-      }
-    })
-    .from(driveMembers)
-    .leftJoin(users, eq(driveMembers.userId, users.id))
-    .leftJoin(userProfiles, eq(driveMembers.userId, userProfiles.userId))
-    .where(and(
-      eq(driveMembers.driveId, driveId),
-      eq(driveMembers.userId, userId)
-    ))
-    .limit(1);
+    // Get member details
+    const memberData = await getDriveMemberDetails(driveId, userId);
 
-    if (memberData.length === 0) {
+    if (!memberData) {
       return NextResponse.json({ error: 'Member not found' }, { status: 404 });
     }
 
     const member = {
-      ...memberData[0],
+      ...memberData,
       drive: {
         id: driveId,
-        name: drive[0].name,
-        slug: drive[0].slug,
-        ownerId: drive[0].ownerId,
+        name: access.drive.name,
+        slug: access.drive.slug,
+        ownerId: access.drive.ownerId,
       }
     };
 
     // Get current permissions for this member
-    const permissions = await db.select({
-      pageId: pagePermissions.pageId,
-      canView: pagePermissions.canView,
-      canEdit: pagePermissions.canEdit,
-      canShare: pagePermissions.canShare,
-    })
-    .from(pagePermissions)
-    .innerJoin(pages, eq(pagePermissions.pageId, pages.id))
-    .where(and(
-      eq(pagePermissions.userId, userId),
-      eq(pages.driveId, driveId)
-    ));
+    const permissions = await getMemberPermissions(driveId, userId);
 
-    return NextResponse.json({ 
+    return NextResponse.json({
       member,
       permissions
     });
@@ -142,70 +91,28 @@ export async function PATCH(
       return NextResponse.json({ error: 'Invalid role' }, { status: 400 });
     }
 
-    // Get drive and check ownership
-    const drive = await db.select()
-      .from(drives)
-      .where(eq(drives.id, driveId))
-      .limit(1);
+    // Check if user is owner or admin
+    const access = await checkDriveAccess(driveId, currentUserId);
 
-    if (drive.length === 0) {
+    if (!access.drive) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    // Check if user is owner or admin
-    const isOwner = drive[0].ownerId === currentUserId;
-    let isAdmin = false;
-
-    if (!isOwner) {
-      const adminMembership = await db.select()
-        .from(driveMembers)
-        .where(and(
-          eq(driveMembers.driveId, driveId),
-          eq(driveMembers.userId, currentUserId),
-          eq(driveMembers.role, 'ADMIN')
-        ))
-        .limit(1);
-
-      isAdmin = adminMembership.length > 0;
-    }
-
-    if (!isOwner && !isAdmin) {
+    if (!access.isOwner && !access.isAdmin) {
       return NextResponse.json({ error: 'Only drive owners and admins can manage member settings' }, { status: 403 });
     }
 
     // Verify member exists in drive
-    const member = await db.select()
-      .from(driveMembers)
-      .where(and(
-        eq(driveMembers.driveId, driveId),
-        eq(driveMembers.userId, userId)
-      ))
-      .limit(1);
+    const memberData = await getDriveMemberDetails(driveId, userId);
 
-    if (member.length === 0) {
+    if (!memberData) {
       return NextResponse.json({ error: 'Member not found' }, { status: 404 });
     }
 
     // Update role and customRoleId if provided
-    const oldRole = member[0].role;
-    const updateData: { role?: 'OWNER' | 'ADMIN' | 'MEMBER'; customRoleId?: string | null } = {};
-    if (role && ['OWNER', 'ADMIN', 'MEMBER'].includes(role)) {
-      updateData.role = role as 'OWNER' | 'ADMIN' | 'MEMBER';
-    }
-    if (customRoleId !== undefined) {
-      updateData.customRoleId = customRoleId || null;
-    }
+    const { oldRole } = await updateMemberRole(driveId, userId, role, customRoleId);
 
-    if (Object.keys(updateData).length > 0) {
-      await db.update(driveMembers)
-        .set(updateData)
-        .where(and(
-          eq(driveMembers.driveId, driveId),
-          eq(driveMembers.userId, userId)
-        ));
-    }
-
-    // Send notification if role changed
+    // Send notification if role changed (boundary obligation)
     if (role && role !== oldRole) {
       await createDriveNotification(
         userId,
@@ -219,58 +126,23 @@ export async function PATCH(
       await broadcastDriveMemberEvent(
         createDriveMemberEventPayload(driveId, userId, 'member_role_changed', {
           role,
-          driveName: drive[0].name
+          driveName: access.drive.name
         })
       );
     }
 
-    // Get all pages in the drive to validate pageIds
-    const drivePages = await db.select({ id: pages.id })
-      .from(pages)
-      .where(eq(pages.driveId, driveId));
+    // Update permissions
+    const permissionsUpdated = await updateMemberPermissions(
+      driveId,
+      userId,
+      currentUserId,
+      permissions
+    );
 
-    const validPageIds = new Set(drivePages.map(p => p.id));
-
-    // Delete all existing permissions for this user in this drive
-    const existingPermissions = await db.select({ pageId: pagePermissions.pageId })
-      .from(pagePermissions)
-      .innerJoin(pages, eq(pagePermissions.pageId, pages.id))
-      .where(and(
-        eq(pagePermissions.userId, userId),
-        eq(pages.driveId, driveId)
-      ));
-
-    // Delete permissions for pages in this drive (can't join in delete, so delete by pageId)
-    for (const perm of existingPermissions) {
-      await db.delete(pagePermissions)
-        .where(and(
-          eq(pagePermissions.userId, userId),
-          eq(pagePermissions.pageId, perm.pageId)
-        ));
-    }
-
-    // Insert new permissions
-    const newPermissions = permissions
-      .filter(p => validPageIds.has(p.pageId))
-      .filter(p => p.canView || p.canEdit || p.canShare) // Only insert if at least one permission is true
-      .map(p => ({
-        pageId: p.pageId,
-        userId: userId,
-        canView: p.canView || false,
-        canEdit: p.canEdit || false,
-        canShare: p.canShare || false,
-        grantedBy: currentUserId,
-        grantedAt: new Date(),
-      }));
-
-    if (newPermissions.length > 0) {
-      await db.insert(pagePermissions).values(newPermissions);
-    }
-
-    return NextResponse.json({ 
+    return NextResponse.json({
       success: true,
       message: 'Permissions updated successfully',
-      permissionsUpdated: newPermissions.length
+      permissionsUpdated
     });
   } catch (error) {
     loggers.api.error('Error updating member permissions:', error as Error);

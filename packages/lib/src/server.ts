@@ -16,6 +16,9 @@ export * from './sheets';
 // Drive service
 export * from './services/drive-service';
 
+// Drive member service
+export * from './services/drive-member-service';
+
 // OAuth utilities (server-only)
 export * from './auth/oauth-utils';
 export * from './auth/oauth-types';
