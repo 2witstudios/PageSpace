@@ -246,7 +246,6 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
     it('should match wildcard patterns', async () => {
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=test.*`);
       const response = await GET(request, createContext(mockDriveId));
-      const body = await response.json();
 
       expect(response.status).toBe(200);
       // Should match test.ts and test.tsx
@@ -255,7 +254,6 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
     it('should match single character wildcard', async () => {
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=test.ts?`);
       const response = await GET(request, createContext(mockDriveId));
-      const body = await response.json();
 
       expect(response.status).toBe(200);
       // Should match test.tsx (? = single char)

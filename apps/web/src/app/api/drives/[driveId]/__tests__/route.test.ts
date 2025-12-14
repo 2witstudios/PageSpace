@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, PATCH, DELETE } from '../route';
 import type { WebAuthResult, AuthError } from '@/lib/auth';
-import { z } from 'zod';
 
 // Mock dependencies
 vi.mock('@pagespace/db', () => ({

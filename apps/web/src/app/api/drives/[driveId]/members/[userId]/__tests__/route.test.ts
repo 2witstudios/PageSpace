@@ -474,7 +474,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
         [], // existing permissions
       ]);
 
-      const { valuesMock } = setupInsertMock();
+      setupInsertMock();
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
         method: 'PATCH',
@@ -501,7 +501,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
         [],
       ]);
 
-      const { valuesMock } = setupInsertMock();
+      setupInsertMock();
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
         method: 'PATCH',

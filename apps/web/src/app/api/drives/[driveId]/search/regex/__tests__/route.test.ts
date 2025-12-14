@@ -196,7 +196,6 @@ describe('GET /api/drives/[driveId]/search/regex', () => {
     it('should support searchIn=both', async () => {
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/regex?pattern=test&searchIn=both`);
       const response = await GET(request, createContext(mockDriveId));
-      const body = await response.json();
 
       expect(response.status).toBe(200);
     });
