@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { UIMessage } from 'ai';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { conversationState } from '@/lib/ai/core';
+import { conversationState } from '@/lib/ai/core/conversation-state';
 import { toast } from 'sonner';
 import { AgentInfo } from '@/types/agent';
 
