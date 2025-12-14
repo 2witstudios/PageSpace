@@ -1,48 +1,45 @@
+/**
+ * Contract tests for /api/pages/[pageId]/permissions
+ *
+ * These tests verify the route handler's contract:
+ * - Request validation → appropriate error responses
+ * - Service delegation → correct parameters passed
+ * - Response mapping → service results mapped to HTTP responses
+ * - Side effects → notifications with correct payload essentials
+ */
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, POST, DELETE } from '../route';
 import type { WebAuthResult, AuthError } from '@/lib/auth';
+import type {
+  GetPermissionsResult,
+  GrantPermissionResult,
+  RevokePermissionResult,
+  PermissionEntry,
+} from '@/services/api';
 
-// Mock dependencies
-vi.mock('@pagespace/db', () => ({
-  db: {
-    query: {
-      pages: {
-        findFirst: vi.fn(),
-      },
-      pagePermissions: {
-        findFirst: vi.fn(),
-      },
-    },
-    select: vi.fn(),
-    insert: vi.fn(),
-    update: vi.fn(),
-    delete: vi.fn(),
+// Mock service boundary - this is the ONLY mock of internal implementation
+vi.mock('@/services/api', () => ({
+  permissionManagementService: {
+    canUserViewPermissions: vi.fn(),
+    canUserManagePermissions: vi.fn(),
+    getPagePermissions: vi.fn(),
+    grantOrUpdatePermission: vi.fn(),
+    revokePermission: vi.fn(),
   },
-  pages: { id: 'pages.id' },
-  users: { id: 'users.id', name: 'users.name', email: 'users.email', image: 'users.image' },
-  pagePermissions: {
-    id: 'pagePermissions.id',
-    pageId: 'pagePermissions.pageId',
-    userId: 'pagePermissions.userId',
-    canView: 'pagePermissions.canView',
-    canEdit: 'pagePermissions.canEdit',
-    canShare: 'pagePermissions.canShare',
-    canDelete: 'pagePermissions.canDelete',
-    grantedBy: 'pagePermissions.grantedBy',
-    grantedAt: 'pagePermissions.grantedAt',
-  },
-  driveMembers: {
-    driveId: 'driveMembers.driveId',
-    userId: 'driveMembers.userId',
-    role: 'driveMembers.role',
-  },
-  and: vi.fn((...args: unknown[]) => ({ args, type: 'and' })),
-  eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
+}));
+
+// Mock external boundaries
+vi.mock('@/lib/auth', () => ({
+  authenticateRequestWithOptions: vi.fn(),
+  isAuthError: vi.fn((result) => 'error' in result),
+}));
+
+vi.mock('@pagespace/lib', () => ({
+  createPermissionNotification: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
-  getUserAccessLevel: vi.fn(),
   loggers: {
     api: {
       info: vi.fn(),
@@ -53,25 +50,14 @@ vi.mock('@pagespace/lib/server', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib', () => ({
-  createPermissionNotification: vi.fn(),
-}));
-
-vi.mock('@paralleldrive/cuid2', () => ({
-  createId: vi.fn(() => 'mock_permission_id'),
-}));
-
-vi.mock('@/lib/auth', () => ({
-  authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn((result) => 'error' in result),
-}));
-
-import { db } from '@pagespace/db';
+import { permissionManagementService } from '@/services/api';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { getUserAccessLevel } from '@pagespace/lib/server';
 import { createPermissionNotification } from '@pagespace/lib';
 
-// Helper to create mock WebAuthResult
+// Test helpers
+const mockUserId = 'user_123';
+const mockPageId = 'page_123';
+
 const mockWebAuth = (userId: string): WebAuthResult => ({
   userId,
   tokenVersion: 0,
@@ -80,61 +66,35 @@ const mockWebAuth = (userId: string): WebAuthResult => ({
   role: 'user',
 });
 
-// Helper to create mock AuthError
 const mockAuthError = (status = 401): AuthError => ({
   error: NextResponse.json({ error: 'Unauthorized' }, { status }),
 });
 
-// Helper to create mock page with drive
-const mockPageWithDrive = (overrides?: Partial<{
-  id: string;
-  ownerId: string;
-}>) => ({
-  id: overrides?.id ?? 'page_123',
-  title: 'Test Page',
-  drive: {
-    id: 'drive_123',
-    ownerId: overrides?.ownerId ?? 'owner_123',
-    owner: {
-      id: overrides?.ownerId ?? 'owner_123',
-      name: 'Owner',
-      email: 'owner@example.com',
-      image: null,
-    },
-  },
-});
+const mockOwner = {
+  id: 'owner_123',
+  name: 'Owner',
+  email: 'owner@example.com',
+  image: null,
+};
 
-// Helper to create mock permission
-const mockPermission = (overrides?: Partial<{
-  id: string;
-  userId: string;
-  pageId: string;
-  canView: boolean;
-  canEdit: boolean;
-  canShare: boolean;
-  canDelete: boolean;
-}>) => ({
-  id: overrides?.id ?? 'perm_123',
-  pageId: overrides?.pageId ?? 'page_123',
-  userId: overrides?.userId ?? 'user_456',
-  canView: overrides?.canView ?? true,
-  canEdit: overrides?.canEdit ?? false,
-  canShare: overrides?.canShare ?? false,
-  canDelete: overrides?.canDelete ?? false,
+const mockPermission: PermissionEntry = {
+  id: 'perm_123',
+  userId: 'user_456',
+  canView: true,
+  canEdit: false,
+  canShare: false,
+  canDelete: false,
   grantedBy: 'owner_123',
   grantedAt: new Date(),
   user: {
-    id: overrides?.userId ?? 'user_456',
+    id: 'user_456',
     name: 'User',
     email: 'user@example.com',
     image: null,
   },
-});
+};
 
 describe('GET /api/pages/[pageId]/permissions', () => {
-  const mockUserId = 'user_123';
-  const mockPageId = 'page_123';
-
   const createRequest = () => {
     return new Request(`https://example.com/api/pages/${mockPageId}/permissions`, {
       method: 'GET',
@@ -143,26 +103,17 @@ describe('GET /api/pages/[pageId]/permissions', () => {
 
   const mockParams = Promise.resolve({ pageId: mockPageId });
 
+  const successResult: GetPermissionsResult = {
+    success: true,
+    owner: mockOwner,
+    permissions: [mockPermission],
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
     (authenticateRequestWithOptions as Mock).mockResolvedValue(mockWebAuth(mockUserId));
-    (getUserAccessLevel as Mock).mockResolvedValue({
-      canView: true,
-      canEdit: true,
-      canShare: true,
-      canDelete: true,
-    });
-    (db.query.pages.findFirst as Mock).mockResolvedValue(mockPageWithDrive());
-
-    // Mock select chain for permissions
-    const selectChain = {
-      from: vi.fn().mockReturnValue({
-        leftJoin: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([mockPermission()]),
-        }),
-      }),
-    };
-    vi.mocked(db.select).mockReturnValue(selectChain as ReturnType<typeof db.select>);
+    (permissionManagementService.canUserViewPermissions as Mock).mockResolvedValue(true);
+    (permissionManagementService.getPagePermissions as Mock).mockResolvedValue(successResult);
   });
 
   describe('authentication', () => {
@@ -172,78 +123,54 @@ describe('GET /api/pages/[pageId]/permissions', () => {
       const response = await GET(createRequest(), { params: mockParams });
 
       expect(response.status).toBe(401);
+      expect(permissionManagementService.getPagePermissions).not.toHaveBeenCalled();
     });
   });
 
   describe('authorization', () => {
     it('returns 403 when user lacks share permission', async () => {
-      (getUserAccessLevel as Mock).mockResolvedValue({
-        canView: true,
-        canEdit: true,
-        canShare: false,
-        canDelete: false,
-      });
+      (permissionManagementService.canUserViewPermissions as Mock).mockResolvedValue(false);
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
 
       expect(response.status).toBe(403);
-      expect(body.error).toBe('You need share permission to view the permission list for this page');
-    });
-
-    it('returns 403 when user has no access', async () => {
-      (getUserAccessLevel as Mock).mockResolvedValue(null);
-
-      const response = await GET(createRequest(), { params: mockParams });
-
-      expect(response.status).toBe(403);
+      expect(body.error).toMatch(/share|permission/i);
+      expect(permissionManagementService.getPagePermissions).not.toHaveBeenCalled();
     });
   });
 
   describe('permission retrieval', () => {
     it('returns 404 when page does not exist', async () => {
-      (db.query.pages.findFirst as Mock).mockResolvedValue(null);
+      (permissionManagementService.getPagePermissions as Mock).mockResolvedValue({
+        success: false,
+        error: 'Page not found',
+        status: 404,
+      });
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
 
       expect(response.status).toBe(404);
-      expect(body.error).toBe('Page not found');
+      expect(body.error).toMatch(/not found/i);
     });
 
-    it('returns owner and permissions list', async () => {
-      const permissions = [
-        mockPermission({ userId: 'user_1', canView: true, canEdit: true }),
-        mockPermission({ userId: 'user_2', canView: true, canEdit: false }),
-      ];
-
-      const selectChain = {
-        from: vi.fn().mockReturnValue({
-          leftJoin: vi.fn().mockReturnValue({
-            where: vi.fn().mockResolvedValue(permissions),
-          }),
-        }),
-      };
-      vi.mocked(db.select).mockReturnValue(selectChain as ReturnType<typeof db.select>);
-
+    it('returns owner and permissions list on success', async () => {
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
 
       expect(response.status).toBe(200);
       expect(body.owner).toBeDefined();
       expect(body.owner.id).toBe('owner_123');
-      expect(body.permissions).toHaveLength(2);
+      expect(body.permissions).toHaveLength(1);
     });
 
     it('returns empty permissions array when no permissions exist', async () => {
-      const selectChain = {
-        from: vi.fn().mockReturnValue({
-          leftJoin: vi.fn().mockReturnValue({
-            where: vi.fn().mockResolvedValue([]),
-          }),
-        }),
-      };
-      vi.mocked(db.select).mockReturnValue(selectChain as ReturnType<typeof db.select>);
+      (permissionManagementService.getPagePermissions as Mock).mockResolvedValue({
+        success: true,
+        owner: mockOwner,
+        permissions: [],
+      });
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -254,22 +181,19 @@ describe('GET /api/pages/[pageId]/permissions', () => {
   });
 
   describe('error handling', () => {
-    it('returns 500 when database query fails', async () => {
-      (getUserAccessLevel as Mock).mockRejectedValue(new Error('Database error'));
+    it('returns 500 when service throws', async () => {
+      (permissionManagementService.canUserViewPermissions as Mock).mockRejectedValue(new Error('Service error'));
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
 
       expect(response.status).toBe(500);
-      expect(body.error).toBe('Failed to fetch permissions');
+      expect(body.error).toMatch(/failed/i);
     });
   });
 });
 
 describe('POST /api/pages/[pageId]/permissions', () => {
-  const mockUserId = 'user_123';
-  const mockPageId = 'page_123';
-
   const createRequest = (body: Record<string, unknown>) => {
     return new Request(`https://example.com/api/pages/${mockPageId}/permissions`, {
       method: 'POST',
@@ -280,51 +204,17 @@ describe('POST /api/pages/[pageId]/permissions', () => {
 
   const mockParams = Promise.resolve({ pageId: mockPageId });
 
+  const grantSuccessResult: GrantPermissionResult = {
+    success: true,
+    permission: mockPermission,
+    isUpdate: false,
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
     (authenticateRequestWithOptions as Mock).mockResolvedValue(mockWebAuth(mockUserId));
-
-    // Current user has share permission
-    (db.query.pagePermissions.findFirst as Mock).mockResolvedValue({
-      canShare: true,
-    });
-
-    // Page exists with drive
-    (db.query.pages.findFirst as Mock).mockResolvedValue({
-      id: mockPageId,
-      drive: { id: 'drive_123', ownerId: 'owner_123' },
-    });
-
-    // No existing permission for target user
-    (db.query.pagePermissions.findFirst as Mock)
-      .mockResolvedValueOnce({ canShare: true }) // Current user check
-      .mockResolvedValueOnce(null); // Target user check
-
-    // Mock admin check
-    const selectChain = {
-      from: vi.fn().mockReturnValue({
-        where: vi.fn().mockReturnValue({
-          limit: vi.fn().mockResolvedValue([]),
-        }),
-      }),
-    };
-    vi.mocked(db.select).mockReturnValue(selectChain as ReturnType<typeof db.select>);
-
-    // Mock insert
-    vi.mocked(db.insert).mockReturnValue({
-      values: vi.fn().mockReturnValue({
-        returning: vi.fn().mockResolvedValue([mockPermission()]),
-      }),
-    } as ReturnType<typeof db.insert>);
-
-    // Mock update
-    vi.mocked(db.update).mockReturnValue({
-      set: vi.fn().mockReturnValue({
-        where: vi.fn().mockReturnValue({
-          returning: vi.fn().mockResolvedValue([mockPermission()]),
-        }),
-      }),
-    } as ReturnType<typeof db.update>);
+    (permissionManagementService.canUserManagePermissions as Mock).mockResolvedValue(true);
+    (permissionManagementService.grantOrUpdatePermission as Mock).mockResolvedValue(grantSuccessResult);
   });
 
   describe('authentication', () => {
@@ -337,6 +227,7 @@ describe('POST /api/pages/[pageId]/permissions', () => {
       );
 
       expect(response.status).toBe(401);
+      expect(permissionManagementService.grantOrUpdatePermission).not.toHaveBeenCalled();
     });
   });
 
@@ -348,43 +239,23 @@ describe('POST /api/pages/[pageId]/permissions', () => {
       );
 
       expect(response.status).toBe(400);
+      expect(permissionManagementService.grantOrUpdatePermission).not.toHaveBeenCalled();
     });
 
-    it('returns 400 when permissions are invalid types', async () => {
+    it('returns 400 when permission flags are invalid types', async () => {
       const response = await POST(
         createRequest({ userId: 'user_456', canView: 'yes' }),
         { params: mockParams }
       );
 
       expect(response.status).toBe(400);
+      expect(permissionManagementService.grantOrUpdatePermission).not.toHaveBeenCalled();
     });
   });
 
   describe('authorization', () => {
-    it('returns 403 when user is not owner, admin, or has share permission', async () => {
-      // Reset mocks to clear defaults from beforeEach
-      vi.mocked(db.query.pagePermissions.findFirst).mockReset();
-      vi.mocked(db.query.pages.findFirst).mockReset();
-      vi.mocked(db.select).mockReset();
-
-      // User has no share permission (first pagePermissions.findFirst call)
-      vi.mocked(db.query.pagePermissions.findFirst).mockResolvedValue({ canShare: false } as never);
-
-      // Not owner (pages.findFirst call)
-      vi.mocked(db.query.pages.findFirst).mockResolvedValue({
-        id: mockPageId,
-        drive: { id: 'drive_123', ownerId: 'different_owner' },
-      } as never);
-
-      // Not admin (db.select chain)
-      const selectChain = {
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            limit: vi.fn().mockResolvedValue([]),
-          }),
-        }),
-      };
-      vi.mocked(db.select).mockReturnValue(selectChain as ReturnType<typeof db.select>);
+    it('returns 403 when user cannot manage permissions', async () => {
+      (permissionManagementService.canUserManagePermissions as Mock).mockResolvedValue(false);
 
       const response = await POST(
         createRequest({ userId: 'user_456', canView: true }),
@@ -393,132 +264,122 @@ describe('POST /api/pages/[pageId]/permissions', () => {
       const body = await response.json();
 
       expect(response.status).toBe(403);
-      expect(body.error).toBe('You do not have permission to share this page');
+      expect(body.error).toMatch(/permission|share/i);
+      expect(permissionManagementService.grantOrUpdatePermission).not.toHaveBeenCalled();
     });
+  });
 
-    it('allows owner to create permissions', async () => {
-      // Not existing share permission
-      (db.query.pagePermissions.findFirst as Mock)
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(null);
-
-      // User is owner
-      (db.query.pages.findFirst as Mock).mockResolvedValue({
-        id: mockPageId,
-        drive: { id: 'drive_123', ownerId: mockUserId },
-      });
-
-      const response = await POST(
-        createRequest({ userId: 'user_456', canView: true }),
-        { params: mockParams }
-      );
-
-      expect(response.status).toBe(201);
-    });
-
-    it('allows admin to create permissions', async () => {
-      // Not existing share permission
-      (db.query.pagePermissions.findFirst as Mock)
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(null);
-
-      // Not owner
-      (db.query.pages.findFirst as Mock).mockResolvedValue({
-        id: mockPageId,
-        drive: { id: 'drive_123', ownerId: 'different_owner' },
-      });
-
-      // Is admin
-      const selectChain = {
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            limit: vi.fn().mockResolvedValue([{ role: 'ADMIN' }]),
-          }),
+  describe('service delegation', () => {
+    it('passes correct parameters to service', async () => {
+      await POST(
+        createRequest({
+          userId: 'user_456',
+          canView: true,
+          canEdit: true,
+          canShare: false,
+          canDelete: false,
         }),
-      };
-      vi.mocked(db.select).mockReturnValue(selectChain as ReturnType<typeof db.select>);
-
-      const response = await POST(
-        createRequest({ userId: 'user_456', canView: true }),
         { params: mockParams }
       );
 
-      expect(response.status).toBe(201);
+      expect(permissionManagementService.grantOrUpdatePermission).toHaveBeenCalledWith({
+        pageId: mockPageId,
+        targetUserId: 'user_456',
+        permissions: {
+          canView: true,
+          canEdit: true,
+          canShare: false,
+          canDelete: false,
+        },
+        grantedBy: mockUserId,
+      });
     });
   });
 
   describe('permission creation', () => {
-    it('creates new permission with default values', async () => {
-      // User is owner
-      (db.query.pagePermissions.findFirst as Mock)
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(null);
-      (db.query.pages.findFirst as Mock).mockResolvedValue({
-        id: mockPageId,
-        drive: { id: 'drive_123', ownerId: mockUserId },
-      });
-
+    it('returns 201 when creating new permission', async () => {
       const response = await POST(
-        createRequest({ userId: 'user_456' }),
+        createRequest({ userId: 'user_456', canView: true }),
         { params: mockParams }
       );
 
       expect(response.status).toBe(201);
-      expect(db.insert).toHaveBeenCalled();
+    });
+
+    it('returns 200 when updating existing permission', async () => {
+      (permissionManagementService.grantOrUpdatePermission as Mock).mockResolvedValue({
+        success: true,
+        permission: mockPermission,
+        isUpdate: true,
+      });
+
+      const response = await POST(
+        createRequest({ userId: 'user_456', canView: true }),
+        { params: mockParams }
+      );
+
+      expect(response.status).toBe(200);
+    });
+  });
+
+  describe('side effects (notifications)', () => {
+    it('sends granted notification for new permission', async () => {
+      await POST(
+        createRequest({
+          userId: 'user_456',
+          canView: true,
+          canEdit: false,
+          canShare: false,
+          canDelete: false,
+        }),
+        { params: mockParams }
+      );
+
       expect(createPermissionNotification).toHaveBeenCalledWith(
         'user_456',
         mockPageId,
         'granted',
+        expect.objectContaining({ canView: true }),
+        mockUserId
+      );
+    });
+
+    it('sends updated notification when updating existing permission', async () => {
+      (permissionManagementService.grantOrUpdatePermission as Mock).mockResolvedValue({
+        success: true,
+        permission: mockPermission,
+        isUpdate: true,
+      });
+
+      await POST(
+        createRequest({ userId: 'user_456', canView: true }),
+        { params: mockParams }
+      );
+
+      expect(createPermissionNotification).toHaveBeenCalledWith(
+        'user_456',
+        mockPageId,
+        'updated',
         expect.any(Object),
         mockUserId
       );
     });
 
-    it('creates permission with all specified flags', async () => {
-      // User is owner
-      (db.query.pagePermissions.findFirst as Mock)
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(null);
-      (db.query.pages.findFirst as Mock).mockResolvedValue({
-        id: mockPageId,
-        drive: { id: 'drive_123', ownerId: mockUserId },
-      });
+    it('does NOT send notification when authorization fails', async () => {
+      (permissionManagementService.canUserManagePermissions as Mock).mockResolvedValue(false);
 
-      const response = await POST(
-        createRequest({
-          userId: 'user_456',
-          canView: true,
-          canEdit: true,
-          canShare: true,
-          canDelete: true,
-        }),
+      await POST(
+        createRequest({ userId: 'user_456', canView: true }),
         { params: mockParams }
       );
 
-      expect(response.status).toBe(201);
+      expect(createPermissionNotification).not.toHaveBeenCalled();
     });
-
-    // NOTE: Testing "updates existing permission" requires complex mock sequencing
-    // The behavior is covered by integration tests and the happy path tests above
-    // verify the core creation flow works correctly
   });
 
   describe('error handling', () => {
-    it('returns 500 when database insert fails', async () => {
-      // User is owner
-      (db.query.pagePermissions.findFirst as Mock)
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(null);
-      (db.query.pages.findFirst as Mock).mockResolvedValue({
-        id: mockPageId,
-        drive: { id: 'drive_123', ownerId: mockUserId },
-      });
-
-      vi.mocked(db.insert).mockReturnValue({
-        values: vi.fn().mockReturnValue({
-          returning: vi.fn().mockRejectedValue(new Error('Insert failed')),
-        }),
-      } as ReturnType<typeof db.insert>);
+    it('returns 500 when service throws', async () => {
+      (permissionManagementService.grantOrUpdatePermission as Mock).mockRejectedValue(new Error('Service error'));
 
       const response = await POST(
         createRequest({ userId: 'user_456', canView: true }),
@@ -527,15 +388,12 @@ describe('POST /api/pages/[pageId]/permissions', () => {
       const body = await response.json();
 
       expect(response.status).toBe(500);
-      expect(body.error).toBe('Failed to create permission');
+      expect(body.error).toMatch(/failed/i);
     });
   });
 });
 
 describe('DELETE /api/pages/[pageId]/permissions', () => {
-  const mockUserId = 'user_123';
-  const mockPageId = 'page_123';
-
   const createRequest = (body: Record<string, unknown>) => {
     return new Request(`https://example.com/api/pages/${mockPageId}/permissions`, {
       method: 'DELETE',
@@ -546,30 +404,15 @@ describe('DELETE /api/pages/[pageId]/permissions', () => {
 
   const mockParams = Promise.resolve({ pageId: mockPageId });
 
+  const revokeSuccessResult: RevokePermissionResult = {
+    success: true,
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
     (authenticateRequestWithOptions as Mock).mockResolvedValue(mockWebAuth(mockUserId));
-
-    // Page exists with drive
-    (db.query.pages.findFirst as Mock).mockResolvedValue({
-      id: mockPageId,
-      drive: { id: 'drive_123', ownerId: mockUserId },
-    });
-
-    // Mock admin check
-    const selectChain = {
-      from: vi.fn().mockReturnValue({
-        where: vi.fn().mockReturnValue({
-          limit: vi.fn().mockResolvedValue([]),
-        }),
-      }),
-    };
-    vi.mocked(db.select).mockReturnValue(selectChain as ReturnType<typeof db.select>);
-
-    // Mock delete
-    vi.mocked(db.delete).mockReturnValue({
-      where: vi.fn().mockResolvedValue(undefined),
-    } as ReturnType<typeof db.delete>);
+    (permissionManagementService.canUserManagePermissions as Mock).mockResolvedValue(true);
+    (permissionManagementService.revokePermission as Mock).mockResolvedValue(revokeSuccessResult);
   });
 
   describe('authentication', () => {
@@ -582,47 +425,42 @@ describe('DELETE /api/pages/[pageId]/permissions', () => {
       );
 
       expect(response.status).toBe(401);
+      expect(permissionManagementService.revokePermission).not.toHaveBeenCalled();
     });
   });
 
   describe('authorization', () => {
-    it('allows owner to delete permissions', async () => {
-      // By default, beforeEach sets the user as owner
+    it('returns 403 when user cannot manage permissions', async () => {
+      (permissionManagementService.canUserManagePermissions as Mock).mockResolvedValue(false);
+
       const response = await DELETE(
         createRequest({ userId: 'user_456' }),
         { params: mockParams }
       );
+      const body = await response.json();
 
-      expect(response.status).toBe(200);
+      expect(response.status).toBe(403);
+      expect(body.error).toMatch(/permission|manage/i);
+      expect(permissionManagementService.revokePermission).not.toHaveBeenCalled();
     });
+  });
 
-    it('allows admin to delete permissions', async () => {
-      // Not owner
-      (db.query.pages.findFirst as Mock).mockResolvedValue({
-        id: mockPageId,
-        drive: { id: 'drive_123', ownerId: 'different_owner' },
-      });
-
-      // Is admin
-      vi.mocked(db.select).mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            limit: vi.fn().mockResolvedValue([{ role: 'ADMIN' }]),
-          }),
-        }),
-      } as ReturnType<typeof db.select>);
-
-      const response = await DELETE(
+  describe('service delegation', () => {
+    it('passes correct parameters to service', async () => {
+      await DELETE(
         createRequest({ userId: 'user_456' }),
         { params: mockParams }
       );
 
-      expect(response.status).toBe(200);
+      expect(permissionManagementService.revokePermission).toHaveBeenCalledWith({
+        pageId: mockPageId,
+        targetUserId: 'user_456',
+      });
     });
   });
 
   describe('permission deletion', () => {
-    it('deletes permission successfully', async () => {
+    it('returns 200 with success on successful deletion', async () => {
       const response = await DELETE(
         createRequest({ userId: 'user_456' }),
         { params: mockParams }
@@ -631,10 +469,11 @@ describe('DELETE /api/pages/[pageId]/permissions', () => {
 
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
-      expect(db.delete).toHaveBeenCalled();
     });
+  });
 
-    it('sends notification when permission is revoked', async () => {
+  describe('side effects (notifications)', () => {
+    it('sends revoked notification on successful deletion', async () => {
       await DELETE(
         createRequest({ userId: 'user_456' }),
         { params: mockParams }
@@ -648,13 +487,22 @@ describe('DELETE /api/pages/[pageId]/permissions', () => {
         mockUserId
       );
     });
+
+    it('does NOT send notification when authorization fails', async () => {
+      (permissionManagementService.canUserManagePermissions as Mock).mockResolvedValue(false);
+
+      await DELETE(
+        createRequest({ userId: 'user_456' }),
+        { params: mockParams }
+      );
+
+      expect(createPermissionNotification).not.toHaveBeenCalled();
+    });
   });
 
   describe('error handling', () => {
-    it('returns 500 when database delete fails', async () => {
-      vi.mocked(db.delete).mockReturnValue({
-        where: vi.fn().mockRejectedValue(new Error('Delete failed')),
-      } as ReturnType<typeof db.delete>);
+    it('returns 500 when service throws', async () => {
+      (permissionManagementService.revokePermission as Mock).mockRejectedValue(new Error('Service error'));
 
       const response = await DELETE(
         createRequest({ userId: 'user_456' }),
@@ -663,7 +511,7 @@ describe('DELETE /api/pages/[pageId]/permissions', () => {
       const body = await response.json();
 
       expect(response.status).toBe(500);
-      expect(body.error).toBe('Failed to delete permission');
+      expect(body.error).toMatch(/failed/i);
     });
   });
 });
