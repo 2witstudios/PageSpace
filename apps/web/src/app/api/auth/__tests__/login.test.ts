@@ -65,6 +65,7 @@ vi.mock('cookie', () => ({
   serialize: vi.fn().mockReturnValue('mock-cookie'),
 }));
 
+import { serialize } from 'cookie';
 import { db } from '@pagespace/db';
 import bcrypt from 'bcryptjs';
 import {
@@ -132,9 +133,31 @@ describe('/api/auth/login', () => {
       // Act
       const response = await POST(request);
 
-      // Assert
-      const setCookieHeaders = response.headers.getSetCookie();
-      expect(setCookieHeaders.length).toBe(2);
+      // Assert - verify serialize was called with httpOnly and security options
+      expect(response.headers.get('set-cookie')).toBeTruthy();
+      expect(serialize).toHaveBeenCalledTimes(2);
+
+      // Verify accessToken cookie options
+      expect(serialize).toHaveBeenCalledWith(
+        'accessToken',
+        expect.any(String),
+        expect.objectContaining({
+          httpOnly: true,
+          sameSite: 'strict',
+          path: '/',
+        })
+      );
+
+      // Verify refreshToken cookie options
+      expect(serialize).toHaveBeenCalledWith(
+        'refreshToken',
+        expect.any(String),
+        expect.objectContaining({
+          httpOnly: true,
+          sameSite: 'strict',
+          path: '/',
+        })
+      );
     });
 
     it('generates access and refresh tokens with correct user data', async () => {
@@ -302,8 +325,10 @@ describe('/api/auth/login', () => {
       // Act
       await POST(request);
 
-      // Assert - bcrypt.compare should be called to prevent timing attacks
-      expect(bcrypt.compare).toHaveBeenCalled();
+      // Assert - bcrypt.compare should be called with the password and dummy hash
+      // The dummy hash ensures consistent timing regardless of whether user exists
+      const DUMMY_HASH = '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5GyYzpLLEm4Eu';
+      expect(bcrypt.compare).toHaveBeenCalledWith('anypassword', DUMMY_HASH);
     });
 
     it('logs failed login attempt', async () => {

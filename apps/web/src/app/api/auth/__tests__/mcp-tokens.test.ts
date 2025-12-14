@@ -77,7 +77,23 @@ describe('/api/auth/mcp-tokens', () => {
   describe('POST /api/auth/mcp-tokens', () => {
     describe('successful token creation', () => {
       it('returns 200 with new token data', async () => {
-        // Arrange
+        // Arrange - capture the values passed to insert
+        let capturedValues: Record<string, unknown> | undefined;
+        const mockValues = vi.fn().mockImplementation((vals) => {
+          capturedValues = vals;
+          return {
+            returning: vi.fn().mockResolvedValue([
+              {
+                id: 'new-mcp-token-id',
+                name: vals.name,
+                token: vals.token,
+                createdAt: new Date(),
+              },
+            ]),
+          };
+        });
+        (db.insert as Mock).mockReturnValue({ values: mockValues });
+
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
           headers: {
@@ -92,16 +108,32 @@ describe('/api/auth/mcp-tokens', () => {
         const response = await POST(request);
         const body = await response.json();
 
-        // Assert
+        // Assert - verify response matches input
         expect(response.status).toBe(200);
         expect(body.id).toBe('new-mcp-token-id');
-        expect(body.name).toBe('Test Token');
-        expect(body.token).toBe('mcp_generated-token');
+        expect(body.name).toBe('My API Token'); // Should match input, not hardcoded mock
+        expect(body.token).toMatch(/^mcp_/); // Token should have mcp_ prefix
         expect(body.createdAt).toBeDefined();
+
+        // Assert - verify correct values were passed to insert
+        expect(capturedValues).toBeDefined();
+        expect(capturedValues!.name).toBe('My API Token');
+        expect(capturedValues!.userId).toBe('test-user-id');
       });
 
       it('generates token with mcp_ prefix', async () => {
-        // Arrange
+        // Arrange - capture the token value
+        let capturedToken: string | undefined;
+        const mockValues = vi.fn().mockImplementation((vals) => {
+          capturedToken = vals.token;
+          return {
+            returning: vi.fn().mockResolvedValue([
+              { id: 'id', name: vals.name, token: vals.token, createdAt: new Date() },
+            ]),
+          };
+        });
+        (db.insert as Mock).mockReturnValue({ values: mockValues });
+
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
           headers: {
@@ -115,12 +147,25 @@ describe('/api/auth/mcp-tokens', () => {
         // Act
         await POST(request);
 
-        // Assert
+        // Assert - verify token has mcp_ prefix
         expect(db.insert).toHaveBeenCalled();
+        expect(capturedToken).toBeDefined();
+        expect(capturedToken).toMatch(/^mcp_/);
       });
 
       it('associates token with authenticated user', async () => {
-        // Arrange
+        // Arrange - capture userId
+        let capturedUserId: string | undefined;
+        const mockValues = vi.fn().mockImplementation((vals) => {
+          capturedUserId = vals.userId;
+          return {
+            returning: vi.fn().mockResolvedValue([
+              { id: 'id', name: vals.name, token: vals.token, createdAt: new Date() },
+            ]),
+          };
+        });
+        (db.insert as Mock).mockReturnValue({ values: mockValues });
+
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
           headers: {
@@ -134,8 +179,9 @@ describe('/api/auth/mcp-tokens', () => {
         // Act
         await POST(request);
 
-        // Assert
+        // Assert - verify token is associated with authenticated user
         expect(db.insert).toHaveBeenCalled();
+        expect(capturedUserId).toBe('test-user-id');
       });
     });
 
@@ -403,7 +449,18 @@ describe('/api/auth/mcp-tokens', () => {
       });
 
       it('sets revokedAt timestamp instead of deleting', async () => {
-        // Arrange
+        // Arrange - capture the values passed to set()
+        let capturedSetValues: Record<string, unknown> | undefined;
+        const mockSet = vi.fn().mockImplementation((vals) => {
+          capturedSetValues = vals;
+          return {
+            where: vi.fn().mockReturnValue({
+              returning: vi.fn().mockResolvedValue([{ id: 'token-123' }]),
+            }),
+          };
+        });
+        (db.update as Mock).mockReturnValue({ set: mockSet });
+
         const request = new NextRequest(
           'http://localhost/api/auth/mcp-tokens/token-123',
           {
@@ -419,8 +476,11 @@ describe('/api/auth/mcp-tokens', () => {
         // Act
         await DELETE(request, context);
 
-        // Assert
+        // Assert - verify update was called and revokedAt was set to a non-null Date
         expect(db.update).toHaveBeenCalled();
+        expect(mockSet).toHaveBeenCalled();
+        expect(capturedSetValues).toBeDefined();
+        expect(capturedSetValues!.revokedAt).toBeInstanceOf(Date);
       });
     });
 

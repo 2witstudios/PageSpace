@@ -19,7 +19,7 @@ vi.mock('@/lib/auth/auth-helpers', () => ({
   isAuthError: vi.fn(),
 }));
 
-import { db } from '@pagespace/db';
+import { db, eq } from '@pagespace/db';
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
 
 describe('/api/auth/me', () => {
@@ -149,8 +149,15 @@ describe('/api/auth/me', () => {
       // Act
       await GET(request);
 
-      // Assert
+      // Assert - verify query is scoped to the authenticated user ID
       expect(db.query.users.findFirst).toHaveBeenCalled();
+      expect(eq).toHaveBeenCalled();
+      // Verify eq was called with the users.id field and the authenticated user's ID
+      const eqCalls = (eq as Mock).mock.calls;
+      const userIdCall = eqCalls.find(
+        (call) => call[1] === 'test-user-id'
+      );
+      expect(userIdCall).toBeDefined();
     });
   });
 

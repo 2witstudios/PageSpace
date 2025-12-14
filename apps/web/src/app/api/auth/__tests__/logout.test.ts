@@ -50,7 +50,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { db } from '@pagespace/db';
-import { parse } from 'cookie';
+import { parse, serialize } from 'cookie';
 import { logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import {
@@ -110,9 +110,31 @@ describe('/api/auth/logout', () => {
       // Act
       const response = await POST(request);
 
-      // Assert
-      const setCookieHeaders = response.headers.getSetCookie();
-      expect(setCookieHeaders.length).toBe(2);
+      // Assert - verify cookies are cleared with expires: epoch (1970-01-01)
+      expect(response.headers.get('set-cookie')).toBeTruthy();
+      expect(serialize).toHaveBeenCalledTimes(2);
+
+      // Verify accessToken cookie is cleared (expires in the past)
+      expect(serialize).toHaveBeenCalledWith(
+        'accessToken',
+        '',
+        expect.objectContaining({
+          expires: new Date(0), // Epoch = cookie cleared
+          httpOnly: true,
+          path: '/',
+        })
+      );
+
+      // Verify refreshToken cookie is cleared
+      expect(serialize).toHaveBeenCalledWith(
+        'refreshToken',
+        '',
+        expect.objectContaining({
+          expires: new Date(0), // Epoch = cookie cleared
+          httpOnly: true,
+          path: '/',
+        })
+      );
     });
 
     it('deletes refresh token from database', async () => {

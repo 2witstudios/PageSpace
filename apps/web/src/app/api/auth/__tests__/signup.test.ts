@@ -95,6 +95,8 @@ vi.mock('cookie', () => ({
   serialize: vi.fn().mockReturnValue('mock-cookie'),
 }));
 
+import { serialize } from 'cookie';
+
 vi.mock('react', () => ({
   default: {
     createElement: vi.fn().mockReturnValue({}),
@@ -160,9 +162,31 @@ describe('/api/auth/signup', () => {
       // Act
       const response = await POST(request);
 
-      // Assert
-      const setCookieHeaders = response.headers.getSetCookie();
-      expect(setCookieHeaders.length).toBe(2);
+      // Assert - verify serialize was called with httpOnly and security options
+      expect(response.headers.get('set-cookie')).toBeTruthy();
+      expect(serialize).toHaveBeenCalledTimes(2);
+
+      // Verify accessToken cookie options
+      expect(serialize).toHaveBeenCalledWith(
+        'accessToken',
+        expect.any(String),
+        expect.objectContaining({
+          httpOnly: true,
+          sameSite: 'strict',
+          path: '/',
+        })
+      );
+
+      // Verify refreshToken cookie options
+      expect(serialize).toHaveBeenCalledWith(
+        'refreshToken',
+        expect.any(String),
+        expect.objectContaining({
+          httpOnly: true,
+          sameSite: 'strict',
+          path: '/',
+        })
+      );
     });
 
     it('hashes password with bcrypt cost factor 12', async () => {
@@ -206,8 +230,11 @@ describe('/api/auth/signup', () => {
       // Act
       await POST(request);
 
-      // Assert - db.insert should be called multiple times (users, drives, userAiSettings, refreshTokens)
-      expect(db.insert).toHaveBeenCalledTimes(4);
+      // Assert - verify key side-effects occurred (user, drive, settings, refresh token)
+      // Use at least 4 inserts instead of exact count to avoid brittleness on harmless refactors
+      expect(db.insert).toHaveBeenCalled();
+      const insertCalls = (db.insert as Mock).mock.calls.length;
+      expect(insertCalls).toBeGreaterThanOrEqual(4);
     });
 
     it('sends verification email', async () => {

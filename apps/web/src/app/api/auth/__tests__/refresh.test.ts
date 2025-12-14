@@ -272,9 +272,27 @@ describe('/api/auth/refresh', () => {
     });
 
     it('returns 401 when refresh token is not found in database', async () => {
-      // Arrange
-      (db.transaction as Mock).mockResolvedValue({ error: 'Invalid refresh token.' });
+      // Arrange - use callback-shaped mock to exercise real control flow
+      (db.transaction as Mock).mockImplementation(async (cb) => {
+        const trx = {
+          query: {
+            refreshTokens: {
+              findFirst: vi.fn().mockResolvedValue(null), // Token not found
+            },
+          },
+          delete: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue(undefined),
+          }),
+          update: vi.fn().mockReturnValue({
+            set: vi.fn().mockReturnValue({
+              where: vi.fn().mockResolvedValue(undefined),
+            }),
+          }),
+        };
+        return cb(trx);
+      });
 
+      // Token decodes to null (invalid signature), so no user invalidation occurs
       (decodeToken as Mock).mockResolvedValue(null);
 
       const request = new Request('http://localhost/api/auth/refresh', {
@@ -291,23 +309,44 @@ describe('/api/auth/refresh', () => {
       // Assert
       expect(response.status).toBe(401);
       expect(body.error).toBe('Invalid refresh token.');
+      // Verify transaction callback was actually executed
+      expect(db.transaction).toHaveBeenCalled();
     });
 
     it('returns 401 when token version does not match', async () => {
       // Arrange - user's tokenVersion has been incremented (logged out elsewhere)
-      (db.transaction as Mock).mockResolvedValue({ existingToken: mockRefreshToken });
-      (decodeToken as Mock).mockResolvedValue({
-        userId: 'test-user-id',
-        tokenVersion: 0, // old version
-        role: 'user',
-      });
-
-      // But user now has tokenVersion 1
+      // The user in DB now has tokenVersion: 1
       const updatedMockRefreshToken = {
         ...mockRefreshToken,
         user: { ...mockUser, tokenVersion: 1 },
       };
-      (db.transaction as Mock).mockResolvedValue({ existingToken: updatedMockRefreshToken });
+
+      // Use callback-shaped mock to exercise real control flow
+      (db.transaction as Mock).mockImplementation(async (cb) => {
+        const trx = {
+          query: {
+            refreshTokens: {
+              findFirst: vi.fn().mockResolvedValue(updatedMockRefreshToken),
+            },
+          },
+          delete: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue(undefined),
+          }),
+          update: vi.fn().mockReturnValue({
+            set: vi.fn().mockReturnValue({
+              where: vi.fn().mockResolvedValue(undefined),
+            }),
+          }),
+        };
+        return cb(trx);
+      });
+
+      // Token was issued with old tokenVersion: 0
+      (decodeToken as Mock).mockResolvedValue({
+        userId: 'test-user-id',
+        tokenVersion: 0, // old version - doesn't match user's current tokenVersion: 1
+        role: 'user',
+      });
 
       const request = new Request('http://localhost/api/auth/refresh', {
         method: 'POST',
@@ -323,6 +362,8 @@ describe('/api/auth/refresh', () => {
       // Assert
       expect(response.status).toBe(401);
       expect(body.error).toBe('Invalid refresh token version.');
+      // Verify transaction callback was actually executed
+      expect(db.transaction).toHaveBeenCalled();
     });
   });
 

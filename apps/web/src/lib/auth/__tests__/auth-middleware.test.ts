@@ -136,6 +136,18 @@ describe('Auth Middleware', () => {
         tokenVersion: mockUser.tokenVersion,
       });
     });
+
+    it('returns null when database query throws error', async () => {
+      // Arrange
+      (decodeToken as Mock).mockResolvedValue(mockDecodedToken);
+      (db.query.users.findFirst as Mock).mockRejectedValue(new Error('Database connection failed'));
+
+      // Act
+      const result = await validateJWTToken('valid-token');
+
+      // Assert - verify graceful degradation under database failures
+      expect(result).toBeNull();
+    });
   });
 
   describe('validateMCPToken', () => {
@@ -204,11 +216,24 @@ describe('Auth Middleware', () => {
       };
       (db.query.mcpTokens.findFirst as Mock).mockResolvedValue(mockMCPToken);
 
+      // Capture the values passed to set()
+      let capturedSetValues: Record<string, unknown> | undefined;
+      const mockSet = vi.fn().mockImplementation((vals) => {
+        capturedSetValues = vals;
+        return {
+          where: vi.fn().mockResolvedValue(undefined),
+        };
+      });
+      (db.update as Mock).mockReturnValue({ set: mockSet });
+
       // Act
       await validateMCPToken('mcp_valid-token');
 
-      // Assert
+      // Assert - verify complete update chain and that lastUsed is a Date
       expect(db.update).toHaveBeenCalled();
+      expect(mockSet).toHaveBeenCalled();
+      expect(capturedSetValues).toBeDefined();
+      expect(capturedSetValues!.lastUsed).toBeInstanceOf(Date);
     });
   });
 
@@ -567,7 +592,7 @@ describe('Auth Middleware', () => {
   });
 
   describe('authenticateHybridRequest', () => {
-    it('accepts both MCP and JWT tokens', async () => {
+    it('accepts JWT tokens', async () => {
       // Arrange
       (decodeToken as Mock).mockResolvedValue(mockDecodedToken);
       (db.query.users.findFirst as Mock).mockResolvedValue(mockUser);
@@ -584,6 +609,41 @@ describe('Auth Middleware', () => {
 
       // Assert
       expect(isAuthError(result)).toBe(false);
+      if (!isAuthError(result)) {
+        expect(result.tokenType).toBe('jwt');
+      }
+    });
+
+    it('accepts MCP tokens', async () => {
+      // Arrange
+      const mockMCPToken = {
+        id: 'token-id',
+        userId: 'test-user-id',
+        user: {
+          id: 'test-user-id',
+          role: 'user',
+          tokenVersion: 0,
+        },
+      };
+      (db.query.mcpTokens.findFirst as Mock).mockResolvedValue(mockMCPToken);
+
+      const request = new Request('http://localhost/api/test', {
+        method: 'GET',
+        headers: {
+          Authorization: 'Bearer mcp_valid-token',
+        },
+      });
+
+      // Act
+      const result = await authenticateHybridRequest(request);
+
+      // Assert - verify MCP token is accepted in hybrid auth
+      expect(isAuthError(result)).toBe(false);
+      if (!isAuthError(result)) {
+        expect(isMCPAuthResult(result)).toBe(true);
+        expect(result.tokenType).toBe('mcp');
+        expect(result.userId).toBe('test-user-id');
+      }
     });
   });
 
