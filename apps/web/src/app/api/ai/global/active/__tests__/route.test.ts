@@ -1,99 +1,87 @@
+/**
+ * Contract tests for GET /api/ai/global/active
+ *
+ * These tests verify the Request → Response contract and boundary obligations.
+ * Database operations are mocked at the repository seam.
+ */
+
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET } from '../route';
 import type { WebAuthResult, AuthError } from '@/lib/auth';
 
-// Mock dependencies
-vi.mock('@pagespace/db', () => {
-  const limitMock = vi.fn().mockResolvedValue([]);
-  const orderByMock = vi.fn().mockReturnValue({ limit: limitMock });
-  const whereMock = vi.fn().mockReturnValue({ orderBy: orderByMock });
-  const fromMock = vi.fn().mockReturnValue({ where: whereMock });
-  const selectMock = vi.fn().mockReturnValue({ from: fromMock });
+// Mock the repository seam (boundary)
+vi.mock('@/lib/repositories/global-conversation-repository', () => ({
+  globalConversationRepository: {
+    getActiveGlobalConversation: vi.fn(),
+  },
+}));
 
-  return {
-    db: {
-      select: selectMock,
-    },
-    conversations: {},
-    eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
-    and: vi.fn((...conditions: unknown[]) => ({ conditions, type: 'and' })),
-    desc: vi.fn((field: unknown) => ({ field, type: 'desc' })),
-  };
-});
+// Mock auth (boundary)
+vi.mock('@/lib/auth', () => ({
+  authenticateRequestWithOptions: vi.fn(),
+  isAuthError: vi.fn(),
+}));
 
+// Mock logging (boundary)
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
       warn: vi.fn(),
-      debug: vi.fn(),
     },
   },
 }));
 
-vi.mock('@/lib/auth', () => ({
-  authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn(),
-}));
-
-import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { loggers } from '@pagespace/lib/server';
 
-// Helper to create mock WebAuthResult
-const mockWebAuth = (userId: string, tokenVersion = 0): WebAuthResult => ({
+// Test fixtures
+const mockUserId = 'user_123';
+
+const mockWebAuth = (userId: string): WebAuthResult => ({
   userId,
-  tokenVersion,
+  tokenVersion: 0,
   tokenType: 'jwt',
   source: 'cookie',
   role: 'user',
 });
 
-// Helper to create mock AuthError
 const mockAuthError = (status = 401): AuthError => ({
   error: NextResponse.json({ error: 'Unauthorized' }, { status }),
 });
 
-// Helper to create mock conversation
-const mockConversation = (overrides: Partial<{
+const mockConversationSummary = (overrides: Partial<{
   id: string;
-  title: string;
+  title: string | null;
   type: string;
   contextId: string | null;
   lastMessageAt: Date;
   createdAt: Date;
 }> = {}) => ({
-  id: overrides.id || 'conv_123',
-  title: overrides.title || 'Test Conversation',
-  type: overrides.type || 'global',
+  id: overrides.id ?? 'conv_123',
+  title: overrides.title ?? 'Test Conversation',
+  type: overrides.type ?? 'global',
   contextId: overrides.contextId ?? null,
-  lastMessageAt: overrides.lastMessageAt || new Date(),
-  createdAt: overrides.createdAt || new Date(),
+  lastMessageAt: overrides.lastMessageAt ?? new Date(),
+  createdAt: overrides.createdAt ?? new Date(),
 });
 
+const createRequest = () =>
+  new Request('https://example.com/api/ai/global/active', { method: 'GET' });
+
 describe('GET /api/ai/global/active', () => {
-  const mockUserId = 'user_123';
-
-  // Helper to setup select mock for active conversation
-  const setupActiveConversationMock = (conversation: ReturnType<typeof mockConversation> | null) => {
-    const limitMock = vi.fn().mockResolvedValue(conversation ? [conversation] : []);
-    const orderByMock = vi.fn().mockReturnValue({ limit: limitMock });
-    const whereMock = vi.fn().mockReturnValue({ orderBy: orderByMock });
-    const fromMock = vi.fn().mockReturnValue({ where: whereMock });
-    vi.mocked(db.select).mockReturnValue({ from: fromMock } as unknown as ReturnType<typeof db.select>);
-  };
-
   beforeEach(() => {
     vi.clearAllMocks();
 
-    // Default auth success
+    // Default: authenticated user
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
 
-    // Default no active conversation
-    setupActiveConversationMock(null);
+    // Default: no active conversation
+    vi.mocked(globalConversationRepository.getActiveGlobalConversation).mockResolvedValue(null);
   });
 
   describe('authentication', () => {
@@ -101,27 +89,24 @@ describe('GET /api/ai/global/active', () => {
       vi.mocked(isAuthError).mockReturnValue(true);
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
-      const request = new Request('https://example.com/api/ai/global/active', {
-        method: 'GET',
-      });
+      const request = createRequest();
 
       const response = await GET(request);
+
       expect(response.status).toBe(401);
     });
   });
 
   describe('successful retrieval', () => {
     it('should return the most recent global conversation', async () => {
-      const conversation = mockConversation({
+      const conversation = mockConversationSummary({
         id: 'conv_active',
         title: 'Active Conversation',
         type: 'global',
       });
-      setupActiveConversationMock(conversation);
+      vi.mocked(globalConversationRepository.getActiveGlobalConversation).mockResolvedValue(conversation);
 
-      const request = new Request('https://example.com/api/ai/global/active', {
-        method: 'GET',
-      });
+      const request = createRequest();
 
       const response = await GET(request);
       const body = await response.json();
@@ -133,11 +118,9 @@ describe('GET /api/ai/global/active', () => {
     });
 
     it('should return null when no global conversation exists', async () => {
-      setupActiveConversationMock(null);
+      vi.mocked(globalConversationRepository.getActiveGlobalConversation).mockResolvedValue(null);
 
-      const request = new Request('https://example.com/api/ai/global/active', {
-        method: 'GET',
-      });
+      const request = createRequest();
 
       const response = await GET(request);
       const body = await response.json();
@@ -146,28 +129,22 @@ describe('GET /api/ai/global/active', () => {
       expect(body).toBeNull();
     });
 
-    it('should only query for global type conversations', async () => {
-      const request = new Request('https://example.com/api/ai/global/active', {
-        method: 'GET',
-      });
+    it('should call repository with userId', async () => {
+      const request = createRequest();
 
       await GET(request);
-      // Verify the select was called
-      expect(db.select).toHaveBeenCalled();
+
+      expect(globalConversationRepository.getActiveGlobalConversation).toHaveBeenCalledWith(mockUserId);
     });
   });
 
   describe('error handling', () => {
-    it('should handle database errors gracefully', async () => {
-      const limitMock = vi.fn().mockRejectedValue(new Error('Database error'));
-      const orderByMock = vi.fn().mockReturnValue({ limit: limitMock });
-      const whereMock = vi.fn().mockReturnValue({ orderBy: orderByMock });
-      const fromMock = vi.fn().mockReturnValue({ where: whereMock });
-      vi.mocked(db.select).mockReturnValue({ from: fromMock } as unknown as ReturnType<typeof db.select>);
+    it('should return 500 when repository throws', async () => {
+      vi.mocked(globalConversationRepository.getActiveGlobalConversation).mockRejectedValue(
+        new Error('Database error')
+      );
 
-      const request = new Request('https://example.com/api/ai/global/active', {
-        method: 'GET',
-      });
+      const request = createRequest();
 
       const response = await GET(request);
       const body = await response.json();

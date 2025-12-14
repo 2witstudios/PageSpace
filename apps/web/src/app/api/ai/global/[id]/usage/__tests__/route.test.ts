@@ -1,78 +1,87 @@
+/**
+ * Contract tests for GET /api/ai/global/[id]/usage
+ *
+ * These tests verify the Request → Response contract and boundary obligations.
+ * Database operations are mocked at the repository seam.
+ * The pure function calculateUsageSummary is tested separately.
+ */
+
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET } from '../route';
 import type { WebAuthResult, AuthError } from '@/lib/auth';
 
-// Mock dependencies
-vi.mock('@pagespace/db', () => {
-  const orderByMock = vi.fn().mockResolvedValue([]);
-  const whereMock = vi.fn().mockReturnValue({ orderBy: orderByMock });
-  const fromMock = vi.fn().mockReturnValue({ where: whereMock });
-  const selectMock = vi.fn().mockReturnValue({ from: fromMock });
+// Mock the repository seam (boundary)
+vi.mock('@/lib/repositories/global-conversation-repository', () => ({
+  globalConversationRepository: {
+    getConversationById: vi.fn(),
+    getUsageLogs: vi.fn(),
+  },
+  calculateUsageSummary: vi.fn(),
+}));
 
-  return {
-    db: {
-      select: selectMock,
-    },
-    conversations: {},
-    aiUsageLogs: {},
-    eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
-    and: vi.fn((...conditions: unknown[]) => ({ conditions, type: 'and' })),
-    desc: vi.fn((field: unknown) => ({ field, type: 'desc' })),
-  };
-});
+// Mock auth (boundary)
+vi.mock('@/lib/auth', () => ({
+  authenticateRequestWithOptions: vi.fn(),
+  isAuthError: vi.fn(),
+}));
 
+// Mock logging (boundary)
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
       warn: vi.fn(),
-      debug: vi.fn(),
     },
   },
 }));
 
+// Mock AI monitoring (boundary)
 vi.mock('@pagespace/lib/ai-monitoring', () => ({
   getContextWindow: vi.fn(() => 200000),
 }));
 
-vi.mock('@/lib/auth', () => ({
-  authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn(),
-}));
-
-import { db } from '@pagespace/db';
+import {
+  globalConversationRepository,
+  calculateUsageSummary as mockedCalculateUsageSummary,
+} from '@/lib/repositories/global-conversation-repository';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 import { getContextWindow } from '@pagespace/lib/ai-monitoring';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
-// Helper to create mock WebAuthResult
-const mockWebAuth = (userId: string, tokenVersion = 0): WebAuthResult => ({
+// Test fixtures
+const mockUserId = 'user_123';
+const mockConversationId = 'conv_123';
+
+const mockWebAuth = (userId: string): WebAuthResult => ({
   userId,
-  tokenVersion,
+  tokenVersion: 0,
   tokenType: 'jwt',
   source: 'cookie',
   role: 'user',
 });
 
-// Helper to create mock AuthError
 const mockAuthError = (status = 401): AuthError => ({
   error: NextResponse.json({ error: 'Unauthorized' }, { status }),
 });
 
-// Helper to create mock conversation
 const mockConversation = (overrides: Partial<{
   id: string;
   userId: string;
   isActive: boolean;
 }> = {}) => ({
-  id: overrides.id || 'conv_123',
-  userId: overrides.userId || 'user_123',
+  id: overrides.id ?? mockConversationId,
+  userId: overrides.userId ?? mockUserId,
   isActive: overrides.isActive ?? true,
+  title: 'Test Conversation',
+  type: 'global',
+  contextId: null,
+  lastMessageAt: new Date(),
+  createdAt: new Date(),
+  updatedAt: new Date(),
 });
 
-// Helper to create mock usage log
 const mockUsageLog = (overrides: Partial<{
   id: string;
   timestamp: Date;
@@ -84,81 +93,88 @@ const mockUsageLog = (overrides: Partial<{
   totalTokens: number;
   cost: number;
   conversationId: string;
-  messageId: string | null;
-  pageId: string | null;
-  driveId: string | null;
-  success: boolean;
-  error: string | null;
   contextSize: number;
   messageCount: number;
   wasTruncated: boolean;
 }> = {}) => ({
-  id: overrides.id || 'log_123',
-  timestamp: overrides.timestamp || new Date(),
-  userId: overrides.userId || 'user_123',
-  provider: overrides.provider || 'openrouter',
-  model: overrides.model || 'anthropic/claude-3-opus',
+  id: overrides.id ?? 'log_123',
+  timestamp: overrides.timestamp ?? new Date(),
+  userId: overrides.userId ?? mockUserId,
+  provider: overrides.provider ?? 'openrouter',
+  model: overrides.model ?? 'anthropic/claude-3-opus',
   inputTokens: overrides.inputTokens ?? 1000,
   outputTokens: overrides.outputTokens ?? 500,
   totalTokens: overrides.totalTokens ?? 1500,
   cost: overrides.cost ?? 0.015,
-  conversationId: overrides.conversationId || 'conv_123',
-  messageId: overrides.messageId ?? null,
-  pageId: overrides.pageId ?? null,
-  driveId: overrides.driveId ?? null,
-  success: overrides.success ?? true,
-  error: overrides.error ?? null,
+  conversationId: overrides.conversationId ?? mockConversationId,
+  messageId: null,
+  pageId: null,
+  driveId: null,
+  success: true,
+  error: null,
   contextSize: overrides.contextSize ?? 50000,
   messageCount: overrides.messageCount ?? 10,
   wasTruncated: overrides.wasTruncated ?? false,
 });
 
+const mockUsageSummary = (overrides: Partial<{
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalTokens: number;
+  totalCost: number;
+  currentContextSize: number;
+  messagesInContext: number;
+  contextWindowSize: number;
+  contextUsagePercent: number;
+  wasTruncated: boolean;
+  mostRecentModel: string | null;
+  mostRecentProvider: string | null;
+  hasContext: boolean;
+}> = {}) => ({
+  billing: {
+    totalInputTokens: overrides.totalInputTokens ?? 3000,
+    totalOutputTokens: overrides.totalOutputTokens ?? 1300,
+    totalTokens: overrides.totalTokens ?? 4300,
+    totalCost: overrides.totalCost ?? 0.03,
+  },
+  context: overrides.hasContext !== false ? {
+    currentContextSize: overrides.currentContextSize ?? 50000,
+    messagesInContext: overrides.messagesInContext ?? 10,
+    contextWindowSize: overrides.contextWindowSize ?? 200000,
+    contextUsagePercent: overrides.contextUsagePercent ?? 25,
+    wasTruncated: overrides.wasTruncated ?? false,
+  } : null,
+  mostRecentModel: overrides.mostRecentModel ?? 'anthropic/claude-3-opus',
+  mostRecentProvider: overrides.mostRecentProvider ?? 'openrouter',
+});
+
+const createContext = (id: string) => ({
+  params: Promise.resolve({ id }),
+});
+
+const createRequest = (id: string) =>
+  new Request(`https://example.com/api/ai/global/${id}/usage`, { method: 'GET' });
+
 describe('GET /api/ai/global/[id]/usage', () => {
-  const mockUserId = 'user_123';
-  const mockConversationId = 'conv_123';
-
-  let selectCallCount = 0;
-
-  // Helper to setup select mocks for conversation and usage logs
-  const setupSelectMocks = (
-    conversation: ReturnType<typeof mockConversation> | undefined,
-    usageLogs: ReturnType<typeof mockUsageLog>[]
-  ) => {
-    selectCallCount = 0;
-    const orderByMock = vi.fn().mockImplementation(() => {
-      return Promise.resolve(usageLogs);
-    });
-    const whereMock = vi.fn().mockImplementation(() => {
-      selectCallCount++;
-      if (selectCallCount === 1) {
-        // First call is for conversation
-        return Promise.resolve(conversation ? [conversation] : []);
-      } else {
-        // Second call is for usage logs (returns object with orderBy)
-        return { orderBy: orderByMock };
-      }
-    });
-    const fromMock = vi.fn().mockReturnValue({ where: whereMock });
-    vi.mocked(db.select).mockReturnValue({ from: fromMock } as unknown as ReturnType<typeof db.select>);
-  };
-
-  const createContext = (id: string) => ({
-    params: Promise.resolve({ id }),
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
-    selectCallCount = 0;
 
-    // Default auth success
+    // Default: authenticated user
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
 
-    // Default context window
-    vi.mocked(getContextWindow).mockReturnValue(200000);
+    // Default: conversation exists
+    vi.mocked(globalConversationRepository.getConversationById).mockResolvedValue(
+      mockConversation()
+    );
 
-    // Default: conversation exists, no usage logs
-    setupSelectMocks(mockConversation(), []);
+    // Default: no usage logs
+    vi.mocked(globalConversationRepository.getUsageLogs).mockResolvedValue([]);
+
+    // Default: empty summary
+    vi.mocked(mockedCalculateUsageSummary).mockReturnValue(
+      mockUsageSummary({ hasContext: false })
+    );
   });
 
   describe('authentication', () => {
@@ -166,23 +182,20 @@ describe('GET /api/ai/global/[id]/usage', () => {
       vi.mocked(isAuthError).mockReturnValue(true);
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
-      const request = new Request(`https://example.com/api/ai/global/${mockConversationId}/usage`, {
-        method: 'GET',
-      });
+      const request = createRequest(mockConversationId);
       const context = createContext(mockConversationId);
 
       const response = await GET(request, context);
+
       expect(response.status).toBe(401);
     });
   });
 
   describe('conversation not found', () => {
     it('should return 404 when conversation does not exist', async () => {
-      setupSelectMocks(undefined, []);
+      vi.mocked(globalConversationRepository.getConversationById).mockResolvedValue(null);
 
-      const request = new Request(`https://example.com/api/ai/global/${mockConversationId}/usage`, {
-        method: 'GET',
-      });
+      const request = createRequest(mockConversationId);
       const context = createContext(mockConversationId);
 
       const response = await GET(request, context);
@@ -196,14 +209,13 @@ describe('GET /api/ai/global/[id]/usage', () => {
   describe('successful retrieval', () => {
     it('should return usage statistics for conversation', async () => {
       const usageLogs = [
-        mockUsageLog({ inputTokens: 1000, outputTokens: 500, totalTokens: 1500, cost: 0.01 }),
-        mockUsageLog({ inputTokens: 2000, outputTokens: 800, totalTokens: 2800, cost: 0.02 }),
+        mockUsageLog({ inputTokens: 1000, outputTokens: 500 }),
+        mockUsageLog({ inputTokens: 2000, outputTokens: 800 }),
       ];
-      setupSelectMocks(mockConversation(), usageLogs);
+      vi.mocked(globalConversationRepository.getUsageLogs).mockResolvedValue(usageLogs);
+      vi.mocked(mockedCalculateUsageSummary).mockReturnValue(mockUsageSummary());
 
-      const request = new Request(`https://example.com/api/ai/global/${mockConversationId}/usage`, {
-        method: 'GET',
-      });
+      const request = createRequest(mockConversationId);
       const context = createContext(mockConversationId);
 
       const response = await GET(request, context);
@@ -213,107 +225,41 @@ describe('GET /api/ai/global/[id]/usage', () => {
       expect(body.logs).toBeDefined();
       expect(body.summary).toBeDefined();
       expect(body.summary.billing).toBeDefined();
-      expect(body.summary.billing.totalInputTokens).toBe(3000);
-      expect(body.summary.billing.totalOutputTokens).toBe(1300);
-      expect(body.summary.billing.totalTokens).toBe(4300);
-      expect(body.summary.billing.totalCost).toBe(0.03);
     });
 
-    it('should return empty logs with zero totals when no usage', async () => {
-      setupSelectMocks(mockConversation(), []);
-
-      const request = new Request(`https://example.com/api/ai/global/${mockConversationId}/usage`, {
-        method: 'GET',
-      });
+    it('should call repository methods with correct arguments', async () => {
+      const request = createRequest(mockConversationId);
       const context = createContext(mockConversationId);
 
-      const response = await GET(request, context);
-      const body = await response.json();
+      await GET(request, context);
 
-      expect(response.status).toBe(200);
-      expect(body.logs).toEqual([]);
-      expect(body.summary.billing.totalInputTokens).toBe(0);
-      expect(body.summary.billing.totalOutputTokens).toBe(0);
-      expect(body.summary.billing.totalTokens).toBe(0);
-      expect(body.summary.billing.totalCost).toBe(0);
-      expect(body.summary.context).toBeNull();
+      expect(globalConversationRepository.getConversationById).toHaveBeenCalledWith(
+        mockUserId,
+        mockConversationId
+      );
+      expect(globalConversationRepository.getUsageLogs).toHaveBeenCalledWith(mockConversationId);
     });
 
-    it('should return context metrics from most recent log', async () => {
-      const usageLogs = [
-        mockUsageLog({
-          contextSize: 75000,
-          messageCount: 15,
-          wasTruncated: false,
-          model: 'anthropic/claude-3-opus',
-        }),
-      ];
-      setupSelectMocks(mockConversation(), usageLogs);
+    it('should pass getContextWindow to calculateUsageSummary', async () => {
+      const usageLogs = [mockUsageLog()];
+      vi.mocked(globalConversationRepository.getUsageLogs).mockResolvedValue(usageLogs);
 
-      const request = new Request(`https://example.com/api/ai/global/${mockConversationId}/usage`, {
-        method: 'GET',
-      });
+      const request = createRequest(mockConversationId);
       const context = createContext(mockConversationId);
 
-      const response = await GET(request, context);
-      const body = await response.json();
+      await GET(request, context);
 
-      expect(response.status).toBe(200);
-      expect(body.summary.context).toBeDefined();
-      expect(body.summary.context.currentContextSize).toBe(75000);
-      expect(body.summary.context.messagesInContext).toBe(15);
-      expect(body.summary.context.wasTruncated).toBe(false);
-      expect(body.summary.mostRecentModel).toBe('anthropic/claude-3-opus');
-      expect(body.summary.mostRecentProvider).toBe('openrouter');
-    });
-
-    it('should calculate context usage percentage correctly', async () => {
-      const usageLogs = [
-        mockUsageLog({ contextSize: 100000 }),
-      ];
-      vi.mocked(getContextWindow).mockReturnValue(200000);
-      setupSelectMocks(mockConversation(), usageLogs);
-
-      const request = new Request(`https://example.com/api/ai/global/${mockConversationId}/usage`, {
-        method: 'GET',
-      });
-      const context = createContext(mockConversationId);
-
-      const response = await GET(request, context);
-      const body = await response.json();
-
-      expect(body.summary.context.contextUsagePercent).toBe(50);
-      expect(body.summary.context.contextWindowSize).toBe(200000);
-    });
-
-    it('should handle null token values gracefully', async () => {
-      const usageLogs = [
-        mockUsageLog({ inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: 0 }),
-      ];
-      setupSelectMocks(mockConversation(), usageLogs);
-
-      const request = new Request(`https://example.com/api/ai/global/${mockConversationId}/usage`, {
-        method: 'GET',
-      });
-      const context = createContext(mockConversationId);
-
-      const response = await GET(request, context);
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.summary.billing.totalInputTokens).toBe(0);
+      expect(mockedCalculateUsageSummary).toHaveBeenCalledWith(usageLogs, getContextWindow);
     });
   });
 
   describe('error handling', () => {
-    it('should handle database errors gracefully', async () => {
-      const whereMock = vi.fn().mockRejectedValue(new Error('Database error'));
-      const fromMock = vi.fn().mockReturnValue({ where: whereMock });
-      vi.mocked(db.select).mockReturnValue({ from: fromMock } as unknown as ReturnType<typeof db.select>);
+    it('should return 500 when repository throws', async () => {
+      vi.mocked(globalConversationRepository.getConversationById).mockRejectedValue(
+        new Error('Database error')
+      );
 
-      const request = new Request(`https://example.com/api/ai/global/${mockConversationId}/usage`, {
-        method: 'GET',
-      });
+      const request = createRequest(mockConversationId);
       const context = createContext(mockConversationId);
 
       const response = await GET(request, context);
@@ -324,25 +270,105 @@ describe('GET /api/ai/global/[id]/usage', () => {
       expect(loggers.api.error).toHaveBeenCalled();
     });
   });
+});
 
-  describe('edge cases', () => {
-    it('should round cost to 6 decimal places', async () => {
-      const usageLogs = [
-        mockUsageLog({ cost: 0.00000123456789 }),
-        mockUsageLog({ cost: 0.00000987654321 }),
-      ];
-      setupSelectMocks(mockConversation(), usageLogs);
+describe('calculateUsageSummary (pure function)', () => {
+  // Import the actual function for pure function tests
+  const actualModule = vi.importActual<typeof import('@/lib/repositories/global-conversation-repository')>(
+    '@/lib/repositories/global-conversation-repository'
+  );
 
-      const request = new Request(`https://example.com/api/ai/global/${mockConversationId}/usage`, {
-        method: 'GET',
-      });
-      const context = createContext(mockConversationId);
+  const mockGetContextWindow = vi.fn(() => 200000);
 
-      const response = await GET(request, context);
-      const body = await response.json();
+  it('should calculate billing totals correctly', async () => {
+    const { calculateUsageSummary } = await actualModule;
+    const logs = [
+      mockUsageLog({ inputTokens: 1000, outputTokens: 500, totalTokens: 1500, cost: 0.01 }),
+      mockUsageLog({ inputTokens: 2000, outputTokens: 800, totalTokens: 2800, cost: 0.02 }),
+    ];
 
-      // Total should be rounded to 6 decimal places
-      expect(typeof body.summary.billing.totalCost).toBe('number');
-    });
+    const result = calculateUsageSummary(logs, mockGetContextWindow);
+
+    expect(result.billing.totalInputTokens).toBe(3000);
+    expect(result.billing.totalOutputTokens).toBe(1300);
+    expect(result.billing.totalTokens).toBe(4300);
+    expect(result.billing.totalCost).toBe(0.03);
+  });
+
+  it('should return zero totals for empty logs', async () => {
+    const { calculateUsageSummary } = await actualModule;
+
+    const result = calculateUsageSummary([], mockGetContextWindow);
+
+    expect(result.billing.totalInputTokens).toBe(0);
+    expect(result.billing.totalOutputTokens).toBe(0);
+    expect(result.billing.totalTokens).toBe(0);
+    expect(result.billing.totalCost).toBe(0);
+    expect(result.context).toBeNull();
+  });
+
+  it('should extract context info from most recent log', async () => {
+    const { calculateUsageSummary } = await actualModule;
+    const logs = [
+      mockUsageLog({
+        contextSize: 75000,
+        messageCount: 15,
+        wasTruncated: false,
+        model: 'anthropic/claude-3-opus',
+        provider: 'openrouter',
+      }),
+    ];
+
+    const result = calculateUsageSummary(logs, mockGetContextWindow);
+
+    expect(result.context?.currentContextSize).toBe(75000);
+    expect(result.context?.messagesInContext).toBe(15);
+    expect(result.context?.wasTruncated).toBe(false);
+    expect(result.mostRecentModel).toBe('anthropic/claude-3-opus');
+    expect(result.mostRecentProvider).toBe('openrouter');
+  });
+
+  it('should calculate context usage percentage correctly', async () => {
+    const { calculateUsageSummary } = await actualModule;
+    const logs = [mockUsageLog({ contextSize: 100000 })];
+    mockGetContextWindow.mockReturnValue(200000);
+
+    const result = calculateUsageSummary(logs, mockGetContextWindow);
+
+    expect(result.context?.contextUsagePercent).toBe(50);
+    expect(result.context?.contextWindowSize).toBe(200000);
+  });
+
+  it('should round cost to 6 decimal places', async () => {
+    const { calculateUsageSummary } = await actualModule;
+    const logs = [
+      mockUsageLog({ cost: 0.00000123456789 }),
+      mockUsageLog({ cost: 0.00000987654321 }),
+    ];
+
+    const result = calculateUsageSummary(logs, mockGetContextWindow);
+
+    // Should be rounded to 6 decimal places
+    expect(result.billing.totalCost.toString().split('.')[1]?.length || 0).toBeLessThanOrEqual(6);
+  });
+
+  it('should handle null token values gracefully', async () => {
+    const { calculateUsageSummary } = await actualModule;
+    const logs = [
+      {
+        ...mockUsageLog(),
+        inputTokens: null as unknown as number,
+        outputTokens: null as unknown as number,
+        totalTokens: null as unknown as number,
+        cost: null as unknown as number,
+      },
+    ];
+
+    const result = calculateUsageSummary(logs, mockGetContextWindow);
+
+    expect(result.billing.totalInputTokens).toBe(0);
+    expect(result.billing.totalOutputTokens).toBe(0);
+    expect(result.billing.totalTokens).toBe(0);
+    expect(result.billing.totalCost).toBe(0);
   });
 });
