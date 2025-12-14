@@ -13,6 +13,9 @@ export * from './file-processing';
 export * from './services/subscription-utils';
 export * from './sheets';
 
+// Drive service
+export * from './services/drive-service';
+
 // OAuth utilities (server-only)
 export * from './auth/oauth-utils';
 export * from './auth/oauth-types';

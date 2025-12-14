@@ -2,28 +2,23 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, PATCH, DELETE } from '../route';
 import type { WebAuthResult, AuthError } from '@/lib/auth';
+import type { DriveWithAccess, DriveAccessInfo } from '@pagespace/lib/server';
 
-// Mock dependencies
-vi.mock('@pagespace/db', () => ({
-  db: {
-    query: {
-      drives: {
-        findFirst: vi.fn(),
-      },
-      driveMembers: {
-        findFirst: vi.fn(),
-      },
-    },
-    select: vi.fn(),
-    update: vi.fn(),
-  },
-  drives: {},
-  driveMembers: {},
-  eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
-  and: vi.fn((...args: unknown[]) => ({ args, type: 'and' })),
-}));
+// ============================================================================
+// Contract Tests for /api/drives/[driveId]
+//
+// These tests mock at the SERVICE SEAM level (getDriveById, getDriveAccess, etc.),
+// NOT at the ORM/query-builder level. This tests the route handler's contract:
+// Request → Response + boundary obligations (broadcast events)
+// ============================================================================
 
+// Mock the service seam - this is the ONLY place we mock DB-related logic
 vi.mock('@pagespace/lib/server', () => ({
+  getDriveById: vi.fn(),
+  getDriveAccess: vi.fn(),
+  getDriveWithAccess: vi.fn(),
+  updateDrive: vi.fn(),
+  trashDrive: vi.fn(),
   loggers: {
     api: {
       info: vi.fn(),
@@ -32,7 +27,6 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
-  slugify: vi.fn((name: string) => name.toLowerCase().replace(/\s+/g, '-')),
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -45,12 +39,21 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
-import { broadcastDriveEvent } from '@/lib/websocket';
+import {
+  getDriveById,
+  getDriveAccess,
+  getDriveWithAccess,
+  updateDrive,
+  trashDrive,
+  loggers,
+} from '@pagespace/lib/server';
+import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
-// Helper to create mock WebAuthResult
+// ============================================================================
+// Test Helpers
+// ============================================================================
+
 const mockWebAuth = (userId: string, tokenVersion = 0): WebAuthResult => ({
   userId,
   tokenVersion,
@@ -59,51 +62,57 @@ const mockWebAuth = (userId: string, tokenVersion = 0): WebAuthResult => ({
   role: 'user',
 });
 
-// Helper to create mock AuthError
 const mockAuthError = (status = 401): AuthError => ({
   error: NextResponse.json({ error: 'Unauthorized' }, { status }),
 });
 
-// Helper to create mock drive
-const mockDrive = (overrides: {
-  id: string;
-  name: string;
-  ownerId?: string;
-  slug?: string;
-  isTrashed?: boolean;
-}) => ({
+// Raw drive fixture (without access info)
+const createRawDriveFixture = (overrides: { id: string; name: string; ownerId?: string }) => ({
   id: overrides.id,
   name: overrides.name,
-  slug: overrides.slug ?? overrides.name.toLowerCase().replace(/\s+/g, '-'),
+  slug: overrides.name.toLowerCase().replace(/\s+/g, '-'),
   ownerId: overrides.ownerId ?? 'user_123',
   createdAt: new Date('2024-01-01'),
   updatedAt: new Date('2024-01-01'),
-  isTrashed: overrides.isTrashed ?? false,
+  isTrashed: false,
   trashedAt: null,
   drivePrompt: null,
 });
 
-// Helper to create mock drive member
-const mockDriveMember = (overrides: {
-  userId: string;
-  driveId: string;
-  role: 'OWNER' | 'ADMIN' | 'MEMBER';
-}) => ({
-  id: 'membership_' + overrides.userId,
-  userId: overrides.userId,
-  driveId: overrides.driveId,
-  role: overrides.role,
-  customRoleId: null,
-  invitedBy: null,
-  invitedAt: new Date(),
-  acceptedAt: new Date(),
-  lastAccessedAt: null,
+// Drive with access info fixture
+const createDriveWithAccessFixture = (
+  overrides: Partial<DriveWithAccess> & { id: string; name: string }
+): DriveWithAccess & { isMember: boolean } => ({
+  id: overrides.id,
+  name: overrides.name,
+  slug: overrides.slug ?? overrides.name.toLowerCase().replace(/\s+/g, '-'),
+  ownerId: overrides.ownerId ?? 'user_123',
+  createdAt: overrides.createdAt ?? new Date('2024-01-01'),
+  updatedAt: overrides.updatedAt ?? new Date('2024-01-01'),
+  isTrashed: overrides.isTrashed ?? false,
+  trashedAt: overrides.trashedAt ?? null,
+  drivePrompt: overrides.drivePrompt ?? null,
+  isOwned: overrides.isOwned ?? true,
+  role: overrides.role ?? 'OWNER',
+  isMember: (overrides as { isMember?: boolean }).isMember ?? false,
 });
 
-// Create mock context
+// Access info fixture
+const createAccessFixture = (overrides: Partial<DriveAccessInfo> = {}): DriveAccessInfo => ({
+  isOwner: overrides.isOwner ?? false,
+  isAdmin: overrides.isAdmin ?? false,
+  isMember: overrides.isMember ?? false,
+  role: overrides.role ?? null,
+});
+
+// Create mock context with async params (Next.js 15 pattern)
 const createContext = (driveId: string) => ({
   params: Promise.resolve({ driveId }),
 });
+
+// ============================================================================
+// GET /api/drives/[driveId] - Contract Tests
+// ============================================================================
 
 describe('GET /api/drives/[driveId]', () => {
   const mockUserId = 'user_123';
@@ -111,13 +120,8 @@ describe('GET /api/drives/[driveId]', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
-
-    vi.mocked(db.query.drives.findFirst).mockResolvedValue(
-      mockDrive({ id: mockDriveId, name: 'Test Drive', ownerId: mockUserId })
-    );
   });
 
   describe('authentication', () => {
@@ -129,12 +133,52 @@ describe('GET /api/drives/[driveId]', () => {
       const response = await GET(request, createContext(mockDriveId));
 
       expect(response.status).toBe(401);
+      const body = await response.json();
+      expect(body.error).toBe('Unauthorized');
+    });
+
+    it('should call authenticateRequestWithOptions with read auth options', async () => {
+      vi.mocked(getDriveWithAccess).mockResolvedValue(
+        createDriveWithAccessFixture({ id: mockDriveId, name: 'Test' })
+      );
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`);
+      await GET(request, createContext(mockDriveId));
+
+      expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
+        request,
+        { allow: ['jwt', 'mcp'], requireCSRF: false }
+      );
+    });
+  });
+
+  describe('service integration', () => {
+    it('should call getDriveWithAccess with driveId and userId', async () => {
+      vi.mocked(getDriveWithAccess).mockResolvedValue(
+        createDriveWithAccessFixture({ id: mockDriveId, name: 'Test' })
+      );
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`);
+      await GET(request, createContext(mockDriveId));
+
+      expect(getDriveWithAccess).toHaveBeenCalledWith(mockDriveId, mockUserId);
+    });
+
+    it('should call getDriveById when getDriveWithAccess returns null', async () => {
+      vi.mocked(getDriveWithAccess).mockResolvedValue(null);
+      vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`);
+      await GET(request, createContext(mockDriveId));
+
+      expect(getDriveById).toHaveBeenCalledWith(mockDriveId);
     });
   });
 
   describe('authorization', () => {
     it('should return 404 when drive not found', async () => {
-      vi.mocked(db.query.drives.findFirst).mockResolvedValue(undefined);
+      vi.mocked(getDriveWithAccess).mockResolvedValue(null);
+      vi.mocked(getDriveById).mockResolvedValue(null);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`);
       const response = await GET(request, createContext(mockDriveId));
@@ -144,11 +188,11 @@ describe('GET /api/drives/[driveId]', () => {
       expect(body.error).toBe('Drive not found');
     });
 
-    it('should return 403 when user is not owner or member', async () => {
-      vi.mocked(db.query.drives.findFirst).mockResolvedValue(
-        mockDrive({ id: mockDriveId, name: 'Other Drive', ownerId: 'other_user' })
+    it('should return 403 when user has no access but drive exists', async () => {
+      vi.mocked(getDriveWithAccess).mockResolvedValue(null);
+      vi.mocked(getDriveById).mockResolvedValue(
+        createRawDriveFixture({ id: mockDriveId, name: 'Other Drive', ownerId: 'other_user' })
       );
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`);
       const response = await GET(request, createContext(mockDriveId));
@@ -159,24 +203,42 @@ describe('GET /api/drives/[driveId]', () => {
     });
   });
 
-  describe('happy path', () => {
+  describe('response contract', () => {
     it('should return drive with isOwned=true when user is owner', async () => {
+      vi.mocked(getDriveWithAccess).mockResolvedValue(
+        createDriveWithAccessFixture({
+          id: mockDriveId,
+          name: 'My Drive',
+          isOwned: true,
+          role: 'OWNER',
+          isMember: false,
+        })
+      );
+
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`);
       const response = await GET(request, createContext(mockDriveId));
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.id).toBe(mockDriveId);
-      expect(body.isOwned).toBe(true);
-      expect(body.isMember).toBe(false);
+      expect(body).toMatchObject({
+        id: mockDriveId,
+        name: 'My Drive',
+        isOwned: true,
+        isMember: false,
+        role: 'OWNER',
+      });
     });
 
     it('should return drive with isMember=true when user is member', async () => {
-      vi.mocked(db.query.drives.findFirst).mockResolvedValue(
-        mockDrive({ id: mockDriveId, name: 'Shared Drive', ownerId: 'other_user' })
-      );
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(
-        mockDriveMember({ userId: mockUserId, driveId: mockDriveId, role: 'MEMBER' })
+      vi.mocked(getDriveWithAccess).mockResolvedValue(
+        createDriveWithAccessFixture({
+          id: mockDriveId,
+          name: 'Shared Drive',
+          ownerId: 'other_user',
+          isOwned: false,
+          role: 'MEMBER',
+          isMember: true,
+        })
       );
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`);
@@ -186,12 +248,37 @@ describe('GET /api/drives/[driveId]', () => {
       expect(response.status).toBe(200);
       expect(body.isOwned).toBe(false);
       expect(body.isMember).toBe(true);
+      expect(body.role).toBe('MEMBER');
+    });
+
+    it('should return all drive fields in response', async () => {
+      vi.mocked(getDriveWithAccess).mockResolvedValue(
+        createDriveWithAccessFixture({
+          id: mockDriveId,
+          name: 'Full Drive',
+          slug: 'full-drive',
+          drivePrompt: 'Custom prompt',
+        })
+      );
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`);
+      const response = await GET(request, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(body).toHaveProperty('id');
+      expect(body).toHaveProperty('name');
+      expect(body).toHaveProperty('slug');
+      expect(body).toHaveProperty('ownerId');
+      expect(body).toHaveProperty('isTrashed');
+      expect(body).toHaveProperty('drivePrompt');
+      expect(body).toHaveProperty('isOwned');
+      expect(body).toHaveProperty('role');
     });
   });
 
   describe('error handling', () => {
-    it('should return 500 when database query fails', async () => {
-      vi.mocked(db.query.drives.findFirst).mockRejectedValue(new Error('Database error'));
+    it('should return 500 when service throws', async () => {
+      vi.mocked(getDriveWithAccess).mockRejectedValue(new Error('Database error'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`);
       const response = await GET(request, createContext(mockDriveId));
@@ -199,41 +286,32 @@ describe('GET /api/drives/[driveId]', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to fetch drive');
-      expect(loggers.api.error).toHaveBeenCalled();
+    });
+
+    it('should log error when service throws', async () => {
+      const error = new Error('Service failure');
+      vi.mocked(getDriveWithAccess).mockRejectedValue(error);
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`);
+      await GET(request, createContext(mockDriveId));
+
+      expect(loggers.api.error).toHaveBeenCalledWith('Error fetching drive:', error);
     });
   });
 });
+
+// ============================================================================
+// PATCH /api/drives/[driveId] - Contract Tests
+// ============================================================================
 
 describe('PATCH /api/drives/[driveId]', () => {
   const mockUserId = 'user_123';
   const mockDriveId = 'drive_abc';
 
-  const setupSelectMock = (results: unknown[]) => {
-    const limitMock = vi.fn().mockResolvedValue(results);
-    const whereMock = vi.fn().mockReturnValue({ limit: limitMock });
-    const fromMock = vi.fn().mockReturnValue({ where: whereMock });
-    vi.mocked(db.select).mockReturnValue({ from: fromMock } as unknown as ReturnType<typeof db.select>);
-    return { whereMock, limitMock };
-  };
-
-  const setupUpdateMock = () => {
-    const whereMock = vi.fn().mockResolvedValue(undefined);
-    const setMock = vi.fn().mockReturnValue({ where: whereMock });
-    vi.mocked(db.update).mockReturnValue({ set: setMock } as unknown as ReturnType<typeof db.update>);
-    return { setMock, whereMock };
-  };
-
   beforeEach(() => {
     vi.clearAllMocks();
-
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
-
-    vi.mocked(db.query.drives.findFirst).mockResolvedValue(
-      mockDrive({ id: mockDriveId, name: 'Test Drive', ownerId: mockUserId })
-    );
-
-    setupUpdateMock();
   });
 
   describe('authentication', () => {
@@ -249,11 +327,28 @@ describe('PATCH /api/drives/[driveId]', () => {
 
       expect(response.status).toBe(401);
     });
+
+    it('should require CSRF for write operations', async () => {
+      vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
+      vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true }));
+      vi.mocked(updateDrive).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Updated' }));
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name: 'Updated' }),
+      });
+      await PATCH(request, createContext(mockDriveId));
+
+      expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
+        request,
+        { allow: ['jwt', 'mcp'], requireCSRF: true }
+      );
+    });
   });
 
   describe('authorization', () => {
     it('should return 404 when drive not found', async () => {
-      vi.mocked(db.query.drives.findFirst).mockResolvedValue(undefined);
+      vi.mocked(getDriveById).mockResolvedValue(null);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
         method: 'PATCH',
@@ -267,10 +362,12 @@ describe('PATCH /api/drives/[driveId]', () => {
     });
 
     it('should return 403 when user is not owner or admin', async () => {
-      vi.mocked(db.query.drives.findFirst).mockResolvedValue(
-        mockDrive({ id: mockDriveId, name: 'Other Drive', ownerId: 'other_user' })
+      vi.mocked(getDriveById).mockResolvedValue(
+        createRawDriveFixture({ id: mockDriveId, name: 'Other Drive', ownerId: 'other_user' })
       );
-      setupSelectMock([]); // No admin membership found
+      vi.mocked(getDriveAccess).mockResolvedValue(
+        createAccessFixture({ isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER' })
+      );
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
         method: 'PATCH',
@@ -283,17 +380,32 @@ describe('PATCH /api/drives/[driveId]', () => {
       expect(body.error).toBe('Only drive owners and admins can update drive settings');
     });
 
-    it('should allow admin to update drive', async () => {
-      vi.mocked(db.query.drives.findFirst)
-        .mockResolvedValueOnce(mockDrive({ id: mockDriveId, name: 'Shared Drive', ownerId: 'other_user' }))
-        .mockResolvedValueOnce(mockDrive({ id: mockDriveId, name: 'Updated Name', ownerId: 'other_user' }));
-
-      // Return admin membership
-      setupSelectMock([mockDriveMember({ userId: mockUserId, driveId: mockDriveId, role: 'ADMIN' })]);
+    it('should allow owner to update drive', async () => {
+      vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
+      vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true, role: 'OWNER' }));
+      vi.mocked(updateDrive).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Updated' }));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
         method: 'PATCH',
-        body: JSON.stringify({ name: 'Updated Name' }),
+        body: JSON.stringify({ name: 'Updated' }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId));
+
+      expect(response.status).toBe(200);
+    });
+
+    it('should allow admin to update drive', async () => {
+      vi.mocked(getDriveById).mockResolvedValue(
+        createRawDriveFixture({ id: mockDriveId, name: 'Shared Drive', ownerId: 'other_user' })
+      );
+      vi.mocked(getDriveAccess).mockResolvedValue(
+        createAccessFixture({ isOwner: false, isAdmin: true, isMember: true, role: 'ADMIN' })
+      );
+      vi.mocked(updateDrive).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Updated' }));
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name: 'Updated' }),
       });
       const response = await PATCH(request, createContext(mockDriveId));
 
@@ -302,7 +414,10 @@ describe('PATCH /api/drives/[driveId]', () => {
   });
 
   describe('validation', () => {
-    it('should reject invalid drivePrompt (too long)', async () => {
+    it('should reject drivePrompt exceeding max length', async () => {
+      vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
+      vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true }));
+
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
         method: 'PATCH',
         body: JSON.stringify({ drivePrompt: 'a'.repeat(10001) }),
@@ -315,9 +430,9 @@ describe('PATCH /api/drives/[driveId]', () => {
     });
 
     it('should accept valid optional fields', async () => {
-      vi.mocked(db.query.drives.findFirst)
-        .mockResolvedValueOnce(mockDrive({ id: mockDriveId, name: 'Test', ownerId: mockUserId }))
-        .mockResolvedValueOnce(mockDrive({ id: mockDriveId, name: 'Test', ownerId: mockUserId }));
+      vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
+      vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true }));
+      vi.mocked(updateDrive).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'New Name' }));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
         method: 'PATCH',
@@ -334,32 +449,51 @@ describe('PATCH /api/drives/[driveId]', () => {
     });
   });
 
-  describe('happy path', () => {
-    it('should update drive name and regenerate slug', async () => {
-      vi.mocked(db.query.drives.findFirst)
-        .mockResolvedValueOnce(mockDrive({ id: mockDriveId, name: 'Old Name', ownerId: mockUserId }))
-        .mockResolvedValueOnce(mockDrive({ id: mockDriveId, name: 'New Name', slug: 'new-name', ownerId: mockUserId }));
-
-      const { setMock } = setupUpdateMock();
+  describe('service integration', () => {
+    it('should call updateDrive with name and drivePrompt', async () => {
+      vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Old' }));
+      vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true }));
+      vi.mocked(updateDrive).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'New' }));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
         method: 'PATCH',
-        body: JSON.stringify({ name: 'New Name' }),
+        body: JSON.stringify({ name: 'New', drivePrompt: 'Instructions' }),
+      });
+      await PATCH(request, createContext(mockDriveId));
+
+      expect(updateDrive).toHaveBeenCalledWith(mockDriveId, {
+        name: 'New',
+        drivePrompt: 'Instructions',
+      });
+    });
+  });
+
+  describe('response contract', () => {
+    it('should return updated drive on success', async () => {
+      const updatedDrive = createRawDriveFixture({ id: mockDriveId, name: 'Updated Name' });
+      vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Old' }));
+      vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true }));
+      vi.mocked(updateDrive).mockResolvedValue(updatedDrive);
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name: 'Updated Name' }),
       });
       const response = await PATCH(request, createContext(mockDriveId));
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(setMock).toHaveBeenCalled();
-      expect(body.name).toBe('New Name');
+      expect(body.name).toBe('Updated Name');
     });
+  });
 
+  describe('boundary obligations', () => {
     it('should broadcast drive updated event when name changes', async () => {
-      vi.mocked(db.query.drives.findFirst)
-        .mockResolvedValueOnce(mockDrive({ id: mockDriveId, name: 'Old', ownerId: mockUserId }))
-        .mockResolvedValueOnce(mockDrive({ id: mockDriveId, name: 'New', ownerId: mockUserId }));
-
-      setupUpdateMock();
+      const originalDrive = createRawDriveFixture({ id: mockDriveId, name: 'Old' });
+      const updatedDrive = { ...originalDrive, name: 'New', slug: 'new' };
+      vi.mocked(getDriveById).mockResolvedValue(originalDrive);
+      vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true }));
+      vi.mocked(updateDrive).mockResolvedValue(updatedDrive);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
         method: 'PATCH',
@@ -367,19 +501,23 @@ describe('PATCH /api/drives/[driveId]', () => {
       });
       await PATCH(request, createContext(mockDriveId));
 
+      expect(createDriveEventPayload).toHaveBeenCalledWith(
+        mockDriveId,
+        'updated',
+        { name: 'New', slug: 'new' }
+      );
       expect(broadcastDriveEvent).toHaveBeenCalled();
     });
 
-    it('should not broadcast event when only AI settings change', async () => {
-      vi.mocked(db.query.drives.findFirst)
-        .mockResolvedValueOnce(mockDrive({ id: mockDriveId, name: 'Test', ownerId: mockUserId }))
-        .mockResolvedValueOnce(mockDrive({ id: mockDriveId, name: 'Test', ownerId: mockUserId }));
-
-      setupUpdateMock();
+    it('should NOT broadcast event when only drivePrompt changes', async () => {
+      const drive = createRawDriveFixture({ id: mockDriveId, name: 'Test' });
+      vi.mocked(getDriveById).mockResolvedValue(drive);
+      vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true }));
+      vi.mocked(updateDrive).mockResolvedValue({ ...drive, drivePrompt: 'New prompt' });
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
         method: 'PATCH',
-        body: JSON.stringify({ aiProvider: 'openai' }),
+        body: JSON.stringify({ drivePrompt: 'New prompt' }),
       });
       await PATCH(request, createContext(mockDriveId));
 
@@ -388,15 +526,10 @@ describe('PATCH /api/drives/[driveId]', () => {
   });
 
   describe('error handling', () => {
-    it('should return 500 when update fails', async () => {
-      vi.mocked(db.query.drives.findFirst).mockResolvedValue(
-        mockDrive({ id: mockDriveId, name: 'Test', ownerId: mockUserId })
-      );
-
-      const setMock = vi.fn().mockReturnValue({
-        where: vi.fn().mockRejectedValue(new Error('Update failed')),
-      });
-      vi.mocked(db.update).mockReturnValue({ set: setMock } as unknown as ReturnType<typeof db.update>);
+    it('should return 500 when updateDrive throws', async () => {
+      vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
+      vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true }));
+      vi.mocked(updateDrive).mockRejectedValue(new Error('Update failed'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
         method: 'PATCH',
@@ -408,39 +541,36 @@ describe('PATCH /api/drives/[driveId]', () => {
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to update drive');
     });
+
+    it('should log error when service throws', async () => {
+      const error = new Error('Update failure');
+      vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
+      vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true }));
+      vi.mocked(updateDrive).mockRejectedValue(error);
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name: 'New' }),
+      });
+      await PATCH(request, createContext(mockDriveId));
+
+      expect(loggers.api.error).toHaveBeenCalledWith('Error updating drive:', error);
+    });
   });
 });
+
+// ============================================================================
+// DELETE /api/drives/[driveId] - Contract Tests
+// ============================================================================
 
 describe('DELETE /api/drives/[driveId]', () => {
   const mockUserId = 'user_123';
   const mockDriveId = 'drive_abc';
 
-  const setupSelectMock = (results: unknown[]) => {
-    const limitMock = vi.fn().mockResolvedValue(results);
-    const whereMock = vi.fn().mockReturnValue({ limit: limitMock });
-    const fromMock = vi.fn().mockReturnValue({ where: whereMock });
-    vi.mocked(db.select).mockReturnValue({ from: fromMock } as unknown as ReturnType<typeof db.select>);
-    return { whereMock, limitMock };
-  };
-
-  const setupUpdateMock = () => {
-    const whereMock = vi.fn().mockResolvedValue(undefined);
-    const setMock = vi.fn().mockReturnValue({ where: whereMock });
-    vi.mocked(db.update).mockReturnValue({ set: setMock } as unknown as ReturnType<typeof db.update>);
-    return { setMock, whereMock };
-  };
-
   beforeEach(() => {
     vi.clearAllMocks();
-
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
-
-    vi.mocked(db.query.drives.findFirst).mockResolvedValue(
-      mockDrive({ id: mockDriveId, name: 'Test Drive', ownerId: mockUserId })
-    );
-
-    setupUpdateMock();
   });
 
   describe('authentication', () => {
@@ -455,11 +585,27 @@ describe('DELETE /api/drives/[driveId]', () => {
 
       expect(response.status).toBe(401);
     });
+
+    it('should require CSRF for delete operations', async () => {
+      vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
+      vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true }));
+      vi.mocked(trashDrive).mockResolvedValue(null);
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+        method: 'DELETE',
+      });
+      await DELETE(request, createContext(mockDriveId));
+
+      expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
+        request,
+        { allow: ['jwt', 'mcp'], requireCSRF: true }
+      );
+    });
   });
 
   describe('authorization', () => {
     it('should return 404 when drive not found', async () => {
-      vi.mocked(db.query.drives.findFirst).mockResolvedValue(undefined);
+      vi.mocked(getDriveById).mockResolvedValue(null);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
         method: 'DELETE',
@@ -472,10 +618,12 @@ describe('DELETE /api/drives/[driveId]', () => {
     });
 
     it('should return 403 when user is not owner or admin', async () => {
-      vi.mocked(db.query.drives.findFirst).mockResolvedValue(
-        mockDrive({ id: mockDriveId, name: 'Other Drive', ownerId: 'other_user' })
+      vi.mocked(getDriveById).mockResolvedValue(
+        createRawDriveFixture({ id: mockDriveId, name: 'Other Drive', ownerId: 'other_user' })
       );
-      setupSelectMock([]);
+      vi.mocked(getDriveAccess).mockResolvedValue(
+        createAccessFixture({ isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER' })
+      );
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
         method: 'DELETE',
@@ -487,11 +635,27 @@ describe('DELETE /api/drives/[driveId]', () => {
       expect(body.error).toBe('Only drive owners and admins can delete drives');
     });
 
+    it('should allow owner to soft-delete drive', async () => {
+      vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
+      vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true }));
+      vi.mocked(trashDrive).mockResolvedValue(null);
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+        method: 'DELETE',
+      });
+      const response = await DELETE(request, createContext(mockDriveId));
+
+      expect(response.status).toBe(200);
+    });
+
     it('should allow admin to soft-delete drive', async () => {
-      vi.mocked(db.query.drives.findFirst).mockResolvedValue(
-        mockDrive({ id: mockDriveId, name: 'Shared Drive', ownerId: 'other_user' })
+      vi.mocked(getDriveById).mockResolvedValue(
+        createRawDriveFixture({ id: mockDriveId, name: 'Shared Drive', ownerId: 'other_user' })
       );
-      setupSelectMock([mockDriveMember({ userId: mockUserId, driveId: mockDriveId, role: 'ADMIN' })]);
+      vi.mocked(getDriveAccess).mockResolvedValue(
+        createAccessFixture({ isOwner: false, isAdmin: true, isMember: true, role: 'ADMIN' })
+      );
+      vi.mocked(trashDrive).mockResolvedValue(null);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
         method: 'DELETE',
@@ -502,9 +666,26 @@ describe('DELETE /api/drives/[driveId]', () => {
     });
   });
 
-  describe('happy path', () => {
-    it('should soft-delete drive by setting isTrashed=true', async () => {
-      const { setMock } = setupUpdateMock();
+  describe('service integration', () => {
+    it('should call trashDrive with driveId', async () => {
+      vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
+      vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true }));
+      vi.mocked(trashDrive).mockResolvedValue(null);
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+        method: 'DELETE',
+      });
+      await DELETE(request, createContext(mockDriveId));
+
+      expect(trashDrive).toHaveBeenCalledWith(mockDriveId);
+    });
+  });
+
+  describe('response contract', () => {
+    it('should return success=true on successful deletion', async () => {
+      vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
+      vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true }));
+      vi.mocked(trashDrive).mockResolvedValue(null);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
         method: 'DELETE',
@@ -514,31 +695,35 @@ describe('DELETE /api/drives/[driveId]', () => {
 
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
-      expect(setMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          isTrashed: true,
-        })
-      );
     });
+  });
 
+  describe('boundary obligations', () => {
     it('should broadcast drive deleted event', async () => {
-      setupUpdateMock();
+      const drive = createRawDriveFixture({ id: mockDriveId, name: 'Deleted Drive' });
+      vi.mocked(getDriveById).mockResolvedValue(drive);
+      vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true }));
+      vi.mocked(trashDrive).mockResolvedValue(null);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
         method: 'DELETE',
       });
       await DELETE(request, createContext(mockDriveId));
 
+      expect(createDriveEventPayload).toHaveBeenCalledWith(
+        mockDriveId,
+        'deleted',
+        { name: 'Deleted Drive', slug: 'deleted-drive' }
+      );
       expect(broadcastDriveEvent).toHaveBeenCalled();
     });
   });
 
   describe('error handling', () => {
-    it('should return 500 when update fails', async () => {
-      const setMock = vi.fn().mockReturnValue({
-        where: vi.fn().mockRejectedValue(new Error('Update failed')),
-      });
-      vi.mocked(db.update).mockReturnValue({ set: setMock } as unknown as ReturnType<typeof db.update>);
+    it('should return 500 when trashDrive throws', async () => {
+      vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
+      vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true }));
+      vi.mocked(trashDrive).mockRejectedValue(new Error('Delete failed'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
         method: 'DELETE',
@@ -548,7 +733,20 @@ describe('DELETE /api/drives/[driveId]', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to delete drive');
-      expect(loggers.api.error).toHaveBeenCalled();
+    });
+
+    it('should log error when service throws', async () => {
+      const error = new Error('Delete failure');
+      vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
+      vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true }));
+      vi.mocked(trashDrive).mockRejectedValue(error);
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+        method: 'DELETE',
+      });
+      await DELETE(request, createContext(mockDriveId));
+
+      expect(loggers.api.error).toHaveBeenCalledWith('Error deleting drive:', error);
     });
   });
 });

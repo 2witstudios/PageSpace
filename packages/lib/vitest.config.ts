@@ -1,23 +1,12 @@
-import { defineConfig } from 'vitest/config'
-import path from 'path'
+import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: ['src/**/*.{test,spec}.{js,ts}'],
-    setupFiles: ['./src/__tests__/setup.ts'],
-    // Run test files sequentially to avoid database race conditions
-    fileParallelism: false,
+    include: ['src/**/*.test.ts'],
     coverage: {
-      provider: 'v8',
       reporter: ['text', 'json', 'html'],
-      exclude: ['**/*.d.ts', '**/*.config.*', '**/dist/**', '**/__tests__/**'],
     },
   },
-  resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src'),
-    },
-  },
-})
+});
