@@ -552,7 +552,7 @@ export const pageService = {
     }
 
     // Validate AI chat tools if applicable
-    if (isAIChatPage(params.type) && params.enabledTools && params.enabledTools.length > 0) {
+    if (isAIChatPage(params.type as PageTypeEnum) && params.enabledTools && params.enabledTools.length > 0) {
       const { pageSpaceTools } = await import('@/lib/ai/core/ai-tools');
       const availableToolNames = Object.keys(pageSpaceTools);
       const toolValidation = validateAIChatTools(params.enabledTools, availableToolNames);
@@ -565,7 +565,7 @@ export const pageService = {
     let defaultAiProvider: string | null = null;
     let defaultAiModel: string | null = null;
 
-    if (isAIChatPage(params.type)) {
+    if (isAIChatPage(params.type as PageTypeEnum)) {
       const user = await db.query.users.findFirst({
         where: eq(users.id, userId),
         columns: {
@@ -608,7 +608,7 @@ export const pageService = {
         updatedAt: new Date(),
       };
 
-      if (isAIChatPage(params.type)) {
+      if (isAIChatPage(params.type as PageTypeEnum)) {
         pageData.aiProvider = params.aiProvider || defaultAiProvider;
         pageData.aiModel = params.aiModel || defaultAiModel;
 
@@ -628,7 +628,7 @@ export const pageService = {
       success: true,
       page: toPageData(newPage),
       driveId: params.driveId,
-      isAIChatPage: isAIChatPage(params.type),
+      isAIChatPage: isAIChatPage(params.type as PageTypeEnum),
     };
   },
 };
