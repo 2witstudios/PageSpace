@@ -76,6 +76,7 @@ describe('web-search-tools', () => {
       mockGetDefaultPageSpaceSettings.mockResolvedValue({
         provider: 'glm',
         apiKey: 'default-glm-key',
+        isConfigured: true,
       });
 
       (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -162,6 +163,7 @@ describe('web-search-tools', () => {
       mockGetDefaultPageSpaceSettings.mockResolvedValue({
         provider: 'glm',
         apiKey: 'test-key',
+        isConfigured: true,
       });
 
       (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -188,6 +190,7 @@ describe('web-search-tools', () => {
       mockGetDefaultPageSpaceSettings.mockResolvedValue({
         provider: 'glm',
         apiKey: 'test-key',
+        isConfigured: true,
       });
 
       (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -221,6 +224,7 @@ describe('web-search-tools', () => {
       mockGetDefaultPageSpaceSettings.mockResolvedValue({
         provider: 'glm',
         apiKey: 'test-key',
+        isConfigured: true,
       });
 
       (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -254,6 +258,7 @@ describe('web-search-tools', () => {
       mockGetDefaultPageSpaceSettings.mockResolvedValue({
         provider: 'glm',
         apiKey: 'test-key',
+        isConfigured: true,
       });
 
       (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -287,6 +292,7 @@ describe('web-search-tools', () => {
       mockGetDefaultPageSpaceSettings.mockResolvedValue({
         provider: 'glm',
         apiKey: 'test-key',
+        isConfigured: true,
       });
 
       const mockResults = [

@@ -629,13 +629,29 @@ describe('provider-factory', () => {
   });
 
   describe('createProviderErrorResponse', () => {
-    it('creates NextResponse with error message and status', () => {
+    it('creates NextResponse with error message and status', async () => {
       const response = createProviderErrorResponse({
         error: 'Test error message',
         status: 403,
       });
 
       expect(response).toBeInstanceOf(NextResponse);
+      expect(response.status).toBe(403);
+
+      const body = await response.json();
+      expect(body).toMatchObject({ error: 'Test error message' });
+    });
+
+    it('uses provided status code', async () => {
+      const response = createProviderErrorResponse({
+        error: 'Not found',
+        status: 404,
+      });
+
+      expect(response.status).toBe(404);
+
+      const body = await response.json();
+      expect(body.error).toBe('Not found');
     });
   });
 
