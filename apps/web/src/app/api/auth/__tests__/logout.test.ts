@@ -49,7 +49,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn().mockReturnValue(false),
 }));
 
-import { db } from '@pagespace/db';
+import { db, eq } from '@pagespace/db';
 import { parse, serialize } from 'cookie';
 import { logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
@@ -151,8 +151,15 @@ describe('/api/auth/logout', () => {
       // Act
       await POST(request);
 
-      // Assert
+      // Assert - verify delete was called and eq was used with the parsed token
       expect(db.delete).toHaveBeenCalled();
+      // Verify eq was called with the refresh token value from cookies
+      expect(eq).toHaveBeenCalled();
+      const eqCalls = (eq as Mock).mock.calls;
+      const tokenDeleteCall = eqCalls.find(
+        (call) => call[1] === 'mock-refresh-token'
+      );
+      expect(tokenDeleteCall).toBeDefined();
     });
 
     it('logs logout event', async () => {
