@@ -273,24 +273,7 @@ describe('/api/auth/refresh', () => {
 
     it('returns 401 when refresh token is not found in database', async () => {
       // Arrange
-      (db.transaction as Mock).mockImplementation(async (cb) => {
-        const trx = {
-          query: {
-            refreshTokens: {
-              findFirst: vi.fn().mockResolvedValue(null),
-            },
-          },
-          delete: vi.fn().mockReturnValue({
-            where: vi.fn().mockResolvedValue(undefined),
-          }),
-          update: vi.fn().mockReturnValue({
-            set: vi.fn().mockReturnValue({
-              where: vi.fn().mockResolvedValue(undefined),
-            }),
-          }),
-        };
-        return { error: 'Invalid refresh token.' };
-      });
+      (db.transaction as Mock).mockResolvedValue({ error: 'Invalid refresh token.' });
 
       (decodeToken as Mock).mockResolvedValue(null);
 

@@ -56,7 +56,6 @@ import bcrypt from 'bcryptjs';
 import {
   checkRateLimit,
   resetRateLimit,
-  generateAccessToken,
   validateOrCreateDeviceToken,
   logAuthEvent,
 } from '@pagespace/lib/server';
