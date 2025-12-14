@@ -64,9 +64,12 @@ const createMockDragEvent = (files: File[] = [], options: Partial<DragEvent> = {
   ...options,
 } as unknown as DragEvent);
 
-// Helper to create mock File
+// Helper to create mock File with optional mocked size (avoids large memory allocation)
 const createMockFile = (name: string, size: number, type = 'text/plain'): File => {
-  return new File(['x'.repeat(size)], name, { type });
+  const file = new File(['x'], name, { type });
+  // Override size property to avoid allocating large buffers for boundary tests
+  Object.defineProperty(file, 'size', { value: size, writable: false });
+  return file;
 };
 
 describe('useFileDrop', () => {
