@@ -100,7 +100,20 @@ describe('/api/auth/csrf', () => {
     });
 
     it('supports Bearer token authentication', async () => {
-      // Arrange
+      // Arrange - reset mocks first to ensure isolation
+      vi.clearAllMocks();
+
+      // Configure authenticateRequestWithOptions to indicate Bearer auth was used
+      (authenticateRequestWithOptions as Mock).mockResolvedValue({
+        userId: 'test-user-id',
+        role: 'user',
+        tokenVersion: 0,
+        tokenType: 'jwt',
+        source: 'bearer',
+      });
+      (isAuthError as Mock).mockReturnValue(false);
+      (decodeToken as Mock).mockResolvedValue(mockDecodedToken);
+
       const request = new Request('http://localhost/api/auth/csrf', {
         method: 'GET',
         headers: {
@@ -112,9 +125,25 @@ describe('/api/auth/csrf', () => {
       const response = await GET(request);
       const body = await response.json();
 
-      // Assert
+      // Assert - verify response
       expect(response.status).toBe(200);
       expect(body.csrfToken).toBe('generated-csrf-token');
+
+      // Assert - verify Bearer token was decoded (not cookie token)
+      expect(decodeToken).toHaveBeenCalledWith('valid-access-token');
+      expect(decodeToken).toHaveBeenCalledTimes(1);
+
+      // Assert - verify cookie parsing was NOT invoked since Bearer token takes precedence
+      expect(parse).not.toHaveBeenCalled();
+
+      // Assert - verify auth was called with correct options
+      expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
+        request,
+        expect.objectContaining({
+          allow: ['jwt'],
+          requireCSRF: false,
+        })
+      );
     });
 
     it('supports cookie-based authentication', async () => {
