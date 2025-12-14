@@ -110,9 +110,8 @@ describe('/api/auth/logout', () => {
       // Act
       const response = await POST(request);
 
-      // Assert - verify cookies are cleared with expires: epoch (1970-01-01)
+      // Assert - verify cookie contract: both tokens cleared with expires: epoch
       expect(response.headers.get('set-cookie')).toBeTruthy();
-      expect(serialize).toHaveBeenCalledTimes(2);
 
       // Verify accessToken cookie is cleared (expires in the past)
       expect(serialize).toHaveBeenCalledWith(

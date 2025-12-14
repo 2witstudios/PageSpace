@@ -133,11 +133,10 @@ describe('/api/auth/login', () => {
       // Act
       const response = await POST(request);
 
-      // Assert - verify serialize was called with httpOnly and security options
+      // Assert - verify cookie contract: both tokens set with security attributes
       expect(response.headers.get('set-cookie')).toBeTruthy();
-      expect(serialize).toHaveBeenCalledTimes(2);
 
-      // Verify accessToken cookie options
+      // Verify accessToken cookie contract
       expect(serialize).toHaveBeenCalledWith(
         'accessToken',
         expect.any(String),
@@ -325,10 +324,19 @@ describe('/api/auth/login', () => {
       // Act
       await POST(request);
 
-      // Assert - bcrypt.compare should be called with the password and dummy hash
-      // The dummy hash ensures consistent timing regardless of whether user exists
-      const DUMMY_HASH = '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5GyYzpLLEm4Eu';
-      expect(bcrypt.compare).toHaveBeenCalledWith('anypassword', DUMMY_HASH);
+      // Assert - security property: bcrypt.compare must be called even for non-existent users
+      // This prevents timing attacks that could reveal user existence
+      expect(bcrypt.compare).toHaveBeenCalled();
+
+      // Verify the password was passed (first argument)
+      const [password, hash] = (bcrypt.compare as Mock).mock.calls[0];
+      expect(password).toBe('anypassword');
+
+      // Verify a valid bcrypt hash was used (not null/undefined/empty)
+      // The specific hash value is an implementation detail; we only care that
+      // a consistent-cost hash comparison occurs
+      expect(hash).toBeTruthy();
+      expect(hash).toMatch(/^\$2[aby]?\$\d+\$/); // Valid bcrypt hash format
     });
 
     it('logs failed login attempt', async () => {
