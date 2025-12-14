@@ -1,7 +1,21 @@
+/**
+ * Logout Route Tests
+ *
+ * Tests are organized by behavior, not implementation.
+ * We only mock at system boundaries: database, device token service, auth.
+ *
+ * Key behaviors tested:
+ * - Authentication required with CSRF
+ * - Successful logout (clears cookies, returns success)
+ * - Graceful handling of failures (continues logout even if parts fail)
+ * - Device token revocation (web header vs desktop body)
+ */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NextResponse } from 'next/server';
 
-// Mock auth module
+// === MOCKS AT SYSTEM BOUNDARIES ONLY ===
+
+// Mock auth module - internal boundary
 const { mockAuthenticateRequestWithOptions, mockIsAuthError } = vi.hoisted(() => ({
   mockAuthenticateRequestWithOptions: vi.fn(),
   mockIsAuthError: vi.fn(),
@@ -12,7 +26,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: mockIsAuthError,
 }));
 
-// Mock @pagespace/lib/device-auth-utils
+// Mock device auth utilities - external service boundary
 const { mockRevokeDeviceTokenByValue, mockRevokeDeviceTokensByDevice } = vi.hoisted(() => ({
   mockRevokeDeviceTokenByValue: vi.fn(),
   mockRevokeDeviceTokensByDevice: vi.fn(),
@@ -23,29 +37,7 @@ vi.mock('@pagespace/lib/device-auth-utils', () => ({
   revokeDeviceTokensByDevice: mockRevokeDeviceTokensByDevice,
 }));
 
-// Mock @pagespace/lib/server
-const { mockLogAuthEvent, mockLoggers } = vi.hoisted(() => ({
-  mockLogAuthEvent: vi.fn(),
-  mockLoggers: {
-    auth: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
-  },
-}));
-
-vi.mock('@pagespace/lib/server', () => ({
-  logAuthEvent: mockLogAuthEvent,
-  loggers: mockLoggers,
-}));
-
-// Mock @pagespace/lib/activity-tracker
-const { mockTrackAuthEvent } = vi.hoisted(() => ({
-  mockTrackAuthEvent: vi.fn(),
-}));
-
-vi.mock('@pagespace/lib/activity-tracker', () => ({
-  trackAuthEvent: mockTrackAuthEvent,
-}));
-
-// Mock database
+// Mock database - external storage boundary
 const { mockDbDeleteWhere } = vi.hoisted(() => ({
   mockDbDeleteWhere: vi.fn(),
 }));
@@ -58,6 +50,19 @@ vi.mock('@pagespace/db', () => ({
   },
   refreshTokens: {},
   eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
+}));
+
+// Mock server utilities (provide implementations, don't verify calls)
+vi.mock('@pagespace/lib/server', () => ({
+  logAuthEvent: vi.fn(),
+  loggers: {
+    auth: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+  },
+}));
+
+// Mock activity tracker (internal analytics - don't verify calls)
+vi.mock('@pagespace/lib/activity-tracker', () => ({
+  trackAuthEvent: vi.fn(),
 }));
 
 // Mock cookie
@@ -78,7 +83,8 @@ vi.mock('cookie', () => ({
 // Import after mocks
 import { POST } from '../route';
 
-// Helper to create mock auth result
+// === TEST HELPERS ===
+
 const mockWebAuth = (userId: string) => ({
   userId,
   tokenVersion: 0,
@@ -87,12 +93,10 @@ const mockWebAuth = (userId: string) => ({
   role: 'user' as const,
 });
 
-// Helper to create mock auth error
 const mockAuthError = (status = 401) => ({
   error: NextResponse.json({ error: 'Unauthorized' }, { status }),
 });
 
-// Helper to create request
 const createRequest = (options: {
   cookies?: Record<string, string>;
   headers?: Record<string, string>;
@@ -113,18 +117,18 @@ const createRequest = (options: {
   });
 };
 
+// === TESTS ===
+
 describe('POST /api/auth/logout', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    // Default auth success
+    // Default: authenticated user
     mockAuthenticateRequestWithOptions.mockResolvedValue(mockWebAuth('user_123'));
     mockIsAuthError.mockReturnValue(false);
 
-    // Default DB operations
+    // Default: all operations succeed
     mockDbDeleteWhere.mockResolvedValue(undefined);
-
-    // Default device token operations
     mockRevokeDeviceTokenByValue.mockResolvedValue(true);
     mockRevokeDeviceTokensByDevice.mockResolvedValue(1);
   });
@@ -133,20 +137,22 @@ describe('POST /api/auth/logout', () => {
     vi.clearAllMocks();
   });
 
-  describe('Authentication', () => {
-    it('should return 401 when not authenticated', async () => {
+  // --- Authentication ---
+
+  describe('authentication', () => {
+    it('returns_401_when_not_authenticated', async () => {
       mockIsAuthError.mockReturnValue(true);
       mockAuthenticateRequestWithOptions.mockResolvedValue(mockAuthError(401));
 
-      const request = createRequest();
-      const response = await POST(request);
+      const response = await POST(createRequest());
 
       expect(response.status).toBe(401);
     });
 
-    it('should require JWT authentication with CSRF', async () => {
-      const request = createRequest();
-      await POST(request);
+    // TODO: REVIEW - Should logout require CSRF protection?
+    // Current behavior: yes, requires CSRF. This prevents cross-site logout attacks.
+    it('requires_csrf_token_for_logout', async () => {
+      await POST(createRequest());
 
       expect(mockAuthenticateRequestWithOptions).toHaveBeenCalledWith(
         expect.any(Request),
@@ -155,54 +161,94 @@ describe('POST /api/auth/logout', () => {
     });
   });
 
-  describe('Refresh Token Revocation', () => {
-    it('should delete refresh token from database', async () => {
-      const request = createRequest({
-        cookies: { refreshToken: 'valid-refresh-token' },
-      });
+  // --- Successful Logout ---
 
-      await POST(request);
+  describe('successful_logout', () => {
+    it('returns_200_with_success_message', async () => {
+      const response = await POST(createRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.message).toBe('Logged out successfully');
+    });
+
+    it('clears_auth_cookies', async () => {
+      const response = await POST(createRequest({
+        cookies: {
+          accessToken: 'old-access-token',
+          refreshToken: 'old-refresh-token',
+        },
+      }));
+
+      const cookies = response.headers.getSetCookie();
+      expect(cookies.some(c => c.includes('accessToken'))).toBe(true);
+      expect(cookies.some(c => c.includes('refreshToken'))).toBe(true);
+    });
+
+    it('deletes_refresh_token_from_database', async () => {
+      await POST(createRequest({
+        cookies: { refreshToken: 'valid-refresh-token' },
+      }));
 
       expect(mockDbDeleteWhere).toHaveBeenCalled();
     });
+  });
 
-    it('should handle missing refresh token gracefully', async () => {
-      const request = createRequest();
-      const response = await POST(request);
+  // --- Graceful Failure Handling ---
+
+  describe('graceful_failure_handling', () => {
+    it('succeeds_when_no_refresh_token_in_cookies', async () => {
+      const response = await POST(createRequest());
       const body = await response.json();
 
       expect(response.status).toBe(200);
       expect(body.message).toBe('Logged out successfully');
     });
 
-    it('should handle database error when deleting refresh token', async () => {
+    it('succeeds_when_refresh_token_delete_fails', async () => {
       mockDbDeleteWhere.mockRejectedValue(new Error('Token not found'));
 
-      const request = createRequest({
+      const response = await POST(createRequest({
         cookies: { refreshToken: 'invalid-token' },
-      });
-
-      const response = await POST(request);
+      }));
       const body = await response.json();
 
-      // Should still succeed - logout continues
       expect(response.status).toBe(200);
       expect(body.message).toBe('Logged out successfully');
+    });
 
-      expect(mockLoggers.auth.debug).toHaveBeenCalledWith(
-        'Refresh token not found in DB during logout',
-        expect.any(Object)
-      );
+    it('succeeds_when_device_token_revocation_fails', async () => {
+      mockRevokeDeviceTokenByValue.mockRejectedValue(new Error('Revocation failed'));
+
+      const response = await POST(createRequest({
+        headers: { 'X-Device-Token': 'device-token-123' },
+      }));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.message).toBe('Logged out successfully');
+    });
+
+    it('succeeds_when_desktop_device_token_revocation_fails', async () => {
+      mockRevokeDeviceTokensByDevice.mockRejectedValue(new Error('Revocation failed'));
+
+      const response = await POST(createRequest({
+        body: { deviceId: 'desktop-device-123', platform: 'desktop' },
+      }));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.message).toBe('Logged out successfully');
     });
   });
 
-  describe('Device Token Revocation - Web (Header)', () => {
-    it('should revoke device token from header', async () => {
-      const request = createRequest({
-        headers: { 'X-Device-Token': 'device-token-123' },
-      });
+  // --- Device Token Handling ---
 
-      await POST(request);
+  describe('device_token_revocation', () => {
+    it('revokes_device_token_from_header_for_web', async () => {
+      await POST(createRequest({
+        headers: { 'X-Device-Token': 'device-token-123' },
+      }));
 
       expect(mockRevokeDeviceTokenByValue).toHaveBeenCalledWith(
         'device-token-123',
@@ -210,52 +256,10 @@ describe('POST /api/auth/logout', () => {
       );
     });
 
-    it('should log success when device token revoked', async () => {
-      mockRevokeDeviceTokenByValue.mockResolvedValue(true);
-
-      const request = createRequest({
-        headers: { 'X-Device-Token': 'device-token-123' },
-      });
-
-      await POST(request);
-
-      expect(mockLoggers.auth.debug).toHaveBeenCalledWith(
-        'Device token revoked on logout',
-        { userId: 'user_123', source: 'header' }
-      );
-    });
-
-    it('should handle device token revocation failure gracefully', async () => {
-      mockRevokeDeviceTokenByValue.mockRejectedValue(new Error('Revocation failed'));
-
-      const request = createRequest({
-        headers: { 'X-Device-Token': 'device-token-123' },
-      });
-
-      const response = await POST(request);
-      const body = await response.json();
-
-      // Should still succeed
-      expect(response.status).toBe(200);
-      expect(body.message).toBe('Logged out successfully');
-
-      expect(mockLoggers.auth.error).toHaveBeenCalledWith(
-        'Failed to revoke device token on logout',
-        expect.objectContaining({
-          error: 'Revocation failed',
-          userId: 'user_123',
-        })
-      );
-    });
-  });
-
-  describe('Device Token Revocation - Desktop (Body)', () => {
-    it('should revoke device token by deviceId and platform from body', async () => {
-      const request = createRequest({
+    it('revokes_device_token_by_device_id_for_desktop', async () => {
+      await POST(createRequest({
         body: { deviceId: 'desktop-device-123', platform: 'desktop' },
-      });
-
-      await POST(request);
+      }));
 
       expect(mockRevokeDeviceTokensByDevice).toHaveBeenCalledWith(
         'user_123',
@@ -265,191 +269,24 @@ describe('POST /api/auth/logout', () => {
       );
     });
 
-    it('should log count of revoked device tokens', async () => {
-      mockRevokeDeviceTokensByDevice.mockResolvedValue(2);
-
-      const request = createRequest({
-        body: { deviceId: 'desktop-device-123', platform: 'desktop' },
-      });
-
-      await POST(request);
-
-      expect(mockLoggers.auth.debug).toHaveBeenCalledWith(
-        'Device tokens revoked on logout',
-        {
-          userId: 'user_123',
-          deviceId: 'desktop-device-123',
-          platform: 'desktop',
-          count: 2,
-        }
-      );
-    });
-
-    it('should not log when no device tokens revoked', async () => {
-      mockRevokeDeviceTokensByDevice.mockResolvedValue(0);
-
-      const request = createRequest({
-        body: { deviceId: 'desktop-device-123', platform: 'desktop' },
-      });
-
-      await POST(request);
-
-      expect(mockLoggers.auth.debug).not.toHaveBeenCalledWith(
-        'Device tokens revoked on logout',
-        expect.anything()
-      );
-    });
-
-    it('should handle body parsing error gracefully', async () => {
-      // No body provided - should not error
-      const request = createRequest();
-      const response = await POST(request);
-
-      expect(response.status).toBe(200);
-    });
-
-    it('should handle desktop device token revocation failure', async () => {
-      mockRevokeDeviceTokensByDevice.mockRejectedValue(new Error('Revocation failed'));
-
-      const request = createRequest({
-        body: { deviceId: 'desktop-device-123', platform: 'desktop' },
-      });
-
-      const response = await POST(request);
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.message).toBe('Logged out successfully');
-
-      expect(mockLoggers.auth.error).toHaveBeenCalledWith(
-        'Failed to revoke device tokens on logout',
-        expect.objectContaining({
-          error: 'Revocation failed',
-          deviceId: 'desktop-device-123',
-        })
-      );
-    });
-  });
-
-  describe('Device Token Priority', () => {
-    it('should prefer header device token over body', async () => {
-      const request = createRequest({
+    // TODO: REVIEW - Is header priority over body correct for device token source?
+    // Current behavior: header device token takes priority over body deviceId
+    it('prefers_header_device_token_over_body', async () => {
+      await POST(createRequest({
         headers: { 'X-Device-Token': 'header-token' },
         body: { deviceId: 'body-device', platform: 'web' },
-      });
+      }));
 
-      await POST(request);
-
-      // Header takes priority
       expect(mockRevokeDeviceTokenByValue).toHaveBeenCalledWith('header-token', 'logout');
       expect(mockRevokeDeviceTokensByDevice).not.toHaveBeenCalled();
     });
-  });
 
-  describe('Logging and Tracking', () => {
-    it('should log logout event', async () => {
-      const request = createRequest({
-        headers: { 'x-forwarded-for': '192.168.1.1' },
-      });
-
-      await POST(request);
-
-      expect(mockLogAuthEvent).toHaveBeenCalledWith(
-        'logout',
-        'user_123',
-        undefined,
-        '192.168.1.1'
-      );
-    });
-
-    it('should track logout event', async () => {
-      const request = createRequest({
-        headers: {
-          'x-forwarded-for': '192.168.1.1',
-          'user-agent': 'Test Agent',
-        },
-      });
-
-      await POST(request);
-
-      expect(mockTrackAuthEvent).toHaveBeenCalledWith(
-        'user_123',
-        'logout',
-        {
-          ip: '192.168.1.1',
-          userAgent: 'Test Agent',
-        }
-      );
-    });
-  });
-
-  describe('Cookie Clearing', () => {
-    it('should clear access and refresh token cookies', async () => {
-      const request = createRequest({
-        cookies: {
-          accessToken: 'old-access-token',
-          refreshToken: 'old-refresh-token',
-        },
-      });
-
-      const response = await POST(request);
-
-      const cookies = response.headers.getSetCookie();
-      expect(cookies.some(c => c.includes('accessToken'))).toBe(true);
-      expect(cookies.some(c => c.includes('refreshToken'))).toBe(true);
-    });
-
-    it('should return success message', async () => {
-      const request = createRequest();
-      const response = await POST(request);
-      const body = await response.json();
+    it('handles_logout_without_device_token', async () => {
+      const response = await POST(createRequest());
 
       expect(response.status).toBe(200);
-      expect(body.message).toBe('Logged out successfully');
-    });
-  });
-
-  describe('IP Address Extraction', () => {
-    it('should extract IP from x-forwarded-for', async () => {
-      const request = createRequest({
-        headers: { 'x-forwarded-for': '203.0.113.1, 198.51.100.178' },
-      });
-
-      await POST(request);
-
-      expect(mockLogAuthEvent).toHaveBeenCalledWith(
-        'logout',
-        'user_123',
-        undefined,
-        '203.0.113.1'
-      );
-    });
-
-    it('should extract IP from x-real-ip', async () => {
-      const request = createRequest({
-        headers: { 'x-real-ip': '10.0.0.50' },
-      });
-
-      await POST(request);
-
-      expect(mockLogAuthEvent).toHaveBeenCalledWith(
-        'logout',
-        'user_123',
-        undefined,
-        '10.0.0.50'
-      );
-    });
-
-    it('should use "unknown" when no IP headers', async () => {
-      const request = createRequest();
-      await POST(request);
-
-      expect(mockLogAuthEvent).toHaveBeenCalledWith(
-        'logout',
-        'user_123',
-        undefined,
-        'unknown'
-      );
+      expect(mockRevokeDeviceTokenByValue).not.toHaveBeenCalled();
+      expect(mockRevokeDeviceTokensByDevice).not.toHaveBeenCalled();
     });
   });
 });

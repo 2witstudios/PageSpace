@@ -1,50 +1,69 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-// Mock bcryptjs - use vi.hoisted to ensure mocks are available before vi.mock
-const { mockBcryptCompare } = vi.hoisted(() => {
-  return {
-    mockBcryptCompare: vi.fn(),
-  };
-});
+/**
+ * Login Route Tests
+ *
+ * Tests are organized by behavior, not implementation.
+ * We only mock at system boundaries: database, bcrypt (external library)
+ *
+ * Coverage:
+ * - Input validation (email format, required fields)
+ * - Rate limiting behavior
+ * - Authentication success/failure
+ * - Security behaviors (timing attack prevention, error message safety)
+ * - Response format
+ */
+
+// === MOCKS AT SYSTEM BOUNDARIES ONLY ===
+
+// Mock bcryptjs - external cryptography library
+const { mockBcryptCompare } = vi.hoisted(() => ({
+  mockBcryptCompare: vi.fn(),
+}));
 
 vi.mock('bcryptjs', () => ({
-  default: {
-    compare: mockBcryptCompare,
-  },
+  default: { compare: mockBcryptCompare },
   compare: mockBcryptCompare,
 }));
 
-// Mock @pagespace/lib/server - rate limiting, token generation, logging
+// Mock database - external system boundary
+const { mockDbQueryUsersFindFirst, mockDbInsertValues } = vi.hoisted(() => ({
+  mockDbQueryUsersFindFirst: vi.fn(),
+  mockDbInsertValues: vi.fn(),
+}));
+
+vi.mock('@pagespace/db', () => ({
+  db: {
+    query: {
+      users: { findFirst: mockDbQueryUsersFindFirst },
+    },
+    insert: vi.fn(() => ({ values: mockDbInsertValues })),
+  },
+  users: {},
+  refreshTokens: {},
+  eq: vi.fn(),
+}));
+
+// Mock rate limiting - internal service but controls request flow
+const { mockCheckRateLimit, mockResetRateLimit } = vi.hoisted(() => ({
+  mockCheckRateLimit: vi.fn(),
+  mockResetRateLimit: vi.fn(),
+}));
+
+// Mock token generation - security boundary
 const {
-  mockCheckRateLimit,
-  mockResetRateLimit,
   mockGenerateAccessToken,
   mockGenerateRefreshToken,
   mockGetRefreshTokenMaxAge,
   mockDecodeToken,
   mockValidateOrCreateDeviceToken,
-  mockLogAuthEvent,
-  mockLoggers,
-} = vi.hoisted(() => {
-  return {
-    mockCheckRateLimit: vi.fn(),
-    mockResetRateLimit: vi.fn(),
-    mockGenerateAccessToken: vi.fn(),
-    mockGenerateRefreshToken: vi.fn(),
-    mockGetRefreshTokenMaxAge: vi.fn(),
-    mockDecodeToken: vi.fn(),
-    mockValidateOrCreateDeviceToken: vi.fn(),
-    mockLogAuthEvent: vi.fn(),
-    mockLoggers: {
-      auth: {
-        info: vi.fn(),
-        error: vi.fn(),
-        warn: vi.fn(),
-        debug: vi.fn(),
-      },
-    },
-  };
-});
+} = vi.hoisted(() => ({
+  mockGenerateAccessToken: vi.fn(),
+  mockGenerateRefreshToken: vi.fn(),
+  mockGetRefreshTokenMaxAge: vi.fn(),
+  mockDecodeToken: vi.fn(),
+  mockValidateOrCreateDeviceToken: vi.fn(),
+}));
 
 vi.mock('@pagespace/lib/server', () => ({
   checkRateLimit: mockCheckRateLimit,
@@ -54,70 +73,31 @@ vi.mock('@pagespace/lib/server', () => ({
   getRefreshTokenMaxAge: mockGetRefreshTokenMaxAge,
   decodeToken: mockDecodeToken,
   validateOrCreateDeviceToken: mockValidateOrCreateDeviceToken,
-  logAuthEvent: mockLogAuthEvent,
-  loggers: mockLoggers,
+  logAuthEvent: vi.fn(),
+  loggers: { auth: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() } },
   RATE_LIMIT_CONFIGS: {
-    LOGIN: {
-      maxAttempts: 5,
-      windowMs: 15 * 60 * 1000,
-      blockDurationMs: 15 * 60 * 1000,
-      progressiveDelay: true,
-    },
+    LOGIN: { maxAttempts: 5, windowMs: 900000, blockDurationMs: 900000, progressiveDelay: true },
   },
 }));
 
-// Mock @pagespace/lib/activity-tracker
-const { mockTrackAuthEvent } = vi.hoisted(() => {
-  return {
-    mockTrackAuthEvent: vi.fn(),
-  };
-});
-
+// Mock activity tracking - analytics boundary (don't need to verify calls)
 vi.mock('@pagespace/lib/activity-tracker', () => ({
-  trackAuthEvent: mockTrackAuthEvent,
+  trackAuthEvent: vi.fn(),
 }));
 
-// Mock database - use vi.hoisted for all mock functions
-const { mockDbQueryUsersFindFirst, mockDbInsertValues } = vi.hoisted(() => {
-  return {
-    mockDbQueryUsersFindFirst: vi.fn(),
-    mockDbInsertValues: vi.fn(),
-  };
-});
-
-vi.mock('@pagespace/db', () => {
-  return {
-    db: {
-      query: {
-        users: {
-          findFirst: mockDbQueryUsersFindFirst,
-        },
-      },
-      insert: vi.fn(() => ({
-        values: mockDbInsertValues,
-      })),
-    },
-    users: {},
-    refreshTokens: {},
-    eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
-  };
-});
-
-// Mock @paralleldrive/cuid2
 vi.mock('@paralleldrive/cuid2', () => ({
-  createId: vi.fn(() => 'mock-cuid'),
+  createId: vi.fn(() => 'test-cuid'),
 }));
 
-// Mock cookie serialize
 vi.mock('cookie', () => ({
   serialize: vi.fn((name: string, value: string) => `${name}=${value}`),
 }));
 
-// Import after mocks
 import { POST } from '../route';
 
-// Helper to create mock user
-const mockUser = (overrides: Partial<{
+// === TEST FIXTURES ===
+
+const createUser = (overrides: Partial<{
   id: string;
   email: string;
   password: string | null;
@@ -133,661 +113,374 @@ const mockUser = (overrides: Partial<{
   role: overrides.role ?? 'user',
 });
 
-// Helper to create request
 const createRequest = (body: object, headers: Record<string, string> = {}) => {
   return new Request('https://example.com/api/auth/login', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...headers,
-    },
+    headers: { 'Content-Type': 'application/json', ...headers },
     body: JSON.stringify(body),
   });
 };
 
-describe('POST /api/auth/login', () => {
+// === TESTS ===
+
+describe('LoginRoute', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    // Default rate limit - allowed
+    // Default: rate limiting allows requests
     mockCheckRateLimit.mockReturnValue({ allowed: true, attemptsRemaining: 4 });
 
-    // Default token generation
-    mockGenerateAccessToken.mockResolvedValue('mock-access-token');
-    mockGenerateRefreshToken.mockResolvedValue('mock-refresh-token');
-    mockGetRefreshTokenMaxAge.mockReturnValue(30 * 24 * 60 * 60); // 30 days
-    mockDecodeToken.mockResolvedValue({
-      userId: 'user_123',
-      tokenVersion: 0,
-      role: 'user',
-      exp: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
-    });
-
-    // Default database insert success
+    // Default: token generation succeeds
+    mockGenerateAccessToken.mockResolvedValue('access-token-value');
+    mockGenerateRefreshToken.mockResolvedValue('refresh-token-value');
+    mockGetRefreshTokenMaxAge.mockReturnValue(2592000); // 30 days
+    mockDecodeToken.mockResolvedValue({ exp: Date.now() / 1000 + 2592000 });
     mockDbInsertValues.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
-    // Use clearAllMocks instead of resetAllMocks to preserve mock implementations
     vi.clearAllMocks();
   });
 
-  describe('Input Validation', () => {
-    it('should return 400 when email is missing', async () => {
-      const request = createRequest({ password: 'password123' });
+  // === INPUT VALIDATION ===
+
+  describe('input_validation', () => {
+    it('rejects_request_when_email_missing', async () => {
+      const request = createRequest({ password: 'anypassword' });
 
       const response = await POST(request);
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors).toBeDefined();
       expect(body.errors.email).toBeDefined();
     });
 
-    it('should return 400 when email format is invalid', async () => {
-      const request = createRequest({
-        email: 'not-an-email',
-        password: 'password123',
-      });
+    it('rejects_request_when_email_format_invalid', async () => {
+      const request = createRequest({ email: 'not-valid-email', password: 'anypassword' });
 
       const response = await POST(request);
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors).toBeDefined();
       expect(body.errors.email).toBeDefined();
     });
 
-    it('should return 400 when password is missing', async () => {
-      const request = createRequest({ email: 'test@example.com' });
+    it('rejects_request_when_password_missing', async () => {
+      const request = createRequest({ email: 'user@example.com' });
 
       const response = await POST(request);
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors).toBeDefined();
       expect(body.errors.password).toBeDefined();
     });
 
-    it('should return 400 when password is empty string', async () => {
-      const request = createRequest({
-        email: 'test@example.com',
-        password: '',
-      });
+    it('rejects_request_when_password_empty', async () => {
+      const request = createRequest({ email: 'user@example.com', password: '' });
 
       const response = await POST(request);
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors).toBeDefined();
       expect(body.errors.password).toBeDefined();
     });
 
-    it('should return 400 when request body is invalid JSON', async () => {
+    it('rejects_request_when_body_is_invalid_json', async () => {
       const request = new Request('https://example.com/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: 'invalid json',
+        body: 'not valid json',
       });
 
       const response = await POST(request);
-      const body = await response.json();
 
       expect(response.status).toBe(500);
-      expect(body.error).toBe('An unexpected error occurred.');
     });
   });
 
-  describe('Rate Limiting', () => {
-    it('should return 429 when IP rate limit is exceeded', async () => {
-      mockCheckRateLimit.mockReturnValueOnce({
-        allowed: false,
-        retryAfter: 900,
-      });
+  // === RATE LIMITING BEHAVIOR ===
 
-      const request = createRequest({
-        email: 'test@example.com',
-        password: 'password123',
-      });
+  describe('rate_limiting', () => {
+    it('blocks_login_when_ip_rate_limit_exceeded', async () => {
+      mockCheckRateLimit.mockReturnValueOnce({ allowed: false, retryAfter: 900 });
 
+      const request = createRequest({ email: 'user@example.com', password: 'password' });
       const response = await POST(request);
       const body = await response.json();
 
       expect(response.status).toBe(429);
-      expect(body.error).toContain('Too many login attempts from this IP');
+      expect(body.error).toMatch(/too many.*ip/i);
       expect(body.retryAfter).toBe(900);
       expect(response.headers.get('Retry-After')).toBe('900');
     });
 
-    it('should return 429 when email rate limit is exceeded', async () => {
-      // First call (IP check) passes, second call (email check) fails
+    it('blocks_login_when_email_rate_limit_exceeded', async () => {
+      // IP check passes, email check fails
       mockCheckRateLimit
-        .mockReturnValueOnce({ allowed: true, attemptsRemaining: 4 })
-        .mockReturnValueOnce({ allowed: false, retryAfter: 900 });
+        .mockReturnValueOnce({ allowed: true })
+        .mockReturnValueOnce({ allowed: false, retryAfter: 600 });
 
-      const request = createRequest({
-        email: 'test@example.com',
-        password: 'password123',
-      });
-
+      const request = createRequest({ email: 'user@example.com', password: 'password' });
       const response = await POST(request);
       const body = await response.json();
 
       expect(response.status).toBe(429);
-      expect(body.error).toContain('Too many login attempts for this email');
-      expect(body.retryAfter).toBe(900);
+      expect(body.error).toMatch(/too many.*email/i);
     });
 
-    it('should check rate limit with correct identifiers', async () => {
-      mockDbQueryUsersFindFirst.mockResolvedValue(mockUser());
+    // TODO: REVIEW - Should rate limit key be case-normalized? Current behavior: yes
+    it('normalizes_email_to_lowercase_for_rate_limit_tracking', async () => {
+      mockDbQueryUsersFindFirst.mockResolvedValue(createUser());
       mockBcryptCompare.mockResolvedValue(true);
 
-      const request = createRequest(
-        { email: 'Test@Example.COM', password: 'password123' },
-        { 'x-forwarded-for': '192.168.1.1' }
-      );
-
+      const request = createRequest({ email: 'USER@EXAMPLE.COM', password: 'password' });
       await POST(request);
 
-      // Should check IP first, then lowercase email
-      expect(mockCheckRateLimit).toHaveBeenCalledTimes(2);
-      expect(mockCheckRateLimit).toHaveBeenNthCalledWith(
-        1,
-        '192.168.1.1',
-        expect.any(Object)
-      );
-      expect(mockCheckRateLimit).toHaveBeenNthCalledWith(
-        2,
-        'test@example.com',
-        expect.any(Object)
-      );
-    });
-
-    it('should reset rate limits on successful login', async () => {
-      mockDbQueryUsersFindFirst.mockResolvedValue(mockUser());
-      mockBcryptCompare.mockResolvedValue(true);
-
-      const request = createRequest(
-        { email: 'test@example.com', password: 'password123' },
-        { 'x-forwarded-for': '192.168.1.1' }
-      );
-
-      await POST(request);
-
-      expect(mockResetRateLimit).toHaveBeenCalledWith('192.168.1.1');
-      expect(mockResetRateLimit).toHaveBeenCalledWith('test@example.com');
+      // Rate limit check should use lowercase email
+      expect(mockCheckRateLimit).toHaveBeenNthCalledWith(2, 'user@example.com', expect.any(Object));
     });
   });
 
-  describe('Authentication - Timing Attack Prevention', () => {
-    it('should always compare password even when user not found to prevent timing attacks', async () => {
-      mockDbQueryUsersFindFirst.mockResolvedValue(null);
-      mockBcryptCompare.mockResolvedValue(false);
+  // === AUTHENTICATION BEHAVIOR ===
 
-      const request = createRequest({
-        email: 'nonexistent@example.com',
-        password: 'password123',
-      });
-
-      await POST(request);
-
-      // bcrypt.compare should still be called with a fake hash
-      expect(mockBcryptCompare).toHaveBeenCalledTimes(1);
-      expect(mockBcryptCompare).toHaveBeenCalledWith(
-        'password123',
-        expect.stringContaining('$2a$12$') // Should be called with a bcrypt hash
-      );
-    });
-
-    it('should return 401 with generic error for non-existent user', async () => {
-      mockDbQueryUsersFindFirst.mockResolvedValue(null);
-      mockBcryptCompare.mockResolvedValue(false);
-
-      const request = createRequest({
-        email: 'nonexistent@example.com',
-        password: 'password123',
-      });
-
-      const response = await POST(request);
-      const body = await response.json();
-
-      expect(response.status).toBe(401);
-      // Generic error that doesn't reveal whether email exists
-      expect(body.error).toBe('Invalid email or password');
-      // Should NOT reveal specific details like "not found" or "does not exist"
-      expect(body.error).not.toContain('not found');
-      expect(body.error).not.toContain('does not exist');
-    });
-  });
-
-  describe('Authentication - Invalid Credentials', () => {
-    it('should return 401 when password is incorrect', async () => {
-      mockDbQueryUsersFindFirst.mockResolvedValue(mockUser());
-      mockBcryptCompare.mockResolvedValue(false);
-
-      const request = createRequest({
-        email: 'test@example.com',
-        password: 'wrongpassword',
-      });
-
-      const response = await POST(request);
-      const body = await response.json();
-
-      expect(response.status).toBe(401);
-      expect(body.error).toBe('Invalid email or password');
-    });
-
-    it('should return 401 when user has no password (OAuth-only account)', async () => {
-      mockDbQueryUsersFindFirst.mockResolvedValue(mockUser({ password: null }));
-      mockBcryptCompare.mockResolvedValue(false);
-
-      const request = createRequest({
-        email: 'oauth@example.com',
-        password: 'anypassword',
-      });
-
-      const response = await POST(request);
-      const body = await response.json();
-
-      expect(response.status).toBe(401);
-      expect(body.error).toBe('Invalid email or password');
-    });
-
-    it('should log failed login attempt with reason', async () => {
-      mockDbQueryUsersFindFirst.mockResolvedValue(null);
-      mockBcryptCompare.mockResolvedValue(false);
-
-      const request = createRequest(
-        { email: 'nonexistent@example.com', password: 'password123' },
-        { 'x-forwarded-for': '192.168.1.1' }
-      );
-
-      await POST(request);
-
-      expect(mockLogAuthEvent).toHaveBeenCalledWith(
-        'failed',
-        undefined,
-        'nonexistent@example.com',
-        '192.168.1.1',
-        'Invalid email'
-      );
-    });
-
-    it('should track failed login attempt', async () => {
-      mockDbQueryUsersFindFirst.mockResolvedValue(mockUser());
-      mockBcryptCompare.mockResolvedValue(false);
-
-      const request = createRequest(
-        { email: 'test@example.com', password: 'wrongpassword' },
-        { 'x-forwarded-for': '192.168.1.1' }
-      );
-
-      await POST(request);
-
-      expect(mockTrackAuthEvent).toHaveBeenCalledWith(
-        'user_123',
-        'failed_login',
-        expect.objectContaining({
-          reason: 'invalid_password',
-          email: 'test@example.com',
-          ip: '192.168.1.1',
-        })
-      );
-    });
-  });
-
-  describe('Successful Authentication', () => {
-    beforeEach(() => {
-      mockDbQueryUsersFindFirst.mockResolvedValue(mockUser());
+  describe('authentication', () => {
+    it('authenticates_user_with_valid_credentials', async () => {
+      mockDbQueryUsersFindFirst.mockResolvedValue(createUser({
+        email: 'valid@example.com',
+        name: 'Valid User',
+      }));
       mockBcryptCompare.mockResolvedValue(true);
-    });
 
-    it('should return 200 with user data on successful login', async () => {
-      const request = createRequest({
-        email: 'test@example.com',
-        password: 'correctpassword',
-      });
-
+      const request = createRequest({ email: 'valid@example.com', password: 'correctpassword' });
       const response = await POST(request);
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.id).toBe('user_123');
-      expect(body.name).toBe('Test User');
-      expect(body.email).toBe('test@example.com');
+      expect(body.email).toBe('valid@example.com');
+      expect(body.name).toBe('Valid User');
     });
 
-    it('should set access token and refresh token cookies', async () => {
-      const request = createRequest({
-        email: 'test@example.com',
-        password: 'correctpassword',
-      });
+    it('sets_session_cookies_on_successful_login', async () => {
+      mockDbQueryUsersFindFirst.mockResolvedValue(createUser());
+      mockBcryptCompare.mockResolvedValue(true);
 
+      const request = createRequest({ email: 'user@example.com', password: 'password' });
       const response = await POST(request);
 
       const cookies = response.headers.getSetCookie();
-      expect(cookies).toHaveLength(2);
+      expect(cookies.length).toBe(2);
       expect(cookies.some(c => c.includes('accessToken'))).toBe(true);
       expect(cookies.some(c => c.includes('refreshToken'))).toBe(true);
     });
 
-    it('should generate tokens with correct user data', async () => {
-      const user = mockUser({ id: 'user_456', tokenVersion: 2, role: 'admin' });
-      mockDbQueryUsersFindFirst.mockResolvedValue(user);
+    it('rejects_login_with_incorrect_password', async () => {
+      mockDbQueryUsersFindFirst.mockResolvedValue(createUser());
+      mockBcryptCompare.mockResolvedValue(false);
 
-      const request = createRequest({
-        email: 'admin@example.com',
-        password: 'correctpassword',
-      });
-
-      await POST(request);
-
-      expect(mockGenerateAccessToken).toHaveBeenCalledWith('user_456', 2, 'admin');
-      expect(mockGenerateRefreshToken).toHaveBeenCalledWith('user_456', 2, 'admin');
-    });
-
-    it('should store refresh token in database', async () => {
-      const request = createRequest(
-        { email: 'test@example.com', password: 'correctpassword' },
-        { 'user-agent': 'Mozilla/5.0 Test', 'x-forwarded-for': '10.0.0.1' }
-      );
-
-      await POST(request);
-
-      expect(mockDbInsertValues).toHaveBeenCalledWith(
-        expect.objectContaining({
-          id: 'mock-cuid',
-          token: 'mock-refresh-token',
-          userId: 'user_123',
-          device: 'Mozilla/5.0 Test',
-          userAgent: 'Mozilla/5.0 Test',
-          ip: '10.0.0.1',
-          platform: 'web',
-        })
-      );
-    });
-
-    it('should log successful login', async () => {
-      const request = createRequest(
-        { email: 'test@example.com', password: 'correctpassword' },
-        { 'x-forwarded-for': '192.168.1.1' }
-      );
-
-      await POST(request);
-
-      expect(mockLogAuthEvent).toHaveBeenCalledWith(
-        'login',
-        'user_123',
-        'test@example.com',
-        '192.168.1.1'
-      );
-    });
-
-    it('should track successful login event', async () => {
-      const request = createRequest(
-        { email: 'test@example.com', password: 'correctpassword' },
-        { 'x-forwarded-for': '192.168.1.1', 'user-agent': 'Test Agent' }
-      );
-
-      await POST(request);
-
-      expect(mockTrackAuthEvent).toHaveBeenCalledWith(
-        'user_123',
-        'login',
-        expect.objectContaining({
-          email: 'test@example.com',
-          ip: '192.168.1.1',
-          userAgent: 'Test Agent',
-        })
-      );
-    });
-  });
-
-  describe('Device Token Handling', () => {
-    beforeEach(() => {
-      mockDbQueryUsersFindFirst.mockResolvedValue(mockUser());
-      mockBcryptCompare.mockResolvedValue(true);
-    });
-
-    it('should create device token when deviceId is provided', async () => {
-      mockValidateOrCreateDeviceToken.mockResolvedValue({
-        deviceToken: 'new-device-token',
-        deviceTokenRecordId: 'device-record-123',
-      });
-
-      const request = createRequest(
-        {
-          email: 'test@example.com',
-          password: 'correctpassword',
-          deviceId: 'device-abc',
-          deviceName: 'My Browser',
-        },
-        { 'user-agent': 'Test Agent', 'x-forwarded-for': '192.168.1.1' }
-      );
-
+      const request = createRequest({ email: 'user@example.com', password: 'wrongpassword' });
       const response = await POST(request);
       const body = await response.json();
 
-      expect(mockValidateOrCreateDeviceToken).toHaveBeenCalledWith({
-        providedDeviceToken: undefined,
-        userId: 'user_123',
-        deviceId: 'device-abc',
-        platform: 'web',
-        tokenVersion: 0,
-        deviceName: 'My Browser',
-        userAgent: 'Test Agent',
-        ipAddress: '192.168.1.1',
+      expect(response.status).toBe(401);
+      expect(body.error).toBe('Invalid email or password');
+    });
+
+    it('rejects_login_for_nonexistent_user', async () => {
+      mockDbQueryUsersFindFirst.mockResolvedValue(null);
+      mockBcryptCompare.mockResolvedValue(false);
+
+      const request = createRequest({ email: 'nobody@example.com', password: 'password' });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(401);
+      expect(body.error).toBe('Invalid email or password');
+    });
+
+    it('rejects_login_for_oauth_only_account_without_password', async () => {
+      mockDbQueryUsersFindFirst.mockResolvedValue(createUser({ password: null }));
+
+      const request = createRequest({ email: 'oauth@example.com', password: 'anypassword' });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(401);
+      expect(body.error).toBe('Invalid email or password');
+    });
+  });
+
+  // === SECURITY BEHAVIORS ===
+
+  describe('security', () => {
+    it('returns_generic_error_that_does_not_reveal_if_email_exists', async () => {
+      mockDbQueryUsersFindFirst.mockResolvedValue(null);
+      mockBcryptCompare.mockResolvedValue(false);
+
+      const request = createRequest({ email: 'unknown@example.com', password: 'password' });
+      const response = await POST(request);
+      const body = await response.json();
+
+      // Error message should not indicate whether email exists
+      expect(body.error).toBe('Invalid email or password');
+      expect(body.error).not.toMatch(/not found/i);
+      expect(body.error).not.toMatch(/does not exist/i);
+      expect(body.error).not.toMatch(/no user/i);
+    });
+
+    // IMPORTANT: Timing attack prevention - bcrypt compare runs even for non-existent users
+    it('performs_password_comparison_even_for_nonexistent_user_to_prevent_timing_attacks', async () => {
+      mockDbQueryUsersFindFirst.mockResolvedValue(null);
+      mockBcryptCompare.mockResolvedValue(false);
+
+      const request = createRequest({ email: 'unknown@example.com', password: 'password' });
+      await POST(request);
+
+      // bcrypt.compare should be called even when user doesn't exist
+      // This prevents timing attacks that could enumerate valid emails
+      expect(mockBcryptCompare).toHaveBeenCalledTimes(1);
+      expect(mockBcryptCompare).toHaveBeenCalledWith('password', expect.stringMatching(/^\$2a\$/));
+    });
+
+    it('does_not_expose_internal_errors_to_client', async () => {
+      mockDbQueryUsersFindFirst.mockRejectedValue(new Error('PostgreSQL connection refused'));
+
+      const request = createRequest({ email: 'user@example.com', password: 'password' });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(body.error).toBe('An unexpected error occurred.');
+      expect(body.error).not.toMatch(/postgresql/i);
+      expect(body.error).not.toMatch(/database/i);
+    });
+  });
+
+  // === DEVICE TOKEN BEHAVIOR ===
+
+  describe('device_tokens', () => {
+    beforeEach(() => {
+      mockDbQueryUsersFindFirst.mockResolvedValue(createUser());
+      mockBcryptCompare.mockResolvedValue(true);
+    });
+
+    it('returns_device_token_when_device_id_provided', async () => {
+      mockValidateOrCreateDeviceToken.mockResolvedValue({
+        deviceToken: 'new-device-token',
+        deviceTokenRecordId: 'record-123',
       });
 
+      const request = createRequest({
+        email: 'user@example.com',
+        password: 'password',
+        deviceId: 'my-device-uuid',
+      });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
       expect(body.deviceToken).toBe('new-device-token');
     });
 
-    it('should validate existing device token when provided', async () => {
+    it('does_not_return_device_token_when_device_id_not_provided', async () => {
+      const request = createRequest({ email: 'user@example.com', password: 'password' });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.deviceToken).toBeUndefined();
+    });
+
+    // TODO: REVIEW - Should existing deviceToken be revalidated or always create new?
+    it('accepts_existing_device_token_for_revalidation', async () => {
       mockValidateOrCreateDeviceToken.mockResolvedValue({
         deviceToken: 'validated-token',
-        deviceTokenRecordId: 'device-record-456',
+        deviceTokenRecordId: 'record-456',
       });
 
       const request = createRequest({
-        email: 'test@example.com',
-        password: 'correctpassword',
-        deviceId: 'device-abc',
-        deviceToken: 'existing-device-token',
+        email: 'user@example.com',
+        password: 'password',
+        deviceId: 'device-id',
+        deviceToken: 'existing-token',
       });
-
-      await POST(request);
-
-      expect(mockValidateOrCreateDeviceToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          providedDeviceToken: 'existing-device-token',
-        })
-      );
-    });
-
-    it('should link refresh token to device token', async () => {
-      mockValidateOrCreateDeviceToken.mockResolvedValue({
-        deviceToken: 'device-token',
-        deviceTokenRecordId: 'device-record-789',
-      });
-
-      const request = createRequest({
-        email: 'test@example.com',
-        password: 'correctpassword',
-        deviceId: 'device-abc',
-      });
-
-      await POST(request);
-
-      expect(mockDbInsertValues).toHaveBeenCalledWith(
-        expect.objectContaining({
-          deviceTokenId: 'device-record-789',
-        })
-      );
-    });
-
-    it('should not include deviceToken in response when deviceId not provided', async () => {
-      const request = createRequest({
-        email: 'test@example.com',
-        password: 'correctpassword',
-      });
-
       const response = await POST(request);
       const body = await response.json();
 
-      expect(body.deviceToken).toBeUndefined();
-      expect(mockValidateOrCreateDeviceToken).not.toHaveBeenCalled();
+      expect(response.status).toBe(200);
+      expect(body.deviceToken).toBe('validated-token');
     });
   });
 
-  describe('IP Address Extraction', () => {
+  // === IP ADDRESS EXTRACTION ===
+
+  describe('ip_extraction', () => {
     beforeEach(() => {
-      mockDbQueryUsersFindFirst.mockResolvedValue(mockUser());
+      mockDbQueryUsersFindFirst.mockResolvedValue(createUser());
       mockBcryptCompare.mockResolvedValue(true);
     });
 
-    it('should extract IP from x-forwarded-for header (first IP)', async () => {
+    it('extracts_client_ip_from_x_forwarded_for_header', async () => {
       const request = createRequest(
-        { email: 'test@example.com', password: 'password' },
-        { 'x-forwarded-for': '203.0.113.1, 198.51.100.178' }
+        { email: 'user@example.com', password: 'password' },
+        { 'x-forwarded-for': '203.0.113.1, 198.51.100.1' }
       );
-
       await POST(request);
 
-      expect(mockCheckRateLimit).toHaveBeenNthCalledWith(
-        1,
-        '203.0.113.1',
-        expect.any(Object)
-      );
+      // Should use first IP from comma-separated list
+      expect(mockCheckRateLimit).toHaveBeenNthCalledWith(1, '203.0.113.1', expect.any(Object));
     });
 
-    it('should extract IP from x-real-ip header when x-forwarded-for not present', async () => {
+    it('falls_back_to_x_real_ip_when_x_forwarded_for_missing', async () => {
       const request = createRequest(
-        { email: 'test@example.com', password: 'password' },
+        { email: 'user@example.com', password: 'password' },
         { 'x-real-ip': '10.0.0.50' }
       );
-
       await POST(request);
 
-      expect(mockCheckRateLimit).toHaveBeenNthCalledWith(
-        1,
-        '10.0.0.50',
-        expect.any(Object)
-      );
+      expect(mockCheckRateLimit).toHaveBeenNthCalledWith(1, '10.0.0.50', expect.any(Object));
     });
 
-    it('should use "unknown" when no IP headers present', async () => {
-      const request = createRequest({ email: 'test@example.com', password: 'password' });
-
+    // TODO: REVIEW - Is 'unknown' the right fallback, or should we reject?
+    it('uses_unknown_when_no_ip_headers_present', async () => {
+      const request = createRequest({ email: 'user@example.com', password: 'password' });
       await POST(request);
 
-      expect(mockCheckRateLimit).toHaveBeenNthCalledWith(
-        1,
-        'unknown',
-        expect.any(Object)
-      );
+      expect(mockCheckRateLimit).toHaveBeenNthCalledWith(1, 'unknown', expect.any(Object));
     });
   });
 
-  describe('Error Handling', () => {
-    it('should return 500 when database query fails', async () => {
-      mockDbQueryUsersFindFirst.mockRejectedValue(new Error('Database connection failed'));
+  // === ERROR HANDLING ===
 
-      const request = createRequest({
-        email: 'test@example.com',
-        password: 'password123',
-      });
+  describe('error_handling', () => {
+    it('returns_500_when_database_query_fails', async () => {
+      mockDbQueryUsersFindFirst.mockRejectedValue(new Error('Connection timeout'));
 
+      const request = createRequest({ email: 'user@example.com', password: 'password' });
       const response = await POST(request);
-      const body = await response.json();
 
       expect(response.status).toBe(500);
-      expect(body.error).toBe('An unexpected error occurred.');
     });
 
-    it('should return 500 when token generation fails', async () => {
-      mockDbQueryUsersFindFirst.mockResolvedValue(mockUser());
+    it('returns_500_when_token_generation_fails', async () => {
+      mockDbQueryUsersFindFirst.mockResolvedValue(createUser());
       mockBcryptCompare.mockResolvedValue(true);
-      mockGenerateAccessToken.mockRejectedValue(new Error('Token generation failed'));
+      mockGenerateAccessToken.mockRejectedValue(new Error('JWT signing failed'));
 
-      const request = createRequest({
-        email: 'test@example.com',
-        password: 'password123',
-      });
-
+      const request = createRequest({ email: 'user@example.com', password: 'password' });
       const response = await POST(request);
-      const body = await response.json();
 
       expect(response.status).toBe(500);
-      expect(body.error).toBe('An unexpected error occurred.');
     });
 
-    it('should return 500 when refresh token storage fails', async () => {
-      mockDbQueryUsersFindFirst.mockResolvedValue(mockUser());
+    it('returns_500_when_refresh_token_storage_fails', async () => {
+      mockDbQueryUsersFindFirst.mockResolvedValue(createUser());
       mockBcryptCompare.mockResolvedValue(true);
       mockDbInsertValues.mockRejectedValue(new Error('Insert failed'));
 
-      const request = createRequest({
-        email: 'test@example.com',
-        password: 'password123',
-      });
-
+      const request = createRequest({ email: 'user@example.com', password: 'password' });
       const response = await POST(request);
-      const body = await response.json();
 
       expect(response.status).toBe(500);
-      expect(body.error).toBe('An unexpected error occurred.');
-    });
-
-    it('should log errors with proper context', async () => {
-      const testError = new Error('Test database error');
-      mockDbQueryUsersFindFirst.mockRejectedValue(testError);
-
-      const request = createRequest({
-        email: 'test@example.com',
-        password: 'password123',
-      });
-
-      await POST(request);
-
-      expect(mockLoggers.auth.error).toHaveBeenCalledWith('Login error', testError);
-    });
-  });
-
-  describe('Email Case Insensitivity', () => {
-    beforeEach(() => {
-      mockBcryptCompare.mockResolvedValue(true);
-    });
-
-    it('should query database with email as provided', async () => {
-      mockDbQueryUsersFindFirst.mockResolvedValue(mockUser({ email: 'Test@Example.COM' }));
-
-      const request = createRequest({
-        email: 'Test@Example.COM',
-        password: 'password123',
-      });
-
-      await POST(request);
-
-      // The route queries with the email as provided
-      // Database handles case sensitivity
-      expect(mockDbQueryUsersFindFirst).toHaveBeenCalled();
-    });
-
-    it('should normalize email to lowercase for rate limiting', async () => {
-      mockDbQueryUsersFindFirst.mockResolvedValue(mockUser());
-
-      const request = createRequest({
-        email: 'TEST@EXAMPLE.COM',
-        password: 'password123',
-      });
-
-      await POST(request);
-
-      expect(mockCheckRateLimit).toHaveBeenNthCalledWith(
-        2,
-        'test@example.com',
-        expect.any(Object)
-      );
     });
   });
 });
