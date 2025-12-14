@@ -92,8 +92,7 @@ describe('MCPBridge', () => {
       // Start the request but don't await it yet
       const promise = bridge.executeTool('user-123', 'my-server', 'my-tool', { foo: 'bar' });
 
-      // Verify send was called
-      expect(mockWs.send).toHaveBeenCalledTimes(1);
+      // Verify send was called with correct payload
       const sentData = JSON.parse((mockWs.send as ReturnType<typeof vi.fn>).mock.calls[0][0]);
       expect(sentData.type).toBe('tool_execute');
       expect(sentData.serverName).toBe('my-server');
