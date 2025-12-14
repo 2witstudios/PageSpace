@@ -353,12 +353,7 @@ describe('useFileDrop', () => {
 
       const { result } = renderHook(() => useFileDrop(defaultOptions));
 
-      let progressDuringUpload = 0;
-
-      // Track state changes during upload
-      const originalFetch = mockFetchWithAuth;
       mockFetchWithAuth.mockImplementation(async () => {
-        progressDuringUpload = result.current.uploadProgress;
         return {
           ok: true,
           json: () => Promise.resolve({ page: { id: 'page-1' } }),

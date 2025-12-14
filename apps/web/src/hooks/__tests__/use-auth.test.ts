@@ -102,7 +102,6 @@ vi.mock('@/stores/auth-store', () => {
 
 // Import after mocks
 import { useAuth } from '../use-auth';
-import { authStoreHelpers } from '@/stores/auth-store';
 
 // Mock localStorage
 const mockLocalStorage = (() => {

@@ -45,7 +45,7 @@ vi.mock('@/stores/useEditingStore', () => ({
 }));
 
 vi.mock('swr', () => ({
-  default: (key: string | null, fetcher: Function, config?: object) => {
+  default: (key: string | null, fetcher: (...args: unknown[]) => unknown, config?: object) => {
     mockUseSWR(key, fetcher, config);
     return {
       data: key ? mockSWRState.data : undefined,
@@ -56,7 +56,7 @@ vi.mock('swr', () => ({
   },
 }));
 
-import { useAiUsage, usePageAiUsage, type AiUsageData } from '../useAiUsage';
+import { useAiUsage, usePageAiUsage } from '../useAiUsage';
 
 // Helper to create mock API response
 const createMockUsageResponse = (overrides = {}) => ({

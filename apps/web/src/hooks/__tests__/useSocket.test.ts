@@ -29,7 +29,7 @@ vi.mock('@/stores/socketStore', () => {
 
   return {
     useSocketStore: Object.assign(
-      (selector: Function) => {
+      (selector: ((state: typeof mockState) => unknown) | undefined) => {
         if (typeof selector === 'function') {
           return selector(mockState);
         }

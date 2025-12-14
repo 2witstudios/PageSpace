@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
+import { renderHook } from '@testing-library/react';
 
 // Mock fetchWithAuth
 const mockFetchWithAuth = vi.fn();
@@ -14,7 +14,8 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
 
 // Mock SWR to control its behavior
 vi.mock('swr', () => ({
-  default: vi.fn((key, fetcher) => {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  default: vi.fn((key, _fetcher) => {
     if (!key) {
       return { data: undefined, error: undefined };
     }
