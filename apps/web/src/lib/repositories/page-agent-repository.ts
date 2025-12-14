@@ -100,6 +100,68 @@ export const pageAgentRepository = {
 
     return newAgent;
   },
+
+  /**
+   * Get an agent by ID with full details
+   */
+  async getAgentById(agentId: string): Promise<AgentDetails | null> {
+    const [agent] = await db
+      .select()
+      .from(pages)
+      .where(eq(pages.id, agentId));
+
+    return agent || null;
+  },
+
+  /**
+   * Update an agent's configuration
+   */
+  async updateAgentConfig(
+    agentId: string,
+    data: AgentConfigUpdate
+  ): Promise<UpdatedAgent> {
+    const [updatedAgent] = await db
+      .update(pages)
+      .set(data)
+      .where(eq(pages.id, agentId))
+      .returning({
+        id: pages.id,
+        title: pages.title,
+        type: pages.type,
+        driveId: pages.driveId,
+      });
+
+    return updatedAgent;
+  },
 };
+
+export interface AgentDetails {
+  id: string;
+  title: string;
+  type: string;
+  driveId: string;
+  parentId: string | null;
+  systemPrompt: string | null;
+  enabledTools: string[] | null;
+  aiProvider: string | null;
+  aiModel: string | null;
+  isTrashed: boolean;
+}
+
+export interface AgentConfigUpdate {
+  systemPrompt?: string | null;
+  enabledTools?: string[] | null;
+  aiProvider?: string | null;
+  aiModel?: string | null;
+  agentDefinition?: string | null;
+  visibleToGlobalAssistant?: boolean;
+}
+
+export interface UpdatedAgent {
+  id: string;
+  title: string;
+  type: string;
+  driveId: string;
+}
 
 export type PageAgentRepository = typeof pageAgentRepository;
