@@ -27,6 +27,15 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      // Workspace package aliases for test resolution
+      '@pagespace/db': path.resolve(__dirname, '../../packages/db/src/index.ts'),
+      '@pagespace/lib/server': path.resolve(__dirname, '../../packages/lib/src/server.ts'),
+      '@pagespace/lib/broadcast-auth': path.resolve(__dirname, '../../packages/lib/src/auth/broadcast-auth.ts'),
+      '@pagespace/lib/logger-browser': path.resolve(__dirname, '../../packages/lib/src/logging/logger-browser.ts'),
+      '@pagespace/lib/utils/environment': path.resolve(__dirname, '../../packages/lib/src/utils/environment.ts'),
+      '@pagespace/lib/ai-context-calculator': path.resolve(__dirname, '../../packages/lib/src/monitoring/ai-context-calculator.ts'),
+      '@pagespace/lib/ai-monitoring': path.resolve(__dirname, '../../packages/lib/src/monitoring/ai-monitoring.ts'),
+      '@pagespace/lib': path.resolve(__dirname, '../../packages/lib/src/index.ts'),
     },
   },
 })
