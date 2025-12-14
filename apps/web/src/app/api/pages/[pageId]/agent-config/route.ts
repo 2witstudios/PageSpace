@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserEditPage, agentAwarenessCache } from '@pagespace/lib/server';
 import { db, pages, drives, eq } from '@pagespace/db';
-import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
+import { pageSpaceTools } from '@/lib/ai/core';
 import { loggers } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };

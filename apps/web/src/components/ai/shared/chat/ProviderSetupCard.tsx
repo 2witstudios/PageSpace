@@ -170,5 +170,3 @@ export const ProviderSetupCard: React.FC<ProviderSetupCardProps> = ({
     </div>
   );
 };
-
-export default ProviderSetupCard;

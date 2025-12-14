@@ -8,7 +8,7 @@ import {
   getErrorAnalytics,
   getPerformanceMetrics,
   getDateRange
-} from '@/lib/monitoring/monitoring-queries';
+} from '@/lib/monitoring';
 import { loggers } from '@pagespace/lib/server';
 
 /**

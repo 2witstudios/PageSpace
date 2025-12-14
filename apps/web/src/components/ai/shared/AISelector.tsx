@@ -12,8 +12,8 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
-import { usePageAgents, AgentSummary } from '@/hooks/page-agents/usePageAgents';
-import { AgentInfo } from '@/stores/page-agents/usePageAgentDashboardStore';
+import { usePageAgents, type AgentSummary } from '@/hooks/page-agents';
+import { type AgentInfo } from '@/stores/page-agents';
 import { cn } from '@/lib/utils';
 
 interface AISelectorProps {

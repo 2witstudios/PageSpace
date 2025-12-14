@@ -8,7 +8,7 @@ import Toolbar from '@/components/editors/Toolbar';
 import { motion, AnimatePresence } from 'motion/react';
 import { useDocumentStore } from '@/stores/useDocumentStore';
 import { useSocket } from '@/hooks/useSocket';
-import { PageEventPayload } from '@/lib/websocket/socket-utils';
+import { PageEventPayload } from '@/lib/websocket';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/use-auth';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';

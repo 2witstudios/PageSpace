@@ -265,7 +265,6 @@
     "jose": "^6.0.11",
     "mammoth": "^1.10.0",
     "pdf-parse-debugging-disabled": "^1.1.1",
-    "pg-boss": "^10.3.2",
     "react-email": "^4.2.12",
     "resend": "^6.1.2",
     "server-only": "^0.0.1",

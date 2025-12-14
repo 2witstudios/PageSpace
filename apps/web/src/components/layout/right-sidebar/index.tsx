@@ -4,9 +4,9 @@ import { useState, useEffect, useRef } from "react";
 import { History, MessageSquare, Settings } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import { usePageAgentSidebarState, useSidebarAgentStore } from "@/hooks/page-agents/usePageAgentSidebarState";
+import { usePageAgentSidebarState, useSidebarAgentStore } from "@/hooks/page-agents";
 import { useDashboardContext } from "@/hooks/useDashboardContext";
-import { usePageAgentDashboardStore, type SidebarTab } from "@/stores/page-agents/usePageAgentDashboardStore";
+import { usePageAgentDashboardStore, type SidebarTab } from "@/stores/page-agents";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 
 import SidebarChatTab from "./ai-assistant/SidebarChatTab";

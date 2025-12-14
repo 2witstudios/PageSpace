@@ -5,19 +5,15 @@ import { Button } from '@/components/ui/button';
 import ChatInput, { ChatInputRef } from '@/components/messages/ChatInput';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Loader2, Send, Plus, StopCircle } from 'lucide-react';
-import { CompactMessageRenderer } from '@/components/ai/shared/CompactMessageRenderer';
-import { ReadOnlyToggle } from '@/components/ai/shared/ReadOnlyToggle';
-import { AISelector } from '@/components/ai/shared/AISelector';
+import { CompactMessageRenderer, ReadOnlyToggle, AISelector, AiUsageMonitor } from '@/components/ai/shared';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth, patch, del } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
-import { usePageAgentSidebarState, SidebarAgentInfo } from '@/hooks/page-agents/usePageAgentSidebarState';
-import { usePageAgentSidebarChat } from '@/hooks/page-agents/usePageAgentSidebarChat';
-import { usePageAgentDashboardStore } from '@/stores/page-agents/usePageAgentDashboardStore';
+import { usePageAgentSidebarState, usePageAgentSidebarChat, type SidebarAgentInfo } from '@/hooks/page-agents';
+import { usePageAgentDashboardStore } from '@/stores/page-agents';
 import { toast } from 'sonner';
-import { AiUsageMonitor } from '@/components/ai/shared/AiUsageMonitor';
 import { LocationContext } from '@/lib/ai/shared';
 
 /**

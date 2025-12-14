@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { Task, TaskTrigger, TaskContent, TaskItem, TaskItemFile, TaskStatus } from '@/components/ai/task';
 import { TaskManagementToolRenderer } from './TaskManagementToolRenderer';
-import { PageAgentConversationRenderer } from '@/components/ai/page-agents/PageAgentConversationRenderer';
+import { PageAgentConversationRenderer } from '@/components/ai/page-agents';
 import { patch } from '@/lib/auth/auth-fetch';
 
 interface DriveInfo {

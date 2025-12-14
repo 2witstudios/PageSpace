@@ -5,8 +5,12 @@
  */
 
 export { AISelector } from './AISelector';
+export { default as AiInput } from './AiInput';
+export { AiUsageMonitor } from './AiUsageMonitor';
+export { CompactMessageRenderer } from './CompactMessageRenderer';
+export { ErrorBoundary } from './ErrorBoundary';
 export { MemoizedMarkdown } from './MemoizedMarkdown';
 export { MessageRenderer } from './MessageRenderer';
-export { ToolCallRenderer } from './ToolCallRenderer';
-export { AiUsageMonitor } from './AiUsageMonitor';
 export { ReadOnlyToggle } from './ReadOnlyToggle';
+export { StreamingMarkdown } from './StreamingMarkdown';
+export { ToolCallRenderer } from './ToolCallRenderer';

@@ -2,7 +2,7 @@ import useSWR from 'swr';
 import { useMemo } from 'react';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
-import { AgentInfo } from '@/stores/page-agents/usePageAgentDashboardStore';
+import { type AgentInfo } from '@/stores/page-agents';
 
 /**
  * Agent summary from the multi-drive API

@@ -30,7 +30,7 @@ import {
   getUserMiniMaxSettings,
   createMiniMaxSettings,
   deleteMiniMaxSettings,
-} from '@/lib/ai/core/ai-utils';
+} from '@/lib/ai/core';
 import { db, users, eq } from '@pagespace/db';
 import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 

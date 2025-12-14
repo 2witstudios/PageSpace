@@ -1,4 +1,4 @@
-import { getConnection, checkConnectionHealth } from '@/lib/websocket/ws-connections';
+import { getConnection, checkConnectionHealth } from '@/lib/websocket';
 import { nanoid } from 'nanoid';
 import { logger } from '@pagespace/lib';
 

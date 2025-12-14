@@ -1,8 +1,8 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db, taskLists, taskItems, pages, eq, and, desc, asc } from '@pagespace/db';
-import { ToolExecutionContext } from '../core/types';
-import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket/socket-utils';
+import { type ToolExecutionContext } from '../core';
+import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { canUserEditPage } from '@pagespace/lib/server';
 import { getDefaultContent, PageType } from '@pagespace/lib';
 

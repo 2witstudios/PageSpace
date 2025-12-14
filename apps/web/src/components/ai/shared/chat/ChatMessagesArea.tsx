@@ -7,7 +7,7 @@ import React, { useRef, useEffect, forwardRef, useImperativeHandle } from 'react
 import { UIMessage } from 'ai';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Loader2 } from 'lucide-react';
-import { MessageRenderer } from '@/components/ai/shared/MessageRenderer';
+import { MessageRenderer } from '@/components/ai/shared';
 import { StreamingIndicator } from './StreamingIndicator';
 
 interface ChatMessagesAreaProps {
@@ -148,5 +148,3 @@ export const ChatMessagesArea = forwardRef<ChatMessagesAreaRef, ChatMessagesArea
 );
 
 ChatMessagesArea.displayName = 'ChatMessagesArea';
-
-export default ChatMessagesArea;

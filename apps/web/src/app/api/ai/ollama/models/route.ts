@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateWebRequest, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
-import { getUserOllamaSettings } from '@/lib/ai/core/ai-utils';
+import { getUserOllamaSettings } from '@/lib/ai/core';
 
 /**
  * GET /api/ai/ollama/models

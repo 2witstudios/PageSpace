@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { db, taskItems, taskLists, pages, eq, and } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/server';
-import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket/socket-utils';
+import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 

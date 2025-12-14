@@ -10,16 +10,23 @@
  */
 
 import { verifyAdminAuth } from '@/lib/auth';
-import { buildCompleteRequest, type CompletePayloadResult, type LocationContext } from '@/lib/ai/core/complete-request-builder';
-import { getToolsSummary } from '@/lib/ai/core/tool-filtering';
-import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
-import { extractToolSchemas, calculateTotalToolTokens } from '@/lib/ai/core/schema-introspection';
+import {
+  buildCompleteRequest,
+  type CompletePayloadResult,
+  type LocationContext,
+  getToolsSummary,
+  pageSpaceTools,
+  extractToolSchemas,
+  calculateTotalToolTokens,
+  buildSystemPrompt,
+  buildAgentAwarenessPrompt,
+  getPageTreeContext,
+  getDriveListSummary,
+  buildInlineInstructions,
+  buildGlobalAssistantInstructions,
+} from '@/lib/ai/core';
 import { db, driveMembers, drives, pages, eq, and, asc } from '@pagespace/db';
 import { estimateSystemPromptTokens } from '@pagespace/lib/ai-context-calculator';
-import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
-import { buildAgentAwarenessPrompt } from '@/lib/ai/core/agent-awareness';
-import { getPageTreeContext, getDriveListSummary } from '@/lib/ai/core/page-tree-context';
-import { buildInlineInstructions, buildGlobalAssistantInstructions } from '@/lib/ai/core/inline-instructions';
 
 interface PromptSection {
   name: string;

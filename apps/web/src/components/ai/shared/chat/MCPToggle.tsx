@@ -56,5 +56,3 @@ export const MCPToggle: React.FC<MCPToggleProps> = ({
     </div>
   );
 };
-
-export default MCPToggle;

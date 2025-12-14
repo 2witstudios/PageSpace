@@ -171,5 +171,3 @@ export const MemoizedMarkdown = memo(
 );
 
 MemoizedMarkdown.displayName = 'MemoizedMarkdown';
-
-export default StreamingMarkdown;

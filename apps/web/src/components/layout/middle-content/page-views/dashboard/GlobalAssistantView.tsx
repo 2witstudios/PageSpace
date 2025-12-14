@@ -45,16 +45,14 @@ import { DefaultChatTransport } from 'ai';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Settings, Plus, History } from 'lucide-react';
-import { ReadOnlyToggle } from '@/components/ai/shared/ReadOnlyToggle';
+import { ReadOnlyToggle, AiUsageMonitor, AISelector } from '@/components/ai/shared';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
-import { usePageAgentDashboardStore } from '@/stores/page-agents/usePageAgentDashboardStore';
-import { AiUsageMonitor } from '@/components/ai/shared/AiUsageMonitor';
-import { AISelector } from '@/components/ai/shared/AISelector';
+import { usePageAgentDashboardStore } from '@/stores/page-agents';
 
 // Shared hooks and components
 import {

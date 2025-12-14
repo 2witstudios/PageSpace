@@ -4,8 +4,8 @@
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { usePageAgentDashboardStore } from '@/stores/page-agents/usePageAgentDashboardStore';
-import { useSidebarAgentStore } from '@/hooks/page-agents/usePageAgentSidebarState';
+import { usePageAgentDashboardStore } from '@/stores/page-agents';
+import { useSidebarAgentStore } from '@/hooks/page-agents';
 import type { AgentInfo } from '@/types/agent';
 
 // Mock dependencies

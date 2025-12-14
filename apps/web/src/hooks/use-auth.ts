@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuthStore, authStoreHelpers } from '@/stores/auth-store';
 import { useTokenRefresh } from './use-token-refresh';
 import { post, clearJWTCache } from '@/lib/auth/auth-fetch';
-import { getOrCreateDeviceId, getDeviceName } from '@/lib/analytics/device-fingerprint';
+import { getOrCreateDeviceId, getDeviceName } from '@/lib/analytics';
 import { z } from 'zod/v4';
 
 // Schema for validating desktop OAuth tokens from URL

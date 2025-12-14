@@ -4,7 +4,12 @@
     ".": {
       "entry": ["scripts/**/*.{ts,js}"],
       "project": ["scripts/**/*.{ts,js}"],
-      "ignoreDependencies": ["msw"],
+      "ignoreDependencies": [
+        "msw",
+        "@pagespace/db",
+        "@pagespace/lib",
+        "stripe"
+      ],
       "drizzle": false
     },
     "apps/web": {
@@ -14,8 +19,8 @@
         "src/app/**/route.ts",
         "next.config.ts",
         "postcss.config.mjs",
-        "vitest.config.ts",
-        "src/test/setup.ts"
+        "eslint.config.mjs",
+        "vitest.config.ts"
       ],
       "project": ["src/**/*.{ts,tsx}", "*.{ts,js,mjs}"],
       "next": {
@@ -31,8 +36,18 @@
       ],
       "ignoreDependencies": [
         "eslint-config-next",
+        "eslint",
+        "@next/eslint-plugin-next",
+        "eslint-plugin-react-hooks",
         "monaco-editor",
         "prettier",
+        "postcss",
+        "tailwindcss",
+        "tw-animate-css",
+        "@radix-ui/react-navigation-menu",
+        "@radix-ui/react-slider",
+        "react-day-picker",
+        "@types/dompurify",
         "@pagespace/db",
         "@pagespace/lib"
       ]
@@ -70,6 +85,7 @@
         "vitest.config.ts"
       ],
       "project": ["src/**/*.ts"],
+      "ignoreDependencies": ["server-only", "@types/bcryptjs"],
       "drizzle": false
     },
     "packages/lib": {
@@ -78,20 +94,20 @@
         "src/server.ts",
         "src/client.ts",
         "src/client-safe.ts",
-        "src/logger.ts",
-        "src/logger-config.ts",
-        "src/logger-database.ts",
-        "src/activity-tracker.ts",
-        "src/ai-monitoring.ts",
-        "src/ai-context-calculator.ts",
-        "src/auth-utils.ts",
-        "src/device-auth-utils.ts",
-        "src/device-fingerprint-utils.ts",
-        "src/api-utils.ts",
-        "src/broadcast-auth.ts",
-        "src/permissions-cached.ts",
-        "src/logger-browser.ts",
-        "src/verification-utils.ts",
+        "src/logging/logger.ts",
+        "src/logging/logger-config.ts",
+        "src/logging/logger-database.ts",
+        "src/logging/logger-browser.ts",
+        "src/monitoring/activity-tracker.ts",
+        "src/monitoring/ai-monitoring.ts",
+        "src/monitoring/ai-context-calculator.ts",
+        "src/auth/auth-utils.ts",
+        "src/auth/device-auth-utils.ts",
+        "src/auth/device-fingerprint-utils.ts",
+        "src/auth/broadcast-auth.ts",
+        "src/auth/verification-utils.ts",
+        "src/utils/api-utils.ts",
+        "src/permissions/permissions-cached.ts",
         "src/services/storage-limits.ts",
         "src/services/subscription-utils.ts",
         "src/services/upload-semaphore.ts",
@@ -102,10 +118,12 @@
         "src/utils/file-security.ts",
         "src/pages/circular-reference-guard.ts",
         "src/email-templates/VerificationEmail.tsx",
+        "src/test/auth-helpers.ts",
         "vitest.config.ts"
       ],
       "project": ["src/**/*.{ts,tsx}"],
-      "ignoreDependencies": ["server-only"]
+      "ignore": ["src/**/__tests__/**"],
+      "ignoreDependencies": ["server-only", "@react-email/preview-server", "@types/xlsx"]
     }
   },
   "ignore": [

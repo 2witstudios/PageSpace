@@ -5,7 +5,7 @@ import { TreePage, usePageTree } from '@/hooks/usePageTree';
 import { useDocument } from '@/hooks/useDocument';
 import { useSocket } from '@/hooks/useSocket';
 import { useAuth } from '@/hooks/use-auth';
-import { PageEventPayload } from '@/lib/websocket/socket-utils';
+import { PageEventPayload } from '@/lib/websocket';
 import { toast } from 'sonner';
 import {
   SheetData,

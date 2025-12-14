@@ -2,35 +2,36 @@ import { NextResponse } from 'next/server';
 import { streamText, convertToModelMessages, stepCountIs, UIMessage } from 'ai';
 import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
 import { createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
-import { broadcastUsageEvent } from '@/lib/websocket/socket-utils';
+import { broadcastUsageEvent } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import {
   createAIProvider,
   updateUserProviderSettings,
   createProviderErrorResponse,
   isProviderError,
-  type ProviderRequest
-} from '@/lib/ai/core/provider-factory';
-import { db, conversations, messages, drives, eq, and, desc, gt, lt } from '@pagespace/db';
-import { createId } from '@paralleldrive/cuid2';
-import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
-import { 
-  extractMessageContent, 
-  extractToolCalls, 
+  type ProviderRequest,
+  pageSpaceTools,
+  extractMessageContent,
+  extractToolCalls,
   extractToolResults,
   sanitizeMessagesForModel,
   convertGlobalAssistantMessageToUIMessage,
-  saveGlobalAssistantMessageToDatabase
-} from '@/lib/ai/core/message-utils';
-import { processMentionsInMessage, buildMentionSystemPrompt } from '@/lib/ai/core/mention-processor';
-import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
-import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
-import { buildAgentAwarenessPrompt } from '@/lib/ai/core/agent-awareness';
-import { filterToolsForReadOnly } from '@/lib/ai/core/tool-filtering';
-import { getPageTreeContext, getDriveListSummary } from '@/lib/ai/core/page-tree-context';
-import { getModelCapabilities } from '@/lib/ai/core/model-capabilities';
-import { convertMCPToolsToAISDKSchemas, parseMCPToolName } from '@/lib/ai/core/mcp-tool-converter';
-import { getMCPBridge } from '@/lib/mcp/mcp-bridge';
+  saveGlobalAssistantMessageToDatabase,
+  processMentionsInMessage,
+  buildMentionSystemPrompt,
+  buildTimestampSystemPrompt,
+  buildSystemPrompt,
+  buildAgentAwarenessPrompt,
+  filterToolsForReadOnly,
+  getPageTreeContext,
+  getDriveListSummary,
+  getModelCapabilities,
+  convertMCPToolsToAISDKSchemas,
+  parseMCPToolName,
+} from '@/lib/ai/core';
+import { db, conversations, messages, drives, eq, and, desc, gt, lt } from '@pagespace/db';
+import { createId } from '@paralleldrive/cuid2';
+import { getMCPBridge } from '@/lib/mcp';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 import type { MCPTool } from '@/types/mcp';

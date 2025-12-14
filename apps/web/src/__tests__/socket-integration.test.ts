@@ -47,7 +47,7 @@ vi.mock('@/lib/logging/mask', () => ({
 import { useSocketStore } from '../stores/socketStore';
 import { io } from 'socket.io-client';
 import { getCookieValue } from '@/lib/utils/get-cookie-value';
-import { broadcastPageEvent, type PageEventPayload } from '@/lib/websocket/socket-utils';
+import { broadcastPageEvent, type PageEventPayload } from '@/lib/websocket';
 
 describe('Socket.IO Integration', () => {
   const windowEventMock = createWindowEventMock();
