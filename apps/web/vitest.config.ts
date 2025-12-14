@@ -27,6 +27,11 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      // Map @pagespace/lib subpath exports to source files
+      '@pagespace/lib/ai-monitoring': path.resolve(__dirname, '../../packages/lib/src/monitoring/ai-monitoring.ts'),
+      '@pagespace/lib/services/storage-limits': path.resolve(__dirname, '../../packages/lib/src/services/storage-limits.ts'),
+      // Fallback for general @pagespace/lib imports
+      '@pagespace/lib': path.resolve(__dirname, '../../packages/lib/src'),
     },
   },
 })
