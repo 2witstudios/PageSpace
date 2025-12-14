@@ -121,6 +121,10 @@ fastlane/screenshots/**/*.png
 fastlane/test_output
 fastlane/test_output/
 
+## Test artifacts
+playwright-report/
+test-results/
+
 ## Code coverage
 *.gcda
 *.gcno

@@ -18,9 +18,6 @@ importers:
       '@faker-js/faker':
         specifier: ^9.3.0
         version: 9.9.0
-      '@playwright/test':
-        specifier: ^1.49.0
-        version: 1.55.1
       '@testing-library/jest-dom':
         specifier: ^6.6.3
         version: 6.8.0
@@ -11932,6 +11929,7 @@ snapshots:
   '@playwright/test@1.55.1':
     dependencies:
       playwright: 1.55.1
+    optional: true
 
   '@polka/url@1.0.0-next.29': {}
 
@@ -18603,13 +18601,15 @@ snapshots:
       exsolve: 1.0.7
       pathe: 2.0.3
 
-  playwright-core@1.55.1: {}
+  playwright-core@1.55.1:
+    optional: true
 
   playwright@1.55.1:
     dependencies:
       playwright-core: 1.55.1
     optionalDependencies:
       fsevents: 2.3.2
+    optional: true
 
   plist@3.1.0:
     dependencies:

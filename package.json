@@ -15,9 +15,6 @@
     "test:watch": "pnpm --filter @pagespace/lib test -- --watch",
     "test:ui": "pnpm --filter @pagespace/lib test -- --ui",
     "test:coverage": "pnpm --filter @pagespace/lib test -- --coverage",
-    "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui",
-    "test:security": "vitest run --dir apps/web/src/test/security",
     "dev:desktop": "pnpm --filter desktop dev",
     "build:desktop": "pnpm --filter desktop build",
     "package:desktop": "pnpm --filter desktop package",
@@ -27,7 +24,6 @@
   },
   "devDependencies": {
     "@faker-js/faker": "^9.3.0",
-    "@playwright/test": "^1.49.0",
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.1.0",
     "@testing-library/user-event": "^14.5.2",

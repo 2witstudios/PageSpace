@@ -7,7 +7,7 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
-    "test": "node --loader ts-node/esm tests/security-utils.test.ts"
+    "test": "vitest run"
   },
   "dependencies": {
     "@pagespace/db": "workspace:*",
