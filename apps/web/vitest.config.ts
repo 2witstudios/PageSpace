@@ -35,6 +35,8 @@ export default defineConfig({
       '@pagespace/lib/utils/environment': path.resolve(__dirname, '../../packages/lib/src/utils/environment.ts'),
       '@pagespace/lib/ai-context-calculator': path.resolve(__dirname, '../../packages/lib/src/monitoring/ai-context-calculator.ts'),
       '@pagespace/lib/ai-monitoring': path.resolve(__dirname, '../../packages/lib/src/monitoring/ai-monitoring.ts'),
+      '@pagespace/lib/auth-utils': path.resolve(__dirname, '../../packages/lib/src/auth/auth-utils.ts'),
+      '@pagespace/lib/services/subscription-utils': path.resolve(__dirname, '../../packages/lib/src/services/subscription-utils.ts'),
       '@pagespace/lib': path.resolve(__dirname, '../../packages/lib/src/index.ts'),
     },
   },
