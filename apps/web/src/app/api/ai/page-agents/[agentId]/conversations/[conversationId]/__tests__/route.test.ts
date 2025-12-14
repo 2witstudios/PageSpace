@@ -221,6 +221,9 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
     // Default: agent exists
     vi.mocked(conversationRepository.getAiAgent).mockResolvedValue(mockAgent());
 
+    // Default: conversation exists
+    vi.mocked(conversationRepository.conversationExists).mockResolvedValue(true);
+
     // Default: conversation metadata
     vi.mocked(conversationRepository.getConversationMetadata).mockResolvedValue({
       messageCount: 5,
@@ -261,6 +264,19 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
 
       expect(response.status).toBe(404);
       expect(body.error).toBe('AI agent not found');
+    });
+
+    it('should return 404 when conversation does not exist', async () => {
+      vi.mocked(conversationRepository.conversationExists).mockResolvedValue(false);
+
+      const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
+      const context = createContext(mockAgentId, mockConversationId);
+
+      const response = await DELETE(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(404);
+      expect(body.error).toBe('Conversation not found');
     });
   });
 

@@ -1,26 +1,30 @@
+/**
+ * Contract tests for GET/POST/PATCH/DELETE /api/ai/settings
+ *
+ * These tests verify the Request → Response contract and boundary obligations.
+ * Database operations are mocked at the repository seam.
+ */
+
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, POST, PATCH, DELETE } from '../route';
 import type { WebAuthResult, AuthError } from '@/lib/auth';
 
-// Mock dependencies
-vi.mock('@pagespace/db', () => {
-  const whereMock = vi.fn().mockResolvedValue([]);
-  const setMock = vi.fn().mockReturnValue({ where: whereMock });
-  const fromMock = vi.fn().mockReturnValue({ where: whereMock });
-  const selectMock = vi.fn().mockReturnValue({ from: fromMock });
-  const updateMock = vi.fn().mockReturnValue({ set: setMock });
+// Mock the repository seam (boundary)
+vi.mock('@/lib/repositories/ai-settings-repository', () => ({
+  aiSettingsRepository: {
+    getUserSettings: vi.fn(),
+    updateProviderSettings: vi.fn(),
+  },
+}));
 
-  return {
-    db: {
-      select: selectMock,
-      update: updateMock,
-    },
-    users: {},
-    eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
-  };
-});
+// Mock auth (boundary)
+vi.mock('@/lib/auth', () => ({
+  authenticateRequestWithOptions: vi.fn(),
+  isAuthError: vi.fn(),
+}));
 
+// Mock logging (boundary)
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     ai: {
@@ -32,19 +36,15 @@ vi.mock('@pagespace/lib/server', () => ({
   },
 }));
 
-vi.mock('@/lib/auth', () => ({
-  authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn(),
-}));
-
+// Mock AI provider settings functions (boundary)
 vi.mock('@/lib/ai/core', () => ({
+  getDefaultPageSpaceSettings: vi.fn(),
   getUserOpenRouterSettings: vi.fn(),
   createOpenRouterSettings: vi.fn(),
   deleteOpenRouterSettings: vi.fn(),
   getUserGoogleSettings: vi.fn(),
   createGoogleSettings: vi.fn(),
   deleteGoogleSettings: vi.fn(),
-  getDefaultPageSpaceSettings: vi.fn(),
   getUserOpenAISettings: vi.fn(),
   createOpenAISettings: vi.fn(),
   deleteOpenAISettings: vi.fn(),
@@ -68,21 +68,22 @@ vi.mock('@/lib/ai/core', () => ({
   deleteMiniMaxSettings: vi.fn(),
 }));
 
+// Mock subscription middleware (boundary)
 vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
   requiresProSubscription: vi.fn(),
 }));
 
-import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { loggers } from '@pagespace/lib/server';
 import {
+  getDefaultPageSpaceSettings,
   getUserOpenRouterSettings,
   createOpenRouterSettings,
   deleteOpenRouterSettings,
   getUserGoogleSettings,
   createGoogleSettings,
   deleteGoogleSettings,
-  getDefaultPageSpaceSettings,
   getUserOpenAISettings,
   createOpenAISettings,
   deleteOpenAISettings,
@@ -107,64 +108,66 @@ import {
 } from '@/lib/ai/core';
 import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 
-// Helper to create mock WebAuthResult
-const mockWebAuth = (userId: string, tokenVersion = 0): WebAuthResult => ({
+// Test fixtures
+const mockUserId = 'user_123';
+
+const mockWebAuth = (userId: string): WebAuthResult => ({
   userId,
-  tokenVersion,
+  tokenVersion: 0,
   tokenType: 'jwt',
   source: 'cookie',
   role: 'user',
 });
 
-// Helper to create mock AuthError
 const mockAuthError = (status = 401): AuthError => ({
   error: NextResponse.json({ error: 'Unauthorized' }, { status }),
 });
 
-// Helper to create mock user
-const mockUser = (overrides: Partial<{
+const mockUserSettings = (overrides: Partial<{
   id: string;
-  currentAiProvider: string;
-  currentAiModel: string;
-  subscriptionTier: string;
+  currentAiProvider: string | null;
+  currentAiModel: string | null;
+  subscriptionTier: string | null;
 }> = {}) => ({
-  id: overrides.id || 'user_123',
-  name: 'Test User',
-  email: 'test@example.com',
-  currentAiProvider: overrides.currentAiProvider || 'pagespace',
-  currentAiModel: overrides.currentAiModel || 'glm-4.5-air',
-  subscriptionTier: overrides.subscriptionTier || 'free',
+  id: overrides.id ?? mockUserId,
+  currentAiProvider: overrides.currentAiProvider ?? 'pagespace',
+  currentAiModel: overrides.currentAiModel ?? 'glm-4.5-air',
+  subscriptionTier: overrides.subscriptionTier ?? 'free',
 });
 
-describe('AI Settings API Routes', () => {
-  const mockUserId = 'user_123';
+const createGetRequest = () =>
+  new Request('https://example.com/api/ai/settings', { method: 'GET' });
 
-  // Helper to setup select mock for users
-  const setupUserSelectMock = (user: ReturnType<typeof mockUser> | undefined) => {
-    const whereMock = vi.fn().mockResolvedValue(user ? [user] : []);
-    const fromMock = vi.fn().mockReturnValue({ where: whereMock });
-    vi.mocked(db.select).mockReturnValue({ from: fromMock } as unknown as ReturnType<typeof db.select>);
-  };
+const createPostRequest = (body: Record<string, unknown>) =>
+  new Request('https://example.com/api/ai/settings', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
 
-  // Helper to setup update mock for users
-  const setupUpdateMock = () => {
-    const whereMock = vi.fn().mockResolvedValue([mockUser()]);
-    const setMock = vi.fn().mockReturnValue({ where: whereMock });
-    vi.mocked(db.update).mockReturnValue({ set: setMock } as unknown as ReturnType<typeof db.update>);
-    return { setMock, whereMock };
-  };
+const createPatchRequest = (body: Record<string, unknown>) =>
+  new Request('https://example.com/api/ai/settings', {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
 
+const createDeleteRequest = (body: Record<string, unknown>) =>
+  new Request('https://example.com/api/ai/settings', {
+    method: 'DELETE',
+    body: JSON.stringify(body),
+  });
+
+describe('GET /api/ai/settings', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    // Default auth success
+    // Default: authenticated user
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
 
-    // Default user setup
-    setupUserSelectMock(mockUser());
+    // Default: user exists
+    vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue(mockUserSettings());
 
-    // Default provider settings (none configured)
+    // Default: no provider settings configured
     vi.mocked(getDefaultPageSpaceSettings).mockResolvedValue(null);
     vi.mocked(getUserOpenRouterSettings).mockResolvedValue(null);
     vi.mocked(getUserGoogleSettings).mockResolvedValue(null);
@@ -177,23 +180,22 @@ describe('AI Settings API Routes', () => {
     vi.mocked(getUserMiniMaxSettings).mockResolvedValue(null);
   });
 
-  describe('GET /api/ai/settings', () => {
+  describe('authentication', () => {
     it('should return 401 when not authenticated', async () => {
       vi.mocked(isAuthError).mockReturnValue(true);
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'GET',
-      });
+      const request = createGetRequest();
 
       const response = await GET(request);
+
       expect(response.status).toBe(401);
     });
+  });
 
+  describe('successful retrieval', () => {
     it('should return current AI settings for authenticated user', async () => {
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'GET',
-      });
+      const request = createGetRequest();
 
       const response = await GET(request);
       const body = await response.json();
@@ -216,9 +218,7 @@ describe('AI Settings API Routes', () => {
         apiKey: 'openrouter-key',
       });
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'GET',
-      });
+      const request = createGetRequest();
 
       const response = await GET(request);
       const body = await response.json();
@@ -237,9 +237,7 @@ describe('AI Settings API Routes', () => {
         baseUrl: 'http://localhost:11434',
       });
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'GET',
-      });
+      const request = createGetRequest();
 
       const response = await GET(request);
       const body = await response.json();
@@ -248,14 +246,22 @@ describe('AI Settings API Routes', () => {
       expect(body.providers.ollama.hasBaseUrl).toBe(true);
     });
 
-    it('should handle database errors gracefully', async () => {
-      const whereMock = vi.fn().mockRejectedValue(new Error('Database connection lost'));
-      const fromMock = vi.fn().mockReturnValue({ where: whereMock });
-      vi.mocked(db.select).mockReturnValue({ from: fromMock } as unknown as ReturnType<typeof db.select>);
+    it('should call repository with userId', async () => {
+      const request = createGetRequest();
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'GET',
-      });
+      await GET(request);
+
+      expect(aiSettingsRepository.getUserSettings).toHaveBeenCalledWith(mockUserId);
+    });
+  });
+
+  describe('error handling', () => {
+    it('should return 500 when repository throws', async () => {
+      vi.mocked(aiSettingsRepository.getUserSettings).mockRejectedValue(
+        new Error('Database error')
+      );
+
+      const request = createGetRequest();
 
       const response = await GET(request);
       const body = await response.json();
@@ -265,26 +271,33 @@ describe('AI Settings API Routes', () => {
       expect(loggers.ai.error).toHaveBeenCalled();
     });
   });
+});
 
-  describe('POST /api/ai/settings', () => {
+describe('POST /api/ai/settings', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    // Default: authenticated user
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(isAuthError).mockReturnValue(false);
+  });
+
+  describe('authentication', () => {
     it('should return 401 when not authenticated', async () => {
       vi.mocked(isAuthError).mockReturnValue(true);
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'POST',
-        body: JSON.stringify({ provider: 'openrouter', apiKey: 'test-key' }),
-      });
+      const request = createPostRequest({ provider: 'openrouter', apiKey: 'test-key' });
 
       const response = await POST(request);
+
       expect(response.status).toBe(401);
     });
+  });
 
+  describe('validation', () => {
     it('should reject invalid provider', async () => {
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'POST',
-        body: JSON.stringify({ provider: 'invalid-provider', apiKey: 'test-key' }),
-      });
+      const request = createPostRequest({ provider: 'invalid-provider', apiKey: 'test-key' });
 
       const response = await POST(request);
       const body = await response.json();
@@ -294,10 +307,7 @@ describe('AI Settings API Routes', () => {
     });
 
     it('should reject missing API key for API-key providers', async () => {
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'POST',
-        body: JSON.stringify({ provider: 'openrouter', apiKey: '' }),
-      });
+      const request = createPostRequest({ provider: 'openrouter', apiKey: '' });
 
       const response = await POST(request);
       const body = await response.json();
@@ -307,10 +317,7 @@ describe('AI Settings API Routes', () => {
     });
 
     it('should reject missing base URL for Ollama', async () => {
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'POST',
-        body: JSON.stringify({ provider: 'ollama', baseUrl: '' }),
-      });
+      const request = createPostRequest({ provider: 'ollama', baseUrl: '' });
 
       const response = await POST(request);
       const body = await response.json();
@@ -320,10 +327,7 @@ describe('AI Settings API Routes', () => {
     });
 
     it('should reject missing base URL for LM Studio', async () => {
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'POST',
-        body: JSON.stringify({ provider: 'lmstudio', baseUrl: '' }),
-      });
+      const request = createPostRequest({ provider: 'lmstudio', baseUrl: '' });
 
       const response = await POST(request);
       const body = await response.json();
@@ -331,14 +335,13 @@ describe('AI Settings API Routes', () => {
       expect(response.status).toBe(400);
       expect(body.error).toBe('Base URL is required for LM Studio');
     });
+  });
 
+  describe('successful creation', () => {
     it('should save OpenRouter API key successfully', async () => {
       vi.mocked(createOpenRouterSettings).mockResolvedValue(undefined);
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'POST',
-        body: JSON.stringify({ provider: 'openrouter', apiKey: '  test-api-key  ' }),
-      });
+      const request = createPostRequest({ provider: 'openrouter', apiKey: '  test-api-key  ' });
 
       const response = await POST(request);
       const body = await response.json();
@@ -353,10 +356,7 @@ describe('AI Settings API Routes', () => {
     it('should save Google API key successfully', async () => {
       vi.mocked(createGoogleSettings).mockResolvedValue(undefined);
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'POST',
-        body: JSON.stringify({ provider: 'google', apiKey: 'google-key' }),
-      });
+      const request = createPostRequest({ provider: 'google', apiKey: 'google-key' });
 
       const response = await POST(request);
       const body = await response.json();
@@ -369,12 +369,10 @@ describe('AI Settings API Routes', () => {
     it('should save OpenAI API key successfully', async () => {
       vi.mocked(createOpenAISettings).mockResolvedValue(undefined);
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'POST',
-        body: JSON.stringify({ provider: 'openai', apiKey: 'openai-key' }),
-      });
+      const request = createPostRequest({ provider: 'openai', apiKey: 'openai-key' });
 
       const response = await POST(request);
+
       expect(response.status).toBe(201);
       expect(createOpenAISettings).toHaveBeenCalledWith(mockUserId, 'openai-key');
     });
@@ -382,12 +380,10 @@ describe('AI Settings API Routes', () => {
     it('should save Anthropic API key successfully', async () => {
       vi.mocked(createAnthropicSettings).mockResolvedValue(undefined);
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'POST',
-        body: JSON.stringify({ provider: 'anthropic', apiKey: 'anthropic-key' }),
-      });
+      const request = createPostRequest({ provider: 'anthropic', apiKey: 'anthropic-key' });
 
       const response = await POST(request);
+
       expect(response.status).toBe(201);
       expect(createAnthropicSettings).toHaveBeenCalledWith(mockUserId, 'anthropic-key');
     });
@@ -395,12 +391,10 @@ describe('AI Settings API Routes', () => {
     it('should save xAI API key successfully', async () => {
       vi.mocked(createXAISettings).mockResolvedValue(undefined);
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'POST',
-        body: JSON.stringify({ provider: 'xai', apiKey: 'xai-key' }),
-      });
+      const request = createPostRequest({ provider: 'xai', apiKey: 'xai-key' });
 
       const response = await POST(request);
+
       expect(response.status).toBe(201);
       expect(createXAISettings).toHaveBeenCalledWith(mockUserId, 'xai-key');
     });
@@ -408,10 +402,7 @@ describe('AI Settings API Routes', () => {
     it('should save Ollama base URL successfully', async () => {
       vi.mocked(createOllamaSettings).mockResolvedValue(undefined);
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'POST',
-        body: JSON.stringify({ provider: 'ollama', baseUrl: 'http://localhost:11434' }),
-      });
+      const request = createPostRequest({ provider: 'ollama', baseUrl: 'http://localhost:11434' });
 
       const response = await POST(request);
       const body = await response.json();
@@ -424,12 +415,10 @@ describe('AI Settings API Routes', () => {
     it('should save LM Studio base URL successfully', async () => {
       vi.mocked(createLMStudioSettings).mockResolvedValue(undefined);
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'POST',
-        body: JSON.stringify({ provider: 'lmstudio', baseUrl: 'http://localhost:1234/v1' }),
-      });
+      const request = createPostRequest({ provider: 'lmstudio', baseUrl: 'http://localhost:1234/v1' });
 
       const response = await POST(request);
+
       expect(response.status).toBe(201);
       expect(createLMStudioSettings).toHaveBeenCalledWith(mockUserId, 'http://localhost:1234/v1');
     });
@@ -437,12 +426,10 @@ describe('AI Settings API Routes', () => {
     it('should save GLM API key successfully', async () => {
       vi.mocked(createGLMSettings).mockResolvedValue(undefined);
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'POST',
-        body: JSON.stringify({ provider: 'glm', apiKey: 'glm-key' }),
-      });
+      const request = createPostRequest({ provider: 'glm', apiKey: 'glm-key' });
 
       const response = await POST(request);
+
       expect(response.status).toBe(201);
       expect(createGLMSettings).toHaveBeenCalledWith(mockUserId, 'glm-key');
     });
@@ -450,23 +437,20 @@ describe('AI Settings API Routes', () => {
     it('should save MiniMax API key successfully', async () => {
       vi.mocked(createMiniMaxSettings).mockResolvedValue(undefined);
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'POST',
-        body: JSON.stringify({ provider: 'minimax', apiKey: 'minimax-key' }),
-      });
+      const request = createPostRequest({ provider: 'minimax', apiKey: 'minimax-key' });
 
       const response = await POST(request);
+
       expect(response.status).toBe(201);
       expect(createMiniMaxSettings).toHaveBeenCalledWith(mockUserId, 'minimax-key');
     });
+  });
 
-    it('should handle save errors gracefully', async () => {
+  describe('error handling', () => {
+    it('should return 500 when save throws', async () => {
       vi.mocked(createOpenRouterSettings).mockRejectedValue(new Error('Save failed'));
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'POST',
-        body: JSON.stringify({ provider: 'openrouter', apiKey: 'test-key' }),
-      });
+      const request = createPostRequest({ provider: 'openrouter', apiKey: 'test-key' });
 
       const response = await POST(request);
       const body = await response.json();
@@ -476,30 +460,42 @@ describe('AI Settings API Routes', () => {
       expect(loggers.ai.error).toHaveBeenCalled();
     });
   });
+});
 
-  describe('PATCH /api/ai/settings', () => {
-    beforeEach(() => {
-      setupUpdateMock();
-    });
+describe('PATCH /api/ai/settings', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
 
+    // Default: authenticated user
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(isAuthError).mockReturnValue(false);
+
+    // Default: user exists
+    vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue(mockUserSettings());
+
+    // Default: no subscription required
+    vi.mocked(requiresProSubscription).mockReturnValue(false);
+
+    // Default: update succeeds
+    vi.mocked(aiSettingsRepository.updateProviderSettings).mockResolvedValue(undefined);
+  });
+
+  describe('authentication', () => {
     it('should return 401 when not authenticated', async () => {
       vi.mocked(isAuthError).mockReturnValue(true);
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'PATCH',
-        body: JSON.stringify({ provider: 'pagespace', model: 'glm-4.5-air' }),
-      });
+      const request = createPatchRequest({ provider: 'pagespace', model: 'glm-4.5-air' });
 
       const response = await PATCH(request);
+
       expect(response.status).toBe(401);
     });
+  });
 
+  describe('validation', () => {
     it('should reject invalid provider', async () => {
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'PATCH',
-        body: JSON.stringify({ provider: 'invalid', model: 'test-model' }),
-      });
+      const request = createPatchRequest({ provider: 'invalid', model: 'test-model' });
 
       const response = await PATCH(request);
       const body = await response.json();
@@ -509,10 +505,7 @@ describe('AI Settings API Routes', () => {
     });
 
     it('should reject missing model', async () => {
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'PATCH',
-        body: JSON.stringify({ provider: 'pagespace' }),
-      });
+      const request = createPatchRequest({ provider: 'pagespace' });
 
       const response = await PATCH(request);
       const body = await response.json();
@@ -520,14 +513,13 @@ describe('AI Settings API Routes', () => {
       expect(response.status).toBe(400);
       expect(body.error).toBe('Model is required');
     });
+  });
 
+  describe('user not found', () => {
     it('should return 404 when user not found', async () => {
-      setupUserSelectMock(undefined);
+      vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue(null);
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'PATCH',
-        body: JSON.stringify({ provider: 'pagespace', model: 'glm-4.5-air' }),
-      });
+      const request = createPatchRequest({ provider: 'pagespace', model: 'glm-4.5-air' });
 
       const response = await PATCH(request);
       const body = await response.json();
@@ -535,15 +527,16 @@ describe('AI Settings API Routes', () => {
       expect(response.status).toBe(404);
       expect(body.error).toBe('User not found');
     });
+  });
 
+  describe('subscription checks', () => {
     it('should reject pro model for free tier user', async () => {
-      setupUserSelectMock(mockUser({ subscriptionTier: 'free' }));
+      vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue(
+        mockUserSettings({ subscriptionTier: 'free' })
+      );
       vi.mocked(requiresProSubscription).mockReturnValue(true);
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'PATCH',
-        body: JSON.stringify({ provider: 'pagespace', model: 'pro-model' }),
-      });
+      const request = createPatchRequest({ provider: 'pagespace', model: 'pro-model' });
 
       const response = await PATCH(request);
       const body = await response.json();
@@ -552,15 +545,15 @@ describe('AI Settings API Routes', () => {
       expect(body.error).toBe('Subscription required');
       expect(body.upgradeUrl).toBe('/settings/billing');
     });
+  });
 
+  describe('successful update', () => {
     it('should update model selection successfully', async () => {
-      setupUserSelectMock(mockUser({ subscriptionTier: 'pro' }));
-      vi.mocked(requiresProSubscription).mockReturnValue(false);
+      vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue(
+        mockUserSettings({ subscriptionTier: 'pro' })
+      );
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'PATCH',
-        body: JSON.stringify({ provider: 'openrouter', model: 'anthropic/claude-3-opus' }),
-      });
+      const request = createPatchRequest({ provider: 'openrouter', model: 'anthropic/claude-3-opus' });
 
       const response = await PATCH(request);
       const body = await response.json();
@@ -572,67 +565,76 @@ describe('AI Settings API Routes', () => {
     });
 
     it('should accept pagespace provider', async () => {
-      vi.mocked(requiresProSubscription).mockReturnValue(false);
-
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'PATCH',
-        body: JSON.stringify({ provider: 'pagespace', model: 'glm-4.5-air' }),
-      });
+      const request = createPatchRequest({ provider: 'pagespace', model: 'glm-4.5-air' });
 
       const response = await PATCH(request);
+
       expect(response.status).toBe(200);
     });
 
     it('should accept openrouter_free provider', async () => {
-      vi.mocked(requiresProSubscription).mockReturnValue(false);
-
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'PATCH',
-        body: JSON.stringify({ provider: 'openrouter_free', model: 'meta-llama/llama-3.2-3b' }),
-      });
+      const request = createPatchRequest({ provider: 'openrouter_free', model: 'meta-llama/llama-3.2-3b' });
 
       const response = await PATCH(request);
+
       expect(response.status).toBe(200);
     });
 
-    it('should handle update errors gracefully', async () => {
-      vi.mocked(requiresProSubscription).mockReturnValue(false);
-      const whereMock = vi.fn().mockRejectedValue(new Error('Update failed'));
-      const setMock = vi.fn().mockReturnValue({ where: whereMock });
-      vi.mocked(db.update).mockReturnValue({ set: setMock } as unknown as ReturnType<typeof db.update>);
+    it('should call repository with correct params', async () => {
+      const request = createPatchRequest({ provider: 'openrouter', model: 'test-model' });
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'PATCH',
-        body: JSON.stringify({ provider: 'pagespace', model: 'glm-4.5-air' }),
-      });
+      await PATCH(request);
+
+      expect(aiSettingsRepository.updateProviderSettings).toHaveBeenCalledWith(
+        mockUserId,
+        { provider: 'openrouter', model: 'test-model' }
+      );
+    });
+  });
+
+  describe('error handling', () => {
+    it('should return 500 when update throws', async () => {
+      vi.mocked(aiSettingsRepository.updateProviderSettings).mockRejectedValue(
+        new Error('Update failed')
+      );
+
+      const request = createPatchRequest({ provider: 'pagespace', model: 'glm-4.5-air' });
 
       const response = await PATCH(request);
       const body = await response.json();
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to update model selection');
+      expect(loggers.ai.error).toHaveBeenCalled();
     });
   });
+});
 
-  describe('DELETE /api/ai/settings', () => {
+describe('DELETE /api/ai/settings', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    // Default: authenticated user
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(isAuthError).mockReturnValue(false);
+  });
+
+  describe('authentication', () => {
     it('should return 401 when not authenticated', async () => {
       vi.mocked(isAuthError).mockReturnValue(true);
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'DELETE',
-        body: JSON.stringify({ provider: 'openrouter' }),
-      });
+      const request = createDeleteRequest({ provider: 'openrouter' });
 
       const response = await DELETE(request);
+
       expect(response.status).toBe(401);
     });
+  });
 
+  describe('validation', () => {
     it('should reject invalid provider', async () => {
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'DELETE',
-        body: JSON.stringify({ provider: 'invalid' }),
-      });
+      const request = createDeleteRequest({ provider: 'invalid' });
 
       const response = await DELETE(request);
       const body = await response.json();
@@ -640,16 +642,16 @@ describe('AI Settings API Routes', () => {
       expect(response.status).toBe(400);
       expect(body.error).toContain('Invalid provider');
     });
+  });
 
+  describe('successful deletion', () => {
     it('should delete OpenRouter settings successfully', async () => {
       vi.mocked(deleteOpenRouterSettings).mockResolvedValue(undefined);
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'DELETE',
-        body: JSON.stringify({ provider: 'openrouter' }),
-      });
+      const request = createDeleteRequest({ provider: 'openrouter' });
 
       const response = await DELETE(request);
+
       expect(response.status).toBe(204);
       expect(deleteOpenRouterSettings).toHaveBeenCalledWith(mockUserId);
     });
@@ -657,12 +659,10 @@ describe('AI Settings API Routes', () => {
     it('should delete Google settings successfully', async () => {
       vi.mocked(deleteGoogleSettings).mockResolvedValue(undefined);
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'DELETE',
-        body: JSON.stringify({ provider: 'google' }),
-      });
+      const request = createDeleteRequest({ provider: 'google' });
 
       const response = await DELETE(request);
+
       expect(response.status).toBe(204);
       expect(deleteGoogleSettings).toHaveBeenCalledWith(mockUserId);
     });
@@ -670,12 +670,10 @@ describe('AI Settings API Routes', () => {
     it('should delete OpenAI settings successfully', async () => {
       vi.mocked(deleteOpenAISettings).mockResolvedValue(undefined);
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'DELETE',
-        body: JSON.stringify({ provider: 'openai' }),
-      });
+      const request = createDeleteRequest({ provider: 'openai' });
 
       const response = await DELETE(request);
+
       expect(response.status).toBe(204);
       expect(deleteOpenAISettings).toHaveBeenCalledWith(mockUserId);
     });
@@ -683,12 +681,10 @@ describe('AI Settings API Routes', () => {
     it('should delete Anthropic settings successfully', async () => {
       vi.mocked(deleteAnthropicSettings).mockResolvedValue(undefined);
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'DELETE',
-        body: JSON.stringify({ provider: 'anthropic' }),
-      });
+      const request = createDeleteRequest({ provider: 'anthropic' });
 
       const response = await DELETE(request);
+
       expect(response.status).toBe(204);
       expect(deleteAnthropicSettings).toHaveBeenCalledWith(mockUserId);
     });
@@ -696,12 +692,10 @@ describe('AI Settings API Routes', () => {
     it('should delete xAI settings successfully', async () => {
       vi.mocked(deleteXAISettings).mockResolvedValue(undefined);
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'DELETE',
-        body: JSON.stringify({ provider: 'xai' }),
-      });
+      const request = createDeleteRequest({ provider: 'xai' });
 
       const response = await DELETE(request);
+
       expect(response.status).toBe(204);
       expect(deleteXAISettings).toHaveBeenCalledWith(mockUserId);
     });
@@ -709,12 +703,10 @@ describe('AI Settings API Routes', () => {
     it('should delete Ollama settings successfully', async () => {
       vi.mocked(deleteOllamaSettings).mockResolvedValue(undefined);
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'DELETE',
-        body: JSON.stringify({ provider: 'ollama' }),
-      });
+      const request = createDeleteRequest({ provider: 'ollama' });
 
       const response = await DELETE(request);
+
       expect(response.status).toBe(204);
       expect(deleteOllamaSettings).toHaveBeenCalledWith(mockUserId);
     });
@@ -722,12 +714,10 @@ describe('AI Settings API Routes', () => {
     it('should delete LM Studio settings successfully', async () => {
       vi.mocked(deleteLMStudioSettings).mockResolvedValue(undefined);
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'DELETE',
-        body: JSON.stringify({ provider: 'lmstudio' }),
-      });
+      const request = createDeleteRequest({ provider: 'lmstudio' });
 
       const response = await DELETE(request);
+
       expect(response.status).toBe(204);
       expect(deleteLMStudioSettings).toHaveBeenCalledWith(mockUserId);
     });
@@ -735,12 +725,10 @@ describe('AI Settings API Routes', () => {
     it('should delete GLM settings successfully', async () => {
       vi.mocked(deleteGLMSettings).mockResolvedValue(undefined);
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'DELETE',
-        body: JSON.stringify({ provider: 'glm' }),
-      });
+      const request = createDeleteRequest({ provider: 'glm' });
 
       const response = await DELETE(request);
+
       expect(response.status).toBe(204);
       expect(deleteGLMSettings).toHaveBeenCalledWith(mockUserId);
     });
@@ -748,23 +736,20 @@ describe('AI Settings API Routes', () => {
     it('should delete MiniMax settings successfully', async () => {
       vi.mocked(deleteMiniMaxSettings).mockResolvedValue(undefined);
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'DELETE',
-        body: JSON.stringify({ provider: 'minimax' }),
-      });
+      const request = createDeleteRequest({ provider: 'minimax' });
 
       const response = await DELETE(request);
+
       expect(response.status).toBe(204);
       expect(deleteMiniMaxSettings).toHaveBeenCalledWith(mockUserId);
     });
+  });
 
-    it('should handle delete errors gracefully', async () => {
+  describe('error handling', () => {
+    it('should return 500 when delete throws', async () => {
       vi.mocked(deleteOpenRouterSettings).mockRejectedValue(new Error('Delete failed'));
 
-      const request = new Request('https://example.com/api/ai/settings', {
-        method: 'DELETE',
-        body: JSON.stringify({ provider: 'openrouter' }),
-      });
+      const request = createDeleteRequest({ provider: 'openrouter' });
 
       const response = await DELETE(request);
       const body = await response.json();

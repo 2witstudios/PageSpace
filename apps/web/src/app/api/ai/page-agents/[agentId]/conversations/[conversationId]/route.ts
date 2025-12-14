@@ -105,6 +105,15 @@ export async function DELETE(
       );
     }
 
+    // Verify conversation exists before attempting deletion
+    const exists = await conversationRepository.conversationExists(agentId, conversationId);
+    if (!exists) {
+      return NextResponse.json(
+        { error: 'Conversation not found' },
+        { status: 404 }
+      );
+    }
+
     // Get conversation metadata before deletion for audit log
     const metadata = await conversationRepository.getConversationMetadata(agentId, conversationId);
 

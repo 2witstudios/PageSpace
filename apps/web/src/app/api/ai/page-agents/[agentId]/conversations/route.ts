@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { createId } from '@paralleldrive/cuid2';
 import { authenticateHybridRequest, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
@@ -164,7 +165,6 @@ export async function POST(
     const customTitle = body.title;
 
     // Generate new conversation ID using createId
-    const { createId } = await import('@paralleldrive/cuid2');
     const conversationId = createId();
 
     return NextResponse.json({

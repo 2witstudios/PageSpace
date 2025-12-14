@@ -11,8 +11,10 @@ export interface ChatMessage {
   id: string;
   pageId: string;
   conversationId: string;
+  userId: string | null;
   role: string;
   content: string;
+  messageType: 'standard' | 'todo_list';
   isActive: boolean;
   createdAt: Date;
   editedAt: Date | null;
