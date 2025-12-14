@@ -180,6 +180,8 @@ describe('page-write-tools', () => {
 
       expect(result.success).toBe(true);
       expect(result.linesReplaced).toBe(1);
+      expect(mockCanUserEditPage).toHaveBeenCalledWith('user-123', 'page-1');
+      expect(mockDb.update).toHaveBeenCalled();
     });
   });
 

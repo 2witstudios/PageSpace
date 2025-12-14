@@ -259,9 +259,29 @@ describe('MCPBridge', () => {
   });
 
   describe('cancelUserRequests', () => {
-    it('logs message about pending requests', () => {
-      // This should not throw - just logs
-      bridge.cancelUserRequests('user-123');
+    it('does not throw when user has no pending requests', () => {
+      // This should not throw
+      expect(() => bridge.cancelUserRequests('user-123')).not.toThrow();
+    });
+
+    it('logs cancellation message', () => {
+      const mockWs = createMockWebSocket(1);
+      mockGetConnection.mockReturnValue(mockWs as WebSocket);
+      mockCheckConnectionHealth.mockReturnValue({
+        isHealthy: true,
+        readyState: 1,
+        connectedDuration: 1000,
+      });
+
+      // Start a request
+      bridge.executeTool('user-123', 'server', 'tool').catch(() => {});
+      expect(bridge.getPendingRequestCount()).toBe(1);
+
+      // Cancel should not throw
+      expect(() => bridge.cancelUserRequests('user-123')).not.toThrow();
+
+      // Clean up: advance timers to let promise timeout
+      vi.advanceTimersByTime(30000);
     });
   });
 
@@ -280,10 +300,15 @@ describe('MCPBridge', () => {
       });
 
       // Start multiple requests without resolving them
-      bridge.executeTool('user-1', 'server', 'tool1').catch(() => {});
-      bridge.executeTool('user-2', 'server', 'tool2').catch(() => {});
+      const p1 = bridge.executeTool('user-1', 'server', 'tool1');
+      const p2 = bridge.executeTool('user-2', 'server', 'tool2');
 
       expect(bridge.getPendingRequestCount()).toBe(2);
+
+      // Clean up: advance timers to let promises timeout
+      vi.advanceTimersByTime(30000);
+      await expect(p1).rejects.toThrow('timeout');
+      await expect(p2).rejects.toThrow('timeout');
     });
   });
 });

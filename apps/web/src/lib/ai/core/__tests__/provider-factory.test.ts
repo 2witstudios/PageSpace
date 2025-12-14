@@ -217,15 +217,23 @@ describe('provider-factory', () => {
         }
       });
 
-      it('creates settings with new API key', async () => {
-        mockGetUserOpenRouterSettings.mockResolvedValue(null);
+      it('creates settings with new API key and returns valid provider', async () => {
+        // First call returns null, subsequent calls return the new settings
+        mockGetUserOpenRouterSettings
+          .mockResolvedValueOnce(null)
+          .mockResolvedValue({ apiKey: 'new-openrouter-key', isConfigured: true });
 
-        await createAIProvider('user-123', {
+        const result = await createAIProvider('user-123', {
           selectedProvider: 'openrouter',
+          selectedModel: 'anthropic/claude-3-sonnet',
           openRouterApiKey: 'new-openrouter-key',
         });
 
         expect(createOpenRouterSettings).toHaveBeenCalledWith('user-123', 'new-openrouter-key');
+        expect(isProviderError(result)).toBe(false);
+        if (!isProviderError(result)) {
+          expect(result.provider).toBe('openrouter');
+        }
       });
 
       it('returns error when no OpenRouter key configured', async () => {

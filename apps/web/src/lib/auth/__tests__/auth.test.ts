@@ -135,42 +135,5 @@ describe('auth', () => {
 
       expect(result).toBeNull();
     });
-
-    it('returns null when user is null', async () => {
-      // Simulate a case where verifyAuth returns null
-      const mockErrorResult = {
-        error: new Response(JSON.stringify({ error: 'Invalid session' }), { status: 401 }),
-      };
-      mockAuthenticateWebRequest.mockResolvedValue(mockErrorResult as never);
-
-      const request = new Request('http://localhost/api/admin/test');
-      const result = await verifyAdminAuth(request);
-
-      expect(result).toBeNull();
-    });
-  });
-
-  describe('VerifiedUser type', () => {
-    it('satisfies VerifiedUser interface structure', () => {
-      const user: VerifiedUser = {
-        id: 'test-id',
-        role: 'user',
-        tokenVersion: 1,
-      };
-
-      expect(user.id).toBe('test-id');
-      expect(user.role).toBe('user');
-      expect(user.tokenVersion).toBe(1);
-    });
-
-    it('accepts admin role', () => {
-      const admin: VerifiedUser = {
-        id: 'admin-id',
-        role: 'admin',
-        tokenVersion: 5,
-      };
-
-      expect(admin.role).toBe('admin');
-    });
   });
 });

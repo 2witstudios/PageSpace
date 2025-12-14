@@ -143,7 +143,7 @@ describe('drive-tools', () => {
           { driveId: 'non-existent', name: 'New Name' },
           context
         )
-      ).rejects.toThrow();
+      ).rejects.toThrow('Drive not found or you do not have permission to rename it');
     });
   });
 });

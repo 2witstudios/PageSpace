@@ -70,6 +70,7 @@ describe('search-tools', () => {
         )
       ).rejects.toThrow("You don't have access to this drive");
     });
+
   });
 
   describe('glob_search', () => {
@@ -103,6 +104,7 @@ describe('search-tools', () => {
         )
       ).rejects.toThrow("You don't have access to this drive");
     });
+
   });
 
   describe('multi_drive_search', () => {
