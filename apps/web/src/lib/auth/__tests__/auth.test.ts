@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { verifyAuth, verifyAdminAuth, type VerifiedUser } from '../auth';
+import { verifyAuth, verifyAdminAuth } from '../auth';
 
 // Mock the auth index module
 vi.mock('../index', () => ({
