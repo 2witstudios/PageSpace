@@ -22,10 +22,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     const result = await pageService.getPage(pageId, userId);
 
     if (!result.success) {
-      if (result.status === 403) {
-        return new NextResponse("Forbidden", { status: 403 });
-      }
-      return new NextResponse(result.error, { status: result.status });
+      return NextResponse.json({ error: result.error }, { status: result.status });
     }
 
     return jsonResponse(result.page);

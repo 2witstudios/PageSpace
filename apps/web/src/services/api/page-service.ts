@@ -627,7 +627,7 @@ export const pageService = {
     return {
       success: true,
       page: toPageData(newPage),
-      driveId: params.driveId,
+      driveId: drive.id,
       isAIChatPage: isAIChatPage(params.type as PageTypeEnum),
     };
   },

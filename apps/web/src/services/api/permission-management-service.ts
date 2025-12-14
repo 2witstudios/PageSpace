@@ -194,56 +194,60 @@ export const permissionManagementService = {
   }): Promise<GrantPermissionResult> {
     const { pageId, targetUserId, permissions, grantedBy } = params;
 
-    // Check if permission already exists
-    const existing = await db.query.pagePermissions.findFirst({
-      where: and(
-        eq(pagePermissions.pageId, pageId),
-        eq(pagePermissions.userId, targetUserId)
-      )
-    });
+    // Use transaction to prevent race conditions on concurrent requests
+    const result = await db.transaction(async (tx) => {
+      // Check if permission already exists within transaction
+      const existing = await tx.query.pagePermissions.findFirst({
+        where: and(
+          eq(pagePermissions.pageId, pageId),
+          eq(pagePermissions.userId, targetUserId)
+        )
+      });
 
-    if (existing) {
-      // Update existing permission
-      const updated = await db.update(pagePermissions)
-        .set({
-          canView: permissions.canView,
-          canEdit: permissions.canEdit,
-          canShare: permissions.canShare,
-          canDelete: permissions.canDelete,
-        })
-        .where(eq(pagePermissions.id, existing.id))
-        .returning();
+      if (existing) {
+        // Update existing permission
+        const updated = await tx.update(pagePermissions)
+          .set({
+            canView: permissions.canView,
+            canEdit: permissions.canEdit,
+            canShare: permissions.canShare,
+            canDelete: permissions.canDelete,
+          })
+          .where(eq(pagePermissions.id, existing.id))
+          .returning();
+
+        return {
+          permission: updated[0],
+          isUpdate: true,
+        };
+      }
+
+      // Create new permission
+      const newPermission = await tx.insert(pagePermissions).values({
+        id: createId(),
+        pageId,
+        userId: targetUserId,
+        canView: permissions.canView,
+        canEdit: permissions.canEdit,
+        canShare: permissions.canShare,
+        canDelete: permissions.canDelete,
+        grantedBy,
+        grantedAt: new Date(),
+      }).returning();
 
       return {
-        success: true,
-        permission: {
-          ...updated[0],
-          user: null, // User info not returned on update
-        },
-        isUpdate: true,
+        permission: newPermission[0],
+        isUpdate: false,
       };
-    }
-
-    // Create new permission
-    const newPermission = await db.insert(pagePermissions).values({
-      id: createId(),
-      pageId,
-      userId: targetUserId,
-      canView: permissions.canView,
-      canEdit: permissions.canEdit,
-      canShare: permissions.canShare,
-      canDelete: permissions.canDelete,
-      grantedBy,
-      grantedAt: new Date(),
-    }).returning();
+    });
 
     return {
       success: true,
       permission: {
-        ...newPermission[0],
-        user: null, // User info not returned on create
+        ...result.permission,
+        user: null, // User info not returned on create/update
       },
-      isUpdate: false,
+      isUpdate: result.isUpdate,
     };
   },
 
