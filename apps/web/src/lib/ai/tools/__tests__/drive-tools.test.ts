@@ -49,11 +49,9 @@ vi.mock('@/lib/logging/mask', () => ({
 
 import { driveTools } from '../drive-tools';
 import { db } from '@pagespace/db';
-import { getUserDriveAccess } from '@pagespace/lib/server';
 import type { ToolExecutionContext } from '../../core';
 
 const mockDb = vi.mocked(db);
-const mockGetUserDriveAccess = vi.mocked(getUserDriveAccess);
 
 describe('drive-tools', () => {
   beforeEach(() => {

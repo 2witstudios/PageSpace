@@ -7,10 +7,9 @@ vi.mock('../index', () => ({
   isAuthError: vi.fn((result) => 'error' in result),
 }));
 
-import { authenticateWebRequest, isAuthError } from '../index';
+import { authenticateWebRequest } from '../index';
 
 const mockAuthenticateWebRequest = vi.mocked(authenticateWebRequest);
-const mockIsAuthError = vi.mocked(isAuthError);
 
 describe('auth', () => {
   beforeEach(() => {

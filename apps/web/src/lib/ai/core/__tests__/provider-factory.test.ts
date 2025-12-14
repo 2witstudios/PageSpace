@@ -79,22 +79,14 @@ import {
   getUserOpenRouterSettings,
   createOpenRouterSettings,
   getUserGoogleSettings,
-  createGoogleSettings,
   getDefaultPageSpaceSettings,
   getUserOpenAISettings,
-  createOpenAISettings,
   getUserAnthropicSettings,
-  createAnthropicSettings,
   getUserXAISettings,
-  createXAISettings,
   getUserOllamaSettings,
-  createOllamaSettings,
   getUserLMStudioSettings,
-  createLMStudioSettings,
   getUserGLMSettings,
-  createGLMSettings,
   getUserMiniMaxSettings,
-  createMiniMaxSettings,
 } from '../ai-utils';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';

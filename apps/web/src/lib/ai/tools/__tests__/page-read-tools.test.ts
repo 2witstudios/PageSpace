@@ -51,13 +51,11 @@ vi.mock('@/lib/logging/mask', () => ({
 
 import { pageReadTools } from '../page-read-tools';
 import { db } from '@pagespace/db';
-import { getUserDriveAccess, getUserAccessiblePagesInDriveWithDetails, canUserViewPage } from '@pagespace/lib/server';
+import { getUserDriveAccess } from '@pagespace/lib/server';
 import type { ToolExecutionContext } from '../../core';
 
 const mockDb = vi.mocked(db);
 const mockGetUserDriveAccess = vi.mocked(getUserDriveAccess);
-const mockGetUserAccessiblePagesInDriveWithDetails = vi.mocked(getUserAccessiblePagesInDriveWithDetails);
-const mockCanUserViewPage = vi.mocked(canUserViewPage);
 
 describe('page-read-tools', () => {
   beforeEach(() => {

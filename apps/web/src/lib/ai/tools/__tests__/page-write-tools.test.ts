@@ -71,12 +71,11 @@ vi.mock('@/lib/logging/mask', () => ({
 
 import { pageWriteTools } from '../page-write-tools';
 import { db } from '@pagespace/db';
-import { canUserEditPage, canUserDeletePage } from '@pagespace/lib/server';
+import { canUserEditPage } from '@pagespace/lib/server';
 import type { ToolExecutionContext } from '../../core';
 
 const mockDb = vi.mocked(db);
 const mockCanUserEditPage = vi.mocked(canUserEditPage);
-const mockCanUserDeletePage = vi.mocked(canUserDeletePage);
 
 describe('page-write-tools', () => {
   beforeEach(() => {
