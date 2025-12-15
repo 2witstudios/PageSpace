@@ -63,10 +63,10 @@ describe('task-management-tools', () => {
     });
 
     it('requires user authentication', async () => {
-      const context = { experimental_context: {} };
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
 
       await expect(
-        taskManagementTools.update_task.execute(
+        taskManagementTools.update_task.execute!(
           { taskId: 'task-1', status: 'completed' },
           context
         )
@@ -75,11 +75,12 @@ describe('task-management-tools', () => {
 
     it('requires taskId or pageId', async () => {
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
       await expect(
-        taskManagementTools.update_task.execute(
+        taskManagementTools.update_task.execute!(
           { status: 'completed' },
           context
         )
@@ -88,11 +89,12 @@ describe('task-management-tools', () => {
 
     it('requires title when creating new task', async () => {
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
       await expect(
-        taskManagementTools.update_task.execute(
+        taskManagementTools.update_task.execute!(
           { pageId: 'page-1' },
           context
         )
@@ -103,11 +105,12 @@ describe('task-management-tools', () => {
       mockDb.query.taskItems.findFirst = vi.fn().mockResolvedValue(null);
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
       await expect(
-        taskManagementTools.update_task.execute(
+        taskManagementTools.update_task.execute!(
           { taskId: 'non-existent', status: 'completed' },
           context
         )
@@ -122,11 +125,12 @@ describe('task-management-tools', () => {
       mockDb.query.taskLists.findFirst = vi.fn().mockResolvedValue(null);
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
       await expect(
-        taskManagementTools.update_task.execute(
+        taskManagementTools.update_task.execute!(
           { taskId: 'task-1', status: 'completed' },
           context
         )
@@ -146,11 +150,12 @@ describe('task-management-tools', () => {
       mockCanUserEditPage.mockResolvedValue(false);
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
       await expect(
-        taskManagementTools.update_task.execute(
+        taskManagementTools.update_task.execute!(
           { taskId: 'task-1', status: 'completed' },
           context
         )
@@ -169,11 +174,12 @@ describe('task-management-tools', () => {
       });
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
       await expect(
-        taskManagementTools.update_task.execute(
+        taskManagementTools.update_task.execute!(
           { taskId: 'task-1', status: 'completed' },
           context
         )
@@ -190,11 +196,12 @@ describe('task-management-tools', () => {
       mockCanUserEditPage.mockResolvedValue(true);
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
       await expect(
-        taskManagementTools.update_task.execute(
+        taskManagementTools.update_task.execute!(
           { pageId: 'page-1', title: 'New Task' },
           context
         )

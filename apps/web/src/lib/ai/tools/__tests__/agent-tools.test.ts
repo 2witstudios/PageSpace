@@ -66,10 +66,10 @@ describe('agent-tools', () => {
     });
 
     it('requires user authentication', async () => {
-      const context = { experimental_context: {} };
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
 
       await expect(
-        agentTools.update_agent_config.execute(
+        agentTools.update_agent_config.execute!(
           { agentPath: '/drive/agent', agentId: 'agent-1' },
           context
         )
@@ -80,11 +80,12 @@ describe('agent-tools', () => {
       mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(null);
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
       await expect(
-        agentTools.update_agent_config.execute(
+        agentTools.update_agent_config.execute!(
           { agentPath: '/drive/agent', agentId: 'non-existent' },
           context
         )
@@ -103,11 +104,12 @@ describe('agent-tools', () => {
       mockCanUserEditPage.mockResolvedValue(false);
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
       await expect(
-        agentTools.update_agent_config.execute(
+        agentTools.update_agent_config.execute!(
           { agentPath: '/drive/agent', agentId: 'agent-1' },
           context
         )
@@ -126,11 +128,12 @@ describe('agent-tools', () => {
       mockCanUserEditPage.mockResolvedValue(true);
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
       await expect(
-        agentTools.update_agent_config.execute(
+        agentTools.update_agent_config.execute!(
           { agentPath: '/drive/agent', agentId: 'agent-1', enabledTools: ['invalid_tool'] },
           context
         )
@@ -151,10 +154,11 @@ describe('agent-tools', () => {
       mockCanUserEditPage.mockResolvedValue(true);
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
-      const result = await agentTools.update_agent_config.execute(
+      const result = await agentTools.update_agent_config.execute!(
         {
           agentPath: '/drive/agent',
           agentId: 'agent-1',
@@ -164,9 +168,9 @@ describe('agent-tools', () => {
         context
       );
 
-      expect(result.success).toBe(true);
-      expect(result.title).toBe('My Agent');
-      expect(result.agentConfig.enabledToolsCount).toBe(2);
+      expect((result as any).success).toBe(true);
+      expect((result as any).title).toBe('My Agent');
+      expect((result as any).agentConfig.enabledToolsCount).toBe(2);
     });
 
     it('updates provider and model settings', async () => {
@@ -183,10 +187,11 @@ describe('agent-tools', () => {
       mockCanUserEditPage.mockResolvedValue(true);
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
-      const result = await agentTools.update_agent_config.execute(
+      const result = await agentTools.update_agent_config.execute!(
         {
           agentPath: '/drive/agent',
           agentId: 'agent-1',
@@ -196,9 +201,10 @@ describe('agent-tools', () => {
         context
       );
 
-      expect(result.success).toBe(true);
-      expect(result.agentConfig.aiProvider).toBe('google');
-      expect(result.agentConfig.aiModel).toBe('gemini-pro');
+      expect((result as any).success).toBe(true);
+      expect((result as any).agentConfig.aiProvider).toBe('google');
+      expect((result as any).agentConfig.aiModel).toBe('gemini-pro');
+
     });
   });
 });

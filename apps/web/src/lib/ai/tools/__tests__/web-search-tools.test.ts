@@ -48,10 +48,10 @@ describe('web-search-tools', () => {
     });
 
     it('requires user authentication', async () => {
-      const context = { experimental_context: {} };
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
 
       await expect(
-        webSearchTools.web_search.execute({ query: 'test search' }, context)
+        webSearchTools.web_search!.execute!({ query: 'test search', count: 10, recencyFilter: 'noLimit' }, context)
       ).rejects.toThrow('User authentication required for web search');
     });
 
@@ -60,14 +60,16 @@ describe('web-search-tools', () => {
       mockGetUserGLMSettings.mockResolvedValue(null);
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
-      const result = await webSearchTools.web_search.execute(
-        { query: 'test search' },
+      const result = await webSearchTools.web_search!.execute!(
+        { query: 'test search', count: 10, recencyFilter: 'noLimit' },
         context
       );
 
+      if (!('error' in result)) throw new Error('Expected error result');
       expect(result.success).toBe(false);
       expect(result.error).toContain('GLM API key not configured');
     });
@@ -99,16 +101,18 @@ describe('web-search-tools', () => {
       });
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
-      const result = await webSearchTools.web_search.execute(
-        { query: 'test search' },
+      const result = await webSearchTools.web_search!.execute!(
+        { query: 'test search', count: 10, recencyFilter: 'noLimit' },
         context
       );
 
-      expect(result.success).toBe(true);
-      expect(result.resultsCount).toBe(1);
+      if ('error' in result) throw new Error(`Expected success but got error: ${result.error}`);
+      expect((result as any).success).toBe(true);
+      expect((result as any).resultsCount).toBe(1);
       expect(global.fetch).toHaveBeenCalledWith(
         'https://api.z.ai/api/paas/v4/web_search',
         expect.objectContaining({
@@ -139,15 +143,17 @@ describe('web-search-tools', () => {
       });
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
-      const result = await webSearchTools.web_search.execute(
-        { query: 'test search' },
+      const result = await webSearchTools.web_search!.execute!(
+        { query: 'test search', count: 10, recencyFilter: 'noLimit' },
         context
       );
 
-      expect(result.success).toBe(true);
+      if ('error' in result) throw new Error(`Expected success but got error: ${result.error}`);
+      expect((result as any).success).toBe(true);
       expect(global.fetch).toHaveBeenCalledWith(
         'https://api.z.ai/api/paas/v4/web_search',
         expect.objectContaining({
@@ -174,14 +180,16 @@ describe('web-search-tools', () => {
       });
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
-      const result = await webSearchTools.web_search.execute(
-        { query: 'test search' },
+      const result = await webSearchTools.web_search!.execute!(
+        { query: 'test search', count: 10, recencyFilter: 'noLimit' },
         context
       );
 
+      if (!('error' in result)) throw new Error('Expected error result');
       expect(result.success).toBe(false);
       expect(result.error).toContain('401 Unauthorized');
     });
@@ -204,11 +212,12 @@ describe('web-search-tools', () => {
       });
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
-      await webSearchTools.web_search.execute(
-        { query: 'react hooks', domainFilter: 'react.dev' },
+      await webSearchTools.web_search!.execute!(
+        { query: 'react hooks', domainFilter: 'react.dev', count: 10, recencyFilter: 'noLimit' },
         context
       );
 
@@ -238,11 +247,12 @@ describe('web-search-tools', () => {
       });
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
-      await webSearchTools.web_search.execute(
-        { query: 'latest news', recencyFilter: 'oneWeek' },
+      await webSearchTools.web_search!.execute!(
+        { query: 'latest news', recencyFilter: 'oneWeek', count: 10 },
         context
       );
 
@@ -272,11 +282,12 @@ describe('web-search-tools', () => {
       });
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
-      await webSearchTools.web_search.execute(
-        { query: 'test', count: 25 },
+      await webSearchTools.web_search!.execute!(
+        { query: 'test', count: 25, recencyFilter: 'noLimit' },
         context
       );
 
@@ -326,22 +337,24 @@ describe('web-search-tools', () => {
       });
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
-      const result = await webSearchTools.web_search.execute(
-        { query: 'test' },
+      const result = await webSearchTools.web_search!.execute!(
+        { query: 'test', count: 10, recencyFilter: 'noLimit' },
         context
       );
 
-      expect(result.success).toBe(true);
-      expect(result.resultsCount).toBe(2);
-      expect(result.results[0].position).toBe(1);
-      expect(result.results[0].title).toBe('First Result');
-      expect(result.results[0].url).toBe('https://example1.com');
-      expect(result.results[0].publishDate).toBe('2025-01-15');
-      expect(result.results[1].position).toBe(2);
-      expect(result.results[1].publishDate).toBe('Unknown');
+      if ('error' in result) throw new Error(`Expected success but got error: ${result.error}`);
+      expect((result as any).success).toBe(true);
+      expect((result as any).resultsCount).toBe(2);
+      expect((result as any).results[0].position).toBe(1);
+      expect((result as any).results[0].title).toBe('First Result');
+      expect((result as any).results[0].url).toBe('https://example1.com');
+      expect((result as any).results[0].publishDate).toBe('2025-01-15');
+      expect((result as any).results[1].position).toBe(2);
+      expect((result as any).results[1].publishDate).toBe('Unknown');
     });
   });
 });
