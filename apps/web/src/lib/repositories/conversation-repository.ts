@@ -204,8 +204,8 @@ export const conversationRepository = {
     const result = await db
       .select({
         messageCount: sql<number>`COUNT(*)`.as('messageCount'),
-        firstMessageTime: sql<Date>`MIN(created_at)`.as('firstMessageTime'),
-        lastMessageTime: sql<Date>`MAX(created_at)`.as('lastMessageTime'),
+        firstMessageTime: sql<Date>`MIN("createdAt")`.as('firstMessageTime'),
+        lastMessageTime: sql<Date>`MAX("createdAt")`.as('lastMessageTime'),
       })
       .from(chatMessages)
       .where(and(
