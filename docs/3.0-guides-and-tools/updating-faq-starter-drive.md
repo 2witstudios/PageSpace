@@ -40,6 +40,7 @@ If you’re just improving wording or adding sections to an existing seeded page
 3. Keep the format consistent:
    - These are TypeScript template literals wrapped in backticks and `.trim()`.
    - If you need literal backticks in the output, escape them in a template literal, e.g.:
+
      ```ts
      Use \`ask_agent\` to delegate to another agent.
      ```
