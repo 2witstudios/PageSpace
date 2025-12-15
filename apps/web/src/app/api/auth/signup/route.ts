@@ -16,7 +16,7 @@ import { populateUserDrive } from '@/lib/onboarding/drive-setup';
 
 const signupSchema = z.object({
   name: z.string().min(1, {
-    error: "Name is required"
+    message: 'Name is required',
   }),
   email: z.email(),
   password: z.string()
