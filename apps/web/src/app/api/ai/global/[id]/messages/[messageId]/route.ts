@@ -126,6 +126,3 @@ export async function DELETE(
     );
   }
 }
-
-// Re-export pure function for testing
-export { processMessageContentUpdate };
