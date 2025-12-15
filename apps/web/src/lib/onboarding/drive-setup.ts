@@ -170,7 +170,9 @@ If you have any questions, try asking the **About PageSpace Agent** in this driv
       content: '', // Chat history starts empty
       systemPrompt: getAboutPageSpaceAgentSystemPrompt(),
       agentDefinition: 'Onboarding guide that teaches PageSpace using the FAQ knowledge base.',
-      enabledTools: ['read_page'],
+      aiProvider: 'pagespace',
+      aiModel: 'glm-4.5-air',
+      enabledTools: ['read_page', 'list_pages', 'glob_search', 'regex_search'],
       includePageTree: true,
       pageTreeScope: 'drive',
       position: 3,
