@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { PUT } from '../route';
 import type { WebAuthResult, AuthError } from '@/lib/auth';
+import type { PageOperation } from '@/lib/websocket';
 
 // Mock the repository seam (boundary)
 vi.mock('@/lib/repositories/page-agent-repository', () => ({
@@ -41,7 +42,12 @@ vi.mock('@pagespace/lib/server', () => ({
 // Mock websocket broadcast (boundary)
 vi.mock('@/lib/websocket', () => ({
   broadcastPageEvent: vi.fn(),
-  createPageEventPayload: vi.fn((driveId, pageId, operation, data) => ({
+  createPageEventPayload: vi.fn((
+    driveId: string,
+    pageId: string,
+    operation: PageOperation,
+    data: { parentId?: string | null; title?: string; type?: string; socketId?: string }
+  ) => ({
     driveId,
     pageId,
     operation,
