@@ -15,7 +15,7 @@ const { mockUseAuth, mockConnect, mockDisconnect, mockGetSocket } = vi.hoisted((
   mockUseAuth: vi.fn(),
   mockConnect: vi.fn(),
   mockDisconnect: vi.fn(),
-  mockGetSocket: vi.fn(() => null),
+  mockGetSocket: vi.fn<() => import('socket.io-client').Socket | null>(() => null),
 }));
 
 // Mock useAuth hook - use full path since test is in __tests__ subdirectory
@@ -65,7 +65,7 @@ describe('useSocket', () => {
 
   describe('connection lifecycle', () => {
     it('given user is authenticated, should return connected socket instance', () => {
-      const expectedSocket = { id: 'socket-123', connected: true };
+      const expectedSocket = { id: 'socket-123', connected: true } as unknown as import('socket.io-client').Socket;
       mockUseAuth.mockReturnValue({
         isAuthenticated: true,
         user: { id: 'user-123', name: 'Test User' },
@@ -108,7 +108,7 @@ describe('useSocket', () => {
       expect(result.current).toBeNull();
 
       // Simulate authentication and socket becoming available
-      const connectedSocket = { id: 'socket-456', connected: true };
+      const connectedSocket = { id: 'socket-456', connected: true } as unknown as import('socket.io-client').Socket;
       mockUseAuth.mockReturnValue({
         isAuthenticated: true,
         user: { id: 'user-123' },
@@ -122,7 +122,7 @@ describe('useSocket', () => {
     });
 
     it('given authentication changes from true to false, should return null socket', () => {
-      const initialSocket = { id: 'socket-123', connected: true };
+      const initialSocket = { id: 'socket-123', connected: true } as unknown as import('socket.io-client').Socket;
       mockUseAuth.mockReturnValue({
         isAuthenticated: true,
         user: { id: 'user-123' },
@@ -154,7 +154,7 @@ describe('useSocket', () => {
         isAuthenticated: true,
         user: { id: 'user-123' },
       });
-      const expectedSocket = { id: 'socket-123', connected: true, rooms: new Set(['room-1']) };
+      const expectedSocket = { id: 'socket-123', connected: true, rooms: new Set(['room-1']) } as unknown as import('socket.io-client').Socket;
       mockGetSocket.mockReturnValue(expectedSocket);
 
       const { result } = renderHook(() => useSocket());
@@ -182,7 +182,7 @@ describe('useSocket', () => {
         isAuthenticated: true,
         user: { id: 'user-1' },
       });
-      const socket1 = { id: 'socket-for-user-1', userId: 'user-1' };
+      const socket1 = { id: 'socket-for-user-1', userId: 'user-1' } as unknown as import('socket.io-client').Socket;
       mockGetSocket.mockReturnValue(socket1);
 
       const { result, rerender } = renderHook(() => useSocket());
@@ -194,7 +194,7 @@ describe('useSocket', () => {
         isAuthenticated: true,
         user: { id: 'user-2' },
       });
-      const socket2 = { id: 'socket-for-user-2', userId: 'user-2' };
+      const socket2 = { id: 'socket-for-user-2', userId: 'user-2' } as unknown as import('socket.io-client').Socket;
       mockGetSocket.mockReturnValue(socket2);
 
       rerender();

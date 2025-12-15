@@ -28,7 +28,7 @@ const mockCheckConnectionHealth = vi.mocked(checkConnectionHealth);
 // Helper to create mock WebSocket
 function createMockWebSocket(readyState: number = 1): Partial<WebSocket> {
   return {
-    readyState,
+    readyState: readyState as WebSocket['readyState'],
     send: vi.fn(),
     close: vi.fn(),
   };
@@ -273,7 +273,7 @@ describe('MCPBridge', () => {
       });
 
       // Start a request
-      bridge.executeTool('user-123', 'server', 'tool').catch(() => {});
+      bridge.executeTool('user-123', 'server', 'tool').catch(() => { });
       expect(bridge.getPendingRequestCount()).toBe(1);
 
       // Cancel should not throw

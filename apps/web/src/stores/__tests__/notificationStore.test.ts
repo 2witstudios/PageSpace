@@ -41,7 +41,7 @@ const createMockNotification = (overrides: Partial<Notification> = {}): Notifica
   isRead: false,
   createdAt: new Date(),
   readAt: null,
-  metadata: null,
+  metadata: undefined,
   userId: 'user-123',
   ...overrides,
 });
@@ -301,7 +301,7 @@ describe('useNotificationStore', () => {
 
     it('given API error, should set loading to false', async () => {
       mockFetchWithAuth.mockResolvedValue({ ok: false });
-      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => { });
 
       const { fetchNotifications } = useNotificationStore.getState();
       await fetchNotifications();
@@ -312,7 +312,7 @@ describe('useNotificationStore', () => {
 
     it('given network error, should handle gracefully', async () => {
       mockFetchWithAuth.mockRejectedValue(new Error('Network error'));
-      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => { });
 
       const { fetchNotifications } = useNotificationStore.getState();
       await fetchNotifications();
@@ -340,7 +340,7 @@ describe('useNotificationStore', () => {
       const notif = createMockNotification({ id: 'notif-123', isRead: false });
       useNotificationStore.setState({ notifications: [notif], unreadCount: 1 });
       mockPatch.mockRejectedValue(new Error('API error'));
-      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => { });
 
       const { handleNotificationRead } = useNotificationStore.getState();
       await handleNotificationRead('notif-123');
