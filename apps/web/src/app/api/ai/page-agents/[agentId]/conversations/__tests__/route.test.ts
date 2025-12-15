@@ -7,7 +7,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
-import { GET, POST, extractPreviewText, generateTitle } from '../route';
+import { GET, POST } from '../route';
 import type { WebAuthResult, AuthError } from '@/lib/auth';
 
 // Mock the repository seam (boundary)
@@ -17,6 +17,18 @@ vi.mock('@/lib/repositories/conversation-repository', () => ({
     listConversations: vi.fn(),
     countConversations: vi.fn(),
   },
+  extractPreviewText: vi.fn((content: string | null) => {
+    if (!content) return 'New conversation';
+    try {
+      const parsed = JSON.parse(content);
+      if (Array.isArray(parsed) && parsed[0]?.text) return parsed[0].text.substring(0, 100);
+      if (parsed.parts?.[0]?.text) return parsed.parts[0].text.substring(0, 100);
+    } catch {
+      return content.substring(0, 100);
+    }
+    return 'New conversation';
+  }),
+  generateTitle: vi.fn((preview: string) => preview.length > 50 ? preview.substring(0, 50) + '...' : preview),
 }));
 
 // Mock auth (boundary)
@@ -351,37 +363,72 @@ describe('POST /api/ai/page-agents/[agentId]/conversations', () => {
 });
 
 describe('extractPreviewText (pure function)', () => {
-  it('should return "New conversation" for null content', () => {
+  it('should return "New conversation" for null content', async () => {
+    const actualModule = await vi.importActual<
+      typeof import('@/lib/repositories/conversation-repository')
+    >('@/lib/repositories/conversation-repository');
+    const { extractPreviewText } = actualModule;
+
     expect(extractPreviewText(null)).toBe('New conversation');
   });
 
-  it('should extract text from array format', () => {
+  it('should extract text from array format', async () => {
+    const actualModule = await vi.importActual<
+      typeof import('@/lib/repositories/conversation-repository')
+    >('@/lib/repositories/conversation-repository');
+    const { extractPreviewText } = actualModule;
+
     const content = JSON.stringify([{ text: 'Hello world' }]);
     expect(extractPreviewText(content)).toBe('Hello world');
   });
 
-  it('should extract text from parts format', () => {
+  it('should extract text from parts format', async () => {
+    const actualModule = await vi.importActual<
+      typeof import('@/lib/repositories/conversation-repository')
+    >('@/lib/repositories/conversation-repository');
+    const { extractPreviewText } = actualModule;
+
     const content = JSON.stringify({ parts: [{ text: 'Hello from parts' }] });
     expect(extractPreviewText(content)).toBe('Hello from parts');
   });
 
-  it('should truncate to 100 characters', () => {
+  it('should truncate to 100 characters', async () => {
+    const actualModule = await vi.importActual<
+      typeof import('@/lib/repositories/conversation-repository')
+    >('@/lib/repositories/conversation-repository');
+    const { extractPreviewText } = actualModule;
+
     const longText = 'a'.repeat(150);
     const content = JSON.stringify([{ text: longText }]);
     expect(extractPreviewText(content)).toBe('a'.repeat(100));
   });
 
-  it('should return raw content if JSON parsing fails', () => {
+  it('should return raw content if JSON parsing fails', async () => {
+    const actualModule = await vi.importActual<
+      typeof import('@/lib/repositories/conversation-repository')
+    >('@/lib/repositories/conversation-repository');
+    const { extractPreviewText } = actualModule;
+
     expect(extractPreviewText('plain text message')).toBe('plain text message');
   });
 });
 
 describe('generateTitle (pure function)', () => {
-  it('should return preview as-is if <= 50 chars', () => {
+  it('should return preview as-is if <= 50 chars', async () => {
+    const actualModule = await vi.importActual<
+      typeof import('@/lib/repositories/conversation-repository')
+    >('@/lib/repositories/conversation-repository');
+    const { generateTitle } = actualModule;
+
     expect(generateTitle('Short title')).toBe('Short title');
   });
 
-  it('should truncate and add ellipsis if > 50 chars', () => {
+  it('should truncate and add ellipsis if > 50 chars', async () => {
+    const actualModule = await vi.importActual<
+      typeof import('@/lib/repositories/conversation-repository')
+    >('@/lib/repositories/conversation-repository');
+    const { generateTitle } = actualModule;
+
     const longPreview = 'a'.repeat(60);
     expect(generateTitle(longPreview)).toBe('a'.repeat(50) + '...');
   });

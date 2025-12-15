@@ -37,6 +37,36 @@ export interface ConversationDeletionLog {
   metadata: ConversationMetadata | null;
 }
 
+/**
+ * Extract preview text from message content (JSON or raw text)
+ * Pure function extracted for testability.
+ */
+export function extractPreviewText(content: string | null): string {
+  if (!content) return 'New conversation';
+
+  try {
+    const parsed = JSON.parse(content);
+    if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].text) {
+      return parsed[0].text.substring(0, 100);
+    } else if (typeof parsed === 'object' && parsed.parts?.[0]?.text) {
+      return parsed.parts[0].text.substring(0, 100);
+    }
+  } catch {
+    // If parsing fails, use raw content substring
+    return content.substring(0, 100);
+  }
+
+  return 'New conversation';
+}
+
+/**
+ * Generate title from preview text
+ * Pure function extracted for testability.
+ */
+export function generateTitle(preview: string): string {
+  return preview.length > 50 ? preview.substring(0, 50) + '...' : preview;
+}
+
 export const conversationRepository = {
   /**
    * Get an AI_CHAT agent by ID
