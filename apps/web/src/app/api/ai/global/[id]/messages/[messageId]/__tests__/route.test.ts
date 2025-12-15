@@ -426,6 +426,18 @@ describe('processMessageContentUpdate (pure function)', () => {
     expect(result).toBe('New text');
   });
 
+  it('should return new content when JSON has textParts but lacks partsOrder', () => {
+    const jsonWithTextPartsNoOrder = JSON.stringify({
+      textParts: ['Original'],
+      originalContent: 'Original',
+    });
+
+    const result = processMessageContentUpdate(jsonWithTextPartsNoOrder, 'New text');
+
+    // Without partsOrder, structure preservation should not occur
+    expect(result).toBe('New text');
+  });
+
   it('should return new content for empty string', () => {
     const result = processMessageContentUpdate('', 'New text');
 

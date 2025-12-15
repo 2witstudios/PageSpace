@@ -88,8 +88,8 @@ describe('GET /api/ai/ollama/models', () => {
       expect(body.models).toEqual([]);
     });
 
-    // Note: The getUserOllamaSettings implementation returns null when baseUrl is falsy,
-    // so we don't need a separate test for empty baseUrl - it's covered by the null case above.
+    // Contract note: When settings are null, the route returns 400 with "Ollama not configured".
+    // This covers all "not configured" states; implementation details of how settings become null are irrelevant.
   });
 
   describe('successful model discovery', () => {

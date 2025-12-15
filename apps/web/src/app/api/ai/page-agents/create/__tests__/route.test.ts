@@ -388,7 +388,9 @@ describe('POST /api/ai/page-agents/create', () => {
           type: 'AI_CHAT',
         })
       );
-      expect(broadcastPageEvent).toHaveBeenCalled();
+      // Verify broadcastPageEvent is called with the payload from createPageEventPayload
+      const expectedPayload = vi.mocked(createPageEventPayload).mock.results[0]?.value;
+      expect(broadcastPageEvent).toHaveBeenCalledWith(expectedPayload);
     });
 
     it('should invalidate agent awareness cache for the drive', async () => {

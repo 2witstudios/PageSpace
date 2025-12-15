@@ -172,6 +172,8 @@ describe('PUT /api/ai/page-agents/[agentId]/config', () => {
 
       expect(response.status).toBe(404);
       expect(body.error).toContain('not found');
+      // Verify no update was attempted
+      expect(pageAgentRepository.updateAgentConfig).not.toHaveBeenCalled();
     });
   });
 
@@ -229,6 +231,8 @@ describe('PUT /api/ai/page-agents/[agentId]/config', () => {
 
       expect(response.status).toBe(403);
       expect(body.error).toContain('Insufficient permissions');
+      // Verify no update was attempted
+      expect(pageAgentRepository.updateAgentConfig).not.toHaveBeenCalled();
     });
   });
 
