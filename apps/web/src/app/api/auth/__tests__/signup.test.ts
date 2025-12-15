@@ -92,6 +92,10 @@ vi.mock('cookie', () => ({
   serialize: vi.fn().mockReturnValue('mock-cookie'),
 }));
 
+vi.mock('@/lib/onboarding/getting-started-drive', () => ({
+  provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'new-drive-id' }),
+}));
+
 import { serialize } from 'cookie';
 
 vi.mock('react', () => ({
@@ -109,10 +113,12 @@ import {
   generateRefreshToken,
   createNotification,
   logAuthEvent,
+  loggers,
 } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { createVerificationToken } from '@pagespace/lib/verification-utils';
 import { sendEmail } from '@pagespace/lib/services/email-service';
+import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 
 describe('/api/auth/signup', () => {
   const validSignupPayload = {
@@ -145,7 +151,7 @@ describe('/api/auth/signup', () => {
 
       // Assert
       expect(response.status).toBe(303);
-      expect(response.headers.get('Location')).toContain('/dashboard');
+      expect(response.headers.get('Location')).toContain('/dashboard/new-drive-id');
     });
 
     it('sets httpOnly cookies for accessToken and refreshToken', async () => {
@@ -259,11 +265,7 @@ describe('/api/auth/signup', () => {
       // Act
       await POST(request);
 
-      // Assert - verify key side-effects occurred (user, drive, settings, refresh token)
-      // Use at least 4 inserts instead of exact count to avoid brittleness on harmless refactors
-      expect(db.insert).toHaveBeenCalled();
-      const insertCalls = (db.insert as Mock).mock.calls.length;
-      expect(insertCalls).toBeGreaterThanOrEqual(4);
+      expect(provisionGettingStartedDriveIfNeeded).toHaveBeenCalledWith('new-user-id');
     });
 
     it('sends verification email', async () => {
@@ -388,7 +390,33 @@ describe('/api/auth/signup', () => {
 
       // Assert - signup should still succeed
       expect(response.status).toBe(303);
+      expect(response.headers.get('Location')).toContain('/dashboard/new-drive-id');
+    });
+
+    it('continues signup even if drive provisioning fails', async () => {
+      // Arrange
+      (provisionGettingStartedDriveIfNeeded as Mock).mockRejectedValue(
+        new Error('Database error')
+      );
+
+      const request = new Request('http://localhost/api/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validSignupPayload),
+      });
+
+      // Act
+      const response = await POST(request);
+
+      // Assert - signup should still succeed with fallback to /dashboard
+      expect(response.status).toBe(303);
       expect(response.headers.get('Location')).toContain('/dashboard');
+      expect(response.headers.get('Location')).not.toContain('/dashboard/new-drive-id');
+      expect(loggers.auth.error).toHaveBeenCalledWith(
+        'Failed to provision Getting Started drive',
+        expect.any(Error),
+        expect.objectContaining({ userId: 'new-user-id' })
+      );
     });
   });
 

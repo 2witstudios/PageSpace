@@ -25,7 +25,10 @@ interface User {
 }
 
 interface AuthActions {
-  login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  login: (
+    email: string,
+    password: string
+  ) => Promise<{ success: boolean; error?: string; redirectTo?: string }>;
   logout: () => Promise<void>;
   refreshAuth: () => Promise<void>;
   checkAuth: () => Promise<void>;
@@ -171,7 +174,9 @@ export function useAuth(): {
 
         setUser(userData);
         startSession();
-        return { success: true };
+        const redirectTo =
+          typeof userData.redirectTo === 'string' ? userData.redirectTo : undefined;
+        return { success: true, ...(redirectTo && { redirectTo }) };
       } else {
         const errorData = await response.json();
         return {
