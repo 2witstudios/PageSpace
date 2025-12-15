@@ -84,6 +84,7 @@ The “About PageSpace Agent” is seeded as an `AI_CHAT` page in `apps/web/src/
 - `systemPrompt: getAboutPageSpaceAgentSystemPrompt()`
 - `enabledTools: ['read_page', 'list_pages', 'glob_search', 'regex_search']`
 - `includePageTree: true` + `pageTreeScope: 'drive'`
+- `includeDrivePrompt: true`
 
 There are two source files to keep in sync:
 

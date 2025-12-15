@@ -175,6 +175,7 @@ If you have any questions, try asking the **About PageSpace Agent** in this driv
       enabledTools: ['read_page', 'list_pages', 'glob_search', 'regex_search'],
       includePageTree: true,
       pageTreeScope: 'drive',
+      includeDrivePrompt: true,
       position: 3,
     });
 
