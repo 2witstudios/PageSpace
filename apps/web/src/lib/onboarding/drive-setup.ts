@@ -1,5 +1,6 @@
 import { db, pages, taskItems, taskLists } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
+import { maskIdentifier } from '@/lib/logging/mask';
 import { getAboutPageSpaceAgentSystemPrompt, getOnboardingFaqSeedTemplate, type SeedNodeTemplate, type SeedTaskTemplate } from './onboarding-faq';
 
 /**
@@ -259,7 +260,11 @@ If you have any questions, try asking the **About PageSpace Agent** in this driv
     });
 
   } catch (error) {
-    console.error('Error populating user drive:', error);
+    console.error(
+      'Error populating user drive',
+      { userId: maskIdentifier(userId), driveId: maskIdentifier(driveId) },
+      error
+    );
     // We shouldn't throw here to avoid failing the signup process
     // just because starter content failed.
   }
