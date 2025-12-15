@@ -1,375 +1,435 @@
+/**
+ * Contract tests for GET/POST /api/ai/page-agents/[agentId]/conversations
+ *
+ * These tests verify the Request → Response contract and boundary obligations.
+ * Database operations are mocked at the repository seam.
+ */
+
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, POST } from '../route';
 import type { WebAuthResult, AuthError } from '@/lib/auth';
 
-// Mock dependencies
-vi.mock('@pagespace/db', () => ({
-  db: {
-    query: {
-      pages: {
-        findFirst: vi.fn(),
-      },
-    },
-    select: vi.fn(),
-    execute: vi.fn(),
+// Mock the repository seam (boundary)
+vi.mock('@/lib/repositories/conversation-repository', () => ({
+  conversationRepository: {
+    getAiAgent: vi.fn(),
+    listConversations: vi.fn(),
+    countConversations: vi.fn(),
   },
-  chatMessages: {},
-  pages: {},
-  eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
-  and: vi.fn((...conditions: unknown[]) => ({ conditions, type: 'and' })),
-  sql: vi.fn(),
+  extractPreviewText: vi.fn((content: string | null) => {
+    if (!content) return 'New conversation';
+    try {
+      const parsed = JSON.parse(content);
+      if (Array.isArray(parsed) && parsed[0]?.text) return parsed[0].text.substring(0, 100);
+      if (parsed.parts?.[0]?.text) return parsed.parts[0].text.substring(0, 100);
+    } catch {
+      return content.substring(0, 100);
+    }
+    return 'New conversation';
+  }),
+  generateTitle: vi.fn((preview: string) => preview.length > 50 ? preview.substring(0, 50) + '...' : preview),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
-    ai: {
-      info: vi.fn(),
-      error: vi.fn(),
-      warn: vi.fn(),
-      debug: vi.fn(),
-    },
-  },
-  canUserViewPage: vi.fn(),
-}));
-
+// Mock auth (boundary)
 vi.mock('@/lib/auth', () => ({
   authenticateHybridRequest: vi.fn(),
   isAuthError: vi.fn(),
 }));
 
+// Mock permissions (boundary)
+vi.mock('@pagespace/lib/server', () => ({
+  canUserViewPage: vi.fn(),
+  loggers: {
+    ai: {
+      info: vi.fn(),
+      error: vi.fn(),
+    },
+  },
+}));
+
+// Mock ID generation
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn(() => 'generated_conv_id'),
 }));
 
-import { db } from '@pagespace/db';
-import { loggers, canUserViewPage } from '@pagespace/lib/server';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { authenticateHybridRequest, isAuthError } from '@/lib/auth';
+import { canUserViewPage, loggers } from '@pagespace/lib/server';
 
-// Helper to create mock WebAuthResult
-const mockWebAuth = (userId: string, tokenVersion = 0): WebAuthResult => ({
+// Test fixtures
+const mockUserId = 'user_123';
+const mockAgentId = 'agent_123';
+const mockDriveId = 'drive_123';
+
+const mockWebAuth = (userId: string): WebAuthResult => ({
   userId,
-  tokenVersion,
+  tokenVersion: 0,
   tokenType: 'jwt',
   source: 'cookie',
   role: 'user',
 });
 
-// Helper to create mock AuthError
 const mockAuthError = (status = 401): AuthError => ({
   error: NextResponse.json({ error: 'Unauthorized' }, { status }),
 });
 
-// Helper to create mock agent page
-const mockAgent = (overrides: Partial<{
-  id: string;
-  title: string;
-  type: string;
-  isTrashed: boolean;
-}> = {}) => ({
-  id: overrides.id || 'agent_123',
-  title: overrides.title || 'Test Agent',
-  type: overrides.type || 'AI_CHAT',
-  isTrashed: overrides.isTrashed ?? false,
+const mockAgent = () => ({
+  id: mockAgentId,
+  title: 'Test Agent',
+  type: 'AI_CHAT',
+  driveId: mockDriveId,
 });
 
-describe('Page Agent Conversations Routes', () => {
-  const mockUserId = 'user_123';
-  const mockAgentId = 'agent_123';
-
-  const createContext = (agentId: string) => ({
-    params: Promise.resolve({ agentId }),
+const createRequest = (agentId: string, method: string, body?: Record<string, unknown>) =>
+  new Request(`https://example.com/api/ai/page-agents/${agentId}/conversations`, {
+    method,
+    body: body ? JSON.stringify(body) : undefined,
   });
 
+const createContext = (agentId: string) => ({
+  params: Promise.resolve({ agentId }),
+});
+
+describe('GET /api/ai/page-agents/[agentId]/conversations', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    // Default auth success
+    // Default: authenticated user
     vi.mocked(authenticateHybridRequest).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
 
-    // Default permission granted
+    // Default: permission granted
     vi.mocked(canUserViewPage).mockResolvedValue(true);
 
-    // Default agent exists
-    vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockAgent());
+    // Default: agent exists
+    vi.mocked(conversationRepository.getAiAgent).mockResolvedValue(mockAgent());
+
+    // Default: empty conversations
+    vi.mocked(conversationRepository.listConversations).mockResolvedValue([]);
+    vi.mocked(conversationRepository.countConversations).mockResolvedValue(0);
   });
 
-  describe('GET /api/ai/page-agents/[agentId]/conversations', () => {
-    // Helper to setup mocks for GET
-    const setupGetMocks = (
-      agent: ReturnType<typeof mockAgent> | undefined,
-      conversationsResult: { rows: unknown[] },
-      totalCount: number
-    ) => {
-      vi.mocked(db.query.pages.findFirst).mockResolvedValue(agent);
-      vi.mocked(db.execute).mockResolvedValue(conversationsResult);
+  describe('authentication', () => {
+    it('should return 401 when not authenticated', async () => {
+      vi.mocked(isAuthError).mockReturnValue(true);
+      vi.mocked(authenticateHybridRequest).mockResolvedValue(mockAuthError(401));
 
-      const whereMock = vi.fn().mockResolvedValue([{ count: totalCount }]);
-      const fromMock = vi.fn().mockReturnValue({ where: whereMock });
-      vi.mocked(db.select).mockReturnValue({ from: fromMock } as unknown as ReturnType<typeof db.select>);
-    };
+      const request = createRequest(mockAgentId, 'GET');
+      const context = createContext(mockAgentId);
 
-    describe('authentication', () => {
-      it('should return 401 when not authenticated', async () => {
-        vi.mocked(isAuthError).mockReturnValue(true);
-        vi.mocked(authenticateHybridRequest).mockResolvedValue(mockAuthError(401));
+      const response = await GET(request, context);
 
-        const request = new Request(`https://example.com/api/ai/page-agents/${mockAgentId}/conversations`, {
-          method: 'GET',
-        });
-        const context = createContext(mockAgentId);
+      expect(response.status).toBe(401);
+    });
+  });
 
-        const response = await GET(request, context);
-        expect(response.status).toBe(401);
+  describe('resource not found', () => {
+    it('should return 404 when agent does not exist', async () => {
+      vi.mocked(conversationRepository.getAiAgent).mockResolvedValue(null);
+
+      const request = createRequest(mockAgentId, 'GET');
+      const context = createContext(mockAgentId);
+
+      const response = await GET(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(404);
+      expect(body.error).toBe('AI agent not found');
+    });
+  });
+
+  describe('authorization', () => {
+    it('should return 403 when user lacks view permission', async () => {
+      vi.mocked(canUserViewPage).mockResolvedValue(false);
+
+      const request = createRequest(mockAgentId, 'GET');
+      const context = createContext(mockAgentId);
+
+      const response = await GET(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toContain('Insufficient permissions');
+    });
+  });
+
+  describe('successful retrieval', () => {
+    it('should return conversations with pagination', async () => {
+      const mockConversations = [
+        {
+          conversationId: 'conv_1',
+          firstMessageTime: new Date('2025-01-01'),
+          lastMessageTime: new Date('2025-01-02'),
+          messageCount: 5,
+          firstUserMessage: JSON.stringify([{ text: 'Hello' }]),
+          lastMessageRole: 'assistant',
+          lastMessageContent: 'Hi there!',
+        },
+      ];
+      vi.mocked(conversationRepository.listConversations).mockResolvedValue(mockConversations);
+      vi.mocked(conversationRepository.countConversations).mockResolvedValue(1);
+
+      const request = createRequest(mockAgentId, 'GET');
+      const context = createContext(mockAgentId);
+
+      const response = await GET(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.conversations).toHaveLength(1);
+      expect(body.conversations[0]).toMatchObject({
+        id: 'conv_1',
+        preview: 'Hello',
+        messageCount: 5,
+      });
+      expect(body.pagination).toMatchObject({
+        page: 0,
+        pageSize: 50,
+        totalCount: 1,
+        totalPages: 1,
+        hasMore: false,
       });
     });
 
-    describe('agent not found', () => {
-      it('should return 404 when agent does not exist', async () => {
-        vi.mocked(db.query.pages.findFirst).mockResolvedValue(undefined);
+    it('should return empty array when no conversations exist', async () => {
+      const request = createRequest(mockAgentId, 'GET');
+      const context = createContext(mockAgentId);
 
-        const request = new Request(`https://example.com/api/ai/page-agents/${mockAgentId}/conversations`, {
-          method: 'GET',
-        });
-        const context = createContext(mockAgentId);
+      const response = await GET(request, context);
+      const body = await response.json();
 
-        const response = await GET(request, context);
-        const body = await response.json();
-
-        expect(response.status).toBe(404);
-        expect(body.error).toBe('AI agent not found');
-      });
+      expect(response.status).toBe(200);
+      expect(body.conversations).toEqual([]);
+      expect(body.pagination.totalCount).toBe(0);
     });
 
-    describe('authorization', () => {
-      it('should return 403 when user lacks view permission', async () => {
-        vi.mocked(canUserViewPage).mockResolvedValue(false);
+    it('should pass pagination params to repository', async () => {
+      vi.mocked(conversationRepository.countConversations).mockResolvedValue(100);
 
-        const request = new Request(`https://example.com/api/ai/page-agents/${mockAgentId}/conversations`, {
-          method: 'GET',
-        });
-        const context = createContext(mockAgentId);
+      const request = new Request(
+        `https://example.com/api/ai/page-agents/${mockAgentId}/conversations?page=2&pageSize=20`,
+        { method: 'GET' }
+      );
+      const context = createContext(mockAgentId);
 
-        const response = await GET(request, context);
-        const body = await response.json();
+      const response = await GET(request, context);
+      const body = await response.json();
 
-        expect(response.status).toBe(403);
-        expect(body.error).toContain('Insufficient permissions');
-      });
-    });
-
-    describe('successful retrieval', () => {
-      it('should return conversations with pagination', async () => {
-        const mockConversations = [
-          {
-            conversationId: 'conv_1',
-            firstMessageTime: new Date(),
-            lastMessageTime: new Date(),
-            messageCount: 5,
-            firstUserMessage: JSON.stringify([{ text: 'Hello' }]),
-            lastMessageRole: 'assistant',
-            lastMessageContent: 'Hi there!',
-          },
-        ];
-        setupGetMocks(mockAgent(), { rows: mockConversations }, 1);
-
-        const request = new Request(`https://example.com/api/ai/page-agents/${mockAgentId}/conversations`, {
-          method: 'GET',
-        });
-        const context = createContext(mockAgentId);
-
-        const response = await GET(request, context);
-        const body = await response.json();
-
-        expect(response.status).toBe(200);
-        expect(body.conversations).toBeDefined();
-        expect(body.pagination).toBeDefined();
-        expect(body.pagination.totalCount).toBe(1);
-      });
-
-      it('should return empty array when no conversations exist', async () => {
-        setupGetMocks(mockAgent(), { rows: [] }, 0);
-
-        const request = new Request(`https://example.com/api/ai/page-agents/${mockAgentId}/conversations`, {
-          method: 'GET',
-        });
-        const context = createContext(mockAgentId);
-
-        const response = await GET(request, context);
-        const body = await response.json();
-
-        expect(response.status).toBe(200);
-        expect(body.conversations).toEqual([]);
-        expect(body.pagination.totalCount).toBe(0);
-      });
-
-      it('should handle pagination parameters', async () => {
-        setupGetMocks(mockAgent(), { rows: [] }, 100);
-
-        const request = new Request(`https://example.com/api/ai/page-agents/${mockAgentId}/conversations?page=2&pageSize=20`, {
-          method: 'GET',
-        });
-        const context = createContext(mockAgentId);
-
-        const response = await GET(request, context);
-        const body = await response.json();
-
-        expect(response.status).toBe(200);
-        expect(body.pagination.page).toBe(2);
-        expect(body.pagination.pageSize).toBe(20);
-        expect(body.pagination.hasMore).toBe(true);
-      });
-    });
-
-    describe('error handling', () => {
-      it('should handle database errors gracefully', async () => {
-        vi.mocked(db.query.pages.findFirst).mockRejectedValue(new Error('Database error'));
-
-        const request = new Request(`https://example.com/api/ai/page-agents/${mockAgentId}/conversations`, {
-          method: 'GET',
-        });
-        const context = createContext(mockAgentId);
-
-        const response = await GET(request, context);
-        const body = await response.json();
-
-        expect(response.status).toBe(500);
-        expect(body.error).toBe('Failed to list conversations');
-        expect(loggers.ai.error).toHaveBeenCalled();
+      expect(conversationRepository.listConversations).toHaveBeenCalledWith(
+        mockAgentId,
+        20,  // pageSize
+        40   // offset (page 2 * 20)
+      );
+      expect(body.pagination).toMatchObject({
+        page: 2,
+        pageSize: 20,
+        hasMore: true,
       });
     });
   });
 
-  describe('POST /api/ai/page-agents/[agentId]/conversations', () => {
-    describe('authentication', () => {
-      it('should return 401 when not authenticated', async () => {
-        vi.mocked(isAuthError).mockReturnValue(true);
-        vi.mocked(authenticateHybridRequest).mockResolvedValue(mockAuthError(401));
+  describe('error handling', () => {
+    it('should return 500 when repository throws', async () => {
+      vi.mocked(conversationRepository.getAiAgent).mockRejectedValue(new Error('Database error'));
 
-        const request = new Request(`https://example.com/api/ai/page-agents/${mockAgentId}/conversations`, {
-          method: 'POST',
-          body: JSON.stringify({}),
-        });
-        const context = createContext(mockAgentId);
+      const request = createRequest(mockAgentId, 'GET');
+      const context = createContext(mockAgentId);
 
-        const response = await POST(request, context);
-        expect(response.status).toBe(401);
-      });
+      const response = await GET(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(body.error).toBe('Failed to list conversations');
+      expect(loggers.ai.error).toHaveBeenCalled();
+    });
+  });
+});
+
+describe('POST /api/ai/page-agents/[agentId]/conversations', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    // Default: authenticated user
+    vi.mocked(authenticateHybridRequest).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(isAuthError).mockReturnValue(false);
+
+    // Default: permission granted
+    vi.mocked(canUserViewPage).mockResolvedValue(true);
+
+    // Default: agent exists
+    vi.mocked(conversationRepository.getAiAgent).mockResolvedValue(mockAgent());
+  });
+
+  describe('authentication', () => {
+    it('should return 401 when not authenticated', async () => {
+      vi.mocked(isAuthError).mockReturnValue(true);
+      vi.mocked(authenticateHybridRequest).mockResolvedValue(mockAuthError(401));
+
+      const request = createRequest(mockAgentId, 'POST', {});
+      const context = createContext(mockAgentId);
+
+      const response = await POST(request, context);
+
+      expect(response.status).toBe(401);
+    });
+  });
+
+  describe('resource not found', () => {
+    it('should return 404 when agent does not exist', async () => {
+      vi.mocked(conversationRepository.getAiAgent).mockResolvedValue(null);
+
+      const request = createRequest(mockAgentId, 'POST', {});
+      const context = createContext(mockAgentId);
+
+      const response = await POST(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(404);
+      expect(body.error).toBe('AI agent not found');
+    });
+  });
+
+  describe('authorization', () => {
+    it('should return 403 when user lacks view permission', async () => {
+      vi.mocked(canUserViewPage).mockResolvedValue(false);
+
+      const request = createRequest(mockAgentId, 'POST', {});
+      const context = createContext(mockAgentId);
+
+      const response = await POST(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toContain('Insufficient permissions');
+    });
+  });
+
+  describe('successful creation', () => {
+    it('should create a new conversation with generated ID', async () => {
+      const request = createRequest(mockAgentId, 'POST', {});
+      const context = createContext(mockAgentId);
+
+      const response = await POST(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.conversationId).toBe('generated_conv_id');
+      expect(body.title).toBe('New conversation');
+      expect(body.createdAt).toBeDefined();
     });
 
-    describe('agent not found', () => {
-      it('should return 404 when agent does not exist', async () => {
-        vi.mocked(db.query.pages.findFirst).mockResolvedValue(undefined);
+    it('should use custom title if provided', async () => {
+      const request = createRequest(mockAgentId, 'POST', { title: 'My Custom Conversation' });
+      const context = createContext(mockAgentId);
 
-        const request = new Request(`https://example.com/api/ai/page-agents/${mockAgentId}/conversations`, {
-          method: 'POST',
-          body: JSON.stringify({}),
-        });
-        const context = createContext(mockAgentId);
+      const response = await POST(request, context);
+      const body = await response.json();
 
-        const response = await POST(request, context);
-        const body = await response.json();
-
-        expect(response.status).toBe(404);
-        expect(body.error).toBe('AI agent not found');
-      });
+      expect(response.status).toBe(200);
+      expect(body.title).toBe('My Custom Conversation');
     });
 
-    describe('authorization', () => {
-      it('should return 403 when user lacks view permission', async () => {
-        vi.mocked(canUserViewPage).mockResolvedValue(false);
+    it('should handle invalid JSON body gracefully', async () => {
+      const request = new Request(
+        `https://example.com/api/ai/page-agents/${mockAgentId}/conversations`,
+        { method: 'POST', body: 'invalid json' }
+      );
+      const context = createContext(mockAgentId);
 
-        const request = new Request(`https://example.com/api/ai/page-agents/${mockAgentId}/conversations`, {
-          method: 'POST',
-          body: JSON.stringify({}),
-        });
-        const context = createContext(mockAgentId);
+      const response = await POST(request, context);
+      const body = await response.json();
 
-        const response = await POST(request, context);
-        const body = await response.json();
-
-        expect(response.status).toBe(403);
-        expect(body.error).toContain('Insufficient permissions');
-      });
+      expect(response.status).toBe(200);
+      expect(body.title).toBe('New conversation');
     });
+  });
 
-    describe('successful creation', () => {
-      it('should create a new conversation', async () => {
-        const request = new Request(`https://example.com/api/ai/page-agents/${mockAgentId}/conversations`, {
-          method: 'POST',
-          body: JSON.stringify({}),
-        });
-        const context = createContext(mockAgentId);
+  describe('error handling', () => {
+    it('should return 500 when repository throws', async () => {
+      vi.mocked(conversationRepository.getAiAgent).mockRejectedValue(new Error('Database error'));
 
-        const response = await POST(request, context);
-        const body = await response.json();
+      const request = createRequest(mockAgentId, 'POST', {});
+      const context = createContext(mockAgentId);
 
-        expect(response.status).toBe(200);
-        expect(body.conversationId).toBe('generated_conv_id');
-        expect(body.createdAt).toBeDefined();
-      });
+      const response = await POST(request, context);
+      const body = await response.json();
 
-      it('should use custom title if provided', async () => {
-        const request = new Request(`https://example.com/api/ai/page-agents/${mockAgentId}/conversations`, {
-          method: 'POST',
-          body: JSON.stringify({ title: 'My Custom Conversation' }),
-        });
-        const context = createContext(mockAgentId);
-
-        const response = await POST(request, context);
-        const body = await response.json();
-
-        expect(response.status).toBe(200);
-        expect(body.title).toBe('My Custom Conversation');
-      });
-
-      it('should default to "New conversation" title', async () => {
-        const request = new Request(`https://example.com/api/ai/page-agents/${mockAgentId}/conversations`, {
-          method: 'POST',
-          body: JSON.stringify({}),
-        });
-        const context = createContext(mockAgentId);
-
-        const response = await POST(request, context);
-        const body = await response.json();
-
-        expect(body.title).toBe('New conversation');
-      });
-
-      it('should handle invalid JSON body gracefully', async () => {
-        const request = new Request(`https://example.com/api/ai/page-agents/${mockAgentId}/conversations`, {
-          method: 'POST',
-          body: 'invalid json',
-        });
-        const context = createContext(mockAgentId);
-
-        const response = await POST(request, context);
-        const body = await response.json();
-
-        // Should still succeed with default values
-        expect(response.status).toBe(200);
-        expect(body.title).toBe('New conversation');
-      });
+      expect(response.status).toBe(500);
+      expect(body.error).toBe('Failed to create conversation');
+      expect(loggers.ai.error).toHaveBeenCalled();
     });
+  });
+});
 
-    describe('error handling', () => {
-      it('should handle database errors gracefully', async () => {
-        vi.mocked(db.query.pages.findFirst).mockRejectedValue(new Error('Database error'));
+describe('extractPreviewText (pure function)', () => {
+  it('should return "New conversation" for null content', async () => {
+    const actualModule = await vi.importActual<
+      typeof import('@/lib/repositories/conversation-repository')
+    >('@/lib/repositories/conversation-repository');
+    const { extractPreviewText } = actualModule;
 
-        const request = new Request(`https://example.com/api/ai/page-agents/${mockAgentId}/conversations`, {
-          method: 'POST',
-          body: JSON.stringify({}),
-        });
-        const context = createContext(mockAgentId);
+    expect(extractPreviewText(null)).toBe('New conversation');
+  });
 
-        const response = await POST(request, context);
-        const body = await response.json();
+  it('should extract text from array format', async () => {
+    const actualModule = await vi.importActual<
+      typeof import('@/lib/repositories/conversation-repository')
+    >('@/lib/repositories/conversation-repository');
+    const { extractPreviewText } = actualModule;
 
-        expect(response.status).toBe(500);
-        expect(body.error).toBe('Failed to create conversation');
-        expect(loggers.ai.error).toHaveBeenCalled();
-      });
-    });
+    const content = JSON.stringify([{ text: 'Hello world' }]);
+    expect(extractPreviewText(content)).toBe('Hello world');
+  });
+
+  it('should extract text from parts format', async () => {
+    const actualModule = await vi.importActual<
+      typeof import('@/lib/repositories/conversation-repository')
+    >('@/lib/repositories/conversation-repository');
+    const { extractPreviewText } = actualModule;
+
+    const content = JSON.stringify({ parts: [{ text: 'Hello from parts' }] });
+    expect(extractPreviewText(content)).toBe('Hello from parts');
+  });
+
+  it('should truncate to 100 characters', async () => {
+    const actualModule = await vi.importActual<
+      typeof import('@/lib/repositories/conversation-repository')
+    >('@/lib/repositories/conversation-repository');
+    const { extractPreviewText } = actualModule;
+
+    const longText = 'a'.repeat(150);
+    const content = JSON.stringify([{ text: longText }]);
+    expect(extractPreviewText(content)).toBe('a'.repeat(100));
+  });
+
+  it('should return raw content if JSON parsing fails', async () => {
+    const actualModule = await vi.importActual<
+      typeof import('@/lib/repositories/conversation-repository')
+    >('@/lib/repositories/conversation-repository');
+    const { extractPreviewText } = actualModule;
+
+    expect(extractPreviewText('plain text message')).toBe('plain text message');
+  });
+});
+
+describe('generateTitle (pure function)', () => {
+  it('should return preview as-is if <= 50 chars', async () => {
+    const actualModule = await vi.importActual<
+      typeof import('@/lib/repositories/conversation-repository')
+    >('@/lib/repositories/conversation-repository');
+    const { generateTitle } = actualModule;
+
+    expect(generateTitle('Short title')).toBe('Short title');
+  });
+
+  it('should truncate and add ellipsis if > 50 chars', async () => {
+    const actualModule = await vi.importActual<
+      typeof import('@/lib/repositories/conversation-repository')
+    >('@/lib/repositories/conversation-repository');
+    const { generateTitle } = actualModule;
+
+    const longPreview = 'a'.repeat(60);
+    expect(generateTitle(longPreview)).toBe('a'.repeat(50) + '...');
   });
 });

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db, conversations, eq, and, desc } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
+import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: false };
 
@@ -15,31 +15,12 @@ export async function GET(request: Request) {
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 
-    // Just get ANY global conversation for this user (most recent by creation time)
-    const globalConversation = await db
-      .select({
-        id: conversations.id,
-        title: conversations.title,
-        type: conversations.type,
-        contextId: conversations.contextId,
-        lastMessageAt: conversations.lastMessageAt,
-        createdAt: conversations.createdAt,
-      })
-      .from(conversations)
-      .where(and(
-        eq(conversations.userId, userId),
-        eq(conversations.type, 'global'),
-        eq(conversations.isActive, true)
-      ))
-      .orderBy(desc(conversations.createdAt)) // Most recent by creation time
-      .limit(1);
-
-    const conversation = globalConversation[0] || null;
+    const conversation = await globalConversationRepository.getActiveGlobalConversation(userId);
     return NextResponse.json(conversation);
   } catch (error) {
     loggers.api.error('Error fetching global conversation:', error as Error);
-    return NextResponse.json({ 
-      error: 'Failed to fetch global conversation' 
+    return NextResponse.json({
+      error: 'Failed to fetch global conversation'
     }, { status: 500 });
   }
 }

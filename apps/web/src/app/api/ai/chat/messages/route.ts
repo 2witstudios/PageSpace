@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
 import { authenticateHybridRequest, isAuthError } from '@/lib/auth';
-import { db, chatMessages, eq, and } from '@pagespace/db';
 import { convertDbMessageToUIMessage } from '@/lib/ai/core';
 import { loggers } from '@pagespace/lib/server';
 import { canUserViewPage } from '@pagespace/lib/server';
+import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 
 /**
  * GET handler to load chat messages for a page
@@ -31,24 +31,11 @@ export async function GET(request: Request) {
       }, { status: 403 });
     }
 
-    // Direct database query for messages
-    // If conversationId provided, filter by conversation session
-    const dbMessages = await db
-      .select()
-      .from(chatMessages)
-      .where(
-        conversationId
-          ? and(
-              eq(chatMessages.pageId, pageId),
-              eq(chatMessages.isActive, true),
-              eq(chatMessages.conversationId, conversationId)
-            )
-          : and(
-              eq(chatMessages.pageId, pageId),
-              eq(chatMessages.isActive, true)
-            )
-      )
-      .orderBy(chatMessages.createdAt);
+    // Get messages from repository
+    const dbMessages = await chatMessageRepository.getMessagesForPage(
+      pageId,
+      conversationId || undefined
+    );
 
     // Convert to UIMessage format with tool calls and results
     const messages = dbMessages.map(convertDbMessageToUIMessage);
@@ -57,8 +44,8 @@ export async function GET(request: Request) {
 
   } catch (error) {
     loggers.ai.error('Error loading chat messages:', error as Error);
-    return NextResponse.json({ 
-      error: 'Failed to load messages' 
+    return NextResponse.json({
+      error: 'Failed to load messages'
     }, { status: 500 });
   }
 }

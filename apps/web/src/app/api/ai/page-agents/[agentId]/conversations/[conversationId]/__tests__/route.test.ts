@@ -1,409 +1,380 @@
+/**
+ * Contract tests for PATCH/DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]
+ *
+ * These tests verify the Request → Response contract and boundary obligations.
+ * Database operations are mocked at the repository seam.
+ */
+
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { PATCH, DELETE } from '../route';
 import type { WebAuthResult, AuthError } from '@/lib/auth';
 
-// Mock dependencies
-vi.mock('@pagespace/db', () => {
-  return {
-    db: {
-      query: {
-        pages: {
-          findFirst: vi.fn(),
-        },
-      },
-      select: vi.fn(),
-      update: vi.fn(),
-      insert: vi.fn(),
-    },
-    chatMessages: {},
-    userActivities: {},
-    pages: {},
-    eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
-    and: vi.fn((...conditions: unknown[]) => ({ conditions, type: 'and' })),
-    sql: vi.fn((strings: TemplateStringsArray) => ({
-      sql: strings.join(''),
-      as: vi.fn(() => ({})),
-    })),
-  };
-});
-
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
-    ai: {
-      info: vi.fn(),
-      error: vi.fn(),
-      warn: vi.fn(),
-      debug: vi.fn(),
-    },
+// Mock the repository seam (boundary)
+vi.mock('@/lib/repositories/conversation-repository', () => ({
+  conversationRepository: {
+    getAiAgent: vi.fn(),
+    conversationExists: vi.fn(),
+    getConversationMetadata: vi.fn(),
+    softDeleteConversation: vi.fn(),
+    logConversationDeletion: vi.fn(),
   },
-  canUserEditPage: vi.fn(),
 }));
 
+// Mock auth (boundary)
 vi.mock('@/lib/auth', () => ({
   authenticateHybridRequest: vi.fn(),
   isAuthError: vi.fn(),
 }));
 
-import { db } from '@pagespace/db';
-import { loggers, canUserEditPage } from '@pagespace/lib/server';
-import { authenticateHybridRequest, isAuthError } from '@/lib/auth';
+// Mock permissions (boundary)
+vi.mock('@pagespace/lib/server', () => ({
+  canUserEditPage: vi.fn(),
+  loggers: {
+    ai: {
+      info: vi.fn(),
+      error: vi.fn(),
+    },
+  },
+}));
 
-// Helper to create mock WebAuthResult
-const mockWebAuth = (userId: string, tokenVersion = 0): WebAuthResult => ({
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
+import { authenticateHybridRequest, isAuthError } from '@/lib/auth';
+import { canUserEditPage, loggers } from '@pagespace/lib/server';
+
+// Test fixtures
+const mockUserId = 'user_123';
+const mockAgentId = 'agent_123';
+const mockConversationId = 'conv_123';
+const mockDriveId = 'drive_123';
+
+const mockWebAuth = (userId: string): WebAuthResult => ({
   userId,
-  tokenVersion,
+  tokenVersion: 0,
   tokenType: 'jwt',
   source: 'cookie',
   role: 'user',
 });
 
-// Helper to create mock AuthError
 const mockAuthError = (status = 401): AuthError => ({
   error: NextResponse.json({ error: 'Unauthorized' }, { status }),
 });
 
-// Helper to create mock agent page
-const mockAgent = (overrides: Partial<{
-  id: string;
-  title: string;
-  type: string;
-  isTrashed: boolean;
-}> = {}) => ({
-  id: overrides.id || 'agent_123',
-  title: overrides.title || 'Test Agent',
-  type: overrides.type || 'AI_CHAT',
-  isTrashed: overrides.isTrashed ?? false,
+const mockAgent = () => ({
+  id: mockAgentId,
+  title: 'Test Agent',
+  type: 'AI_CHAT',
+  driveId: mockDriveId,
 });
 
-describe('Page Agent Conversation Routes', () => {
-  const mockUserId = 'user_123';
-  const mockAgentId = 'agent_123';
-  const mockConversationId = 'conv_123';
+const createRequest = (
+  agentId: string,
+  conversationId: string,
+  method: string,
+  body?: Record<string, unknown>
+) =>
+  new Request(
+    `https://example.com/api/ai/page-agents/${agentId}/conversations/${conversationId}`,
+    {
+      method,
+      body: body ? JSON.stringify(body) : undefined,
+    }
+  );
 
-  const createContext = (agentId: string, conversationId: string) => ({
-    params: Promise.resolve({ agentId, conversationId }),
-  });
+const createContext = (agentId: string, conversationId: string) => ({
+  params: Promise.resolve({ agentId, conversationId }),
+});
 
+describe('PATCH /api/ai/page-agents/[agentId]/conversations/[conversationId]', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    // Default auth success
+    // Default: authenticated user
     vi.mocked(authenticateHybridRequest).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
 
-    // Default permission granted
+    // Default: permission granted
     vi.mocked(canUserEditPage).mockResolvedValue(true);
 
-    // Default agent exists
-    vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockAgent());
+    // Default: agent exists
+    vi.mocked(conversationRepository.getAiAgent).mockResolvedValue(mockAgent());
+
+    // Default: conversation exists
+    vi.mocked(conversationRepository.conversationExists).mockResolvedValue(true);
   });
 
-  describe('PATCH /api/ai/page-agents/[agentId]/conversations/[conversationId]', () => {
-    // Helper to setup select mock for conversation messages (uses .limit())
-    const setupConversationMessagesMock = (hasMessages: boolean) => {
-      const result = hasMessages ? [{ count: 'msg_1' }] : [];
-      // Chain: db.select().from().where().limit() -> result
-      const limitMock = vi.fn().mockResolvedValue(result);
-      const whereMock = vi.fn().mockReturnValue({ limit: limitMock });
-      const fromMock = vi.fn().mockReturnValue({ where: whereMock });
-      vi.mocked(db.select).mockReturnValue({ from: fromMock } as unknown as ReturnType<typeof db.select>);
-    };
+  describe('authentication', () => {
+    it('should return 401 when not authenticated', async () => {
+      vi.mocked(isAuthError).mockReturnValue(true);
+      vi.mocked(authenticateHybridRequest).mockResolvedValue(mockAuthError(401));
 
-    describe('authentication', () => {
-      it('should return 401 when not authenticated', async () => {
-        vi.mocked(isAuthError).mockReturnValue(true);
-        vi.mocked(authenticateHybridRequest).mockResolvedValue(mockAuthError(401));
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', { title: 'Updated' });
+      const context = createContext(mockAgentId, mockConversationId);
 
-        const request = new Request(
-          `https://example.com/api/ai/page-agents/${mockAgentId}/conversations/${mockConversationId}`,
-          {
-            method: 'PATCH',
-            body: JSON.stringify({ title: 'Updated' }),
-          }
-        );
-        const context = createContext(mockAgentId, mockConversationId);
+      const response = await PATCH(request, context);
 
-        const response = await PATCH(request, context);
-        expect(response.status).toBe(401);
-      });
-    });
-
-    describe('agent not found', () => {
-      it('should return 404 when agent does not exist', async () => {
-        vi.mocked(db.query.pages.findFirst).mockResolvedValue(undefined);
-
-        const request = new Request(
-          `https://example.com/api/ai/page-agents/${mockAgentId}/conversations/${mockConversationId}`,
-          {
-            method: 'PATCH',
-            body: JSON.stringify({ title: 'Updated' }),
-          }
-        );
-        const context = createContext(mockAgentId, mockConversationId);
-
-        const response = await PATCH(request, context);
-        const body = await response.json();
-
-        expect(response.status).toBe(404);
-        expect(body.error).toBe('AI agent not found');
-      });
-    });
-
-    describe('authorization', () => {
-      it('should return 403 when user lacks edit permission', async () => {
-        vi.mocked(canUserEditPage).mockResolvedValue(false);
-
-        const request = new Request(
-          `https://example.com/api/ai/page-agents/${mockAgentId}/conversations/${mockConversationId}`,
-          {
-            method: 'PATCH',
-            body: JSON.stringify({ title: 'Updated' }),
-          }
-        );
-        const context = createContext(mockAgentId, mockConversationId);
-
-        const response = await PATCH(request, context);
-        const body = await response.json();
-
-        expect(response.status).toBe(403);
-        expect(body.error).toContain('Insufficient permissions');
-      });
-    });
-
-    describe('conversation not found', () => {
-      it('should return 404 when conversation does not exist', async () => {
-        setupConversationMessagesMock(false);
-
-        const request = new Request(
-          `https://example.com/api/ai/page-agents/${mockAgentId}/conversations/${mockConversationId}`,
-          {
-            method: 'PATCH',
-            body: JSON.stringify({ title: 'Updated' }),
-          }
-        );
-        const context = createContext(mockAgentId, mockConversationId);
-
-        const response = await PATCH(request, context);
-        const body = await response.json();
-
-        expect(response.status).toBe(404);
-        expect(body.error).toBe('Conversation not found');
-      });
-    });
-
-    describe('successful update', () => {
-      it('should return success with title update message', async () => {
-        setupConversationMessagesMock(true);
-
-        const request = new Request(
-          `https://example.com/api/ai/page-agents/${mockAgentId}/conversations/${mockConversationId}`,
-          {
-            method: 'PATCH',
-            body: JSON.stringify({ title: 'My Custom Title' }),
-          }
-        );
-        const context = createContext(mockAgentId, mockConversationId);
-
-        const response = await PATCH(request, context);
-        const body = await response.json();
-
-        expect(response.status).toBe(200);
-        expect(body.success).toBe(true);
-        expect(body.conversationId).toBe(mockConversationId);
-        expect(body.title).toBe('My Custom Title');
-        expect(body.message).toContain('Custom titles will be supported');
-      });
-    });
-
-    describe('error handling', () => {
-      it('should handle database errors gracefully', async () => {
-        vi.mocked(db.query.pages.findFirst).mockRejectedValue(new Error('Database error'));
-
-        const request = new Request(
-          `https://example.com/api/ai/page-agents/${mockAgentId}/conversations/${mockConversationId}`,
-          {
-            method: 'PATCH',
-            body: JSON.stringify({ title: 'Updated' }),
-          }
-        );
-        const context = createContext(mockAgentId, mockConversationId);
-
-        const response = await PATCH(request, context);
-        const body = await response.json();
-
-        expect(response.status).toBe(500);
-        expect(body.error).toBe('Failed to update conversation');
-        expect(loggers.ai.error).toHaveBeenCalled();
-      });
+      expect(response.status).toBe(401);
     });
   });
 
-  describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', () => {
-    // Helper to setup mocks for DELETE
-    // Chain: db.select().from().where() -> result (no .limit() for DELETE metadata query)
-    const setupDeleteMocks = (metadata: { messageCount: number; firstMessageTime: Date; lastMessageTime: Date } | null) => {
-      const selectWhereMock = vi.fn().mockResolvedValue(metadata ? [metadata] : []);
-      const fromMock = vi.fn().mockReturnValue({ where: selectWhereMock });
-      vi.mocked(db.select).mockReturnValue({ from: fromMock } as unknown as ReturnType<typeof db.select>);
+  describe('resource not found', () => {
+    it('should return 404 when agent does not exist', async () => {
+      vi.mocked(conversationRepository.getAiAgent).mockResolvedValue(null);
 
-      // Chain: db.update().set().where() -> resolved
-      const updateWhereMock = vi.fn().mockResolvedValue(undefined);
-      const setMock = vi.fn().mockReturnValue({ where: updateWhereMock });
-      vi.mocked(db.update).mockReturnValue({ set: setMock } as unknown as ReturnType<typeof db.update>);
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', { title: 'Updated' });
+      const context = createContext(mockAgentId, mockConversationId);
 
-      // Chain: db.insert().values() -> resolved
-      const insertValuesMock = vi.fn().mockResolvedValue([]);
-      vi.mocked(db.insert).mockReturnValue({ values: insertValuesMock } as unknown as ReturnType<typeof db.insert>);
+      const response = await PATCH(request, context);
+      const body = await response.json();
 
-      return { updateWhereMock, insertValuesMock };
-    };
+      expect(response.status).toBe(404);
+      expect(body.error).toBe('AI agent not found');
+    });
 
-    describe('authentication', () => {
-      it('should return 401 when not authenticated', async () => {
-        vi.mocked(isAuthError).mockReturnValue(true);
-        vi.mocked(authenticateHybridRequest).mockResolvedValue(mockAuthError(401));
+    it('should return 404 when conversation does not exist', async () => {
+      vi.mocked(conversationRepository.conversationExists).mockResolvedValue(false);
 
-        const request = new Request(
-          `https://example.com/api/ai/page-agents/${mockAgentId}/conversations/${mockConversationId}`,
-          { method: 'DELETE' }
-        );
-        const context = createContext(mockAgentId, mockConversationId);
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', { title: 'Updated' });
+      const context = createContext(mockAgentId, mockConversationId);
 
-        const response = await DELETE(request, context);
-        expect(response.status).toBe(401);
+      const response = await PATCH(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(404);
+      expect(body.error).toBe('Conversation not found');
+    });
+  });
+
+  describe('authorization', () => {
+    it('should return 403 when user lacks edit permission', async () => {
+      vi.mocked(canUserEditPage).mockResolvedValue(false);
+
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', { title: 'Updated' });
+      const context = createContext(mockAgentId, mockConversationId);
+
+      const response = await PATCH(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toContain('Insufficient permissions');
+    });
+  });
+
+  describe('successful update', () => {
+    it('should return success with title and placeholder message', async () => {
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', {
+        title: 'My Custom Title',
+      });
+      const context = createContext(mockAgentId, mockConversationId);
+
+      const response = await PATCH(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.conversationId).toBe(mockConversationId);
+      expect(body.title).toBe('My Custom Title');
+      expect(body.message).toContain('Custom titles will be supported');
+    });
+
+    it('should verify conversation exists before returning success', async () => {
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', { title: 'Test' });
+      const context = createContext(mockAgentId, mockConversationId);
+
+      await PATCH(request, context);
+
+      expect(conversationRepository.conversationExists).toHaveBeenCalledWith(
+        mockAgentId,
+        mockConversationId
+      );
+    });
+  });
+
+  describe('error handling', () => {
+    it('should return 500 when repository throws', async () => {
+      vi.mocked(conversationRepository.getAiAgent).mockRejectedValue(new Error('Database error'));
+
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', { title: 'Updated' });
+      const context = createContext(mockAgentId, mockConversationId);
+
+      const response = await PATCH(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(body.error).toBe('Failed to update conversation');
+      expect(loggers.ai.error).toHaveBeenCalled();
+    });
+  });
+});
+
+describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    // Default: authenticated user
+    vi.mocked(authenticateHybridRequest).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(isAuthError).mockReturnValue(false);
+
+    // Default: permission granted
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
+
+    // Default: agent exists
+    vi.mocked(conversationRepository.getAiAgent).mockResolvedValue(mockAgent());
+
+    // Default: conversation exists
+    vi.mocked(conversationRepository.conversationExists).mockResolvedValue(true);
+
+    // Default: conversation metadata
+    vi.mocked(conversationRepository.getConversationMetadata).mockResolvedValue({
+      messageCount: 5,
+      firstMessageTime: new Date('2025-01-01'),
+      lastMessageTime: new Date('2025-01-02'),
+    });
+
+    // Default: soft delete succeeds
+    vi.mocked(conversationRepository.softDeleteConversation).mockResolvedValue(undefined);
+
+    // Default: audit log succeeds
+    vi.mocked(conversationRepository.logConversationDeletion).mockResolvedValue(undefined);
+  });
+
+  describe('authentication', () => {
+    it('should return 401 when not authenticated', async () => {
+      vi.mocked(isAuthError).mockReturnValue(true);
+      vi.mocked(authenticateHybridRequest).mockResolvedValue(mockAuthError(401));
+
+      const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
+      const context = createContext(mockAgentId, mockConversationId);
+
+      const response = await DELETE(request, context);
+
+      expect(response.status).toBe(401);
+    });
+  });
+
+  describe('resource not found', () => {
+    it('should return 404 when agent does not exist', async () => {
+      vi.mocked(conversationRepository.getAiAgent).mockResolvedValue(null);
+
+      const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
+      const context = createContext(mockAgentId, mockConversationId);
+
+      const response = await DELETE(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(404);
+      expect(body.error).toBe('AI agent not found');
+    });
+
+    it('should return 404 when conversation does not exist', async () => {
+      vi.mocked(conversationRepository.conversationExists).mockResolvedValue(false);
+
+      const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
+      const context = createContext(mockAgentId, mockConversationId);
+
+      const response = await DELETE(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(404);
+      expect(body.error).toBe('Conversation not found');
+    });
+  });
+
+  describe('authorization', () => {
+    it('should return 403 when user lacks edit permission', async () => {
+      vi.mocked(canUserEditPage).mockResolvedValue(false);
+
+      const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
+      const context = createContext(mockAgentId, mockConversationId);
+
+      const response = await DELETE(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toContain('Insufficient permissions');
+    });
+  });
+
+  describe('successful deletion', () => {
+    it('should soft delete conversation and return success', async () => {
+      const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
+      const context = createContext(mockAgentId, mockConversationId);
+
+      const response = await DELETE(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.conversationId).toBe(mockConversationId);
+      expect(body.message).toBe('Conversation deleted successfully');
+    });
+
+    it('should call softDeleteConversation with correct params', async () => {
+      const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
+      const context = createContext(mockAgentId, mockConversationId);
+
+      await DELETE(request, context);
+
+      expect(conversationRepository.softDeleteConversation).toHaveBeenCalledWith(
+        mockAgentId,
+        mockConversationId
+      );
+    });
+  });
+
+  describe('boundary obligations', () => {
+    it('should create audit log with correct metadata', async () => {
+      const metadata = {
+        messageCount: 5,
+        firstMessageTime: new Date('2025-01-01'),
+        lastMessageTime: new Date('2025-01-02'),
+      };
+      vi.mocked(conversationRepository.getConversationMetadata).mockResolvedValue(metadata);
+
+      const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
+      const context = createContext(mockAgentId, mockConversationId);
+
+      await DELETE(request, context);
+
+      expect(conversationRepository.logConversationDeletion).toHaveBeenCalledWith({
+        userId: mockUserId,
+        conversationId: mockConversationId,
+        agentId: mockAgentId,
+        metadata,
       });
     });
 
-    describe('agent not found', () => {
-      it('should return 404 when agent does not exist', async () => {
-        vi.mocked(db.query.pages.findFirst).mockResolvedValue(undefined);
+    it('should log successful deletion', async () => {
+      const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
+      const context = createContext(mockAgentId, mockConversationId);
 
-        const request = new Request(
-          `https://example.com/api/ai/page-agents/${mockAgentId}/conversations/${mockConversationId}`,
-          { method: 'DELETE' }
-        );
-        const context = createContext(mockAgentId, mockConversationId);
+      await DELETE(request, context);
 
-        const response = await DELETE(request, context);
-        const body = await response.json();
-
-        expect(response.status).toBe(404);
-        expect(body.error).toBe('AI agent not found');
-      });
-    });
-
-    describe('authorization', () => {
-      it('should return 403 when user lacks edit permission', async () => {
-        vi.mocked(canUserEditPage).mockResolvedValue(false);
-
-        const request = new Request(
-          `https://example.com/api/ai/page-agents/${mockAgentId}/conversations/${mockConversationId}`,
-          { method: 'DELETE' }
-        );
-        const context = createContext(mockAgentId, mockConversationId);
-
-        const response = await DELETE(request, context);
-        const body = await response.json();
-
-        expect(response.status).toBe(403);
-        expect(body.error).toContain('Insufficient permissions');
-      });
-    });
-
-    describe('successful deletion', () => {
-      it('should soft delete all conversation messages', async () => {
-        const metadata = {
+      expect(loggers.ai.info).toHaveBeenCalledWith(
+        'Conversation deleted',
+        expect.objectContaining({
+          conversationId: mockConversationId,
+          agentId: mockAgentId,
+          userId: mockUserId,
           messageCount: 5,
-          firstMessageTime: new Date(),
-          lastMessageTime: new Date(),
-        };
-        setupDeleteMocks(metadata);
-
-        const request = new Request(
-          `https://example.com/api/ai/page-agents/${mockAgentId}/conversations/${mockConversationId}`,
-          { method: 'DELETE' }
-        );
-        const context = createContext(mockAgentId, mockConversationId);
-
-        const response = await DELETE(request, context);
-        const body = await response.json();
-
-        expect(response.status).toBe(200);
-        expect(body.success).toBe(true);
-        expect(body.conversationId).toBe(mockConversationId);
-        expect(body.message).toBe('Conversation deleted successfully');
-      });
-
-      it('should create audit log entry', async () => {
-        const metadata = {
-          messageCount: 5,
-          firstMessageTime: new Date(),
-          lastMessageTime: new Date(),
-        };
-        const { insertValuesMock } = setupDeleteMocks(metadata);
-
-        const request = new Request(
-          `https://example.com/api/ai/page-agents/${mockAgentId}/conversations/${mockConversationId}`,
-          { method: 'DELETE' }
-        );
-        const context = createContext(mockAgentId, mockConversationId);
-
-        await DELETE(request, context);
-
-        expect(insertValuesMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            userId: mockUserId,
-            action: 'delete',
-            resource: 'conversation',
-            resourceId: mockConversationId,
-          })
-        );
-      });
-
-      it('should log successful deletion', async () => {
-        const metadata = {
-          messageCount: 5,
-          firstMessageTime: new Date(),
-          lastMessageTime: new Date(),
-        };
-        setupDeleteMocks(metadata);
-
-        const request = new Request(
-          `https://example.com/api/ai/page-agents/${mockAgentId}/conversations/${mockConversationId}`,
-          { method: 'DELETE' }
-        );
-        const context = createContext(mockAgentId, mockConversationId);
-
-        await DELETE(request, context);
-
-        expect(loggers.ai.info).toHaveBeenCalledWith(
-          'Conversation deleted',
-          expect.objectContaining({
-            conversationId: mockConversationId,
-            agentId: mockAgentId,
-          })
-        );
-      });
+        })
+      );
     });
+  });
 
-    describe('error handling', () => {
-      it('should handle database errors gracefully', async () => {
-        vi.mocked(db.query.pages.findFirst).mockRejectedValue(new Error('Database error'));
+  describe('error handling', () => {
+    it('should return 500 when repository throws', async () => {
+      vi.mocked(conversationRepository.getAiAgent).mockRejectedValue(new Error('Database error'));
 
-        const request = new Request(
-          `https://example.com/api/ai/page-agents/${mockAgentId}/conversations/${mockConversationId}`,
-          { method: 'DELETE' }
-        );
-        const context = createContext(mockAgentId, mockConversationId);
+      const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
+      const context = createContext(mockAgentId, mockConversationId);
 
-        const response = await DELETE(request, context);
-        const body = await response.json();
+      const response = await DELETE(request, context);
+      const body = await response.json();
 
-        expect(response.status).toBe(500);
-        expect(body.error).toBe('Failed to delete conversation');
-        expect(loggers.ai.error).toHaveBeenCalled();
-      });
+      expect(response.status).toBe(500);
+      expect(body.error).toBe('Failed to delete conversation');
+      expect(loggers.ai.error).toHaveBeenCalled();
     });
   });
 });

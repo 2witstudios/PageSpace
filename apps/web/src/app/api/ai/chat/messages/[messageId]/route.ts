@@ -1,9 +1,12 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db, chatMessages, eq } from '@pagespace/db';
 import { canUserEditPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
+import {
+  chatMessageRepository,
+  processMessageContentUpdate,
+} from '@/lib/repositories/chat-message-repository';
 
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 
@@ -33,10 +36,7 @@ export async function PATCH(
     }
 
     // Get the message to check permissions
-    const [message] = await db
-      .select()
-      .from(chatMessages)
-      .where(eq(chatMessages.id, messageId));
+    const message = await chatMessageRepository.getMessageById(messageId);
 
     if (!message) {
       return NextResponse.json({ error: 'Message not found' }, { status: 404 });
@@ -56,28 +56,11 @@ export async function PATCH(
       );
     }
 
-    // Parse existing content to check if it's structured
-    let updatedContent = content;
-    try {
-      const parsed = JSON.parse(message.content);
-      if (parsed.textParts && parsed.partsOrder) {
-        // Update only textParts, preserve structure
-        parsed.textParts = [content];
-        parsed.originalContent = content;
-        updatedContent = JSON.stringify(parsed);
-      }
-    } catch {
-      // Plain text, use as-is
-    }
+    // Process content, preserving structured format if present
+    const updatedContent = processMessageContentUpdate(message.content, content);
 
     // Update the message content and set editedAt
-    await db
-      .update(chatMessages)
-      .set({
-        content: updatedContent,
-        editedAt: new Date()
-      })
-      .where(eq(chatMessages.id, messageId));
+    await chatMessageRepository.updateMessageContent(messageId, updatedContent);
 
     loggers.api.info('Message edited successfully', {
       userId: maskIdentifier(userId),
@@ -115,10 +98,7 @@ export async function DELETE(
     const { messageId } = await context.params;
 
     // Get the message to check permissions
-    const [message] = await db
-      .select()
-      .from(chatMessages)
-      .where(eq(chatMessages.id, messageId));
+    const message = await chatMessageRepository.getMessageById(messageId);
 
     if (!message) {
       return NextResponse.json({ error: 'Message not found' }, { status: 404 });
@@ -139,10 +119,7 @@ export async function DELETE(
     }
 
     // Soft delete the message
-    await db
-      .update(chatMessages)
-      .set({ isActive: false })
-      .where(eq(chatMessages.id, messageId));
+    await chatMessageRepository.softDeleteMessage(messageId);
 
     loggers.api.info('Message deleted successfully', {
       userId: maskIdentifier(userId),

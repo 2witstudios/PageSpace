@@ -2,11 +2,11 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
-import { db, pages, drives, eq, and, desc, isNull } from '@pagespace/db';
 import { canUserEditPage, agentAwarenessCache } from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { pageSpaceTools } from '@/lib/ai/core';
 import { loggers } from '@pagespace/lib/server';
+import { pageAgentRepository, type AgentData } from '@/lib/repositories/page-agent-repository';
 
 /**
  * POST /api/ai/page-agents/create
@@ -29,10 +29,7 @@ export async function POST(request: Request) {
     }
 
     // Get the drive directly by ID
-    const [drive] = await db
-      .select({ id: drives.id, ownerId: drives.ownerId })
-      .from(drives)
-      .where(eq(drives.id, driveId));
+    const drive = await pageAgentRepository.getDriveById(driveId);
 
     if (!drive) {
       return NextResponse.json(
@@ -43,14 +40,7 @@ export async function POST(request: Request) {
 
     // If parentId is provided, verify it exists and belongs to this drive
     if (parentId) {
-      const [parentPage] = await db
-        .select({ id: pages.id })
-        .from(pages)
-        .where(and(
-          eq(pages.id, parentId),
-          eq(pages.driveId, driveId),
-          eq(pages.isTrashed, false)
-        ));
+      const parentPage = await pageAgentRepository.getParentPage(parentId, driveId);
 
       if (!parentPage) {
         return NextResponse.json(
@@ -93,32 +83,10 @@ export async function POST(request: Request) {
     }
 
     // Get next position
-    const siblingPages = await db
-      .select({ position: pages.position })
-      .from(pages)
-      .where(and(
-        eq(pages.driveId, drive.id),
-        parentId ? eq(pages.parentId, parentId) : isNull(pages.parentId),
-        eq(pages.isTrashed, false)
-      ))
-      .orderBy(desc(pages.position));
-
-    const nextPosition = siblingPages.length > 0 ? siblingPages[0].position + 1 : 1;
+    const nextPosition = await pageAgentRepository.getNextPosition(drive.id, parentId || null);
 
     // Prepare agent data
-    const agentData: {
-      title: string;
-      type: 'AI_CHAT';
-      content: string;
-      position: number;
-      driveId: string;
-      parentId: string | null;
-      isTrashed: boolean;
-      systemPrompt?: string | null;
-      enabledTools?: string[] | null;
-      aiProvider?: string | null;
-      aiModel?: string | null;
-    } = {
+    const agentData: AgentData = {
       title,
       type: 'AI_CHAT',
       content: welcomeMessage || '',
@@ -141,10 +109,7 @@ export async function POST(request: Request) {
     }
 
     // Create the agent
-    const [newAgent] = await db
-      .insert(pages)
-      .values(agentData)
-      .returning({ id: pages.id, title: pages.title, type: pages.type });
+    const newAgent = await pageAgentRepository.createAgent(agentData);
 
     // Broadcast agent creation event
     await broadcastPageEvent(
@@ -200,7 +165,7 @@ export async function POST(request: Request) {
   } catch (error) {
     loggers.api.error('Error creating AI agent:', error as Error);
     return NextResponse.json(
-      { error: `Failed to create AI agent: ${error instanceof Error ? error.message : String(error)}` },
+      { error: 'Failed to create AI agent' },
       { status: 500 }
     );
   }

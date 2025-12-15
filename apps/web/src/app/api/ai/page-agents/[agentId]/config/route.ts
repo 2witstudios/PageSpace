@@ -2,11 +2,11 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
-import { db, pages, eq } from '@pagespace/db';
 import { canUserEditPage, agentAwarenessCache } from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { pageSpaceTools } from '@/lib/ai/core';
 import { loggers } from '@pagespace/lib/server';
+import { pageAgentRepository, type AgentConfigUpdate } from '@/lib/repositories/page-agent-repository';
 
 /**
  * PUT /api/ai/page-agents/{agentId}/config
@@ -26,10 +26,7 @@ export async function PUT(
     const { systemPrompt, enabledTools, aiProvider, aiModel, agentDefinition, visibleToGlobalAssistant } = body;
 
     // Get the agent page
-    const [agent] = await db
-      .select()
-      .from(pages)
-      .where(eq(pages.id, agentId));
+    const agent = await pageAgentRepository.getAgentById(agentId);
 
     if (!agent) {
       return NextResponse.json(
@@ -68,14 +65,7 @@ export async function PUT(
     }
 
     // Build update object with only provided fields
-    const updateData: {
-      systemPrompt?: string | null;
-      enabledTools?: string[] | null;
-      aiProvider?: string | null;
-      aiModel?: string | null;
-      agentDefinition?: string | null;
-      visibleToGlobalAssistant?: boolean;
-    } = {};
+    const updateData: AgentConfigUpdate = {};
     const updatedFields: string[] = [];
 
     if (systemPrompt !== undefined) {
@@ -111,11 +101,7 @@ export async function PUT(
     }
 
     // Update the agent
-    const [updatedAgent] = await db
-      .update(pages)
-      .set(updateData)
-      .where(eq(pages.id, agentId))
-      .returning({ id: pages.id, title: pages.title, type: pages.type, driveId: pages.driveId });
+    const updatedAgent = await pageAgentRepository.updateAgentConfig(agentId, updateData);
 
     // Broadcast agent update event
     await broadcastPageEvent(

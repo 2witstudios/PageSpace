@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db, conversations, messages, eq, and } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
+import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
+import { processMessageContentUpdate } from '@/lib/repositories/chat-message-repository';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -32,15 +33,7 @@ export async function PATCH(
     }
 
     // Verify user owns the conversation
-    const [conversation] = await db
-      .select()
-      .from(conversations)
-      .where(and(
-        eq(conversations.id, conversationId),
-        eq(conversations.userId, userId),
-        eq(conversations.isActive, true)
-      ));
-
+    const conversation = await globalConversationRepository.getConversationById(userId, conversationId);
     if (!conversation) {
       return NextResponse.json(
         { error: 'Conversation not found' },
@@ -49,40 +42,16 @@ export async function PATCH(
     }
 
     // Get the message to verify it belongs to this conversation
-    const [message] = await db
-      .select()
-      .from(messages)
-      .where(and(
-        eq(messages.id, messageId),
-        eq(messages.conversationId, conversationId)
-      ));
-
+    const message = await globalConversationRepository.getMessageById(conversationId, messageId);
     if (!message) {
       return NextResponse.json({ error: 'Message not found' }, { status: 404 });
     }
 
-    // Parse existing content to check if it's structured
-    let updatedContent = content;
-    try {
-      const parsed = JSON.parse(message.content);
-      if (parsed.textParts && parsed.partsOrder) {
-        // Update only textParts, preserve structure
-        parsed.textParts = [content];
-        parsed.originalContent = content;
-        updatedContent = JSON.stringify(parsed);
-      }
-    } catch {
-      // Plain text, use as-is
-    }
+    // Process content update (preserving structure if needed)
+    const updatedContent = processMessageContentUpdate(message.content, content);
 
-    // Update the message content and set editedAt
-    await db
-      .update(messages)
-      .set({
-        content: updatedContent,
-        editedAt: new Date()
-      })
-      .where(eq(messages.id, messageId));
+    // Update the message content
+    await globalConversationRepository.updateMessageContent(messageId, updatedContent);
 
     loggers.api.info('Global Assistant message edited successfully', {
       userId: maskIdentifier(userId),
@@ -120,15 +89,7 @@ export async function DELETE(
     const { id: conversationId, messageId } = await context.params;
 
     // Verify user owns the conversation
-    const [conversation] = await db
-      .select()
-      .from(conversations)
-      .where(and(
-        eq(conversations.id, conversationId),
-        eq(conversations.userId, userId),
-        eq(conversations.isActive, true)
-      ));
-
+    const conversation = await globalConversationRepository.getConversationById(userId, conversationId);
     if (!conversation) {
       return NextResponse.json(
         { error: 'Conversation not found' },
@@ -137,23 +98,13 @@ export async function DELETE(
     }
 
     // Get the message to verify it belongs to this conversation
-    const [message] = await db
-      .select()
-      .from(messages)
-      .where(and(
-        eq(messages.id, messageId),
-        eq(messages.conversationId, conversationId)
-      ));
-
+    const message = await globalConversationRepository.getMessageById(conversationId, messageId);
     if (!message) {
       return NextResponse.json({ error: 'Message not found' }, { status: 404 });
     }
 
     // Soft delete the message
-    await db
-      .update(messages)
-      .set({ isActive: false })
-      .where(eq(messages.id, messageId));
+    await globalConversationRepository.softDeleteMessage(messageId);
 
     loggers.api.info('Global Assistant message deleted successfully', {
       userId: maskIdentifier(userId),

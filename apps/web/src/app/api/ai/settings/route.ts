@@ -31,7 +31,7 @@ import {
   createMiniMaxSettings,
   deleteMiniMaxSettings,
 } from '@/lib/ai/core';
-import { db, users, eq } from '@pagespace/db';
+import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
 import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 
 const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
@@ -47,8 +47,8 @@ export async function GET(request: Request) {
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 
-    // Get user's current provider settings
-    const [user] = await db.select().from(users).where(eq(users.id, userId));
+    // Get user's current provider settings via repository
+    const user = await aiSettingsRepository.getUserSettings(userId);
     
     // Check PageSpace default settings
     const pageSpaceSettings = await getDefaultPageSpaceSettings();
@@ -266,8 +266,8 @@ export async function PATCH(request: Request) {
       );
     }
 
-    // Get user's subscription tier to check access permissions
-    const [user] = await db.select().from(users).where(eq(users.id, userId));
+    // Get user's subscription tier to check access permissions via repository
+    const user = await aiSettingsRepository.getUserSettings(userId);
     if (!user) {
       return NextResponse.json(
         { error: 'User not found' },
@@ -276,7 +276,7 @@ export async function PATCH(request: Request) {
     }
 
     // Check if user is trying to select PageSpace pro AI model without proper subscription
-    if (requiresProSubscription(provider, model, user.subscriptionTier)) {
+    if (requiresProSubscription(provider, model, user.subscriptionTier ?? undefined)) {
       return NextResponse.json(
         {
           error: 'Subscription required',
@@ -287,15 +287,9 @@ export async function PATCH(request: Request) {
       );
     }
 
-    // Update user's current provider and model selection
+    // Update user's current provider and model selection via repository
     try {
-      await db
-        .update(users)
-        .set({
-          currentAiProvider: provider,
-          currentAiModel: model,
-        })
-        .where(eq(users.id, userId));
+      await aiSettingsRepository.updateProviderSettings(userId, { provider, model });
 
       return NextResponse.json(
         { 

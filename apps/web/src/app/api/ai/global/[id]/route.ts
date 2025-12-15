@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db, conversations, eq, and } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
+import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 
 const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
@@ -20,27 +20,19 @@ export async function GET(
 
     const { id } = await context.params;
 
-    // Get conversation
-    const [conversation] = await db
-      .select()
-      .from(conversations)
-      .where(and(
-        eq(conversations.id, id),
-        eq(conversations.userId, userId),
-        eq(conversations.isActive, true)
-      ));
+    const conversation = await globalConversationRepository.getConversationById(userId, id);
 
     if (!conversation) {
-      return NextResponse.json({ 
-        error: 'Conversation not found' 
+      return NextResponse.json({
+        error: 'Conversation not found'
       }, { status: 404 });
     }
 
     return NextResponse.json(conversation);
   } catch (error) {
     loggers.api.error('Error fetching conversation:', error as Error);
-    return NextResponse.json({ 
-      error: 'Failed to fetch conversation' 
+    return NextResponse.json({
+      error: 'Failed to fetch conversation'
     }, { status: 500 });
   }
 }
@@ -61,29 +53,23 @@ export async function PATCH(
     const body = await request.json();
     const { title } = body;
 
-    const [updatedConversation] = await db
-      .update(conversations)
-      .set({
-        title,
-        updatedAt: new Date(),
-      })
-      .where(and(
-        eq(conversations.id, id),
-        eq(conversations.userId, userId)
-      ))
-      .returning();
+    const updatedConversation = await globalConversationRepository.updateConversationTitle(
+      userId,
+      id,
+      title
+    );
 
     if (!updatedConversation) {
-      return NextResponse.json({ 
-        error: 'Conversation not found' 
+      return NextResponse.json({
+        error: 'Conversation not found'
       }, { status: 404 });
     }
 
     return NextResponse.json(updatedConversation);
   } catch (error) {
     loggers.api.error('Error updating conversation:', error as Error);
-    return NextResponse.json({ 
-      error: 'Failed to update conversation' 
+    return NextResponse.json({
+      error: 'Failed to update conversation'
     }, { status: 500 });
   }
 }
@@ -102,30 +88,22 @@ export async function DELETE(
 
     const { id } = await context.params;
 
-    // Soft delete by setting isActive to false
-    const [deletedConversation] = await db
-      .update(conversations)
-      .set({
-        isActive: false,
-        updatedAt: new Date(),
-      })
-      .where(and(
-        eq(conversations.id, id),
-        eq(conversations.userId, userId)
-      ))
-      .returning();
+    const deletedConversation = await globalConversationRepository.softDeleteConversation(
+      userId,
+      id
+    );
 
     if (!deletedConversation) {
-      return NextResponse.json({ 
-        error: 'Conversation not found' 
+      return NextResponse.json({
+        error: 'Conversation not found'
       }, { status: 404 });
     }
 
     return NextResponse.json({ success: true });
   } catch (error) {
     loggers.api.error('Error deleting conversation:', error as Error);
-    return NextResponse.json({ 
-      error: 'Failed to delete conversation' 
+    return NextResponse.json({
+      error: 'Failed to delete conversation'
     }, { status: 500 });
   }
 }
