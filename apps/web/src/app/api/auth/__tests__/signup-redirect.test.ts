@@ -13,7 +13,7 @@ vi.mock('@pagespace/db', () => ({
     },
     insert: vi.fn(),
   },
-  eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
+  eq: vi.fn((field: string, value: string | number) => ({ field, value })),
 }));
 
 vi.mock('bcryptjs', () => ({
@@ -108,6 +108,7 @@ describe('/api/auth/signup redirect', () => {
 
     (db.query.users.findFirst as Mock).mockResolvedValue(null);
 
+    // Match table by identity to return appropriate mock responses
     (db.insert as Mock).mockImplementation((table: unknown) => {
       if (table === users) {
         return {
@@ -170,6 +171,33 @@ describe('/api/auth/signup redirect', () => {
   test('given signup when provisioning returns null, should redirect to default dashboard', async () => {
     // Arrange
     (provisionGettingStartedDriveIfNeeded as Mock).mockResolvedValue(null);
+
+    const request = new Request('http://localhost/api/auth/signup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test User',
+        email: 'test@example.com',
+        password: 'Password123456',
+        confirmPassword: 'Password123456',
+        acceptedTos: true,
+      }),
+    });
+
+    // Act
+    const response = await POST(request);
+
+    // Assert
+    expect(response.status).toBe(303);
+    expect(response.headers.get('Location')).toContain('/dashboard');
+    expect(response.headers.get('Location')).not.toContain('/dashboard/drive-');
+  });
+
+  test('given signup when provisioning throws, should still redirect to dashboard', async () => {
+    // Arrange
+    (provisionGettingStartedDriveIfNeeded as Mock).mockRejectedValue(
+      new Error('Provisioning failed')
+    );
 
     const request = new Request('http://localhost/api/auth/signup', {
       method: 'POST',
