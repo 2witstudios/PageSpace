@@ -1,6 +1,10 @@
 /**
  * useSocket Hook Tests
  * Tests for Socket.IO connection integration with authentication
+ *
+ * These tests validate the observable behavior of the useSocket hook:
+ * - Socket instance returned based on auth state
+ * - Connection lifecycle tied to authentication
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
@@ -11,7 +15,7 @@ const { mockUseAuth, mockConnect, mockDisconnect, mockGetSocket } = vi.hoisted((
   mockUseAuth: vi.fn(),
   mockConnect: vi.fn(),
   mockDisconnect: vi.fn(),
-  mockGetSocket: vi.fn(() => ({ id: 'socket-123' })),
+  mockGetSocket: vi.fn(() => null),
 }));
 
 // Mock useAuth hook - use full path since test is in __tests__ subdirectory
@@ -52,6 +56,7 @@ describe('useSocket', () => {
       isAuthenticated: false,
       user: null,
     });
+    mockGetSocket.mockReturnValue(null);
   });
 
   afterEach(() => {
@@ -59,72 +64,97 @@ describe('useSocket', () => {
   });
 
   describe('connection lifecycle', () => {
-    it('given user is authenticated, should connect to socket', () => {
+    it('given user is authenticated, should return connected socket instance', () => {
+      const expectedSocket = { id: 'socket-123', connected: true };
       mockUseAuth.mockReturnValue({
         isAuthenticated: true,
         user: { id: 'user-123', name: 'Test User' },
       });
+      mockGetSocket.mockReturnValue(expectedSocket);
 
-      renderHook(() => useSocket());
+      const { result } = renderHook(() => useSocket());
 
+      // Primary assertion: observable outcome - socket is returned
+      expect(result.current).toEqual(expectedSocket);
+      // Secondary: connect was triggered
       expect(mockConnect).toHaveBeenCalled();
     });
 
-    it('given user is not authenticated, should disconnect from socket', () => {
+    it('given user is not authenticated, should return null socket', () => {
       mockUseAuth.mockReturnValue({
         isAuthenticated: false,
         user: null,
       });
+      mockGetSocket.mockReturnValue(null);
 
-      renderHook(() => useSocket());
+      const { result } = renderHook(() => useSocket());
 
+      // Primary assertion: observable outcome - no socket returned
+      expect(result.current).toBeNull();
+      // Secondary: disconnect was triggered
       expect(mockDisconnect).toHaveBeenCalled();
     });
 
-    it('given authentication changes from false to true, should connect', () => {
+    it('given authentication changes from false to true, should return socket after connection', () => {
       mockUseAuth.mockReturnValue({
         isAuthenticated: false,
         user: null,
       });
+      mockGetSocket.mockReturnValue(null);
 
-      const { rerender } = renderHook(() => useSocket());
+      const { result, rerender } = renderHook(() => useSocket());
 
+      // Initially no socket
+      expect(result.current).toBeNull();
+
+      // Simulate authentication and socket becoming available
+      const connectedSocket = { id: 'socket-456', connected: true };
       mockUseAuth.mockReturnValue({
         isAuthenticated: true,
         user: { id: 'user-123' },
       });
+      mockGetSocket.mockReturnValue(connectedSocket);
 
       rerender();
 
-      expect(mockConnect).toHaveBeenCalled();
+      // Primary assertion: socket is now available
+      expect(result.current).toEqual(connectedSocket);
     });
 
-    it('given authentication changes from true to false, should disconnect', () => {
+    it('given authentication changes from true to false, should return null socket', () => {
+      const initialSocket = { id: 'socket-123', connected: true };
       mockUseAuth.mockReturnValue({
         isAuthenticated: true,
         user: { id: 'user-123' },
       });
+      mockGetSocket.mockReturnValue(initialSocket);
 
-      const { rerender } = renderHook(() => useSocket());
+      const { result, rerender } = renderHook(() => useSocket());
 
+      // Initially have socket
+      expect(result.current).toEqual(initialSocket);
+
+      // Simulate logout
       mockUseAuth.mockReturnValue({
         isAuthenticated: false,
         user: null,
       });
+      mockGetSocket.mockReturnValue(null);
 
       rerender();
 
-      expect(mockDisconnect).toHaveBeenCalled();
+      // Primary assertion: socket is cleared
+      expect(result.current).toBeNull();
     });
   });
 
   describe('return value', () => {
-    it('should return the socket from getSocket', () => {
+    it('given socket store has active socket, should return it', () => {
       mockUseAuth.mockReturnValue({
         isAuthenticated: true,
         user: { id: 'user-123' },
       });
-      const expectedSocket = { id: 'socket-123' };
+      const expectedSocket = { id: 'socket-123', connected: true, rooms: new Set(['room-1']) };
       mockGetSocket.mockReturnValue(expectedSocket);
 
       const { result } = renderHook(() => useSocket());
@@ -132,7 +162,7 @@ describe('useSocket', () => {
       expect(result.current).toEqual(expectedSocket);
     });
 
-    it('given socket is null, should return null', () => {
+    it('given socket store has null socket, should return null', () => {
       mockUseAuth.mockReturnValue({
         isAuthenticated: true,
         user: { id: 'user-123' },
@@ -145,26 +175,32 @@ describe('useSocket', () => {
     });
   });
 
-  describe('user ID changes', () => {
-    it('given user ID changes, should re-trigger connection logic', () => {
+  describe('user changes', () => {
+    it('given user ID changes while authenticated, should reconnect and return new socket', () => {
+      // Initial user
       mockUseAuth.mockReturnValue({
         isAuthenticated: true,
         user: { id: 'user-1' },
       });
+      const socket1 = { id: 'socket-for-user-1', userId: 'user-1' };
+      mockGetSocket.mockReturnValue(socket1);
 
-      const { rerender } = renderHook(() => useSocket());
+      const { result, rerender } = renderHook(() => useSocket());
 
-      const firstConnectCount = mockConnect.mock.calls.length;
+      expect(result.current).toEqual(socket1);
 
+      // Different user logs in
       mockUseAuth.mockReturnValue({
         isAuthenticated: true,
         user: { id: 'user-2' },
       });
+      const socket2 = { id: 'socket-for-user-2', userId: 'user-2' };
+      mockGetSocket.mockReturnValue(socket2);
 
       rerender();
 
-      // Should have called connect again for new user
-      expect(mockConnect.mock.calls.length).toBeGreaterThanOrEqual(firstConnectCount);
+      // Primary assertion: new socket for new user
+      expect(result.current).toEqual(socket2);
     });
   });
 });

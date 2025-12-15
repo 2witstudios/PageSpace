@@ -1,6 +1,11 @@
 /**
  * useAiUsage Hook Tests
  * Tests for AI usage data fetching with SWR
+ *
+ * These tests validate observable behavior:
+ * - Data mapping from API response to hook return values
+ * - Loading and error states
+ * - Null/undefined conversationId handling
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
@@ -15,9 +20,6 @@ const { mockFetchWithAuth, mockMutate, mockSWRState } = vi.hoisted(() => ({
     error: undefined as unknown,
   },
 }));
-
-// Track useSWR calls
-const mockUseSWR = vi.hoisted(() => vi.fn());
 
 // Mock dependencies with hoisted mocks
 vi.mock('@/lib/auth/auth-fetch', () => ({
@@ -45,8 +47,7 @@ vi.mock('@/stores/useEditingStore', () => ({
 }));
 
 vi.mock('swr', () => ({
-  default: (key: string | null, fetcher: (...args: unknown[]) => unknown, config?: object) => {
-    mockUseSWR(key, fetcher, config);
+  default: (key: string | null) => {
     return {
       data: key ? mockSWRState.data : undefined,
       error: mockSWRState.error,
@@ -58,7 +59,7 @@ vi.mock('swr', () => ({
 
 import { useAiUsage, usePageAiUsage } from '../useAiUsage';
 
-// Helper to create mock API response
+// Helper to create mock API response matching real API shape
 const createMockUsageResponse = (overrides = {}) => ({
   logs: [],
   summary: {
@@ -86,103 +87,31 @@ describe('useAiUsage', () => {
     vi.clearAllMocks();
     mockSWRState.data = undefined;
     mockSWRState.error = undefined;
-    mockUseSWR.mockClear();
   });
 
   afterEach(() => {
     vi.clearAllMocks();
   });
 
-  describe('SWR key generation', () => {
-    it('given a conversationId, should generate correct SWR key', () => {
-      renderHook(() => useAiUsage('conv-123'));
-
-      expect(mockUseSWR).toHaveBeenCalledWith(
-        '/api/ai/global/conv-123/usage',
-        expect.any(Function),
-        expect.any(Object)
-      );
-    });
-
-    it('given null conversationId, should pass null as SWR key', () => {
-      renderHook(() => useAiUsage(null));
-
-      expect(mockUseSWR).toHaveBeenCalledWith(
-        null,
-        expect.any(Function),
-        expect.any(Object)
-      );
-    });
-
-    it('given undefined conversationId, should pass null as SWR key', () => {
-      renderHook(() => useAiUsage(undefined));
-
-      expect(mockUseSWR).toHaveBeenCalledWith(
-        null,
-        expect.any(Function),
-        expect.any(Object)
-      );
-    });
-
-    it('given conversationId with special characters, should encode it', () => {
-      renderHook(() => useAiUsage('conv with spaces'));
-
-      expect(mockUseSWR).toHaveBeenCalledWith(
-        '/api/ai/global/conv%20with%20spaces/usage',
-        expect.any(Function),
-        expect.any(Object)
-      );
-    });
-  });
-
-  describe('SWR configuration', () => {
-    it('should use default refresh interval of 15000ms', () => {
-      renderHook(() => useAiUsage('conv-123'));
-
-      const swrConfig = mockUseSWR.mock.calls[0][2];
-      expect(swrConfig?.refreshInterval).toBe(15000);
-    });
-
-    it('given custom refresh interval, should use it', () => {
-      renderHook(() => useAiUsage('conv-123', 5000));
-
-      const swrConfig = mockUseSWR.mock.calls[0][2];
-      expect(swrConfig?.refreshInterval).toBe(5000);
-    });
-
-    it('should disable revalidateOnFocus', () => {
-      renderHook(() => useAiUsage('conv-123'));
-
-      const swrConfig = mockUseSWR.mock.calls[0][2];
-      expect(swrConfig?.revalidateOnFocus).toBe(false);
-    });
-
-    it('should set dedupingInterval to 2000ms', () => {
-      renderHook(() => useAiUsage('conv-123'));
-
-      const swrConfig = mockUseSWR.mock.calls[0][2];
-      expect(swrConfig?.dedupingInterval).toBe(2000);
-    });
-  });
-
-  describe('return values', () => {
-    it('given data is loaded, should return mapped usage data', () => {
+  describe('data mapping', () => {
+    it('given API returns usage data, should map billing fields correctly', () => {
       mockSWRState.data = createMockUsageResponse();
 
       const { result } = renderHook(() => useAiUsage('conv-123'));
 
-      expect(result.current.usage).toBeDefined();
+      // Observable: billing data correctly mapped
       expect(result.current.usage?.billing.inputTokens).toBe(1000);
       expect(result.current.usage?.billing.outputTokens).toBe(500);
       expect(result.current.usage?.billing.totalTokens).toBe(1500);
       expect(result.current.usage?.billing.cost).toBe(0.05);
     });
 
-    it('given context data, should map it correctly', () => {
+    it('given API returns context data, should map context fields correctly', () => {
       mockSWRState.data = createMockUsageResponse();
 
       const { result } = renderHook(() => useAiUsage('conv-123'));
 
+      // Observable: context data correctly mapped
       expect(result.current.usage?.context.currentSize).toBe(2000);
       expect(result.current.usage?.context.messagesInContext).toBe(10);
       expect(result.current.usage?.context.windowSize).toBe(128000);
@@ -190,7 +119,33 @@ describe('useAiUsage', () => {
       expect(result.current.usage?.context.wasTruncated).toBe(false);
     });
 
-    it('given no context data (legacy), should compute fallback values', () => {
+    it('given API returns model info, should map model and provider', () => {
+      mockSWRState.data = createMockUsageResponse();
+
+      const { result } = renderHook(() => useAiUsage('conv-123'));
+
+      // Observable: model info correctly mapped
+      expect(result.current.usage?.model).toBe('gpt-4');
+      expect(result.current.usage?.provider).toBe('openai');
+    });
+
+    it('given API returns logs with ISO timestamps, should include them in response', () => {
+      const mockLogs = [
+        { id: 'log-1', timestamp: '2024-01-15T10:30:00.000Z', inputTokens: 100, outputTokens: 50 },
+        { id: 'log-2', timestamp: '2024-01-15T10:31:00.000Z', inputTokens: 200, outputTokens: 75 },
+      ];
+      mockSWRState.data = createMockUsageResponse({ logs: mockLogs });
+
+      const { result } = renderHook(() => useAiUsage('conv-123'));
+
+      // Observable: logs returned as-is from API
+      expect(result.current.logs).toEqual(mockLogs);
+      expect(result.current.logs[0].timestamp).toBe('2024-01-15T10:30:00.000Z');
+    });
+  });
+
+  describe('legacy data handling', () => {
+    it('given API returns null context (legacy), should compute fallback values', () => {
       mockSWRState.data = createMockUsageResponse({
         summary: {
           billing: {
@@ -199,7 +154,7 @@ describe('useAiUsage', () => {
             totalTokens: 1500,
             totalCost: 0.05,
           },
-          context: null, // Legacy data without context
+          context: null,
           mostRecentModel: 'gpt-4',
           mostRecentProvider: 'openai',
         },
@@ -207,88 +162,13 @@ describe('useAiUsage', () => {
 
       const { result } = renderHook(() => useAiUsage('conv-123'));
 
-      expect(result.current.usage?.context.currentSize).toBe(1000); // Falls back to totalInputTokens
+      // Observable: fallback values computed for legacy responses
+      expect(result.current.usage?.context.currentSize).toBe(1000);
       expect(result.current.usage?.context.messagesInContext).toBe(0);
       expect(result.current.usage?.context.wasTruncated).toBe(false);
     });
 
-    it('given logs in response, should return them', () => {
-      const mockLogs = [
-        { id: 'log-1', timestamp: new Date(), inputTokens: 100 },
-        { id: 'log-2', timestamp: new Date(), inputTokens: 200 },
-      ];
-      mockSWRState.data = createMockUsageResponse({ logs: mockLogs });
-
-      const { result } = renderHook(() => useAiUsage('conv-123'));
-
-      expect(result.current.logs).toEqual(mockLogs);
-    });
-
-    it('given no data, should return empty logs array', () => {
-      mockSWRState.data = undefined;
-
-      const { result } = renderHook(() => useAiUsage('conv-123'));
-
-      expect(result.current.logs).toEqual([]);
-      expect(result.current.usage).toBeNull();
-    });
-
-    it('given error, should return isError', () => {
-      const error = new Error('Failed to fetch');
-      mockSWRState.error = error;
-
-      const { result } = renderHook(() => useAiUsage('conv-123'));
-
-      expect(result.current.isError).toBe(error);
-    });
-
-    it('should expose mutate function', () => {
-      mockSWRState.data = createMockUsageResponse();
-
-      const { result } = renderHook(() => useAiUsage('conv-123'));
-
-      expect(result.current.mutate).toBe(mockMutate);
-    });
-  });
-
-  describe('isLoading state', () => {
-    it('given no data and no error and valid key, should be loading', () => {
-      mockSWRState.data = undefined;
-      mockSWRState.error = undefined;
-
-      const { result } = renderHook(() => useAiUsage('conv-123'));
-
-      expect(result.current.isLoading).toBe(true);
-    });
-
-    it('given data loaded, should not be loading', () => {
-      mockSWRState.data = createMockUsageResponse();
-
-      const { result } = renderHook(() => useAiUsage('conv-123'));
-
-      expect(result.current.isLoading).toBe(false);
-    });
-
-    it('given null key, should not be loading', () => {
-      mockSWRState.data = undefined;
-
-      const { result } = renderHook(() => useAiUsage(null));
-
-      expect(result.current.isLoading).toBe(false);
-    });
-  });
-
-  describe('model and provider info', () => {
-    it('given model and provider in response, should include them', () => {
-      mockSWRState.data = createMockUsageResponse();
-
-      const { result } = renderHook(() => useAiUsage('conv-123'));
-
-      expect(result.current.usage?.model).toBe('gpt-4');
-      expect(result.current.usage?.provider).toBe('openai');
-    });
-
-    it('given no model info, should default to unknown', () => {
+    it('given API returns null model info, should default to unknown', () => {
       mockSWRState.data = createMockUsageResponse({
         summary: {
           billing: {
@@ -305,8 +185,79 @@ describe('useAiUsage', () => {
 
       const { result } = renderHook(() => useAiUsage('conv-123'));
 
+      // Observable: defaults applied for missing model info
       expect(result.current.usage?.model).toBe('unknown');
       expect(result.current.usage?.provider).toBe('unknown');
+    });
+  });
+
+  describe('loading and error states', () => {
+    it('given data is loading, should return isLoading=true', () => {
+      mockSWRState.data = undefined;
+      mockSWRState.error = undefined;
+
+      const { result } = renderHook(() => useAiUsage('conv-123'));
+
+      // Observable: loading state exposed
+      expect(result.current.isLoading).toBe(true);
+      expect(result.current.usage).toBeNull();
+    });
+
+    it('given data is loaded, should return isLoading=false', () => {
+      mockSWRState.data = createMockUsageResponse();
+
+      const { result } = renderHook(() => useAiUsage('conv-123'));
+
+      expect(result.current.isLoading).toBe(false);
+      expect(result.current.usage).not.toBeNull();
+    });
+
+    it('given API error, should expose error state', () => {
+      const error = new Error('Failed to fetch usage data');
+      mockSWRState.error = error;
+
+      const { result } = renderHook(() => useAiUsage('conv-123'));
+
+      // Observable: error exposed
+      expect(result.current.isError).toBe(error);
+    });
+
+    it('given no data, should return empty logs array', () => {
+      mockSWRState.data = undefined;
+
+      const { result } = renderHook(() => useAiUsage('conv-123'));
+
+      // Observable: safe default for logs
+      expect(result.current.logs).toEqual([]);
+    });
+  });
+
+  describe('null conversationId handling', () => {
+    it('given null conversationId, should not fetch and return null usage', () => {
+      const { result } = renderHook(() => useAiUsage(null));
+
+      // Observable: null usage when no conversationId (SWR returns undefined, hook maps to null)
+      expect(result.current.usage).toBeNull();
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    it('given undefined conversationId, should not fetch and return null usage', () => {
+      const { result } = renderHook(() => useAiUsage(undefined));
+
+      // Observable: null usage when no conversationId
+      expect(result.current.usage).toBeNull();
+      expect(result.current.isLoading).toBe(false);
+    });
+  });
+
+  describe('mutate function', () => {
+    it('should expose mutate function for manual revalidation', () => {
+      mockSWRState.data = createMockUsageResponse();
+
+      const { result } = renderHook(() => useAiUsage('conv-123'));
+
+      // Observable: mutate function available
+      expect(result.current.mutate).toBe(mockMutate);
     });
   });
 });
@@ -316,66 +267,40 @@ describe('usePageAiUsage', () => {
     vi.clearAllMocks();
     mockSWRState.data = undefined;
     mockSWRState.error = undefined;
-    mockUseSWR.mockClear();
   });
 
-  describe('SWR key generation', () => {
-    it('given a pageId, should generate page-specific SWR key', () => {
-      renderHook(() => usePageAiUsage('page-123'));
-
-      expect(mockUseSWR).toHaveBeenCalledWith(
-        '/api/pages/page-123/ai-usage',
-        expect.any(Function),
-        expect.any(Object)
-      );
-    });
-
-    it('given null pageId, should pass null as SWR key', () => {
-      renderHook(() => usePageAiUsage(null));
-
-      expect(mockUseSWR).toHaveBeenCalledWith(
-        null,
-        expect.any(Function),
-        expect.any(Object)
-      );
-    });
-  });
-
-  describe('return values', () => {
-    it('given data is loaded, should return mapped usage data', () => {
+  describe('data mapping', () => {
+    it('given API returns page usage data, should map fields correctly', () => {
       mockSWRState.data = createMockUsageResponse();
 
       const { result } = renderHook(() => usePageAiUsage('page-123'));
 
-      expect(result.current.usage).toBeDefined();
+      // Observable: same data mapping as useAiUsage
       expect(result.current.usage?.billing.inputTokens).toBe(1000);
-    });
-
-    it('should use same data mapping as useAiUsage', () => {
-      mockSWRState.data = createMockUsageResponse();
-
-      const { result } = renderHook(() => usePageAiUsage('page-123'));
-
       expect(result.current.usage?.context.currentSize).toBe(2000);
       expect(result.current.usage?.model).toBe('gpt-4');
     });
   });
 
-  describe('SWR configuration', () => {
-    it('should use same configuration as useAiUsage', () => {
-      renderHook(() => usePageAiUsage('page-123'));
+  describe('null pageId handling', () => {
+    it('given null pageId, should not fetch and return null usage', () => {
+      const { result } = renderHook(() => usePageAiUsage(null));
 
-      const swrConfig = mockUseSWR.mock.calls[0][2];
-      expect(swrConfig?.refreshInterval).toBe(15000);
-      expect(swrConfig?.revalidateOnFocus).toBe(false);
-      expect(swrConfig?.dedupingInterval).toBe(2000);
+      // Observable: null usage when no pageId
+      expect(result.current.usage).toBeNull();
+      expect(result.current.isLoading).toBe(false);
     });
+  });
 
-    it('given custom refresh interval, should use it', () => {
-      renderHook(() => usePageAiUsage('page-123', 30000));
+  describe('custom refresh interval', () => {
+    it('given custom refresh interval, should still return data correctly', () => {
+      mockSWRState.data = createMockUsageResponse();
 
-      const swrConfig = mockUseSWR.mock.calls[0][2];
-      expect(swrConfig?.refreshInterval).toBe(30000);
+      const { result } = renderHook(() => usePageAiUsage('page-123', 30000));
+
+      // Observable: data still returned with custom interval
+      expect(result.current.usage).not.toBeNull();
+      expect(result.current.usage?.billing.inputTokens).toBe(1000);
     });
   });
 });

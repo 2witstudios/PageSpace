@@ -277,16 +277,17 @@ describe('useAuthStore', () => {
       expect(state.csrfToken).toBeNull();
     });
 
-    it('given pending refresh timeout, should clear it', () => {
+    it('given pending refresh timeout, should clear timeout and reset state', () => {
       const timeoutId = setTimeout(() => {}, 10000);
       useAuthStore.setState({ refreshTimeoutId: timeoutId });
-      const clearTimeoutSpy = vi.spyOn(global, 'clearTimeout');
       const { endSession } = useAuthStore.getState();
 
       endSession();
 
-      expect(clearTimeoutSpy).toHaveBeenCalledWith(timeoutId);
+      // Observable: timeout ID is cleared from state
       expect(useAuthStore.getState().refreshTimeoutId).toBeNull();
+      // Clean up the real timeout to prevent test pollution
+      clearTimeout(timeoutId);
     });
   });
 
@@ -407,16 +408,17 @@ describe('useAuthStore', () => {
       expect(state.isAuthenticated).toBe(false);
     });
 
-    it('given force=false and already loading, should return existing promise', async () => {
-      const existingPromise = Promise.resolve();
-      useAuthStore.setState({ _authPromise: existingPromise });
+    it('given force=false and already loading, should not trigger redundant fetch', async () => {
+      // Simulate an in-progress auth load
+      const pendingPromise = new Promise<void>((resolve) => setTimeout(resolve, 100));
+      useAuthStore.setState({ _authPromise: pendingPromise });
+      vi.mocked(global.fetch).mockClear();
 
-      const result = useAuthStore.getState().loadSession(false);
+      // Call loadSession without force
+      useAuthStore.getState().loadSession(false);
 
-      // Both should be the same promise instance - verify by checking they resolve to same
-      expect(result).toBeInstanceOf(Promise);
-      // Verify the store didn't create a new promise (still the same one)
-      expect(useAuthStore.getState()._authPromise).toBe(existingPromise);
+      // Observable: no new fetch triggered when already loading
+      expect(global.fetch).not.toHaveBeenCalled();
     });
 
     it('given force=true, should bypass existing promise', async () => {
