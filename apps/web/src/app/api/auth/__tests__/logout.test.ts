@@ -64,15 +64,15 @@ describe('/api/auth/logout', () => {
     vi.clearAllMocks();
 
     // Default: authenticated user
-    (authenticateRequestWithOptions as Mock).mockResolvedValue({
+    (authenticateRequestWithOptions as unknown as Mock).mockResolvedValue({
       userId: 'test-user-id',
       role: 'user',
       tokenVersion: 0,
       tokenType: 'jwt',
       source: 'cookie',
     });
-    (isAuthError as Mock).mockReturnValue(false);
-    (parse as Mock).mockReturnValue({ refreshToken: 'mock-refresh-token' });
+    (isAuthError as unknown as Mock).mockReturnValue(false);
+    (parse as unknown as Mock).mockReturnValue({ refreshToken: 'mock-refresh-token' });
   });
 
   describe('successful logout', () => {
@@ -248,7 +248,7 @@ describe('/api/auth/logout', () => {
 
     it('handles device token revocation failure gracefully', async () => {
       // Arrange
-      (revokeDeviceTokenByValue as Mock).mockRejectedValue(new Error('Revocation failed'));
+      (revokeDeviceTokenByValue as unknown as Mock).mockRejectedValue(new Error('Revocation failed'));
 
       const request = new Request('http://localhost/api/auth/logout', {
         method: 'POST',
@@ -272,8 +272,8 @@ describe('/api/auth/logout', () => {
     it('returns error when not authenticated', async () => {
       // Arrange
       const mockError = { error: Response.json({ error: 'Unauthorized' }, { status: 401 }) };
-      (authenticateRequestWithOptions as Mock).mockResolvedValue(mockError);
-      (isAuthError as Mock).mockReturnValue(true);
+      (authenticateRequestWithOptions as unknown as Mock).mockResolvedValue(mockError);
+      (isAuthError as unknown as Mock).mockReturnValue(true);
 
       const request = new Request('http://localhost/api/auth/logout', {
         method: 'POST',
@@ -313,7 +313,7 @@ describe('/api/auth/logout', () => {
   describe('edge cases', () => {
     it('handles missing refresh token cookie gracefully', async () => {
       // Arrange
-      (parse as Mock).mockReturnValue({});
+      (parse as unknown as Mock).mockReturnValue({});
 
       const request = new Request('http://localhost/api/auth/logout', {
         method: 'POST',
@@ -333,7 +333,7 @@ describe('/api/auth/logout', () => {
 
     it('handles refresh token not found in database gracefully', async () => {
       // Arrange
-      (db.delete as Mock).mockReturnValue({
+      (db.delete as unknown as Mock).mockReturnValue({
         where: vi.fn().mockRejectedValue(new Error('Token not found')),
       });
 
