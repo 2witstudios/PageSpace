@@ -418,7 +418,7 @@ describe('POST /api/ai/page-agents/create', () => {
 
     it('should not leak internal error details to client', async () => {
       vi.mocked(pageAgentRepository.createAgent).mockRejectedValue(
-        new Error('SENSITIVE: connection string with password')
+        new Error('SENSITIVE: connection string with password=secret123')
       );
 
       const request = createRequest({
@@ -430,9 +430,11 @@ describe('POST /api/ai/page-agents/create', () => {
       const response = await POST(request);
       const body = await response.json();
 
-      // Error message should be sanitized - we include the error message in this route
-      // but we verify it doesn't expose credentials
-      expect(body.error).toContain('Failed to create AI agent');
+      // Error message should be exactly the generic message - no internal details
+      expect(body.error).toBe('Failed to create AI agent');
+      expect(body.error).not.toContain('SENSITIVE');
+      expect(body.error).not.toContain('connection');
+      expect(body.error).not.toContain('password');
     });
   });
 });
