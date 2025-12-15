@@ -2,24 +2,17 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { PATCH } from '../route';
 import type { WebAuthResult, AuthError } from '@/lib/auth';
+import type { DriveRoleAccessInfo } from '@pagespace/lib/server';
 
-// Mock dependencies
-vi.mock('@pagespace/db', () => ({
-  db: {
-    query: {
-      driveRoles: {
-        findMany: vi.fn(),
-      },
-    },
-    select: vi.fn(),
-    update: vi.fn(),
-    transaction: vi.fn(),
-  },
-  driveRoles: {},
-  driveMembers: {},
-  drives: {},
-  eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
-  and: vi.fn((...args: unknown[]) => ({ args, type: 'and' })),
+// ============================================================================
+// Contract Tests for /api/drives/[driveId]/roles/reorder
+//
+// These tests mock at the SERVICE SEAM level, NOT at the ORM/query-builder level.
+// ============================================================================
+
+vi.mock('@pagespace/lib/server', () => ({
+  checkDriveAccessForRoles: vi.fn(),
+  reorderDriveRoles: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -27,10 +20,16 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-import { db } from '@pagespace/db';
+import {
+  checkDriveAccessForRoles,
+  reorderDriveRoles,
+} from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
-// Helper to create mock WebAuthResult
+// ============================================================================
+// Test Fixtures
+// ============================================================================
+
 const mockWebAuth = (userId: string, tokenVersion = 0): WebAuthResult => ({
   userId,
   tokenVersion,
@@ -39,87 +38,41 @@ const mockWebAuth = (userId: string, tokenVersion = 0): WebAuthResult => ({
   role: 'user',
 });
 
-// Helper to create mock AuthError
 const mockAuthError = (status = 401): AuthError => ({
   error: NextResponse.json({ error: 'Unauthorized' }, { status }),
 });
 
-// Helper to create mock drive
-const mockDrive = (overrides: {
-  id: string;
-  name: string;
-  ownerId?: string;
-}) => ({
+const createDriveFixture = (overrides: { id: string; name: string; ownerId?: string }) => ({
   id: overrides.id,
   name: overrides.name,
   slug: overrides.name.toLowerCase().replace(/\s+/g, '-'),
   ownerId: overrides.ownerId ?? 'user_123',
-  createdAt: new Date('2024-01-01'),
-  updatedAt: new Date('2024-01-01'),
-  isTrashed: false,
-  trashedAt: null,
-  drivePrompt: null,
 });
 
-// Helper to create mock member
-const mockMember = (overrides: {
-  userId: string;
-  driveId: string;
-  role: 'OWNER' | 'ADMIN' | 'MEMBER';
-}) => ({
-  id: 'mem_' + overrides.userId,
-  userId: overrides.userId,
-  driveId: overrides.driveId,
-  role: overrides.role,
-  customRoleId: null,
-  invitedBy: null,
-  invitedAt: new Date(),
-  acceptedAt: new Date(),
-  lastAccessedAt: null,
+const createAccessFixture = (overrides: Partial<DriveRoleAccessInfo>): DriveRoleAccessInfo => ({
+  isOwner: overrides.isOwner ?? false,
+  isAdmin: overrides.isAdmin ?? false,
+  isMember: overrides.isMember ?? false,
+  drive: overrides.drive ?? null,
 });
 
-// Create mock context
 const createContext = (driveId: string) => ({
   params: Promise.resolve({ driveId }),
 });
+
+// ============================================================================
+// PATCH /api/drives/[driveId]/roles/reorder - Contract Tests
+// ============================================================================
 
 describe('PATCH /api/drives/[driveId]/roles/reorder', () => {
   const mockUserId = 'user_123';
   const mockDriveId = 'drive_abc';
 
   beforeEach(() => {
-    vi.clearAllMocks();
-
+    vi.resetAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
   });
-
-  const setupSelectMock = (driveResults: unknown[], adminResults: unknown[] = []) => {
-    let callIndex = 0;
-    vi.mocked(db.select).mockImplementation(() => ({
-      from: vi.fn().mockReturnValue({
-        where: vi.fn().mockReturnValue({
-          limit: vi.fn().mockImplementation(async () => {
-            callIndex++;
-            if (callIndex === 1) return driveResults;
-            return adminResults;
-          }),
-        }),
-      }),
-    } as unknown as ReturnType<typeof db.select>));
-  };
-
-  const setupTransactionMock = () => {
-    const txUpdateMock = vi.fn().mockReturnValue({
-      set: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue(undefined),
-      }),
-    });
-    vi.mocked(db.transaction).mockImplementation(async (callback) => {
-      await callback({ update: txUpdateMock } as never);
-    });
-    return { txUpdateMock };
-  };
 
   describe('authentication', () => {
     it('should return 401 when not authenticated', async () => {
@@ -134,11 +87,30 @@ describe('PATCH /api/drives/[driveId]/roles/reorder', () => {
 
       expect(response.status).toBe(401);
     });
+
+    it('should require CSRF for write operations', async () => {
+      vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+      }));
+      vi.mocked(reorderDriveRoles).mockResolvedValue(undefined);
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/reorder`, {
+        method: 'PATCH',
+        body: JSON.stringify({ roleIds: ['role_1', 'role_2'] }),
+      });
+      await PATCH(request, createContext(mockDriveId));
+
+      expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
+        request,
+        { allow: ['jwt'], requireCSRF: true }
+      );
+    });
   });
 
   describe('authorization', () => {
     it('should return 404 when drive not found', async () => {
-      setupSelectMock([]);
+      vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({ drive: null }));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/reorder`, {
         method: 'PATCH',
@@ -152,10 +124,12 @@ describe('PATCH /api/drives/[driveId]/roles/reorder', () => {
     });
 
     it('should return 403 when user is not owner or admin', async () => {
-      setupSelectMock(
-        [mockDrive({ id: mockDriveId, name: 'Other Drive', ownerId: 'other_user' })],
-        []
-      );
+      vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({
+        isOwner: false,
+        isAdmin: false,
+        isMember: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Other', ownerId: 'other_user' }),
+      }));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/reorder`, {
         method: 'PATCH',
@@ -167,11 +141,32 @@ describe('PATCH /api/drives/[driveId]/roles/reorder', () => {
       expect(response.status).toBe(403);
       expect(body.error).toBe('Only owners and admins can reorder roles');
     });
+
+    it('should allow admin to reorder roles', async () => {
+      vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({
+        isOwner: false,
+        isAdmin: true,
+        isMember: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Shared', ownerId: 'other_user' }),
+      }));
+      vi.mocked(reorderDriveRoles).mockResolvedValue(undefined);
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/reorder`, {
+        method: 'PATCH',
+        body: JSON.stringify({ roleIds: ['role_2', 'role_1'] }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId));
+
+      expect(response.status).toBe(200);
+    });
   });
 
   describe('validation', () => {
     beforeEach(() => {
-      setupSelectMock([mockDrive({ id: mockDriveId, name: 'Test', ownerId: mockUserId })]);
+      vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test', ownerId: mockUserId }),
+      }));
     });
 
     it('should reject when roleIds is not an array', async () => {
@@ -186,11 +181,20 @@ describe('PATCH /api/drives/[driveId]/roles/reorder', () => {
       expect(body.error).toBe('roleIds must be an array');
     });
 
+    it('should reject when roleIds is null', async () => {
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/reorder`, {
+        method: 'PATCH',
+        body: JSON.stringify({ roleIds: null }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('roleIds must be an array');
+    });
+
     it('should reject when roleIds contains invalid IDs', async () => {
-      vi.mocked(db.query.driveRoles.findMany).mockResolvedValue([
-        { id: 'role_1' },
-        { id: 'role_2' },
-      ]);
+      vi.mocked(reorderDriveRoles).mockRejectedValue(new Error('Invalid role IDs'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/reorder`, {
         method: 'PATCH',
@@ -204,15 +208,32 @@ describe('PATCH /api/drives/[driveId]/roles/reorder', () => {
     });
   });
 
-  describe('happy path', () => {
-    it('should reorder roles successfully', async () => {
-      setupSelectMock([mockDrive({ id: mockDriveId, name: 'Test', ownerId: mockUserId })]);
-      vi.mocked(db.query.driveRoles.findMany).mockResolvedValue([
-        { id: 'role_1' },
-        { id: 'role_2' },
-        { id: 'role_3' },
-      ]);
-      const { txUpdateMock } = setupTransactionMock();
+  describe('service integration', () => {
+    it('should call reorderDriveRoles with driveId and roleIds', async () => {
+      vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+      }));
+      vi.mocked(reorderDriveRoles).mockResolvedValue(undefined);
+
+      const roleIds = ['role_3', 'role_1', 'role_2'];
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/reorder`, {
+        method: 'PATCH',
+        body: JSON.stringify({ roleIds }),
+      });
+      await PATCH(request, createContext(mockDriveId));
+
+      expect(reorderDriveRoles).toHaveBeenCalledWith(mockDriveId, roleIds);
+    });
+  });
+
+  describe('response contract', () => {
+    it('should return success=true on successful reorder', async () => {
+      vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+      }));
+      vi.mocked(reorderDriveRoles).mockResolvedValue(undefined);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/reorder`, {
         method: 'PATCH',
@@ -223,34 +244,14 @@ describe('PATCH /api/drives/[driveId]/roles/reorder', () => {
 
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
-      // Transaction should update positions for each role
-      expect(txUpdateMock).toHaveBeenCalledTimes(3);
-    });
-
-    it('should allow admin to reorder roles', async () => {
-      setupSelectMock(
-        [mockDrive({ id: mockDriveId, name: 'Shared', ownerId: 'other_user' })],
-        [mockMember({ userId: mockUserId, driveId: mockDriveId, role: 'ADMIN' })]
-      );
-      vi.mocked(db.query.driveRoles.findMany).mockResolvedValue([
-        { id: 'role_1' },
-        { id: 'role_2' },
-      ]);
-      setupTransactionMock();
-
-      const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/reorder`, {
-        method: 'PATCH',
-        body: JSON.stringify({ roleIds: ['role_2', 'role_1'] }),
-      });
-      const response = await PATCH(request, createContext(mockDriveId));
-
-      expect(response.status).toBe(200);
     });
 
     it('should handle empty roleIds array', async () => {
-      setupSelectMock([mockDrive({ id: mockDriveId, name: 'Test', ownerId: mockUserId })]);
-      vi.mocked(db.query.driveRoles.findMany).mockResolvedValue([]);
-      setupTransactionMock();
+      vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+      }));
+      vi.mocked(reorderDriveRoles).mockResolvedValue(undefined);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/reorder`, {
         method: 'PATCH',
@@ -262,32 +263,15 @@ describe('PATCH /api/drives/[driveId]/roles/reorder', () => {
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
     });
-
-    it('should handle partial roleIds (subset of all roles)', async () => {
-      setupSelectMock([mockDrive({ id: mockDriveId, name: 'Test', ownerId: mockUserId })]);
-      vi.mocked(db.query.driveRoles.findMany).mockResolvedValue([
-        { id: 'role_1' },
-        { id: 'role_2' },
-        { id: 'role_3' },
-      ]);
-      setupTransactionMock();
-
-      // Only reorder some roles
-      const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/reorder`, {
-        method: 'PATCH',
-        body: JSON.stringify({ roleIds: ['role_1', 'role_3'] }), // role_2 not included
-      });
-      const response = await PATCH(request, createContext(mockDriveId));
-
-      expect(response.status).toBe(200);
-    });
   });
 
   describe('error handling', () => {
-    it('should return 500 when transaction fails', async () => {
-      setupSelectMock([mockDrive({ id: mockDriveId, name: 'Test', ownerId: mockUserId })]);
-      vi.mocked(db.query.driveRoles.findMany).mockResolvedValue([{ id: 'role_1' }]);
-      vi.mocked(db.transaction).mockRejectedValue(new Error('Transaction failed'));
+    it('should return 500 when service throws unexpected error', async () => {
+      vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+      }));
+      vi.mocked(reorderDriveRoles).mockRejectedValue(new Error('Transaction failed'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/reorder`, {
         method: 'PATCH',

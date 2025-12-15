@@ -1,10 +1,15 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import {
+  checkDriveAccessForSearch,
+  globSearchPages,
+  loggers,
+} from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const };
-import { db, pages, drives, eq, and, inArray } from '@pagespace/db';
-import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/server';
-import { loggers } from '@pagespace/lib/server';
+
+const VALID_PAGE_TYPES = ['FOLDER', 'DOCUMENT', 'AI_CHAT', 'CHANNEL', 'CANVAS', 'SHEET'] as const;
+type PageType = (typeof VALID_PAGE_TYPES)[number];
 
 /**
  * GET /api/drives/[driveId]/search/glob
@@ -33,152 +38,53 @@ export async function GET(
     }
 
     // Parse includeTypes
-    const includeTypes = includeTypesParam ?
-      includeTypesParam.split(',').filter(t => ['FOLDER', 'DOCUMENT', 'AI_CHAT', 'CHANNEL', 'CANVAS', 'SHEET'].includes(t)) :
-      null;
+    const includeTypes = includeTypesParam
+      ? (includeTypesParam
+          .split(',')
+          .filter((t): t is PageType => VALID_PAGE_TYPES.includes(t as PageType)))
+      : undefined;
 
     // Check drive access
-    const hasDriveAccess = await getUserDriveAccess(userId, driveId);
-    if (!hasDriveAccess) {
+    const accessInfo = await checkDriveAccessForSearch(driveId, userId);
+
+    if (!accessInfo.hasAccess) {
       return NextResponse.json(
-        { error: 'You don\'t have access to this drive' },
+        { error: "You don't have access to this drive" },
         { status: 403 }
       );
     }
 
-    // Get drive info
-    const [drive] = await db
-      .select({ slug: drives.slug, name: drives.name })
-      .from(drives)
-      .where(eq(drives.id, driveId));
-
-    if (!drive) {
+    if (!accessInfo.drive) {
       return NextResponse.json(
         { error: 'Drive not found' },
         { status: 404 }
       );
     }
 
-    // Build where conditions
-    const whereConditions = includeTypes && includeTypes.length > 0
-      ? and(
-          eq(pages.driveId, driveId),
-          eq(pages.isTrashed, false),
-          inArray(pages.type, includeTypes as Array<'FOLDER' | 'DOCUMENT' | 'AI_CHAT' | 'CHANNEL' | 'CANVAS' | 'SHEET'>)
-        )
-      : and(
-          eq(pages.driveId, driveId),
-          eq(pages.isTrashed, false)
-        );
-
-    // Get all pages in drive
-    const query = db
-      .select({
-        id: pages.id,
-        title: pages.title,
-        type: pages.type,
-        parentId: pages.parentId,
-        position: pages.position,
-      })
-      .from(pages)
-      .where(whereConditions);
-
-    const allPages = await query;
-
-    // Build page hierarchy with paths
-    const pageMap = new Map();
-    const results = [];
-
-    // First pass: build page map
-    for (const page of allPages) {
-      pageMap.set(page.id, page);
-    }
-
-    // Convert glob pattern to regex
-    const globToRegex = (glob: string): RegExp => {
-      const escaped = glob
-        .replace(/[.+^${}()|[\]\\]/g, '\\$&') // Escape regex special chars except * and ?
-        .replace(/\*/g, '.*')  // * matches any characters
-        .replace(/\?/g, '.');   // ? matches single character
-      return new RegExp(`^${escaped}$`, 'i');
-    };
-
-    const pathRegex = globToRegex(pattern);
-
-    // Second pass: build paths and check pattern
-    for (const page of allPages) {
-      // Check permissions
-      const accessLevel = await getUserAccessLevel(userId, page.id);
-      if (!accessLevel?.canView) continue;
-
-      // Build full path
-      const pathParts = [];
-      let currentPage = page;
-
-      while (currentPage) {
-        pathParts.unshift(currentPage.title);
-        if (currentPage.parentId) {
-          currentPage = pageMap.get(currentPage.parentId);
-        } else {
-          break;
-        }
+    // Perform glob search
+    const searchResults = await globSearchPages(
+      driveId,
+      userId,
+      pattern,
+      accessInfo.drive.slug,
+      {
+        includeTypes: includeTypes?.length ? includeTypes : undefined,
+        maxResults,
       }
-
-      const fullPath = pathParts.join('/');
-      const semanticPath = `/${drive.slug || driveId}/${fullPath}`;
-
-      // Check if path matches pattern
-      if (pathRegex.test(fullPath) || pathRegex.test(page.title)) {
-        results.push({
-          pageId: page.id,
-          title: page.title,
-          type: page.type,
-          semanticPath,
-          matchedOn: pathRegex.test(fullPath) ? 'path' : 'title',
-        });
-
-        if (results.length >= maxResults) break;
-      }
-    }
-
-    // Sort results by path for better organization
-    results.sort((a, b) => a.semanticPath.localeCompare(b.semanticPath));
+    );
 
     loggers.api.info('Glob search completed', {
       driveId,
       pattern,
       includeTypes,
-      resultCount: results.length,
-      userId
+      resultCount: searchResults.results.length,
+      userId,
     });
 
     return NextResponse.json({
       success: true,
-      driveSlug: drive.slug,
-      pattern,
-      results,
-      totalResults: results.length,
-      summary: `Found ${results.length} page${results.length === 1 ? '' : 's'} matching pattern "${pattern}"`,
-      stats: {
-        totalPagesScanned: allPages.length,
-        matchingPages: results.length,
-        documentTypes: [...new Set(results.map(r => r.type))],
-        matchTypes: {
-          path: results.filter(r => r.matchedOn === 'path').length,
-          title: results.filter(r => r.matchedOn === 'title').length,
-        }
-      },
-      nextSteps: results.length > 0 ? [
-        'Use read_page with the pageId to examine content',
-        'Use the semantic paths to understand the structure',
-        'Consider using regex_search for content-based searching',
-      ] : [
-        'Try a broader pattern (e.g., "**/*" for all pages)',
-        'Check if your pattern syntax is correct',
-        'Verify the pages exist with list_pages',
-      ]
+      ...searchResults,
     });
-
   } catch (error) {
     loggers.api.error('Error in glob search:', error as Error);
     return NextResponse.json(

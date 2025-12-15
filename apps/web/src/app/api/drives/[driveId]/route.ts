@@ -1,7 +1,13 @@
 import { NextResponse } from 'next/server';
-import { drives, db, eq, and, driveMembers } from '@pagespace/db';
 import { z } from 'zod';
-import { loggers, slugify } from '@pagespace/lib/server';
+import {
+  getDriveById,
+  getDriveAccess,
+  getDriveWithAccess,
+  updateDrive,
+  trashDrive,
+} from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
@@ -12,7 +18,7 @@ const patchSchema = z.object({
   name: z.string().optional(),
   aiProvider: z.string().optional(),
   aiModel: z.string().optional(),
-  drivePrompt: z.string().max(10000).optional(), // Custom AI instructions for this drive
+  drivePrompt: z.string().max(10000).optional(),
 });
 
 /**
@@ -31,40 +37,18 @@ export async function GET(
     }
     const userId = auth.userId;
 
-    // First try to get the drive
-    const drive = await db.query.drives.findFirst({
-      where: eq(drives.id, driveId),
-    });
+    const driveWithAccess = await getDriveWithAccess(driveId, userId);
 
-    if (!drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
-    }
-
-    // Check if user has access (owner or member)
-    const isOwned = drive.ownerId === userId;
-    let isMember = false;
-    
-    if (!isOwned) {
-      const membership = await db.query.driveMembers.findFirst({
-        where: and(
-          eq(driveMembers.driveId, drive.id),
-          eq(driveMembers.userId, userId)
-        ),
-      });
-
-      if (!membership) {
-        return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+    if (!driveWithAccess) {
+      // Check if drive exists at all for proper error
+      const drive = await getDriveById(driveId);
+      if (!drive) {
+        return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
       }
-      
-      isMember = true;
+      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
     }
 
-    // Return drive with ownership/membership flags
-    return NextResponse.json({
-      ...drive,
-      isOwned,
-      isMember
-    });
+    return NextResponse.json(driveWithAccess);
   } catch (error) {
     loggers.api.error('Error fetching drive:', error as Error);
     return NextResponse.json({ error: 'Failed to fetch drive' }, { status: 500 });
@@ -90,57 +74,33 @@ export async function PATCH(
     const body = await request.json();
     const validatedBody = patchSchema.parse(body);
 
-    // Find the drive
-    const drive = await db.query.drives.findFirst({
-      where: eq(drives.id, driveId),
-    });
-
+    // Check drive exists
+    const drive = await getDriveById(driveId);
     if (!drive) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    // Check if user is owner or admin
-    const isOwner = drive.ownerId === userId;
-    let isAdmin = false;
-
-    if (!isOwner) {
-      const adminMembership = await db.select()
-        .from(driveMembers)
-        .where(and(
-          eq(driveMembers.driveId, driveId),
-          eq(driveMembers.userId, userId),
-          eq(driveMembers.role, 'ADMIN')
-        ))
-        .limit(1);
-
-      isAdmin = adminMembership.length > 0;
+    // Check authorization
+    const access = await getDriveAccess(driveId, userId);
+    if (!access.isOwner && !access.isAdmin) {
+      return NextResponse.json(
+        { error: 'Only drive owners and admins can update drive settings' },
+        { status: 403 }
+      );
     }
 
-    if (!isOwner && !isAdmin) {
-      return NextResponse.json({ error: 'Only drive owners and admins can update drive settings' }, { status: 403 });
-    }
-
-    // Update the drive (regenerate slug if name changes)
-    await db
-      .update(drives)
-      .set({
-        ...validatedBody,
-        ...(validatedBody.name && { slug: slugify(validatedBody.name) }),
-        updatedAt: new Date(),
-      })
-      .where(eq(drives.id, drive.id));
-
-    // Fetch updated drive
-    const updatedDrive = await db.query.drives.findFirst({
-      where: eq(drives.id, drive.id),
+    // Update the drive
+    const updatedDrive = await updateDrive(driveId, {
+      name: validatedBody.name,
+      drivePrompt: validatedBody.drivePrompt,
     });
 
     // Broadcast drive update event if name changed
-    if (validatedBody.name) {
+    if (validatedBody.name && updatedDrive) {
       await broadcastDriveEvent(
         createDriveEventPayload(drive.id, 'updated', {
-          name: updatedDrive?.name,
-          slug: updatedDrive?.slug,
+          name: updatedDrive.name,
+          slug: updatedDrive.slug,
         })
       );
     }
@@ -148,7 +108,10 @@ export async function PATCH(
     return NextResponse.json(updatedDrive);
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return NextResponse.json({ error: 'Invalid request body', details: error.issues }, { status: 400 });
+      return NextResponse.json(
+        { error: 'Invalid request body', details: error.issues },
+        { status: 400 }
+      );
     }
     loggers.api.error('Error updating drive:', error as Error);
     return NextResponse.json({ error: 'Failed to update drive' }, { status: 500 });
@@ -171,45 +134,23 @@ export async function DELETE(
     }
     const userId = auth.userId;
 
-    // Find the drive
-    const drive = await db.query.drives.findFirst({
-      where: eq(drives.id, driveId),
-    });
-
+    // Check drive exists
+    const drive = await getDriveById(driveId);
     if (!drive) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    // Check if user is owner or admin
-    const isOwner = drive.ownerId === userId;
-    let isAdmin = false;
-
-    if (!isOwner) {
-      const adminMembership = await db.select()
-        .from(driveMembers)
-        .where(and(
-          eq(driveMembers.driveId, driveId),
-          eq(driveMembers.userId, userId),
-          eq(driveMembers.role, 'ADMIN')
-        ))
-        .limit(1);
-
-      isAdmin = adminMembership.length > 0;
-    }
-
-    if (!isOwner && !isAdmin) {
-      return NextResponse.json({ error: 'Only drive owners and admins can delete drives' }, { status: 403 });
+    // Check authorization
+    const access = await getDriveAccess(driveId, userId);
+    if (!access.isOwner && !access.isAdmin) {
+      return NextResponse.json(
+        { error: 'Only drive owners and admins can delete drives' },
+        { status: 403 }
+      );
     }
 
     // Move drive to trash
-    await db
-      .update(drives)
-      .set({
-        isTrashed: true,
-        trashedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(eq(drives.id, drive.id));
+    await trashDrive(driveId);
 
     // Broadcast drive deletion event
     await broadcastDriveEvent(

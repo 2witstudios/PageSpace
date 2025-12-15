@@ -2,20 +2,17 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET } from '../route';
 import type { WebAuthResult, AuthError } from '@/lib/auth';
+import type { DriveSearchInfo, GlobSearchResponse } from '@pagespace/lib/server';
 
-// Mock dependencies
-vi.mock('@pagespace/db', () => ({
-  db: {
-    select: vi.fn(),
-  },
-  pages: {},
-  drives: {},
-  eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
-  and: vi.fn((...args: unknown[]) => ({ args, type: 'and' })),
-  inArray: vi.fn((field: unknown, values: unknown[]) => ({ field, values, type: 'inArray' })),
-}));
+// ============================================================================
+// Contract Tests for /api/drives/[driveId]/search/glob
+//
+// These tests mock at the SERVICE SEAM level, NOT at the ORM/query-builder level.
+// ============================================================================
 
 vi.mock('@pagespace/lib/server', () => ({
+  checkDriveAccessForSearch: vi.fn(),
+  globSearchPages: vi.fn(),
   loggers: {
     api: {
       info: vi.fn(),
@@ -24,8 +21,6 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
-  getUserAccessLevel: vi.fn(),
-  getUserDriveAccess: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -33,11 +28,13 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-import { db } from '@pagespace/db';
-import { loggers, getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/server';
+import { checkDriveAccessForSearch, globSearchPages } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
-// Helper to create mock WebAuthResult
+// ============================================================================
+// Test Fixtures
+// ============================================================================
+
 const mockWebAuth = (userId: string, tokenVersion = 0): WebAuthResult => ({
   userId,
   tokenVersion,
@@ -46,60 +43,59 @@ const mockWebAuth = (userId: string, tokenVersion = 0): WebAuthResult => ({
   role: 'user',
 });
 
-// Helper to create mock AuthError
 const mockAuthError = (status = 401): AuthError => ({
   error: NextResponse.json({ error: 'Unauthorized' }, { status }),
 });
 
-// Helper to create mock page
-const mockPage = (overrides: {
-  id: string;
-  title: string;
-  type?: 'FOLDER' | 'DOCUMENT' | 'AI_CHAT' | 'CHANNEL' | 'CANVAS' | 'SHEET';
-  parentId?: string | null;
-  position?: number;
-}) => ({
-  id: overrides.id,
-  title: overrides.title,
-  type: overrides.type ?? 'DOCUMENT',
-  parentId: overrides.parentId ?? null,
-  position: overrides.position ?? 0,
+const createDriveSearchInfo = (overrides: Partial<DriveSearchInfo> = {}): DriveSearchInfo => ({
+  hasAccess: overrides.hasAccess ?? true,
+  drive: 'drive' in overrides ? overrides.drive : {
+    id: 'drive_abc',
+    slug: 'test-drive',
+    name: 'Test Drive',
+  },
 });
 
-// Create mock context
+const createGlobSearchResponse = (overrides: Partial<GlobSearchResponse> = {}): GlobSearchResponse => ({
+  driveSlug: overrides.driveSlug ?? 'test-drive',
+  pattern: overrides.pattern ?? '*.md',
+  results: overrides.results ?? [
+    {
+      pageId: 'page_1',
+      title: 'README.md',
+      type: 'DOCUMENT',
+      semanticPath: '/test-drive/README.md',
+      matchedOn: 'title',
+    },
+  ],
+  totalResults: overrides.totalResults ?? 1,
+  summary: overrides.summary ?? 'Found 1 page matching pattern "*.md"',
+  stats: overrides.stats ?? {
+    totalPagesScanned: 10,
+    matchingPages: 1,
+    documentTypes: ['DOCUMENT'],
+    matchTypes: { path: 0, title: 1 },
+  },
+  nextSteps: overrides.nextSteps ?? ['Use read_page with the pageId to examine content'],
+});
+
 const createContext = (driveId: string) => ({
   params: Promise.resolve({ driveId }),
 });
+
+// ============================================================================
+// GET /api/drives/[driveId]/search/glob - Contract Tests
+// ============================================================================
 
 describe('GET /api/drives/[driveId]/search/glob', () => {
   const mockUserId = 'user_123';
   const mockDriveId = 'drive_abc';
 
   beforeEach(() => {
-    vi.clearAllMocks();
-
+    vi.resetAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
-
-    // Default: user has drive access
-    vi.mocked(getUserDriveAccess).mockResolvedValue(true);
-
-    // Default: user has view access to pages
-    vi.mocked(getUserAccessLevel).mockResolvedValue({ canView: true, canEdit: false, canShare: false });
   });
-
-  const setupSelectMock = (driveResults: unknown[], pageResults: unknown[]) => {
-    let callIndex = 0;
-    vi.mocked(db.select).mockImplementation(() => ({
-      from: vi.fn().mockImplementation(() => ({
-        where: vi.fn().mockImplementation(async () => {
-          callIndex++;
-          if (callIndex === 1) return driveResults;
-          return pageResults;
-        }),
-      })),
-    } as unknown as ReturnType<typeof db.select>));
-  };
 
   describe('authentication', () => {
     it('should return 401 when not authenticated', async () => {
@@ -111,11 +107,41 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
 
       expect(response.status).toBe(401);
     });
+
+    it('should allow JWT authentication', async () => {
+      vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
+      vi.mocked(globSearchPages).mockResolvedValue(createGlobSearchResponse());
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*.md`);
+      await GET(request, createContext(mockDriveId));
+
+      expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
+        request,
+        { allow: ['jwt', 'mcp'] }
+      );
+    });
+
+    it('should allow MCP authentication', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+        ...mockWebAuth(mockUserId),
+        tokenType: 'mcp',
+      } as WebAuthResult);
+      vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
+      vi.mocked(globSearchPages).mockResolvedValue(createGlobSearchResponse());
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*.md`);
+      const response = await GET(request, createContext(mockDriveId));
+
+      expect(response.status).toBe(200);
+    });
   });
 
   describe('authorization', () => {
     it('should return 403 when user has no drive access', async () => {
-      vi.mocked(getUserDriveAccess).mockResolvedValue(false);
+      vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo({
+        hasAccess: false,
+        drive: null,
+      }));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*.md`);
       const response = await GET(request, createContext(mockDriveId));
@@ -126,7 +152,10 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
     });
 
     it('should return 404 when drive not found', async () => {
-      setupSelectMock([], []);
+      vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo({
+        hasAccess: true,
+        drive: null,
+      }));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*.md`);
       const response = await GET(request, createContext(mockDriveId));
@@ -148,186 +177,183 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
     });
   });
 
-  describe('happy path', () => {
-    beforeEach(() => {
-      setupSelectMock(
-        [{ slug: 'test-drive', name: 'Test Drive' }],
-        [
-          mockPage({ id: 'page_1', title: 'README.md' }),
-          mockPage({ id: 'page_2', title: 'docs', type: 'FOLDER' }),
-          mockPage({ id: 'page_3', title: 'CONTRIBUTING.md', parentId: 'page_2' }),
-        ]
+  describe('service integration', () => {
+    it('should call checkDriveAccessForSearch with driveId and userId', async () => {
+      vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
+      vi.mocked(globSearchPages).mockResolvedValue(createGlobSearchResponse());
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*.md`);
+      await GET(request, createContext(mockDriveId));
+
+      expect(checkDriveAccessForSearch).toHaveBeenCalledWith(mockDriveId, mockUserId);
+    });
+
+    it('should call globSearchPages with correct parameters', async () => {
+      vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
+      vi.mocked(globSearchPages).mockResolvedValue(createGlobSearchResponse());
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*.md&maxResults=50`);
+      await GET(request, createContext(mockDriveId));
+
+      expect(globSearchPages).toHaveBeenCalledWith(
+        mockDriveId,
+        mockUserId,
+        '*.md',
+        'test-drive',
+        { includeTypes: undefined, maxResults: 50 }
       );
     });
 
-    it('should return matching pages for simple pattern', async () => {
+    it('should pass includeTypes to globSearchPages', async () => {
+      vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
+      vi.mocked(globSearchPages).mockResolvedValue(createGlobSearchResponse());
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*&includeTypes=DOCUMENT,FOLDER`);
+      await GET(request, createContext(mockDriveId));
+
+      expect(globSearchPages).toHaveBeenCalledWith(
+        mockDriveId,
+        mockUserId,
+        '*',
+        'test-drive',
+        { includeTypes: ['DOCUMENT', 'FOLDER'], maxResults: 100 }
+      );
+    });
+
+    it('should filter out invalid includeTypes values', async () => {
+      vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
+      vi.mocked(globSearchPages).mockResolvedValue(createGlobSearchResponse());
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*&includeTypes=DOCUMENT,INVALID_TYPE`);
+      await GET(request, createContext(mockDriveId));
+
+      expect(globSearchPages).toHaveBeenCalledWith(
+        mockDriveId,
+        mockUserId,
+        '*',
+        'test-drive',
+        { includeTypes: ['DOCUMENT'], maxResults: 100 }
+      );
+    });
+
+    it('should cap maxResults at 200', async () => {
+      vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
+      vi.mocked(globSearchPages).mockResolvedValue(createGlobSearchResponse());
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*&maxResults=500`);
+      await GET(request, createContext(mockDriveId));
+
+      expect(globSearchPages).toHaveBeenCalledWith(
+        mockDriveId,
+        mockUserId,
+        '*',
+        'test-drive',
+        { includeTypes: undefined, maxResults: 200 }
+      );
+    });
+  });
+
+  describe('response contract', () => {
+    it('should return success=true on successful search', async () => {
+      vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
+      vi.mocked(globSearchPages).mockResolvedValue(createGlobSearchResponse());
+
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*.md`);
       const response = await GET(request, createContext(mockDriveId));
       const body = await response.json();
 
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
-      expect(body.pattern).toBe('*.md');
-      expect(body.results.length).toBeGreaterThan(0);
     });
 
-    it('should return results with semantic paths', async () => {
+    it('should include pattern in response', async () => {
+      vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
+      vi.mocked(globSearchPages).mockResolvedValue(createGlobSearchResponse({ pattern: 'test-pattern' }));
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=test-pattern`);
+      const response = await GET(request, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(body.pattern).toBe('test-pattern');
+    });
+
+    it('should include driveSlug in response', async () => {
+      vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
+      vi.mocked(globSearchPages).mockResolvedValue(createGlobSearchResponse({ driveSlug: 'my-drive' }));
+
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*`);
       const response = await GET(request, createContext(mockDriveId));
       const body = await response.json();
 
-      expect(response.status).toBe(200);
+      expect(body.driveSlug).toBe('my-drive');
+    });
+
+    it('should include results array', async () => {
+      const mockResults = [
+        { pageId: 'page_1', title: 'Test', type: 'DOCUMENT', semanticPath: '/test/Test', matchedOn: 'title' as const },
+        { pageId: 'page_2', title: 'Test2', type: 'FOLDER', semanticPath: '/test/Test2', matchedOn: 'path' as const },
+      ];
+      vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
+      vi.mocked(globSearchPages).mockResolvedValue(createGlobSearchResponse({
+        results: mockResults,
+        totalResults: 2,
+      }));
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*`);
+      const response = await GET(request, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(body.results).toHaveLength(2);
+      expect(body.results[0]).toHaveProperty('pageId');
+      expect(body.results[0]).toHaveProperty('title');
+      expect(body.results[0]).toHaveProperty('type');
       expect(body.results[0]).toHaveProperty('semanticPath');
-      expect(body.results[0].semanticPath).toMatch(/^\/test-drive\//);
+      expect(body.results[0]).toHaveProperty('matchedOn');
     });
 
-    it('should include match type (path or title)', async () => {
-      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=README*`);
-      const response = await GET(request, createContext(mockDriveId));
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      if (body.results.length > 0) {
-        expect(body.results[0]).toHaveProperty('matchedOn');
-        expect(['path', 'title']).toContain(body.results[0].matchedOn);
-      }
-    });
-
-    it('should respect maxResults parameter', async () => {
-      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*&maxResults=1`);
-      const response = await GET(request, createContext(mockDriveId));
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.results.length).toBeLessThanOrEqual(1);
-    });
-
-    it('should cap maxResults at 200', async () => {
-      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*&maxResults=500`);
-      const response = await GET(request, createContext(mockDriveId));
-
-      expect(response.status).toBe(200);
-      // The route should internally cap at 200
-    });
-
-    it('should filter by includeTypes parameter', async () => {
-      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*&includeTypes=DOCUMENT,FOLDER`);
-      const response = await GET(request, createContext(mockDriveId));
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      // Results should only contain DOCUMENT and FOLDER types
-      body.results.forEach((result: { type: string }) => {
-        expect(['DOCUMENT', 'FOLDER']).toContain(result.type);
-      });
-    });
-
-    it('should filter out invalid includeTypes values', async () => {
-      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*&includeTypes=DOCUMENT,INVALID_TYPE`);
-      const response = await GET(request, createContext(mockDriveId));
-
-      expect(response.status).toBe(200);
-    });
-  });
-
-  describe('glob pattern matching', () => {
-    beforeEach(() => {
-      setupSelectMock(
-        [{ slug: 'test-drive', name: 'Test Drive' }],
-        [
-          mockPage({ id: 'page_1', title: 'README.md' }),
-          mockPage({ id: 'page_2', title: 'config.json' }),
-          mockPage({ id: 'page_3', title: 'test.ts' }),
-          mockPage({ id: 'page_4', title: 'test.tsx' }),
-        ]
-      );
-    });
-
-    it('should match wildcard patterns', async () => {
-      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=test.*`);
-      const response = await GET(request, createContext(mockDriveId));
-
-      expect(response.status).toBe(200);
-      // Should match test.ts and test.tsx
-    });
-
-    it('should match single character wildcard', async () => {
-      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=test.ts?`);
-      const response = await GET(request, createContext(mockDriveId));
-
-      expect(response.status).toBe(200);
-      // Should match test.tsx (? = single char)
-    });
-  });
-
-  describe('permission filtering', () => {
-    it('should filter out pages user cannot view', async () => {
-      setupSelectMock(
-        [{ slug: 'test-drive', name: 'Test Drive' }],
-        [
-          mockPage({ id: 'page_1', title: 'Visible' }),
-          mockPage({ id: 'page_2', title: 'Hidden' }),
-        ]
-      );
-
-      // Only allow viewing page_1
-      vi.mocked(getUserAccessLevel).mockImplementation(async (_, pageId) => {
-        if (pageId === 'page_1') {
-          return { canView: true, canEdit: false, canShare: false };
-        }
-        return { canView: false, canEdit: false, canShare: false };
-      });
-
-      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*`);
-      const response = await GET(request, createContext(mockDriveId));
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.results.some((r: { title: string }) => r.title === 'Visible')).toBe(true);
-      expect(body.results.some((r: { title: string }) => r.title === 'Hidden')).toBe(false);
-    });
-  });
-
-  describe('response metadata', () => {
     it('should include summary and stats', async () => {
-      setupSelectMock(
-        [{ slug: 'test-drive', name: 'Test Drive' }],
-        [mockPage({ id: 'page_1', title: 'Test' })]
-      );
+      vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
+      vi.mocked(globSearchPages).mockResolvedValue(createGlobSearchResponse());
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*`);
       const response = await GET(request, createContext(mockDriveId));
       const body = await response.json();
 
-      expect(response.status).toBe(200);
       expect(body.summary).toBeDefined();
       expect(body.stats).toBeDefined();
       expect(body.stats.totalPagesScanned).toBeDefined();
       expect(body.stats.matchingPages).toBeDefined();
+      expect(body.stats.documentTypes).toBeDefined();
       expect(body.stats.matchTypes).toBeDefined();
       expect(body.nextSteps).toBeDefined();
     });
 
-    it('should include driveSlug in response', async () => {
-      setupSelectMock(
-        [{ slug: 'my-drive', name: 'My Drive' }],
-        []
-      );
+    it('should return empty results when no matches', async () => {
+      vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
+      vi.mocked(globSearchPages).mockResolvedValue(createGlobSearchResponse({
+        results: [],
+        totalResults: 0,
+        stats: {
+          totalPagesScanned: 10,
+          matchingPages: 0,
+          documentTypes: [],
+          matchTypes: { path: 0, title: 0 },
+        },
+      }));
 
-      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*`);
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=nomatch`);
       const response = await GET(request, createContext(mockDriveId));
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.driveSlug).toBe('my-drive');
+      expect(body.results).toHaveLength(0);
+      expect(body.totalResults).toBe(0);
     });
   });
 
   describe('error handling', () => {
-    it('should return 500 when database query fails', async () => {
-      vi.mocked(db.select).mockImplementation(() => {
-        throw new Error('Database error');
-      });
+    it('should return 500 when service throws unexpected error', async () => {
+      vi.mocked(checkDriveAccessForSearch).mockRejectedValue(new Error('Database error'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*`);
       const response = await GET(request, createContext(mockDriveId));
@@ -335,7 +361,18 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toContain('Glob search failed');
-      expect(loggers.api.error).toHaveBeenCalled();
+    });
+
+    it('should return 500 when globSearchPages throws', async () => {
+      vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
+      vi.mocked(globSearchPages).mockRejectedValue(new Error('Search failed'));
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*`);
+      const response = await GET(request, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(body.error).toContain('Glob search failed');
     });
   });
 });
