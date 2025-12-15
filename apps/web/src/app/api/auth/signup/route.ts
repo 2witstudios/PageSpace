@@ -114,7 +114,7 @@ export async function POST(req: Request) {
     }).returning().then(res => res[0]);
 
     // Create a personal drive for the new user
-    const driveName = `${user.name}'s Drive`;
+    const driveName = 'Getting Started';
     const driveSlug = slugify(driveName);
     const newDrive = await db.insert(drives).values({
       name: driveName,
