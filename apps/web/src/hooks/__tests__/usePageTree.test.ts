@@ -176,9 +176,8 @@ describe('usePageTree', () => {
       expect(mockMutate).toHaveBeenCalledWith(expect.any(Array), false);
     });
 
-    it('given a non-existent node, should not throw and keep tree unchanged', () => {
-      const originalPage = createMockTreePage({ id: 'page-1', title: 'Original' });
-      mockSWRState.data = [originalPage];
+    it('given a non-existent node, should not throw and not mutate', () => {
+      mockSWRState.data = [createMockTreePage({ id: 'page-1' })];
 
       const { result } = renderHook(() => usePageTree('drive-123'));
 
@@ -188,9 +187,7 @@ describe('usePageTree', () => {
         });
       }).not.toThrow();
 
-      // Observable: tree remains unchanged when node doesn't exist
-      const updatedTree = mockMutate.mock.calls[0][0];
-      expect(updatedTree[0].title).toBe('Original');
+      expect(mockMutate).not.toHaveBeenCalled();
     });
   });
 
@@ -224,7 +221,7 @@ describe('usePageTree', () => {
     it('given API error, should log error and not throw', async () => {
       mockSWRState.data = [createMockTreePage({ id: 'parent' })];
       mockFetchWithAuth.mockRejectedValue(new Error('API error'));
-      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => { });
 
       const { result } = renderHook(() => usePageTree('drive-123'));
 
@@ -256,7 +253,7 @@ describe('usePageTree', () => {
     it('given active editing, should skip invalidation', () => {
       mockSWRState.data = [createMockTreePage()];
       mockIsAnyEditing.mockReturnValue(true);
-      const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => { });
 
       const { result } = renderHook(() => usePageTree('drive-123'));
 

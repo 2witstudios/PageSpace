@@ -23,12 +23,12 @@ type ChatMessage = {
 };
 
 type AiChat = {
-    id: string;
-    model: string;
-    pageId: string;
-    providerOverride?: string;
-    temperature?: number;
-    systemPrompt?: string;
+  id: string;
+  model: string;
+  pageId: string;
+  providerOverride?: string;
+  temperature?: number;
+  systemPrompt?: string;
 };
 
 export type MessageWithUser = ChatMessage & { user: User | null };
@@ -85,19 +85,32 @@ export function usePageTree(driveId?: string, trashView?: boolean) {
   }, [swrKey, cache, mutate]);
 
   const updateNode = (nodeId: string, updates: Partial<TreePage>) => {
+    let found = false;
+
     const update = (pages: TreePage[]): TreePage[] => {
-      return pages.map(page => {
+      const newPages = pages.map(page => {
         if (page.id === nodeId) {
+          found = true;
           return { ...page, ...updates, children: page.children || [] };
         }
+
         if (page.children && page.children.length > 0) {
-          return { ...page, children: update(page.children) };
+          const newChildren = update(page.children);
+          if (newChildren !== page.children) {
+            return { ...page, children: newChildren };
+          }
         }
-        return { ...page, children: page.children || [] };
+        return page;
       });
+
+      const hasChanged = newPages.some((newPage, i) => newPage !== pages[i]);
+      return hasChanged ? newPages : pages;
     };
 
-    mutate(update(data || []), false);
+    const newTree = update(data || []);
+    if (found) {
+      mutate(newTree, false);
+    }
   };
 
   return {
