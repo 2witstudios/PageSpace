@@ -110,7 +110,21 @@ export const pageAgentRepository = {
       .from(pages)
       .where(eq(pages.id, agentId));
 
-    return agent || null;
+    if (!agent) return null;
+
+    // Cast enabledTools from unknown (jsonb) to string[] | null
+    return {
+      id: agent.id,
+      title: agent.title,
+      type: agent.type,
+      driveId: agent.driveId,
+      parentId: agent.parentId,
+      systemPrompt: agent.systemPrompt,
+      enabledTools: agent.enabledTools as string[] | null,
+      aiProvider: agent.aiProvider,
+      aiModel: agent.aiModel,
+      isTrashed: agent.isTrashed,
+    };
   },
 
   /**

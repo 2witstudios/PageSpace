@@ -92,6 +92,7 @@ const mockAgent = (overrides: Partial<{
   enabledTools: string[] | null;
   aiProvider: string | null;
   aiModel: string | null;
+  isTrashed: boolean;
 }> = {}) => ({
   id: overrides.id ?? mockAgentId,
   type: overrides.type ?? 'AI_CHAT',
@@ -102,6 +103,7 @@ const mockAgent = (overrides: Partial<{
   enabledTools: overrides.enabledTools ?? ['read_page'],
   aiProvider: overrides.aiProvider ?? 'openrouter',
   aiModel: overrides.aiModel ?? 'claude-3-opus',
+  isTrashed: overrides.isTrashed ?? false,
 });
 
 const createRequest = (agentId: string, body: Record<string, unknown>) =>

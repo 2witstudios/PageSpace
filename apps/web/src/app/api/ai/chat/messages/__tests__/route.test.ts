@@ -68,14 +68,18 @@ const mockChatMessage = (overrides: Partial<{
   id: string;
   pageId: string;
   conversationId: string;
+  userId: string | null;
   role: string;
   content: string;
+  messageType: 'standard' | 'todo_list';
 }> = {}) => ({
   id: overrides.id || 'msg_123',
   pageId: overrides.pageId || mockPageId,
   conversationId: overrides.conversationId || 'conv_123',
+  userId: overrides.userId ?? mockUserId,
   role: overrides.role || 'user',
   content: overrides.content || 'Hello, AI!',
+  messageType: overrides.messageType || 'standard' as const,
   isActive: true,
   createdAt: new Date(),
   editedAt: null,

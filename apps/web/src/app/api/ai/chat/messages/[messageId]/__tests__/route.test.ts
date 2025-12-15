@@ -68,12 +68,16 @@ const mockChatMessage = (overrides: Partial<{
   id: string;
   pageId: string;
   content: string;
+  userId: string | null;
+  messageType: 'standard' | 'todo_list';
 }> = {}) => ({
   id: overrides.id || mockMessageId,
   pageId: overrides.pageId || mockPageId,
   conversationId: 'conv_123',
+  userId: overrides.userId ?? mockUserId,
   role: 'user',
   content: overrides.content || 'Hello, AI!',
+  messageType: overrides.messageType || 'standard' as const,
   isActive: true,
   createdAt: new Date(),
   editedAt: null,
@@ -234,6 +238,19 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
         mockMessageId,
         'Updated content'
       );
+    });
+
+    it('should call processMessageContentUpdate with existing and new content', async () => {
+      const { processMessageContentUpdate } = await import('@/lib/repositories/chat-message-repository');
+      const existingMessage = mockChatMessage({ content: 'Existing content' });
+      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(existingMessage);
+
+      const request = createPatchRequest(mockMessageId, { content: 'New content' });
+      const context = createContext(mockMessageId);
+
+      await PATCH(request, context);
+
+      expect(processMessageContentUpdate).toHaveBeenCalledWith('Existing content', 'New content');
     });
 
     it('should log successful edit', async () => {

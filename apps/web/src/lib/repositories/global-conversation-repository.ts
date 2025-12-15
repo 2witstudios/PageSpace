@@ -76,24 +76,6 @@ export interface UsageSummary {
 }
 
 /**
- * Pure function: Process message content update preserving structure
- */
-export function processMessageContentUpdate(existingContent: string, newContent: string): string {
-  try {
-    const parsed = JSON.parse(existingContent);
-    if (parsed.textParts && parsed.partsOrder) {
-      // Update only textParts, preserve structure
-      parsed.textParts = [newContent];
-      parsed.originalContent = newContent;
-      return JSON.stringify(parsed);
-    }
-  } catch {
-    // Plain text, use as-is
-  }
-  return newContent;
-}
-
-/**
  * Pure function: Calculate usage summary from logs
  */
 export function calculateUsageSummary(

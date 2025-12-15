@@ -88,10 +88,10 @@ describe('GET /api/ai/lmstudio/models', () => {
       expect(body.models).toEqual({});
     });
 
-    it('should return 400 when LM Studio settings exist but baseUrl is missing', async () => {
+    it('should return 400 when LM Studio settings exist but baseUrl is empty', async () => {
       vi.mocked(getUserLMStudioSettings).mockResolvedValue({
         isConfigured: true,
-        baseUrl: null,
+        baseUrl: '',
       });
 
       const request = new Request('https://example.com/api/ai/lmstudio/models', {

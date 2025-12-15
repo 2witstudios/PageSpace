@@ -212,6 +212,7 @@ describe('GET /api/ai/settings', () => {
       vi.mocked(getDefaultPageSpaceSettings).mockResolvedValue({
         isConfigured: true,
         apiKey: 'test-key',
+        provider: 'glm',
       });
       vi.mocked(getUserOpenRouterSettings).mockResolvedValue({
         isConfigured: true,

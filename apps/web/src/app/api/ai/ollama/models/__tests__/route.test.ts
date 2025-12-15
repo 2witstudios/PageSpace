@@ -88,10 +88,10 @@ describe('GET /api/ai/ollama/models', () => {
       expect(body.models).toEqual([]);
     });
 
-    it('should return 400 when Ollama settings exist but baseUrl is missing', async () => {
+    it('should return 400 when Ollama settings exist but baseUrl is empty', async () => {
       vi.mocked(getUserOllamaSettings).mockResolvedValue({
         isConfigured: true,
-        baseUrl: null,
+        baseUrl: '',
       });
 
       const request = new Request('https://example.com/api/ai/ollama/models', {

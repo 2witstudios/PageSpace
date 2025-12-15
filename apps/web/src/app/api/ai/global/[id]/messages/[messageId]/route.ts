@@ -2,10 +2,8 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
-import {
-  globalConversationRepository,
-  processMessageContentUpdate,
-} from '@/lib/repositories/global-conversation-repository';
+import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
+import { processMessageContentUpdate } from '@/lib/repositories/chat-message-repository';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 

@@ -22,6 +22,7 @@ export interface ConversationStats {
   firstUserMessage: string | null;
   lastMessageRole: string | null;
   lastMessageContent: string | null;
+  [key: string]: unknown; // Index signature for Drizzle execute compatibility
 }
 
 export interface ConversationMetadata {
@@ -51,12 +52,12 @@ export function extractPreviewText(content: string | null): string {
     } else if (typeof parsed === 'object' && parsed.parts?.[0]?.text) {
       return parsed.parts[0].text.substring(0, 100);
     }
+    // JSON parsed but didn't match expected formats - use raw content
+    return content.substring(0, 100);
   } catch {
     // If parsing fails, use raw content substring
     return content.substring(0, 100);
   }
-
-  return 'New conversation';
 }
 
 /**
