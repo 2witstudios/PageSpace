@@ -22,6 +22,28 @@ export interface ChatMessage {
   toolResults: unknown | null;
 }
 
+/**
+ * Process message content, preserving structured content format if present.
+ * Pure function extracted for testability.
+ */
+export function processMessageContentUpdate(
+  existingContent: string,
+  newContent: string
+): string {
+  try {
+    const parsed = JSON.parse(existingContent);
+    if (parsed.textParts && parsed.partsOrder) {
+      // Update only textParts, preserve structure
+      parsed.textParts = [newContent];
+      parsed.originalContent = newContent;
+      return JSON.stringify(parsed);
+    }
+  } catch {
+    // Plain text, use as-is
+  }
+  return newContent;
+}
+
 export const chatMessageRepository = {
   /**
    * Get messages for a page, optionally filtered by conversationId

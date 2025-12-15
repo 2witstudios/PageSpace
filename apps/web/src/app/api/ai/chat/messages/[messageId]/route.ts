@@ -3,31 +3,12 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
-import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
+import {
+  chatMessageRepository,
+  processMessageContentUpdate,
+} from '@/lib/repositories/chat-message-repository';
 
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
-
-/**
- * Process message content, preserving structured content format if present.
- * Pure function extracted for testability.
- */
-export function processMessageContentUpdate(
-  existingContent: string,
-  newContent: string
-): string {
-  try {
-    const parsed = JSON.parse(existingContent);
-    if (parsed.textParts && parsed.partsOrder) {
-      // Update only textParts, preserve structure
-      parsed.textParts = [newContent];
-      parsed.originalContent = newContent;
-      return JSON.stringify(parsed);
-    }
-  } catch {
-    // Plain text, use as-is
-  }
-  return newContent;
-}
 
 /**
  * PATCH - Edit message content
