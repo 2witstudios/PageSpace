@@ -129,12 +129,13 @@ export const pageAgentRepository = {
 
   /**
    * Update an agent's configuration
+   * @throws Error if agent not found (no rows updated)
    */
   async updateAgentConfig(
     agentId: string,
     data: AgentConfigUpdate
   ): Promise<UpdatedAgent> {
-    const [updatedAgent] = await db
+    const result = await db
       .update(pages)
       .set(data)
       .where(eq(pages.id, agentId))
@@ -145,7 +146,11 @@ export const pageAgentRepository = {
         driveId: pages.driveId,
       });
 
-    return updatedAgent;
+    if (result.length === 0) {
+      throw new Error(`Agent not found: ${agentId}`);
+    }
+
+    return result[0];
   },
 };
 
