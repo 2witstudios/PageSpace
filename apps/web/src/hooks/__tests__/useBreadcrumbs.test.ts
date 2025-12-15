@@ -16,7 +16,6 @@ const { mockSWRState, mockMutate } = vi.hoisted(() => ({
   mockSWRState: {
     data: undefined as unknown,
     error: undefined as unknown,
-    isLoading: false,
   },
   mockMutate: vi.fn(),
 }));
@@ -26,16 +25,18 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: vi.fn(),
 }));
 
-// Mock SWR to control its behavior
+// Mock SWR to control its behavior - compute isLoading like the actual hook
 vi.mock('swr', () => ({
   default: vi.fn((key) => {
     if (!key) {
-      return { data: undefined, error: undefined, isLoading: false, mutate: mockMutate };
+      // Null key: SWR returns undefined data, so isLoading = !error && !data = true
+      return { data: undefined, error: undefined, isLoading: true, mutate: mockMutate };
     }
     return {
       data: mockSWRState.data,
       error: mockSWRState.error,
-      isLoading: mockSWRState.isLoading,
+      // Compute isLoading like the actual hook: !error && !data
+      isLoading: !mockSWRState.error && !mockSWRState.data,
       mutate: mockMutate,
     };
   }),
@@ -59,7 +60,6 @@ describe('useBreadcrumbs', () => {
     vi.clearAllMocks();
     mockSWRState.data = undefined;
     mockSWRState.error = undefined;
-    mockSWRState.isLoading = false;
   });
 
   afterEach(() => {
@@ -119,9 +119,10 @@ describe('useBreadcrumbs', () => {
   });
 
   describe('loading state', () => {
-    it('given data is loading, should return isLoading=true', () => {
+    it('given no data and no error, should return isLoading=true', () => {
+      // isLoading is computed as !error && !data
       mockSWRState.data = undefined;
-      mockSWRState.isLoading = true;
+      mockSWRState.error = undefined;
 
       const { result } = renderHook(() => useBreadcrumbs('page-123'));
 
@@ -130,8 +131,8 @@ describe('useBreadcrumbs', () => {
     });
 
     it('given data is loaded, should return isLoading=false', () => {
+      // When data exists, isLoading = !error && !data = false
       mockSWRState.data = [createMockBreadcrumb()];
-      mockSWRState.isLoading = false;
 
       const { result } = renderHook(() => useBreadcrumbs('page-123'));
 
@@ -171,11 +172,11 @@ describe('useBreadcrumbs', () => {
       expect(result.current.breadcrumbs).toBeUndefined();
     });
 
-    it('given null pageId, should report loading until data is available', () => {
+    it('given null pageId, should return isLoading=true (no data returned)', () => {
       const { result } = renderHook(() => useBreadcrumbs(null));
 
-      // Hook computes isLoading as !error && !data
-      // With null key, SWR returns undefined data, so isLoading is true
+      // With null key, SWR returns undefined data and no error
+      // isLoading = !error && !data = true
       expect(result.current.isLoading).toBe(true);
       expect(result.current.breadcrumbs).toBeUndefined();
     });

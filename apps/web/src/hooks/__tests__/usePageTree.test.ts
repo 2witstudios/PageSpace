@@ -176,8 +176,9 @@ describe('usePageTree', () => {
       expect(mockMutate).toHaveBeenCalledWith(expect.any(Array), false);
     });
 
-    it('given a non-existent node, should not throw and not mutate', () => {
-      mockSWRState.data = [createMockTreePage({ id: 'page-1' })];
+    it('given a non-existent node, should not throw and keep tree unchanged', () => {
+      const originalPage = createMockTreePage({ id: 'page-1', title: 'Original' });
+      mockSWRState.data = [originalPage];
 
       const { result } = renderHook(() => usePageTree('drive-123'));
 
@@ -186,6 +187,10 @@ describe('usePageTree', () => {
           result.current.updateNode('non-existent', { title: 'Test' });
         });
       }).not.toThrow();
+
+      // Observable: tree remains unchanged when node doesn't exist
+      const updatedTree = mockMutate.mock.calls[0][0];
+      expect(updatedTree[0].title).toBe('Original');
     });
   });
 

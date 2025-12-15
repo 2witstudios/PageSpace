@@ -11,6 +11,27 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 
+type AuthUser = {
+  id: string;
+  name?: string;
+  email?: string;
+  deviceToken?: string;
+};
+
+type MockAuthStoreState = {
+  user: AuthUser | null;
+  isLoading: boolean;
+  isAuthenticated: boolean;
+  isRefreshing: boolean;
+  hasHydrated: boolean;
+  setUser: ReturnType<typeof vi.fn<(user: AuthUser | null) => void>>;
+  setLoading: ReturnType<typeof vi.fn<(loading: boolean) => void>>;
+  setHydrated: ReturnType<typeof vi.fn<(hydrated: boolean) => void>>;
+  startSession: ReturnType<typeof vi.fn<() => void>>;
+  endSession: ReturnType<typeof vi.fn<() => void>>;
+  updateActivity: ReturnType<typeof vi.fn<() => void>>;
+};
+
 // Create hoisted mocks with state simulation
 const {
   mockPush,
@@ -28,29 +49,29 @@ const {
   mockShouldLoadSession,
   mockInitializeEventListeners,
 } = vi.hoisted(() => {
-  const store = {
-    user: null as { id: string; name: string; email: string } | null,
+  const store: MockAuthStoreState = {
+    user: null,
     isLoading: false,
     isAuthenticated: false,
     isRefreshing: false,
     hasHydrated: true,
     // Simulate actual state transitions
-    setUser: vi.fn((user) => {
+    setUser: vi.fn<(user: AuthUser | null) => void>((user) => {
       store.user = user;
       store.isAuthenticated = !!user;
     }),
-    setLoading: vi.fn((loading) => {
+    setLoading: vi.fn<(loading: boolean) => void>((loading) => {
       store.isLoading = loading;
     }),
-    setHydrated: vi.fn((hydrated) => {
+    setHydrated: vi.fn<(hydrated: boolean) => void>((hydrated) => {
       store.hasHydrated = hydrated;
     }),
-    startSession: vi.fn(),
-    endSession: vi.fn(() => {
+    startSession: vi.fn<() => void>(),
+    endSession: vi.fn<() => void>(() => {
       store.user = null;
       store.isAuthenticated = false;
     }),
-    updateActivity: vi.fn(),
+    updateActivity: vi.fn<() => void>(),
   };
 
   return {
@@ -99,7 +120,7 @@ vi.mock('@/hooks/use-token-refresh', () => ({
 }));
 
 vi.mock('@/stores/auth-store', () => {
-  const useAuthStoreMock = vi.fn((selector) => {
+  const useAuthStoreMock = vi.fn(<T,>(selector?: (s: typeof mockAuthStore) => T): T | typeof mockAuthStore => {
     if (typeof selector === 'function') {
       return selector(mockAuthStore);
     }
@@ -122,6 +143,9 @@ vi.mock('@/stores/auth-store', () => {
 // Import after mocks
 import { useAuth } from '../use-auth';
 
+type UseAuthReturn = ReturnType<typeof useAuth>;
+type LoginResult = Awaited<ReturnType<UseAuthReturn['actions']['login']>>;
+
 // Mock localStorage
 const mockLocalStorage = (() => {
   let store: Record<string, string> = {};
@@ -132,7 +156,11 @@ const mockLocalStorage = (() => {
     clear: vi.fn(() => { store = {}; }),
   };
 })();
-Object.defineProperty(global, 'localStorage', { value: mockLocalStorage });
+Object.defineProperty(global, 'localStorage', {
+  value: mockLocalStorage,
+  configurable: true,
+  writable: true,
+});
 
 const originalFetch = global.fetch;
 
@@ -196,7 +224,7 @@ describe('useAuth', () => {
 
       const { result } = renderHook(() => useAuth());
 
-      let loginResult;
+      let loginResult: LoginResult | undefined;
       await act(async () => {
         loginResult = await result.current.actions.login('test@example.com', 'password123');
       });
@@ -218,7 +246,7 @@ describe('useAuth', () => {
 
       const { result } = renderHook(() => useAuth());
 
-      let loginResult;
+      let loginResult: LoginResult | undefined;
       await act(async () => {
         loginResult = await result.current.actions.login('test@example.com', 'wrongpassword');
       });
@@ -236,7 +264,7 @@ describe('useAuth', () => {
 
       const { result } = renderHook(() => useAuth());
 
-      let loginResult;
+      let loginResult: LoginResult | undefined;
       await act(async () => {
         loginResult = await result.current.actions.login('test@example.com', 'password');
       });
@@ -277,13 +305,15 @@ describe('useAuth', () => {
         await result.current.actions.login('test@example.com', 'password');
       });
 
-      // Observable: API called with correct payload
-      expect(global.fetch).toHaveBeenCalledWith(
-        '/api/auth/login',
-        expect.objectContaining({
-          body: expect.stringContaining('deviceId'),
-        })
-      );
+      // Observable: API called with correct payload (parse JSON for accurate assertion)
+      expect(global.fetch).toHaveBeenCalled();
+      const [, init] = vi.mocked(global.fetch).mock.calls[0] ?? [];
+      const body = JSON.parse(String((init as RequestInit | undefined)?.body ?? '{}')) as {
+        deviceId?: string;
+        deviceName?: string;
+      };
+      expect(body.deviceId).toBe('device-123');
+      expect(body.deviceName).toBe('Test Device');
     });
   });
 
@@ -458,17 +488,19 @@ describe('useAuth', () => {
     });
 
     it('given unauthenticated, should not schedule token refresh', async () => {
+      vi.useFakeTimers();
       mockAuthStore.isAuthenticated = false;
       mockAuthStore.user = null;
       mockAuthStore.hasHydrated = true;
 
       renderHook(() => useAuth());
 
-      // Give effects time to run
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // Flush queued timers/effects deterministically
+      await vi.runOnlyPendingTimersAsync();
 
       // Observable: no refresh scheduled for unauthenticated users
       expect(mockStartTokenRefresh).not.toHaveBeenCalled();
+      vi.useRealTimers();
     });
   });
 
