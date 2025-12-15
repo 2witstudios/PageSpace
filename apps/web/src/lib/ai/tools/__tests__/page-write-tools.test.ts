@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 
 // Mock database and dependencies
 vi.mock('@pagespace/db', () => ({
@@ -76,6 +76,22 @@ import type { ToolExecutionContext } from '../../core';
 
 const mockDb = vi.mocked(db);
 const mockCanUserEditPage = vi.mocked(canUserEditPage);
+
+interface MockDb {
+  select: Mock;
+  from: Mock;
+  where: Mock;
+  orderBy: Mock;
+  update: Mock;
+  set: Mock;
+  insert: Mock;
+  values: Mock;
+  returning: Mock;
+  query: {
+    pages: { findFirst: Mock };
+    drives: { findFirst: Mock };
+  };
+}
 
 describe('page-write-tools', () => {
   beforeEach(() => {
@@ -186,9 +202,9 @@ describe('page-write-tools', () => {
 
       // Observable outcomes prove the operation succeeded
       if ('error' in result) throw new Error(`Expected success but got error: ${result.error}`);
-      expect((result as any).success).toBe(true);
+      expect((result as { success: boolean }).success).toBe(true);
       if (!('linesReplaced' in result)) throw new Error('Expected linesReplaced in success result');
-      expect((result as any).linesReplaced).toBe(1);
+      expect((result as { linesReplaced: number }).linesReplaced).toBe(1);
       // Verify permission check was called with correct arguments
       expect(mockCanUserEditPage).toHaveBeenCalledWith('user-123', 'page-1');
     });
@@ -212,7 +228,7 @@ describe('page-write-tools', () => {
     });
 
     it('throws error when drive not found', async () => {
-      ((mockDb as any).where as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+      ((mockDb as unknown as MockDb).where as Mock).mockResolvedValue([]);
 
       const context = {
         toolCallId: '1', messages: [],

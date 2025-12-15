@@ -168,9 +168,9 @@ describe('agent-tools', () => {
         context
       );
 
-      expect((result as any).success).toBe(true);
-      expect((result as any).title).toBe('My Agent');
-      expect((result as any).agentConfig.enabledToolsCount).toBe(2);
+      expect((result as { success: boolean }).success).toBe(true);
+      expect((result as { title: string }).title).toBe('My Agent');
+      expect((result as { agentConfig: { enabledToolsCount: number } }).agentConfig.enabledToolsCount).toBe(2);
     });
 
     it('updates provider and model settings', async () => {
@@ -201,9 +201,9 @@ describe('agent-tools', () => {
         context
       );
 
-      expect((result as any).success).toBe(true);
-      expect((result as any).agentConfig.aiProvider).toBe('google');
-      expect((result as any).agentConfig.aiModel).toBe('gemini-pro');
+      expect((result as { success: boolean }).success).toBe(true);
+      expect((result as { agentConfig: { aiProvider: string } }).agentConfig.aiProvider).toBe('google');
+      expect((result as { agentConfig: { aiModel: string } }).agentConfig.aiModel).toBe('gemini-pro');
 
     });
   });

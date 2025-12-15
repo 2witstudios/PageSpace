@@ -111,8 +111,8 @@ describe('web-search-tools', () => {
       );
 
       if ('error' in result) throw new Error(`Expected success but got error: ${result.error}`);
-      expect((result as any).success).toBe(true);
-      expect((result as any).resultsCount).toBe(1);
+      expect((result as { success: boolean }).success).toBe(true);
+      expect((result as { resultsCount: number }).resultsCount).toBe(1);
       expect(global.fetch).toHaveBeenCalledWith(
         'https://api.z.ai/api/paas/v4/web_search',
         expect.objectContaining({
@@ -153,7 +153,7 @@ describe('web-search-tools', () => {
       );
 
       if ('error' in result) throw new Error(`Expected success but got error: ${result.error}`);
-      expect((result as any).success).toBe(true);
+      expect((result as { success: boolean }).success).toBe(true);
       expect(global.fetch).toHaveBeenCalledWith(
         'https://api.z.ai/api/paas/v4/web_search',
         expect.objectContaining({
@@ -347,14 +347,15 @@ describe('web-search-tools', () => {
       );
 
       if ('error' in result) throw new Error(`Expected success but got error: ${result.error}`);
-      expect((result as any).success).toBe(true);
-      expect((result as any).resultsCount).toBe(2);
-      expect((result as any).results[0].position).toBe(1);
-      expect((result as any).results[0].title).toBe('First Result');
-      expect((result as any).results[0].url).toBe('https://example1.com');
-      expect((result as any).results[0].publishDate).toBe('2025-01-15');
-      expect((result as any).results[1].position).toBe(2);
-      expect((result as any).results[1].publishDate).toBe('Unknown');
+      expect((result as { success: boolean }).success).toBe(true);
+      expect((result as { resultsCount: number }).resultsCount).toBe(2);
+      const results = (result as { results: Record<string, unknown>[] }).results;
+      expect(results[0].position).toBe(1);
+      expect(results[0].title).toBe('First Result');
+      expect(results[0].url).toBe('https://example1.com');
+      expect(results[0].publishDate).toBe('2025-01-15');
+      expect(results[1].position).toBe(2);
+      expect(results[1].publishDate).toBe('Unknown');
     });
   });
 });

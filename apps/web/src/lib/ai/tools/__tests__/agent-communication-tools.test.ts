@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 
 // Mock database and dependencies
 vi.mock('@pagespace/db', () => ({
@@ -83,6 +83,16 @@ import type { ToolExecutionContext } from '../../core';
 const mockDb = vi.mocked(db);
 const mockCanUserViewPage = vi.mocked(canUserViewPage);
 
+interface MockDb {
+  select: Mock;
+  from: Mock;
+  where: Mock;
+  orderBy: Mock;
+  query: {
+    pages: { findFirst: Mock };
+  };
+}
+
 describe('agent-communication-tools', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -106,7 +116,7 @@ describe('agent-communication-tools', () => {
     });
 
     it('returns error when drive not found', async () => {
-      ((mockDb as any).where as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+      ((mockDb as unknown as MockDb).where as Mock).mockResolvedValue([]);
 
       const context = {
         toolCallId: '1', messages: [],

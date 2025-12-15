@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 import { NextResponse } from 'next/server';
 
 // Mock database
@@ -69,10 +69,11 @@ vi.mock('../ai-utils', () => ({
 }));
 
 import {
-  createAIProvider,
-  updateUserProviderSettings,
   createProviderErrorResponse,
   isProviderError,
+  type ProviderResult,
+  createAIProvider,
+  updateUserProviderSettings,
 } from '../provider-factory';
 import { db } from '@pagespace/db';
 import {
@@ -108,11 +109,19 @@ const mockGetUserLMStudioSettings = vi.mocked(getUserLMStudioSettings);
 const mockGetUserGLMSettings = vi.mocked(getUserGLMSettings);
 const mockGetUserMiniMaxSettings = vi.mocked(getUserMiniMaxSettings);
 
+interface MockDb {
+  select: Mock;
+  from: Mock;
+  where: Mock;
+  update: Mock;
+  set: Mock;
+}
+
 describe('provider-factory', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Default mock: return user with no provider set
-    (mockDb as any).where.mockResolvedValue([
+    (mockDb as unknown as MockDb).where.mockResolvedValue([
       { id: 'user-123', currentAiProvider: null, currentAiModel: null },
     ]);
   });
@@ -563,7 +572,7 @@ describe('provider-factory', () => {
 
     describe('user provider defaults', () => {
       it('uses user default provider when not specified', async () => {
-        (mockDb as any).where.mockResolvedValue([
+        (mockDb as unknown as MockDb).where.mockResolvedValue([
           { id: 'user-123', currentAiProvider: 'google', currentAiModel: 'gemini-pro' },
         ]);
         mockGetUserGoogleSettings.mockResolvedValue({
@@ -618,7 +627,7 @@ describe('provider-factory', () => {
     });
 
     it('updates when both provider and model specified and different', async () => {
-      (mockDb as any).where.mockResolvedValue([
+      (mockDb as unknown as MockDb).where.mockResolvedValue([
         { id: 'user-123', currentAiProvider: 'old-provider', currentAiModel: 'old-model' },
       ]);
 
@@ -628,7 +637,7 @@ describe('provider-factory', () => {
     });
 
     it('does not update when provider and model are same', async () => {
-      (mockDb as any).where.mockResolvedValue([
+      (mockDb as unknown as MockDb).where.mockResolvedValue([
         { id: 'user-123', currentAiProvider: 'google', currentAiModel: 'gemini-pro' },
       ]);
 
@@ -679,7 +688,7 @@ describe('provider-factory', () => {
         modelName: 'gemini-pro',
       };
 
-      expect(isProviderError(result as any)).toBe(false);
+      expect(isProviderError(result as unknown as ProviderResult)).toBe(false);
     });
   });
 });
