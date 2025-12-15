@@ -1,7 +1,7 @@
-import { users, drives, userAiSettings, refreshTokens, db, eq } from '@pagespace/db';
+import { users, userAiSettings, refreshTokens, db, eq } from '@pagespace/db';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod/v4';
-import { slugify, generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, checkRateLimit, resetRateLimit, RATE_LIMIT_CONFIGS, createNotification, decodeToken, validateOrCreateDeviceToken } from '@pagespace/lib/server';
+import { generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, checkRateLimit, resetRateLimit, RATE_LIMIT_CONFIGS, createNotification, decodeToken, validateOrCreateDeviceToken } from '@pagespace/lib/server';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
@@ -11,7 +11,7 @@ import { sendEmail } from '@pagespace/lib/services/email-service';
 import { VerificationEmail } from '@pagespace/lib/email-templates/VerificationEmail';
 import React from 'react';
 import { NextResponse } from 'next/server';
-import { populateUserDrive } from '@/lib/onboarding/drive-setup';
+import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 // Removed AI defaults dependency
 
 const signupSchema = z.object({
@@ -113,26 +113,13 @@ export async function POST(req: Request) {
       tosAcceptedAt: new Date(),
     }).returning().then(res => res[0]);
 
-    // Create a personal drive for the new user
-    const driveName = 'Getting Started';
-    const driveSlug = slugify(driveName);
-    const newDrive = await db.insert(drives).values({
-      name: driveName,
-      slug: driveSlug,
-      ownerId: user.id,
-      updatedAt: new Date(),
-    }).returning().then(res => res[0]);
-
-    // Populate the new drive with starter content
-    if (newDrive) {
-      try {
-        await populateUserDrive(user.id, newDrive.id);
-      } catch (error) {
-        loggers.auth.error('Failed to populate user drive', error as Error, {
-          userId: user.id,
-          driveId: newDrive.id,
-        });
-      }
+    let provisionedDrive: { driveId: string } | null = null;
+    try {
+      provisionedDrive = await provisionGettingStartedDriveIfNeeded(user.id);
+    } catch (error) {
+      loggers.auth.error('Failed to provision Getting Started drive', error as Error, {
+        userId: user.id,
+      });
     }
 
     // Add default 'ollama' provider for the new user with Docker-compatible URL
@@ -239,7 +226,10 @@ export async function POST(req: Request) {
 
     // Set cookies and redirect to dashboard (matching Google OAuth pattern)
     const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
-    const redirectUrl = new URL('/dashboard', baseUrl);
+    const dashboardPath = provisionedDrive
+      ? `/dashboard/${provisionedDrive.driveId}`
+      : '/dashboard';
+    const redirectUrl = new URL(dashboardPath, baseUrl);
 
     // Add auth success parameter to trigger auth state refresh
     redirectUrl.searchParams.set('auth', 'success');

@@ -16,6 +16,7 @@ import { serialize } from 'cookie';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
+import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 
 const loginSchema = z.object({
   email: z.email(),
@@ -170,11 +171,24 @@ export async function POST(req: Request) {
     headers.append('Set-Cookie', accessTokenCookie);
     headers.append('Set-Cookie', refreshTokenCookie);
 
+    let redirectTo: string | undefined;
+    try {
+      const provisionedDrive = await provisionGettingStartedDriveIfNeeded(user.id);
+      if (provisionedDrive) {
+        redirectTo = `/dashboard/${provisionedDrive.driveId}`;
+      }
+    } catch (error) {
+      loggers.auth.error('Failed to provision Getting Started drive', error as Error, {
+        userId: user.id,
+      });
+    }
+
     return Response.json({
       id: user.id,
       name: user.name,
       email: user.email,
       ...(deviceTokenValue && { deviceToken: deviceTokenValue }),
+      ...(redirectTo && { redirectTo }),
     }, { status: 200, headers });
 
   } catch (error) {

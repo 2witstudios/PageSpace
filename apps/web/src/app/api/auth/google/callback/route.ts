@@ -1,7 +1,7 @@
-import { users, refreshTokens, drives } from '@pagespace/db';
-import { db, eq, or, count } from '@pagespace/db';
+import { users, refreshTokens } from '@pagespace/db';
+import { db, eq, or } from '@pagespace/db';
 import { z } from 'zod/v4';
-import { generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, checkRateLimit, resetRateLimit, RATE_LIMIT_CONFIGS, slugify, decodeToken, generateCSRFToken, getSessionIdFromJWT, validateOrCreateDeviceToken } from '@pagespace/lib/server';
+import { generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, checkRateLimit, resetRateLimit, RATE_LIMIT_CONFIGS, decodeToken, generateCSRFToken, getSessionIdFromJWT, validateOrCreateDeviceToken } from '@pagespace/lib/server';
 import { serialize } from 'cookie';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
@@ -9,7 +9,7 @@ import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { OAuth2Client } from 'google-auth-library';
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
-import { populateUserDrive } from '@/lib/onboarding/drive-setup';
+import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 
 const googleCallbackSchema = z.object({
   code: z.string().min(1, "Authorization code is required"),
@@ -187,33 +187,17 @@ export async function GET(req: Request) {
       console.log(`[GOOGLE_AUTH] New user created: ${user.name} (id: ${user.id})`);
     }
 
-    // Check if this user needs a personal drive (new users or existing users without drives)
-    const userDriveCount = await db.select({ count: count() }).from(drives).where(eq(drives.ownerId, user.id));
-    console.log(`[GOOGLE_AUTH] User has ${userDriveCount[0]?.count || 0} drives`);
-    
-    if (userDriveCount[0]?.count === 0) {
-      // Create a personal drive for users who don't have any drives
-      const driveName = 'Getting Started';
-      const driveSlug = slugify(driveName);
-      console.log(`[GOOGLE_AUTH] Creating drive: ${driveName} (${driveSlug})`);
-      const newDrive = await db.insert(drives).values({
-        name: driveName,
-        slug: driveSlug,
-        ownerId: user.id,
-        updatedAt: new Date(),
-      }).returning().then(res => res[0]);
-
-      if (newDrive) {
-        try {
-          await populateUserDrive(user.id, newDrive.id);
-        } catch (error) {
-          loggers.auth.error('Failed to populate user drive', error as Error, {
-            userId: user.id,
-            driveId: newDrive.id,
-            provider: 'google',
-          });
-        }
+    let provisionedDrive: { driveId: string } | null = null;
+    try {
+      provisionedDrive = await provisionGettingStartedDriveIfNeeded(user.id);
+      if (provisionedDrive) {
+        returnUrl = `/dashboard/${provisionedDrive.driveId}`;
       }
+    } catch (error) {
+      loggers.auth.error('Failed to provision Getting Started drive', error as Error, {
+        userId: user.id,
+        provider: 'google',
+      });
     }
 
     // Generate JWT tokens
@@ -296,7 +280,10 @@ export async function GET(req: Request) {
 
       // Redirect to dashboard with tokens in URL (will be handled by desktop OAuth handler)
       const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
-      const redirectUrl = new URL('/dashboard', baseUrl);
+      const dashboardPath = provisionedDrive
+        ? `/dashboard/${provisionedDrive.driveId}`
+        : '/dashboard';
+      const redirectUrl = new URL(dashboardPath, baseUrl);
       redirectUrl.searchParams.set('auth', 'success');
       redirectUrl.searchParams.set('desktop', 'true');
 

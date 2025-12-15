@@ -69,7 +69,7 @@ function SignInForm() {
         toast.success("Welcome back! You've been signed in successfully.");
         
         // Use replace to avoid back navigation issues
-        router.replace('/dashboard');
+        router.replace(result.redirectTo ?? '/dashboard');
       } else {
         const errorMessage = result.error || 'An unexpected error occurred.';
         setError(errorMessage);
