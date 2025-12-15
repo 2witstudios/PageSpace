@@ -3,7 +3,9 @@ import { createEmptySheet, serializeSheetContent } from '@pagespace/lib';
 export const WORKSPACE_TEMPLATES_GUIDE = `
 # Workspace Templates (Guide)
 
-A good PageSpace structure does two jobs:
+Templates are not “finished workspaces” — they’re **examples of shapes**.
+
+A good PageSpace shape does two jobs:
 
 1. Helps humans find things quickly.
 2. Makes your workspace **discoverable context** for AI agents.
@@ -26,6 +28,18 @@ If your drive uses predictable names and has a few “anchor pages”, an agent 
 - **Glossary**: acronyms, terms, naming conventions
 - **Status / Weekly Notes**: current state and next actions
 - **Sources**: files and links that matter
+
+## How an agent “sees” your structure (mental model)
+
+When an automation agent runs \`list_pages\`, it can see titles + hierarchy and then \`read_page\` the pages it finds.
+
+If you keep stable names like:
+
+- \`Product/PRDs/PRD Template\`
+- \`Sprint/Sprint Board\`
+- \`Clients/Client - <Name>/Overview\`
+
+…then an agent can reliably locate the right context without you pasting it into chat.
 
 ## Where agents belong
 
@@ -51,7 +65,7 @@ Put an **Agents** folder inside each major project area. Keep agents narrow:
 
 ## How structure helps automation (example)
 
-If you keep a predictable structure like:
+If you keep a predictable shape like:
 
 - \`/Product/PRDs\`
 - \`/Sprint/Sprint Board\`
@@ -67,15 +81,30 @@ If you keep a predictable structure like:
 export const BOOK_TEMPLATE_README = `
 # Solo Book Writing (Template)
 
-This template is designed for writing a book solo while still getting leverage from AI agents.
+This template is designed for **research + writing**, with just enough structure for AI agents to find the right context.
 
-## Structure (high level)
+## Shape (what to copy)
 
-- **00 Inbox**: capture messy ideas without worrying about organization
-- **01 Manuscript**: the source of truth for the actual writing
-- **02 Research**: characters/world/sources
-- **03 Publishing**: checklists and release planning
-- **Agents**: specialized helpers that know how this structure is laid out
+This folder contains a small set of stable anchor pages and example content.
+
+Example tree (what an agent might discover via \`list_pages\`):
+
+- 00 Inbox (Folder)
+  - Idea Capture (Document)
+- 01 Manuscript (Folder)
+  - Book Brief (Document)
+  - Outline (Document)
+  - Style Guide (Document)
+  - Chapters (Folder)
+    - Chapter 01 (Example) (Document)
+- 02 Research (Folder)
+  - Character Bible (Document)
+- 03 Publishing (Folder)
+  - Publishing Checklist (Example) (Task List)
+- Outputs (Folder)
+- Agents (Folder)
+  - Book Coach (AI Chat)
+  - Continuity Checker (AI Chat)
 
 ## Discoverable context (why this works for AI)
 
@@ -88,9 +117,11 @@ Keep a few “anchor pages” stable and easy to find:
 
 If those pages exist and stay named consistently, an agent can reliably locate them via \`list_pages\` + \`read_page\`.
 
-## Example agent automations (ideas)
+## Example pipelines (ideas)
 
-- **Chapter pipeline**:
+These are “multi-step” workflows you can run with an orchestrator that delegates to specialists via \`ask_agent\`.
+
+- **Chapter drafting pipeline**:
   1) “Outline the next chapter” (planning)
   2) “Draft scene beats” (drafting)
   3) “Continuity check” (consistency)
@@ -102,15 +133,30 @@ See **Page Types → AI Automations → Automation Examples (Use Cases)** for pi
 export const FOUNDER_TEMPLATE_README = `
 # Solo Founder (Template)
 
-This template is built for a founder who needs product thinking, execution, and ops in one place.
+This template is built for **product + execution + ops** in one place.
 
-## Structure (high level)
+## Shape (what to copy)
 
-- **00 Inbox**: capture raw notes and TODOs
-- **Product**: vision, PRDs, roadmap
-- **Customers**: interviews, notes, insights
-- **Operations**: weekly review, finance, admin
-- **Agents**: specialized helpers (strategy, synthesis, planning)
+Example tree (what an agent might discover via \`list_pages\`):
+
+- 00 Inbox (Folder)
+  - Quick Capture (Document)
+- Product (Folder)
+  - Vision (Document)
+  - PRDs (Folder)
+    - PRD Template (Document)
+  - Roadmap (Example) (Task List)
+- Customers (Folder)
+  - Interviews (Folder)
+    - Interview Notes (Example) (Document)
+  - Insights (Document)
+- Operations (Folder)
+  - Weekly Review (Document)
+  - Metrics (Example Sheet) (Sheet)
+- Outputs (Folder)
+- Agents (Folder)
+  - Founder Ops (AI Chat)
+  - Interview Synthesizer (AI Chat)
 
 ## Discoverable context
 
@@ -122,15 +168,15 @@ The most “AI-useful” pages are the ones that stay stable:
 
 Agents can find these consistently if you keep titles predictable and avoid burying anchors too deeply.
 
-## Example agent automations (ideas)
+## Example pipelines (ideas)
 
-- Turn an interview note into:
+- Interview → insights → roadmap:
   - a summary
   - key insights
   - follow-up questions
   - a PRD skeleton
 
-- Weekly review pipeline:
+- Weekly review → plan:
   - summarize wins/losses
   - propose next priorities
   - update a task list for the week
@@ -139,15 +185,29 @@ Agents can find these consistently if you keep titles predictable and avoid bury
 export const SMALL_BUSINESS_TEMPLATE_README = `
 # Small Business (Template)
 
-This template focuses on repeatable operations: clients, delivery, sales, and SOPs.
+This template focuses on **repeatable operations**: clients, delivery, sales, and SOPs.
 
-## Structure (high level)
+## Shape (what to copy)
 
-- **00 Inbox**: capture quick notes and requests
-- **Clients**: one folder per client (work, files, notes, tasks)
-- **Operations**: SOPs, policies, admin
-- **Sales & Marketing**: leads, campaigns, content
-- **Agents**: onboarding, SOP writing, support triage
+Example tree (what an agent might discover via \`list_pages\`):
+
+- 00 Inbox (Folder)
+  - Requests (Document)
+- Clients (Folder)
+  - Client - ExampleCo (Folder)
+    - Overview (Document)
+    - Onboarding Tasks (Task List)
+    - Notes (Document)
+    - Client Chat (Channel)
+- Operations (Folder)
+  - SOPs (Folder)
+    - SOP Template (Document)
+- Sales & Marketing (Folder)
+  - Sales Pipeline (Example Sheet) (Sheet)
+- Outputs (Folder)
+- Agents (Folder)
+  - Client Onboarding (AI Chat)
+  - SOP Writer (AI Chat)
 
 ## Discoverable context
 
@@ -162,16 +222,31 @@ Agents can discover and operate on this structure by searching for “Client - �
 export const DEV_TEAM_TEMPLATE_README = `
 # Dev Team (Template)
 
-This template is designed to connect product intent → engineering execution → ongoing operations.
+This template is designed to connect **product intent → engineering execution → ongoing operations**.
 
-## Structure (high level)
+## Shape (what to copy)
 
-- **00 Inbox**: capture issues and ideas
-- **Product**: PRDs and decisions
-- **Engineering**: RFCs, runbooks, architecture notes
-- **Sprint**: task lists where each task has its own page
-- **Channels**: lightweight team chat
-- **Agents**: planning, PRD-to-tasks, RFC review
+Example tree (what an agent might discover via \`list_pages\`):
+
+- 00 Inbox (Folder)
+  - Bugs & Ideas (Document)
+- Product (Folder)
+  - PRDs (Folder)
+    - PRD (Example) (Document)
+    - Decisions (Document)
+- Engineering (Folder)
+  - RFCs (Folder)
+    - RFC Template (Document)
+  - Runbooks (Folder)
+    - Runbook Template (Document)
+- Sprint (Folder)
+  - Sprint Board (Example) (Task List)
+- Channels (Folder)
+  - Engineering Chat (Channel)
+- Outputs (Folder)
+- Agents (Folder)
+  - PRD → Sprint Orchestrator (AI Chat)
+  - RFC Reviewer (AI Chat)
 
 ## Discoverable context
 
@@ -221,4 +296,3 @@ export function buildSalesPipelineSheetContent(): string {
   };
   return serializeSheetContent(sheet);
 }
-
