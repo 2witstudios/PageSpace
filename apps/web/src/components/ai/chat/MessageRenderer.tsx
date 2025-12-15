@@ -1,7 +1,7 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { UIMessage } from 'ai';
 import { ToolCallRenderer } from '@/components/ai/tools/ToolCallRenderer';
-import { GroupedToolCallsRenderer } from '@/components/ai/tools/GroupedToolCallsRenderer';
+
 import { StreamingMarkdown } from './StreamingMarkdown';
 import { MessageActionButtons } from './MessageActionButtons';
 import { MessageEditor } from './MessageEditor';
@@ -95,8 +95,8 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({
   return (
     <div
       className={`group relative p-3 rounded-lg mb-2 ${role === 'user'
-          ? 'bg-primary/10 dark:bg-accent/20 ml-2 sm:ml-8'
-          : 'bg-gray-50 dark:bg-gray-800/50 mr-2 sm:mr-8'
+        ? 'bg-primary/10 dark:bg-accent/20 ml-2 sm:ml-8'
+        : 'bg-gray-50 dark:bg-gray-800/50 mr-2 sm:mr-8'
         }`}
     >
       <div className="flex items-center justify-between mb-1">
@@ -490,18 +490,22 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
             // Type narrowing: we know this is a ToolCallsGroupPart
             const toolCallsGroup = group as ToolCallsGroupPart;
             return (
-              <div key={`${message.id}-toolgroup-${index}`} className="mr-2 sm:mr-8">
-                <GroupedToolCallsRenderer
-                  toolCalls={toolCallsGroup.tools.map(tool => ({
-                    type: tool.type,
-                    toolName: tool.toolName,
-                    toolCallId: tool.toolCallId,
-                    input: tool.input,
-                    output: tool.output,
-                    state: tool.state,
-                  }))}
-                />
-              </div>
+              <React.Fragment key={`${message.id}-toolgroup-${index}`}>
+                {toolCallsGroup.tools.map((tool, toolIndex) => (
+                  <div key={`${message.id}-tool-${index}-${toolIndex}`} className="mr-2 sm:mr-8">
+                    <ToolCallRenderer
+                      part={{
+                        type: tool.type,
+                        toolName: tool.toolName,
+                        toolCallId: tool.toolCallId,
+                        input: tool.input,
+                        output: tool.output,
+                        state: tool.state,
+                      }}
+                    />
+                  </div>
+                ))}
+              </React.Fragment>
             );
           } else if (group.type.startsWith('tool-')) {
             // Type narrowing: we know this is a ToolGroupPart
