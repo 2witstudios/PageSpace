@@ -1,29 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Mock database and dependencies
-vi.mock('@pagespace/db', () => ({
-  db: {
-    select: vi.fn().mockReturnThis(),
-    selectDistinct: vi.fn().mockReturnThis(),
-    from: vi.fn().mockReturnThis(),
-    where: vi.fn(),
-    limit: vi.fn(),
-    query: {
-      pages: { findFirst: vi.fn() },
-      drives: { findFirst: vi.fn() },
-    },
-  },
-  pages: { id: 'id', driveId: 'driveId', content: 'content', title: 'title' },
-  drives: { id: 'id', isTrashed: 'isTrashed' },
-  eq: vi.fn(),
-  and: vi.fn(),
-  sql: vi.fn(),
-  inArray: vi.fn(),
-}));
-
+// Mock only the boundary we actually test
 vi.mock('@pagespace/lib/server', () => ({
   getUserDriveAccess: vi.fn(),
-  getUserAccessiblePagesInDriveWithDetails: vi.fn(),
 }));
 
 import { searchTools } from '../search-tools';
@@ -32,6 +11,23 @@ import type { ToolExecutionContext } from '../../core';
 
 const mockGetUserDriveAccess = vi.mocked(getUserDriveAccess);
 
+/**
+ * @scaffold - happy path coverage deferred
+ *
+ * These tests cover authentication and authorization error paths.
+ * Happy path tests (actual search results, filtering, pagination) are deferred
+ * because they require either:
+ * - A SearchRepository seam to avoid complex DB iteration mocking, OR
+ * - Integration tests against a real database with seeded content
+ *
+ * The search logic involves iterating over pages and matching patterns,
+ * which is impractical to mock without coupling to implementation details.
+ *
+ * TODO: Add SearchService seam with methods like:
+ * - searchByRegex(driveId, pattern, options): SearchResult[]
+ * - searchByGlob(driveId, pattern, options): SearchResult[]
+ * Then test happy paths against that seam.
+ */
 describe('search-tools', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -70,7 +66,6 @@ describe('search-tools', () => {
         )
       ).rejects.toThrow("You don't have access to this drive");
     });
-
   });
 
   describe('glob_search', () => {
@@ -104,7 +99,6 @@ describe('search-tools', () => {
         )
       ).rejects.toThrow("You don't have access to this drive");
     });
-
   });
 
   describe('multi_drive_search', () => {

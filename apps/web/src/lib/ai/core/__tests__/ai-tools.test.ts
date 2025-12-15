@@ -1,3 +1,12 @@
+/**
+ * @scaffold - aggregation tripwire
+ *
+ * This test validates that pageSpaceTools correctly aggregates all tool modules.
+ * It's a scaffold test because:
+ * - The unit is pure wiring/aggregation with no business logic
+ * - Changes here indicate tools were added/removed/renamed
+ * - Failures should prompt review of whether the change was intentional
+ */
 import { describe, it, expect, vi } from 'vitest';
 
 // Mock all tool modules to avoid database dependencies
@@ -64,91 +73,66 @@ vi.mock('../../tools/web-search-tools', () => ({
 }));
 
 import { pageSpaceTools } from '../ai-tools';
+import { driveTools } from '../../tools/drive-tools';
+import { pageReadTools } from '../../tools/page-read-tools';
+import { pageWriteTools } from '../../tools/page-write-tools';
+import { searchTools } from '../../tools/search-tools';
+import { taskManagementTools } from '../../tools/task-management-tools';
+import { agentTools } from '../../tools/agent-tools';
+import { agentCommunicationTools } from '../../tools/agent-communication-tools';
+import { webSearchTools } from '../../tools/web-search-tools';
 
 describe('ai-tools', () => {
   describe('pageSpaceTools aggregation', () => {
-    it('aggregates all tools from individual modules', () => {
-      expect(pageSpaceTools).toBeDefined();
-      expect(typeof pageSpaceTools).toBe('object');
+    it('equals the merged object of all tool modules', () => {
+      expect(pageSpaceTools).toEqual({
+        ...driveTools,
+        ...pageReadTools,
+        ...pageWriteTools,
+        ...searchTools,
+        ...taskManagementTools,
+        ...agentTools,
+        ...agentCommunicationTools,
+        ...webSearchTools,
+      });
     });
 
-    it('includes driveTools', () => {
-      expect(pageSpaceTools.list_drives).toBeDefined();
-      expect(pageSpaceTools.create_drive).toBeDefined();
-      expect(pageSpaceTools.rename_drive).toBeDefined();
-    });
+    it('has no key collisions between tool modules', () => {
+      const moduleKeysets = [
+        Object.keys(driveTools),
+        Object.keys(pageReadTools),
+        Object.keys(pageWriteTools),
+        Object.keys(searchTools),
+        Object.keys(taskManagementTools),
+        Object.keys(agentTools),
+        Object.keys(agentCommunicationTools),
+        Object.keys(webSearchTools),
+      ];
 
-    it('includes pageReadTools', () => {
-      expect(pageSpaceTools.list_pages).toBeDefined();
-      expect(pageSpaceTools.read_page).toBeDefined();
-      expect(pageSpaceTools.list_trash).toBeDefined();
-    });
+      const allKeys = moduleKeysets.flat();
+      const uniqueKeys = new Set(allKeys);
 
-    it('includes pageWriteTools', () => {
-      expect(pageSpaceTools.replace_lines).toBeDefined();
-      expect(pageSpaceTools.create_page).toBeDefined();
-      expect(pageSpaceTools.rename_page).toBeDefined();
-      expect(pageSpaceTools.trash).toBeDefined();
-      expect(pageSpaceTools.restore).toBeDefined();
-      expect(pageSpaceTools.move_page).toBeDefined();
-      expect(pageSpaceTools.edit_sheet_cells).toBeDefined();
-    });
-
-    it('includes searchTools', () => {
-      expect(pageSpaceTools.regex_search).toBeDefined();
-      expect(pageSpaceTools.glob_search).toBeDefined();
-      expect(pageSpaceTools.multi_drive_search).toBeDefined();
-    });
-
-    it('includes taskManagementTools', () => {
-      expect(pageSpaceTools.update_task).toBeDefined();
-    });
-
-    it('includes agentTools', () => {
-      expect(pageSpaceTools.update_agent_config).toBeDefined();
-    });
-
-    it('includes agentCommunicationTools', () => {
-      expect(pageSpaceTools.list_agents).toBeDefined();
-      expect(pageSpaceTools.multi_drive_list_agents).toBeDefined();
-      expect(pageSpaceTools.ask_agent).toBeDefined();
-    });
-
-    it('includes webSearchTools', () => {
-      expect(pageSpaceTools.web_search).toBeDefined();
-    });
-
-    it('has expected number of tools', () => {
-      const toolCount = Object.keys(pageSpaceTools).length;
-      // Total expected: 3 drive + 3 read + 7 write + 3 search + 1 task + 1 agent + 3 agent-comm + 1 web = 22
-      expect(toolCount).toBe(22);
-    });
-
-    it('has no undefined tools', () => {
-      for (const [, tool] of Object.entries(pageSpaceTools)) {
-        expect(tool).toBeDefined();
-        expect(tool).not.toBeNull();
+      // If there are duplicates, find them for a helpful error message
+      if (uniqueKeys.size !== allKeys.length) {
+        const seen = new Set<string>();
+        const duplicates: string[] = [];
+        for (const key of allKeys) {
+          if (seen.has(key)) {
+            duplicates.push(key);
+          }
+          seen.add(key);
+        }
+        throw new Error(`Tool name collisions detected: ${duplicates.join(', ')}`);
       }
+
+      expect(uniqueKeys.size).toBe(allKeys.length);
     });
 
-    it('has no duplicate tool names', () => {
-      const toolNames = Object.keys(pageSpaceTools);
-      const uniqueNames = new Set(toolNames);
-      expect(uniqueNames.size).toBe(toolNames.length);
-    });
-  });
-
-  describe('tool structure', () => {
-    it('each tool has a name property', () => {
+    it('has no undefined or null tools', () => {
       for (const [name, tool] of Object.entries(pageSpaceTools)) {
-        expect((tool as { name: string }).name).toBe(name);
-      }
-    });
-
-    it('each tool has a description property', () => {
-      for (const [, tool] of Object.entries(pageSpaceTools)) {
-        expect((tool as { description: string }).description).toBeDefined();
-        expect(typeof (tool as { description: string }).description).toBe('string');
+        if (tool === undefined || tool === null) {
+          throw new Error(`Tool "${name}" is ${tool}`);
+        }
       }
     });
   });

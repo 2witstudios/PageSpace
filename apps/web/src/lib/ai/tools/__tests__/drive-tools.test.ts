@@ -1,31 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Mock database and dependencies
+// Mock database - only mock what's actually used in tests
 vi.mock('@pagespace/db', () => ({
   db: {
-    select: vi.fn().mockReturnThis(),
-    from: vi.fn().mockReturnThis(),
-    where: vi.fn(),
-    insert: vi.fn().mockReturnThis(),
-    values: vi.fn().mockReturnThis(),
-    returning: vi.fn(),
-    update: vi.fn().mockReturnThis(),
-    set: vi.fn().mockReturnThis(),
     query: {
       drives: { findFirst: vi.fn() },
-      driveMembers: { findFirst: vi.fn() },
     },
   },
   drives: { id: 'id', ownerId: 'ownerId' },
-  driveMembers: { driveId: 'driveId' },
   eq: vi.fn(),
   and: vi.fn(),
-  or: vi.fn(),
-  isNull: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
-  getUserDriveAccess: vi.fn(),
   loggers: {
     ai: {
       child: vi.fn(() => ({
@@ -53,6 +40,17 @@ import type { ToolExecutionContext } from '../../core';
 
 const mockDb = vi.mocked(db);
 
+/**
+ * @scaffold - happy path coverage deferred
+ *
+ * These tests cover authentication and validation error paths.
+ * Happy path tests (list_drives returning data, create_drive success, etc.)
+ * are deferred because they require either:
+ * - A repository seam to avoid query-builder chain mocking, OR
+ * - Integration tests against a real database
+ *
+ * TODO: Add DriveRepository seam and test happy paths against it.
+ */
 describe('drive-tools', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -72,7 +70,6 @@ describe('drive-tools', () => {
         driveTools.list_drives.execute({}, context)
       ).rejects.toThrow('User authentication required');
     });
-
   });
 
   describe('create_drive', () => {

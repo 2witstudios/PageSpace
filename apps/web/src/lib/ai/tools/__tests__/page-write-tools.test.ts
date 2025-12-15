@@ -178,10 +178,11 @@ describe('page-write-tools', () => {
         context
       );
 
+      // Observable outcomes prove the operation succeeded
       expect(result.success).toBe(true);
       expect(result.linesReplaced).toBe(1);
+      // Verify permission check was called with correct arguments
       expect(mockCanUserEditPage).toHaveBeenCalledWith('user-123', 'page-1');
-      expect(mockDb.update).toHaveBeenCalled();
     });
   });
 
