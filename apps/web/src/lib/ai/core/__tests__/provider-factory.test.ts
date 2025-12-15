@@ -99,6 +99,7 @@ import { createXai } from '@ai-sdk/xai';
 import { createOllama } from 'ollama-ai-provider-v2';
 
 const mockDb = vi.mocked(db);
+const mockDbMock = mockDb as unknown as MockDb;
 const mockGetUserOpenRouterSettings = vi.mocked(getUserOpenRouterSettings);
 const mockGetUserGoogleSettings = vi.mocked(getUserGoogleSettings);
 const mockGetDefaultPageSpaceSettings = vi.mocked(getDefaultPageSpaceSettings);
@@ -122,7 +123,7 @@ describe('provider-factory', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Default mock: return user with no provider set
-    (mockDb as unknown as MockDb).where.mockResolvedValue([
+    mockDbMock.where.mockResolvedValue([
       { id: 'user-123', currentAiProvider: null, currentAiModel: null },
     ]);
   });
@@ -573,7 +574,7 @@ describe('provider-factory', () => {
 
     describe('user provider defaults', () => {
       it('uses user default provider when not specified', async () => {
-        (mockDb as unknown as MockDb).where.mockResolvedValue([
+        mockDbMock.where.mockResolvedValue([
           { id: 'user-123', currentAiProvider: 'google', currentAiModel: 'gemini-pro' },
         ]);
         mockGetUserGoogleSettings.mockResolvedValue({
@@ -628,7 +629,7 @@ describe('provider-factory', () => {
     });
 
     it('updates when both provider and model specified and different', async () => {
-      (mockDb as unknown as MockDb).where.mockResolvedValue([
+      mockDbMock.where.mockResolvedValue([
         { id: 'user-123', currentAiProvider: 'old-provider', currentAiModel: 'old-model' },
       ]);
 
@@ -638,7 +639,7 @@ describe('provider-factory', () => {
     });
 
     it('does not update when provider and model are same', async () => {
-      (mockDb as unknown as MockDb).where.mockResolvedValue([
+      mockDbMock.where.mockResolvedValue([
         { id: 'user-123', currentAiProvider: 'google', currentAiModel: 'gemini-pro' },
       ]);
 
