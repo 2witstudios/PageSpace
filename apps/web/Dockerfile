@@ -1,9 +1,10 @@
-# Install dependencies only when needed  
+# syntax=docker/dockerfile:1.6
+# Install dependencies only when needed
 FROM node:22.17.0-alpine AS deps
 WORKDIR /app
 
-# Enable corepack for pnpm
-RUN corepack enable
+# Enable corepack and pin pnpm (with basic retry for transient network issues)
+RUN corepack enable && (corepack prepare pnpm@10.13.1 --activate || corepack prepare pnpm@10.13.1 --activate || corepack prepare pnpm@10.13.1 --activate)
 
 # Copy only package files for dependency installation
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
@@ -13,7 +14,7 @@ COPY apps/web/package.json ./apps/web/
 COPY apps/realtime/package.json ./apps/realtime/
 
 # Install ALL dependencies for the entire monorepo
-RUN pnpm install --frozen-lockfile
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm config set store-dir /pnpm/store && pnpm install --frozen-lockfile
 
 # Now copy source code AFTER dependencies are installed
 COPY packages ./packages
@@ -23,7 +24,7 @@ COPY tsconfig.json ./
 # Rebuild the source code only when needed
 FROM node:22.17.0-alpine AS builder
 WORKDIR /app
-RUN corepack enable && corepack prepare pnpm@10.13.1 --activate
+RUN corepack enable && (corepack prepare pnpm@10.13.1 --activate || corepack prepare pnpm@10.13.1 --activate || corepack prepare pnpm@10.13.1 --activate)
 
 # Copy the installed dependencies and the entire source code
 COPY --from=deps /app .
