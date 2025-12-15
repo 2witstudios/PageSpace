@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 
 // Mock database and dependencies
 vi.mock('@pagespace/db', () => ({
@@ -83,6 +83,16 @@ import type { ToolExecutionContext } from '../../core';
 const mockDb = vi.mocked(db);
 const mockCanUserViewPage = vi.mocked(canUserViewPage);
 
+interface MockDb {
+  select: Mock;
+  from: Mock;
+  where: Mock;
+  orderBy: Mock;
+  query: {
+    pages: { findFirst: Mock };
+  };
+}
+
 describe('agent-communication-tools', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -95,28 +105,30 @@ describe('agent-communication-tools', () => {
     });
 
     it('requires user authentication', async () => {
-      const context = { experimental_context: {} };
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
 
       await expect(
-        agentCommunicationTools.list_agents.execute(
-          { driveId: 'drive-1' },
+        agentCommunicationTools.list_agents!.execute!(
+          { driveId: 'drive-1', includeSystemPrompt: false, includeTools: false },
           context
         )
       ).rejects.toThrow('User authentication required');
     });
 
     it('returns error when drive not found', async () => {
-      (mockDb.where as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+      ((mockDb as unknown as MockDb).where as Mock).mockResolvedValue([]);
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
-      const result = await agentCommunicationTools.list_agents.execute(
-        { driveId: 'non-existent' },
+      const result = await agentCommunicationTools.list_agents!.execute!(
+        { driveId: 'non-existent', includeSystemPrompt: false, includeTools: false },
         context
       );
 
+      if (!('error' in result)) throw new Error('Expected error result');
       expect(result.success).toBe(false);
       expect(result.error).toContain('not found');
     });
@@ -130,10 +142,13 @@ describe('agent-communication-tools', () => {
     });
 
     it('requires user authentication', async () => {
-      const context = { experimental_context: {} };
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
 
       await expect(
-        agentCommunicationTools.multi_drive_list_agents.execute({}, context)
+        agentCommunicationTools.multi_drive_list_agents!.execute!(
+          { includeSystemPrompt: false, includeTools: false, groupByDrive: false },
+          context
+        )
       ).rejects.toThrow('User authentication required');
     });
 
@@ -146,10 +161,10 @@ describe('agent-communication-tools', () => {
     });
 
     it('requires user authentication', async () => {
-      const context = { experimental_context: {} };
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
 
       await expect(
-        agentCommunicationTools.ask_agent.execute(
+        agentCommunicationTools.ask_agent!.execute!(
           {
             agentPath: '/drive/agent',
             agentId: 'agent-1',
@@ -164,10 +179,11 @@ describe('agent-communication-tools', () => {
       mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(null);
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
-      const result = await agentCommunicationTools.ask_agent.execute(
+      const result = await agentCommunicationTools.ask_agent!.execute!(
         {
           agentPath: '/drive/agent',
           agentId: 'non-existent',
@@ -176,6 +192,7 @@ describe('agent-communication-tools', () => {
         context
       );
 
+      if (!('error' in result)) throw new Error('Expected error result');
       expect(result.success).toBe(false);
       expect(result.error).toContain('not found');
     });
@@ -194,10 +211,11 @@ describe('agent-communication-tools', () => {
       mockCanUserViewPage.mockResolvedValue(false);
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
-      const result = await agentCommunicationTools.ask_agent.execute(
+      const result = await agentCommunicationTools.ask_agent!.execute!(
         {
           agentPath: '/drive/agent',
           agentId: 'agent-1',
@@ -206,6 +224,7 @@ describe('agent-communication-tools', () => {
         context
       );
 
+      if (!('error' in result)) throw new Error('Expected error result');
       expect(result.success).toBe(false);
       expect(result.error).toContain('Insufficient permissions');
     });
@@ -220,6 +239,7 @@ describe('agent-communication-tools', () => {
 
       // Context with max depth reached
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: {
           userId: 'user-123',
           agentCallDepth: 3, // MAX_AGENT_DEPTH
@@ -227,7 +247,7 @@ describe('agent-communication-tools', () => {
       };
 
       await expect(
-        agentCommunicationTools.ask_agent.execute(
+        agentCommunicationTools.ask_agent!.execute!(
           {
             agentPath: '/drive/agent',
             agentId: 'agent-1',

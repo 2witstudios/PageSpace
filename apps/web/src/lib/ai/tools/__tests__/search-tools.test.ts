@@ -42,26 +42,27 @@ describe('search-tools', () => {
     });
 
     it('requires user authentication', async () => {
-      const context = { experimental_context: {} };
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
 
       await expect(
-        searchTools.regex_search.execute(
-          { driveId: 'drive-1', pattern: 'TODO.*' },
+        searchTools.regex_search.execute!(
+          { driveId: 'drive-1', pattern: 'TODO.*', searchIn: 'both', maxResults: 10 },
           context
         )
       ).rejects.toThrow('User authentication required');
     });
 
     it('throws error when drive access denied', async () => {
-      mockGetUserDriveAccess.mockResolvedValue(null);
+      mockGetUserDriveAccess.mockResolvedValue(false);
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
       await expect(
-        searchTools.regex_search.execute(
-          { driveId: 'drive-1', pattern: 'TODO.*' },
+        searchTools.regex_search.execute!(
+          { driveId: 'drive-1', pattern: 'TODO.*', searchIn: 'both', maxResults: 10 },
           context
         )
       ).rejects.toThrow("You don't have access to this drive");
@@ -75,26 +76,27 @@ describe('search-tools', () => {
     });
 
     it('requires user authentication', async () => {
-      const context = { experimental_context: {} };
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
 
       await expect(
-        searchTools.glob_search.execute(
-          { driveId: 'drive-1', pattern: '**/README*' },
+        searchTools.glob_search.execute!(
+          { driveId: 'drive-1', pattern: '**/README*', maxResults: 10 },
           context
         )
       ).rejects.toThrow('User authentication required');
     });
 
     it('throws error when drive access denied', async () => {
-      mockGetUserDriveAccess.mockResolvedValue(null);
+      mockGetUserDriveAccess.mockResolvedValue(false);
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
       await expect(
-        searchTools.glob_search.execute(
-          { driveId: 'drive-1', pattern: '**/README*' },
+        searchTools.glob_search.execute!(
+          { driveId: 'drive-1', pattern: '**/README*', maxResults: 10 },
           context
         )
       ).rejects.toThrow("You don't have access to this drive");
@@ -108,11 +110,11 @@ describe('search-tools', () => {
     });
 
     it('requires user authentication', async () => {
-      const context = { experimental_context: {} };
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
 
       await expect(
-        searchTools.multi_drive_search.execute(
-          { searchQuery: 'test' },
+        searchTools.multi_drive_search.execute!(
+          { searchQuery: 'test', searchType: 'text', maxResultsPerDrive: 5 },
           context
         )
       ).rejects.toThrow('User authentication required');

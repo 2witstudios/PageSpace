@@ -64,14 +64,14 @@ describe('/api/auth/mcp-tokens', () => {
     vi.clearAllMocks();
 
     // Default: authenticated user
-    (authenticateRequestWithOptions as Mock).mockResolvedValue({
+    (authenticateRequestWithOptions as unknown as Mock).mockResolvedValue({
       userId: 'test-user-id',
       role: 'user',
       tokenVersion: 0,
       tokenType: 'jwt',
       source: 'cookie',
     });
-    (isAuthError as Mock).mockReturnValue(false);
+    (isAuthError as unknown as Mock).mockReturnValue(false);
   });
 
   describe('POST /api/auth/mcp-tokens', () => {
@@ -92,7 +92,7 @@ describe('/api/auth/mcp-tokens', () => {
             ]),
           };
         });
-        (db.insert as Mock).mockReturnValue({ values: mockValues });
+        (db.insert as unknown as Mock).mockReturnValue({ values: mockValues });
 
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
@@ -257,8 +257,8 @@ describe('/api/auth/mcp-tokens', () => {
         const mockError = {
           error: Response.json({ error: 'Unauthorized' }, { status: 401 }),
         };
-        (authenticateRequestWithOptions as Mock).mockResolvedValue(mockError);
-        (isAuthError as Mock).mockReturnValue(true);
+        (authenticateRequestWithOptions as unknown as Mock).mockResolvedValue(mockError);
+        (isAuthError as unknown as Mock).mockReturnValue(true);
 
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
@@ -303,7 +303,7 @@ describe('/api/auth/mcp-tokens', () => {
 
   describe('GET /api/auth/mcp-tokens', () => {
     beforeEach(() => {
-      (db.query.mcpTokens.findMany as Mock).mockResolvedValue([
+      (db.query.mcpTokens.findMany as unknown as Mock).mockResolvedValue([
         {
           id: 'token-1',
           name: 'Token 1',
@@ -463,7 +463,7 @@ describe('/api/auth/mcp-tokens', () => {
             }),
           };
         });
-        (db.update as Mock).mockReturnValue({ set: mockSet });
+        (db.update as unknown as Mock).mockReturnValue({ set: mockSet });
 
         const request = new NextRequest(
           'http://localhost/api/auth/mcp-tokens/token-123',

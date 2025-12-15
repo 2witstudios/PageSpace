@@ -2,7 +2,10 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, PATCH } from '../route';
 import type { WebAuthResult, AuthError } from '@/lib/auth';
-import type { DriveAccessResult, MemberDetails, MemberPermission } from '@pagespace/lib/server';
+// Use inferred types to avoid export issues
+type DriveAccessResult = Awaited<ReturnType<typeof import('@pagespace/lib/server').checkDriveAccess>>;
+type MemberDetails = NonNullable<Awaited<ReturnType<typeof import('@pagespace/lib/server').getDriveMemberDetails>>>;
+type MemberPermission = Awaited<ReturnType<typeof import('@pagespace/lib/server').getMemberPermissions>>[number];
 
 // ============================================================================
 // Contract Tests for /api/drives/[driveId]/members/[userId]
@@ -108,9 +111,11 @@ const createMemberDetailsFixture = (overrides: {
   id: overrides.id ?? `mem_${overrides.userId}`,
   userId: overrides.userId,
   role: overrides.role,
-  customRoleId: null,
+  invitedBy: null,
   invitedAt: new Date('2024-01-01'),
   acceptedAt: new Date('2024-01-01'),
+  lastAccessedAt: null,
+  customRole: null,
   user: {
     id: overrides.userId,
     email: overrides.email ?? `${overrides.userId}@example.com`,

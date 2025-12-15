@@ -30,8 +30,8 @@ const createMockDrive = (overrides: Partial<Drive> = {}): Drive => ({
   id: 'drive-' + Math.random().toString(36).slice(2, 11),
   name: 'Test Drive',
   slug: 'test-drive',
-  createdAt: new Date(),
-  updatedAt: new Date(),
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
   ownerId: 'user-123',
   isTrashed: false,
   trashedAt: null,
@@ -157,7 +157,7 @@ describe('useDriveStore', () => {
 
     it('given API error, should set loading to false', async () => {
       mockFetchWithAuth.mockResolvedValue({ ok: false });
-      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => { });
 
       await useDriveStore.getState().fetchDrives(false, true);
 

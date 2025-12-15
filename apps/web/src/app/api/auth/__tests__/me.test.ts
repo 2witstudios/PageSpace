@@ -38,14 +38,14 @@ describe('/api/auth/me', () => {
     vi.clearAllMocks();
 
     // Default: authenticated user
-    (requireAuth as Mock).mockResolvedValue({
+    (requireAuth as unknown as Mock).mockResolvedValue({
       userId: 'test-user-id',
       role: 'user',
       tokenVersion: 0,
       tokenType: 'jwt',
     });
-    (isAuthError as Mock).mockReturnValue(false);
-    (db.query.users.findFirst as Mock).mockResolvedValue(mockUser);
+    (isAuthError as unknown as Mock).mockReturnValue(false);
+    (db.query.users.findFirst as unknown as Mock).mockResolvedValue(mockUser);
   });
 
   describe('successful retrieval', () => {
@@ -96,7 +96,7 @@ describe('/api/auth/me', () => {
       // Arrange
       const adminUser = { ...mockUser, role: 'admin' as const };
       (db.query.users.findFirst as Mock).mockResolvedValue(adminUser);
-      (requireAuth as Mock).mockResolvedValue({
+      (requireAuth as unknown as Mock).mockResolvedValue({
         userId: 'test-user-id',
         role: 'admin',
         tokenVersion: 0,
@@ -123,8 +123,8 @@ describe('/api/auth/me', () => {
     it('returns 401 when not authenticated', async () => {
       // Arrange
       const mockResponse = new Response('Unauthorized', { status: 401 });
-      (requireAuth as Mock).mockResolvedValue(mockResponse);
-      (isAuthError as Mock).mockReturnValue(true);
+      (requireAuth as unknown as Mock).mockResolvedValue(mockResponse);
+      (isAuthError as unknown as Mock).mockReturnValue(true);
 
       const request = new Request('http://localhost/api/auth/me', {
         method: 'GET',

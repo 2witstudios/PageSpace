@@ -2,7 +2,9 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET } from '../route';
 import type { WebAuthResult, AuthError } from '@/lib/auth';
-import type { DriveSearchInfo, GlobSearchResponse } from '@pagespace/lib/server';
+// Use inferred types to avoid export issues
+type DriveSearchInfo = NonNullable<Awaited<ReturnType<typeof import('@pagespace/lib/server').checkDriveAccessForSearch>>>;
+type GlobSearchResponse = Awaited<ReturnType<typeof import('@pagespace/lib/server').globSearchPages>>;
 
 // ============================================================================
 // Contract Tests for /api/drives/[driveId]/search/glob
@@ -49,7 +51,7 @@ const mockAuthError = (status = 401): AuthError => ({
 
 const createDriveSearchInfo = (overrides: Partial<DriveSearchInfo> = {}): DriveSearchInfo => ({
   hasAccess: overrides.hasAccess ?? true,
-  drive: 'drive' in overrides ? overrides.drive : {
+  drive: overrides.drive !== undefined ? overrides.drive : {
     id: 'drive_abc',
     slug: 'test-drive',
     name: 'Test Drive',
@@ -125,7 +127,7 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
         ...mockWebAuth(mockUserId),
         tokenType: 'mcp',
-      } as WebAuthResult);
+      } as unknown as WebAuthResult);
       vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
       vi.mocked(globSearchPages).mockResolvedValue(createGlobSearchResponse());
 

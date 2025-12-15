@@ -69,22 +69,23 @@ describe('page-read-tools', () => {
     });
 
     it('requires user authentication', async () => {
-      const context = { experimental_context: {} };
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
 
       await expect(
-        pageReadTools.list_pages.execute({ driveId: 'drive-1' }, context)
+        pageReadTools.list_pages.execute!({ driveId: 'drive-1' }, context)
       ).rejects.toThrow('User authentication required');
     });
 
     it('throws error when drive not found', async () => {
-      mockGetUserDriveAccess.mockResolvedValue(null);
+      mockGetUserDriveAccess.mockResolvedValue(false);
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
       await expect(
-        pageReadTools.list_pages.execute({ driveId: 'non-existent' }, context)
+        pageReadTools.list_pages.execute!({ driveId: 'non-existent' }, context)
       ).rejects.toThrow(); // Throws an error when drive access is denied
     });
 
@@ -97,10 +98,10 @@ describe('page-read-tools', () => {
     });
 
     it('requires user authentication', async () => {
-      const context = { experimental_context: {} };
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
 
       await expect(
-        pageReadTools.read_page.execute(
+        pageReadTools.read_page.execute!(
           { path: '/drive/page', pageId: 'page-1' },
           context
         )
@@ -111,11 +112,12 @@ describe('page-read-tools', () => {
       mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(null);
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
       await expect(
-        pageReadTools.read_page.execute(
+        pageReadTools.read_page.execute!(
           { path: '/drive/page', pageId: 'non-existent' },
           context
         )

@@ -81,7 +81,7 @@ const createRawDriveFixture = (overrides: { id: string; name: string; ownerId?: 
 
 // Drive with access info fixture
 const createDriveWithAccessFixture = (
-  overrides: Partial<DriveWithAccess> & { id: string; name: string }
+  overrides: Partial<DriveWithAccess> & { id: string; name: string; isMember?: boolean }
 ): DriveWithAccess & { isMember: boolean } => ({
   id: overrides.id,
   name: overrides.name,

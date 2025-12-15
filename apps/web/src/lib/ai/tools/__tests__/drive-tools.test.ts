@@ -64,10 +64,10 @@ describe('drive-tools', () => {
     });
 
     it('requires user authentication', async () => {
-      const context = { experimental_context: {} };
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
 
       await expect(
-        driveTools.list_drives.execute({}, context)
+        driveTools.list_drives.execute!({}, context)
       ).rejects.toThrow('User authentication required');
     });
   });
@@ -80,10 +80,10 @@ describe('drive-tools', () => {
     });
 
     it('requires user authentication', async () => {
-      const context = { experimental_context: {} };
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
 
       await expect(
-        driveTools.create_drive.execute(
+        driveTools.create_drive.execute!(
           { name: 'Test Drive' },
           context
         )
@@ -92,21 +92,23 @@ describe('drive-tools', () => {
 
     it('throws on empty name', async () => {
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
       await expect(
-        driveTools.create_drive.execute({ name: '' }, context)
+        driveTools.create_drive.execute!({ name: '' }, context)
       ).rejects.toThrow('Drive name is required');
     });
 
     it('throws when trying to create Personal drive', async () => {
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
       await expect(
-        driveTools.create_drive.execute({ name: 'Personal' }, context)
+        driveTools.create_drive.execute!({ name: 'Personal' }, context)
       ).rejects.toThrow('Cannot create a drive named "Personal"');
     });
   });
@@ -118,10 +120,10 @@ describe('drive-tools', () => {
     });
 
     it('requires user authentication', async () => {
-      const context = { experimental_context: {} };
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
 
       await expect(
-        driveTools.rename_drive.execute(
+        driveTools.rename_drive.execute!(
           { driveId: 'drive-1', name: 'New Name' },
           context
         )
@@ -132,11 +134,12 @@ describe('drive-tools', () => {
       mockDb.query.drives.findFirst = vi.fn().mockResolvedValue(null);
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
       await expect(
-        driveTools.rename_drive.execute(
+        driveTools.rename_drive.execute!(
           { driveId: 'non-existent', name: 'New Name' },
           context
         )

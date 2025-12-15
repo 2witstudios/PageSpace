@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 
 // Mock database and dependencies
 vi.mock('@pagespace/db', () => ({
@@ -77,6 +77,22 @@ import type { ToolExecutionContext } from '../../core';
 const mockDb = vi.mocked(db);
 const mockCanUserEditPage = vi.mocked(canUserEditPage);
 
+interface MockDb {
+  select: Mock;
+  from: Mock;
+  where: Mock;
+  orderBy: Mock;
+  update: Mock;
+  set: Mock;
+  insert: Mock;
+  values: Mock;
+  returning: Mock;
+  query: {
+    pages: { findFirst: Mock };
+    drives: { findFirst: Mock };
+  };
+}
+
 describe('page-write-tools', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -89,10 +105,10 @@ describe('page-write-tools', () => {
     });
 
     it('requires user authentication', async () => {
-      const context = { experimental_context: {} };
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
 
       await expect(
-        pageWriteTools.replace_lines.execute(
+        pageWriteTools.replace_lines.execute!(
           { path: '/drive/page', pageId: 'page-1', startLine: 1, content: 'new' },
           context
         )
@@ -103,11 +119,12 @@ describe('page-write-tools', () => {
       mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(null);
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
       await expect(
-        pageWriteTools.replace_lines.execute(
+        pageWriteTools.replace_lines.execute!(
           { path: '/drive/page', pageId: 'non-existent', startLine: 1, content: 'new' },
           context
         )
@@ -125,14 +142,16 @@ describe('page-write-tools', () => {
       });
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
-      const result = await pageWriteTools.replace_lines.execute(
+      const result = await pageWriteTools.replace_lines.execute!(
         { path: '/drive/page', pageId: 'page-1', startLine: 1, content: 'new' },
         context
       );
 
+      if (!('error' in result)) throw new Error('Expected error result');
       expect(result.success).toBe(false);
       expect(result.error).toBe('Cannot edit FILE pages');
     });
@@ -147,14 +166,16 @@ describe('page-write-tools', () => {
       });
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
-      const result = await pageWriteTools.replace_lines.execute(
+      const result = await pageWriteTools.replace_lines.execute!(
         { path: '/drive/page', pageId: 'page-1', startLine: 1, content: 'new' },
         context
       );
 
+      if (!('error' in result)) throw new Error('Expected error result');
       expect(result.success).toBe(false);
       expect(result.error).toBe('Cannot use line editing on sheets');
     });
@@ -170,17 +191,20 @@ describe('page-write-tools', () => {
       mockCanUserEditPage.mockResolvedValue(true);
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
-      const result = await pageWriteTools.replace_lines.execute(
+      const result = await pageWriteTools.replace_lines.execute!(
         { path: '/drive/page', pageId: 'page-1', startLine: 2, content: 'New Line 2' },
         context
       );
 
       // Observable outcomes prove the operation succeeded
-      expect(result.success).toBe(true);
-      expect(result.linesReplaced).toBe(1);
+      if ('error' in result) throw new Error(`Expected success but got error: ${result.error}`);
+      expect((result as { success: boolean }).success).toBe(true);
+      if (!('linesReplaced' in result)) throw new Error('Expected linesReplaced in success result');
+      expect((result as { linesReplaced: number }).linesReplaced).toBe(1);
       // Verify permission check was called with correct arguments
       expect(mockCanUserEditPage).toHaveBeenCalledWith('user-123', 'page-1');
     });
@@ -193,10 +217,10 @@ describe('page-write-tools', () => {
     });
 
     it('requires user authentication', async () => {
-      const context = { experimental_context: {} };
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
 
       await expect(
-        pageWriteTools.create_page.execute(
+        pageWriteTools.create_page.execute!(
           { driveId: 'drive-1', title: 'New Page', type: 'DOCUMENT' },
           context
         )
@@ -204,14 +228,15 @@ describe('page-write-tools', () => {
     });
 
     it('throws error when drive not found', async () => {
-      (mockDb.where as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+      ((mockDb as unknown as MockDb).where as Mock).mockResolvedValue([]);
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
       await expect(
-        pageWriteTools.create_page.execute(
+        pageWriteTools.create_page.execute!(
           { driveId: 'non-existent', title: 'New Page', type: 'DOCUMENT' },
           context
         )
@@ -226,10 +251,10 @@ describe('page-write-tools', () => {
     });
 
     it('requires user authentication', async () => {
-      const context = { experimental_context: {} };
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
 
       await expect(
-        pageWriteTools.rename_page.execute(
+        pageWriteTools.rename_page.execute!(
           { path: '/drive/page', pageId: 'page-1', title: 'New Title' },
           context
         )
@@ -244,11 +269,11 @@ describe('page-write-tools', () => {
     });
 
     it('requires user authentication', async () => {
-      const context = { experimental_context: {} };
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
 
       await expect(
-        pageWriteTools.trash.execute(
-          { type: 'page', id: 'page-1' },
+        pageWriteTools.trash.execute!(
+          { type: 'page', id: 'page-1', withChildren: false },
           context
         )
       ).rejects.toThrow('User authentication required');
@@ -256,12 +281,13 @@ describe('page-write-tools', () => {
 
     it('requires confirmDriveName for trashing drives', async () => {
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
       await expect(
-        pageWriteTools.trash.execute(
-          { type: 'drive', id: 'drive-1' },
+        pageWriteTools.trash.execute!(
+          { type: 'drive', id: 'drive-1', withChildren: false },
           context
         )
       ).rejects.toThrow('Drive name confirmation is required for trashing drives');
@@ -275,10 +301,10 @@ describe('page-write-tools', () => {
     });
 
     it('requires user authentication', async () => {
-      const context = { experimental_context: {} };
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
 
       await expect(
-        pageWriteTools.restore.execute(
+        pageWriteTools.restore.execute!(
           { type: 'page', id: 'page-1' },
           context
         )
@@ -293,10 +319,10 @@ describe('page-write-tools', () => {
     });
 
     it('requires user authentication', async () => {
-      const context = { experimental_context: {} };
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
 
       await expect(
-        pageWriteTools.move_page.execute(
+        pageWriteTools.move_page.execute!(
           { path: '/old', pageId: 'page-1', newParentPath: '/new', position: 1 },
           context
         )
@@ -311,10 +337,10 @@ describe('page-write-tools', () => {
     });
 
     it('requires user authentication', async () => {
-      const context = { experimental_context: {} };
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
 
       await expect(
-        pageWriteTools.edit_sheet_cells.execute(
+        pageWriteTools.edit_sheet_cells.execute!(
           { pageId: 'page-1', cells: [{ address: 'A1', value: 'test' }] },
           context
         )
@@ -331,14 +357,16 @@ describe('page-write-tools', () => {
       });
 
       const context = {
+        toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
-      const result = await pageWriteTools.edit_sheet_cells.execute(
+      const result = await pageWriteTools.edit_sheet_cells.execute!(
         { pageId: 'page-1', cells: [{ address: 'A1', value: 'test' }] },
         context
       );
 
+      if (!('error' in result)) throw new Error('Expected error result');
       expect(result.success).toBe(false);
       expect(result.error).toBe('Page is not a sheet');
     });

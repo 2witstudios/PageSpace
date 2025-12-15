@@ -652,7 +652,7 @@ describe('Auth Middleware', () => {
       it('returns true for error result', () => {
         const errorResult = {
           error: Response.json({ error: 'Test' }, { status: 401 }),
-        };
+        } as unknown as import('@/lib/auth').AuthError;
         expect(isAuthError(errorResult)).toBe(true);
       });
 

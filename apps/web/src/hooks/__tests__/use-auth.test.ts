@@ -125,7 +125,10 @@ vi.mock('@/stores/auth-store', () => {
       return selector(mockAuthStore);
     }
     return mockAuthStore;
-  });
+  }) as unknown as {
+    <T>(selector?: (s: typeof mockAuthStore) => T): T | typeof mockAuthStore;
+    getState: () => typeof mockAuthStore;
+  };
   useAuthStoreMock.getState = () => mockAuthStore;
 
   return {
@@ -260,7 +263,7 @@ describe('useAuth', () => {
 
     it('given network error, should return generic error without changing auth state', async () => {
       vi.mocked(global.fetch).mockRejectedValue(new Error('Network error'));
-      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => { });
 
       const { result } = renderHook(() => useAuth());
 
@@ -340,7 +343,7 @@ describe('useAuth', () => {
 
     it('given logout API fails, should still clear session and redirect', async () => {
       mockPost.mockRejectedValue(new Error('API error'));
-      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => { });
 
       mockAuthStore.user = { id: 'user-123', name: 'Test', email: 'test@example.com' };
       mockAuthStore.isAuthenticated = true;

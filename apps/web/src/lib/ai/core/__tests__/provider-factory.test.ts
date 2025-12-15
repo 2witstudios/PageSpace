@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 import { NextResponse } from 'next/server';
 
 // Mock database
@@ -68,11 +68,13 @@ vi.mock('../ai-utils', () => ({
   createMiniMaxSettings: vi.fn(),
 }));
 
+import { type LanguageModel } from 'ai';
 import {
-  createAIProvider,
-  updateUserProviderSettings,
   createProviderErrorResponse,
   isProviderError,
+  type ProviderResult,
+  createAIProvider,
+  updateUserProviderSettings,
 } from '../provider-factory';
 import { db } from '@pagespace/db';
 import {
@@ -97,6 +99,7 @@ import { createXai } from '@ai-sdk/xai';
 import { createOllama } from 'ollama-ai-provider-v2';
 
 const mockDb = vi.mocked(db);
+const mockDbMock = mockDb as unknown as MockDb;
 const mockGetUserOpenRouterSettings = vi.mocked(getUserOpenRouterSettings);
 const mockGetUserGoogleSettings = vi.mocked(getUserGoogleSettings);
 const mockGetDefaultPageSpaceSettings = vi.mocked(getDefaultPageSpaceSettings);
@@ -108,11 +111,19 @@ const mockGetUserLMStudioSettings = vi.mocked(getUserLMStudioSettings);
 const mockGetUserGLMSettings = vi.mocked(getUserGLMSettings);
 const mockGetUserMiniMaxSettings = vi.mocked(getUserMiniMaxSettings);
 
+interface MockDb {
+  select: Mock;
+  from: Mock;
+  where: Mock;
+  update: Mock;
+  set: Mock;
+}
+
 describe('provider-factory', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Default mock: return user with no provider set
-    (mockDb.where as ReturnType<typeof vi.fn>).mockResolvedValue([
+    mockDbMock.where.mockResolvedValue([
       { id: 'user-123', currentAiProvider: null, currentAiModel: null },
     ]);
   });
@@ -123,6 +134,7 @@ describe('provider-factory', () => {
         mockGetDefaultPageSpaceSettings.mockResolvedValue({
           provider: 'glm',
           apiKey: 'glm-api-key',
+          isConfigured: true,
         });
 
         const result = await createAIProvider('user-123', {});
@@ -142,6 +154,7 @@ describe('provider-factory', () => {
         mockGetDefaultPageSpaceSettings.mockResolvedValue({
           provider: 'google',
           apiKey: 'google-api-key',
+          isConfigured: true,
         });
 
         const result = await createAIProvider('user-123', {});
@@ -561,7 +574,7 @@ describe('provider-factory', () => {
 
     describe('user provider defaults', () => {
       it('uses user default provider when not specified', async () => {
-        (mockDb.where as ReturnType<typeof vi.fn>).mockResolvedValue([
+        mockDbMock.where.mockResolvedValue([
           { id: 'user-123', currentAiProvider: 'google', currentAiModel: 'gemini-pro' },
         ]);
         mockGetUserGoogleSettings.mockResolvedValue({
@@ -616,7 +629,7 @@ describe('provider-factory', () => {
     });
 
     it('updates when both provider and model specified and different', async () => {
-      (mockDb.where as ReturnType<typeof vi.fn>).mockResolvedValue([
+      mockDbMock.where.mockResolvedValue([
         { id: 'user-123', currentAiProvider: 'old-provider', currentAiModel: 'old-model' },
       ]);
 
@@ -626,7 +639,7 @@ describe('provider-factory', () => {
     });
 
     it('does not update when provider and model are same', async () => {
-      (mockDb.where as ReturnType<typeof vi.fn>).mockResolvedValue([
+      mockDbMock.where.mockResolvedValue([
         { id: 'user-123', currentAiProvider: 'google', currentAiModel: 'gemini-pro' },
       ]);
 
@@ -671,8 +684,17 @@ describe('provider-factory', () => {
     });
 
     it('returns false for success result', () => {
-      const result = {
-        model: { modelId: 'test' },
+      // Create a minimal valid mock of a LanguageModel
+      const mockModel = {
+        specificationVersion: 'v1',
+        provider: 'test-provider',
+        modelId: 'test-model',
+        doGenerate: vi.fn(),
+        doStream: vi.fn(),
+      } as unknown as LanguageModel;
+
+      const result: ProviderResult = {
+        model: mockModel,
         provider: 'google',
         modelName: 'gemini-pro',
       };
