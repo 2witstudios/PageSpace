@@ -413,7 +413,7 @@ describe('POST /api/ai/page-agents/create', () => {
       const body = await response.json();
 
       expect(response.status).toBe(500);
-      expect(body.error).toContain('Failed to create AI agent');
+      expect(body.error).toBe('Failed to create AI agent');
     });
 
     it('should not leak internal error details to client', async () => {
