@@ -1,19 +1,25 @@
 import { NextResponse } from 'next/server';
-import { db, drives, pages, users, and, eq, desc } from '@pagespace/db';
-import {
-  validatePageCreation,
-  validateAIChatTools,
-  getDefaultContent,
-  PageType as PageTypeEnum,
-  isAIChatPage,
-  isDriveOwnerOrAdmin,
-} from '@pagespace/lib';
+import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers, agentAwarenessCache, pageTreeCache } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { pageService } from '@/services/api';
 
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
+
+// Zod schema for page creation request
+const createPageSchema = z.object({
+  title: z.string().min(1, 'Title is required'),
+  type: z.enum(['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET']),
+  driveId: z.string().min(1, 'Drive ID is required'),
+  parentId: z.string().nullable().optional(),
+  content: z.string().optional(),
+  systemPrompt: z.string().optional(),
+  enabledTools: z.array(z.string()).optional(),
+  aiProvider: z.string().optional(),
+  aiModel: z.string().optional(),
+});
 
 export async function POST(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
@@ -24,152 +30,61 @@ export async function POST(request: Request) {
   const userId = auth.userId;
 
   try {
-    const {
-      title,
-      type,
-      parentId,
-      driveId,
-      content,
-      systemPrompt,
-      enabledTools,
-      aiProvider,
-      aiModel,
-    } = await request.json();
+    const body = await request.json();
 
-    if (!title || !type || !driveId) {
-      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
-    }
-
-    // Check drive exists
-    const drive = await db.query.drives.findFirst({
-      where: eq(drives.id, driveId),
-    });
-
-    if (!drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
-    }
-
-    // Check if user is owner or admin (uses centralized utility)
-    const hasPermission = await isDriveOwnerOrAdmin(userId, driveId);
-
-    if (!hasPermission) {
+    // Validate request body with Zod
+    const parseResult = createPageSchema.safeParse(body);
+    if (!parseResult.success) {
       return NextResponse.json(
-        { error: 'Only drive owners and admins can create pages' },
-        { status: 403 }
+        { error: parseResult.error.issues.map(i => i.message).join('. ') },
+        { status: 400 }
       );
     }
 
-    const lastPage = await db.query.pages.findFirst({
-      where: and(eq(pages.parentId, parentId), eq(pages.driveId, drive.id)),
-      orderBy: [desc(pages.position)],
+    const validatedData = parseResult.data;
+
+    const result = await pageService.createPage(userId, {
+      title: validatedData.title,
+      type: validatedData.type,
+      driveId: validatedData.driveId,
+      parentId: validatedData.parentId,
+      content: validatedData.content,
+      systemPrompt: validatedData.systemPrompt,
+      enabledTools: validatedData.enabledTools,
+      aiProvider: validatedData.aiProvider,
+      aiModel: validatedData.aiModel,
     });
 
-    const newPosition = (lastPage?.position || 0) + 1;
-
-    const validation = validatePageCreation(type as PageTypeEnum, {
-      title,
-      systemPrompt,
-      enabledTools,
-      aiProvider,
-      aiModel,
-    });
-
-    if (!validation.valid) {
-      return NextResponse.json({ error: validation.errors.join('. ') }, { status: 400 });
+    if (!result.success) {
+      return NextResponse.json({ error: result.error }, { status: result.status });
     }
 
-    if (isAIChatPage(type) && enabledTools && enabledTools.length > 0) {
-      const { pageSpaceTools } = await import('@/lib/ai/core/ai-tools');
-      const availableToolNames = Object.keys(pageSpaceTools);
-      const toolValidation = validateAIChatTools(enabledTools, availableToolNames);
-      if (!toolValidation.valid) {
-        return NextResponse.json({ error: toolValidation.errors.join('. ') }, { status: 400 });
-      }
-    }
-
-    let defaultAiProvider: string | null = null;
-    let defaultAiModel: string | null = null;
-
-    if (isAIChatPage(type)) {
-      const user = await db.query.users.findFirst({
-        where: eq(users.id, userId),
-        columns: {
-          currentAiProvider: true,
-          currentAiModel: true,
-        },
-      });
-
-      if (user) {
-        defaultAiProvider = user.currentAiProvider || 'pagespace';
-        defaultAiModel = user.currentAiModel || 'qwen/qwen3-coder:free';
-      }
-    }
-
-    const newPage = await db.transaction(async (tx) => {
-      interface APIPageInsertData {
-        title: string;
-        type: 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'SHEET';
-        parentId: string | null;
-        driveId: string;
-        content: string;
-        position: number;
-        updatedAt: Date;
-        aiProvider?: string | null;
-        aiModel?: string | null;
-        systemPrompt?: string | null;
-        enabledTools?: string[] | null;
-      }
-
-      const pageData: APIPageInsertData = {
-        title,
-        type: type as 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'SHEET',
-        parentId,
-        driveId: drive.id,
-        content: content || getDefaultContent(type as PageTypeEnum),
-        position: newPosition,
-        updatedAt: new Date(),
-      };
-
-      if (isAIChatPage(type)) {
-        pageData.aiProvider = aiProvider || defaultAiProvider;
-        pageData.aiModel = aiModel || defaultAiModel;
-
-        if (systemPrompt) {
-          pageData.systemPrompt = systemPrompt;
-        }
-        if (enabledTools && enabledTools.length > 0) {
-          pageData.enabledTools = enabledTools;
-        }
-      }
-
-      const [page] = await tx.insert(pages).values(pageData).returning();
-      return page;
-    });
-
+    // Side effects: use result values (normalized/canonical) instead of request body
     await broadcastPageEvent(
-      createPageEventPayload(driveId, newPage.id, 'created', {
-        parentId,
-        title,
-        type,
+      createPageEventPayload(result.driveId, result.page.id, 'created', {
+        parentId: result.page.parentId ?? undefined,
+        title: result.page.title ?? undefined,
+        type: result.page.type,
       }),
     );
 
     // Invalidate agent awareness cache when an AI_CHAT page is created
-    if (isAIChatPage(type)) {
-      await agentAwarenessCache.invalidateDriveAgents(driveId);
+    if (result.isAIChatPage) {
+      await agentAwarenessCache.invalidateDriveAgents(result.driveId);
     }
 
     // Invalidate page tree cache when structure changes
-    await pageTreeCache.invalidateDriveTree(driveId);
+    await pageTreeCache.invalidateDriveTree(result.driveId);
 
-    trackPageOperation(userId, 'create', newPage.id, {
-      title,
-      type,
-      driveId: drive.id,
-      parentId,
+    // Track page creation using result values
+    trackPageOperation(userId, 'create', result.page.id, {
+      title: result.page.title,
+      type: result.page.type,
+      driveId: result.driveId,
+      parentId: result.page.parentId,
     });
 
-    return NextResponse.json(newPage, { status: 201 });
+    return NextResponse.json(result.page, { status: 201 });
   } catch (error) {
     loggers.api.error('Error creating page:', error as Error);
     return NextResponse.json({ error: 'Failed to create page' }, { status: 500 });
