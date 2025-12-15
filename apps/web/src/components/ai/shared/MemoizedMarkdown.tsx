@@ -7,4 +7,4 @@
  * @deprecated Use StreamingMarkdown instead
  */
 
-export { MemoizedMarkdown, StreamingMarkdown } from './StreamingMarkdown';
+export { MemoizedMarkdown, StreamingMarkdown } from '../chat/StreamingMarkdown';

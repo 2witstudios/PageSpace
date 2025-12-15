@@ -21,6 +21,8 @@ import {
 import { CompactTaskManagementToolRenderer } from './CompactTaskManagementToolRenderer';
 import { patch } from '@/lib/auth/auth-fetch';
 
+import { FileTreePreview } from './views/FileTreePreview';
+import { DocumentPreview } from './views/DocumentPreview';
 
 interface TreeItem {
   path: string;
@@ -28,6 +30,8 @@ interface TreeItem {
   type: string;
   children: TreeItem[];
 }
+
+
 
 interface ToolPart {
   type: string;
@@ -48,7 +52,7 @@ interface CompactToolCallRendererProps {
  */
 export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = ({ part }) => {
   const [isExpanded, setIsExpanded] = useState(false);
-  
+
   const toolName = part.toolName || part.type?.replace('tool-', '');
   const state = part.state;
   const input = part.input;
@@ -139,21 +143,55 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
       'move_page': 'Move',
       'list_trash': 'List Trash'
     };
-    
+
     return nameMap[toolName] || toolName
       .split('_')
       .map(word => word.charAt(0).toUpperCase() + word.slice(1))
       .join(' ');
   };
 
+  // AMBIGUITY FIX: Parse input to get a descriptive header title
+  const getDescriptiveTitle = () => {
+    const base = formatToolName(toolName);
+    if (!input) return base;
+
+    try {
+      const params = typeof input === 'string' ? JSON.parse(input) : input;
+
+      // File-based tools
+      if (['read_page', 'replace_lines', 'list_pages'].includes(toolName)) {
+        if (params.path) {
+          const fileName = params.path.split('/').pop();
+          return `${base}: ${fileName}`;
+        }
+        if (params.dir) return `${base}: ${params.dir}`;
+      }
+
+      // Title-based tools
+      if (['create_page', 'rename_page', 'move_page'].includes(toolName)) {
+        if (params.title) return `${base}: "${params.title}"`;
+        if (params.name) return `${base}: "${params.name}"`;
+      }
+
+      // Trash/Restore
+      if (['trash', 'restore'].includes(toolName)) {
+        if (params.title || params.name) return `${base}: "${params.title || params.name}"`;
+      }
+
+      return base;
+    } catch {
+      return base;
+    }
+  };
+
   // Get compact summary
   const getCompactSummary = (): string => {
     if (error) return 'Failed';
-    
+
     if (state === 'output-available' || state === 'done') {
       try {
         const result = typeof output === 'string' ? JSON.parse(output) : output;
-        
+
         if (toolName === 'ask_agent' && result.response) {
           const text = String(result.response);
           return text.length > 30 ? text.substring(0, 27) + '...' : text;
@@ -163,36 +201,36 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
         if (toolName === 'list_drives' && result.drives) {
           return `${result.drives.length} drives`;
         }
-        
+
         if (toolName === 'list_pages' && result.tree) {
           const pageCount = countPages(result.tree || []);
           return `${pageCount} pages`;
         }
-        
+
         if (toolName === 'read_page') {
           const title = result.title || 'page';
           return title.length > 20 ? title.substring(0, 17) + '...' : title;
         }
-        
+
         if (result.message) {
           const msg = result.message;
           return msg.length > 30 ? msg.substring(0, 27) + '...' : msg;
         }
-        
+
         if (result.title) {
           return result.title.length > 20 ? result.title.substring(0, 17) + '...' : result.title;
         }
-        
+
         return 'Complete';
       } catch {
         return 'Done';
       }
     }
-    
+
     if (state === 'input-available' || state === 'streaming') {
       return 'Running...';
     }
-    
+
     return 'Pending';
   };
 
@@ -220,23 +258,54 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
 
         {output ? (
           <div className="space-y-0.5 max-w-full overflow-hidden">
-            <div className="font-medium text-gray-600 dark:text-gray-400">Output:</div>
-            <pre className="text-gray-500 dark:text-gray-500 overflow-x-auto whitespace-pre-wrap break-all max-h-32 overflow-y-auto max-w-full">
-              {(() => {
-                try {
-                  const result = typeof output === 'string' ? JSON.parse(output) : output;
+            <div className="font-medium text-gray-600 dark:text-gray-400">Result:</div>
+            {(() => {
+              try {
+                const result = typeof output === 'string' ? JSON.parse(output) : output;
 
-                  // Special handling for read_page content
-                  if (toolName === 'read_page' && result.content) {
-                    return result.content.slice(0, 200) + (result.content.length > 200 ? '...' : '');
-                  }
-
-                  return JSON.stringify(result, null, 2);
-                } catch {
-                  return typeof output === 'string' ? output : JSON.stringify(output, null, 2);
+                if (toolName === 'list_pages' && result.tree) {
+                  return <div className="border rounded-md overflow-hidden"><FileTreePreview tree={result.tree} /></div>;
                 }
-              })()}
-            </pre>
+
+                if (toolName === 'read_page' && result.content) {
+                  return (
+                    <div className="border rounded-md overflow-hidden">
+                      <DocumentPreview
+                        title={result.title || result.path || 'Document'}
+                        content={result.content}
+                        language="typescript"
+                        description={`${result.lineCount} lines`}
+                      />
+                    </div>
+                  );
+                }
+
+                if (toolName === 'replace_lines' && result.content) {
+                  return (
+                    <div className="border rounded-md overflow-hidden">
+                      <DocumentPreview
+                        title={result.title || "Modified"}
+                        content={result.content}
+                        language="typescript"
+                        description="Updated"
+                      />
+                    </div>
+                  );
+                }
+
+                return (
+                  <pre className="text-gray-500 dark:text-gray-500 overflow-x-auto whitespace-pre-wrap break-all max-h-60 overflow-y-auto max-w-full">
+                    {JSON.stringify(result, null, 2)}
+                  </pre>
+                );
+              } catch {
+                return (
+                  <pre className="text-gray-500 dark:text-gray-500 overflow-x-auto whitespace-pre-wrap break-all max-h-32 overflow-y-auto max-w-full">
+                    {typeof output === 'string' ? output : JSON.stringify(output, null, 2)}
+                  </pre>
+                );
+              }
+            })()}
           </div>
         ) : null}
 
@@ -257,7 +326,7 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
       >
         {isExpanded ? <ChevronDown className="h-3 w-3 flex-shrink-0" /> : <ChevronRight className="h-3 w-3 flex-shrink-0" />}
         <div className="flex-shrink-0">{getToolIcon(toolName)}</div>
-        <span className="font-medium truncate flex-1 min-w-0">{formatToolName(toolName)}</span>
+        <span className="font-medium truncate flex-1 min-w-0" title={getDescriptiveTitle()}>{getDescriptiveTitle()}</span>
         <div className="flex-shrink-0">{getStatusIcon()}</div>
         <span className="text-gray-500 dark:text-gray-400 truncate max-w-[80px] min-w-0">
           {getCompactSummary()}

@@ -1,6 +1,6 @@
 import React from 'react';
 import { CheckCircle } from 'lucide-react';
-import { TodoListMessage } from './TodoListMessage';
+import { TodoListMessage } from '../chat/TodoListMessage';
 
 interface Task {
   id: string;

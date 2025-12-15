@@ -1,6 +1,6 @@
 import React from 'react';
 import { CheckCircle, ListTodo, Loader2, AlertCircle } from 'lucide-react';
-import { CompactTodoListMessage } from './CompactTodoListMessage';
+import { CompactTodoListMessage } from '@/components/ai/chat/CompactTodoListMessage';
 
 interface Task {
   id: string;

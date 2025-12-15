@@ -38,7 +38,7 @@ import {
   ChatMessagesAreaRef,
   ChatInputAreaRef,
 } from '@/components/ai/shared/chat';
-import { AiUsageMonitor } from '@/components/ai/shared';
+import { AiUsageMonitor } from '@/components/ai/shared/AiUsageMonitor';
 
 interface AiChatViewProps {
   page: TreePage;

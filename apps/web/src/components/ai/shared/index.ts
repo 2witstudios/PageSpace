@@ -5,12 +5,12 @@
  */
 
 export { AISelector } from './AISelector';
-export { default as AiInput } from './AiInput';
+export { default as AiInput } from '../chat/AiInput';
 export { AiUsageMonitor } from './AiUsageMonitor';
-export { CompactMessageRenderer } from './CompactMessageRenderer';
+export { CompactMessageRenderer } from '../chat/CompactMessageRenderer';
 export { ErrorBoundary } from './ErrorBoundary';
 export { MemoizedMarkdown } from './MemoizedMarkdown';
-export { MessageRenderer } from './MessageRenderer';
+export { MessageRenderer } from '../chat/MessageRenderer';
 export { ReadOnlyToggle } from './ReadOnlyToggle';
-export { StreamingMarkdown } from './StreamingMarkdown';
-export { ToolCallRenderer } from './ToolCallRenderer';
+export { StreamingMarkdown } from '../chat/StreamingMarkdown';
+export { ToolCallRenderer } from '../tools/ToolCallRenderer';
