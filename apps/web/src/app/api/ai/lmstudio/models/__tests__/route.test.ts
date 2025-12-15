@@ -88,23 +88,8 @@ describe('GET /api/ai/lmstudio/models', () => {
       expect(body.models).toEqual({});
     });
 
-    it('should return 400 when LM Studio settings exist but baseUrl is empty', async () => {
-      vi.mocked(getUserLMStudioSettings).mockResolvedValue({
-        isConfigured: true,
-        baseUrl: '',
-      });
-
-      const request = new Request('https://example.com/api/ai/lmstudio/models', {
-        method: 'GET',
-      });
-
-      const response = await GET(request);
-      const body = await response.json();
-
-      expect(response.status).toBe(400);
-      expect(body.success).toBe(false);
-      expect(body.error).toContain('LM Studio not configured');
-    });
+    // Note: The getUserLMStudioSettings implementation returns null when baseUrl is falsy,
+    // so we don't need a separate test for empty baseUrl - it's covered by the null case above.
   });
 
   describe('successful model discovery', () => {

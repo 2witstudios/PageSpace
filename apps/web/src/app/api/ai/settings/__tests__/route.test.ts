@@ -237,6 +237,10 @@ describe('GET /api/ai/settings', () => {
         isConfigured: true,
         baseUrl: 'http://localhost:11434',
       });
+      vi.mocked(getUserLMStudioSettings).mockResolvedValue({
+        isConfigured: true,
+        baseUrl: 'http://localhost:1234',
+      });
 
       const request = createGetRequest();
 
@@ -245,6 +249,8 @@ describe('GET /api/ai/settings', () => {
 
       expect(body.providers.ollama.isConfigured).toBe(true);
       expect(body.providers.ollama.hasBaseUrl).toBe(true);
+      expect(body.providers.lmstudio.isConfigured).toBe(true);
+      expect(body.providers.lmstudio.hasBaseUrl).toBe(true);
     });
 
     it('should call repository with userId', async () => {
