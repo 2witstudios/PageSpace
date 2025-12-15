@@ -276,7 +276,7 @@ export async function PATCH(request: Request) {
     }
 
     // Check if user is trying to select PageSpace pro AI model without proper subscription
-    if (requiresProSubscription(provider, model, user.subscriptionTier)) {
+    if (requiresProSubscription(provider, model, user.subscriptionTier ?? undefined)) {
       return NextResponse.json(
         {
           error: 'Subscription required',

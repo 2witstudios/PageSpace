@@ -165,7 +165,7 @@ export async function POST(request: Request) {
   } catch (error) {
     loggers.api.error('Error creating AI agent:', error as Error);
     return NextResponse.json(
-      { error: `Failed to create AI agent: ${error instanceof Error ? error.message : String(error)}` },
+      { error: 'Failed to create AI agent' },
       { status: 500 }
     );
   }
