@@ -204,7 +204,15 @@ export async function GET(req: Request) {
       }).returning().then(res => res[0]);
 
       if (newDrive) {
-        await populateUserDrive(user.id, newDrive.id);
+        try {
+          await populateUserDrive(user.id, newDrive.id);
+        } catch (error) {
+          loggers.auth.error('Failed to populate user drive', error as Error, {
+            userId: user.id,
+            driveId: newDrive.id,
+            provider: 'google',
+          });
+        }
       }
     }
 

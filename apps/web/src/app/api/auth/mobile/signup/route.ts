@@ -135,7 +135,15 @@ export async function POST(req: Request) {
     }).returning().then(res => res[0]);
 
     if (newDrive) {
-      await populateUserDrive(user.id, newDrive.id);
+      try {
+        await populateUserDrive(user.id, newDrive.id);
+      } catch (error) {
+        loggers.auth.error('Failed to populate user drive', error as Error, {
+          userId: user.id,
+          driveId: newDrive.id,
+          platform,
+        });
+      }
     }
 
     // Add default 'ollama' provider for the new user with Docker-compatible URL
