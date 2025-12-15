@@ -203,8 +203,13 @@ describe('/api/auth/signup', () => {
 
     it('creates user with correct data', async () => {
       // Arrange - capture insert values for user creation
-      let capturedUserData: Record<string, unknown> | undefined;
-      const mockValues = vi.fn().mockImplementation((data) => {
+      interface CapturedUserData {
+        email?: string;
+        name?: string;
+        password?: string;
+      }
+      let capturedUserData: CapturedUserData | undefined;
+      const mockValues = vi.fn().mockImplementation((data: CapturedUserData) => {
         // Capture the first insert (user creation)
         if (!capturedUserData && data.email) {
           capturedUserData = data;
@@ -237,6 +242,7 @@ describe('/api/auth/signup', () => {
       expect(capturedUserData!.email).toBe('new@example.com');
       expect(capturedUserData!.name).toBe('New User');
       // Password should be hashed, not plaintext
+      expect(typeof capturedUserData!.password).toBe('string');
       expect(capturedUserData!.password).not.toBe('ValidPass123!');
       expect(capturedUserData!.password).toMatch(/^\$2[aby]?\$\d+\$/); // bcrypt hash format
     });

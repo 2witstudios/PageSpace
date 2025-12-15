@@ -114,12 +114,14 @@ describe('/api/auth/logout', () => {
       expect(response.headers.get('set-cookie')).toBeTruthy();
 
       // Verify accessToken cookie is cleared (expires in the past)
+      // Must mirror original cookie attributes (sameSite, httpOnly, path) to guarantee overwrite
       expect(serialize).toHaveBeenCalledWith(
         'accessToken',
         '',
         expect.objectContaining({
           expires: new Date(0), // Epoch = cookie cleared
           httpOnly: true,
+          sameSite: 'strict',
           path: '/',
         })
       );
@@ -131,6 +133,7 @@ describe('/api/auth/logout', () => {
         expect.objectContaining({
           expires: new Date(0), // Epoch = cookie cleared
           httpOnly: true,
+          sameSite: 'strict',
           path: '/',
         })
       );

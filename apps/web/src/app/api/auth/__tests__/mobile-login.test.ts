@@ -339,7 +339,8 @@ describe('/api/auth/mobile/login', () => {
       // The specific hash value is an implementation detail; we only care that
       // a consistent-cost hash comparison occurs
       expect(hash).toBeTruthy();
-      expect(hash).toMatch(/^\$2[aby]?\$\d+\$/); // Valid bcrypt hash format
+      expect(typeof hash).toBe('string');
+      expect(hash).toMatch(/^\$2[aby]?\$\d{1,2}\$[./A-Za-z0-9]{53}$/); // Full bcrypt hash format
     });
 
     it('logs failed login attempt', async () => {

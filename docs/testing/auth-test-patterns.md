@@ -176,4 +176,4 @@ The following improvements were implemented in this review:
    - Added capture-and-assert for user creation data
    - Verifies email, name, and hashed password
 
-All 218 tests passing across 12 auth test files.
+Run `pnpm test:unit` or check CI to verify all auth tests pass.
