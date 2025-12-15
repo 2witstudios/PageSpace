@@ -143,18 +143,25 @@ describe('/api/auth/google/callback redirect', () => {
   });
 
   test('given new user, should redirect to Getting Started drive', async () => {
+    // Arrange
     const request = new Request(
       'http://localhost/api/auth/google/callback?code=valid-code',
       { method: 'GET' }
     );
 
+    // Act
     const response = await GET(request);
 
+    // Assert
+    expect(provisionGettingStartedDriveIfNeeded).toHaveBeenCalledWith('user-123');
+    expect(provisionGettingStartedDriveIfNeeded).toHaveBeenCalledTimes(1);
+    expect(response.status).toBe(307);
     expect(response.headers.get('Location')).toContain('/dashboard/drive-123');
     expect(response.headers.get('Location')).toContain('auth=success');
   });
 
   test('given existing user with drives, should redirect to default dashboard', async () => {
+    // Arrange
     (provisionGettingStartedDriveIfNeeded as Mock).mockResolvedValue(null);
     (db.query.users.findFirst as Mock).mockResolvedValue({
       id: 'user-123',
@@ -170,13 +177,16 @@ describe('/api/auth/google/callback redirect', () => {
       { method: 'GET' }
     );
 
+    // Act
     const response = await GET(request);
 
+    // Assert
     expect(response.headers.get('Location')).toContain('/dashboard');
     expect(response.headers.get('Location')).not.toContain('/dashboard/drive-');
   });
 
   test('given provisioning throws error, should still redirect successfully', async () => {
+    // Arrange
     (provisionGettingStartedDriveIfNeeded as Mock).mockRejectedValue(new Error('DB error'));
 
     const request = new Request(
@@ -184,8 +194,10 @@ describe('/api/auth/google/callback redirect', () => {
       { method: 'GET' }
     );
 
+    // Act
     const response = await GET(request);
 
+    // Assert
     expect(response.status).toBe(307);
     expect(response.headers.get('Location')).toContain('/dashboard');
   });

@@ -113,6 +113,7 @@ import {
   generateRefreshToken,
   createNotification,
   logAuthEvent,
+  loggers,
 } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { createVerificationToken } from '@pagespace/lib/verification-utils';
@@ -390,6 +391,32 @@ describe('/api/auth/signup', () => {
       // Assert - signup should still succeed
       expect(response.status).toBe(303);
       expect(response.headers.get('Location')).toContain('/dashboard/new-drive-id');
+    });
+
+    it('continues signup even if drive provisioning fails', async () => {
+      // Arrange
+      (provisionGettingStartedDriveIfNeeded as Mock).mockRejectedValue(
+        new Error('Database error')
+      );
+
+      const request = new Request('http://localhost/api/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validSignupPayload),
+      });
+
+      // Act
+      const response = await POST(request);
+
+      // Assert - signup should still succeed with fallback to /dashboard
+      expect(response.status).toBe(303);
+      expect(response.headers.get('Location')).toContain('/dashboard');
+      expect(response.headers.get('Location')).not.toContain('/dashboard/new-drive-id');
+      expect(loggers.auth.error).toHaveBeenCalledWith(
+        'Failed to provision Getting Started drive',
+        expect.any(Error),
+        expect.objectContaining({ userId: 'new-user-id' })
+      );
     });
   });
 

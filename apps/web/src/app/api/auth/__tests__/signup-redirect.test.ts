@@ -141,6 +141,7 @@ describe('/api/auth/signup redirect', () => {
   });
 
   test('given successful signup, should redirect to Getting Started drive', async () => {
+    // Arrange
     const request = new Request('http://localhost/api/auth/signup', {
       method: 'POST',
       headers: {
@@ -155,14 +156,19 @@ describe('/api/auth/signup redirect', () => {
       }),
     });
 
+    // Act
     const response = await POST(request);
 
+    // Assert
+    expect(provisionGettingStartedDriveIfNeeded).toHaveBeenCalledWith('user-123');
+    expect(provisionGettingStartedDriveIfNeeded).toHaveBeenCalledTimes(1);
     expect(response.status).toBe(303);
     expect(response.headers.get('Location')).toContain('/dashboard/drive-123');
     expect(response.headers.get('Location')).toContain('auth=success');
   });
 
   test('given signup when provisioning returns null, should redirect to default dashboard', async () => {
+    // Arrange
     (provisionGettingStartedDriveIfNeeded as Mock).mockResolvedValue(null);
 
     const request = new Request('http://localhost/api/auth/signup', {
@@ -177,8 +183,10 @@ describe('/api/auth/signup redirect', () => {
       }),
     });
 
+    // Act
     const response = await POST(request);
 
+    // Assert
     expect(response.status).toBe(303);
     expect(response.headers.get('Location')).toContain('/dashboard');
     expect(response.headers.get('Location')).not.toContain('/dashboard/drive-');

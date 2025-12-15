@@ -148,7 +148,7 @@ export async function GET(req: Request) {
     if (user) {
       // Update existing user with Google ID if not set, or update other profile info
       if (!user.googleId || !user.name || user.image !== picture) {
-        console.log(`[GOOGLE_AUTH] Updating existing user: ${email}`);
+        loggers.auth.info('Updating existing user via Google OAuth', { email });
         await db.update(users)
           .set({ 
             googleId: googleId || user.googleId,
@@ -163,11 +163,11 @@ export async function GET(req: Request) {
         user = await db.query.users.findFirst({
           where: eq(users.id, user.id),
         }) || user;
-        console.log(`[GOOGLE_AUTH] User updated: ${user.name}`);
+        loggers.auth.info('User updated via Google OAuth', { userId: user.id, name: user.name });
       }
     } else {
       // Create new user
-      console.log(`[GOOGLE_AUTH] Creating new user: ${email}`);
+      loggers.auth.info('Creating new user via Google OAuth', { email });
       const [newUser] = await db.insert(users).values({
         id: createId(),
         name: userName,
@@ -184,7 +184,7 @@ export async function GET(req: Request) {
       }).returning();
 
       user = newUser;
-      console.log(`[GOOGLE_AUTH] New user created: ${user.name} (id: ${user.id})`);
+      loggers.auth.info('New user created via Google OAuth', { userId: user.id, name: user.name });
     }
 
     let provisionedDrive: { driveId: string } | null = null;
@@ -201,7 +201,7 @@ export async function GET(req: Request) {
     }
 
     // Generate JWT tokens
-    console.log(`[GOOGLE_AUTH] Generating tokens for user: ${user.id} (tokenVersion: ${user.tokenVersion})`);
+    loggers.auth.debug('Generating tokens for Google OAuth user', { userId: user.id, tokenVersion: user.tokenVersion });
     const accessToken = await generateAccessToken(user.id, user.tokenVersion, user.role);
     const refreshToken = await generateRefreshToken(user.id, user.tokenVersion, user.role);
 
