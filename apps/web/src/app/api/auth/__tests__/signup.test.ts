@@ -32,7 +32,8 @@ vi.mock('@pagespace/db', () => ({
 
 vi.mock('bcryptjs', () => ({
   default: {
-    hash: vi.fn().mockResolvedValue('$2a$12$hashedpassword'),
+    // Use a properly formatted bcrypt hash (60 chars: $2a$12$ + 53 char salt+hash)
+    hash: vi.fn().mockResolvedValue('$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5GyYzpLLEm4Eu'),
   },
 }));
 
@@ -202,7 +203,32 @@ describe('/api/auth/signup', () => {
     });
 
     it('creates user with correct data', async () => {
-      // Arrange
+      // Arrange - capture insert values for user creation
+      interface CapturedUserData {
+        email?: string;
+        name?: string;
+        password?: string;
+      }
+      let capturedUserData: CapturedUserData | undefined;
+      const mockValues = vi.fn().mockImplementation((data: CapturedUserData) => {
+        // Capture the first insert (user creation)
+        if (!capturedUserData && data.email) {
+          capturedUserData = data;
+        }
+        return {
+          returning: vi.fn().mockResolvedValue([
+            {
+              id: 'new-user-id',
+              name: data.name || 'New User',
+              email: data.email || 'new@example.com',
+              tokenVersion: 0,
+              role: 'user',
+            },
+          ]),
+        };
+      });
+      (db.insert as Mock).mockReturnValue({ values: mockValues });
+
       const request = new Request('http://localhost/api/auth/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -212,8 +238,14 @@ describe('/api/auth/signup', () => {
       // Act
       await POST(request);
 
-      // Assert
-      expect(db.insert).toHaveBeenCalled();
+      // Assert - verify user was created with correct fields
+      expect(capturedUserData).toBeDefined();
+      expect(capturedUserData!.email).toBe('new@example.com');
+      expect(capturedUserData!.name).toBe('New User');
+      // Password should be hashed, not plaintext
+      expect(typeof capturedUserData!.password).toBe('string');
+      expect(capturedUserData!.password).not.toBe('ValidPass123!');
+      expect(capturedUserData!.password).toMatch(/^\$2[aby]?\$\d{1,2}\$[./A-Za-z0-9]{53}$/); // Full bcrypt hash format
     });
 
     it('creates a personal drive for new user', async () => {

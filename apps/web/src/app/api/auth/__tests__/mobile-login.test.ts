@@ -314,7 +314,7 @@ describe('/api/auth/mobile/login', () => {
       expect(body.error).toBe('Invalid email or password');
     });
 
-    it('performs timing-safe comparison', async () => {
+    it('performs timing-safe comparison even for non-existent users', async () => {
       // Arrange
       (db.query.users.findFirst as Mock).mockResolvedValue(null);
 
@@ -327,8 +327,20 @@ describe('/api/auth/mobile/login', () => {
       // Act
       await POST(request);
 
-      // Assert - bcrypt.compare should be called even for non-existent users
+      // Assert - security property: bcrypt.compare must be called even for non-existent users
+      // This prevents timing attacks that could reveal user existence
       expect(bcrypt.compare).toHaveBeenCalled();
+
+      // Verify the password was passed (first argument)
+      const [password, hash] = (bcrypt.compare as Mock).mock.calls[0];
+      expect(password).toBe(validLoginPayload.password);
+
+      // Verify a valid bcrypt hash was used (not null/undefined/empty)
+      // The specific hash value is an implementation detail; we only care that
+      // a consistent-cost hash comparison occurs
+      expect(hash).toBeTruthy();
+      expect(typeof hash).toBe('string');
+      expect(hash).toMatch(/^\$2[aby]?\$\d{1,2}\$[./A-Za-z0-9]{53}$/); // Full bcrypt hash format
     });
 
     it('logs failed login attempt', async () => {

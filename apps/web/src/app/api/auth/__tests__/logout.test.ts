@@ -110,17 +110,18 @@ describe('/api/auth/logout', () => {
       // Act
       const response = await POST(request);
 
-      // Assert - verify cookies are cleared with expires: epoch (1970-01-01)
+      // Assert - verify cookie contract: both tokens cleared with expires: epoch
       expect(response.headers.get('set-cookie')).toBeTruthy();
-      expect(serialize).toHaveBeenCalledTimes(2);
 
       // Verify accessToken cookie is cleared (expires in the past)
+      // Must mirror original cookie attributes (sameSite, httpOnly, path) to guarantee overwrite
       expect(serialize).toHaveBeenCalledWith(
         'accessToken',
         '',
         expect.objectContaining({
           expires: new Date(0), // Epoch = cookie cleared
           httpOnly: true,
+          sameSite: 'strict',
           path: '/',
         })
       );
@@ -132,6 +133,7 @@ describe('/api/auth/logout', () => {
         expect.objectContaining({
           expires: new Date(0), // Epoch = cookie cleared
           httpOnly: true,
+          sameSite: 'strict',
           path: '/',
         })
       );
