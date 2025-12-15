@@ -48,6 +48,3 @@ export async function GET(
     }, { status: 500 });
   }
 }
-
-// Re-export pure function for testing
-export { calculateUsageSummary };
