@@ -11,11 +11,12 @@ import { sendEmail } from '@pagespace/lib/services/email-service';
 import { VerificationEmail } from '@pagespace/lib/email-templates/VerificationEmail';
 import React from 'react';
 import { NextResponse } from 'next/server';
+import { populateUserDrive } from '@/lib/onboarding/drive-setup';
 // Removed AI defaults dependency
 
 const signupSchema = z.object({
   name: z.string().min(1, {
-      error: "Name is required"
+    message: 'Name is required',
   }),
   email: z.email(),
   password: z.string()
@@ -37,12 +38,12 @@ const signupSchema = z.object({
 });
 
 export async function POST(req: Request) {
-  const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] || 
-                   req.headers.get('x-real-ip') || 
-                   'unknown';
-  
+  const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] ||
+    req.headers.get('x-real-ip') ||
+    'unknown';
+
   let email: string | undefined;
-  
+
   try {
     const body = await req.json();
     const validation = signupSchema.safeParse(body);
@@ -113,14 +114,26 @@ export async function POST(req: Request) {
     }).returning().then(res => res[0]);
 
     // Create a personal drive for the new user
-    const driveName = `${user.name}'s Drive`;
+    const driveName = 'Getting Started';
     const driveSlug = slugify(driveName);
-    await db.insert(drives).values({
+    const newDrive = await db.insert(drives).values({
       name: driveName,
       slug: driveSlug,
       ownerId: user.id,
       updatedAt: new Date(),
-    });
+    }).returning().then(res => res[0]);
+
+    // Populate the new drive with starter content
+    if (newDrive) {
+      try {
+        await populateUserDrive(user.id, newDrive.id);
+      } catch (error) {
+        loggers.auth.error('Failed to populate user drive', error as Error, {
+          userId: user.id,
+          driveId: newDrive.id,
+        });
+      }
+    }
 
     // Add default 'ollama' provider for the new user with Docker-compatible URL
     // This enables local AI models via Ollama for users with local deployments

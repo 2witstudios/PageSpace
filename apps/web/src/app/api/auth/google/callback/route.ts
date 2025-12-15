@@ -9,6 +9,7 @@ import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { OAuth2Client } from 'google-auth-library';
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
+import { populateUserDrive } from '@/lib/onboarding/drive-setup';
 
 const googleCallbackSchema = z.object({
   code: z.string().min(1, "Authorization code is required"),
@@ -192,15 +193,27 @@ export async function GET(req: Request) {
     
     if (userDriveCount[0]?.count === 0) {
       // Create a personal drive for users who don't have any drives
-      const driveName = `${user.name || userName}'s Drive`;
+      const driveName = 'Getting Started';
       const driveSlug = slugify(driveName);
       console.log(`[GOOGLE_AUTH] Creating drive: ${driveName} (${driveSlug})`);
-      await db.insert(drives).values({
+      const newDrive = await db.insert(drives).values({
         name: driveName,
         slug: driveSlug,
         ownerId: user.id,
         updatedAt: new Date(),
-      });
+      }).returning().then(res => res[0]);
+
+      if (newDrive) {
+        try {
+          await populateUserDrive(user.id, newDrive.id);
+        } catch (error) {
+          loggers.auth.error('Failed to populate user drive', error as Error, {
+            userId: user.id,
+            driveId: newDrive.id,
+            provider: 'google',
+          });
+        }
+      }
     }
 
     // Generate JWT tokens
