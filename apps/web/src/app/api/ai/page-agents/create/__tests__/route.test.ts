@@ -64,7 +64,7 @@ vi.mock('@/lib/ai/core', () => ({
 
 import { pageAgentRepository } from '@/lib/repositories/page-agent-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { canUserEditPage, agentAwarenessCache, loggers } from '@pagespace/lib/server';
+import { canUserEditPage, agentAwarenessCache } from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 
 // Test fixtures

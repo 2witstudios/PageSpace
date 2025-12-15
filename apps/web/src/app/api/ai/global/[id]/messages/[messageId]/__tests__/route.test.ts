@@ -7,7 +7,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
-import { PATCH, DELETE, processMessageContentUpdate } from '../route';
+import { PATCH, DELETE } from '../route';
 import type { WebAuthResult, AuthError } from '@/lib/auth';
 
 // Mock the repository seam (boundary)
