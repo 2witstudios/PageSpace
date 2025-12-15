@@ -4,6 +4,8 @@ import path from 'path'
 // Note: vite-tsconfig-paths removed due to ESM compatibility issue
 // Using manual path alias instead
 
+const packagesDir = path.resolve(__dirname, '../../packages')
+
 export default defineConfig({
   plugins: [react()],
   test: {
@@ -27,6 +29,25 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      // Workspace package aliases for testing
+      '@pagespace/db': path.resolve(packagesDir, 'db/src'),
+      '@pagespace/lib/server': path.resolve(packagesDir, 'lib/src/server'),
+      '@pagespace/lib/broadcast-auth': path.resolve(packagesDir, 'lib/src/auth/broadcast-auth'),
+      '@pagespace/lib/logger-browser': path.resolve(packagesDir, 'lib/src/logging/logger-browser'),
+      '@pagespace/lib/utils/environment': path.resolve(packagesDir, 'lib/src/utils/environment'),
+      '@pagespace/lib/ai-context-calculator': path.resolve(packagesDir, 'lib/src/monitoring/ai-context-calculator'),
+      '@pagespace/lib/ai-monitoring': path.resolve(packagesDir, 'lib/src/monitoring/ai-monitoring'),
+      '@pagespace/lib/auth-utils': path.resolve(packagesDir, 'lib/src/auth/auth-utils'),
+      '@pagespace/lib/services/subscription-utils': path.resolve(packagesDir, 'lib/src/services/subscription-utils'),
+      '@pagespace/lib/services/storage-limits': path.resolve(packagesDir, 'lib/src/services/storage-limits'),
+      '@pagespace/lib/verification-utils': path.resolve(packagesDir, 'lib/src/auth/verification-utils'),
+      '@pagespace/lib/device-auth-utils': path.resolve(packagesDir, 'lib/src/auth/device-auth-utils'),
+      '@pagespace/lib/activity-tracker': path.resolve(packagesDir, 'lib/src/monitoring/activity-tracker'),
+      '@pagespace/lib/services/email-service': path.resolve(packagesDir, 'lib/src/services/email-service'),
+      '@pagespace/lib/email-templates/VerificationEmail': path.resolve(packagesDir, 'lib/src/email-templates/VerificationEmail'),
+      '@pagespace/lib/api-utils': path.resolve(packagesDir, 'lib/src/utils/api-utils'),
+      // Fallback for general @pagespace/lib imports
+      '@pagespace/lib': path.resolve(packagesDir, 'lib/src'),
     },
   },
 })

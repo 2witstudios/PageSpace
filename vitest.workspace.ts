@@ -11,14 +11,6 @@ export default defineWorkspace([
   },
   {
     test: {
-      name: '@pagespace/db',
-      root: './packages/db',
-      environment: 'node',
-      globals: true,
-    },
-  },
-  {
-    test: {
       name: 'web',
       root: './apps/web',
       environment: 'jsdom',
@@ -30,6 +22,14 @@ export default defineWorkspace([
     test: {
       name: 'realtime',
       root: './apps/realtime',
+      environment: 'node',
+      globals: true,
+    },
+  },
+  {
+    test: {
+      name: 'processor',
+      root: './apps/processor',
       environment: 'node',
       globals: true,
     },
