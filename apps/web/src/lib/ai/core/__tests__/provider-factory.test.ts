@@ -68,6 +68,7 @@ vi.mock('../ai-utils', () => ({
   createMiniMaxSettings: vi.fn(),
 }));
 
+import { type LanguageModel } from 'ai';
 import {
   createProviderErrorResponse,
   isProviderError,
@@ -682,13 +683,22 @@ describe('provider-factory', () => {
     });
 
     it('returns false for success result', () => {
-      const result = {
-        model: { modelId: 'test' },
+      // Create a minimal valid mock of a LanguageModel
+      const mockModel = {
+        specificationVersion: 'v1',
+        provider: 'test-provider',
+        modelId: 'test-model',
+        doGenerate: vi.fn(),
+        doStream: vi.fn(),
+      } as unknown as LanguageModel;
+
+      const result: ProviderResult = {
+        model: mockModel,
         provider: 'google',
         modelName: 'gemini-pro',
       };
 
-      expect(isProviderError(result as unknown as ProviderResult)).toBe(false);
+      expect(isProviderError(result)).toBe(false);
     });
   });
 });

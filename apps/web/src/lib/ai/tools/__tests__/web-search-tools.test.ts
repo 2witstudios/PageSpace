@@ -30,6 +30,11 @@ import type { ToolExecutionContext } from '../../core';
 const mockGetDefaultPageSpaceSettings = vi.mocked(getDefaultPageSpaceSettings);
 const mockGetUserGLMSettings = vi.mocked(getUserGLMSettings);
 
+type WebSearchResult = Exclude<
+  Awaited<ReturnType<NonNullable<(typeof webSearchTools.web_search)['execute']>>>,
+  AsyncIterable<unknown>
+>;
+
 describe('web-search-tools', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -105,14 +110,14 @@ describe('web-search-tools', () => {
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
-      const result = await webSearchTools.web_search!.execute!(
+      const result = (await webSearchTools.web_search!.execute!(
         { query: 'test search', count: 10, recencyFilter: 'noLimit' },
         context
-      );
+      )) as WebSearchResult;
 
       if ('error' in result) throw new Error(`Expected success but got error: ${result.error}`);
-      expect((result as { success: boolean }).success).toBe(true);
-      expect((result as { resultsCount: number }).resultsCount).toBe(1);
+      expect(result.success).toBe(true);
+      expect(result.resultsCount).toBe(1);
       expect(global.fetch).toHaveBeenCalledWith(
         'https://api.z.ai/api/paas/v4/web_search',
         expect.objectContaining({
@@ -147,13 +152,13 @@ describe('web-search-tools', () => {
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
-      const result = await webSearchTools.web_search!.execute!(
+      const result = (await webSearchTools.web_search!.execute!(
         { query: 'test search', count: 10, recencyFilter: 'noLimit' },
         context
-      );
+      )) as WebSearchResult;
 
       if ('error' in result) throw new Error(`Expected success but got error: ${result.error}`);
-      expect((result as { success: boolean }).success).toBe(true);
+      expect(result.success).toBe(true);
       expect(global.fetch).toHaveBeenCalledWith(
         'https://api.z.ai/api/paas/v4/web_search',
         expect.objectContaining({
@@ -341,15 +346,15 @@ describe('web-search-tools', () => {
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
-      const result = await webSearchTools.web_search!.execute!(
+      const result = (await webSearchTools.web_search!.execute!(
         { query: 'test', count: 10, recencyFilter: 'noLimit' },
         context
-      );
+      )) as WebSearchResult;
 
       if ('error' in result) throw new Error(`Expected success but got error: ${result.error}`);
-      expect((result as { success: boolean }).success).toBe(true);
-      expect((result as { resultsCount: number }).resultsCount).toBe(2);
-      const results = (result as { results: Record<string, unknown>[] }).results;
+      expect(result.success).toBe(true);
+      expect(result.resultsCount).toBe(2);
+      const results = result.results;
       expect(results[0].position).toBe(1);
       expect(results[0].title).toBe('First Result');
       expect(results[0].url).toBe('https://example1.com');
