@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET } from '../route';
 import type { WebAuthResult, AuthError } from '@/lib/auth';
+import type { ChatMessage } from '@/lib/repositories/chat-message-repository';
 
 // Mock the repository seam (boundary)
 vi.mock('@/lib/repositories/chat-message-repository', () => ({
@@ -36,7 +37,7 @@ vi.mock('@pagespace/lib/server', () => ({
 
 // Mock message converter (boundary)
 vi.mock('@/lib/ai/core', () => ({
-  convertDbMessageToUIMessage: vi.fn((msg) => ({
+  convertDbMessageToUIMessage: vi.fn((msg: ChatMessage) => ({
     id: msg.id,
     role: msg.role,
     content: msg.content,

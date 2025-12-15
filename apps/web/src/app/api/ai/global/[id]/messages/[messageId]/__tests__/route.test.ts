@@ -381,34 +381,29 @@ describe('DELETE /api/ai/global/[id]/messages/[messageId]', () => {
 });
 
 describe('processMessageContentUpdate (pure function)', () => {
-  it('should return new content for plain text messages', async () => {
+  // Use beforeAll to import the actual module once, avoiding repetition
+  let processMessageContentUpdate: (existingContent: string, newContent: string) => string;
+
+  beforeAll(async () => {
     const actualModule = await vi.importActual<
       typeof import('@/lib/repositories/chat-message-repository')
     >('@/lib/repositories/chat-message-repository');
-    const { processMessageContentUpdate } = actualModule;
+    processMessageContentUpdate = actualModule.processMessageContentUpdate;
+  });
 
+  it('should return new content for plain text messages', () => {
     const result = processMessageContentUpdate('Old text', 'New text');
 
     expect(result).toBe('New text');
   });
 
-  it('should return new content for invalid JSON', async () => {
-    const actualModule = await vi.importActual<
-      typeof import('@/lib/repositories/chat-message-repository')
-    >('@/lib/repositories/chat-message-repository');
-    const { processMessageContentUpdate } = actualModule;
-
+  it('should return new content for invalid JSON', () => {
     const result = processMessageContentUpdate('not json', 'New text');
 
     expect(result).toBe('New text');
   });
 
-  it('should preserve structure for messages with textParts', async () => {
-    const actualModule = await vi.importActual<
-      typeof import('@/lib/repositories/chat-message-repository')
-    >('@/lib/repositories/chat-message-repository');
-    const { processMessageContentUpdate } = actualModule;
-
+  it('should preserve structure for messages with textParts', () => {
     const structured = JSON.stringify({
       textParts: ['Original'],
       partsOrder: ['text'],
@@ -423,15 +418,16 @@ describe('processMessageContentUpdate (pure function)', () => {
     expect(parsed.partsOrder).toEqual(['text']);
   });
 
-  it('should return new content when JSON lacks textParts', async () => {
-    const actualModule = await vi.importActual<
-      typeof import('@/lib/repositories/chat-message-repository')
-    >('@/lib/repositories/chat-message-repository');
-    const { processMessageContentUpdate } = actualModule;
-
+  it('should return new content when JSON lacks textParts', () => {
     const jsonWithoutTextParts = JSON.stringify({ other: 'data' });
 
     const result = processMessageContentUpdate(jsonWithoutTextParts, 'New text');
+
+    expect(result).toBe('New text');
+  });
+
+  it('should return new content for empty string', () => {
+    const result = processMessageContentUpdate('', 'New text');
 
     expect(result).toBe('New text');
   });

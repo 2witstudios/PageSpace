@@ -41,10 +41,10 @@ vi.mock('@pagespace/lib/server', () => ({
 // Mock websocket broadcast (boundary)
 vi.mock('@/lib/websocket', () => ({
   broadcastPageEvent: vi.fn(),
-  createPageEventPayload: vi.fn((driveId, pageId, action, data) => ({
+  createPageEventPayload: vi.fn((driveId, pageId, operation, data) => ({
     driveId,
     pageId,
-    action,
+    operation,
     ...data,
   })),
 }));
@@ -109,6 +109,7 @@ const mockAgent = (overrides: Partial<{
 const createRequest = (agentId: string, body: Record<string, unknown>) =>
   new Request(`https://example.com/api/ai/page-agents/${agentId}/config`, {
     method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
 
@@ -298,6 +299,10 @@ describe('PUT /api/ai/page-agents/[agentId]/config', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
+      // Assert explicit fields rather than just count for resilience to future additions
+      expect(body.updatedFields).toEqual(
+        expect.arrayContaining(['systemPrompt', 'enabledTools', 'aiProvider'])
+      );
       expect(body.updatedFields.length).toBe(3);
     });
   });
@@ -318,7 +323,9 @@ describe('PUT /api/ai/page-agents/[agentId]/config', () => {
           type: 'AI_CHAT',
         })
       );
-      expect(broadcastPageEvent).toHaveBeenCalled();
+      // Verify broadcastPageEvent is called with the payload from createPageEventPayload
+      const expectedPayload = vi.mocked(createPageEventPayload).mock.results[0]?.value;
+      expect(broadcastPageEvent).toHaveBeenCalledWith(expectedPayload);
     });
 
     it('should invalidate cache when agentDefinition changes', async () => {

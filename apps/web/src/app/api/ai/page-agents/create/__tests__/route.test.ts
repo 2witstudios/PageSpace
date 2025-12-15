@@ -43,10 +43,10 @@ vi.mock('@pagespace/lib/server', () => ({
 // Mock websocket broadcast (boundary)
 vi.mock('@/lib/websocket', () => ({
   broadcastPageEvent: vi.fn(),
-  createPageEventPayload: vi.fn((driveId, pageId, action, data) => ({
+  createPageEventPayload: vi.fn((driveId, pageId, operation, data) => ({
     driveId,
     pageId,
-    action,
+    operation,
     ...data,
   })),
 }));
@@ -86,6 +86,7 @@ const mockAuthError = (status = 401): AuthError => ({
 const createRequest = (body: Record<string, unknown>) =>
   new Request('https://example.com/api/ai/page-agents/create', {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
 
@@ -210,6 +211,8 @@ describe('POST /api/ai/page-agents/create', () => {
       expect(response.status).toBe(404);
       expect(body.error).toContain('Drive');
       expect(body.error).toContain('not found');
+      // Verify repository was called with correct driveId
+      expect(pageAgentRepository.getDriveById).toHaveBeenCalledWith('nonexistent_drive');
     });
 
     it('should return 404 when parent page does not exist', async () => {
@@ -228,6 +231,8 @@ describe('POST /api/ai/page-agents/create', () => {
       expect(response.status).toBe(404);
       expect(body.error).toContain('Parent page');
       expect(body.error).toContain('not found');
+      // Verify repository was called with correct parentId and driveId
+      expect(pageAgentRepository.getParentPage).toHaveBeenCalledWith('nonexistent_parent', mockDriveId);
     });
   });
 
@@ -267,6 +272,8 @@ describe('POST /api/ai/page-agents/create', () => {
 
       expect(response.status).toBe(403);
       expect(body.error).toContain('Insufficient permissions');
+      // Verify permission check was called with correct userId and pageId
+      expect(canUserEditPage).toHaveBeenCalledWith(mockUserId, 'parent_123');
     });
   });
 

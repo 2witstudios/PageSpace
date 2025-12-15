@@ -141,18 +141,21 @@ const createGetRequest = () =>
 const createPostRequest = (body: Record<string, unknown>) =>
   new Request('https://example.com/api/ai/settings', {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
 
 const createPatchRequest = (body: Record<string, unknown>) =>
   new Request('https://example.com/api/ai/settings', {
     method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
 
 const createDeleteRequest = (body: Record<string, unknown>) =>
   new Request('https://example.com/api/ai/settings', {
     method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
 
@@ -551,6 +554,8 @@ describe('PATCH /api/ai/settings', () => {
       expect(response.status).toBe(403);
       expect(body.error).toBe('Subscription required');
       expect(body.upgradeUrl).toBe('/settings/billing');
+      // Verify centralized subscription helper was called with correct arguments
+      expect(requiresProSubscription).toHaveBeenCalledWith('pagespace', 'pro-model', 'free');
     });
   });
 

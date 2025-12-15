@@ -77,6 +77,9 @@ export interface UsageSummary {
 
 /**
  * Pure function: Calculate usage summary from logs
+ * @param logs - Usage logs, must be sorted by timestamp descending (most recent first)
+ * @param getContextWindow - Callback to get context window size for a given model
+ * @returns Aggregated usage summary with billing, context info, and most recent model/provider
  */
 export function calculateUsageSummary(
   logs: UsageLog[],
@@ -256,7 +259,8 @@ export const globalConversationRepository = {
   },
 
   /**
-   * Get a message by ID within a conversation
+   * Get an active message by ID within a conversation
+   * Only returns messages that haven't been soft-deleted
    */
   async getMessageById(conversationId: string, messageId: string): Promise<Message | null> {
     const [message] = await db
@@ -264,7 +268,8 @@ export const globalConversationRepository = {
       .from(messages)
       .where(and(
         eq(messages.id, messageId),
-        eq(messages.conversationId, conversationId)
+        eq(messages.conversationId, conversationId),
+        eq(messages.isActive, true)
       ));
 
     return message || null;
