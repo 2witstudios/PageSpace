@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, POST } from '../route';
 import type { WebAuthResult, AuthError } from '@/lib/auth';
-import type { DriveAccessInfo, DriveRole, RolePermissions } from '@pagespace/lib/server';
+import type { DriveRoleAccessInfo, DriveRole, RolePermissions } from '@pagespace/lib/server';
 
 // ============================================================================
 // Contract Tests for /api/drives/[driveId]/roles
@@ -53,7 +53,7 @@ const createDriveFixture = (overrides: { id: string; name: string; ownerId?: str
   ownerId: overrides.ownerId ?? 'user_123',
 });
 
-const createAccessFixture = (overrides: Partial<DriveAccessInfo>): DriveAccessInfo => ({
+const createAccessFixture = (overrides: Partial<DriveRoleAccessInfo>): DriveRoleAccessInfo => ({
   isOwner: overrides.isOwner ?? false,
   isAdmin: overrides.isAdmin ?? false,
   isMember: overrides.isMember ?? false,

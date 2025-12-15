@@ -43,7 +43,7 @@ export interface UpdateRoleInput {
   permissions?: RolePermissions;
 }
 
-export interface DriveAccessInfo {
+export interface DriveRoleAccessInfo {
   isOwner: boolean;
   isAdmin: boolean;
   isMember: boolean;
@@ -65,7 +65,7 @@ export interface DriveAccessInfo {
 export async function checkDriveAccessForRoles(
   driveId: string,
   userId: string
-): Promise<DriveAccessInfo> {
+): Promise<DriveRoleAccessInfo> {
   const driveResult = await db
     .select()
     .from(drives)
