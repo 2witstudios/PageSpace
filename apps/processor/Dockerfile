@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.6
 FROM node:22.17.0-alpine AS base
 
 # Install system dependencies for Sharp and Tesseract
@@ -17,24 +18,27 @@ RUN apk add --no-cache \
 # Set working directory
 WORKDIR /app
 
-# Install pnpm
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# Enable corepack and pin pnpm (with basic retry for transient network issues)
+RUN corepack enable && (corepack prepare pnpm@10.13.1 --activate || corepack prepare pnpm@10.13.1 --activate || corepack prepare pnpm@10.13.1 --activate)
 
-# Copy workspace configuration files
-COPY pnpm-workspace.yaml package.json pnpm-lock.yaml tsconfig.json ./
-COPY packages ./packages
+# Copy only manifests for dependency install caching
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages/db/package.json ./packages/db/
+COPY packages/lib/package.json ./packages/lib/
 COPY apps/processor/package.json ./apps/processor/
 
 # Install all dependencies
 # Install dependencies (allow lockfile update since processor deps changed)
-RUN pnpm install --no-frozen-lockfile --prod=false
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm config set store-dir /pnpm/store && pnpm install --no-frozen-lockfile --prod=false
+
+# Now copy source code AFTER dependencies are installed
+COPY tsconfig.json ./
+COPY packages ./packages
+COPY apps/processor ./apps/processor
 
 # Build shared workspaces before compiling the processor
 RUN pnpm --filter @pagespace/db build \
   && pnpm --filter @pagespace/lib build
-
-# Copy processor source code
-COPY apps/processor ./apps/processor
 
 # Build the processor service
 WORKDIR /app/apps/processor
@@ -55,9 +59,6 @@ RUN apk add --no-cache \
     freetype
 
 WORKDIR /app
-
-# Install pnpm
-RUN corepack enable && corepack prepare pnpm@latest --activate
 
 # Copy built application
 COPY --from=base /app/node_modules ./node_modules

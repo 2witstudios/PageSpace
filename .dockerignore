@@ -1,15 +1,31 @@
 # Dependencies
 node_modules/
+node_modules
+**/node_modules/
+**/node_modules
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+.pnpm-store/
+**/.pnpm-store
+**/.pnpm-store/
 
 # Build outputs
 .next/
+**/.next/
 out/
 build/
 dist/
+**/out/
+**/build/
+**/dist/
+.turbo/
+**/.turbo/
+
+# Internal package builds are needed by some Docker builds (e.g. Next.js subpath exports)
+!packages/**/dist/
+!packages/**/dist/**
 
 # Environment files
 .env.local
@@ -94,6 +110,10 @@ pids/
 
 # Documentation (not needed in container)
 docs/
+
+# Non-server apps (not needed for these images)
+apps/desktop/
+apps/ios/
 
 # Docker files themselves
 Dockerfile*
