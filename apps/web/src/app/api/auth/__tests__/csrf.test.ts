@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { GET } from '../csrf/route';
 
 // Mock dependencies
@@ -43,20 +43,27 @@ describe('/api/auth/csrf', () => {
     exp: Math.floor(Date.now() / 1000) + 900, // 15 minutes
   };
 
+  const authenticateRequestWithOptionsMock = vi.mocked(authenticateRequestWithOptions);
+  const isAuthErrorMock = vi.mocked(isAuthError);
+  const decodeTokenMock = vi.mocked(decodeToken);
+  const parseMock = vi.mocked(parse);
+  const generateCSRFTokenMock = vi.mocked(generateCSRFToken);
+  const getSessionIdFromJWTMock = vi.mocked(getSessionIdFromJWT);
+
   beforeEach(() => {
     vi.clearAllMocks();
 
     // Default: authenticated user
-    (authenticateRequestWithOptions as Mock).mockResolvedValue({
+    authenticateRequestWithOptionsMock.mockResolvedValue({
       userId: 'test-user-id',
       role: 'user',
       tokenVersion: 0,
       tokenType: 'jwt',
       source: 'cookie',
     });
-    (isAuthError as Mock).mockReturnValue(false);
-    (decodeToken as Mock).mockResolvedValue(mockDecodedToken);
-    (parse as Mock).mockReturnValue({ accessToken: 'valid-access-token' });
+    isAuthErrorMock.mockReturnValue(false);
+    decodeTokenMock.mockResolvedValue(mockDecodedToken);
+    parseMock.mockReturnValue({ accessToken: 'valid-access-token' });
   });
 
   describe('successful CSRF token generation', () => {
@@ -104,15 +111,15 @@ describe('/api/auth/csrf', () => {
       vi.clearAllMocks();
 
       // Configure authenticateRequestWithOptions to indicate Bearer auth was used
-      (authenticateRequestWithOptions as Mock).mockResolvedValue({
+      authenticateRequestWithOptionsMock.mockResolvedValue({
         userId: 'test-user-id',
         role: 'user',
         tokenVersion: 0,
         tokenType: 'jwt',
         source: 'bearer',
       });
-      (isAuthError as Mock).mockReturnValue(false);
-      (decodeToken as Mock).mockResolvedValue(mockDecodedToken);
+      isAuthErrorMock.mockReturnValue(false);
+      decodeTokenMock.mockResolvedValue(mockDecodedToken);
 
       const request = new Request('http://localhost/api/auth/csrf', {
         method: 'GET',
@@ -148,7 +155,7 @@ describe('/api/auth/csrf', () => {
 
     it('supports cookie-based authentication', async () => {
       // Arrange
-      (parse as Mock).mockReturnValue({ accessToken: 'cookie-access-token' });
+      parseMock.mockReturnValue({ accessToken: 'cookie-access-token' });
 
       const request = new Request('http://localhost/api/auth/csrf', {
         method: 'GET',
@@ -169,8 +176,8 @@ describe('/api/auth/csrf', () => {
     it('returns 401 when not authenticated', async () => {
       // Arrange
       const mockError = { error: Response.json({ error: 'Authentication required' }, { status: 401 }) };
-      (authenticateRequestWithOptions as Mock).mockResolvedValue(mockError);
-      (isAuthError as Mock).mockReturnValue(true);
+      authenticateRequestWithOptionsMock.mockResolvedValue(mockError);
+      isAuthErrorMock.mockReturnValue(true);
 
       const request = new Request('http://localhost/api/auth/csrf', {
         method: 'GET',
@@ -185,7 +192,7 @@ describe('/api/auth/csrf', () => {
 
     it('returns 401 when JWT token is not found', async () => {
       // Arrange
-      (parse as Mock).mockReturnValue({});
+      parseMock.mockReturnValue({});
 
       const request = new Request('http://localhost/api/auth/csrf', {
         method: 'GET',
@@ -202,7 +209,7 @@ describe('/api/auth/csrf', () => {
 
     it('returns 401 when JWT is invalid (missing iat)', async () => {
       // Arrange
-      (decodeToken as Mock).mockResolvedValue({
+      decodeTokenMock.mockResolvedValue({
         userId: 'test-user-id',
         tokenVersion: 0,
         role: 'user',
@@ -227,7 +234,7 @@ describe('/api/auth/csrf', () => {
 
     it('returns 401 when decodeToken returns null', async () => {
       // Arrange
-      (decodeToken as Mock).mockResolvedValue(null);
+      decodeTokenMock.mockResolvedValue(null);
 
       const request = new Request('http://localhost/api/auth/csrf', {
         method: 'GET',
@@ -293,7 +300,7 @@ describe('/api/auth/csrf', () => {
   describe('error handling', () => {
     it('returns 500 on unexpected errors', async () => {
       // Arrange
-      (generateCSRFToken as Mock).mockImplementation(() => {
+      generateCSRFTokenMock.mockImplementation(() => {
         throw new Error('CSRF generation failed');
       });
 
@@ -316,7 +323,7 @@ describe('/api/auth/csrf', () => {
     it('logs errors for debugging', async () => {
       // Arrange
       const mockError = new Error('CSRF generation failed');
-      (generateCSRFToken as Mock).mockImplementation(() => {
+      generateCSRFTokenMock.mockImplementation(() => {
         throw mockError;
       });
 

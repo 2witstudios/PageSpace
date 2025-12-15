@@ -21,7 +21,27 @@
     ],
     "paths": {
       "@/*": ["apps/web/src/*"],
-      "@pagespace/*": ["packages/*/src"]
+      "@pagespace/lib": ["packages/lib/src/index.ts"],
+      "@pagespace/lib/*": [
+        "packages/lib/src/*",
+        "packages/lib/src/auth/*",
+        "packages/lib/src/utils/*",
+        "packages/lib/src/monitoring/*",
+        "packages/lib/src/logging/*",
+        "packages/lib/src/services/*",
+        "packages/lib/src/permissions/*",
+        "packages/lib/src/notifications/*",
+        "packages/lib/src/content/*",
+        "packages/lib/src/email-templates/*",
+        "packages/lib/src/pages/*",
+        "packages/lib/src/test/*",
+        "packages/lib/src/types/*",
+        "packages/lib/src/sheets/*",
+        "packages/lib/src/file-processing/*",
+        "packages/lib/src/encryption/*"
+      ],
+      "@pagespace/db": ["packages/db/src/index.ts"],
+      "@pagespace/db/*": ["packages/db/src/*"]
     }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],

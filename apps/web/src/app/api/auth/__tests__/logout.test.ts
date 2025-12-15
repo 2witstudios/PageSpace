@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { POST } from '../logout/route';
 
 // Mock dependencies
@@ -60,19 +60,27 @@ import {
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 describe('/api/auth/logout', () => {
+  const authenticateRequestWithOptionsMock = vi.mocked(authenticateRequestWithOptions);
+  const isAuthErrorMock = vi.mocked(isAuthError);
+  const parseMock = vi.mocked(parse);
+  const eqMock = vi.mocked(eq);
+  const dbDeleteMock = vi.mocked(db.delete);
+  const revokeDeviceTokenByValueMock = vi.mocked(revokeDeviceTokenByValue);
+  const logAuthEventMock = vi.mocked(logAuthEvent);
+
   beforeEach(() => {
     vi.clearAllMocks();
 
     // Default: authenticated user
-    (authenticateRequestWithOptions as Mock).mockResolvedValue({
+    authenticateRequestWithOptionsMock.mockResolvedValue({
       userId: 'test-user-id',
       role: 'user',
       tokenVersion: 0,
       tokenType: 'jwt',
       source: 'cookie',
     });
-    (isAuthError as Mock).mockReturnValue(false);
-    (parse as Mock).mockReturnValue({ refreshToken: 'mock-refresh-token' });
+    isAuthErrorMock.mockReturnValue(false);
+    parseMock.mockReturnValue({ refreshToken: 'mock-refresh-token' });
   });
 
   describe('successful logout', () => {
@@ -156,8 +164,8 @@ describe('/api/auth/logout', () => {
       // Assert - verify delete was called and eq was used with the parsed token
       expect(db.delete).toHaveBeenCalled();
       // Verify eq was called with the refresh token value from cookies
-      expect(eq).toHaveBeenCalled();
-      const eqCalls = (eq as Mock).mock.calls;
+      expect(eqMock).toHaveBeenCalled();
+      const eqCalls = eqMock.mock.calls;
       const tokenDeleteCall = eqCalls.find(
         (call) => call[1] === 'mock-refresh-token'
       );
@@ -248,7 +256,7 @@ describe('/api/auth/logout', () => {
 
     it('handles device token revocation failure gracefully', async () => {
       // Arrange
-      (revokeDeviceTokenByValue as Mock).mockRejectedValue(new Error('Revocation failed'));
+      revokeDeviceTokenByValueMock.mockRejectedValue(new Error('Revocation failed'));
 
       const request = new Request('http://localhost/api/auth/logout', {
         method: 'POST',
@@ -272,8 +280,8 @@ describe('/api/auth/logout', () => {
     it('returns error when not authenticated', async () => {
       // Arrange
       const mockError = { error: Response.json({ error: 'Unauthorized' }, { status: 401 }) };
-      (authenticateRequestWithOptions as Mock).mockResolvedValue(mockError);
-      (isAuthError as Mock).mockReturnValue(true);
+      authenticateRequestWithOptionsMock.mockResolvedValue(mockError);
+      isAuthErrorMock.mockReturnValue(true);
 
       const request = new Request('http://localhost/api/auth/logout', {
         method: 'POST',
@@ -313,7 +321,7 @@ describe('/api/auth/logout', () => {
   describe('edge cases', () => {
     it('handles missing refresh token cookie gracefully', async () => {
       // Arrange
-      (parse as Mock).mockReturnValue({});
+      parseMock.mockReturnValue({});
 
       const request = new Request('http://localhost/api/auth/logout', {
         method: 'POST',
@@ -333,7 +341,7 @@ describe('/api/auth/logout', () => {
 
     it('handles refresh token not found in database gracefully', async () => {
       // Arrange
-      (db.delete as Mock).mockReturnValue({
+      dbDeleteMock.mockReturnValue({
         where: vi.fn().mockRejectedValue(new Error('Token not found')),
       });
 
