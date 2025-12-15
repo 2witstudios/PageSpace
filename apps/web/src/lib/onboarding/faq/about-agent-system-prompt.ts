@@ -4,7 +4,8 @@ function formatKnowledgeBaseForSystemPrompt(): string {
   const kbDocs = getFaqKnowledgeBaseDocuments();
   return kbDocs
     .map((doc) => {
-      return `---\n\n${doc.content}`.trim();
+      const title = doc.title?.trim() || 'Untitled';
+      return `---\n\n${title}\n\n${doc.content}`.trim();
     })
     .join('\n\n');
 }
