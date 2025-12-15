@@ -32,7 +32,8 @@ vi.mock('@pagespace/db', () => ({
 
 vi.mock('bcryptjs', () => ({
   default: {
-    hash: vi.fn().mockResolvedValue('$2a$12$hashedpassword'),
+    // Use a properly formatted bcrypt hash (60 chars: $2a$12$ + 53 char salt+hash)
+    hash: vi.fn().mockResolvedValue('$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5GyYzpLLEm4Eu'),
   },
 }));
 
@@ -244,7 +245,7 @@ describe('/api/auth/signup', () => {
       // Password should be hashed, not plaintext
       expect(typeof capturedUserData!.password).toBe('string');
       expect(capturedUserData!.password).not.toBe('ValidPass123!');
-      expect(capturedUserData!.password).toMatch(/^\$2[aby]?\$\d+\$/); // bcrypt hash format
+      expect(capturedUserData!.password).toMatch(/^\$2[aby]?\$\d{1,2}\$[./A-Za-z0-9]{53}$/); // Full bcrypt hash format
     });
 
     it('creates a personal drive for new user', async () => {
