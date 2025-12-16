@@ -106,7 +106,7 @@ export function useAggregatedTasks(messages: UIMessage[]): AggregatedTasksResult
       for (const part of parts) {
         // Check if this is an update_task tool call
         const toolPart = part as ToolPart;
-        if (toolPart.toolName !== 'update_task' && !toolPart.type?.includes('update_task')) {
+        if (toolPart.toolName !== 'update_task') {
           continue;
         }
 
