@@ -9,6 +9,7 @@ import { cn } from '@/lib/utils';
 import { toTitleCase } from '@/lib/utils/formatters';
 import { patch } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
+import Link from 'next/link';
 import type { Task, TaskList } from '../useAggregatedTasks';
 import { getNextTaskStatus } from '../useAggregatedTasks';
 import { ExpandableTaskItem } from '../ExpandableTaskItem';
@@ -240,9 +241,19 @@ export function GroupedToolCallsRenderer({ toolCalls, className }: GroupedToolCa
               <div className="flex-shrink-0">
                 <ListTodo className="h-4 w-4 text-primary" />
               </div>
-              <span className="font-medium text-sm text-foreground truncate">
-                {taskList?.title || 'Task List'}
-              </span>
+              {taskList?.pageId && taskList?.driveId ? (
+                <Link
+                  href={`/dashboard/${taskList.driveId}/${taskList.pageId}`}
+                  className="font-medium text-sm text-foreground truncate hover:underline"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {taskList.title || 'Task List'}
+                </Link>
+              ) : (
+                <span className="font-medium text-sm text-foreground truncate">
+                  {taskList?.title || 'Task List'}
+                </span>
+              )}
               <Badge variant="secondary" className="text-xs">
                 {progress.completed}/{progress.total}
               </Badge>
@@ -251,15 +262,7 @@ export function GroupedToolCallsRenderer({ toolCalls, className }: GroupedToolCa
           </CollapsibleTrigger>
 
           <CollapsibleContent>
-            <div className="mt-1 rounded-lg border bg-background">
-              {/* Progress bar */}
-              <div className="w-full bg-muted h-1 rounded-t-lg overflow-hidden">
-                <div
-                  className="bg-primary h-1 transition-all duration-300"
-                  style={{ width: `${progress.percentage}%` }}
-                />
-              </div>
-
+            <div className="mt-1 rounded-lg bg-background">
               {/* Task list */}
               {tasks.length > 0 && (
                 <div className="divide-y divide-border/50 max-h-72 overflow-auto">

@@ -5,9 +5,6 @@ import { UIMessage } from 'ai';
 import useSWR from 'swr';
 import {
   ListTodo,
-  Clock,
-  Circle,
-  AlertCircle,
   ChevronDown,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -19,7 +16,9 @@ import { cn } from '@/lib/utils';
 import { useAggregatedTasks, type Task, getNextTaskStatus } from './chat/useAggregatedTasks';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
+import Link from 'next/link';
 import { ExpandableTaskItem } from './chat/ExpandableTaskItem';
+import { useDriveStore } from '@/hooks/useDrive';
 
 interface TasksDropdownProps {
   messages: UIMessage[];
@@ -65,6 +64,10 @@ export function TasksDropdown({ messages, driveId: fallbackDriveId }: TasksDropd
 
   // Use fetched driveId, message data driveId, or fallback
   const effectiveDriveId = taskList?.driveId || pageData?.driveId || fallbackDriveId || '';
+
+  // Get drive name from store for footer display
+  const drives = useDriveStore((state) => state.drives);
+  const driveName = drives.find(d => d.id === effectiveDriveId)?.name;
 
   // Handle status toggle (click on status icon)
   const handleStatusToggle = async (e: React.MouseEvent, taskId: string, currentStatus: Task['status']) => {
@@ -128,7 +131,7 @@ export function TasksDropdown({ messages, driveId: fallbackDriveId }: TasksDropd
       <PopoverContent className="w-96 p-0" align="end">
         <div className="flex flex-col max-h-[28rem] overflow-hidden">
           {/* Header */}
-          <Collapsible open={isListOpen} onOpenChange={setIsListOpen}>
+          <Collapsible open={isListOpen} onOpenChange={setIsListOpen} className="flex flex-col flex-1 min-h-0">
             <CollapsibleTrigger asChild>
               <button
                 type="button"
@@ -136,12 +139,23 @@ export function TasksDropdown({ messages, driveId: fallbackDriveId }: TasksDropd
               >
                 <div className="flex items-center gap-2 min-w-0 flex-1">
                   <div className="w-2 h-2 rounded-full bg-primary flex-shrink-0" />
-                  <span
-                    className="font-medium text-sm truncate"
-                    title={taskList.title}
-                  >
-                    {taskList.title}
-                  </span>
+                  {taskListPageId && effectiveDriveId ? (
+                    <Link
+                      href={`/dashboard/${effectiveDriveId}/${taskListPageId}`}
+                      className="font-medium text-sm truncate hover:underline"
+                      title={taskList.title}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {taskList.title}
+                    </Link>
+                  ) : (
+                    <span
+                      className="font-medium text-sm truncate"
+                      title={taskList.title}
+                    >
+                      {taskList.title}
+                    </span>
+                  )}
                   {isLoading && (
                     <div className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin flex-shrink-0" />
                   )}
@@ -169,7 +183,7 @@ export function TasksDropdown({ messages, driveId: fallbackDriveId }: TasksDropd
 
             <CollapsibleContent className="flex flex-col min-h-0 flex-1">
               {/* Task list */}
-              <ScrollArea className="flex-1 min-h-0">
+              <ScrollArea className="flex-1 min-h-0 max-h-[20rem]">
                 <div className="divide-y divide-border/50">
                   {sortedTasks.map((task) => {
                     const displayStatus = optimisticStatuses.get(task.id) ?? task.status;
@@ -189,27 +203,10 @@ export function TasksDropdown({ messages, driveId: fallbackDriveId }: TasksDropd
                 </div>
               </ScrollArea>
 
-              {/* Footer with status summary */}
-              {tasks.length > 0 && (
-                <div className="px-3 py-2 border-t text-xs text-muted-foreground flex gap-3 flex-wrap flex-shrink-0">
-                  {stats.inProgress > 0 && (
-                    <span className="flex items-center gap-1">
-                      <Clock className="w-3 h-3" />
-                      {stats.inProgress} active
-                    </span>
-                  )}
-                  {stats.pending > 0 && (
-                    <span className="flex items-center gap-1">
-                      <Circle className="w-3 h-3" />
-                      {stats.pending} pending
-                    </span>
-                  )}
-                  {stats.blocked > 0 && (
-                    <span className="flex items-center gap-1">
-                      <AlertCircle className="w-3 h-3" />
-                      {stats.blocked} blocked
-                    </span>
-                  )}
+              {/* Footer with drive name */}
+              {tasks.length > 0 && driveName && (
+                <div className="px-3 py-2 border-t text-xs text-muted-foreground flex-shrink-0 truncate">
+                  {driveName}
                 </div>
               )}
 

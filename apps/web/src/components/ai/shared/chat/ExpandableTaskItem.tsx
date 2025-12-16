@@ -113,106 +113,108 @@ export function ExpandableTaskItem({
 
   return (
     <Collapsible open={isExpanded} onOpenChange={setIsExpanded}>
-      <div
-        className={cn(
-          'py-2.5 px-3 hover:bg-muted/40 transition-colors',
-          isCompleted && 'opacity-60'
-        )}
-      >
-        <div className="flex items-start gap-2">
-          <button
-            type="button"
-            onClick={(e) => onStatusToggle(e, task.id, displayStatus)}
-            className="flex-shrink-0 mt-0.5 hover:opacity-70 transition-opacity cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={disabled}
-            title={
-              taskListPageId
-                ? 'Click to change status'
-                : 'Status toggle unavailable'
-            }
-          >
-            {getTaskStatusIcon(displayStatus, 'w-4 h-4')}
-          </button>
+      <CollapsibleTrigger asChild>
+        <div
+          className={cn(
+            'py-2.5 px-3 hover:bg-muted/40 transition-colors cursor-pointer',
+            isCompleted && 'opacity-60'
+          )}
+        >
+          <div className="flex items-start gap-2">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onStatusToggle(e, task.id, displayStatus);
+              }}
+              className="flex-shrink-0 mt-0.5 hover:opacity-70 transition-opacity cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={disabled}
+              title={
+                taskListPageId
+                  ? 'Click to change status'
+                  : 'Status toggle unavailable'
+              }
+            >
+              {getTaskStatusIcon(displayStatus, 'w-4 h-4')}
+            </button>
 
-          <div className="flex-1 min-w-0">
-            {task.pageId ? (
-              <Link
-                href={`/pages/${task.pageId}`}
-                className={cn(
-                  'text-sm font-medium leading-tight line-clamp-2 hover:underline',
-                  isCompleted && 'line-through text-muted-foreground'
-                )}
-                title={task.title}
-              >
-                {task.title}
-              </Link>
-            ) : (
-              <span
-                className={cn(
-                  'text-sm font-medium leading-tight line-clamp-2',
-                  isCompleted && 'line-through text-muted-foreground'
-                )}
-                title={task.title}
-              >
-                {task.title}
-              </span>
-            )}
-          </div>
+            <div className="flex-1 min-w-0">
+              {task.pageId && effectiveDriveId ? (
+                <Link
+                  href={`/dashboard/${effectiveDriveId}/${task.pageId}`}
+                  className={cn(
+                    'text-sm font-medium leading-tight line-clamp-2 hover:underline',
+                    isCompleted && 'line-through text-muted-foreground'
+                  )}
+                  title={task.title}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {task.title}
+                </Link>
+              ) : (
+                <span
+                  className={cn(
+                    'text-sm font-medium leading-tight line-clamp-2',
+                    isCompleted && 'line-through text-muted-foreground'
+                  )}
+                  title={task.title}
+                >
+                  {task.title}
+                </span>
+              )}
+            </div>
 
-          {!disabled && (
-            <CollapsibleTrigger asChild>
-              <button
-                type="button"
-                className="flex-shrink-0 p-1 hover:bg-muted rounded transition-colors"
-                title={isExpanded ? 'Collapse' : 'Expand to edit'}
-              >
+            {!disabled && (
+              <div className="flex-shrink-0 p-1">
                 <ChevronDown
                   className={cn(
                     'w-3 h-3 text-muted-foreground transition-transform',
                     isExpanded && 'rotate-180'
                   )}
                 />
-              </button>
-            </CollapsibleTrigger>
-          )}
-        </div>
-
-        {!isExpanded && hasMetadata && (
-          <div className="flex items-center gap-3 mt-1.5 ml-6 text-xs">
-            {dueDateInfo && (
-              <span
-                className={cn('flex items-center gap-1', dueDateInfo.className)}
-              >
-                <CalendarDays className="w-3 h-3" />
-                {dueDateInfo.text}
-              </span>
-            )}
-            {localTask.assignee && (
-              <span className="flex items-center gap-1.5 text-muted-foreground">
-                <Avatar className="w-4 h-4">
-                  <AvatarImage src={localTask.assignee.image || undefined} />
-                  <AvatarFallback className="text-[8px]">
-                    {localTask.assignee.name?.[0]?.toUpperCase() || '?'}
-                  </AvatarFallback>
-                </Avatar>
-                <span className="truncate max-w-[80px]">
-                  {localTask.assignee.name}
-                </span>
-              </span>
-            )}
-            {localTask.priority === 'high' && (
-              <Badge
-                variant="outline"
-                className="text-[10px] px-1.5 py-0 bg-red-50 text-red-600 border-red-200 dark:bg-red-950 dark:text-red-400 dark:border-red-800"
-              >
-                High
-              </Badge>
+              </div>
             )}
           </div>
-        )}
 
-        <CollapsibleContent>
-          <div className="mt-2 ml-6 flex items-center gap-2 flex-wrap">
+          {!isExpanded && hasMetadata && (
+            <div className="flex items-center gap-3 mt-1.5 ml-6 text-xs">
+              {dueDateInfo && (
+                <span
+                  className={cn('flex items-center gap-1', dueDateInfo.className)}
+                >
+                  <CalendarDays className="w-3 h-3" />
+                  {dueDateInfo.text}
+                </span>
+              )}
+              {localTask.assignee && (
+                <span className="flex items-center gap-1.5 text-muted-foreground">
+                  <Avatar className="w-4 h-4">
+                    <AvatarImage src={localTask.assignee.image || undefined} />
+                    <AvatarFallback className="text-[8px]">
+                      {localTask.assignee.name?.[0]?.toUpperCase() || '?'}
+                    </AvatarFallback>
+                  </Avatar>
+                  <span className="truncate max-w-[80px]">
+                    {localTask.assignee.name}
+                  </span>
+                </span>
+              )}
+              {localTask.priority === 'high' && (
+                <Badge
+                  variant="outline"
+                  className="text-[10px] px-1.5 py-0 bg-red-50 text-red-600 border-red-200 dark:bg-red-950 dark:text-red-400 dark:border-red-800"
+                >
+                  High
+                </Badge>
+              )}
+            </div>
+          )}
+        </div>
+      </CollapsibleTrigger>
+
+      <CollapsibleContent>
+        <div className="py-2 px-3">
+          <div className="ml-6 flex items-center gap-2 flex-wrap">
             <PrioritySelect
               currentPriority={localTask.priority}
               onSelect={handlePriorityChange}
@@ -233,8 +235,8 @@ export function ExpandableTaskItem({
               disabled={disabled || updatingFields.has('dueDate')}
             />
           </div>
-        </CollapsibleContent>
-      </div>
+        </div>
+      </CollapsibleContent>
     </Collapsible>
   );
 }
