@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { UIMessage } from 'ai';
-import { ToolCallRenderer } from './tool-calls';
+import { ToolCallRenderer, GroupedToolCallsRenderer } from './tool-calls';
 
 import { StreamingMarkdown } from './StreamingMarkdown';
 import { MessageActionButtons } from './MessageActionButtons';
@@ -490,22 +490,18 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
             // Type narrowing: we know this is a ToolCallsGroupPart
             const toolCallsGroup = group as ToolCallsGroupPart;
             return (
-              <React.Fragment key={`${message.id}-toolgroup-${index}`}>
-                {toolCallsGroup.tools.map((tool, toolIndex) => (
-                  <div key={`${message.id}-tool-${index}-${toolIndex}`} className="mr-2 sm:mr-8">
-                    <ToolCallRenderer
-                      part={{
-                        type: tool.type,
-                        toolName: tool.toolName,
-                        toolCallId: tool.toolCallId,
-                        input: tool.input,
-                        output: tool.output,
-                        state: tool.state,
-                      }}
-                    />
-                  </div>
-                ))}
-              </React.Fragment>
+              <GroupedToolCallsRenderer
+                key={`${message.id}-toolgroup-${index}`}
+                toolCalls={toolCallsGroup.tools.map((tool) => ({
+                  type: tool.type,
+                  toolName: tool.toolName,
+                  toolCallId: tool.toolCallId,
+                  input: tool.input,
+                  output: tool.output,
+                  state: tool.state,
+                }))}
+                className="mr-2 sm:mr-8"
+              />
             );
           } else if (group.type.startsWith('tool-')) {
             // Type narrowing: we know this is a ToolGroupPart

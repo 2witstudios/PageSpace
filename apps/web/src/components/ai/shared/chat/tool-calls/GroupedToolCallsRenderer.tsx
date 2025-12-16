@@ -134,50 +134,41 @@ export function GroupedToolCallsRenderer({ toolCalls, className }: GroupedToolCa
   }, [toolCalls]);
 
   return (
-    <div className={cn('my-2', className)}>
+    <div className={cn('my-1', className)}>
       <Collapsible open={isOpen} onOpenChange={setIsOpen}>
-        <div className="border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900">
-          <CollapsibleTrigger className="w-full flex items-center justify-between p-3 text-left hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors group">
-            <div className="flex items-center space-x-3 flex-1 min-w-0">
-              <div className="flex-shrink-0">
-                {getStatusIcon(groupStatus)}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="font-medium text-sm text-gray-900 dark:text-gray-100">
-                  {summary.total} {toolDisplayName} call{summary.total !== 1 ? 's' : ''}
-                </div>
-                <div className="text-xs text-gray-500 dark:text-gray-400">
-                  {summaryText}
-                </div>
-              </div>
+        <CollapsibleTrigger className="w-full flex items-center justify-between py-1.5 px-2 text-left rounded hover:bg-muted/50 transition-colors group">
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            <div className="flex-shrink-0">
+              {getStatusIcon(groupStatus)}
             </div>
-            <ChevronDown className="h-4 w-4 text-gray-500 transition-transform duration-200 group-data-[state=open]:rotate-180" />
-          </CollapsibleTrigger>
+            <span className="font-medium text-sm text-foreground truncate">
+              {summary.total} {toolDisplayName} call{summary.total !== 1 ? 's' : ''}
+            </span>
+            <span className="text-xs text-muted-foreground">
+              {summaryText}
+            </span>
+          </div>
+          <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform duration-200 group-data-[state=open]:rotate-180" />
+        </CollapsibleTrigger>
 
-          <CollapsibleContent>
-            <div className="border-t border-gray-200 dark:border-gray-700">
-              <div className="p-2 space-y-2">
-                {toolCallsWithStatus.map((tool, index) => {
-                  const isActive = index === activeToolIndex;
-                  return (
-                    <div
-                      key={tool.toolCallId || `tool-${index}`}
-                      className={cn(
-                        'relative',
-                        isActive && 'ring-2 ring-blue-500 ring-opacity-50 rounded-lg'
-                      )}
-                    >
-                      {isActive && (
-                        <div className="absolute -left-1 top-0 bottom-0 w-1 bg-blue-500 rounded-l" />
-                      )}
-                      <ToolCallRenderer part={tool} />
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </CollapsibleContent>
-        </div>
+        <CollapsibleContent>
+          <div className="space-y-0.5 pl-6">
+            {toolCallsWithStatus.map((tool, index) => {
+              const isActive = index === activeToolIndex;
+              return (
+                <div
+                  key={tool.toolCallId || `tool-${index}`}
+                  className={cn(
+                    'relative',
+                    isActive && 'bg-primary/5 rounded'
+                  )}
+                >
+                  <ToolCallRenderer part={tool} />
+                </div>
+              );
+            })}
+          </div>
+        </CollapsibleContent>
       </Collapsible>
     </div>
   );
