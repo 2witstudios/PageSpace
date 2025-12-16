@@ -4,7 +4,6 @@ import React, { useState, useMemo } from 'react';
 import { UIMessage } from 'ai';
 import {
   ListTodo,
-  CheckCircle2,
   Clock,
   Circle,
   AlertCircle,
@@ -19,45 +18,10 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { cn } from '@/lib/utils';
 import { useAggregatedTasks, type Task, getNextTaskStatus } from './chat/useAggregatedTasks';
+import { formatDueDate, getTaskStatusIcon } from './chat/task-utils';
 import { patch } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
 import Link from 'next/link';
-
-const getStatusIcon = (status: Task['status']) => {
-  switch (status) {
-    case 'completed':
-      return <CheckCircle2 className="w-4 h-4 text-green-600" />;
-    case 'in_progress':
-      return <Clock className="w-4 h-4 text-amber-500" />;
-    case 'blocked':
-      return <AlertCircle className="w-4 h-4 text-red-600" />;
-    case 'pending':
-    default:
-      return <Circle className="w-4 h-4 text-slate-400" />;
-  }
-};
-
-// Smart date formatting for due dates
-const formatDueDate = (dateStr: string): { text: string; className: string } => {
-  const date = new Date(dateStr);
-  if (isNaN(date.getTime())) {
-    return { text: 'No date', className: 'text-muted-foreground' };
-  }
-  const now = new Date();
-  now.setHours(0, 0, 0, 0);
-  date.setHours(0, 0, 0, 0);
-  const diffDays = Math.ceil((date.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-
-  if (diffDays < 0) return { text: 'Overdue', className: 'text-red-500' };
-  if (diffDays === 0) return { text: 'Today', className: 'text-amber-600 dark:text-amber-400' };
-  if (diffDays === 1) return { text: 'Tomorrow', className: 'text-amber-600 dark:text-amber-400' };
-  if (diffDays <= 7) return { text: `${diffDays}d`, className: 'text-muted-foreground' };
-
-  return {
-    text: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-    className: 'text-muted-foreground'
-  };
-};
 
 interface TasksDropdownProps {
   messages: UIMessage[];
@@ -214,7 +178,7 @@ export function TasksDropdown({ messages }: TasksDropdownProps) {
                             disabled={!taskListPageId}
                             title={taskListPageId ? `Click to change status` : 'Status toggle unavailable'}
                           >
-                            {getStatusIcon(displayStatus)}
+                            {getTaskStatusIcon(displayStatus, 'w-4 h-4')}
                           </button>
                           {/* Title - link to task's document page */}
                           {task.pageId ? (

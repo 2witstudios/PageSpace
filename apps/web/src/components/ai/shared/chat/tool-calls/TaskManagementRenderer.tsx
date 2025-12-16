@@ -1,12 +1,11 @@
 import React, { useState, useMemo } from 'react';
 import {
-  CheckCircle2,
-  Clock,
-  Circle,
-  AlertCircle,
   ChevronDown,
   Loader2,
-  User
+  User,
+  AlertCircle,
+  Clock,
+  Circle,
 } from 'lucide-react';
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '@/components/ui/collapsible';
 import { Badge } from '@/components/ui/badge';
@@ -14,6 +13,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { cn } from '@/lib/utils';
 import { patch } from '@/lib/auth/auth-fetch';
 import type { Task, TaskList } from '../useAggregatedTasks';
+import { getTaskStatusIcon } from '../task-utils';
 
 const PRIORITY_CONFIG = {
   low: { label: 'Low', color: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400' },
@@ -28,20 +28,6 @@ interface TaskManagementRendererProps {
   hasError?: boolean;
   errorMessage?: string;
 }
-
-const getStatusIcon = (status: Task['status']) => {
-  switch (status) {
-    case 'completed':
-      return <CheckCircle2 className="w-4 h-4 text-green-600" />;
-    case 'in_progress':
-      return <Clock className="w-4 h-4 text-amber-500" />;
-    case 'blocked':
-      return <AlertCircle className="w-4 h-4 text-red-600" />;
-    case 'pending':
-    default:
-      return <Circle className="w-4 h-4 text-slate-400" />;
-  }
-};
 
 const formatDueDate = (dueDate: string | null | undefined): { text: string; isOverdue: boolean; isUrgent: boolean } | null => {
   if (!dueDate) return null;
@@ -166,7 +152,7 @@ export const TaskManagementRenderer: React.FC<TaskManagementRendererProps> = ({
                   >
                     {/* Status icon */}
                     <div className="flex-shrink-0">
-                      {getStatusIcon(task.status)}
+                      {getTaskStatusIcon(task.status)}
                     </div>
 
                     {/* Title */}

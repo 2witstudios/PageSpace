@@ -4,7 +4,7 @@ import React, { useMemo, useState } from 'react';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { ChevronDown, Loader2, CheckCircle2, XCircle, Clock, Circle, AlertCircle, ListTodo, CalendarDays } from 'lucide-react';
+import { ChevronDown, Loader2, CheckCircle2, XCircle, Clock, ListTodo, CalendarDays } from 'lucide-react';
 import { ToolCallRenderer } from './ToolCallRenderer';
 import { cn } from '@/lib/utils';
 import { toTitleCase } from '@/lib/utils/formatters';
@@ -13,6 +13,7 @@ import { toast } from 'sonner';
 import Link from 'next/link';
 import type { Task, TaskList } from '../useAggregatedTasks';
 import { getNextTaskStatus } from '../useAggregatedTasks';
+import { formatDueDate, getTaskStatusIcon } from '../task-utils';
 
 interface ToolCallPart {
   type: string;
@@ -30,42 +31,6 @@ interface GroupedToolCallsRendererProps {
 }
 
 type ToolStatus = 'pending' | 'in_progress' | 'completed' | 'error';
-
-// Smart date formatting for due dates
-const formatDueDate = (dateStr: string): { text: string; className: string } => {
-  const date = new Date(dateStr);
-  if (isNaN(date.getTime())) {
-    return { text: 'No date', className: 'text-muted-foreground' };
-  }
-  const now = new Date();
-  now.setHours(0, 0, 0, 0);
-  date.setHours(0, 0, 0, 0);
-  const diffDays = Math.ceil((date.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-
-  if (diffDays < 0) return { text: 'Overdue', className: 'text-red-500' };
-  if (diffDays === 0) return { text: 'Today', className: 'text-amber-600 dark:text-amber-400' };
-  if (diffDays === 1) return { text: 'Tomorrow', className: 'text-amber-600 dark:text-amber-400' };
-  if (diffDays <= 7) return { text: `${diffDays}d`, className: 'text-muted-foreground' };
-
-  return {
-    text: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-    className: 'text-muted-foreground'
-  };
-};
-
-const getTaskStatusIcon = (status: Task['status']) => {
-  switch (status) {
-    case 'completed':
-      return <CheckCircle2 className="w-3.5 h-3.5 text-green-600" />;
-    case 'in_progress':
-      return <Clock className="w-3.5 h-3.5 text-amber-500" />;
-    case 'blocked':
-      return <AlertCircle className="w-3.5 h-3.5 text-red-600" />;
-    case 'pending':
-    default:
-      return <Circle className="w-3.5 h-3.5 text-slate-400" />;
-  }
-};
 
 interface ToolCallWithStatus extends ToolCallPart {
   status: ToolStatus;

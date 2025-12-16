@@ -2,13 +2,10 @@
 
 import React, { useState, useMemo } from 'react';
 import {
-  CheckCircle2,
-  Clock,
-  Circle,
-  AlertCircle,
   ChevronDown,
   ListTodo,
   Loader2,
+  AlertCircle,
   CalendarDays,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -20,6 +17,7 @@ import { toast } from 'sonner';
 import Link from 'next/link';
 import type { Task, TaskList, ToolPart } from '../useAggregatedTasks';
 import { getNextTaskStatus } from '../useAggregatedTasks';
+import { formatDueDate, getTaskStatusIcon } from '../task-utils';
 
 interface TaskManagementToolOutput {
   success: boolean;
@@ -38,47 +36,11 @@ interface TaskRendererProps {
   part: ToolPart;
 }
 
-// Smart date formatting for due dates
-const formatDueDate = (dateStr: string): { text: string; className: string } => {
-  const date = new Date(dateStr);
-  if (isNaN(date.getTime())) {
-    return { text: 'No date', className: 'text-muted-foreground' };
-  }
-  const now = new Date();
-  now.setHours(0, 0, 0, 0);
-  date.setHours(0, 0, 0, 0);
-  const diffDays = Math.ceil((date.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-
-  if (diffDays < 0) return { text: 'Overdue', className: 'text-red-500' };
-  if (diffDays === 0) return { text: 'Today', className: 'text-amber-600 dark:text-amber-400' };
-  if (diffDays === 1) return { text: 'Tomorrow', className: 'text-amber-600 dark:text-amber-400' };
-  if (diffDays <= 7) return { text: `${diffDays}d`, className: 'text-muted-foreground' };
-
-  return {
-    text: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-    className: 'text-muted-foreground'
-  };
-};
-
 const STATUS_CONFIG = {
   pending: { label: 'To Do', color: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300' },
   in_progress: { label: 'In Progress', color: 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300' },
   completed: { label: 'Done', color: 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' },
   blocked: { label: 'Blocked', color: 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300' },
-};
-
-const getStatusIcon = (status: Task['status']) => {
-  switch (status) {
-    case 'completed':
-      return <CheckCircle2 className="w-3.5 h-3.5 text-green-600" />;
-    case 'in_progress':
-      return <Clock className="w-3.5 h-3.5 text-amber-500" />;
-    case 'blocked':
-      return <AlertCircle className="w-3.5 h-3.5 text-red-600" />;
-    case 'pending':
-    default:
-      return <Circle className="w-3.5 h-3.5 text-slate-400" />;
-  }
 };
 
 export const TaskRenderer: React.FC<TaskRendererProps> = ({ part }) => {
@@ -275,7 +237,7 @@ export const TaskRenderer: React.FC<TaskRendererProps> = ({ part }) => {
                           disabled={!taskListPageId}
                           title={taskListPageId ? `Click to change status` : 'Status toggle unavailable'}
                         >
-                          {getStatusIcon(displayStatus)}
+                          {getTaskStatusIcon(displayStatus)}
                         </button>
                         {/* Title - link to task's document page */}
                         {task.pageId ? (
