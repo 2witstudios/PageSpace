@@ -40,6 +40,7 @@ export interface TaskList {
   description?: string;
   status: string;
   pageId?: string; // Task list page
+  driveId?: string; // Drive ID for AssigneeSelect
   createdAt?: Date;
   updatedAt?: Date;
 }

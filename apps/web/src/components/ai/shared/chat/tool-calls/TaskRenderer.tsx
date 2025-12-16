@@ -6,18 +6,15 @@ import {
   ListTodo,
   Loader2,
   AlertCircle,
-  CalendarDays,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { cn } from '@/lib/utils';
 import { patch } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
-import Link from 'next/link';
 import type { Task, TaskList, ToolPart } from '../useAggregatedTasks';
 import { getNextTaskStatus } from '../useAggregatedTasks';
-import { formatDueDate, getTaskStatusIcon } from '../task-utils';
+import { ExpandableTaskItem } from '../ExpandableTaskItem';
 
 interface TaskManagementToolOutput {
   success: boolean;
@@ -215,86 +212,17 @@ export const TaskRenderer: React.FC<TaskRendererProps> = ({ part }) => {
               <div className="divide-y divide-border/50 max-h-56 overflow-auto">
                 {sortedTasks.map((task) => {
                   const displayStatus = optimisticStatuses.get(task.id) ?? task.status;
-                  const isCompleted = displayStatus === 'completed';
-                  const dueDateInfo = task.dueDate ? formatDueDate(task.dueDate) : null;
-                  const hasMetadata = dueDateInfo || task.assignee || task.priority === 'high';
 
                   return (
-                    <div
+                    <ExpandableTaskItem
                       key={task.id}
-                      className={cn(
-                        "py-2.5 px-3 hover:bg-muted/40 transition-colors",
-                        isCompleted && "opacity-60"
-                      )}
-                    >
-                      {/* Row 1: Status + Title */}
-                      <div className="flex items-start gap-2">
-                        {/* Status icon - clickable to toggle status */}
-                        <button
-                          type="button"
-                          onClick={(e) => handleStatusToggle(e, task.id, displayStatus)}
-                          className="flex-shrink-0 mt-0.5 hover:opacity-70 transition-opacity cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
-                          disabled={!taskListPageId}
-                          title={taskListPageId ? `Click to change status` : 'Status toggle unavailable'}
-                        >
-                          {getTaskStatusIcon(displayStatus)}
-                        </button>
-                        {/* Title - link to task's document page */}
-                        {task.pageId ? (
-                          <Link
-                            href={`/pages/${task.pageId}`}
-                            className={cn(
-                              "text-sm font-medium leading-tight line-clamp-2 hover:underline",
-                              isCompleted && "line-through text-muted-foreground"
-                            )}
-                            title={task.title}
-                          >
-                            {task.title}
-                          </Link>
-                        ) : (
-                          <span
-                            className={cn(
-                              "text-sm font-medium leading-tight line-clamp-2",
-                              isCompleted && "line-through text-muted-foreground"
-                            )}
-                            title={task.title}
-                          >
-                            {task.title}
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Row 2: Metadata (due date, assignee, priority) */}
-                      {hasMetadata && (
-                        <div className="flex items-center gap-3 mt-1.5 ml-5 text-xs">
-                          {dueDateInfo && (
-                            <span className={cn("flex items-center gap-1", dueDateInfo.className)}>
-                              <CalendarDays className="w-3 h-3" />
-                              {dueDateInfo.text}
-                            </span>
-                          )}
-                          {task.assignee && (
-                            <span className="flex items-center gap-1.5 text-muted-foreground">
-                              <Avatar className="w-4 h-4">
-                                <AvatarImage src={task.assignee.image || undefined} />
-                                <AvatarFallback className="text-[8px]">
-                                  {task.assignee.name?.[0]?.toUpperCase() || '?'}
-                                </AvatarFallback>
-                              </Avatar>
-                              <span className="truncate max-w-[80px]">{task.assignee.name}</span>
-                            </span>
-                          )}
-                          {task.priority === 'high' && (
-                            <Badge
-                              variant="outline"
-                              className="text-[10px] px-1.5 py-0 bg-red-50 text-red-600 border-red-200 dark:bg-red-950 dark:text-red-400 dark:border-red-800"
-                            >
-                              High
-                            </Badge>
-                          )}
-                        </div>
-                      )}
-                    </div>
+                      task={task}
+                      driveId={taskList?.driveId || ''}
+                      taskListPageId={taskListPageId || ''}
+                      displayStatus={displayStatus}
+                      onStatusToggle={handleStatusToggle}
+                      disabled={!taskListPageId}
+                    />
                   );
                 })}
               </div>
