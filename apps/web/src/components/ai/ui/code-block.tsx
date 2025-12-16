@@ -72,6 +72,7 @@ export async function highlightCode(
       }),
     ]);
   } catch (error) {
+    console.error("Failed to highlight code:", error);
     const escapedCode = code.replace(
       /[&<>"']/g,
       (c) =>
