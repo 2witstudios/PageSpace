@@ -9,6 +9,7 @@ export { AISelector } from './AISelector';
 export { AiUsageMonitor } from './AiUsageMonitor';
 export { ErrorBoundary } from './ErrorBoundary';
 export { ReadOnlyToggle } from './ReadOnlyToggle';
+export { TasksDropdown } from './TasksDropdown';
 
 // Re-export all chat/message rendering components
 export * from './chat';

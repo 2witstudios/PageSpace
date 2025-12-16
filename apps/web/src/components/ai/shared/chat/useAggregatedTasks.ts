@@ -81,6 +81,7 @@ export function useAggregatedTasks(messages: UIMessage[]): AggregatedTasksResult
   return useMemo(() => {
     const taskMap = new Map<string, Task>();
     let latestTaskList: TaskList | null = null;
+    let currentTaskListId: string | null = null;
     let isLoading = false;
     let hasError = false;
     let errorMessage: string | undefined;
@@ -116,6 +117,13 @@ export function useAggregatedTasks(messages: UIMessage[]): AggregatedTasksResult
               : toolPart.output as TaskManagementToolOutput;
 
             if (output?.success && output.tasks) {
+              // Detect new task list - clear previous tasks when switching lists
+              const newTaskListId = output.taskListId || output.taskList?.id;
+              if (newTaskListId && newTaskListId !== currentTaskListId) {
+                taskMap.clear();
+                currentTaskListId = newTaskListId;
+              }
+
               // Update task map with latest data (latest wins)
               for (const task of output.tasks) {
                 taskMap.set(task.id, task);

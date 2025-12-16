@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import ChatInput, { ChatInputRef } from '@/components/messages/ChatInput';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Loader2, Send, Plus, StopCircle } from 'lucide-react';
-import { CompactMessageRenderer, ReadOnlyToggle, AISelector, AiUsageMonitor } from '@/components/ai/shared';
+import { CompactMessageRenderer, ReadOnlyToggle, AISelector, AiUsageMonitor, TasksDropdown } from '@/components/ai/shared';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth, patch, del } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
@@ -558,12 +558,13 @@ const SidebarChatTab: React.FC = () => {
         </div>
 
         {(currentConversationId || selectedAgent) && (
-          <div className="px-2 pb-2">
+          <div className="flex items-center justify-between px-2 pb-2">
             <AiUsageMonitor
               conversationId={selectedAgent ? undefined : currentConversationId}
               pageId={selectedAgent ? selectedAgent.id : undefined}
               compact
             />
+            <TasksDropdown messages={displayMessages} />
           </div>
         )}
       </div>

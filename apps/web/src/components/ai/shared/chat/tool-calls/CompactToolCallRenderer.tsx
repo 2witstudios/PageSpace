@@ -21,6 +21,7 @@ import {
 
 import { FileTreeRenderer } from './FileTreeRenderer';
 import { DocumentRenderer } from './DocumentRenderer';
+import { InlineTaskRenderer } from './InlineTaskRenderer';
 
 interface TreeItem {
   path: string;
@@ -57,10 +58,9 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
   const output = part.output;
   const error = part.errorText;
 
-  // Task management tools - rendered as aggregated component elsewhere
-  // Return null here to avoid duplicate rendering
+  // Task management tools - render inline with expandable summary
   if (toolName === 'update_task') {
-    return null;
+    return <InlineTaskRenderer part={part} />;
   }
 
   // Tool-specific icons (smaller)

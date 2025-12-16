@@ -9,8 +9,6 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Loader2 } from 'lucide-react';
 import { MessageRenderer } from './MessageRenderer';
 import { StreamingIndicator } from './StreamingIndicator';
-import { TaskManagementRenderer } from './tool-calls/TaskManagementRenderer';
-import { useAggregatedTasks } from './useAggregatedTasks';
 
 interface ChatMessagesAreaProps {
   /** Messages to display */
@@ -64,9 +62,6 @@ export const ChatMessagesArea = forwardRef<ChatMessagesAreaRef, ChatMessagesArea
   ) => {
     const scrollAreaRef = useRef<HTMLDivElement>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
-
-    // Aggregate task data from all update_task tool calls
-    const { tasks, taskList, hasTaskData, isLoading: isTasksLoading, hasError, errorMessage } = useAggregatedTasks(messages);
 
     // Scroll to bottom function
     const scrollToBottom = () => {
@@ -136,17 +131,6 @@ export const ChatMessagesArea = forwardRef<ChatMessagesAreaRef, ChatMessagesArea
                     isStreaming={isStreaming && message.id === lastAssistantMessageId && message.role === 'assistant'}
                   />
                 ))
-              )}
-
-              {/* Persistent task list (aggregated from all update_task calls) */}
-              {hasTaskData && taskList && (
-                <TaskManagementRenderer
-                  tasks={tasks}
-                  taskList={taskList}
-                  isLoading={isTasksLoading}
-                  hasError={hasError}
-                  errorMessage={errorMessage}
-                />
               )}
 
               {isStreaming && !isLoading && (

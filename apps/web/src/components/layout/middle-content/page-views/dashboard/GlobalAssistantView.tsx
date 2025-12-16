@@ -45,7 +45,7 @@ import { DefaultChatTransport } from 'ai';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Settings, Plus, History } from 'lucide-react';
-import { ReadOnlyToggle, AiUsageMonitor, AISelector } from '@/components/ai/shared';
+import { ReadOnlyToggle, AiUsageMonitor, AISelector, TasksDropdown } from '@/components/ai/shared';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -475,6 +475,7 @@ const GlobalAssistantView: React.FC = () => {
             runningServers={runningServers}
             onToggle={setMcpEnabled}
           />
+          <TasksDropdown messages={messages} />
           <Button
             variant="ghost"
             size="icon"
