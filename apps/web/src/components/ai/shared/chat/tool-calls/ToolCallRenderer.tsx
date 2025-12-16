@@ -10,7 +10,7 @@ import {
 import { PageAgentConversationRenderer } from '@/components/ai/page-agents';
 import { FileTreeRenderer } from './FileTreeRenderer';
 import { DocumentRenderer } from './DocumentRenderer';
-import { InlineTaskRenderer } from './InlineTaskRenderer';
+import { TaskRenderer } from './TaskRenderer';
 
 
 
@@ -88,9 +88,9 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
     }
   };
 
-  // Task management tools - render inline with expandable summary
+  // Task management tools - render with expandable summary
   if (toolName === 'update_task') {
-    return <InlineTaskRenderer part={part} />;
+    return <TaskRenderer part={part} />;
   }
 
   // Ask Agent tool - render with dedicated conversation UI

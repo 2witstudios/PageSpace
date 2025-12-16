@@ -62,7 +62,7 @@ interface ToolPart {
   errorText?: string;
 }
 
-interface InlineTaskRendererProps {
+interface TaskRendererProps {
   part: ToolPart;
 }
 
@@ -106,7 +106,7 @@ const getStatusIcon = (status: Task['status']) => {
   }
 };
 
-export const InlineTaskRenderer: React.FC<InlineTaskRendererProps> = ({ part }) => {
+export const TaskRenderer: React.FC<TaskRendererProps> = ({ part }) => {
   const [isOpen, setIsOpen] = useState(false);
   const state = part.state || 'input-streaming';
   const output = part.output as TaskManagementToolOutput | undefined;

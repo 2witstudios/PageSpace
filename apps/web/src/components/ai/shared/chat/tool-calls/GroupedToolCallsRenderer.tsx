@@ -27,7 +27,7 @@ interface GroupedToolCallsRendererProps {
 
 type ToolStatus = 'pending' | 'in_progress' | 'completed' | 'error';
 
-// Task management types (from InlineTaskRenderer)
+// Task management types (from TaskRenderer)
 interface Task {
   id: string;
   title: string;
