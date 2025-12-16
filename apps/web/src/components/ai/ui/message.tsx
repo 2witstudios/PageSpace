@@ -20,7 +20,7 @@ import {
   XIcon,
 } from "lucide-react";
 import type { ComponentProps, HTMLAttributes, ReactElement } from "react";
-import { createContext, memo, useContext, useEffect, useState, useMemo } from "react";
+import React, { createContext, memo, useContext, useEffect, useState, useMemo } from "react";
 import { Streamdown } from "streamdown";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
@@ -188,11 +188,21 @@ export const MessageBranchContent = ({
   ...props
 }: MessageBranchContentProps) => {
   const { currentBranch, setBranches, branches } = useMessageBranch();
-  const childrenArray = useMemo(() => Array.isArray(children) ? children : [children], [children]);
+  const childrenArray = useMemo(
+    () =>
+      (Array.isArray(children) ? children : [children]).filter(
+        (child): child is ReactElement => React.isValidElement(child)
+      ),
+    [children]
+  );
 
   // Use useEffect to update branches when they change
   useEffect(() => {
-    if (branches.length !== childrenArray.length) {
+    // Update branches when children change
+    if (
+      branches.length !== childrenArray.length ||
+      !childrenArray.every((child, i) => branches[i] === child)
+    ) {
       setBranches(childrenArray);
     }
   }, [childrenArray, branches, setBranches]);
@@ -203,7 +213,7 @@ export const MessageBranchContent = ({
         "grid gap-2 overflow-hidden [&>div]:pb-0",
         index === currentBranch ? "block" : "hidden"
       )}
-      key={branch.key}
+      key={branch.key ?? index}
       {...props}
     >
       {branch}

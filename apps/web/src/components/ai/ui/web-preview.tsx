@@ -124,11 +124,9 @@ export const WebPreviewNavigationButton = ({
   </TooltipProvider>
 );
 
-export type WebPreviewUrlProps = ComponentProps<typeof Input>;
+export type WebPreviewUrlProps = Omit<ComponentProps<typeof Input>, 'value' | 'onChange'>;
 
 export const WebPreviewUrl = ({
-  value,
-  onChange,
   onKeyDown,
   ...props
 }: WebPreviewUrlProps) => {
@@ -142,7 +140,6 @@ export const WebPreviewUrl = ({
 
   const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     setInputValue(event.target.value);
-    onChange?.(event);
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -156,10 +153,10 @@ export const WebPreviewUrl = ({
   return (
     <Input
       className="h-8 flex-1 text-sm"
-      onChange={onChange ?? handleChange}
+      onChange={handleChange}
       onKeyDown={handleKeyDown}
       placeholder="Enter URL..."
-      value={value ?? inputValue}
+      value={inputValue}
       {...props}
     />
   );
@@ -181,8 +178,8 @@ export const WebPreviewBody = ({
     <div className="flex-1">
       <iframe
         className={cn("size-full", className)}
-        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation"
-        src={(src ?? url) || undefined}
+        sandbox="allow-scripts allow-forms allow-popups allow-presentation"
+        src={src || url || undefined}
         title="Preview"
         {...props}
       />

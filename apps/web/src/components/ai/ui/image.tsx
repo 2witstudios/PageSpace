@@ -14,7 +14,7 @@ export const Image = ({
   /* eslint-disable @next/next/no-img-element */
   <img
     {...props}
-    alt={props.alt}
+    alt={props.alt || "AI-generated image"}
     className={cn(
       "h-auto max-w-full overflow-hidden rounded-md",
       props.className

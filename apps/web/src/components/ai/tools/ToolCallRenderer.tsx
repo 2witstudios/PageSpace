@@ -33,6 +33,23 @@ interface ToolCallRendererProps {
  * Renders PageSpace tool calls using a standardized Tool UI.
  * Addresses ambiguity by extracting target filenames/titles from input.
  */
+// Helper for safe JSON parsing
+const safeJsonParse = (value: unknown): Record<string, unknown> | null => {
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return { raw: value };
+    }
+  }
+  if (typeof value === 'object' && value !== null) {
+    return value as Record<string, unknown>;
+  }
+  return null;
+};
+
+type ToolOutputType = React.ReactNode | string | Record<string, unknown>;
+
 export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
   const toolName = part.toolName || part.type?.replace('tool-', '') || 'unknown_tool';
   const state = part.state || 'input-available';
@@ -166,26 +183,21 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
   };
 
   const outputContent = getOutputContent();
+  const parsedInput = safeJsonParse(input);
 
   return (
     <Tool className="my-2">
       <ToolHeader
         title={getDescriptiveTitle()}
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        type={`tool-${toolName}` as any}
+        type={`tool-${toolName}`}
         state={getToolState()}
-      // className requires removing icon prop or updating ToolHeader? 
-      // ToolHeader in tool.tsx doesn't accept icon. It has hardcoded WrenchIcon.
-      // I will ignore icon prop for now as it's not supported by standard ToolHeader.
       />
       <ToolContent>
-        {!!input && (
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          <ToolInput input={typeof input === 'string' ? JSON.parse(input) : input as any} />
+        {!!input && parsedInput && (
+          <ToolInput input={parsedInput} />
         )}
         {(outputContent || error) && (
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          <ToolOutput output={outputContent as any} errorText={error} />
+          <ToolOutput output={outputContent as ToolOutputType} errorText={error} />
         )}
       </ToolContent>
     </Tool>

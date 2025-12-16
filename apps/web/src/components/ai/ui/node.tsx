@@ -18,7 +18,7 @@ export type NodeProps = ComponentProps<typeof Card> & {
   };
 };
 
-export const Node = ({ handles, className, ...props }: NodeProps) => (
+export const Node = ({ handles, className, children, ...props }: NodeProps) => (
   <Card
     className={cn(
       "node-container relative size-full h-auto w-sm gap-0 rounded-md p-0",
@@ -28,7 +28,7 @@ export const Node = ({ handles, className, ...props }: NodeProps) => (
   >
     {handles.target && <Handle position={Position.Left} type="target" />}
     {handles.source && <Handle position={Position.Right} type="source" />}
-    {props.children}
+    {children}
   </Card>
 );
 

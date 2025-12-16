@@ -77,10 +77,23 @@ export const Reasoning = memo(
       }
     }, [isStreaming, startTime, setDuration]);
 
-    // Auto-open when streaming starts, auto-close when streaming ends (once only)
+    // Auto-open when streaming starts
     useEffect(() => {
-      if (defaultOpen && !isStreaming && isOpen && !hasAutoClosed) {
-        // Add a small delay before closing to allow user to see the content
+      if (isStreaming && !isOpen) {
+        setIsOpen(true);
+        // allow auto-close again for a new streaming session
+        setHasAutoClosed(false);
+      }
+    }, [isStreaming, isOpen, setIsOpen]);
+
+    // Auto-close once after streaming ends
+    useEffect(() => {
+      if (
+        defaultOpen &&
+        !isStreaming &&
+        isOpen &&
+        !hasAutoClosed
+      ) {
         const timer = setTimeout(() => {
           setIsOpen(false);
           setHasAutoClosed(true);
@@ -88,7 +101,7 @@ export const Reasoning = memo(
 
         return () => clearTimeout(timer);
       }
-    }, [isStreaming, isOpen, defaultOpen, setIsOpen, hasAutoClosed]);
+    }, [defaultOpen, isStreaming, isOpen, hasAutoClosed, setIsOpen]);
 
     const handleOpenChange = (newOpen: boolean) => {
       setIsOpen(newOpen);
