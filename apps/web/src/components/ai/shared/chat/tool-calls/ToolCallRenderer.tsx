@@ -7,11 +7,11 @@ import {
   ToolOutput,
   ToolInput
 } from '@/components/ai/ui/tool';
-import { TaskManagementToolRenderer } from './TaskManagementToolRenderer';
+import { TaskManagementRenderer } from './TaskManagementRenderer';
 import { PageAgentConversationRenderer } from '@/components/ai/page-agents';
 import { patch } from '@/lib/auth/auth-fetch';
-import { FileTreePreview } from './views/FileTreePreview';
-import { DocumentPreview } from './views/DocumentPreview';
+import { FileTreeRenderer } from './FileTreeRenderer';
+import { DocumentRenderer } from './DocumentRenderer';
 
 
 
@@ -73,7 +73,7 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
   // Task management tools - render with dedicated renderer
   if (['update_task'].includes(toolName)) {
     return (
-      <TaskManagementToolRenderer
+      <TaskManagementRenderer
         part={part}
         onTaskUpdate={async (taskId: string, newStatus) => {
           try {
@@ -148,12 +148,12 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
         const result = typeof output === 'string' ? JSON.parse(output) : output;
 
         if (toolName === 'list_pages' && result.tree) {
-          return <FileTreePreview tree={result.tree} />;
+          return <FileTreeRenderer tree={result.tree} />;
         }
 
         if (toolName === 'read_page' && result.content) {
           return (
-            <DocumentPreview
+            <DocumentRenderer
               title={result.title || result.path || 'Document'}
               content={result.content}
               language="typescript" // Infer or default
@@ -164,7 +164,7 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
 
         if (toolName === 'replace_lines' && result.content) {
           return (
-            <DocumentPreview
+            <DocumentRenderer
               title={result.title || "Modified File"}
               content={result.content}
               language="typescript"

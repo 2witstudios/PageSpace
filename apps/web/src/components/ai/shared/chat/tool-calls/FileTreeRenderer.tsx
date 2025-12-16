@@ -9,11 +9,11 @@ interface TreeItem {
     children: TreeItem[];
 }
 
-interface FileTreePreviewProps {
+interface FileTreeRendererProps {
     tree: TreeItem[];
 }
 
-export const FileTreePreview: React.FC<FileTreePreviewProps> = ({ tree }) => {
+export const FileTreeRenderer: React.FC<FileTreeRendererProps> = ({ tree }) => {
     const renderTreeItems = (items: TreeItem[], depth = 0): React.ReactNode => {
         return items.map((item, index) => (
             <div key={index} style={{ paddingLeft: `${depth * 16}px` }} className="py-1">

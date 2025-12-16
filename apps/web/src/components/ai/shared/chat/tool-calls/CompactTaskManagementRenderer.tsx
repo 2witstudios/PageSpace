@@ -1,6 +1,6 @@
 import React from 'react';
 import { CheckCircle, ListTodo, Loader2, AlertCircle } from 'lucide-react';
-import { CompactTodoListMessage } from '@/components/ai/chat/CompactTodoListMessage';
+import { CompactTodoListMessage } from '../CompactTodoListMessage';
 
 interface Task {
   id: string;
@@ -54,7 +54,7 @@ interface ToolPart {
   errorText?: string;
 }
 
-interface CompactTaskManagementToolRendererProps {
+interface CompactTaskManagementRendererProps {
   part: ToolPart;
   onTaskUpdate?: (taskId: string, newStatus: 'pending' | 'in_progress' | 'completed' | 'blocked') => void;
 }
@@ -62,7 +62,7 @@ interface CompactTaskManagementToolRendererProps {
 /**
  * Compact version for sidebar - renders task management tool results as interactive CompactTodoListMessage components
  */
-export const CompactTaskManagementToolRenderer: React.FC<CompactTaskManagementToolRendererProps> = ({
+export const CompactTaskManagementRenderer: React.FC<CompactTaskManagementRendererProps> = ({
   part,
   onTaskUpdate
 }) => {

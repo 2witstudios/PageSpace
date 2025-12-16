@@ -18,11 +18,11 @@ import {
   Clock,
   Bot
 } from 'lucide-react';
-import { CompactTaskManagementToolRenderer } from './CompactTaskManagementToolRenderer';
+import { CompactTaskManagementRenderer } from './CompactTaskManagementRenderer';
 import { patch } from '@/lib/auth/auth-fetch';
 
-import { FileTreePreview } from './views/FileTreePreview';
-import { DocumentPreview } from './views/DocumentPreview';
+import { FileTreeRenderer } from './FileTreeRenderer';
+import { DocumentRenderer } from './DocumentRenderer';
 
 interface TreeItem {
   path: string;
@@ -66,7 +66,7 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
 
   if (taskManagementTools.includes(toolName)) {
     return (
-      <CompactTaskManagementToolRenderer
+      <CompactTaskManagementRenderer
         part={part}
         onTaskUpdate={async (taskId: string, newStatus) => {
           // Update task status via API
@@ -264,13 +264,13 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
                 const result = typeof output === 'string' ? JSON.parse(output) : output;
 
                 if (toolName === 'list_pages' && result.tree) {
-                  return <div className="border rounded-md overflow-hidden"><FileTreePreview tree={result.tree} /></div>;
+                  return <div className="border rounded-md overflow-hidden"><FileTreeRenderer tree={result.tree} /></div>;
                 }
 
                 if (toolName === 'read_page' && result.content) {
                   return (
                     <div className="border rounded-md overflow-hidden">
-                      <DocumentPreview
+                      <DocumentRenderer
                         title={result.title || result.path || 'Document'}
                         content={result.content}
                         language="typescript"
@@ -283,7 +283,7 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
                 if (toolName === 'replace_lines' && result.content) {
                   return (
                     <div className="border rounded-md overflow-hidden">
-                      <DocumentPreview
+                      <DocumentRenderer
                         title={result.title || "Modified"}
                         content={result.content}
                         language="typescript"

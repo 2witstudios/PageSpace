@@ -4,13 +4,11 @@
  * Components used by both Global AI and Page Agents systems.
  */
 
+// Shared utilities
 export { AISelector } from './AISelector';
-export { default as AiInput } from '../chat/AiInput';
 export { AiUsageMonitor } from './AiUsageMonitor';
-export { CompactMessageRenderer } from '../chat/CompactMessageRenderer';
 export { ErrorBoundary } from './ErrorBoundary';
-export { MemoizedMarkdown } from './MemoizedMarkdown';
-export { MessageRenderer } from '../chat/MessageRenderer';
 export { ReadOnlyToggle } from './ReadOnlyToggle';
-export { StreamingMarkdown } from '../chat/StreamingMarkdown';
-export { ToolCallRenderer } from '../tools/ToolCallRenderer';
+
+// Re-export all chat/message rendering components
+export * from './chat';

@@ -1,7 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { UIMessage } from 'ai';
-import { CompactToolCallRenderer } from '@/components/ai/tools/CompactToolCallRenderer';
-import { CompactGroupedToolCallsRenderer } from '@/components/ai/tools/CompactGroupedToolCallsRenderer';
+import { CompactToolCallRenderer, CompactGroupedToolCallsRenderer } from './tool-calls';
 import { StreamingMarkdown } from './StreamingMarkdown';
 import { MessageActionButtons } from './MessageActionButtons';
 import { MessageEditor } from './MessageEditor';

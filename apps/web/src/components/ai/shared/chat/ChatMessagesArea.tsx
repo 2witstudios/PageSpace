@@ -7,7 +7,7 @@ import React, { useRef, useEffect, forwardRef, useImperativeHandle } from 'react
 import { UIMessage } from 'ai';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Loader2 } from 'lucide-react';
-import { MessageRenderer } from '@/components/ai/chat/MessageRenderer';
+import { MessageRenderer } from './MessageRenderer';
 import { StreamingIndicator } from './StreamingIndicator';
 
 interface ChatMessagesAreaProps {

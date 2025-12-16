@@ -4,7 +4,7 @@ import { CodeBlock, CodeBlockCopyButton } from '@/components/ai/ui/code-block';
 import { cn } from '@/lib/utils';
 import { type BundledLanguage } from 'shiki';
 
-interface DocumentPreviewProps {
+interface DocumentRendererProps {
     title: string;
     content: string;
     language?: string;
@@ -12,7 +12,7 @@ interface DocumentPreviewProps {
     className?: string;
 }
 
-export const DocumentPreview: React.FC<DocumentPreviewProps> = ({
+export const DocumentRenderer: React.FC<DocumentRendererProps> = ({
     title,
     content,
     language = 'typescript',

@@ -1,6 +1,6 @@
 import React from 'react';
 import { CheckCircle } from 'lucide-react';
-import { TodoListMessage } from '../chat/TodoListMessage';
+import { TodoListMessage } from '../TodoListMessage';
 
 interface Task {
   id: string;
@@ -54,7 +54,7 @@ interface ToolPart {
   errorText?: string;
 }
 
-interface TaskManagementToolRendererProps {
+interface TaskManagementRendererProps {
   part: ToolPart;
   onTaskUpdate?: (taskId: string, newStatus: 'pending' | 'in_progress' | 'completed' | 'blocked') => void;
 }
@@ -63,7 +63,7 @@ interface TaskManagementToolRendererProps {
  * Renders task management tool results as interactive TodoListMessage components
  * Handles update_task tool results
  */
-export const TaskManagementToolRenderer: React.FC<TaskManagementToolRendererProps> = ({
+export const TaskManagementRenderer: React.FC<TaskManagementRendererProps> = ({
   part,
   onTaskUpdate
 }) => {
