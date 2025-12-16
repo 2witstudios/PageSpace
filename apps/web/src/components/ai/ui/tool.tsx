@@ -40,9 +40,11 @@ const getStatusIcon = (status: ToolUIPart["state"]): ReactNode => {
     "input-available": <ClockIcon className="size-4 text-primary animate-pulse" />,
     // @ts-expect-error state only available in AI SDK v6
     "approval-requested": <ClockIcon className="size-4 text-yellow-600" />,
+    // @ts-expect-error state only available in AI SDK v6
     "approval-responded": <CheckCircleIcon className="size-4 text-blue-600" />,
     "output-available": <CheckCircleIcon className="size-4 text-green-600" />,
     "output-error": <XCircleIcon className="size-4 text-red-600" />,
+    // @ts-expect-error state only available in AI SDK v6
     "output-denied": <XCircleIcon className="size-4 text-orange-600" />,
   };
 
