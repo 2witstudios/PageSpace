@@ -48,6 +48,25 @@ const safeJsonParse = (value: unknown): Record<string, unknown> | null => {
   return null;
 };
 
+// Helper to infer language from file path
+const inferLanguage = (path?: string): string => {
+  if (!path) return 'plaintext';
+  const ext = path.split('.').pop()?.toLowerCase();
+  const langMap: Record<string, string> = {
+    'ts': 'typescript', 'tsx': 'typescript',
+    'js': 'javascript', 'jsx': 'javascript',
+    'py': 'python', 'md': 'markdown',
+    'json': 'json', 'css': 'css', 'html': 'html',
+    'yml': 'yaml', 'yaml': 'yaml',
+    'sh': 'shell', 'bash': 'shell',
+    'sql': 'sql', 'xml': 'xml',
+    'go': 'go', 'rs': 'rust',
+    'java': 'java', 'c': 'c', 'cpp': 'cpp',
+    'rb': 'ruby', 'php': 'php'
+  };
+  return langMap[ext || ''] || 'plaintext';
+};
+
 type ToolOutputType = React.ReactNode | string | Record<string, unknown>;
 
 export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
@@ -156,8 +175,8 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
             <DocumentRenderer
               title={result.title || result.path || 'Document'}
               content={result.content}
-              language="typescript" // Infer or default
-              description={`${result.lineCount} lines`}
+              language={inferLanguage(result.path)}
+              description={result.lineCount !== undefined ? `${result.lineCount} lines` : undefined}
             />
           );
         }
@@ -165,10 +184,10 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
         if (toolName === 'replace_lines' && result.content) {
           return (
             <DocumentRenderer
-              title={result.title || "Modified File"}
+              title={result.title || result.path || "Modified File"}
               content={result.content}
-              language="typescript"
-              description="Updated Content"
+              language={inferLanguage(result.path)}
+              description={result.lineCount !== undefined ? `${result.lineCount} lines` : "Updated Content"}
             />
           );
         }

@@ -136,7 +136,7 @@ export const PageAgentConversationRenderer: React.FC<PageAgentConversationRender
     >
       <CollapsibleTrigger
         className={cn(
-          "w-full flex items-center justify-between p-3 text-left hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors rounded-t-lg",
+          "group w-full flex items-center justify-between p-3 text-left hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors rounded-t-lg",
           getStatusColor()
         )}
       >
