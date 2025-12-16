@@ -302,10 +302,10 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
   };
 
   return (
-    <div className="bg-gray-50 dark:bg-gray-800/30 rounded p-1.5 text-[11px] max-w-full overflow-hidden">
+    <div className="py-0.5 text-[11px] max-w-full overflow-hidden">
       <button
         onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full flex items-center space-x-1.5 text-left hover:bg-gray-100 dark:hover:bg-gray-700/30 rounded p-0.5 transition-colors max-w-full overflow-hidden"
+        className="w-full flex items-center space-x-1.5 text-left hover:bg-muted/30 rounded py-0.5 px-1 transition-colors max-w-full overflow-hidden"
       >
         {isExpanded ? <ChevronDown className="h-3 w-3 flex-shrink-0" /> : <ChevronRight className="h-3 w-3 flex-shrink-0" />}
         <div className="flex-shrink-0">{getToolIcon(toolName)}</div>
