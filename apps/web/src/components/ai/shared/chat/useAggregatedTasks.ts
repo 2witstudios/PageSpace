@@ -94,7 +94,7 @@ export function useAggregatedTasks(messages: UIMessage[]): AggregatedTasksResult
     const taskMap = new Map<string, Task>();
     let latestTaskList: TaskList | null = null;
     let currentTaskListId: string | null = null;
-    let isLoading = false;
+    const activeLoadingCalls = new Set<string>();
     let hasError = false;
     let errorMessage: string | undefined;
 
@@ -110,11 +110,12 @@ export function useAggregatedTasks(messages: UIMessage[]): AggregatedTasksResult
           continue;
         }
 
-        // Track loading state - reset when completed or errored
+        // Track loading state per tool call ID to handle concurrent calls
+        const callId = toolPart.toolCallId || `${message.id}-${toolPart.toolName}`;
         if (toolPart.state === 'input-streaming' || toolPart.state === 'input-available' || toolPart.state === 'streaming') {
-          isLoading = true;
+          activeLoadingCalls.add(callId);
         } else if (toolPart.state === 'output-available' || toolPart.state === 'done' || toolPart.state === 'output-error') {
-          isLoading = false;
+          activeLoadingCalls.delete(callId);
         }
 
         // Track error state
@@ -162,7 +163,7 @@ export function useAggregatedTasks(messages: UIMessage[]): AggregatedTasksResult
       tasks,
       taskList: latestTaskList,
       hasTaskData: taskMap.size > 0,
-      isLoading,
+      isLoading: activeLoadingCalls.size > 0,
       hasError,
       errorMessage,
     };
