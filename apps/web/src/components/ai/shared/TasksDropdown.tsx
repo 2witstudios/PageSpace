@@ -9,21 +9,17 @@ import {
   Circle,
   AlertCircle,
   ChevronDown,
+  CalendarDays,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { cn } from '@/lib/utils';
 import { useAggregatedTasks, type Task } from './chat/useAggregatedTasks';
 import { patch } from '@/lib/auth/auth-fetch';
-
-const PRIORITY_CONFIG = {
-  low: { label: 'Low', color: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400' },
-  medium: { label: 'Medium', color: 'bg-amber-100 text-amber-600 dark:bg-amber-900 dark:text-amber-400' },
-  high: { label: 'High', color: 'bg-red-100 text-red-600 dark:bg-red-900 dark:text-red-400' },
-};
 
 const getStatusIcon = (status: Task['status']) => {
   switch (status) {
@@ -37,6 +33,25 @@ const getStatusIcon = (status: Task['status']) => {
     default:
       return <Circle className="w-4 h-4 text-slate-400" />;
   }
+};
+
+// Smart date formatting for due dates
+const formatDueDate = (dateStr: string): { text: string; className: string } => {
+  const date = new Date(dateStr);
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+  date.setHours(0, 0, 0, 0);
+  const diffDays = Math.ceil((date.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+
+  if (diffDays < 0) return { text: 'Overdue', className: 'text-red-500' };
+  if (diffDays === 0) return { text: 'Today', className: 'text-amber-600 dark:text-amber-400' };
+  if (diffDays === 1) return { text: 'Tomorrow', className: 'text-amber-600 dark:text-amber-400' };
+  if (diffDays <= 7) return { text: `${diffDays}d`, className: 'text-muted-foreground' };
+
+  return {
+    text: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+    className: 'text-muted-foreground'
+  };
 };
 
 interface TasksDropdownProps {
@@ -108,20 +123,25 @@ export function TasksDropdown({ messages }: TasksDropdownProps) {
           )}
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-80 p-0" align="end">
-        <div className="flex flex-col max-h-96">
+      <PopoverContent className="w-96 p-0" align="end">
+        <div className="flex flex-col max-h-[28rem]">
           {/* Header */}
           <Collapsible open={isListOpen} onOpenChange={setIsListOpen}>
             <CollapsibleTrigger asChild>
               <div className="flex items-center justify-between p-3 border-b cursor-pointer hover:bg-muted/50 transition-colors">
-                <div className="flex items-center gap-2 min-w-0">
+                <div className="flex items-center gap-2 min-w-0 flex-1">
                   <div className="w-2 h-2 rounded-full bg-primary flex-shrink-0" />
-                  <span className="font-medium text-sm truncate">{taskList.title}</span>
+                  <span
+                    className="font-medium text-sm truncate"
+                    title={taskList.title}
+                  >
+                    {taskList.title}
+                  </span>
                   {isLoading && (
-                    <div className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                    <div className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin flex-shrink-0" />
                   )}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-shrink-0">
                   <Badge variant="secondary" className="text-xs">
                     {stats.completed}/{stats.total}
                   </Badge>
@@ -144,41 +164,67 @@ export function TasksDropdown({ messages }: TasksDropdownProps) {
 
             <CollapsibleContent>
               {/* Task list */}
-              <ScrollArea className="max-h-64">
+              <ScrollArea className="max-h-72">
                 <div className="divide-y divide-border/50">
                   {sortedTasks.map((task) => {
                     const isCompleted = task.status === 'completed';
+                    const dueDateInfo = task.dueDate ? formatDueDate(task.dueDate) : null;
+                    const hasMetadata = dueDateInfo || task.assignee || task.priority === 'high';
 
                     return (
                       <div
                         key={task.id}
                         className={cn(
-                          "flex items-center gap-2 py-2 px-3 hover:bg-muted/40 transition-colors cursor-pointer",
+                          "py-2.5 px-3 hover:bg-muted/40 transition-colors cursor-pointer",
                           isCompleted && "opacity-60"
                         )}
                         onClick={() => handleTaskClick(task.id, task.status)}
                       >
-                        {/* Status icon */}
-                        <div className="flex-shrink-0">
-                          {getStatusIcon(task.status)}
-                        </div>
-
-                        {/* Title */}
-                        <div className={cn(
-                          "flex-1 min-w-0 text-sm truncate",
-                          isCompleted && "line-through text-muted-foreground"
-                        )}>
-                          {task.title}
-                        </div>
-
-                        {/* Priority badge (only show high) */}
-                        {task.priority === 'high' && (
-                          <Badge
-                            variant="outline"
-                            className={cn("text-[10px] px-1.5 py-0", PRIORITY_CONFIG[task.priority].color)}
+                        {/* Row 1: Status + Title */}
+                        <div className="flex items-start gap-2">
+                          <div className="flex-shrink-0 mt-0.5">
+                            {getStatusIcon(task.status)}
+                          </div>
+                          <span
+                            className={cn(
+                              "text-sm font-medium leading-tight line-clamp-2",
+                              isCompleted && "line-through text-muted-foreground"
+                            )}
+                            title={task.title}
                           >
-                            {PRIORITY_CONFIG[task.priority].label}
-                          </Badge>
+                            {task.title}
+                          </span>
+                        </div>
+
+                        {/* Row 2: Metadata (due date, assignee, priority) */}
+                        {hasMetadata && (
+                          <div className="flex items-center gap-3 mt-1.5 ml-6 text-xs">
+                            {dueDateInfo && (
+                              <span className={cn("flex items-center gap-1", dueDateInfo.className)}>
+                                <CalendarDays className="w-3 h-3" />
+                                {dueDateInfo.text}
+                              </span>
+                            )}
+                            {task.assignee && (
+                              <span className="flex items-center gap-1.5 text-muted-foreground">
+                                <Avatar className="w-4 h-4">
+                                  <AvatarImage src={task.assignee.image || undefined} />
+                                  <AvatarFallback className="text-[8px]">
+                                    {task.assignee.name?.[0]?.toUpperCase() || '?'}
+                                  </AvatarFallback>
+                                </Avatar>
+                                <span className="truncate max-w-[80px]">{task.assignee.name}</span>
+                              </span>
+                            )}
+                            {task.priority === 'high' && (
+                              <Badge
+                                variant="outline"
+                                className="text-[10px] px-1.5 py-0 bg-red-50 text-red-600 border-red-200 dark:bg-red-950 dark:text-red-400 dark:border-red-800"
+                              >
+                                High
+                              </Badge>
+                            )}
+                          </div>
                         )}
                       </div>
                     );
