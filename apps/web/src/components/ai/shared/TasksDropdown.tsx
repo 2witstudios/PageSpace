@@ -22,9 +22,10 @@ import { ExpandableTaskItem } from './chat/ExpandableTaskItem';
 
 interface TasksDropdownProps {
   messages: UIMessage[];
+  driveId?: string; // Fallback driveId for AssigneeSelect when taskList.driveId is unavailable
 }
 
-export function TasksDropdown({ messages }: TasksDropdownProps) {
+export function TasksDropdown({ messages, driveId: fallbackDriveId }: TasksDropdownProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [isListOpen, setIsListOpen] = useState(true);
   const [optimisticStatuses, setOptimisticStatuses] = useState<Map<string, Task['status']>>(new Map());
@@ -167,7 +168,7 @@ export function TasksDropdown({ messages }: TasksDropdownProps) {
                       <ExpandableTaskItem
                         key={task.id}
                         task={task}
-                        driveId={taskList.driveId || ''}
+                        driveId={taskList.driveId || fallbackDriveId || ''}
                         taskListPageId={taskListPageId || ''}
                         displayStatus={displayStatus}
                         onStatusToggle={handleStatusToggle}

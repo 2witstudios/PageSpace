@@ -207,41 +207,26 @@ export function ExpandableTaskItem({
         )}
 
         <CollapsibleContent>
-          <div className="mt-3 ml-6 space-y-2 border-l-2 border-muted pl-3">
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground w-16">
-                Priority
-              </span>
-              <PrioritySelect
-                currentPriority={localTask.priority}
-                onSelect={handlePriorityChange}
-                disabled={disabled || updatingFields.has('priority')}
-                compact
-              />
-            </div>
-
+          <div className="mt-2 ml-6 flex items-center gap-2 flex-wrap">
+            <PrioritySelect
+              currentPriority={localTask.priority}
+              onSelect={handlePriorityChange}
+              disabled={disabled || updatingFields.has('priority')}
+              compact
+            />
             {driveId && (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground w-16">
-                  Assignee
-                </span>
-                <AssigneeSelect
-                  driveId={driveId}
-                  currentAssignee={localTask.assignee}
-                  onSelect={handleAssigneeChange}
-                  disabled={disabled || updatingFields.has('assignee')}
-                />
-              </div>
-            )}
-
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground w-16">Due</span>
-              <DueDatePicker
-                currentDate={localTask.dueDate || null}
-                onSelect={handleDueDateChange}
-                disabled={disabled || updatingFields.has('dueDate')}
+              <AssigneeSelect
+                driveId={driveId}
+                currentAssignee={localTask.assignee}
+                onSelect={handleAssigneeChange}
+                disabled={disabled || updatingFields.has('assignee')}
               />
-            </div>
+            )}
+            <DueDatePicker
+              currentDate={localTask.dueDate || null}
+              onSelect={handleDueDateChange}
+              disabled={disabled || updatingFields.has('dueDate')}
+            />
           </div>
         </CollapsibleContent>
       </div>

@@ -564,7 +564,7 @@ const SidebarChatTab: React.FC = () => {
               pageId={selectedAgent ? selectedAgent.id : undefined}
               compact
             />
-            <TasksDropdown messages={displayMessages} />
+            <TasksDropdown messages={displayMessages} driveId={locationContext?.currentDrive?.id} />
           </div>
         )}
       </div>

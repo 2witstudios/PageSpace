@@ -353,7 +353,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                   onToggle={setMcpEnabled}
                 />
 
-                <TasksDropdown messages={messages} />
+                <TasksDropdown messages={messages} driveId={driveId} />
 
                 <Button
                   variant="outline"

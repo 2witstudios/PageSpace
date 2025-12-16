@@ -475,7 +475,7 @@ const GlobalAssistantView: React.FC = () => {
             runningServers={runningServers}
             onToggle={setMcpEnabled}
           />
-          <TasksDropdown messages={messages} />
+          <TasksDropdown messages={messages} driveId={selectedAgent?.driveId || locationContext?.currentDrive?.id} />
           <Button
             variant="ghost"
             size="icon"
