@@ -119,24 +119,24 @@ export const PageAgentConversationRenderer: React.FC<PageAgentConversationRender
   const getStatusColor = () => {
     switch (taskStatus) {
       case 'completed':
-        return 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800';
+        return 'bg-green-50/50 dark:bg-green-900/20 hover:bg-green-50 dark:hover:bg-green-900/30';
       case 'in_progress':
-        return 'bg-primary/10 dark:bg-primary/20 border-primary/20 dark:border-primary/30';
+        return 'bg-primary/10 dark:bg-primary/20 hover:bg-primary/15 dark:hover:bg-primary/25';
       case 'error':
-        return 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800';
+        return 'bg-red-50/50 dark:bg-red-900/20 hover:bg-red-50 dark:hover:bg-red-900/30';
       default:
-        return 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700';
+        return 'bg-muted/30 hover:bg-muted/50';
     }
   };
 
   return (
     <Collapsible
       defaultOpen={taskStatus === 'in_progress' || taskStatus === 'error'}
-      className="my-2 border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+      className="my-2 mr-2 sm:mr-8"
     >
       <CollapsibleTrigger
         className={cn(
-          "group w-full flex items-center justify-between p-3 text-left hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors rounded-t-lg",
+          "group w-full flex items-center justify-between py-2 px-3 text-left rounded-t-lg transition-colors",
           getStatusColor()
         )}
       >
@@ -150,7 +150,7 @@ export const PageAgentConversationRenderer: React.FC<PageAgentConversationRender
         </div>
         <ChevronDown className="h-4 w-4 text-gray-500 transition-transform duration-200 group-data-[state=open]:rotate-180" />
       </CollapsibleTrigger>
-      <CollapsibleContent className="p-3 border-t border-gray-200 dark:border-gray-700">
+      <CollapsibleContent className="px-3 pb-3 bg-muted/20 rounded-b-lg">
         {/* Loading state */}
         {taskStatus === 'in_progress' && (
           <div className="flex items-center text-sm text-primary">

@@ -18,8 +18,6 @@ import {
   Clock,
   Bot
 } from 'lucide-react';
-import { CompactTaskManagementRenderer } from './CompactTaskManagementRenderer';
-import { patch } from '@/lib/auth/auth-fetch';
 
 import { FileTreeRenderer } from './FileTreeRenderer';
 import { DocumentRenderer } from './DocumentRenderer';
@@ -59,25 +57,10 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
   const output = part.output;
   const error = part.errorText;
 
-  // Task management tools - render with CompactTodoListMessage components
-  const taskManagementTools = [
-    'update_task',
-  ];
-
-  if (taskManagementTools.includes(toolName)) {
-    return (
-      <CompactTaskManagementRenderer
-        part={part}
-        onTaskUpdate={async (taskId: string, newStatus) => {
-          // Update task status via API
-          try {
-            await patch(`/api/ai/tasks/${taskId}/status`, { status: newStatus });
-          } catch (error) {
-            console.error('Error updating task:', error);
-          }
-        }}
-      />
-    );
+  // Task management tools - rendered as aggregated component elsewhere
+  // Return null here to avoid duplicate rendering
+  if (toolName === 'update_task') {
+    return null;
   }
 
   // Tool-specific icons (smaller)

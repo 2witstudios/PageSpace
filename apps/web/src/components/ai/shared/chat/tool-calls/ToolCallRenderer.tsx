@@ -7,9 +7,7 @@ import {
   ToolOutput,
   ToolInput
 } from '@/components/ai/ui/tool';
-import { TaskManagementRenderer } from './TaskManagementRenderer';
 import { PageAgentConversationRenderer } from '@/components/ai/page-agents';
-import { patch } from '@/lib/auth/auth-fetch';
 import { FileTreeRenderer } from './FileTreeRenderer';
 import { DocumentRenderer } from './DocumentRenderer';
 
@@ -89,20 +87,10 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
     }
   };
 
-  // Task management tools - render with dedicated renderer
+  // Task management tools - rendered as aggregated component in ChatMessagesArea
+  // Return null here to avoid duplicate rendering
   if (['update_task'].includes(toolName)) {
-    return (
-      <TaskManagementRenderer
-        part={part}
-        onTaskUpdate={async (taskId: string, newStatus) => {
-          try {
-            await patch(`/api/ai/tasks/${taskId}/status`, { status: newStatus });
-          } catch (error) {
-            console.error('Error updating task:', error);
-          }
-        }}
-      />
-    );
+    return null;
   }
 
   // Ask Agent tool - render with dedicated conversation UI

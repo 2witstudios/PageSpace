@@ -1,188 +1,255 @@
-import React from 'react';
-import { CheckCircle } from 'lucide-react';
-import { TodoListMessage } from '../TodoListMessage';
+import React, { useState, useMemo } from 'react';
+import {
+  CheckCircle2,
+  Clock,
+  Circle,
+  AlertCircle,
+  ChevronDown,
+  Loader2,
+  User
+} from 'lucide-react';
+import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '@/components/ui/collapsible';
+import { Badge } from '@/components/ui/badge';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { cn } from '@/lib/utils';
+import { patch } from '@/lib/auth/auth-fetch';
+import type { Task, TaskList } from '../useAggregatedTasks';
 
-interface Task {
-  id: string;
-  title: string;
-  description?: string;
-  status: 'pending' | 'in_progress' | 'completed' | 'blocked';
-  priority: 'low' | 'medium' | 'high';
-  position: number;
-  completedAt?: Date;
-  metadata?: {
-    notes?: Array<{
-      content: string;
-      timestamp: string;
-    }>;
-    estimatedMinutes?: number;
-  };
-}
-
-interface TaskList {
-  id: string;
-  title: string;
-  description?: string;
-  status: string;
-  createdAt?: Date;
-  updatedAt?: Date;
-}
-
-interface TaskManagementToolOutput {
-  success: boolean;
-  taskList?: TaskList;
-  taskListId?: string;
-  title?: string;
-  description?: string;
-  tasks?: Task[];
-  task?: {
-    id: string;
-    title: string;
-    status: string;
-  };
-  message?: string;
-  summary?: string;
-}
-
-interface ToolPart {
-  type: string;
-  toolName?: string;
-  toolCallId?: string;
-  state?: 'input-streaming' | 'input-available' | 'output-available' | 'output-error' | 'done' | 'streaming';
-  input?: unknown;
-  output?: unknown;
-  errorText?: string;
-}
+const PRIORITY_CONFIG = {
+  low: { label: 'Low', color: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400' },
+  medium: { label: 'Medium', color: 'bg-amber-100 text-amber-600 dark:bg-amber-900 dark:text-amber-400' },
+  high: { label: 'High', color: 'bg-red-100 text-red-600 dark:bg-red-900 dark:text-red-400' },
+};
 
 interface TaskManagementRendererProps {
-  part: ToolPart;
-  onTaskUpdate?: (taskId: string, newStatus: 'pending' | 'in_progress' | 'completed' | 'blocked') => void;
+  tasks: Task[];
+  taskList: TaskList;
+  isLoading?: boolean;
+  hasError?: boolean;
+  errorMessage?: string;
 }
 
-/**
- * Renders task management tool results as interactive TodoListMessage components
- * Handles update_task tool results
- */
-export const TaskManagementRenderer: React.FC<TaskManagementRendererProps> = ({
-  part,
-  onTaskUpdate
-}) => {
-  const toolName = part.toolName || part.type?.replace('tool-', '') || '';
-  const state = part.state || 'input-streaming';
-  const output = part.output as TaskManagementToolOutput | undefined;
-
-  // Handle different states
-  switch (state) {
-    case 'input-streaming':
-      return (
-        <div className="mb-4">
-          <div className="bg-primary/10 dark:bg-primary/20 border border-primary/20 dark:border-primary/30 rounded-lg p-4">
-            <div className="animate-pulse">
-              <div className="flex items-center gap-2 mb-2">
-                <div className="w-4 h-4 bg-primary rounded-full animate-spin"></div>
-                <div className="h-4 bg-primary/30 dark:bg-primary/50 rounded w-1/3"></div>
-              </div>
-              <div className="text-sm text-primary">
-                Preparing {getToolDisplayName(toolName)}...
-              </div>
-            </div>
-          </div>
-        </div>
-      );
-
-    case 'input-available':
-      return (
-        <div className="mb-4">
-          <div className="bg-primary/10 dark:bg-primary/20 border border-primary/20 dark:border-primary/30 rounded-lg p-4">
-            <div className="animate-pulse">
-              <div className="flex items-center gap-2 mb-2">
-                <div className="w-4 h-4 bg-primary rounded-full animate-spin"></div>
-                <div className="font-medium text-primary">
-                  {getToolDisplayName(toolName)}
-                </div>
-              </div>
-              <div className="text-sm text-primary">
-                Processing task management operation...
-              </div>
-            </div>
-          </div>
-        </div>
-      );
-
-    case 'output-error':
-      return (
-        <div className="mb-4">
-          <div className="bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 rounded-lg p-4">
-            <div className="text-red-800 dark:text-red-200 font-medium mb-2">
-              Task Management Error
-            </div>
-            <div className="text-sm text-red-600 dark:text-red-400">
-              {part.errorText || 'An error occurred while processing the task management operation'}
-            </div>
-          </div>
-        </div>
-      );
-
-    case 'output-available':
-      if (!output?.success) {
-        return (
-          <div className="mb-4">
-            <div className="bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
-              <div className="text-yellow-800 dark:text-yellow-200 font-medium mb-2">
-                Task Operation Failed
-              </div>
-              <div className="text-sm text-yellow-600 dark:text-yellow-400">
-                {output?.message || 'The task management operation was not successful'}
-              </div>
-            </div>
-          </div>
-        );
-      }
-
-      // Success case - render TodoListMessage if we have task data
-      if (output.taskList && output.tasks) {
-        return (
-          <TodoListMessage
-            tasks={output.tasks}
-            taskList={output.taskList}
-            createdAt={output.taskList.createdAt}
-            onTaskUpdate={onTaskUpdate}
-          />
-        );
-      }
-
-      // Fallback for operations that don't return full task list data
-      return (
-        <div className="mb-4">
-          <div className="bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 rounded-lg p-4">
-            <div className="text-green-800 dark:text-green-200 font-medium mb-2 flex items-center gap-2">
-              <CheckCircle className="h-4 w-4" />
-              {getToolDisplayName(toolName)} Completed
-            </div>
-            {output.summary && (
-              <div className="text-sm text-green-600 dark:text-green-400 mb-2">
-                {output.summary}
-              </div>
-            )}
-            {output.message && (
-              <div className="text-sm text-green-600 dark:text-green-400">
-                {output.message}
-              </div>
-            )}
-          </div>
-        </div>
-      );
-
+const getStatusIcon = (status: Task['status']) => {
+  switch (status) {
+    case 'completed':
+      return <CheckCircle2 className="w-4 h-4 text-green-600" />;
+    case 'in_progress':
+      return <Clock className="w-4 h-4 text-amber-500" />;
+    case 'blocked':
+      return <AlertCircle className="w-4 h-4 text-red-600" />;
+    case 'pending':
     default:
-      return null;
+      return <Circle className="w-4 h-4 text-slate-400" />;
   }
 };
 
-function getToolDisplayName(toolName: string): string {
-  switch (toolName) {
-    case 'update_task':
-      return 'Update Task';
-    default:
-      return 'Task Management';
-  }
-}
+const formatDueDate = (dueDate: string | null | undefined): { text: string; isOverdue: boolean; isUrgent: boolean } | null => {
+  if (!dueDate) return null;
+
+  const date = new Date(dueDate);
+  const now = new Date();
+  const diffDays = Math.ceil((date.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+
+  const text = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+  return {
+    text,
+    isOverdue: diffDays < 0,
+    isUrgent: diffDays >= 0 && diffDays <= 3,
+  };
+};
+
+const getInitials = (name: string | null): string => {
+  if (!name) return '?';
+  return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+};
+
+/**
+ * Persistent inline task list for AI chat.
+ * Displays aggregated task data with columns for status, title, priority, assignee, and due date.
+ */
+export const TaskManagementRenderer: React.FC<TaskManagementRendererProps> = ({
+  tasks,
+  taskList,
+  isLoading = false,
+  hasError = false,
+  errorMessage,
+}) => {
+  const [isOpen, setIsOpen] = useState(true);
+
+  // Sort tasks by status priority then position
+  const sortedTasks = useMemo(() => {
+    return [...tasks].sort((a, b) => {
+      const statusPriority = { in_progress: 0, pending: 1, blocked: 2, completed: 3 };
+      const statusDiff = statusPriority[a.status] - statusPriority[b.status];
+      if (statusDiff !== 0) return statusDiff;
+      return a.position - b.position;
+    });
+  }, [tasks]);
+
+  // Calculate progress
+  const progress = useMemo(() => {
+    const total = tasks.length;
+    const completed = tasks.filter(t => t.status === 'completed').length;
+    const percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
+    return { total, completed, percentage };
+  }, [tasks]);
+
+  const handleTaskClick = async (taskId: string, currentStatus: Task['status']) => {
+    const statusCycle: Task['status'][] = ['pending', 'in_progress', 'completed', 'blocked'];
+    const currentIndex = statusCycle.indexOf(currentStatus);
+    const nextStatus = statusCycle[(currentIndex + 1) % statusCycle.length];
+
+    try {
+      await patch(`/api/ai/tasks/${taskId}/status`, { status: nextStatus });
+    } catch (error) {
+      console.error('Failed to update task status:', error);
+    }
+  };
+
+  return (
+    <div className="my-2 mr-2 sm:mr-8">
+      <Collapsible open={isOpen} onOpenChange={setIsOpen}>
+        {/* Header */}
+        <CollapsibleTrigger className="w-full">
+          <div className="flex items-center justify-between py-2 px-3 rounded-t-lg bg-muted/30 hover:bg-muted/50 transition-colors">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="w-2 h-2 rounded-full bg-primary flex-shrink-0" />
+              <span className="font-medium text-sm truncate">{taskList.title}</span>
+              {isLoading && <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />}
+            </div>
+            <div className="flex items-center gap-2">
+              <Badge variant="secondary" className="text-xs">
+                {progress.completed}/{progress.total}
+              </Badge>
+              <span className="text-xs text-muted-foreground">{progress.percentage}%</span>
+              <ChevronDown className={cn(
+                "w-4 h-4 text-muted-foreground transition-transform",
+                isOpen && "rotate-180"
+              )} />
+            </div>
+          </div>
+
+          {/* Progress bar */}
+          <div className="w-full bg-muted/50 h-1">
+            <div
+              className="bg-primary h-1 transition-all duration-300"
+              style={{ width: `${progress.percentage}%` }}
+            />
+          </div>
+        </CollapsibleTrigger>
+
+        <CollapsibleContent>
+          <div className="bg-muted/20 rounded-b-lg">
+            {/* Error state */}
+            {hasError && (
+              <div className="px-3 py-2 text-sm text-red-600 dark:text-red-400 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4" />
+                {errorMessage || 'An error occurred'}
+              </div>
+            )}
+
+            {/* Task list */}
+            <div className="divide-y divide-border/50">
+              {sortedTasks.map((task) => {
+                const dueInfo = formatDueDate(task.dueDate);
+                const isCompleted = task.status === 'completed';
+
+                return (
+                  <div
+                    key={task.id}
+                    className={cn(
+                      "flex items-center gap-2 py-1.5 px-3 hover:bg-muted/40 transition-colors cursor-pointer",
+                      isCompleted && "opacity-60"
+                    )}
+                    onClick={() => handleTaskClick(task.id, task.status)}
+                  >
+                    {/* Status icon */}
+                    <div className="flex-shrink-0">
+                      {getStatusIcon(task.status)}
+                    </div>
+
+                    {/* Title */}
+                    <div className={cn(
+                      "flex-1 min-w-0 text-sm truncate",
+                      isCompleted && "line-through text-muted-foreground"
+                    )}>
+                      {task.title}
+                    </div>
+
+                    {/* Priority badge (only show high/medium) */}
+                    {task.priority !== 'low' && (
+                      <Badge
+                        variant="outline"
+                        className={cn("text-[10px] px-1.5 py-0", PRIORITY_CONFIG[task.priority].color)}
+                      >
+                        {PRIORITY_CONFIG[task.priority].label}
+                      </Badge>
+                    )}
+
+                    {/* Assignee avatar */}
+                    {task.assignee ? (
+                      <Avatar className="w-5 h-5">
+                        <AvatarImage src={task.assignee.image || undefined} />
+                        <AvatarFallback className="text-[10px]">
+                          {getInitials(task.assignee.name)}
+                        </AvatarFallback>
+                      </Avatar>
+                    ) : (
+                      <div className="w-5 h-5 rounded-full bg-muted flex items-center justify-center">
+                        <User className="w-3 h-3 text-muted-foreground" />
+                      </div>
+                    )}
+
+                    {/* Due date */}
+                    {dueInfo && (
+                      <span className={cn(
+                        "text-xs flex-shrink-0",
+                        dueInfo.isOverdue && "text-red-600 dark:text-red-400",
+                        dueInfo.isUrgent && !dueInfo.isOverdue && "text-amber-600 dark:text-amber-400",
+                        !dueInfo.isOverdue && !dueInfo.isUrgent && "text-muted-foreground"
+                      )}>
+                        {dueInfo.text}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Footer with status summary */}
+            {tasks.length > 0 && (
+              <div className="px-3 py-2 border-t border-border/50 text-xs text-muted-foreground flex gap-3">
+                {tasks.filter(t => t.status === 'in_progress').length > 0 && (
+                  <span className="flex items-center gap-1">
+                    <Clock className="w-3 h-3" />
+                    {tasks.filter(t => t.status === 'in_progress').length} in progress
+                  </span>
+                )}
+                {tasks.filter(t => t.status === 'pending').length > 0 && (
+                  <span className="flex items-center gap-1">
+                    <Circle className="w-3 h-3" />
+                    {tasks.filter(t => t.status === 'pending').length} pending
+                  </span>
+                )}
+                {tasks.filter(t => t.status === 'blocked').length > 0 && (
+                  <span className="flex items-center gap-1">
+                    <AlertCircle className="w-3 h-3" />
+                    {tasks.filter(t => t.status === 'blocked').length} blocked
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* Empty state */}
+            {tasks.length === 0 && !isLoading && (
+              <div className="px-3 py-4 text-center text-sm text-muted-foreground">
+                No tasks yet
+              </div>
+            )}
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
+    </div>
+  );
+};
