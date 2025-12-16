@@ -14,6 +14,7 @@ import Link from 'next/link';
 import { patch } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
 import { formatDueDate, getTaskStatusIcon } from './task-utils';
+import { useDriveStore } from '@/hooks/useDrive';
 import { AssigneeSelect } from '@/components/layout/middle-content/page-views/task-list/AssigneeSelect';
 import { DueDatePicker } from '@/components/layout/middle-content/page-views/task-list/DueDatePicker';
 import { PrioritySelect } from '@/components/layout/middle-content/page-views/task-list/PrioritySelect';
@@ -45,6 +46,10 @@ export function ExpandableTaskItem({
   const [isExpanded, setIsExpanded] = useState(false);
   const [updatingFields, setUpdatingFields] = useState<Set<string>>(new Set());
   const [localTask, setLocalTask] = useState(task);
+
+  // Fallback to global currentDriveId if driveId prop is empty
+  const globalDriveId = useDriveStore((state) => state.currentDriveId);
+  const effectiveDriveId = driveId || globalDriveId || '';
 
   // Sync local task with prop when task changes
   React.useEffect(() => {
@@ -214,9 +219,9 @@ export function ExpandableTaskItem({
               disabled={disabled || updatingFields.has('priority')}
               compact
             />
-            {driveId && (
+            {effectiveDriveId && (
               <AssigneeSelect
-                driveId={driveId}
+                driveId={effectiveDriveId}
                 currentAssignee={localTask.assignee}
                 onSelect={handleAssigneeChange}
                 disabled={disabled || updatingFields.has('assignee')}
