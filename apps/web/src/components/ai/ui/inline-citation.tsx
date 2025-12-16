@@ -23,6 +23,14 @@ import {
   useState,
 } from "react";
 
+const getHostname = (url: string): string => {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "unknown";
+  }
+};
+
 export type InlineCitationProps = ComponentProps<"span">;
 
 export const InlineCitation = ({
@@ -70,7 +78,7 @@ export const InlineCitationCardTrigger = ({
     >
       {sources[0] ? (
         <>
-          {new URL(sources[0]).hostname}{" "}
+          {getHostname(sources[0])}{" "}
           {sources.length > 1 && `+${sources.length - 1}`}
         </>
       ) : (
@@ -166,9 +174,15 @@ export const InlineCitationCarouselIndex = ({
     setCount(api.scrollSnapList().length);
     setCurrent(api.selectedScrollSnap() + 1);
 
-    api.on("select", () => {
+    const handleSelect = () => {
       setCurrent(api.selectedScrollSnap() + 1);
-    });
+    };
+
+    api.on("select", handleSelect);
+
+    return () => {
+      api.off("select", handleSelect);
+    };
   }, [api]);
 
   return (
