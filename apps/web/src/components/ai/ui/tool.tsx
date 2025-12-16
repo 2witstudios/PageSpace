@@ -58,7 +58,7 @@ export const ToolHeader = ({
 }: ToolHeaderProps) => (
   <CollapsibleTrigger
     className={cn(
-      "flex w-full items-center justify-between gap-2 py-1.5 px-2 hover:bg-muted/50 rounded transition-colors",
+      "group flex w-full items-center justify-between gap-2 py-1.5 px-2 hover:bg-muted/50 rounded transition-colors",
       className
     )}
     {...props}
@@ -122,7 +122,10 @@ export const ToolOutput = ({
       <CodeBlock code={JSON.stringify(output, null, 2)} language="json" />
     );
   } else if (typeof output === "string") {
-    Output = <CodeBlock code={output} language="json" />;
+    // Detect if string content looks like JSON
+    const trimmed = output.trim();
+    const isJson = trimmed.startsWith('{') || trimmed.startsWith('[');
+    Output = <CodeBlock code={output} language={isJson ? "json" : "text"} />;
   }
 
   return (

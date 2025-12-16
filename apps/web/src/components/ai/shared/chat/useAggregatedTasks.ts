@@ -49,7 +49,7 @@ interface TaskManagementToolOutput {
   summary?: string;
 }
 
-interface ToolPart {
+export interface ToolPart {
   type: string;
   toolName?: string;
   toolCallId?: string;
@@ -98,9 +98,11 @@ export function useAggregatedTasks(messages: UIMessage[]): AggregatedTasksResult
           continue;
         }
 
-        // Track loading state
+        // Track loading state - reset when completed or errored
         if (toolPart.state === 'input-streaming' || toolPart.state === 'input-available' || toolPart.state === 'streaming') {
           isLoading = true;
+        } else if (toolPart.state === 'output-available' || toolPart.state === 'done' || toolPart.state === 'output-error') {
+          isLoading = false;
         }
 
         // Track error state

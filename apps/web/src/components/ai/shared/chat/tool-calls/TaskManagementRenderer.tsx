@@ -61,7 +61,7 @@ const formatDueDate = (dueDate: string | null | undefined): { text: string; isOv
 
 const getInitials = (name: string | null): string => {
   if (!name) return '?';
-  return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+  return name.split(' ').filter(Boolean).map(n => n[0]).join('').toUpperCase().slice(0, 2);
 };
 
 /**

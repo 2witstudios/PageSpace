@@ -22,6 +22,7 @@ import {
 import { FileTreeRenderer } from './FileTreeRenderer';
 import { DocumentRenderer } from './DocumentRenderer';
 import { TaskRenderer } from './TaskRenderer';
+import { getLanguageFromPath } from '@/lib/utils/formatters';
 
 interface TreeItem {
   path: string;
@@ -256,8 +257,8 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
                       <DocumentRenderer
                         title={result.title || result.path || 'Document'}
                         content={result.content}
-                        language="typescript"
-                        description={`${result.lineCount} lines`}
+                        language={getLanguageFromPath(result.path)}
+                        description={`${result.lineCount ?? '?'} lines`}
                       />
                     </div>
                   );
@@ -269,7 +270,7 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
                       <DocumentRenderer
                         title={result.title || "Modified"}
                         content={result.content}
-                        language="typescript"
+                        language={getLanguageFromPath(result.path)}
                         description="Updated"
                       />
                     </div>

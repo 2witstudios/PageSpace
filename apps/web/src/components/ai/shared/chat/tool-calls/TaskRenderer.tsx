@@ -16,28 +16,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { cn } from '@/lib/utils';
 import { patch } from '@/lib/auth/auth-fetch';
-
-interface Task {
-  id: string;
-  title: string;
-  description?: string;
-  status: 'pending' | 'in_progress' | 'completed' | 'blocked';
-  priority: 'low' | 'medium' | 'high';
-  position: number;
-  dueDate?: string | null;
-  assignee?: {
-    id: string;
-    name: string | null;
-    image: string | null;
-  } | null;
-}
-
-interface TaskList {
-  id: string;
-  title: string;
-  description?: string;
-  status: string;
-}
+import type { Task, TaskList, ToolPart } from '../useAggregatedTasks';
 
 interface TaskManagementToolOutput {
   success: boolean;
@@ -50,16 +29,6 @@ interface TaskManagementToolOutput {
     status: string;
   };
   message?: string;
-}
-
-interface ToolPart {
-  type: string;
-  toolName?: string;
-  toolCallId?: string;
-  state?: 'input-streaming' | 'input-available' | 'output-available' | 'output-error' | 'done' | 'streaming';
-  input?: unknown;
-  output?: unknown;
-  errorText?: string;
 }
 
 interface TaskRendererProps {
