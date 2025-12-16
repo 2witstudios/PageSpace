@@ -9,15 +9,17 @@ export type ImageProps = Experimental_GeneratedImage & {
 export const Image = ({
   base64,
   mediaType,
+  alt,
+  className,
   ...props
 }: ImageProps) => (
   /* eslint-disable @next/next/no-img-element */
   <img
     {...props}
-    alt={props.alt || "AI-generated image"}
+    alt={alt || "AI-generated image"}
     className={cn(
       "h-auto max-w-full overflow-hidden rounded-md",
-      props.className
+      className
     )}
     src={`data:${mediaType};base64,${base64}`}
   />
