@@ -9,6 +9,7 @@ import {
   type HTMLAttributes,
   useContext,
   useEffect,
+  useRef,
   useState,
 } from "react";
 import { type BundledLanguage, codeToHtml, type ShikiTransformer } from "shiki";
@@ -57,18 +58,30 @@ export async function highlightCode(
     ? [lineNumberTransformer]
     : [];
 
-  return await Promise.all([
-    codeToHtml(code, {
-      lang: language,
-      theme: "one-light",
-      transformers,
-    }),
-    codeToHtml(code, {
-      lang: language,
-      theme: "one-dark-pro",
-      transformers,
-    }),
-  ]);
+  try {
+    return await Promise.all([
+      codeToHtml(code, {
+        lang: language,
+        theme: "one-light",
+        transformers,
+      }),
+      codeToHtml(code, {
+        lang: language,
+        theme: "one-dark-pro",
+        transformers,
+      }),
+    ]);
+  } catch (error) {
+    const escapedCode = code.replace(
+      /[&<>"']/g,
+      (c) =>
+        ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
+          c
+        ] || c
+    );
+    const fallback = `<pre><code>${escapedCode}</code></pre>`;
+    return [fallback, fallback];
+  }
 }
 
 export const CodeBlock = ({
@@ -142,6 +155,13 @@ export const CodeBlockCopyButton = ({
 }: CodeBlockCopyButtonProps) => {
   const [isCopied, setIsCopied] = useState(false);
   const { code } = useContext(CodeBlockContext);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, []);
 
   const copyToClipboard = async () => {
     if (typeof window === "undefined" || !navigator?.clipboard?.writeText) {
@@ -153,7 +173,11 @@ export const CodeBlockCopyButton = ({
       await navigator.clipboard.writeText(code);
       setIsCopied(true);
       onCopy?.();
-      setTimeout(() => setIsCopied(false), timeout);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      timeoutRef.current = setTimeout(() => {
+        setIsCopied(false);
+        timeoutRef.current = null;
+      }, timeout);
     } catch (error) {
       onError?.(error as Error);
     }
@@ -167,6 +191,7 @@ export const CodeBlockCopyButton = ({
       onClick={copyToClipboard}
       size="icon"
       variant="ghost"
+      aria-label={isCopied ? "Copied" : "Copy code"}
       {...props}
     >
       {children ?? <Icon size={14} />}
