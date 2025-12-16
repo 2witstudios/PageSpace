@@ -72,6 +72,12 @@ export function TasksDropdown({ messages }: TasksDropdownProps) {
 
     try {
       await patch(`/api/pages/${taskListPageId}/tasks/${taskId}`, { status: nextStatus });
+      // Clear optimistic entry on success - authoritative data comes from useAggregatedTasks
+      setOptimisticStatuses(prev => {
+        const next = new Map(prev);
+        next.delete(taskId);
+        return next;
+      });
     } catch {
       // Revert optimistic update on error
       setOptimisticStatuses(prev => {
@@ -113,7 +119,10 @@ export function TasksDropdown({ messages }: TasksDropdownProps) {
           {/* Header */}
           <Collapsible open={isListOpen} onOpenChange={setIsListOpen}>
             <CollapsibleTrigger asChild>
-              <div className="flex items-center justify-between p-3 border-b cursor-pointer hover:bg-muted/50 transition-colors">
+              <button
+                type="button"
+                className="flex items-center justify-between p-3 border-b cursor-pointer hover:bg-muted/50 transition-colors w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              >
                 <div className="flex items-center gap-2 min-w-0 flex-1">
                   <div className="w-2 h-2 rounded-full bg-primary flex-shrink-0" />
                   <span
@@ -136,7 +145,7 @@ export function TasksDropdown({ messages }: TasksDropdownProps) {
                     isListOpen && "rotate-180"
                   )} />
                 </div>
-              </div>
+              </button>
             </CollapsibleTrigger>
 
             {/* Progress bar */}
