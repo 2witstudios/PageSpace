@@ -2,6 +2,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { UIMessage } from 'ai';
+import useSWR from 'swr';
 import {
   ListTodo,
   Clock,
@@ -16,7 +17,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
 import { useAggregatedTasks, type Task, getNextTaskStatus } from './chat/useAggregatedTasks';
-import { patch } from '@/lib/auth/auth-fetch';
+import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
 import { ExpandableTaskItem } from './chat/ExpandableTaskItem';
 
@@ -55,6 +56,15 @@ export function TasksDropdown({ messages, driveId: fallbackDriveId }: TasksDropd
 
   // Get task list page ID for API calls
   const taskListPageId = taskList?.pageId;
+
+  // Fetch driveId from page when missing from message data (for historical tasks)
+  const { data: pageData } = useSWR(
+    taskListPageId && !taskList?.driveId ? `/api/pages/${taskListPageId}` : null,
+    (url) => fetchWithAuth(url).then(r => r.json())
+  );
+
+  // Use fetched driveId, message data driveId, or fallback
+  const effectiveDriveId = taskList?.driveId || pageData?.driveId || fallbackDriveId || '';
 
   // Handle status toggle (click on status icon)
   const handleStatusToggle = async (e: React.MouseEvent, taskId: string, currentStatus: Task['status']) => {
@@ -168,7 +178,7 @@ export function TasksDropdown({ messages, driveId: fallbackDriveId }: TasksDropd
                       <ExpandableTaskItem
                         key={task.id}
                         task={task}
-                        driveId={taskList.driveId || fallbackDriveId || ''}
+                        driveId={effectiveDriveId}
                         taskListPageId={taskListPageId || ''}
                         displayStatus={displayStatus}
                         onStatusToggle={handleStatusToggle}
