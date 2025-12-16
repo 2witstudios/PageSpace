@@ -158,7 +158,7 @@ export function TasksDropdown({ messages }: TasksDropdownProps) {
 
             <CollapsibleContent className="flex flex-col min-h-0 flex-1">
               {/* Task list */}
-              <ScrollArea className="flex-1 min-h-0 max-h-64">
+              <ScrollArea className="flex-1 min-h-0">
                 <div className="divide-y divide-border/50">
                   {sortedTasks.map((task) => {
                     const displayStatus = optimisticStatuses.get(task.id) ?? task.status;

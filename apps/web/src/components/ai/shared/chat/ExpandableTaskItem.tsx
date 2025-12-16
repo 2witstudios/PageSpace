@@ -154,7 +154,7 @@ export function ExpandableTaskItem({
             )}
           </div>
 
-          {!disabled && driveId && (
+          {!disabled && (
             <CollapsibleTrigger asChild>
               <button
                 type="button"
