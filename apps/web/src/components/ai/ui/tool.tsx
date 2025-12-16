@@ -125,7 +125,7 @@ export const ToolOutput = ({
     // Detect if string content looks like JSON
     const trimmed = output.trim();
     const isJson = trimmed.startsWith('{') || trimmed.startsWith('[');
-    Output = <CodeBlock code={output} language={isJson ? "json" : "plaintext"} />;
+    Output = <CodeBlock code={output} language={isJson ? "json" : "text"} />;
   }
 
   return (

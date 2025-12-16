@@ -14,9 +14,12 @@ import {
 } from "react";
 import { type BundledLanguage, codeToHtml, type ShikiTransformer } from "shiki";
 
+// Special languages supported by Shiki but not in BundledLanguage type
+type SpecialLanguage = 'text' | 'plain' | 'txt';
+
 type CodeBlockProps = HTMLAttributes<HTMLDivElement> & {
   code: string;
-  language: BundledLanguage;
+  language: BundledLanguage | SpecialLanguage;
   showLineNumbers?: boolean;
 };
 
@@ -51,7 +54,7 @@ const lineNumberTransformer: ShikiTransformer = {
 
 export async function highlightCode(
   code: string,
-  language: BundledLanguage,
+  language: BundledLanguage | SpecialLanguage,
   showLineNumbers = false
 ) {
   const transformers: ShikiTransformer[] = showLineNumbers

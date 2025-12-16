@@ -16,8 +16,10 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { cn } from '@/lib/utils';
 import { patch } from '@/lib/auth/auth-fetch';
+import { toast } from 'sonner';
 import Link from 'next/link';
 import type { Task, TaskList, ToolPart } from '../useAggregatedTasks';
+import { getNextTaskStatus } from '../useAggregatedTasks';
 
 interface TaskManagementToolOutput {
   success: boolean;
@@ -81,6 +83,7 @@ const getStatusIcon = (status: Task['status']) => {
 
 export const TaskRenderer: React.FC<TaskRendererProps> = ({ part }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const [optimisticStatuses, setOptimisticStatuses] = useState<Map<string, Task['status']>>(new Map());
   const state = part.state || 'input-streaming';
   const output = part.output as TaskManagementToolOutput | undefined;
   const error = part.errorText;
@@ -152,18 +155,25 @@ export const TaskRenderer: React.FC<TaskRendererProps> = ({ part }) => {
     e.preventDefault();
 
     if (!taskListPageId) {
-      console.error('Cannot update task: taskList.pageId is missing');
+      toast.error('Cannot update task status');
       return;
     }
 
-    const statusCycle: Task['status'][] = ['pending', 'in_progress', 'completed', 'blocked'];
-    const currentIndex = statusCycle.indexOf(currentStatus);
-    const nextStatus = statusCycle[(currentIndex + 1) % statusCycle.length];
+    const nextStatus = getNextTaskStatus(currentStatus);
+
+    // Optimistic update
+    setOptimisticStatuses(prev => new Map(prev).set(taskId, nextStatus));
 
     try {
       await patch(`/api/pages/${taskListPageId}/tasks/${taskId}`, { status: nextStatus });
-    } catch (err) {
-      console.error('Failed to update task status:', err);
+    } catch {
+      // Revert optimistic update on error
+      setOptimisticStatuses(prev => {
+        const next = new Map(prev);
+        next.delete(taskId);
+        return next;
+      });
+      toast.error('Failed to update task status');
     }
   };
 
@@ -200,7 +210,7 @@ export const TaskRenderer: React.FC<TaskRendererProps> = ({ part }) => {
     <div className="my-2">
       <Collapsible open={isOpen} onOpenChange={setIsOpen}>
         <CollapsibleTrigger asChild>
-          <div className="flex items-center justify-between rounded-lg border bg-muted/30 p-3 cursor-pointer hover:bg-muted/50 transition-colors">
+          <button type="button" className="w-full flex items-center justify-between rounded-lg border bg-muted/30 p-3 cursor-pointer hover:bg-muted/50 transition-colors text-left">
             <div className="flex items-center gap-2 text-sm">
               <ListTodo className="h-4 w-4 text-primary" />
               <span className="font-medium">{getSummaryText()}</span>
@@ -216,7 +226,7 @@ export const TaskRenderer: React.FC<TaskRendererProps> = ({ part }) => {
                 isOpen && "rotate-180"
               )} />
             </div>
-          </div>
+          </button>
         </CollapsibleTrigger>
 
         <CollapsibleContent>
@@ -242,7 +252,8 @@ export const TaskRenderer: React.FC<TaskRendererProps> = ({ part }) => {
             {hasTasks && (
               <div className="divide-y divide-border/50 max-h-56 overflow-auto">
                 {sortedTasks.map((task) => {
-                  const isCompleted = task.status === 'completed';
+                  const displayStatus = optimisticStatuses.get(task.id) ?? task.status;
+                  const isCompleted = displayStatus === 'completed';
                   const dueDateInfo = task.dueDate ? formatDueDate(task.dueDate) : null;
                   const hasMetadata = dueDateInfo || task.assignee || task.priority === 'high';
 
@@ -259,12 +270,12 @@ export const TaskRenderer: React.FC<TaskRendererProps> = ({ part }) => {
                         {/* Status icon - clickable to toggle status */}
                         <button
                           type="button"
-                          onClick={(e) => handleStatusToggle(e, task.id, task.status)}
+                          onClick={(e) => handleStatusToggle(e, task.id, displayStatus)}
                           className="flex-shrink-0 mt-0.5 hover:opacity-70 transition-opacity cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                           disabled={!taskListPageId}
                           title={taskListPageId ? `Click to change status` : 'Status toggle unavailable'}
                         >
-                          {getStatusIcon(task.status)}
+                          {getStatusIcon(displayStatus)}
                         </button>
                         {/* Title - link to task's document page */}
                         {task.pageId ? (

@@ -9,7 +9,10 @@ import { ToolCallRenderer } from './ToolCallRenderer';
 import { cn } from '@/lib/utils';
 import { toTitleCase } from '@/lib/utils/formatters';
 import { patch } from '@/lib/auth/auth-fetch';
+import { toast } from 'sonner';
 import Link from 'next/link';
+import type { Task, TaskList } from '../useAggregatedTasks';
+import { getNextTaskStatus } from '../useAggregatedTasks';
 
 interface ToolCallPart {
   type: string;
@@ -27,31 +30,6 @@ interface GroupedToolCallsRendererProps {
 }
 
 type ToolStatus = 'pending' | 'in_progress' | 'completed' | 'error';
-
-// Task management types (from TaskRenderer)
-interface Task {
-  id: string;
-  title: string;
-  description?: string;
-  status: 'pending' | 'in_progress' | 'completed' | 'blocked';
-  priority: 'low' | 'medium' | 'high';
-  position: number;
-  dueDate?: string | null;
-  pageId?: string; // Linked document page for the task
-  assignee?: {
-    id: string;
-    name: string | null;
-    image: string | null;
-  } | null;
-}
-
-interface TaskList {
-  id: string;
-  title: string;
-  description?: string;
-  status: string;
-  pageId?: string; // Task list page
-}
 
 // Smart date formatting for due dates
 const formatDueDate = (dateStr: string): { text: string; className: string } => {
@@ -127,6 +105,9 @@ function getStatusIcon(status: ToolStatus) {
 }
 
 export function GroupedToolCallsRenderer({ toolCalls, className }: GroupedToolCallsRendererProps) {
+  // Optimistic state for task status updates
+  const [optimisticStatuses, setOptimisticStatuses] = useState<Map<string, Task['status']>>(new Map());
+
   // Process tool calls with status
   const toolCallsWithStatus = useMemo<ToolCallWithStatus[]>(() => {
     return toolCalls.map((tool, index) => ({
@@ -262,18 +243,25 @@ export function GroupedToolCallsRenderer({ toolCalls, className }: GroupedToolCa
     e.preventDefault();
 
     if (!taskListPageId) {
-      console.error('Cannot update task: taskList.pageId is missing');
+      toast.error('Cannot update task status');
       return;
     }
 
-    const statusCycle: Task['status'][] = ['pending', 'in_progress', 'completed', 'blocked'];
-    const currentIndex = statusCycle.indexOf(currentStatus);
-    const nextStatus = statusCycle[(currentIndex + 1) % statusCycle.length];
+    const nextStatus = getNextTaskStatus(currentStatus);
+
+    // Optimistic update
+    setOptimisticStatuses(prev => new Map(prev).set(taskId, nextStatus));
 
     try {
       await patch(`/api/pages/${taskListPageId}/tasks/${taskId}`, { status: nextStatus });
-    } catch (err) {
-      console.error('Failed to update task status:', err);
+    } catch {
+      // Revert optimistic update on error
+      setOptimisticStatuses(prev => {
+        const next = new Map(prev);
+        next.delete(taskId);
+        return next;
+      });
+      toast.error('Failed to update task status');
     }
   };
 
@@ -313,7 +301,8 @@ export function GroupedToolCallsRenderer({ toolCalls, className }: GroupedToolCa
               {tasks.length > 0 && (
                 <div className="divide-y divide-border/50 max-h-72 overflow-auto">
                   {tasks.map((task) => {
-                    const isCompleted = task.status === 'completed';
+                    const displayStatus = optimisticStatuses.get(task.id) ?? task.status;
+                    const isCompleted = displayStatus === 'completed';
                     const dueDateInfo = task.dueDate ? formatDueDate(task.dueDate) : null;
                     const hasMetadata = dueDateInfo || task.assignee || task.priority === 'high';
 
@@ -330,12 +319,12 @@ export function GroupedToolCallsRenderer({ toolCalls, className }: GroupedToolCa
                           {/* Status icon - clickable to toggle status */}
                           <button
                             type="button"
-                            onClick={(e) => handleStatusToggle(e, task.id, task.status, taskList?.pageId)}
+                            onClick={(e) => handleStatusToggle(e, task.id, displayStatus, taskList?.pageId)}
                             className="flex-shrink-0 mt-0.5 hover:opacity-70 transition-opacity cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                             disabled={!taskList?.pageId}
                             title={taskList?.pageId ? `Click to change status` : 'Status toggle unavailable'}
                           >
-                            {getTaskStatusIcon(task.status)}
+                            {getTaskStatusIcon(displayStatus)}
                           </button>
                           {/* Title - link to task's document page */}
                           {task.pageId ? (

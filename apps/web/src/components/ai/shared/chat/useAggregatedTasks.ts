@@ -25,6 +25,15 @@ export interface Task {
   };
 }
 
+// Task status cycle for toggling
+export const TASK_STATUS_CYCLE: Task['status'][] = ['pending', 'in_progress', 'completed', 'blocked'];
+
+// Helper to get next status in cycle
+export function getNextTaskStatus(currentStatus: Task['status']): Task['status'] {
+  const currentIndex = TASK_STATUS_CYCLE.indexOf(currentStatus);
+  return TASK_STATUS_CYCLE[(currentIndex + 1) % TASK_STATUS_CYCLE.length];
+}
+
 export interface TaskList {
   id: string;
   title: string;

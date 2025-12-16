@@ -18,8 +18,9 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { cn } from '@/lib/utils';
-import { useAggregatedTasks, type Task } from './chat/useAggregatedTasks';
+import { useAggregatedTasks, type Task, getNextTaskStatus } from './chat/useAggregatedTasks';
 import { patch } from '@/lib/auth/auth-fetch';
+import { toast } from 'sonner';
 import Link from 'next/link';
 
 const getStatusIcon = (status: Task['status']) => {
@@ -65,6 +66,7 @@ interface TasksDropdownProps {
 export function TasksDropdown({ messages }: TasksDropdownProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [isListOpen, setIsListOpen] = useState(true);
+  const [optimisticStatuses, setOptimisticStatuses] = useState<Map<string, Task['status']>>(new Map());
 
   const { tasks, taskList, hasTaskData, isLoading } = useAggregatedTasks(messages);
 
@@ -98,18 +100,25 @@ export function TasksDropdown({ messages }: TasksDropdownProps) {
     e.preventDefault();
 
     if (!taskListPageId) {
-      console.error('Cannot update task: taskList.pageId is missing');
+      toast.error('Cannot update task status');
       return;
     }
 
-    const statusCycle: Task['status'][] = ['pending', 'in_progress', 'completed', 'blocked'];
-    const currentIndex = statusCycle.indexOf(currentStatus);
-    const nextStatus = statusCycle[(currentIndex + 1) % statusCycle.length];
+    const nextStatus = getNextTaskStatus(currentStatus);
+
+    // Optimistic update
+    setOptimisticStatuses(prev => new Map(prev).set(taskId, nextStatus));
 
     try {
       await patch(`/api/pages/${taskListPageId}/tasks/${taskId}`, { status: nextStatus });
-    } catch (error) {
-      console.error('Failed to update task status:', error);
+    } catch {
+      // Revert optimistic update on error
+      setOptimisticStatuses(prev => {
+        const next = new Map(prev);
+        next.delete(taskId);
+        return next;
+      });
+      toast.error('Failed to update task status');
     }
   };
 
@@ -182,7 +191,8 @@ export function TasksDropdown({ messages }: TasksDropdownProps) {
               <ScrollArea className="max-h-72">
                 <div className="divide-y divide-border/50">
                   {sortedTasks.map((task) => {
-                    const isCompleted = task.status === 'completed';
+                    const displayStatus = optimisticStatuses.get(task.id) ?? task.status;
+                    const isCompleted = displayStatus === 'completed';
                     const dueDateInfo = task.dueDate ? formatDueDate(task.dueDate) : null;
                     const hasMetadata = dueDateInfo || task.assignee || task.priority === 'high';
 
@@ -199,12 +209,12 @@ export function TasksDropdown({ messages }: TasksDropdownProps) {
                           {/* Status icon - clickable to toggle status */}
                           <button
                             type="button"
-                            onClick={(e) => handleStatusToggle(e, task.id, task.status)}
+                            onClick={(e) => handleStatusToggle(e, task.id, displayStatus)}
                             className="flex-shrink-0 mt-0.5 hover:opacity-70 transition-opacity cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                             disabled={!taskListPageId}
                             title={taskListPageId ? `Click to change status` : 'Status toggle unavailable'}
                           >
-                            {getStatusIcon(task.status)}
+                            {getStatusIcon(displayStatus)}
                           </button>
                           {/* Title - link to task's document page */}
                           {task.pageId ? (
