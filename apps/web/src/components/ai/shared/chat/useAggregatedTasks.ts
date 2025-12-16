@@ -10,6 +10,7 @@ export interface Task {
   position: number;
   completedAt?: Date;
   dueDate?: string | null;
+  pageId?: string; // Linked document page for the task
   assignee?: {
     id: string;
     name: string | null;
@@ -29,6 +30,7 @@ export interface TaskList {
   title: string;
   description?: string;
   status: string;
+  pageId?: string; // Task list page
   createdAt?: Date;
   updatedAt?: Date;
 }

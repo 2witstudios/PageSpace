@@ -20,6 +20,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { cn } from '@/lib/utils';
 import { useAggregatedTasks, type Task } from './chat/useAggregatedTasks';
 import { patch } from '@/lib/auth/auth-fetch';
+import Link from 'next/link';
 
 const getStatusIcon = (status: Task['status']) => {
   switch (status) {
@@ -38,6 +39,9 @@ const getStatusIcon = (status: Task['status']) => {
 // Smart date formatting for due dates
 const formatDueDate = (dateStr: string): { text: string; className: string } => {
   const date = new Date(dateStr);
+  if (isNaN(date.getTime())) {
+    return { text: 'No date', className: 'text-muted-foreground' };
+  }
   const now = new Date();
   now.setHours(0, 0, 0, 0);
   date.setHours(0, 0, 0, 0);
@@ -85,14 +89,25 @@ export function TasksDropdown({ messages }: TasksDropdownProps) {
     });
   }, [tasks]);
 
-  // Handle task status cycle
-  const handleTaskClick = async (taskId: string, currentStatus: Task['status']) => {
+  // Get task list page ID for API calls
+  const taskListPageId = taskList?.pageId;
+
+  // Handle status toggle (click on status icon)
+  const handleStatusToggle = async (e: React.MouseEvent, taskId: string, currentStatus: Task['status']) => {
+    e.stopPropagation();
+    e.preventDefault();
+
+    if (!taskListPageId) {
+      console.error('Cannot update task: taskList.pageId is missing');
+      return;
+    }
+
     const statusCycle: Task['status'][] = ['pending', 'in_progress', 'completed', 'blocked'];
     const currentIndex = statusCycle.indexOf(currentStatus);
     const nextStatus = statusCycle[(currentIndex + 1) % statusCycle.length];
 
     try {
-      await patch(`/api/ai/tasks/${taskId}/status`, { status: nextStatus });
+      await patch(`/api/pages/${taskListPageId}/tasks/${taskId}`, { status: nextStatus });
     } catch (error) {
       console.error('Failed to update task status:', error);
     }
@@ -175,25 +190,45 @@ export function TasksDropdown({ messages }: TasksDropdownProps) {
                       <div
                         key={task.id}
                         className={cn(
-                          "py-2.5 px-3 hover:bg-muted/40 transition-colors cursor-pointer",
+                          "py-2.5 px-3 hover:bg-muted/40 transition-colors",
                           isCompleted && "opacity-60"
                         )}
-                        onClick={() => handleTaskClick(task.id, task.status)}
                       >
                         {/* Row 1: Status + Title */}
                         <div className="flex items-start gap-2">
-                          <div className="flex-shrink-0 mt-0.5">
-                            {getStatusIcon(task.status)}
-                          </div>
-                          <span
-                            className={cn(
-                              "text-sm font-medium leading-tight line-clamp-2",
-                              isCompleted && "line-through text-muted-foreground"
-                            )}
-                            title={task.title}
+                          {/* Status icon - clickable to toggle status */}
+                          <button
+                            type="button"
+                            onClick={(e) => handleStatusToggle(e, task.id, task.status)}
+                            className="flex-shrink-0 mt-0.5 hover:opacity-70 transition-opacity cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={!taskListPageId}
+                            title={taskListPageId ? `Click to change status` : 'Status toggle unavailable'}
                           >
-                            {task.title}
-                          </span>
+                            {getStatusIcon(task.status)}
+                          </button>
+                          {/* Title - link to task's document page */}
+                          {task.pageId ? (
+                            <Link
+                              href={`/pages/${task.pageId}`}
+                              className={cn(
+                                "text-sm font-medium leading-tight line-clamp-2 hover:underline",
+                                isCompleted && "line-through text-muted-foreground"
+                              )}
+                              title={task.title}
+                            >
+                              {task.title}
+                            </Link>
+                          ) : (
+                            <span
+                              className={cn(
+                                "text-sm font-medium leading-tight line-clamp-2",
+                                isCompleted && "line-through text-muted-foreground"
+                              )}
+                              title={task.title}
+                            >
+                              {task.title}
+                            </span>
+                          )}
                         </div>
 
                         {/* Row 2: Metadata (due date, assignee, priority) */}
