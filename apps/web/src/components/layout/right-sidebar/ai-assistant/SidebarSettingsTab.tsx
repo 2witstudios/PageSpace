@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { CheckCircle, XCircle, Key, ExternalLink, Zap, Sparkles, Bot, Wrench, FolderTree } from 'lucide-react';
+import { CheckCircle, XCircle, Key, ExternalLink, Zap, Bot, Wrench, FolderTree } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import { AI_PROVIDERS, getBackendProvider } from '@/lib/ai/core/ai-providers-config';
@@ -487,10 +487,7 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
     <div className="flex flex-col h-full">
       {/* Header */}
       <div className="p-3 border-b">
-        <div className="flex items-center gap-2">
-          <Sparkles className="h-4 w-4 text-primary" />
-          <h3 className="text-sm font-medium">Global Settings</h3>
-        </div>
+        <h3 className="text-sm font-medium">Global Settings</h3>
       </div>
 
       {/* Settings Content - with native scrolling */}

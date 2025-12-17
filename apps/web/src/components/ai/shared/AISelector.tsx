@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { ChevronDown, Sparkles, Bot, Loader2 } from 'lucide-react';
+import { ChevronDown, Loader2 } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -61,17 +61,9 @@ export function AISelector({
             className
           )}
         >
-          {selectedAgent ? (
-            <>
-              <Bot className="h-5 w-5 text-primary" />
-              <span className="truncate max-w-[200px]">{selectedAgent.title}</span>
-            </>
-          ) : (
-            <>
-              <Sparkles className="h-5 w-5 text-primary" />
-              <span>Global Assistant</span>
-            </>
-          )}
+          <span className={selectedAgent ? "truncate max-w-[200px]" : ""}>
+            {selectedAgent ? selectedAgent.title : 'Global Assistant'}
+          </span>
           <ChevronDown className="h-4 w-4 opacity-50" />
         </Button>
       </DropdownMenuTrigger>
@@ -86,7 +78,6 @@ export function AISelector({
           )}
           aria-current={!selectedAgent ? 'true' : undefined}
         >
-          <Sparkles className="h-4 w-4 text-primary" />
           <span className="font-medium">Global Assistant</span>
           {!selectedAgent && (
             <span className="ml-auto text-xs text-muted-foreground">Active</span>
@@ -130,7 +121,6 @@ export function AISelector({
                         )}
                         aria-current={isSelected ? 'true' : undefined}
                       >
-                        <Bot className="h-4 w-4 text-muted-foreground" />
                         <span className="truncate">{agent.title || 'Unnamed Agent'}</span>
                         {isSelected && (
                           <span className="ml-auto text-xs text-muted-foreground">Active</span>
