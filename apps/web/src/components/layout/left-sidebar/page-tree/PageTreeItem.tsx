@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, CSSProperties, MouseEvent, useCallback } from "react";
+import { useState, CSSProperties, MouseEvent, KeyboardEvent, useCallback } from "react";
 import {
   Trash2,
   Pencil,
@@ -206,7 +206,7 @@ export function PageTreeItem({
 
   // Selection click handler
   const handleSelectionClick = useCallback(
-    (e: MouseEvent) => {
+    (e: MouseEvent | KeyboardEvent) => {
       e.stopPropagation();
       e.preventDefault();
 

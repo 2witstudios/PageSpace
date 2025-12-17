@@ -1,6 +1,6 @@
 "use client";
 
-import { CSSProperties, forwardRef, MouseEvent } from "react";
+import { CSSProperties, forwardRef, MouseEvent, KeyboardEvent } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
@@ -42,8 +42,8 @@ export interface PageTreeItemContentProps {
   onMouseLeave?: () => void;
   onClick?: (e: MouseEvent) => void;
   onContextMenu?: (e: MouseEvent) => void;
-  // For selection indicator click
-  onSelectionClick?: (e: MouseEvent) => void;
+  // For selection indicator click/keypress
+  onSelectionClick?: (e: MouseEvent | KeyboardEvent) => void;
   // Drag handle props (optional - only when draggable)
   dragHandleProps?: {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -141,12 +141,24 @@ export const PageTreeItemContent = forwardRef<HTMLDivElement, PageTreeItemConten
           onClick={onClick}
         >
           {/* Selection indicator / checkbox area */}
-          <div
+          <button
+            type="button"
+            data-selection-checkbox
             className={cn(
               "flex items-center justify-center w-5 h-5 mr-0.5 rounded transition-opacity",
+              "bg-transparent border-none p-0 cursor-pointer",
+              "focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1",
               isSelected || isHovered ? "opacity-100" : "opacity-0"
             )}
             onClick={onSelectionClick}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onSelectionClick?.(e);
+              }
+            }}
+            aria-pressed={isSelected}
+            aria-label={isSelected ? `Deselect ${item.title}` : `Select ${item.title}`}
           >
             <div
               className={cn(
@@ -162,7 +174,7 @@ export const PageTreeItemContent = forwardRef<HTMLDivElement, PageTreeItemConten
                 </svg>
               )}
             </div>
-          </div>
+          </button>
 
           {/* Expand/Collapse Chevron */}
           {itemHasChildren ? (
