@@ -10,6 +10,7 @@ import {
   ChatMessagesAreaRef,
 } from '@/components/ai/shared/chat';
 import { WelcomeContent } from './WelcomeContent';
+import type { AttachmentFile } from '../input';
 
 export interface ChatLayoutProps {
   /** Messages in the conversation */
@@ -60,6 +61,21 @@ export interface ChatLayoutProps {
   lastUserMessageId?: string;
   /** Whether user has read-only access */
   isReadOnly?: boolean;
+
+  // Attachment support
+  /** Current attachments */
+  attachments?: AttachmentFile[];
+  /** Handler when files are added */
+  onAddAttachments?: (files: File[]) => void;
+  /** Handler when an attachment is removed */
+  onRemoveAttachment?: (id: string) => void;
+
+  // Toolbar feature toggles
+  /** Show action menu (+ button) - default true */
+  showActionMenu?: boolean;
+  /** Show speech-to-text button - default true */
+  showSpeech?: boolean;
+
   /** Render custom input - receives InputCard and current state */
   renderInput?: (props: {
     value: string;
@@ -71,6 +87,13 @@ export interface ChatLayoutProps {
     placeholder?: string;
     driveId?: string;
     crossDrive?: boolean;
+    // Attachment props
+    attachments?: AttachmentFile[];
+    onAddAttachments?: (files: File[]) => void;
+    onRemoveAttachment?: (id: string) => void;
+    // Toolbar props
+    showActionMenu?: boolean;
+    showSpeech?: boolean;
   }) => React.ReactNode;
 }
 
@@ -112,6 +135,13 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
       lastAssistantMessageId,
       lastUserMessageId,
       isReadOnly = false,
+      // Attachment props
+      attachments,
+      onAddAttachments,
+      onRemoveAttachment,
+      // Toolbar props
+      showActionMenu = true,
+      showSpeech = true,
       renderInput,
     },
     ref
@@ -177,6 +207,13 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
           placeholder,
           driveId,
           crossDrive,
+          // Attachment props
+          attachments,
+          onAddAttachments,
+          onRemoveAttachment,
+          // Toolbar props
+          showActionMenu,
+          showSpeech,
         })
       : defaultInputContent;
 
