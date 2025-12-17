@@ -13,6 +13,7 @@ import Link from 'next/link';
 import type { Task, TaskList } from '../useAggregatedTasks';
 import { getNextTaskStatus } from '../useAggregatedTasks';
 import { ExpandableTaskItem } from '../ExpandableTaskItem';
+import { useDriveStore } from '@/hooks/useDrive';
 
 interface ToolCallPart {
   type: string;
@@ -71,6 +72,9 @@ function getStatusIcon(status: ToolStatus) {
 export function GroupedToolCallsRenderer({ toolCalls, className }: GroupedToolCallsRendererProps) {
   // Optimistic state for task status updates
   const [optimisticStatuses, setOptimisticStatuses] = useState<Map<string, Task['status']>>(new Map());
+
+  // Fallback driveId from store for AssigneeSelect when not in message data
+  const currentDriveId = useDriveStore((state) => state.currentDriveId);
 
   // Process tool calls with status
   const toolCallsWithStatus = useMemo<ToolCallWithStatus[]>(() => {
@@ -274,7 +278,7 @@ export function GroupedToolCallsRenderer({ toolCalls, className }: GroupedToolCa
                       <ExpandableTaskItem
                         key={task.id}
                         task={task}
-                        driveId={taskList?.driveId || ''}
+                        driveId={taskList?.driveId || currentDriveId || ''}
                         taskListPageId={taskList?.pageId || ''}
                         displayStatus={displayStatus}
                         onStatusToggle={(e, taskId, status) => handleStatusToggle(e, taskId, status, taskList?.pageId)}
