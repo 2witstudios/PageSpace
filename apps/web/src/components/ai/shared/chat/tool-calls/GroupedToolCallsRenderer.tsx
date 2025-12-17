@@ -263,9 +263,9 @@ export function GroupedToolCallsRenderer({ toolCalls, className }: GroupedToolCa
               <div className="flex-shrink-0">
                 <ListTodo className="h-4 w-4 text-primary" />
               </div>
-              {taskList?.pageId && taskList?.driveId ? (
+              {taskList?.pageId && effectiveDriveId ? (
                 <Link
-                  href={`/dashboard/${taskList.driveId}/${taskList.pageId}`}
+                  href={`/dashboard/${effectiveDriveId}/${taskList.pageId}`}
                   className="font-medium text-sm text-foreground truncate hover:underline"
                   onClick={(e) => e.stopPropagation()}
                 >
