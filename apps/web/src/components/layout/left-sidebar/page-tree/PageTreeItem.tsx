@@ -12,6 +12,7 @@ import { TreePage } from "@/hooks/usePageTree";
 import { useFavorites } from "@/hooks/useFavorites";
 import { toast } from "sonner";
 import { DeletePageDialog } from "@/components/dialogs/DeletePageDialog";
+import { BatchDeleteDialog } from "@/components/dialogs/BatchDeleteDialog";
 import { RenameDialog } from "@/components/dialogs/RenameDialog";
 import { patch, del, post } from "@/lib/auth/auth-fetch";
 import { Projection } from "@/lib/tree/sortable-tree";
@@ -88,6 +89,8 @@ export function PageTreeItem({
 
   const [isHovered, setIsHovered] = useState(false);
   const [isConfirmTrashOpen, setConfirmTrashOpen] = useState(false);
+  const [isBatchDeleteOpen, setIsBatchDeleteOpen] = useState(false);
+  const [batchDeleteInfo, setBatchDeleteInfo] = useState<{ ids: string[]; count: number }>({ ids: [], count: 0 });
   const [isRenameOpen, setRenameOpen] = useState(false);
   const { addFavorite, removeFavorite, isFavorite } = useFavorites();
   const {
@@ -139,18 +142,30 @@ export function PageTreeItem({
     }
   };
 
-  const handleBatchDelete = async () => {
+  const handleBatchDelete = () => {
     const selectedIds = getSelectedIds();
     if (selectedIds.length === 0) return;
 
-    const toastId = toast.loading(`Moving ${selectedIds.length} pages to trash...`);
+    // Open confirmation dialog with selected page info
+    setBatchDeleteInfo({ ids: selectedIds, count: selectedIds.length });
+    setIsBatchDeleteOpen(true);
+  };
+
+  const confirmBatchDelete = async () => {
+    const { ids, count } = batchDeleteInfo;
+    if (ids.length === 0) return;
+
+    setIsBatchDeleteOpen(false);
+    const toastId = toast.loading(`Moving ${count} pages to trash...`);
     try {
-      await post("/api/pages/batch-trash", { pageIds: selectedIds });
+      await post("/api/pages/batch-trash", { pageIds: ids });
       clearSelection();
       await mutate();
-      toast.success(`${selectedIds.length} pages moved to trash.`, { id: toastId });
+      toast.success(`${count} pages moved to trash.`, { id: toastId });
     } catch {
       toast.error("Error moving pages to trash.", { id: toastId });
+    } finally {
+      setBatchDeleteInfo({ ids: [], count: 0 });
     }
   };
 
@@ -347,6 +362,13 @@ export function PageTreeItem({
         onClose={() => setConfirmTrashOpen(false)}
         onConfirm={handleDelete}
         hasChildren={hasChildren}
+      />
+
+      <BatchDeleteDialog
+        isOpen={isBatchDeleteOpen}
+        onClose={() => setIsBatchDeleteOpen(false)}
+        onConfirm={confirmBatchDelete}
+        pageCount={batchDeleteInfo.count}
       />
 
       <RenameDialog
