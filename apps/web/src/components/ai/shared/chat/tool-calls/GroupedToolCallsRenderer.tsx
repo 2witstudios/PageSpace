@@ -96,7 +96,7 @@ export function GroupedToolCallsRenderer({ toolCalls, className }: GroupedToolCa
     });
 
     return stats;
-  }, [toolCallsWithStatus, toolCalls.length]);
+  }, [toolCallsWithStatus]);
 
   // Controlled open state - always starts closed
   const [isOpen, setIsOpen] = useState(false);
@@ -218,13 +218,14 @@ export function GroupedToolCallsRenderer({ toolCalls, className }: GroupedToolCa
 
     try {
       await patch(`/api/pages/${taskListPageId}/tasks/${taskId}`, { status: nextStatus });
-    } catch {
+    } catch (err) {
       // Revert optimistic update on error
       setOptimisticStatuses(prev => {
         const next = new Map(prev);
         next.delete(taskId);
         return next;
       });
+      console.error('Failed to update task status:', err);
       toast.error('Failed to update task status');
     }
   };

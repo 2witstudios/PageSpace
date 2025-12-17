@@ -59,7 +59,13 @@ export function TasksDropdown({ messages, driveId: fallbackDriveId }: TasksDropd
   // Fetch driveId from page when missing from message data (for historical tasks)
   const { data: pageData } = useSWR(
     taskListPageId && !taskList?.driveId ? `/api/pages/${taskListPageId}` : null,
-    (url) => fetchWithAuth(url).then(r => r.json())
+    async (url) => {
+      const response = await fetchWithAuth(url);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch page: ${response.status}`);
+      }
+      return response.json();
+    }
   );
 
   // Use fetched driveId, message data driveId, or fallback
