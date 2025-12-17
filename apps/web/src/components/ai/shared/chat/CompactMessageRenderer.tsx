@@ -95,28 +95,39 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
 
   return (
     <div
-      className={`group relative p-2 rounded-md text-xs ${role === 'user'
-          ? 'bg-primary/10 dark:bg-accent/20 ml-2'
-          : 'bg-gray-50 dark:bg-gray-800/50'
+      className={`group relative text-xs mb-1 ${role === 'user'
+          ? 'p-2 rounded-md bg-primary/10 dark:bg-accent/20 ml-2'
+          : ''
         }`}
     >
-      <div className="flex items-center justify-between mb-0.5">
-        <div className={`text-xs font-medium ${role === 'user' ? 'text-primary dark:text-primary' : 'text-gray-700 dark:text-gray-300'
-          }`}>
-          {role === 'user' ? 'You' : 'AI'}
-          {editedAt && !isEditing && (
-            <span className="ml-1 text-[10px] text-muted-foreground">(edited)</span>
+      {role === 'user' && (
+        <div className="flex items-center justify-between mb-0.5">
+          <div className="text-xs font-medium text-primary dark:text-primary">
+            You
+            {editedAt && !isEditing && (
+              <span className="ml-1 text-[10px] text-muted-foreground">(edited)</span>
+            )}
+          </div>
+          {onEdit && onDelete && !isEditing && (
+            <MessageActionButtons
+              onEdit={onEdit}
+              onDelete={onDelete}
+              onRetry={onRetry}
+              compact
+            />
           )}
         </div>
-        {onEdit && onDelete && !isEditing && (
+      )}
+      {role !== 'user' && onEdit && onDelete && !isEditing && (
+        <div className="flex justify-end mb-0.5">
           <MessageActionButtons
             onEdit={onEdit}
             onDelete={onDelete}
             onRetry={onRetry}
             compact
           />
-        )}
-      </div>
+        </div>
+      )}
 
       {isEditing && onSaveEdit && onCancelEdit ? (
         <div className="text-xs">

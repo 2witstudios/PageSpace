@@ -600,10 +600,7 @@ const SidebarChatTab: React.FC = () => {
             )}
 
             {displayIsStreaming && (
-              <div className="p-2 rounded-lg bg-gray-50 dark:bg-gray-800/50">
-                <div className="text-xs font-medium mb-1 text-gray-700 dark:text-gray-300">
-                  {assistantName}
-                </div>
+              <div className="mb-1">
                 <div className="flex items-center space-x-2 text-gray-500 text-xs">
                   <Loader2 className="h-3 w-3 animate-spin" />
                   <span>Thinking...</span>

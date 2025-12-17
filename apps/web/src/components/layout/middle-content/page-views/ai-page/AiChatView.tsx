@@ -397,7 +397,6 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             messages={messages}
             isLoading={isLoading}
             isStreaming={isStreaming}
-            assistantName="Assistant"
             emptyMessage="Start a conversation with the AI assistant"
             onEdit={!isReadOnly ? handleEdit : undefined}
             onDelete={!isReadOnly ? handleDelete : undefined}
