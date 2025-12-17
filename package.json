@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "turbo dev",
     "dev:db": "docker compose up postgres migrate seed -d",
+    "dev:services": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up postgres redis processor realtime -d",
     "build": "turbo build",
     "lint": "turbo lint",
     "typecheck": "turbo typecheck",

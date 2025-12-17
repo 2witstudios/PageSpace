@@ -1,0 +1,22 @@
+# Override for hybrid dev mode: exposes postgres/redis ports to host
+# Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up postgres redis -d
+#
+# This adds postgres and redis to the frontend network, which allows port
+# publishing to the host (the internal network has internal: true which
+# disables port publishing).
+
+services:
+  postgres:
+    networks:
+      - internal
+      - frontend
+
+  redis:
+    networks:
+      - internal
+      - frontend
+
+  processor:
+    networks:
+      - internal
+      - frontend
