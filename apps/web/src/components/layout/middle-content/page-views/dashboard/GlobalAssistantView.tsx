@@ -529,7 +529,6 @@ const GlobalAssistantView: React.FC = () => {
         messages={messages}
         isLoading={isLoading}
         isStreaming={isStreaming}
-        assistantName={selectedAgent ? selectedAgent.title : 'Global Assistant'}
         emptyMessage={
           selectedAgent
             ? `Start a conversation with ${selectedAgent.title}`

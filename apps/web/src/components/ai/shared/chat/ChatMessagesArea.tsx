@@ -17,8 +17,6 @@ interface ChatMessagesAreaProps {
   isLoading: boolean;
   /** Whether the AI is currently streaming a response */
   isStreaming: boolean;
-  /** Name to show in streaming indicator */
-  assistantName?: string;
   /** Empty state message */
   emptyMessage?: string;
   /** Edit message handler */
@@ -49,7 +47,6 @@ export const ChatMessagesArea = forwardRef<ChatMessagesAreaRef, ChatMessagesArea
       messages,
       isLoading,
       isStreaming,
-      assistantName = 'Assistant',
       emptyMessage = 'Start a conversation with the AI assistant',
       onEdit,
       onDelete,
@@ -134,7 +131,7 @@ export const ChatMessagesArea = forwardRef<ChatMessagesAreaRef, ChatMessagesArea
               )}
 
               {isStreaming && !isLoading && (
-                <StreamingIndicator assistantName={assistantName} />
+                <StreamingIndicator />
               )}
 
               {/* Invisible element to mark the bottom for scrolling */}
