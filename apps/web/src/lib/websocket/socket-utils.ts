@@ -11,7 +11,7 @@ import { maskIdentifier } from '@/lib/logging/mask';
 // This prevents Node.js-specific API errors in browser contexts
 const loggers = browserLoggers;
 
-export type PageOperation = 'created' | 'updated' | 'moved' | 'deleted' | 'restored' | 'trashed' | 'content-updated';
+export type PageOperation = 'created' | 'updated' | 'moved' | 'deleted' | 'restored' | 'trashed' | 'content-updated' | 'batch-trashed' | 'batch-moved';
 export type DriveOperation = 'created' | 'updated' | 'deleted';
 export type DriveMemberOperation = 'member_added' | 'member_role_changed' | 'member_removed';
 export type TaskOperation = 'task_list_created' | 'task_added' | 'task_updated' | 'task_completed' | 'task_deleted' | 'tasks_reordered';
@@ -25,6 +25,9 @@ export interface PageEventPayload {
   title?: string;
   type?: string;
   socketId?: string; // Socket ID of the user who triggered this event (to prevent self-refetch)
+  // Batch operation fields
+  pageIds?: string[];
+  count?: number;
 }
 
 export interface DriveEventPayload {
@@ -220,6 +223,9 @@ export function createPageEventPayload(
     title?: string;
     type?: string;
     socketId?: string;
+    // Batch operation fields
+    pageIds?: string[];
+    count?: number;
   } = {}
 ): PageEventPayload {
   return {
