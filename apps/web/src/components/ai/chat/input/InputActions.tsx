@@ -44,6 +44,7 @@ export function InputActions({
       size="icon"
       className="h-9 w-9 shrink-0"
       title="Stop generating"
+      aria-label="Stop generating"
     >
       <StopCircle className="h-4 w-4" />
     </Button>
@@ -55,6 +56,7 @@ export function InputActions({
       size="icon"
       className="h-9 w-9 shrink-0 rounded-full bg-muted hover:bg-muted/80"
       title="Send message"
+      aria-label="Send message"
     >
       <ArrowRight className="h-4 w-4" />
     </Button>

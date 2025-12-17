@@ -142,7 +142,7 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
             }
           }}
           placeholder={placeholder}
-          disabled={disabled || isLoading}
+          disabled={disabled || isLoading || isStreaming}
           className="flex-1 min-h-[36px] max-h-48 resize-none bg-transparent border-none outline-none text-foreground placeholder:text-muted-foreground"
           rows={1}
         />

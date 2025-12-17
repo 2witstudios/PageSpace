@@ -436,7 +436,6 @@ const GlobalAssistantView: React.FC = () => {
 
     sendMessage({ text: input }, { body: requestBody });
     setInput('');
-    inputRef.current?.clear();
     setTimeout(() => chatLayoutRef.current?.scrollToBottom(), 100);
   };
 
@@ -568,6 +567,7 @@ const GlobalAssistantView: React.FC = () => {
             placeholder={props.placeholder}
             driveId={props.driveId}
             crossDrive={props.crossDrive}
+            isReadOnly={isReadOnly}
           />
         )}
       />

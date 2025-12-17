@@ -138,5 +138,3 @@ export function WelcomeContent({
     </motion.div>
   );
 }
-
-export default WelcomeContent;

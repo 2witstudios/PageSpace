@@ -374,7 +374,6 @@ const SidebarChatTab: React.FC = () => {
 
     sendMessage({ text: input }, { body });
     setInput('');
-    chatInputRef.current?.clear();
     setTimeout(scrollToBottom, 100);
   }, [
     input,

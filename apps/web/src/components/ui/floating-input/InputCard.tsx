@@ -44,6 +44,7 @@ export function InputCard({
             <p className="text-sm text-destructive flex-1">{error}</p>
             {onClearError && (
               <button
+                type="button"
                 onClick={onClearError}
                 className="text-sm text-destructive/70 hover:text-destructive underline underline-offset-2 ml-3 shrink-0"
               >

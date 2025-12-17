@@ -224,6 +224,13 @@
   animation: holographic-sweep 0.6s ease-out forwards;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .holographic-card:hover::before {
+    animation: none;
+    opacity: 1;
+  }
+}
+
 @layer components {
   /* Liquid Glass Utilities */
   .liquid-glass-thin {
