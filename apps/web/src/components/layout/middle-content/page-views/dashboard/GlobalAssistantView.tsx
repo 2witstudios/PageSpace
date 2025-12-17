@@ -39,11 +39,10 @@
  * sidebar subscribes to activeTab in dashboard context, ensuring reactive updates.
  */
 
-import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useChat } from '@ai-sdk/react';
-import { DefaultChatTransport, type FileUIPart } from 'ai';
+import { DefaultChatTransport } from 'ai';
 import { usePathname } from 'next/navigation';
-import { nanoid } from 'nanoid';
 import { Button } from '@/components/ui/button';
 import { Settings, Plus, History } from 'lucide-react';
 import { ReadOnlyToggle, AiUsageMonitor, AISelector, TasksDropdown } from '@/components/ai/shared';
@@ -70,7 +69,7 @@ import {
   ChatLayout,
   type ChatLayoutRef,
 } from '@/components/ai/chat/layouts';
-import { ChatInput, type ChatInputRef, type AttachmentFile } from '@/components/ai/chat/input';
+import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
 
 const GlobalAssistantView: React.FC = () => {
   const pathname = usePathname();
@@ -121,7 +120,6 @@ const GlobalAssistantView: React.FC = () => {
   const [isReadOnly, setIsReadOnly] = useState<boolean>(false);
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
-  const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
 
   // Agent mode state (provider/model settings)
   const [agentSelectedProvider, setAgentSelectedProvider] = useState<string>('pagespace');
@@ -394,40 +392,6 @@ const GlobalAssistantView: React.FC = () => {
   // HANDLERS
   // ============================================
 
-  // Attachment handlers
-  const handleAddAttachments = useCallback((files: File[]) => {
-    const newAttachments: AttachmentFile[] = files.map((file) => ({
-      id: nanoid(),
-      type: 'file' as const,
-      url: URL.createObjectURL(file),
-      mediaType: file.type,
-      filename: file.name,
-    }));
-    setAttachments((prev) => [...prev, ...newAttachments]);
-  }, []);
-
-  const handleRemoveAttachment = useCallback((id: string) => {
-    setAttachments((prev) => {
-      const found = prev.find((f) => f.id === id);
-      if (found?.url) {
-        URL.revokeObjectURL(found.url);
-      }
-      return prev.filter((f) => f.id !== id);
-    });
-  }, []);
-
-  // Cleanup blob URLs on unmount
-  useEffect(() => {
-    return () => {
-      attachments.forEach((f) => {
-        if (f.url) {
-          URL.revokeObjectURL(f.url);
-        }
-      });
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   // Get setActiveTab from store for sidebar tab control
   const { setActiveTab } = usePageAgentDashboardStore();
 
@@ -450,7 +414,7 @@ const GlobalAssistantView: React.FC = () => {
   };
 
   const handleSendMessage = async () => {
-    if ((!input.trim() && attachments.length === 0) || !currentConversationId) return;
+    if (!input.trim() || !currentConversationId) return;
 
     const requestBody = selectedAgent
       ? {
@@ -470,12 +434,8 @@ const GlobalAssistantView: React.FC = () => {
           mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
         };
 
-    // Convert attachments to FileUIPart format for AI SDK (strip internal id)
-    const files: FileUIPart[] = attachments.map(({ id: _, ...file }) => file);
-
-    sendMessage({ text: input, files: files.length > 0 ? files : undefined }, { body: requestBody });
+    sendMessage({ text: input }, { body: requestBody });
     setInput('');
-    setAttachments([]);
     inputRef.current?.clear();
     setTimeout(() => chatLayoutRef.current?.scrollToBottom(), 100);
   };
@@ -596,9 +556,6 @@ const GlobalAssistantView: React.FC = () => {
         onRetry={handleRetry}
         lastAssistantMessageId={lastAssistantMessageId}
         lastUserMessageId={lastUserMessageId}
-        attachments={attachments}
-        onAddAttachments={handleAddAttachments}
-        onRemoveAttachment={handleRemoveAttachment}
         renderInput={(props) => (
           <ChatInput
             ref={inputRef}
@@ -611,10 +568,6 @@ const GlobalAssistantView: React.FC = () => {
             placeholder={props.placeholder}
             driveId={props.driveId}
             crossDrive={props.crossDrive}
-            attachments={props.attachments}
-            onAddAttachments={props.onAddAttachments}
-            onRemoveAttachment={props.onRemoveAttachment}
-            showActionMenu={props.showActionMenu}
             showSpeech={props.showSpeech}
           />
         )}

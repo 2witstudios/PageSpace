@@ -1,9 +1,8 @@
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
-import { DefaultChatTransport, type FileUIPart } from 'ai';
+import { DefaultChatTransport } from 'ai';
 import { usePathname } from 'next/navigation';
-import { nanoid } from 'nanoid';
 import { Button } from '@/components/ui/button';
-import { ChatInput, type ChatInputRef, type AttachmentFile } from '@/components/ai/chat/input';
+import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Loader2, Plus } from 'lucide-react';
 import { CompactMessageRenderer, ReadOnlyToggle, AISelector, AiUsageMonitor, TasksDropdown } from '@/components/ai/shared';
@@ -133,7 +132,6 @@ const SidebarChatTab: React.FC = () => {
   const [isReadOnly, setIsReadOnly] = useState<boolean>(false);
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
-  const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
 
   // Refs
   const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -152,11 +150,11 @@ const SidebarChatTab: React.FC = () => {
 
   // Determine if send button should be enabled
   const canSend = useMemo(() => {
-    if (!input.trim() && attachments.length === 0) return false;
+    if (!input.trim()) return false;
     if (!currentConversationId) return false;
     if (selectedAgent) return true; // Agent mode has its own provider config
     return isAnyProviderConfigured;
-  }, [input, attachments.length, currentConversationId, selectedAgent, isAnyProviderConfigured]);
+  }, [input, currentConversationId, selectedAgent, isAnyProviderConfigured]);
 
   // ============================================
   // Effects: Drive Loading
@@ -348,26 +346,6 @@ const SidebarChatTab: React.FC = () => {
   // Handlers
   // ============================================
 
-  // Attachment handlers
-  const handleAddAttachments = useCallback((files: File[]) => {
-    const newAttachments: AttachmentFile[] = files.map((file) => ({
-      id: nanoid(),
-      type: 'file' as const,
-      url: URL.createObjectURL(file),
-      mediaType: file.type,
-      filename: file.name,
-    }));
-    setAttachments((prev) => [...prev, ...newAttachments]);
-  }, []);
-
-  const handleRemoveAttachment = useCallback((id: string) => {
-    setAttachments((prev) => {
-      const found = prev.find((f) => f.id === id);
-      if (found?.url) URL.revokeObjectURL(found.url);
-      return prev.filter((f) => f.id !== id);
-    });
-  }, []);
-
   const handleNewConversation = useCallback(async () => {
     try {
       if (selectedAgent) {
@@ -382,7 +360,7 @@ const SidebarChatTab: React.FC = () => {
   }, [selectedAgent, createAgentConversation, createGlobalConversation, setMessages]);
 
   const handleSendMessage = useCallback(async () => {
-    if ((!input.trim() && attachments.length === 0) || !currentConversationId) return;
+    if (!input.trim() || !currentConversationId) return;
 
     const body = selectedAgent
       ? {
@@ -403,17 +381,12 @@ const SidebarChatTab: React.FC = () => {
           selectedModel: currentModel,
         };
 
-    // Prepare files for sending (strip internal id)
-    const files = attachments.map(({ id: _, ...file }) => file as FileUIPart);
-
-    sendMessage({ text: input, files: files.length > 0 ? files : undefined }, { body });
+    sendMessage({ text: input }, { body });
     setInput('');
-    setAttachments([]);
     chatInputRef.current?.clear();
     setTimeout(scrollToBottom, 100);
   }, [
     input,
-    attachments,
     currentConversationId,
     selectedAgent,
     agentConversationId,
@@ -688,10 +661,6 @@ const SidebarChatTab: React.FC = () => {
             : 'Ask about your workspace...'}
           driveId={locationContext?.currentDrive?.id}
           crossDrive={true}
-          attachments={attachments}
-          onAddAttachments={handleAddAttachments}
-          onRemoveAttachment={handleRemoveAttachment}
-          showActionMenu={true}
           showSpeech={true}
         />
       </div>

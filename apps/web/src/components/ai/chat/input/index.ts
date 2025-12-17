@@ -2,7 +2,6 @@ export {
   ChatInput,
   type ChatInputProps,
   type ChatInputRef,
-  type AttachmentFile,
 } from './ChatInput';
 
 export {

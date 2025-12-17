@@ -2,30 +2,16 @@
 
 import React, { useRef } from 'react';
 import { Button } from '@/components/ui/button';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import { Plus, Mic, ImageIcon, Paperclip } from 'lucide-react';
+import { Mic } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export interface InputToolbarProps {
-  /** Whether to show the action menu (+ button) */
-  showActionMenu?: boolean;
   /** Whether to show speech-to-text button */
   showSpeech?: boolean;
-  /** Handler when files are selected via file picker */
-  onAddFiles?: (files: File[]) => void;
   /** Handler for speech transcription changes */
   onTranscriptionChange?: (text: string) => void;
-  /** Custom action menu items to add */
-  customMenuItems?: React.ReactNode;
   /** Custom toolbar buttons */
   customButtons?: React.ReactNode;
-  /** Whether to accept only images */
-  acceptImages?: boolean;
   /** Whether the toolbar is disabled */
   disabled?: boolean;
   /** Additional class names */
@@ -36,40 +22,18 @@ export interface InputToolbarProps {
  * InputToolbar - Action buttons row for the chat input
  *
  * Provides:
- * - Action menu with file/image attachment options
  * - Speech-to-text button
  * - Extensible slots for custom buttons
  */
 export function InputToolbar({
-  showActionMenu = true,
   showSpeech = true,
-  onAddFiles,
   onTranscriptionChange,
-  customMenuItems,
   customButtons,
-  acceptImages = false,
   disabled = false,
   className,
 }: InputToolbarProps) {
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const [isListening, setIsListening] = React.useState(false);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
-
-  // Handle file selection
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (files && files.length > 0 && onAddFiles) {
-      onAddFiles(Array.from(files));
-    }
-    // Reset input to allow selecting same file again
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-  };
-
-  const openFilePicker = () => {
-    fileInputRef.current?.click();
-  };
 
   // Speech recognition setup
   React.useEffect(() => {
@@ -140,51 +104,12 @@ export function InputToolbar({
     ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
 
   // Don't render if nothing to show
-  if (!showActionMenu && !showSpeech && !customButtons) {
+  if (!showSpeech && !customButtons) {
     return null;
   }
 
   return (
     <div className={cn('flex items-center gap-1 px-3 pb-2', className)}>
-      {/* Hidden file input */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        multiple
-        accept={acceptImages ? 'image/*' : undefined}
-        onChange={handleFileChange}
-        className="hidden"
-        aria-label="Upload files"
-      />
-
-      {/* Action menu */}
-      {showActionMenu && (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              disabled={disabled}
-              title="Add attachment"
-            >
-              <Plus className="h-4 w-4" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
-            <DropdownMenuItem onClick={openFilePicker}>
-              <ImageIcon className="mr-2 h-4 w-4" />
-              Add photos or files
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={openFilePicker}>
-              <Paperclip className="mr-2 h-4 w-4" />
-              Upload document
-            </DropdownMenuItem>
-            {customMenuItems}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      )}
-
       {/* Speech-to-text button */}
       {showSpeech && hasSpeechSupport && (
         <Button
