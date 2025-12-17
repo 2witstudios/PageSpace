@@ -31,6 +31,7 @@ interface ExpandableTaskItemProps {
     status: Task['status']
   ) => void;
   onTaskUpdate?: (taskId: string, updates: Partial<Task>) => void;
+  onNavigate?: () => void;
   disabled?: boolean;
 }
 
@@ -41,6 +42,7 @@ export function ExpandableTaskItem({
   displayStatus,
   onStatusToggle,
   onTaskUpdate,
+  onNavigate,
   disabled = false,
 }: ExpandableTaskItemProps) {
   const [isExpanded, setIsExpanded] = useState(false);
@@ -147,7 +149,10 @@ export function ExpandableTaskItem({
                     isCompleted && 'line-through text-muted-foreground'
                   )}
                   title={task.title}
-                  onClick={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onNavigate?.();
+                  }}
                 >
                   {task.title}
                 </Link>

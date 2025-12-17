@@ -144,7 +144,10 @@ export function TasksDropdown({ messages, driveId: fallbackDriveId }: TasksDropd
                       href={`/dashboard/${effectiveDriveId}/${taskListPageId}`}
                       className="font-medium text-sm truncate hover:underline"
                       title={taskList.title}
-                      onClick={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setIsOpen(false);
+                      }}
                     >
                       {taskList.title}
                     </Link>
@@ -196,6 +199,7 @@ export function TasksDropdown({ messages, driveId: fallbackDriveId }: TasksDropd
                         taskListPageId={taskListPageId || ''}
                         displayStatus={displayStatus}
                         onStatusToggle={handleStatusToggle}
+                        onNavigate={() => setIsOpen(false)}
                         disabled={!taskListPageId}
                       />
                     );
