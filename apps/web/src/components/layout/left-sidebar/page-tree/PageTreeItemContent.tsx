@@ -3,6 +3,7 @@
 import { CSSProperties, forwardRef, MouseEvent, KeyboardEvent } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/core";
 import {
   ChevronRight,
   Plus,
@@ -45,10 +46,8 @@ export interface PageTreeItemContentProps {
   onSelectionClick?: (e: MouseEvent | KeyboardEvent) => void;
   // Drag handle props (optional - only when draggable)
   dragHandleProps?: {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    listeners?: Record<string, any>;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    attributes?: Record<string, any>;
+    listeners?: DraggableSyntheticListeners;
+    attributes?: DraggableAttributes;
   };
 }
 
