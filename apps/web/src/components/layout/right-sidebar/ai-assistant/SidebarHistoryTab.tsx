@@ -1,9 +1,14 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { usePathname } from 'next/navigation';
-import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Trash2, Search, MessageSquare, Sparkles, Bot } from 'lucide-react';
+import { Trash2, Search, MessageSquare, Bot } from 'lucide-react';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from '@/components/ui/context-menu';
 import { formatDistanceToNow } from 'date-fns';
 import { del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
@@ -141,9 +146,7 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
     }
   };
 
-  const handleDeleteConversation = async (conversationId: string, event: React.MouseEvent) => {
-    event.stopPropagation(); // Prevent conversation click
-
+  const handleDeleteConversation = async (conversationId: string) => {
     if (!confirm('Are you sure you want to delete this conversation?')) {
       return;
     }
@@ -188,15 +191,12 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
           <Skeleton className="h-8 w-full" />
         </div>
         {/* Skeleton conversation list */}
-        <div className="flex-grow p-2 space-y-2">
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="p-3 rounded-lg border border-border">
-              <div className="flex items-start justify-between">
-                <div className="flex-grow space-y-2">
-                  <Skeleton className="h-4 w-3/4" />
-                  <Skeleton className="h-3 w-24" />
-                </div>
-                <Skeleton className="h-6 w-6 rounded" />
+        <div className="flex-grow">
+          {[1, 2, 3, 4, 5].map((i) => (
+            <div key={i} className="py-1 px-3">
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-4 flex-grow" />
+                <Skeleton className="h-3 w-12 flex-shrink-0" />
               </div>
             </div>
           ))}
@@ -214,10 +214,8 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
       {/* Header - Shows agent name or Global Assistant */}
       <div className="p-3 border-b space-y-2">
         <div className="flex items-center gap-2">
-          {selectedAgent ? (
+          {selectedAgent && (
             <Bot className="h-4 w-4 text-primary" />
-          ) : (
-            <Sparkles className="h-4 w-4 text-primary" />
           )}
           <h3 className="text-sm font-medium truncate">
             {selectedAgent ? `${selectedAgent.title} History` : 'Conversation History'}
@@ -236,7 +234,7 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
 
       {/* Conversations List - with native scrolling */}
       <div className="flex-grow overflow-y-auto">
-        <div className="p-2">
+        <div>
           {filteredConversations.length === 0 ? (
             <div className="text-center py-8">
               <MessageSquare className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
@@ -245,38 +243,40 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
               </p>
             </div>
           ) : (
-            <div className="space-y-1">
+            <div>
               {filteredConversations.map((conversation) => (
-                <div
-                  key={conversation.id}
-                  onClick={() => handleConversationClick(conversation.id)}
-                  className={`group p-3 rounded-lg border cursor-pointer hover:bg-accent transition-colors ${
-                    conversation.id === activeConversationId
-                      ? 'bg-accent/50 border-accent-foreground/20'
-                      : 'border-border'
-                  }`}
-                >
-                  <div className="flex items-start justify-between">
-                    <div className="flex-grow min-w-0">
-                      <h4 className="text-sm font-medium truncate">
-                        {conversation.title || 'New Conversation'}
-                      </h4>
-                      <p className={`text-xs mt-1 ${conversation.id === activeConversationId ? 'text-foreground' : 'text-muted-foreground group-hover:text-foreground'}`}>
-                        {formatDistanceToNow(new Date(conversation.lastMessageAt || conversation.createdAt), {
-                          addSuffix: true,
-                        })}
-                      </p>
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={(e) => handleDeleteConversation(conversation.id, e)}
-                      className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                <ContextMenu key={conversation.id}>
+                  <ContextMenuTrigger asChild>
+                    <div
+                      onClick={() => handleConversationClick(conversation.id)}
+                      className={`py-1 px-3 cursor-pointer hover:bg-accent/50 transition-colors relative ${
+                        conversation.id === activeConversationId
+                          ? 'bg-accent before:absolute before:left-0 before:top-0 before:bottom-0 before:w-0.5 before:bg-primary'
+                          : ''
+                      }`}
                     >
-                      <Trash2 className="h-3 w-3" />
-                    </Button>
-                  </div>
-                </div>
+                      <div className="flex items-center gap-2">
+                        <span className="flex-grow truncate text-sm">
+                          {conversation.title || 'New Conversation'}
+                        </span>
+                        <span className="text-xs text-muted-foreground flex-shrink-0">
+                          {formatDistanceToNow(new Date(conversation.lastMessageAt || conversation.createdAt), {
+                            addSuffix: true,
+                          })}
+                        </span>
+                      </div>
+                    </div>
+                  </ContextMenuTrigger>
+                  <ContextMenuContent className="w-40">
+                    <ContextMenuItem
+                      onSelect={() => handleDeleteConversation(conversation.id)}
+                      className="text-red-500 focus:text-red-500"
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      <span>Delete</span>
+                    </ContextMenuItem>
+                  </ContextMenuContent>
+                </ContextMenu>
               ))}
             </div>
           )}
