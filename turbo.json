@@ -4,7 +4,7 @@
     "dev": {
       "cache": false,
       "persistent": true,
-      "dependsOn": ["^db:generate", "^db:migrate"]
+      "dependsOn": []
     },
     "build": {
       "dependsOn": ["^build", "^db:generate"],

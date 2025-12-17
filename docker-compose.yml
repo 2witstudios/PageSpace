@@ -108,8 +108,8 @@ services:
     build:
       context: .
       dockerfile: apps/processor/Dockerfile
-    expose:
-      - "3003"
+    ports:
+      - "3003:3003"
     depends_on:
       migrate:
         condition: service_completed_successfully
