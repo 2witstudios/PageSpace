@@ -19,6 +19,7 @@ import { toast } from 'sonner';
 import Link from 'next/link';
 import { ExpandableTaskItem } from './chat/ExpandableTaskItem';
 import { useDriveStore } from '@/hooks/useDrive';
+import { useEditingStore } from '@/stores/useEditingStore';
 
 interface TasksDropdownProps {
   messages: UIMessage[];
@@ -31,6 +32,9 @@ export function TasksDropdown({ messages, driveId: fallbackDriveId }: TasksDropd
   const [optimisticStatuses, setOptimisticStatuses] = useState<Map<string, Task['status']>>(new Map());
 
   const { tasks, taskList, hasTaskData, isLoading } = useAggregatedTasks(messages);
+
+  // Track editing state to pause SWR revalidation
+  const isAnyActive = useEditingStore((state) => state.isAnyActive());
 
   // Calculate stats
   const stats = useMemo(() => {
@@ -65,7 +69,8 @@ export function TasksDropdown({ messages, driveId: fallbackDriveId }: TasksDropd
         throw new Error(`Failed to fetch page: ${response.status}`);
       }
       return response.json();
-    }
+    },
+    { isPaused: () => isAnyActive }
   );
 
   // Use fetched driveId, message data driveId, or fallback

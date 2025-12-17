@@ -15,6 +15,7 @@ import type { Task, TaskList } from '../useAggregatedTasks';
 import { getNextTaskStatus } from '../useAggregatedTasks';
 import { ExpandableTaskItem } from '../ExpandableTaskItem';
 import { useDriveStore } from '@/hooks/useDrive';
+import { useEditingStore } from '@/stores/useEditingStore';
 
 interface ToolCallPart {
   type: string;
@@ -76,6 +77,9 @@ export function GroupedToolCallsRenderer({ toolCalls, className }: GroupedToolCa
 
   // Fallback driveId from store for AssigneeSelect when not in message data
   const currentDriveId = useDriveStore((state) => state.currentDriveId);
+
+  // Track editing state to pause SWR revalidation
+  const isAnyActive = useEditingStore((state) => state.isAnyActive());
 
   // Process tool calls with status
   const toolCallsWithStatus = useMemo<ToolCallWithStatus[]>(() => {
@@ -216,7 +220,8 @@ export function GroupedToolCallsRenderer({ toolCalls, className }: GroupedToolCa
         throw new Error(`Failed to fetch page: ${response.status}`);
       }
       return response.json();
-    }
+    },
+    { isPaused: () => isAnyActive }
   );
 
   // Use fetched driveId, message data driveId, or store fallback
