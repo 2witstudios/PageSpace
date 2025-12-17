@@ -1,25 +1,10 @@
 import React, { useMemo, useEffect, useState } from 'react';
-import { CheckCircle2, Clock, Circle, AlertCircle, ChevronDown, ChevronRight } from 'lucide-react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Badge } from '@/components/ui/badge';
-
-interface Task {
-  id: string;
-  title: string;
-  description?: string;
-  status: 'pending' | 'in_progress' | 'completed' | 'blocked';
-  priority: 'low' | 'medium' | 'high';
-  position: number;
-  completedAt?: Date;
-  metadata?: {
-    notes?: Array<{
-      content: string;
-      timestamp: string;
-    }>;
-    estimatedMinutes?: number;
-  };
-}
+import { getTaskStatusIcon } from './task-utils';
+import type { Task } from './useAggregatedTasks';
 
 interface TaskList {
   id: string;
@@ -37,18 +22,12 @@ interface TodoListMessageProps {
   onTaskUpdate?: (taskId: string, newStatus: Task['status']) => void;
 }
 
-const getStatusIcon = (status: Task['status']) => {
-  switch (status) {
-    case 'completed':
-      return <CheckCircle2 className="w-4 h-4 text-green-600" />;
-    case 'in_progress':
-      return <Clock className="w-4 h-4 text-primary" />;
-    case 'blocked':
-      return <AlertCircle className="w-4 h-4 text-red-600" />;
-    case 'pending':
-    default:
-      return <Circle className="w-4 h-4 text-gray-400" />;
-  }
+// Custom colors for TodoListMessage
+const TODO_LIST_COLORS = {
+  completed: 'text-green-600',
+  in_progress: 'text-primary',
+  blocked: 'text-red-600',
+  pending: 'text-gray-400',
 };
 
 const getPriorityColor = (priority: Task['priority']) => {
@@ -190,7 +169,7 @@ export const TodoListMessage: React.FC<TodoListMessageProps> = React.memo(({
                     onClick={() => onTaskUpdate && handleTaskClick(task.id, task.status)}
                   >
                     <div className="flex-shrink-0">
-                      {getStatusIcon(task.status)}
+                      {getTaskStatusIcon(task.status, 'w-4 h-4', TODO_LIST_COLORS)}
                     </div>
                     
                     <div className="flex-grow min-w-0">

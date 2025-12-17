@@ -274,17 +274,35 @@ When creating tasks:
           message = `Created task "${resultTask.title}" with linked document page`;
         }
 
-        // Get all tasks for response
-        const allTasks = await db
-          .select()
-          .from(taskItems)
-          .where(eq(taskItems.taskListId, taskList!.id))
-          .orderBy(asc(taskItems.position));
+        // Get all tasks for response with assignee relations
+        const allTasks = await db.query.taskItems.findMany({
+          where: eq(taskItems.taskListId, taskList!.id),
+          orderBy: [asc(taskItems.position)],
+          with: {
+            assignee: {
+              columns: {
+                id: true,
+                name: true,
+                image: true,
+              },
+            },
+          },
+        });
 
-        // Refresh task list
+        // Refresh task list with page info for driveId
         const refreshedTaskList = await db.query.taskLists.findFirst({
           where: eq(taskLists.id, taskList!.id),
         });
+
+        // Get driveId from the associated page
+        let driveId: string | undefined;
+        if (refreshedTaskList?.pageId) {
+          const taskListPage = await db.query.pages.findFirst({
+            where: eq(pages.id, refreshedTaskList.pageId),
+            columns: { driveId: true },
+          });
+          driveId = taskListPage?.driveId;
+        }
 
         return {
           success: true,
@@ -307,6 +325,7 @@ When creating tasks:
             description: refreshedTaskList.description,
             status: refreshedTaskList.status,
             pageId: refreshedTaskList.pageId,
+            driveId,
           } : null,
           tasks: allTasks.map(t => ({
             id: t.id,
@@ -319,6 +338,11 @@ When creating tasks:
             position: t.position,
             completedAt: t.completedAt,
             pageId: t.pageId,
+            assignee: t.assignee ? {
+              id: t.assignee.id,
+              name: t.assignee.name,
+              image: t.assignee.image,
+            } : null,
           })),
           message,
         };

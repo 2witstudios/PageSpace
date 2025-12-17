@@ -38,7 +38,7 @@ import {
   ChatMessagesAreaRef,
   ChatInputAreaRef,
 } from '@/components/ai/shared/chat';
-import { AiUsageMonitor } from '@/components/ai/shared';
+import { AiUsageMonitor, TasksDropdown } from '@/components/ai/shared';
 
 interface AiChatViewProps {
   page: TreePage;
@@ -352,6 +352,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                   runningServers={runningServers}
                   onToggle={setMcpEnabled}
                 />
+
+                <TasksDropdown messages={messages} driveId={driveId} />
 
                 <Button
                   variant="outline"

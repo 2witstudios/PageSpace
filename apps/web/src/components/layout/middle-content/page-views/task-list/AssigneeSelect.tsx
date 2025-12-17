@@ -41,7 +41,7 @@ interface AssigneeSelectProps {
     name: string | null;
     image: string | null;
   } | null;
-  onSelect: (userId: string | null) => void;
+  onSelect: (userId: string | null, member?: { id: string; name: string | null; image: string | null } | null) => void;
   disabled?: boolean;
 }
 
@@ -67,8 +67,13 @@ export function AssigneeSelect({
 
   const members = data?.members || [];
 
-  const handleSelect = (userId: string | null) => {
-    onSelect(userId);
+  const handleSelect = (userId: string | null, member?: DriveMember | null) => {
+    const memberData = member ? {
+      id: member.userId,
+      name: member.profile?.displayName || member.user.name || null,
+      image: member.profile?.avatarUrl || null,
+    } : null;
+    onSelect(userId, memberData);
     setOpen(false);
   };
 
@@ -121,7 +126,7 @@ export function AssigneeSelect({
             <CommandEmpty>No members found.</CommandEmpty>
             <CommandGroup>
               {/* Unassign option */}
-              <CommandItem value="unassign" onSelect={() => handleSelect(null)}>
+              <CommandItem value="unassign" onSelect={() => handleSelect(null, null)}>
                 <User className="mr-2 h-4 w-4 text-muted-foreground" />
                 <span>Unassigned</span>
                 {!currentAssignee && <Check className="ml-auto h-4 w-4" />}
@@ -140,7 +145,7 @@ export function AssigneeSelect({
                   <CommandItem
                     key={member.userId}
                     value={displayName}
-                    onSelect={() => handleSelect(member.userId)}
+                    onSelect={() => handleSelect(member.userId, member)}
                   >
                     <Avatar className="mr-2 h-5 w-5">
                       <AvatarImage src={avatarUrl} />

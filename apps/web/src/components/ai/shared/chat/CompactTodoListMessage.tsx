@@ -1,14 +1,7 @@
 import React, { useMemo, useEffect, useState } from 'react';
-import { CheckCircle2, Clock, Circle, AlertCircle } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
-
-interface Task {
-  id: string;
-  title: string;
-  status: 'pending' | 'in_progress' | 'completed' | 'blocked';
-  priority: 'low' | 'medium' | 'high';
-  position: number;
-}
+import { getTaskStatusIcon } from './task-utils';
+import type { Task } from './useAggregatedTasks';
 
 interface TaskList {
   id: string;
@@ -26,18 +19,12 @@ interface CompactTodoListMessageProps {
   onTaskUpdate?: (taskId: string, newStatus: Task['status']) => void;
 }
 
-const getStatusIcon = (status: Task['status']) => {
-  switch (status) {
-    case 'completed':
-      return <CheckCircle2 className="w-3 h-3 text-green-500" />;
-    case 'in_progress':
-      return <Clock className="w-3 h-3 text-primary" />;
-    case 'blocked':
-      return <AlertCircle className="w-3 h-3 text-red-500" />;
-    case 'pending':
-    default:
-      return <Circle className="w-3 h-3 text-gray-400" />;
-  }
+// Custom colors for compact variant
+const COMPACT_COLORS = {
+  completed: 'text-green-500',
+  in_progress: 'text-primary',
+  blocked: 'text-red-500',
+  pending: 'text-gray-400',
 };
 
 export const CompactTodoListMessage: React.FC<CompactTodoListMessageProps> = React.memo(({
@@ -128,7 +115,7 @@ export const CompactTodoListMessage: React.FC<CompactTodoListMessageProps> = Rea
               onClick={() => onTaskUpdate && handleTaskClick(task.id, task.status)}
             >
               <div className="flex-shrink-0">
-                {getStatusIcon(task.status)}
+                {getTaskStatusIcon(task.status, 'w-3 h-3', COMPACT_COLORS)}
               </div>
               
               <div className={`flex-1 min-w-0 truncate ${
