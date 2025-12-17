@@ -193,13 +193,14 @@ export function PageTreeItem({
             <div
               ref={handleProps.ref}
               {...handleProps.attributes}
+              {...handleProps.listeners}
               data-tree-node-id={item.id}
               className={cn(
-                "group flex items-center px-1 py-1.5 rounded-lg transition-all duration-200",
+                "group flex items-center px-1 py-1.5 rounded-lg transition-all duration-200 cursor-grab active:cursor-grabbing outline-none ring-0 focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0",
                 showDropIndicator && dropPosition === "inside" &&
                   "bg-primary/10 dark:bg-primary/20 ring-2 ring-primary ring-inset",
                 !isActive && !showDropIndicator &&
-                  "hover:bg-gray-100 dark:hover:bg-gray-800",
+                  "hover:bg-gray-200 dark:hover:bg-gray-700",
                 params.pageId === item.id && "bg-gray-200 dark:bg-gray-700"
               )}
               style={{ paddingLeft: `${depth * 8 + 4}px` }}
@@ -211,9 +212,10 @@ export function PageTreeItem({
                     e.stopPropagation();
                     onToggleExpand(item.id);
                   }}
+                  onPointerDown={(e) => e.stopPropagation()}
                   aria-expanded={isExpanded}
                   aria-label={isExpanded ? "Collapse" : "Expand"}
-                  className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                  className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors cursor-pointer"
                 >
                   <ChevronRight
                     className={cn(
@@ -224,11 +226,8 @@ export function PageTreeItem({
                 </button>
               )}
 
-              {/* Icon - Drag Handle */}
-              <div
-                {...handleProps.listeners}
-                className="cursor-grab active:cursor-grabbing p-0.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700"
-              >
+              {/* Icon */}
+              <div className="p-0.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700">
                 <PageTypeIcon
                   type={item.type}
                   isTaskLinked={item.isTaskLinked}
@@ -242,7 +241,8 @@ export function PageTreeItem({
               {/* Title - Click to Navigate */}
               <Link
                 href={linkHref}
-                className="flex-1 min-w-0 ml-1.5 truncate text-sm font-medium text-gray-900 dark:text-gray-100 hover:underline"
+                onPointerDown={(e) => e.stopPropagation()}
+                className="flex-1 min-w-0 ml-1.5 truncate text-sm font-medium text-gray-900 dark:text-gray-100 hover:underline cursor-pointer"
               >
                 {item.title}
               </Link>
@@ -255,11 +255,12 @@ export function PageTreeItem({
                 )}
               >
                 <button
-                  className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700"
+                  className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 cursor-pointer"
                   onClick={(e) => {
                     e.stopPropagation();
                     onOpenCreateDialog(item.id);
                   }}
+                  onPointerDown={(e) => e.stopPropagation()}
                   aria-label="Add child page"
                 >
                   <Plus className="h-3 w-3 text-gray-500" />
