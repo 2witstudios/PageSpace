@@ -631,6 +631,215 @@ export const pageService = {
       isAIChatPage: isAIChatPage(params.type as PageTypeEnum),
     };
   },
+
+  /**
+   * Batch trash multiple pages (soft delete)
+   */
+  async batchTrashPages(pageIds: string[], userId: string): Promise<BatchTrashResult> {
+    if (!pageIds.length) {
+      return { success: false, error: 'No page IDs provided', status: 400 };
+    }
+
+    // Check authorization for all pages
+    const authResults = await Promise.all(
+      pageIds.map(async (pageId) => ({
+        pageId,
+        canDelete: await canUserDeletePage(userId, pageId),
+      }))
+    );
+
+    const unauthorized = authResults.filter((r) => !r.canDelete);
+    if (unauthorized.length > 0) {
+      return {
+        success: false,
+        error: `No permission to delete ${unauthorized.length} page(s)`,
+        status: 403,
+      };
+    }
+
+    // Get page info for all pages
+    const pagesInfo = await db.query.pages.findMany({
+      where: inArray(pages.id, pageIds),
+      with: {
+        drive: { columns: { id: true } },
+      },
+    });
+
+    if (pagesInfo.length !== pageIds.length) {
+      return { success: false, error: 'Some pages not found', status: 404 };
+    }
+
+    // Get unique drive IDs
+    const driveIds = [...new Set(pagesInfo.map((p) => p.drive?.id).filter(Boolean))] as string[];
+
+    // Trash all pages in a transaction
+    await db.transaction(async (tx) => {
+      const now = new Date();
+      await tx.update(pages)
+        .set({ isTrashed: true, trashedAt: now })
+        .where(inArray(pages.id, pageIds));
+    });
+
+    // Check if any AI_CHAT pages were trashed
+    const hasAIChatPages = pagesInfo.some((p) => p.type === 'AI_CHAT');
+
+    return {
+      success: true,
+      driveIds,
+      trashedCount: pageIds.length,
+      hasAIChatPages,
+    };
+  },
+
+  /**
+   * Batch move multiple pages to a new parent
+   */
+  async batchMovePages(
+    pageIds: string[],
+    newParentId: string | null,
+    userId: string
+  ): Promise<BatchMoveResult> {
+    if (!pageIds.length) {
+      return { success: false, error: 'No page IDs provided', status: 400 };
+    }
+
+    // Check authorization for all pages
+    const authResults = await Promise.all(
+      pageIds.map(async (pageId) => ({
+        pageId,
+        canEdit: await canUserEditPage(userId, pageId),
+      }))
+    );
+
+    const unauthorized = authResults.filter((r) => !r.canEdit);
+    if (unauthorized.length > 0) {
+      return {
+        success: false,
+        error: `No permission to move ${unauthorized.length} page(s)`,
+        status: 403,
+      };
+    }
+
+    // Get page info for all pages
+    const pagesInfo = await db.query.pages.findMany({
+      where: inArray(pages.id, pageIds),
+      with: {
+        drive: { columns: { id: true } },
+      },
+    });
+
+    if (pagesInfo.length !== pageIds.length) {
+      return { success: false, error: 'Some pages not found', status: 404 };
+    }
+
+    // Validate moves (check for circular references)
+    for (const pageId of pageIds) {
+      const validation = await validatePageMove(pageId, newParentId);
+      if (!validation.valid) {
+        return { success: false, error: validation.error || 'Invalid move', status: 400 };
+      }
+    }
+
+    // Get the target parent's driveId (if moving to a parent)
+    let targetDriveId: string;
+    if (newParentId) {
+      const parentInfo = await db.query.pages.findFirst({
+        where: eq(pages.id, newParentId),
+        columns: { driveId: true },
+      });
+      if (!parentInfo) {
+        return { success: false, error: 'Parent page not found', status: 404 };
+      }
+      targetDriveId = parentInfo.driveId;
+    } else {
+      // Moving to root - use the first page's drive
+      targetDriveId = pagesInfo[0]?.drive?.id || '';
+    }
+
+    // Calculate new positions for all pages
+    const existingSiblings = await db.select({ id: pages.id, position: pages.position })
+      .from(pages)
+      .where(
+        and(
+          newParentId ? eq(pages.parentId, newParentId) : isNull(pages.parentId),
+          eq(pages.driveId, targetDriveId),
+          eq(pages.isTrashed, false)
+        )
+      )
+      .orderBy(pages.position);
+
+    // Filter out pages being moved
+    const siblingsWithoutMoving = existingSiblings.filter(
+      (s) => !pageIds.includes(s.id)
+    );
+
+    // Calculate starting position (at the end)
+    let lastPosition = siblingsWithoutMoving.length > 0
+      ? (siblingsWithoutMoving[siblingsWithoutMoving.length - 1]?.position ?? 0) + 1
+      : 1;
+
+    // Move all pages in a transaction
+    await db.transaction(async (tx) => {
+      for (const pageId of pageIds) {
+        await tx.update(pages)
+          .set({
+            parentId: newParentId,
+            position: lastPosition,
+            updatedAt: new Date(),
+          })
+          .where(eq(pages.id, pageId));
+        lastPosition += 1;
+      }
+    });
+
+    // Get unique drive IDs (source drives)
+    const sourceDriveIds = [...new Set(pagesInfo.map((p) => p.drive?.id).filter(Boolean))] as string[];
+    // Add target drive if different
+    const allDriveIds = [...new Set([...sourceDriveIds, targetDriveId])];
+
+    return {
+      success: true,
+      driveIds: allDriveIds,
+      movedCount: pageIds.length,
+      targetParentId: newParentId,
+    };
+  },
 };
+
+/**
+ * Batch trash result types
+ */
+export interface BatchTrashSuccess {
+  success: true;
+  driveIds: string[];
+  trashedCount: number;
+  hasAIChatPages: boolean;
+}
+
+export interface BatchTrashError {
+  success: false;
+  error: string;
+  status: number;
+}
+
+export type BatchTrashResult = BatchTrashSuccess | BatchTrashError;
+
+/**
+ * Batch move result types
+ */
+export interface BatchMoveSuccess {
+  success: true;
+  driveIds: string[];
+  movedCount: number;
+  targetParentId: string | null;
+}
+
+export interface BatchMoveError {
+  success: false;
+  error: string;
+  status: number;
+}
+
+export type BatchMoveResult = BatchMoveSuccess | BatchMoveError;
 
 export type PageService = typeof pageService;

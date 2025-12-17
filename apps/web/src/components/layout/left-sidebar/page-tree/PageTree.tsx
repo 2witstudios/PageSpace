@@ -1,20 +1,22 @@
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { FileIcon } from "lucide-react";
-import { patch } from "@/lib/auth/auth-fetch";
+import { patch, post } from "@/lib/auth/auth-fetch";
 import { TreePage } from "@/hooks/usePageTree";
 import { usePageTreeSocket } from "@/hooks/usePageTreeSocket";
 import { findNodeAndParent } from "@/lib/tree/tree-utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import CreatePageDialog from "../CreatePageDialog";
-import { useTreeState } from "@/hooks/useUI";
+import { useTreeState, usePageSelection } from "@/hooks/useUI";
 import { useFileDrop } from "@/hooks/useFileDrop";
 import { cn } from "@/lib/utils";
 import { SortableTree } from "@/components/ui/sortable-tree";
 import { Projection, TreeItem } from "@/lib/tree/sortable-tree";
 import { PageTreeItem, DropPosition } from "./PageTreeItem";
+import { DragOverlayContent } from "./PageTreeItemContent";
 import { KeyedMutator } from "swr";
+import { toast } from "sonner";
 
 interface PageTreeProps {
   driveId: string;
@@ -38,6 +40,11 @@ export default function PageTree({
   const tree = initialTree ?? fetchedTree;
   const mutate = externalMutate ?? internalMutate;
   const { expanded: expandedNodes, toggleExpanded } = useTreeState();
+  const {
+    selectedPageIds,
+    setSelection,
+    clearSelection,
+  } = usePageSelection();
 
   const [createPageInfo, setCreatePageInfo] = useState<{
     isOpen: boolean;
@@ -62,6 +69,23 @@ export default function PageTree({
     parentId: null,
     onUploadComplete: () => mutate(),
   });
+
+  // Clear selection when clicking outside the tree
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      // If click is outside the sidebar tree, clear selection
+      if (!target.closest('[data-tree-node-id]') && !target.closest('[data-slot="context-menu"]')) {
+        // Only clear if not right-clicking (context menu)
+        if (e.button === 0) {
+          clearSelection();
+        }
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [clearSelection]);
 
   // Filter tree by search query
   const filterTree = useCallback((nodes: TreePage[], query: string): TreePage[] => {
@@ -103,7 +127,7 @@ export default function PageTree({
     return allIds;
   }, [displayedTree, expandedNodes]);
 
-  // Handle move from SortableTree
+  // Handle single move from SortableTree
   const handleMove = useCallback(
     async (activeId: string, _overId: string, projection: Projection) => {
       const activeInfo = findNodeAndParent(tree, activeId);
@@ -116,7 +140,7 @@ export default function PageTree({
       const siblings = newParent ? newParent.children : tree;
 
       // Filter out the active item from siblings (it's being moved)
-      const siblingsWithoutActive = siblings.filter(s => s.id !== activeId);
+      const siblingsWithoutActive = siblings.filter((s: TreePage) => s.id !== activeId);
 
       // Use projection.insertionIndex for correct position calculation
       const insertAt = projection.insertionIndex;
@@ -157,6 +181,41 @@ export default function PageTree({
       }
     },
     [tree, mutate, expandedNodes, toggleExpanded]
+  );
+
+  // Handle multi-move from SortableTree
+  const handleMultiMove = useCallback(
+    async (activeIds: string[], _overId: string, projection: Projection) => {
+      const newParentId = projection.parentId;
+
+      // Auto-expand parent if dropping inside
+      if (newParentId && !expandedNodes.has(newParentId)) {
+        toggleExpanded(newParentId);
+      }
+
+      const toastId = toast.loading(`Moving ${activeIds.length} pages...`);
+      try {
+        await post("/api/pages/batch-move", {
+          pageIds: activeIds,
+          newParentId: newParentId,
+          insertionIndex: projection.insertionIndex,
+        });
+        await mutate();
+        toast.success(`${activeIds.length} pages moved.`, { id: toastId });
+      } catch (error) {
+        console.error("Failed to batch move pages:", error);
+        toast.error("Failed to move pages.", { id: toastId });
+      }
+    },
+    [expandedNodes, toggleExpanded, mutate]
+  );
+
+  // Handle selection change from SortableTree (when dragging unselected item)
+  const handleSelectionChange = useCallback(
+    (ids: string[]) => {
+      setSelection(ids);
+    },
+    [setSelection]
   );
 
   const handleToggleExpand = useCallback(
@@ -274,6 +333,14 @@ export default function PageTree({
     [isDraggingFiles, fileDragState, tree, handleFileDrop]
   );
 
+  // Render drag overlay for multi-select
+  const renderDragOverlay = useCallback(
+    ({ items, totalCount }: { items: TreePage[]; totalCount: number }) => {
+      return <DragOverlayContent items={items} totalCount={totalCount} />;
+    },
+    []
+  );
+
   if (isLoading) {
     return (
       <div className="p-4 space-y-2">
@@ -297,8 +364,12 @@ export default function PageTree({
           items={displayedTree as SortableTreePage[]}
           collapsedIds={collapsedIds}
           indentationWidth={24}
+          selectedIds={selectedPageIds}
           onMove={handleMove}
-          renderItem={({ item, depth, isActive, isOver, dropPosition, projectedDepth, projected, handleProps, wrapperProps }) => (
+          onMultiMove={handleMultiMove}
+          onSelectionChange={handleSelectionChange}
+          renderDragOverlay={renderDragOverlay}
+          renderItem={({ item, depth, isActive, isOver, dropPosition, projectedDepth, projected, flattenedIds, handleProps, wrapperProps }) => (
             <PageTreeItem
               item={item as TreePage}
               depth={depth}
@@ -315,6 +386,7 @@ export default function PageTree({
               mutate={mutate}
               isTrashView={isTrashView}
               fileDragState={fileDragState}
+              flattenedIds={flattenedIds}
             />
           )}
         />
