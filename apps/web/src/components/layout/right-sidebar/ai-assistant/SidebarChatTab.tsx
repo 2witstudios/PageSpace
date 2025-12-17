@@ -655,7 +655,6 @@ const SidebarChatTab: React.FC = () => {
           onSend={handleSendMessage}
           onStop={handleStop}
           isStreaming={displayIsStreaming}
-          disabled={!canSend && !displayIsStreaming}
           placeholder={locationContext
             ? `Ask about ${locationContext.currentPage?.title || 'this page'}...`
             : 'Ask about your workspace...'}
