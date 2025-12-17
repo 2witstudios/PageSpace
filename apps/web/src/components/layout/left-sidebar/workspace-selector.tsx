@@ -89,14 +89,16 @@ export default function DriveSwitcher() {
           <Link href={currentDrive ? `/dashboard/${currentDrive.id}` : '/dashboard'} className="font-semibold truncate hover:underline flex-1 text-foreground">
             {currentDrive ? currentDrive.name : "Select a drive"}
           </Link>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="shrink-0 text-muted-foreground h-8 w-8"
-            onClick={() => setCreateDriveOpen(true)}
-          >
-            <Plus className="h-4 w-4" />
-          </Button>
+          {!urlDriveId && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="shrink-0 text-muted-foreground h-8 w-8"
+              onClick={() => setCreateDriveOpen(true)}
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+          )}
         </div>
         <DropdownMenuContent className="w-56">
           {ownedDrives.length > 0 && (
