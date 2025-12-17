@@ -159,3 +159,15 @@ export const StreamingMarkdown = memo(
 );
 
 StreamingMarkdown.displayName = 'StreamingMarkdown';
+
+/**
+ * Legacy alias for backward compatibility
+ * Can be used as a drop-in replacement for MemoizedMarkdown
+ */
+export const MemoizedMarkdown = memo(
+  ({ content, id }: { content: string; id: string }) => {
+    return <StreamingMarkdown content={content} id={id} isStreaming={false} />;
+  }
+);
+
+MemoizedMarkdown.displayName = 'MemoizedMarkdown';

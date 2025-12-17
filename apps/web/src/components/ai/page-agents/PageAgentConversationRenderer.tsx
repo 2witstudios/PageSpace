@@ -1,11 +1,8 @@
 import React from 'react';
-import { Loader2, AlertCircle, CheckCircle, Clock, XCircle, ChevronDown } from 'lucide-react';
-import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '@/components/ui/collapsible';
+import { Loader2, AlertCircle } from 'lucide-react';
+import { Task, TaskTrigger, TaskContent, TaskItem, TaskStatus } from '@/components/ai/task';
 import { Badge } from '@/components/ui/badge';
-import { StreamingMarkdown } from '@/components/ai/shared';
-import { cn } from '@/lib/utils';
-
-type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'error';
+import { MemoizedMarkdown } from '@/components/ai/shared';
 
 interface AgentConversationOutput {
   success: boolean;
@@ -102,70 +99,29 @@ export const PageAgentConversationRenderer: React.FC<PageAgentConversationRender
     return 'Ask Agent';
   };
 
-  // Status-based styling
-  const getStatusIcon = () => {
-    switch (taskStatus) {
-      case 'completed':
-        return <CheckCircle className="h-4 w-4 text-green-600" />;
-      case 'in_progress':
-        return <Loader2 className="h-4 w-4 text-primary animate-spin" />;
-      case 'error':
-        return <XCircle className="h-4 w-4 text-red-600" />;
-      default:
-        return <Clock className="h-4 w-4 text-gray-400" />;
-    }
-  };
-
-  const getStatusColor = () => {
-    switch (taskStatus) {
-      case 'completed':
-        return 'bg-green-50/50 dark:bg-green-900/20 hover:bg-green-50 dark:hover:bg-green-900/30';
-      case 'in_progress':
-        return 'bg-primary/10 dark:bg-primary/20 hover:bg-primary/15 dark:hover:bg-primary/25';
-      case 'error':
-        return 'bg-red-50/50 dark:bg-red-900/20 hover:bg-red-50 dark:hover:bg-red-900/30';
-      default:
-        return 'bg-muted/30 hover:bg-muted/50';
-    }
-  };
-
+  // Use Task accordion pattern (like other tools)
   return (
-    <Collapsible
-      defaultOpen={taskStatus === 'in_progress' || taskStatus === 'error'}
-      className="my-2 mr-2 sm:mr-8"
-    >
-      <CollapsibleTrigger
-        className={cn(
-          "group w-full flex items-center justify-between py-2 px-3 text-left rounded-t-lg transition-colors",
-          getStatusColor()
-        )}
-      >
-        <div className="flex items-center space-x-3 flex-1 min-w-0">
-          {getStatusIcon()}
-          <div className="flex-1 min-w-0">
-            <div className="font-medium text-sm text-gray-900 dark:text-gray-100 truncate">
-              {getTaskTitle()}
-            </div>
-          </div>
-        </div>
-        <ChevronDown className="h-4 w-4 text-gray-500 transition-transform duration-200 group-data-[state=open]:rotate-180" />
-      </CollapsibleTrigger>
-      <CollapsibleContent className="px-3 pb-3 bg-muted/20 rounded-b-lg">
+    <Task defaultOpen={taskStatus === 'in_progress' || taskStatus === 'error'} className="my-2">
+      <TaskTrigger
+        title={getTaskTitle()}
+        status={taskStatus}
+      />
+      <TaskContent>
         {/* Loading state */}
         {taskStatus === 'in_progress' && (
-          <div className="flex items-center text-sm text-primary">
+          <TaskItem status="in_progress">
             <Loader2 className="h-4 w-4 animate-spin mr-2" />
             Processing inquiry with {agentLabel}...
-          </div>
+          </TaskItem>
         )}
-
+        
         {/* Error state */}
         {taskStatus === 'error' && (
           <>
-            <div className="flex items-center text-sm text-red-600 dark:text-red-400">
+            <TaskItem status="error">
               <AlertCircle className="h-4 w-4 mr-2" />
               Agent consultation failed
-            </div>
+            </TaskItem>
             {error && (
               <div className="mt-2 p-2 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded text-xs">
                 <div className="text-red-600 dark:text-red-400">{error}</div>
@@ -173,12 +129,12 @@ export const PageAgentConversationRenderer: React.FC<PageAgentConversationRender
             )}
           </>
         )}
-
-        {/* Success state */}
+        
+        {/* Success state - Beautiful conversation display */}
         {taskStatus === 'completed' && output && (
           <div className="space-y-3">
             {/* Provider/Model badges (only non-default) */}
-            {(output.metadata?.provider && output.metadata.provider !== 'default') ||
+            {(output.metadata?.provider && output.metadata.provider !== 'default') || 
              (output.metadata?.model && output.metadata.model !== 'default') ? (
               <div className="flex items-center gap-2 flex-wrap">
                 {output.metadata?.provider && output.metadata.provider !== 'default' && (
@@ -193,14 +149,14 @@ export const PageAgentConversationRenderer: React.FC<PageAgentConversationRender
                 )}
               </div>
             ) : null}
-
+            
             {/* Context if provided */}
             {context && (
               <div className="text-xs text-muted-foreground px-2">
                 <span className="font-medium">Context:</span> {context}
               </div>
             )}
-
+            
             {/* Question */}
             {question && (
               <div className="bg-gray-50 dark:bg-gray-800/50 rounded-md p-3">
@@ -212,7 +168,7 @@ export const PageAgentConversationRenderer: React.FC<PageAgentConversationRender
                 </div>
               </div>
             )}
-
+            
             {/* Response with markdown */}
             {response && (
               <div className="bg-white dark:bg-gray-900 rounded-md p-3 border border-gray-200 dark:border-gray-800">
@@ -220,16 +176,16 @@ export const PageAgentConversationRenderer: React.FC<PageAgentConversationRender
                   Response
                 </div>
                 <div className="text-gray-900 dark:text-gray-100 prose prose-sm dark:prose-invert max-w-none prose-pre:bg-gray-100 dark:prose-pre:bg-gray-800">
-                  <StreamingMarkdown
-                    content={response}
-                    isStreaming={false}
+                  <MemoizedMarkdown 
+                    content={response} 
+                    id={`ask-agent-${part.toolCallId || 'response'}`} 
                   />
                 </div>
               </div>
             )}
           </div>
         )}
-      </CollapsibleContent>
-    </Collapsible>
+      </TaskContent>
+    </Task>
   );
 };

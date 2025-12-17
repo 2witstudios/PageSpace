@@ -11,7 +11,7 @@ vi.mock('streamdown', () => ({
 }));
 
 // Import after mocking
-import { StreamingMarkdown } from '../chat/StreamingMarkdown';
+import { StreamingMarkdown, MemoizedMarkdown } from '../StreamingMarkdown';
 
 /**
  * Tests for StreamingMarkdown component
@@ -133,6 +133,16 @@ describe('preprocessMentions', () => {
     // Second render - regex lastIndex should be reset
     rerender(<StreamingMarkdown content="@[Second](id2:type)" />);
     expect(screen.getByTestId('streamdown').textContent).toBe('[mention:Second](mention://id2/type)');
+  });
+});
+
+describe('MemoizedMarkdown (legacy alias)', () => {
+  it('should render content using StreamingMarkdown internally', () => {
+    render(<MemoizedMarkdown content="Hello legacy" id="legacy-id" />);
+
+    const streamdown = screen.getByTestId('streamdown');
+    expect(streamdown).toHaveAttribute('data-mode', 'static');
+    expect(streamdown.textContent).toBe('Hello legacy');
   });
 });
 

@@ -130,12 +130,12 @@ export function CompactGroupedToolCallsRenderer({ toolCalls, className }: Compac
   }, [toolCalls]);
 
   return (
-    <div className={cn('my-0.5', className)}>
-      <div className="rounded">
+    <div className={cn('my-1.5', className)}>
+      <div className="bg-gray-50 dark:bg-gray-800/30 rounded border border-gray-200 dark:border-gray-700">
         {/* Group Header */}
         <button
           onClick={() => setIsExpanded(!isExpanded)}
-          className="w-full flex items-center space-x-1.5 py-1 px-1.5 text-left hover:bg-muted/30 transition-colors rounded"
+          className="w-full flex items-center space-x-1.5 p-2 text-left hover:bg-gray-100 dark:hover:bg-gray-800/50 transition-colors rounded"
         >
           <div className="flex-shrink-0">
             {isExpanded ? (
@@ -161,8 +161,8 @@ export function CompactGroupedToolCallsRenderer({ toolCalls, className }: Compac
 
         {/* Expanded Tool Calls */}
         {isExpanded && (
-          <div>
-            <div className="p-1 space-y-0.5">
+          <div className="border-t border-gray-200 dark:border-gray-700">
+            <div className="p-1.5 space-y-1.5">
               {toolCallsWithStatus.map((tool, index) => {
                 const isActive = index === activeToolIndex;
                 return (

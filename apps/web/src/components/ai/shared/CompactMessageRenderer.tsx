@@ -1,15 +1,16 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { UIMessage } from 'ai';
-import { ToolCallRenderer, GroupedToolCallsRenderer } from './tool-calls';
-
+import { CompactToolCallRenderer } from './CompactToolCallRenderer';
+import { CompactGroupedToolCallsRenderer } from './CompactGroupedToolCallsRenderer';
 import { StreamingMarkdown } from './StreamingMarkdown';
 import { MessageActionButtons } from './MessageActionButtons';
 import { MessageEditor } from './MessageEditor';
 import { DeleteMessageDialog } from './DeleteMessageDialog';
-import { TodoListMessage } from './TodoListMessage';
+import { CompactTodoListMessage } from './CompactTodoListMessage';
 import { useSocket } from '@/hooks/useSocket';
-import { ErrorBoundary } from '@/components/ai/shared/ErrorBoundary';
+import { ErrorBoundary } from './ErrorBoundary';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import styles from './CompactMessageRenderer.module.css';
 
 // Extended message interface that includes database fields
 interface ConversationMessage extends UIMessage {
@@ -55,7 +56,7 @@ interface ToolCallsGroupPart {
 
 type GroupedPart = TextGroupPart | ToolGroupPart | ToolCallsGroupPart;
 
-interface TextBlockProps {
+interface CompactTextBlockProps {
   parts: TextPart[];
   role: 'user' | 'assistant' | 'system';
   messageId: string;
@@ -72,9 +73,10 @@ interface TextBlockProps {
 }
 
 /**
- * Renders a group of consecutive text parts as a single block
+ * Compact text block for sidebar - minimal margins and padding
+ * Memoized to prevent unnecessary re-renders during streaming
  */
-const TextBlock: React.FC<TextBlockProps> = React.memo(({
+const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
   parts,
   role,
   messageId,
@@ -94,17 +96,19 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({
 
   return (
     <div
-      className={`group relative p-3 rounded-lg mb-2 ${role === 'user'
-        ? 'bg-primary/10 dark:bg-accent/20 ml-2 sm:ml-8'
-        : 'bg-gray-50 dark:bg-gray-800/50 mr-2 sm:mr-8'
-        }`}
+      className={`group relative p-2 rounded-md text-xs ${
+        role === 'user'
+          ? 'bg-primary/10 dark:bg-accent/20 ml-2'
+          : 'bg-gray-50 dark:bg-gray-800/50'
+      }`}
     >
-      <div className="flex items-center justify-between mb-1">
-        <div className={`text-sm font-medium ${role === 'user' ? 'text-primary dark:text-primary' : 'text-gray-700 dark:text-gray-300'
-          }`}>
-          {role === 'user' ? 'You' : 'Assistant'}
+      <div className="flex items-center justify-between mb-0.5">
+        <div className={`text-xs font-medium ${
+          role === 'user' ? 'text-primary dark:text-primary' : 'text-gray-700 dark:text-gray-300'
+        }`}>
+          {role === 'user' ? 'You' : 'AI'}
           {editedAt && !isEditing && (
-            <span className="ml-2 text-xs text-muted-foreground">(edited)</span>
+            <span className="ml-1 text-[10px] text-muted-foreground">(edited)</span>
           )}
         </div>
         {onEdit && onDelete && !isEditing && (
@@ -112,29 +116,31 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({
             onEdit={onEdit}
             onDelete={onDelete}
             onRetry={onRetry}
+            compact
           />
         )}
       </div>
 
       {isEditing && onSaveEdit && onCancelEdit ? (
-        <MessageEditor
-          initialContent={content}
-          onSave={onSaveEdit}
-          onCancel={onCancelEdit}
-        />
+        <div className="text-xs">
+          <MessageEditor
+            initialContent={content}
+            onSave={onSaveEdit}
+            onCancel={onCancelEdit}
+            placeholder="Edit message..."
+          />
+        </div>
       ) : (
         <>
-          <div className="text-gray-900 dark:text-gray-100 prose prose-sm dark:prose-invert max-w-full overflow-hidden prose-pre:bg-gray-100 dark:prose-pre:bg-gray-800">
-            <div className="break-words overflow-wrap-anywhere">
-              <StreamingMarkdown content={content} id={`${messageId}-text`} isStreaming={isStreaming} />
-            </div>
+          <div className={`text-gray-900 dark:text-gray-100 prose prose-xs dark:prose-invert max-w-full overflow-hidden ${styles.compactProseContent}`}>
+            <StreamingMarkdown content={content} id={`${messageId}-text`} isStreaming={isStreaming} />
           </div>
           {createdAt && (
-            <div className="text-xs text-gray-500 mt-2">
-              {new Date(createdAt).toLocaleTimeString()}
+            <div className="text-[10px] text-gray-500 mt-1">
+              {new Date(createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               {editedAt && (
-                <span className="ml-2">
-                  (edited {new Date(editedAt).toLocaleTimeString()})
+                <span className="ml-1">
+                  (edited)
                 </span>
               )}
             </div>
@@ -145,9 +151,9 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({
   );
 });
 
-TextBlock.displayName = 'TextBlock';
+CompactTextBlock.displayName = 'CompactTextBlock';
 
-interface MessageRendererProps {
+interface CompactMessageRendererProps {
   message: ConversationMessage;
   onEdit?: (messageId: string, newContent: string) => Promise<void>;
   onDelete?: (messageId: string) => Promise<void>;
@@ -160,11 +166,10 @@ interface MessageRendererProps {
 }
 
 /**
- * Renders a UIMessage with parts in chronological order.
+ * Compact message renderer for sidebar - optimized for narrow width.
  * Supports both standard messages and todo_list messages with real-time socket updates.
- * Groups consecutive text parts together while preserving tool call positions.
  */
-export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
+export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = React.memo(({
   message,
   onEdit,
   onDelete,
@@ -407,15 +412,14 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
   if (message.messageType === 'todo_list') {
     if (isLoadingTasks) {
       return (
-        <div className="mb-4 mr-8">
-          <div className="bg-primary/5 dark:bg-primary/10 border border-primary/20 dark:border-primary/30 rounded-lg p-4">
+        <div className="mb-3">
+          <div className="bg-primary/10 dark:bg-primary/20 border border-primary/20 dark:border-primary/30 rounded-md p-2">
             <div className="animate-pulse">
-              <div className="h-4 bg-primary/20 dark:bg-primary/30 rounded w-1/3 mb-2"></div>
-              <div className="h-2 bg-primary/15 dark:bg-primary/25 rounded w-full mb-3"></div>
-              <div className="space-y-2">
-                <div className="h-8 bg-white dark:bg-gray-800 rounded"></div>
-                <div className="h-8 bg-white dark:bg-gray-800 rounded"></div>
-                <div className="h-8 bg-white dark:bg-gray-800 rounded"></div>
+              <div className="h-3 bg-primary/30 dark:bg-primary/50 rounded w-2/3 mb-1"></div>
+              <div className="h-1.5 bg-primary/20 dark:bg-primary/40 rounded w-full mb-2"></div>
+              <div className="space-y-1">
+                <div className="h-6 bg-white dark:bg-gray-800 rounded"></div>
+                <div className="h-6 bg-white dark:bg-gray-800 rounded"></div>
               </div>
             </div>
           </div>
@@ -425,9 +429,9 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
 
     if (!taskList || tasks.length === 0) {
       return (
-        <div className="mb-4 mr-8">
-          <div className="bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
-            <div className="text-yellow-800 dark:text-yellow-200">
+        <div className="mb-3">
+          <div className="bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-800 rounded-md p-2">
+            <div className="text-xs text-yellow-700 dark:text-yellow-300">
               No tasks found for this todo list.
             </div>
           </div>
@@ -438,16 +442,16 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
     return (
       <ErrorBoundary
         fallback={
-          <div className="mb-4">
-            <div className="bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
-              <div className="text-yellow-800 dark:text-yellow-200">
+          <div className="mb-3">
+            <div className="bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-800 rounded-md p-2">
+              <div className="text-xs text-yellow-700 dark:text-yellow-300">
                 Failed to load TODO list. Please refresh the page.
               </div>
             </div>
           </div>
         }
       >
-        <TodoListMessage
+        <CompactTodoListMessage
           tasks={tasks}
           taskList={taskList}
           createdAt={message.createdAt}
@@ -462,7 +466,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
   // ============================================
   return (
     <>
-      <div key={message.id} className="mb-4" style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 100px' }}>
+      <div key={message.id} className="mb-2" style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 80px' }}>
         {groupedParts.map((group, index) => {
           if (group.type === 'text-group') {
             // Type narrowing: we know this is a TextGroupPart
@@ -470,7 +474,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
             const isLastTextBlock = index === groupedParts.length - 1;
 
             return (
-              <TextBlock
+              <CompactTextBlock
                 key={`${message.id}-text-${index}`}
                 parts={textGroup.parts}
                 role={message.role as 'user' | 'assistant' | 'system'}
@@ -490,25 +494,25 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
             // Type narrowing: we know this is a ToolCallsGroupPart
             const toolCallsGroup = group as ToolCallsGroupPart;
             return (
-              <GroupedToolCallsRenderer
-                key={`${message.id}-toolgroup-${index}`}
-                toolCalls={toolCallsGroup.tools.map((tool) => ({
-                  type: tool.type,
-                  toolName: tool.toolName,
-                  toolCallId: tool.toolCallId,
-                  input: tool.input,
-                  output: tool.output,
-                  state: tool.state,
-                }))}
-                className="mr-2 sm:mr-8"
-              />
+              <div key={`${message.id}-toolgroup-${index}`} className="mt-1">
+                <CompactGroupedToolCallsRenderer
+                  toolCalls={toolCallsGroup.tools.map(tool => ({
+                    type: tool.type,
+                    toolName: tool.toolName,
+                    toolCallId: tool.toolCallId,
+                    input: tool.input,
+                    output: tool.output,
+                    state: tool.state,
+                  }))}
+                />
+              </div>
             );
           } else if (group.type.startsWith('tool-')) {
             // Type narrowing: we know this is a ToolGroupPart
             const toolGroup = group as ToolGroupPart;
             return (
-              <div key={`${message.id}-tool-${index}`} className="mr-2 sm:mr-8">
-                <ToolCallRenderer
+              <div key={`${message.id}-tool-${index}`} className="mt-1">
+                <CompactToolCallRenderer
                   part={{
                     type: toolGroup.type,
                     toolName: toolGroup.toolName,
@@ -537,4 +541,4 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
   );
 });
 
-MessageRenderer.displayName = 'MessageRenderer';
+CompactMessageRenderer.displayName = 'CompactMessageRenderer';

@@ -67,7 +67,6 @@ export const useDriveStore = create<DriveState>()(
       partialize: (state) => ({
         drives: state.drives,
         lastFetched: state.lastFetched,
-        currentDriveId: state.currentDriveId,
       }),
     }
   )
