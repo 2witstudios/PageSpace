@@ -296,7 +296,7 @@ export default function PageTree({
         <SortableTree
           items={displayedTree as SortableTreePage[]}
           collapsedIds={collapsedIds}
-          indentationWidth={24}
+          indentationWidth={12}
           onMove={handleMove}
           renderItem={({ item, depth, isActive, isOver, dropPosition, projectedDepth, projected, handleProps, wrapperProps }) => (
             <PageTreeItem

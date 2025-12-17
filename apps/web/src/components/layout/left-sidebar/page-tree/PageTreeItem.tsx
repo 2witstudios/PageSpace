@@ -6,7 +6,6 @@ import { useParams } from "next/navigation";
 import {
   ChevronRight,
   Plus,
-  MoreHorizontal,
   Trash2,
   Pencil,
   Star,
@@ -15,11 +14,11 @@ import {
 import { TreePage } from "@/hooks/usePageTree";
 import { PageTypeIcon } from "@/components/common/PageTypeIcon";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { useFavorites } from "@/hooks/useFavorites";
 import { toast } from "sonner";
 import { DeletePageDialog } from "@/components/dialogs/DeletePageDialog";
@@ -183,148 +182,139 @@ export function PageTreeItem({
           <div className="relative">
             <div
               className="absolute left-0 right-0 h-0.5 bg-primary -top-[1px] pointer-events-none z-10"
-              style={{ left: `${indicatorDepth * 24 + 8}px` }}
+              style={{ left: `${indicatorDepth * 12 + 4}px` }}
             />
             <div className="h-0.5 w-full" />
           </div>
         )}
 
-        <div
-          ref={handleProps.ref}
-          {...handleProps.attributes}
-          data-tree-node-id={item.id}
-          className={cn(
-            "group flex items-center px-1 py-1.5 rounded-lg transition-all duration-200",
-            showDropIndicator && dropPosition === "inside" &&
-              "bg-primary/10 dark:bg-primary/20 ring-2 ring-primary ring-inset",
-            !isActive && !showDropIndicator &&
-              "hover:bg-gray-100 dark:hover:bg-gray-800",
-            params.pageId === item.id && "bg-gray-200 dark:bg-gray-700"
-          )}
-          style={{ paddingLeft: `${depth * 16 + 4}px` }}
-        >
-          {/* Expand/Collapse Chevron */}
-          {hasChildren && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onToggleExpand(item.id);
-              }}
-              aria-expanded={isExpanded}
-              aria-label={isExpanded ? "Collapse" : "Expand"}
-              className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-            >
-              <ChevronRight
-                className={cn(
-                  "h-4 w-4 text-gray-500 transition-transform duration-200",
-                  isExpanded && "rotate-90"
-                )}
-              />
-            </button>
-          )}
-
-          {/* Icon - Drag Handle */}
-          <div
-            {...handleProps.listeners}
-            className="cursor-grab active:cursor-grabbing p-0.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700"
-          >
-            <PageTypeIcon
-              type={item.type}
-              isTaskLinked={item.isTaskLinked}
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
+            <div
+              ref={handleProps.ref}
+              {...handleProps.attributes}
+              data-tree-node-id={item.id}
               className={cn(
-                "h-4 w-4 flex-shrink-0",
-                hasChildren ? "text-primary" : "text-gray-500"
+                "group flex items-center px-1 py-1.5 rounded-lg transition-all duration-200",
+                showDropIndicator && dropPosition === "inside" &&
+                  "bg-primary/10 dark:bg-primary/20 ring-2 ring-primary ring-inset",
+                !isActive && !showDropIndicator &&
+                  "hover:bg-gray-100 dark:hover:bg-gray-800",
+                params.pageId === item.id && "bg-gray-200 dark:bg-gray-700"
               )}
-            />
-          </div>
-
-          {/* Title - Click to Navigate */}
-          <Link
-            href={linkHref}
-            className="flex-1 min-w-0 ml-1.5 truncate text-sm font-medium text-gray-900 dark:text-gray-100 hover:underline"
-          >
-            {item.title}
-          </Link>
-
-          {/* Action Buttons */}
-          <div
-            className={cn(
-              "flex items-center gap-1 ml-2 transition-opacity duration-200",
-              isHovered ? "opacity-100" : "opacity-0"
-            )}
-          >
-            <button
-              className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700"
-              onClick={(e) => {
-                e.stopPropagation();
-                onOpenCreateDialog(item.id);
-              }}
-              aria-label="Add child page"
+              style={{ paddingLeft: `${depth * 8 + 4}px` }}
             >
-              <Plus className="h-3 w-3 text-gray-500" />
-            </button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
+              {/* Expand/Collapse Chevron */}
+              {hasChildren && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleExpand(item.id);
+                  }}
+                  aria-expanded={isExpanded}
+                  aria-label={isExpanded ? "Collapse" : "Expand"}
+                  className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                >
+                  <ChevronRight
+                    className={cn(
+                      "h-4 w-4 text-gray-500 transition-transform duration-200",
+                      isExpanded && "rotate-90"
+                    )}
+                  />
+                </button>
+              )}
+
+              {/* Icon - Drag Handle */}
+              <div
+                {...handleProps.listeners}
+                className="cursor-grab active:cursor-grabbing p-0.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700"
+              >
+                <PageTypeIcon
+                  type={item.type}
+                  isTaskLinked={item.isTaskLinked}
+                  className={cn(
+                    "h-4 w-4 flex-shrink-0",
+                    hasChildren ? "text-primary" : "text-gray-500"
+                  )}
+                />
+              </div>
+
+              {/* Title - Click to Navigate */}
+              <Link
+                href={linkHref}
+                className="flex-1 min-w-0 ml-1.5 truncate text-sm font-medium text-gray-900 dark:text-gray-100 hover:underline"
+              >
+                {item.title}
+              </Link>
+
+              {/* Action Button - Add child */}
+              <div
+                className={cn(
+                  "flex items-center ml-2 transition-opacity duration-200",
+                  isHovered ? "opacity-100" : "opacity-0"
+                )}
+              >
                 <button
                   className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700"
-                  onClick={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenCreateDialog(item.id);
+                  }}
+                  aria-label="Add child page"
                 >
-                  <MoreHorizontal className="h-3 w-3 text-gray-500" />
+                  <Plus className="h-3 w-3 text-gray-500" />
                 </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                onClick={(e) => e.stopPropagation()}
-                className="w-48"
-              >
-                {isTrashView ? (
-                  <>
-                    <DropdownMenuItem onSelect={handleRestore}>
-                      <Undo2 className="mr-2 h-4 w-4" />
-                      <span>Restore</span>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onSelect={handlePermanentDelete}
-                      className="text-red-500 focus:text-red-500"
-                    >
-                      <Trash2 className="mr-2 h-4 w-4" />
-                      <span>Delete Permanently</span>
-                    </DropdownMenuItem>
-                  </>
-                ) : (
-                  <>
-                    <DropdownMenuItem onSelect={() => setRenameOpen(true)}>
-                      <Pencil className="mr-2 h-4 w-4" />
-                      <span>Rename</span>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onSelect={handleFavoriteToggle}>
-                      <Star
-                        className={cn(
-                          "mr-2 h-4 w-4",
-                          isFavorite(item.id) && "text-yellow-500 fill-yellow-500"
-                        )}
-                      />
-                      <span>{isFavorite(item.id) ? "Unfavorite" : "Favorite"}</span>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onSelect={() => setConfirmTrashOpen(true)}
-                      className="text-red-500 focus:text-red-500"
-                    >
-                      <Trash2 className="mr-2 h-4 w-4" />
-                      <span>Trash</span>
-                    </DropdownMenuItem>
-                  </>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
+              </div>
 
-          {/* Visual hint for inside drop */}
-          {showDropIndicator && dropPosition === "inside" && (
-            <div className="absolute inset-0 pointer-events-none">
-              <div className="absolute inset-x-4 inset-y-1 border-2 border-primary rounded-md opacity-50" />
+              {/* Visual hint for inside drop */}
+              {showDropIndicator && dropPosition === "inside" && (
+                <div className="absolute inset-0 pointer-events-none">
+                  <div className="absolute inset-x-4 inset-y-1 border-2 border-primary rounded-md opacity-50" />
+                </div>
+              )}
             </div>
-          )}
-        </div>
+          </ContextMenuTrigger>
+          <ContextMenuContent className="w-48">
+            {isTrashView ? (
+              <>
+                <ContextMenuItem onSelect={handleRestore}>
+                  <Undo2 className="mr-2 h-4 w-4" />
+                  <span>Restore</span>
+                </ContextMenuItem>
+                <ContextMenuItem
+                  onSelect={handlePermanentDelete}
+                  className="text-red-500 focus:text-red-500"
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  <span>Delete Permanently</span>
+                </ContextMenuItem>
+              </>
+            ) : (
+              <>
+                <ContextMenuItem onSelect={() => setRenameOpen(true)}>
+                  <Pencil className="mr-2 h-4 w-4" />
+                  <span>Rename</span>
+                </ContextMenuItem>
+                <ContextMenuItem onSelect={handleFavoriteToggle}>
+                  <Star
+                    className={cn(
+                      "mr-2 h-4 w-4",
+                      isFavorite(item.id) && "text-yellow-500 fill-yellow-500"
+                    )}
+                  />
+                  <span>{isFavorite(item.id) ? "Unfavorite" : "Favorite"}</span>
+                </ContextMenuItem>
+                <ContextMenuItem
+                  onSelect={() => setConfirmTrashOpen(true)}
+                  className="text-red-500 focus:text-red-500"
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  <span>Trash</span>
+                </ContextMenuItem>
+              </>
+            )}
+          </ContextMenuContent>
+        </ContextMenu>
 
         {/* Drop indicator - AFTER */}
         {showDropIndicator && dropPosition === "after" && (
@@ -332,7 +322,7 @@ export function PageTreeItem({
             <div className="h-0.5 w-full" />
             <div
               className="absolute left-0 right-0 h-0.5 bg-primary -bottom-[1px] pointer-events-none z-10"
-              style={{ left: `${indicatorDepth * 24 + 8}px` }}
+              style={{ left: `${indicatorDepth * 12 + 4}px` }}
             />
           </div>
         )}
