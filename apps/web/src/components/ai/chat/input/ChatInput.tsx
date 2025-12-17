@@ -1,9 +1,10 @@
 'use client';
 
-import React, { forwardRef, useRef, useImperativeHandle } from 'react';
+import React, { forwardRef, useRef, useImperativeHandle, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { ChatTextarea, type ChatTextareaRef } from './ChatTextarea';
 import { InputActions } from './InputActions';
+import { InputFooter } from '@/components/ui/floating-input';
 
 export interface ChatInputProps {
   /** Current input value */
@@ -67,6 +68,10 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
   ) => {
     const textareaRef = useRef<ChatTextareaRef>(null);
 
+    // Local state for footer toggles (UI preview only)
+    const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+    const [writeMode, setWriteMode] = useState(true);
+
     useImperativeHandle(ref, () => ({
       focus: () => textareaRef.current?.focus(),
       clear: () => textareaRef.current?.clear(),
@@ -104,6 +109,19 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
             disabled={!canSend}
           />
         </div>
+
+        {/* Footer menu */}
+        <InputFooter
+          webSearchEnabled={webSearchEnabled}
+          onWebSearchToggle={() => setWebSearchEnabled(!webSearchEnabled)}
+          writeMode={writeMode}
+          onWriteModeToggle={() => setWriteMode(!writeMode)}
+          onMicClick={() => console.log('Mic clicked')}
+          onProviderClick={() => console.log('Provider clicked')}
+          onModelClick={() => console.log('Model clicked')}
+          selectedProvider="OpenAI"
+          selectedModel="GPT-4o"
+        />
 
         {/* Read-only indicator */}
         {isReadOnly && (

@@ -8,3 +8,8 @@ export {
   InputCard,
   type InputCardProps,
 } from './InputCard';
+
+export {
+  InputFooter,
+  type InputFooterProps,
+} from './InputFooter';
