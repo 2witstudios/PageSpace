@@ -57,15 +57,17 @@ export function InputCard({
       {/* Main card */}
       <div
         className={cn(
-          // Solid background with rounded corners
           'bg-background rounded-2xl',
           'border border-[var(--separator)]',
-          'shadow-[var(--shadow-elevated)]',
+          // Inset blue glow (default)
+          'shadow-[inset_0_0_20px_oklch(0.62_0.16_235_/_0.15)]',
           'overflow-hidden',
-          // Transition for hover/focus states
-          'transition-shadow duration-200',
-          // Hover elevation boost
-          'hover:shadow-[0_4px_12px_rgb(0_0_0/0.08),0_20px_56px_rgb(0_0_0/0.10)]',
+          // Holographic sweep effect
+          'holographic-card',
+          // Hover transitions
+          'transition-all duration-300',
+          'hover:scale-[1.02]',
+          'hover:shadow-[inset_0_0_20px_oklch(0.62_0.16_235_/_0.15),0_0_30px_oklch(0.62_0.16_235_/_0.3)]',
           className
         )}
       >
