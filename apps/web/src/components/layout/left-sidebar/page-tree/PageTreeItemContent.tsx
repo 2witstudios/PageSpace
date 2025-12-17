@@ -6,7 +6,6 @@ import { useParams } from "next/navigation";
 import {
   ChevronRight,
   Plus,
-  MoreHorizontal,
   GripVertical,
 } from "lucide-react";
 import { TreePage } from "@/hooks/usePageTree";
@@ -90,8 +89,7 @@ export const PageTreeItemContent = forwardRef<HTMLDivElement, PageTreeItemConten
     const linkHref = `/dashboard/${params.driveId}/${item.id}`;
     const effectiveIndicatorDepth = indicatorDepth ?? depth;
 
-    // Silence unused vars - these callbacks are passed for interface completeness
-    // but actions are handled via context menu in PageTreeItem
+    // Silence unused vars - passed for interface completeness, handled by context menu
     void _isFavorite;
     void _onRename;
     void _onTrash;
@@ -245,17 +243,6 @@ export const PageTreeItemContent = forwardRef<HTMLDivElement, PageTreeItemConten
                 <Plus className="h-3 w-3 text-gray-500" />
               </button>
             )}
-            {/* 3-dot menu trigger - we keep this for single-item actions */}
-            <button
-              className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700"
-              onClick={(e) => {
-                e.stopPropagation();
-                // Will be replaced by context menu, but keeping for backwards compat
-              }}
-              aria-label="More options"
-            >
-              <MoreHorizontal className="h-3 w-3 text-gray-500" />
-            </button>
           </div>
 
           {/* Visual hint for inside drop */}

@@ -98,12 +98,13 @@ export function PageTreeItem({
     selectPage,
     clearSelection,
     getSelectedIds,
-    isMultiSelect,
   } = usePageSelection();
 
   const hasChildren = item.children && item.children.length > 0;
   const itemIsSelected = isSelected(item.id);
-  const multiSelectActive = isMultiSelect();
+  const selectedIds = getSelectedIds();
+  const selectedCount = selectedIds.length;
+  const multiSelectActive = selectedCount > 1;
 
   // Combine file drops AND internal dnd-kit drags for drop indicators
   const isFileDragOver = fileDragState?.overId === item.id;
@@ -143,11 +144,10 @@ export function PageTreeItem({
   };
 
   const handleBatchDelete = () => {
-    const selectedIds = getSelectedIds();
-    if (selectedIds.length === 0) return;
+    if (selectedCount === 0) return;
 
     // Open confirmation dialog with selected page info
-    setBatchDeleteInfo({ ids: selectedIds, count: selectedIds.length });
+    setBatchDeleteInfo({ ids: selectedIds, count: selectedCount });
     setIsBatchDeleteOpen(true);
   };
 
@@ -316,7 +316,7 @@ export function PageTreeItem({
             <>
               <ContextMenuItem disabled>
                 <FolderInput className="mr-2 h-4 w-4" />
-                <span>Move {getSelectedIds().length} pages...</span>
+                <span>Move {selectedCount} pages...</span>
               </ContextMenuItem>
               <ContextMenuSeparator />
               <ContextMenuItem
@@ -324,7 +324,7 @@ export function PageTreeItem({
                 variant="destructive"
               >
                 <Trash2 className="mr-2 h-4 w-4" />
-                <span>Trash {getSelectedIds().length} pages</span>
+                <span>Trash {selectedCount} pages</span>
               </ContextMenuItem>
             </>
           ) : (
