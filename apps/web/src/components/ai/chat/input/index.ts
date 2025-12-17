@@ -14,8 +14,3 @@ export {
   InputActions,
   type InputActionsProps,
 } from './InputActions';
-
-export {
-  InputToolbar,
-  type InputToolbarProps,
-} from './InputToolbar';

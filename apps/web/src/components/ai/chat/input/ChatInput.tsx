@@ -1,10 +1,9 @@
 'use client';
 
-import React, { forwardRef, useRef, useImperativeHandle, useCallback } from 'react';
+import React, { forwardRef, useRef, useImperativeHandle } from 'react';
 import { cn } from '@/lib/utils';
 import { ChatTextarea, type ChatTextareaRef } from './ChatTextarea';
 import { InputActions } from './InputActions';
-import { InputToolbar } from './InputToolbar';
 
 export interface ChatInputProps {
   /** Current input value */
@@ -29,12 +28,6 @@ export interface ChatInputProps {
   isReadOnly?: boolean;
   /** Message to show when read-only */
   readOnlyMessage?: string;
-
-  // Toolbar feature toggles
-  /** Show speech-to-text button - default true */
-  showSpeech?: boolean;
-  /** Custom toolbar buttons */
-  customToolbarButtons?: React.ReactNode;
 }
 
 export interface ChatInputRef {
@@ -69,9 +62,6 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       crossDrive = false,
       isReadOnly = false,
       readOnlyMessage = 'View only - cannot send messages',
-      // Toolbar props
-      showSpeech = true,
-      customToolbarButtons,
     },
     ref
   ) => {
@@ -88,19 +78,9 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       }
     };
 
-    // Handle speech transcription by appending to current value
-    const handleTranscription = useCallback(
-      (text: string) => {
-        const newValue = value + (value ? ' ' : '') + text;
-        onChange(newValue);
-      },
-      [value, onChange]
-    );
-
     const computedPlaceholder = isReadOnly ? readOnlyMessage : placeholder;
     const isDisabled = disabled || isReadOnly;
     const canSend = value.trim().length > 0 && !isDisabled;
-    const hasToolbar = (showSpeech || customToolbarButtons) && !isReadOnly;
 
     return (
       <div className={cn('flex flex-col relative')}>
@@ -124,16 +104,6 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
             disabled={!canSend}
           />
         </div>
-
-        {/* Toolbar row */}
-        {hasToolbar && (
-          <InputToolbar
-            showSpeech={showSpeech}
-            onTranscriptionChange={handleTranscription}
-            customButtons={customToolbarButtons}
-            disabled={isDisabled}
-          />
-        )}
 
         {/* Read-only indicator */}
         {isReadOnly && (

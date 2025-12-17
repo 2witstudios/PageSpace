@@ -430,7 +430,6 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                 crossDrive={props.crossDrive}
                 isReadOnly={isReadOnly}
                 readOnlyMessage="You do not have permission to send messages in this AI chat"
-                showSpeech={props.showSpeech}
               />
             )}
           />

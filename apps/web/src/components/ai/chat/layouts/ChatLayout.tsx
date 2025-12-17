@@ -59,10 +59,6 @@ export interface ChatLayoutProps {
   /** Whether user has read-only access */
   isReadOnly?: boolean;
 
-  // Toolbar feature toggles
-  /** Show speech-to-text button - default true */
-  showSpeech?: boolean;
-
   /** Render custom input - receives InputCard and current state */
   renderInput?: (props: {
     value: string;
@@ -74,8 +70,6 @@ export interface ChatLayoutProps {
     placeholder?: string;
     driveId?: string;
     crossDrive?: boolean;
-    // Toolbar props
-    showSpeech?: boolean;
   }) => React.ReactNode;
 }
 
@@ -116,8 +110,6 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
       lastAssistantMessageId,
       lastUserMessageId,
       isReadOnly = false,
-      // Toolbar props
-      showSpeech = true,
       renderInput,
     },
     ref
@@ -183,8 +175,6 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
           placeholder,
           driveId,
           crossDrive,
-          // Toolbar props
-          showSpeech,
         })
       : defaultInputContent;
 

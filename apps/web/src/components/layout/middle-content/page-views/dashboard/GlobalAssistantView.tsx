@@ -568,7 +568,6 @@ const GlobalAssistantView: React.FC = () => {
             placeholder={props.placeholder}
             driveId={props.driveId}
             crossDrive={props.crossDrive}
-            showSpeech={props.showSpeech}
           />
         )}
       />

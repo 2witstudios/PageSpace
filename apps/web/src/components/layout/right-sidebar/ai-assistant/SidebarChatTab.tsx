@@ -661,7 +661,6 @@ const SidebarChatTab: React.FC = () => {
             : 'Ask about your workspace...'}
           driveId={locationContext?.currentDrive?.id}
           crossDrive={true}
-          showSpeech={true}
         />
       </div>
     </div>
