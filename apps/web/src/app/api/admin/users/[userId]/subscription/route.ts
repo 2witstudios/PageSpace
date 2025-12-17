@@ -11,9 +11,7 @@ import { NextRequest, NextResponse } from 'next/server';
  * This ensures Stripe remains the single source of truth for subscriptions.
  */
 export async function PUT(
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   _request: NextRequest,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   _context: { params: Promise<{ userId: string }> }
 ) {
   return NextResponse.json(

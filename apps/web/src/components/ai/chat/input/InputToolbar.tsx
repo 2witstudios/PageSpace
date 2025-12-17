@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useRef, type RefObject } from 'react';
+import React, { useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -18,8 +18,6 @@ export interface InputToolbarProps {
   showSpeech?: boolean;
   /** Handler when files are selected via file picker */
   onAddFiles?: (files: File[]) => void;
-  /** Reference to the textarea for speech input */
-  textareaRef?: RefObject<{ focus: () => void } | null>;
   /** Handler for speech transcription changes */
   onTranscriptionChange?: (text: string) => void;
   /** Custom action menu items to add */
@@ -46,7 +44,6 @@ export function InputToolbar({
   showActionMenu = true,
   showSpeech = true,
   onAddFiles,
-  textareaRef,
   onTranscriptionChange,
   customMenuItems,
   customButtons,
@@ -98,7 +95,8 @@ export function InputToolbar({
         setIsListening(false);
       };
 
-      recognition.onresult = (event: SpeechRecognitionEvent) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      recognition.onresult = (event: any) => {
         let finalTranscript = '';
 
         for (let i = event.resultIndex; i < event.results.length; i++) {

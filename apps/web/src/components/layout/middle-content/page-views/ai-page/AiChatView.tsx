@@ -13,7 +13,8 @@ import { useParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Loader2, Settings, MessageSquare, History, Plus, Save } from 'lucide-react';
-import { UIMessage, DefaultChatTransport } from 'ai';
+import { UIMessage, DefaultChatTransport, type FileUIPart } from 'ai';
+import { nanoid } from 'nanoid';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { buildPagePath } from '@/lib/tree/tree-utils';
 import { useDriveStore } from '@/hooks/useDrive';
@@ -39,7 +40,7 @@ import {
   ChatLayout,
   type ChatLayoutRef,
 } from '@/components/ai/chat/layouts';
-import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
+import { ChatInput, type ChatInputRef, type AttachmentFile } from '@/components/ai/chat/input';
 
 interface AiChatViewProps {
   page: TreePage;
@@ -64,6 +65,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const [isReadOnly, setIsReadOnly] = useState<boolean>(false);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [isSettingsSaving, setIsSettingsSaving] = useState(false);
+  const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
 
   // Refs
   const chatLayoutRef = useRef<ChatLayoutRef>(null);
@@ -246,18 +248,41 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // HANDLERS
   // ============================================
 
+  // Attachment handlers
+  const handleAddAttachments = useCallback((files: File[]) => {
+    const newAttachments: AttachmentFile[] = files.map((file) => ({
+      id: nanoid(),
+      type: 'file' as const,
+      url: URL.createObjectURL(file),
+      mediaType: file.type,
+      filename: file.name,
+    }));
+    setAttachments((prev) => [...prev, ...newAttachments]);
+  }, []);
+
+  const handleRemoveAttachment = useCallback((id: string) => {
+    setAttachments((prev) => {
+      const found = prev.find((f) => f.id === id);
+      if (found?.url) URL.revokeObjectURL(found.url);
+      return prev.filter((f) => f.id !== id);
+    });
+  }, []);
+
   const handleSendMessage = useCallback(() => {
     if (isReadOnly) {
       toast.error('You do not have permission to send messages in this AI chat');
       return;
     }
-    if (!input.trim()) return;
+    if (!input.trim() && attachments.length === 0) return;
 
     const currentDrive = drives.find((d) => d.id === driveId);
     const pagePathInfo = buildPagePath(tree, page.id, driveId);
 
+    // Prepare files for sending (strip internal id)
+    const files = attachments.map(({ id: _, ...file }) => file as FileUIPart);
+
     sendMessage(
-      { text: input },
+      { text: input, files: files.length > 0 ? files : undefined },
       {
         body: {
           chatId: page.id,
@@ -280,11 +305,13 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       }
     );
     setInput('');
+    setAttachments([]);
     inputRef.current?.clear();
     setTimeout(() => chatLayoutRef.current?.scrollToBottom(), 100);
   }, [
     isReadOnly,
     input,
+    attachments,
     drives,
     driveId,
     tree,
@@ -416,6 +443,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             lastAssistantMessageId={lastAssistantMessageId}
             lastUserMessageId={lastUserMessageId}
             isReadOnly={isReadOnly}
+            attachments={attachments}
+            onAddAttachments={handleAddAttachments}
+            onRemoveAttachment={handleRemoveAttachment}
             renderInput={(props) => (
               <ChatInput
                 ref={inputRef}
@@ -430,6 +460,11 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                 crossDrive={props.crossDrive}
                 isReadOnly={isReadOnly}
                 readOnlyMessage="You do not have permission to send messages in this AI chat"
+                attachments={props.attachments}
+                onAddAttachments={props.onAddAttachments}
+                onRemoveAttachment={props.onRemoveAttachment}
+                showActionMenu={props.showActionMenu}
+                showSpeech={props.showSpeech}
               />
             )}
           />

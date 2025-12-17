@@ -2,7 +2,7 @@
 
 import React, { forwardRef, useRef, useImperativeHandle, useState, useCallback } from 'react';
 import type { FileUIPart } from 'ai';
-import { X, Image as ImageIcon, FileIcon } from 'lucide-react';
+import { X, FileIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { ChatTextarea, type ChatTextareaRef } from './ChatTextarea';
@@ -301,7 +301,6 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
             showActionMenu={showActionMenu}
             showSpeech={showSpeech}
             onAddFiles={onAddAttachments}
-            textareaRef={textareaRef}
             onTranscriptionChange={handleTranscription}
             customMenuItems={customMenuItems}
             customButtons={customToolbarButtons}

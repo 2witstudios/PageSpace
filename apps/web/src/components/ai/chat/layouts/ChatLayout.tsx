@@ -45,8 +45,6 @@ export interface ChatLayoutProps {
   welcomeTitle?: string;
   /** Welcome state subtitle */
   welcomeSubtitle?: string;
-  /** Whether to show welcome icon */
-  showWelcomeIcon?: boolean;
   /** Custom welcome icon */
   welcomeIcon?: React.ReactNode;
   /** Edit message handler */
@@ -127,7 +125,6 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
       onClearError,
       welcomeTitle,
       welcomeSubtitle,
-      showWelcomeIcon = true,
       welcomeIcon,
       onEdit,
       onDelete,
@@ -262,7 +259,7 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
                   title={welcomeTitle}
                   subtitle={welcomeSubtitle}
                   icon={welcomeIcon}
-                  showIcon={showWelcomeIcon}
+                  showIcon={false}
                 />
               </div>
             </motion.div>

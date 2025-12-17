@@ -470,8 +470,8 @@ const GlobalAssistantView: React.FC = () => {
           mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
         };
 
-    // Convert attachments to FileUIPart format for AI SDK
-    const files: FileUIPart[] = attachments.map(({ id: _id, ...file }) => file);
+    // Convert attachments to FileUIPart format for AI SDK (strip internal id)
+    const files: FileUIPart[] = attachments.map(({ id: _, ...file }) => file);
 
     sendMessage({ text: input, files: files.length > 0 ? files : undefined }, { body: requestBody });
     setInput('');
@@ -589,7 +589,7 @@ const GlobalAssistantView: React.FC = () => {
         welcomeSubtitle={
           selectedAgent
             ? 'Ask me anything!'
-            : 'Ask me about your workspace, documents, or get help with tasks.'
+            : 'Tell me what you\'re thinking about or working on.'
         }
         onEdit={handleEdit}
         onDelete={handleDelete}

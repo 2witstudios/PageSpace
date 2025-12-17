@@ -727,7 +727,6 @@ export const PromptInput = ({
 
     // Convert blob URLs to data URLs asynchronously
     Promise.all(
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       files.map(async ({ id: _id, ...item }) => {
         if (item.url && item.url.startsWith("blob:")) {
           const dataUrl = await convertBlobUrlToDataUrl(item.url);
@@ -1055,60 +1054,6 @@ export const PromptInputSubmit = ({
     </InputGroupButton>
   );
 };
-
-interface SpeechRecognition extends EventTarget {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  start(): void;
-  stop(): void;
-  onstart: ((this: SpeechRecognition, ev: Event) => void) | null;
-  onend: ((this: SpeechRecognition, ev: Event) => void) | null;
-  onresult:
-  | ((this: SpeechRecognition, ev: SpeechRecognitionEvent) => void)
-  | null;
-  onerror:
-  | ((this: SpeechRecognition, ev: SpeechRecognitionErrorEvent) => void)
-  | null;
-}
-
-interface SpeechRecognitionEvent extends Event {
-  results: SpeechRecognitionResultList;
-  resultIndex: number;
-}
-
-type SpeechRecognitionResultList = {
-  readonly length: number;
-  item(index: number): SpeechRecognitionResult;
-  [index: number]: SpeechRecognitionResult;
-};
-
-type SpeechRecognitionResult = {
-  readonly length: number;
-  item(index: number): SpeechRecognitionAlternative;
-  [index: number]: SpeechRecognitionAlternative;
-  isFinal: boolean;
-};
-
-type SpeechRecognitionAlternative = {
-  transcript: string;
-  confidence: number;
-};
-
-interface SpeechRecognitionErrorEvent extends Event {
-  error: string;
-}
-
-declare global {
-  interface Window {
-    SpeechRecognition: {
-      new(): SpeechRecognition;
-    };
-    webkitSpeechRecognition: {
-      new(): SpeechRecognition;
-    };
-  }
-}
 
 export type PromptInputSpeechButtonProps = ComponentProps<
   typeof PromptInputButton
