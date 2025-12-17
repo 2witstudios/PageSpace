@@ -3,7 +3,7 @@
 import React from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import { Button } from '@/components/ui/button';
-import { Send, StopCircle } from 'lucide-react';
+import { ArrowRight, StopCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export interface InputActionsProps {
@@ -51,11 +51,12 @@ export function InputActions({
     <Button
       onClick={onSend}
       disabled={disabled}
+      variant="ghost"
       size="icon"
-      className="h-9 w-9 shrink-0"
+      className="h-9 w-9 shrink-0 rounded-full bg-muted hover:bg-muted/80"
       title="Send message"
     >
-      <Send className="h-4 w-4" />
+      <ArrowRight className="h-4 w-4" />
     </Button>
   );
 

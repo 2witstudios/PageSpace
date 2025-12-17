@@ -97,7 +97,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
           disabled={disabled}
           className={cn(
             'min-h-[36px] max-h-48 resize-none',
-            'bg-transparent border-none outline-none',
+            'bg-card dark:bg-transparent border-none outline-none',
             'text-foreground placeholder:text-muted-foreground',
             'focus-visible:ring-0 focus-visible:ring-offset-0',
             className
