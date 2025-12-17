@@ -181,9 +181,9 @@ export function TasksDropdown({ messages, driveId: fallbackDriveId }: TasksDropd
               />
             </div>
 
-            <CollapsibleContent className="flex flex-col min-h-0 flex-1">
+            <CollapsibleContent className="flex-1 min-h-0 overflow-hidden">
               {/* Task list */}
-              <ScrollArea className="flex-1 min-h-0 max-h-[20rem]">
+              <ScrollArea className="h-full max-h-[20rem]">
                 <div className="divide-y divide-border/50">
                   {sortedTasks.map((task) => {
                     const displayStatus = optimisticStatuses.get(task.id) ?? task.status;
@@ -203,13 +203,6 @@ export function TasksDropdown({ messages, driveId: fallbackDriveId }: TasksDropd
                 </div>
               </ScrollArea>
 
-              {/* Footer with drive name */}
-              {tasks.length > 0 && driveName && (
-                <div className="px-3 py-2 border-t text-xs text-muted-foreground flex-shrink-0 truncate">
-                  {driveName}
-                </div>
-              )}
-
               {/* Empty state */}
               {tasks.length === 0 && (
                 <div className="px-3 py-4 text-center text-sm text-muted-foreground">
@@ -218,6 +211,13 @@ export function TasksDropdown({ messages, driveId: fallbackDriveId }: TasksDropd
               )}
             </CollapsibleContent>
           </Collapsible>
+
+          {/* Footer with drive name - outside Collapsible so always visible */}
+          {tasks.length > 0 && driveName && (
+            <div className="px-3 py-2 border-t text-xs text-muted-foreground flex-shrink-0 truncate">
+              {driveName}
+            </div>
+          )}
         </div>
       </PopoverContent>
     </Popover>
