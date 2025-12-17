@@ -7,7 +7,8 @@ import { ChevronDown, Loader2, CheckCircle2, XCircle, Clock, ListTodo } from 'lu
 import { ToolCallRenderer } from './ToolCallRenderer';
 import { cn } from '@/lib/utils';
 import { toTitleCase } from '@/lib/utils/formatters';
-import { patch } from '@/lib/auth/auth-fetch';
+import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import useSWR from 'swr';
 import { toast } from 'sonner';
 import Link from 'next/link';
 import type { Task, TaskList } from '../useAggregatedTasks';
@@ -205,6 +206,22 @@ export function GroupedToolCallsRenderer({ toolCalls, className }: GroupedToolCa
     };
   }, [toolCalls, isTaskManagementGroup]);
 
+  // Fetch driveId from page when missing from message data (same pattern as TasksDropdown)
+  const taskListPageId = aggregatedTaskData?.taskList?.pageId;
+  const { data: pageData } = useSWR(
+    taskListPageId && !aggregatedTaskData?.taskList?.driveId ? `/api/pages/${taskListPageId}` : null,
+    async (url) => {
+      const response = await fetchWithAuth(url);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch page: ${response.status}`);
+      }
+      return response.json();
+    }
+  );
+
+  // Use fetched driveId, message data driveId, or store fallback
+  const effectiveDriveId = aggregatedTaskData?.taskList?.driveId || pageData?.driveId || currentDriveId || '';
+
   // Handle status toggle (click on status icon)
   const handleStatusToggle = async (e: React.MouseEvent, taskId: string, currentStatus: Task['status'], taskListPageId: string | undefined) => {
     e.stopPropagation();
@@ -278,7 +295,7 @@ export function GroupedToolCallsRenderer({ toolCalls, className }: GroupedToolCa
                       <ExpandableTaskItem
                         key={task.id}
                         task={task}
-                        driveId={taskList?.driveId || currentDriveId || ''}
+                        driveId={effectiveDriveId}
                         taskListPageId={taskList?.pageId || ''}
                         displayStatus={displayStatus}
                         onStatusToggle={(e, taskId, status) => handleStatusToggle(e, taskId, status, taskList?.pageId)}
