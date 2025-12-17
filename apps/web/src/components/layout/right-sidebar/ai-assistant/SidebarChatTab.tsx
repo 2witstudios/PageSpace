@@ -123,7 +123,6 @@ const SidebarChatTab: React.FC = () => {
   const currentProvider = useAssistantSettingsStore((state) => state.currentProvider);
   const currentModel = useAssistantSettingsStore((state) => state.currentModel);
   const loadSettings = useAssistantSettingsStore((state) => state.loadSettings);
-  const isAnyProviderConfigured = useAssistantSettingsStore((state) => state.isAnyProviderConfigured);
 
   // ============================================
   // Local Component State
@@ -147,14 +146,6 @@ const SidebarChatTab: React.FC = () => {
       scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight;
     }
   }, []);
-
-  // Determine if send button should be enabled
-  const canSend = useMemo(() => {
-    if (!input.trim()) return false;
-    if (!currentConversationId) return false;
-    if (selectedAgent) return true; // Agent mode has its own provider config
-    return isAnyProviderConfigured;
-  }, [input, currentConversationId, selectedAgent, isAnyProviderConfigured]);
 
   // ============================================
   // Effects: Drive Loading
