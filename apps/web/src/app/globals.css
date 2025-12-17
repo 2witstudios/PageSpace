@@ -207,9 +207,9 @@
   background: linear-gradient(
     0deg,
     transparent,
-    transparent 35%,
-    oklch(0.62 0.16 235 / 0.02) 50%,
-    transparent 65%,
+    transparent 40%,
+    oklch(0.62 0.16 235 / 0.015) 50%,
+    transparent 60%,
     transparent
   );
   transform: rotate(-45deg) translateY(-100%);
