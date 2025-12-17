@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, CSSProperties, MouseEvent, useCallback } from "react";
-import { useParams } from "next/navigation";
 import {
   Trash2,
   Pencil,
@@ -90,7 +89,6 @@ export function PageTreeItem({
   const [isHovered, setIsHovered] = useState(false);
   const [isConfirmTrashOpen, setConfirmTrashOpen] = useState(false);
   const [isRenameOpen, setRenameOpen] = useState(false);
-  const params = useParams();
   const { addFavorite, removeFavorite, isFavorite } = useFavorites();
   const {
     isSelected,
@@ -233,7 +231,7 @@ export function PageTreeItem({
 
   // Context menu handler
   const handleContextMenu = useCallback(
-    (e: MouseEvent) => {
+    () => {
       // If this item is not selected, select it first (single selection)
       if (!itemIsSelected) {
         clearSelection();

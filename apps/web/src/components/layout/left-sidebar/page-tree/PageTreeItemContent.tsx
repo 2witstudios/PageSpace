@@ -7,10 +7,6 @@ import {
   ChevronRight,
   Plus,
   MoreHorizontal,
-  Trash2,
-  Pencil,
-  Star,
-  Undo2,
   GripVertical,
 } from "lucide-react";
 import { TreePage } from "@/hooks/usePageTree";
@@ -70,17 +66,17 @@ export const PageTreeItemContent = forwardRef<HTMLDivElement, PageTreeItemConten
       indicatorDepth,
       isExpanded = false,
       hasChildren = false,
-      isFavorite = false,
+      isFavorite: _isFavorite = false,
       isHovered = false,
       isTrashView = false,
       style,
       onToggleExpand,
       onOpenCreateDialog,
-      onRename,
-      onTrash,
-      onRestore,
-      onPermanentDelete,
-      onFavoriteToggle,
+      onRename: _onRename,
+      onTrash: _onTrash,
+      onRestore: _onRestore,
+      onPermanentDelete: _onPermanentDelete,
+      onFavoriteToggle: _onFavoriteToggle,
       onMouseEnter,
       onMouseLeave,
       onClick,
@@ -93,6 +89,15 @@ export const PageTreeItemContent = forwardRef<HTMLDivElement, PageTreeItemConten
     const params = useParams();
     const linkHref = `/dashboard/${params.driveId}/${item.id}`;
     const effectiveIndicatorDepth = indicatorDepth ?? depth;
+
+    // Silence unused vars - these callbacks are passed for interface completeness
+    // but actions are handled via context menu in PageTreeItem
+    void _isFavorite;
+    void _onRename;
+    void _onTrash;
+    void _onRestore;
+    void _onPermanentDelete;
+    void _onFavoriteToggle;
 
     // Compute if children exist from item
     const itemHasChildren = hasChildren || (item.children && item.children.length > 0);
