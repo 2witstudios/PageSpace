@@ -101,31 +101,10 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
         }`}
     >
       {role === 'user' && (
-        <div className="flex items-center justify-between mb-0.5">
+        <div className="flex items-center mb-0.5">
           <div className="text-xs font-medium text-primary dark:text-primary">
             You
-            {editedAt && !isEditing && (
-              <span className="ml-1 text-[10px] text-muted-foreground">(edited)</span>
-            )}
           </div>
-          {onEdit && onDelete && !isEditing && (
-            <MessageActionButtons
-              onEdit={onEdit}
-              onDelete={onDelete}
-              onRetry={onRetry}
-              compact
-            />
-          )}
-        </div>
-      )}
-      {role !== 'user' && onEdit && onDelete && !isEditing && (
-        <div className="flex justify-end mb-0.5">
-          <MessageActionButtons
-            onEdit={onEdit}
-            onDelete={onDelete}
-            onRetry={onRetry}
-            compact
-          />
         </div>
       )}
 
@@ -144,12 +123,18 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
             <StreamingMarkdown content={content} id={`${messageId}-text`} isStreaming={isStreaming} />
           </div>
           {createdAt && (
-            <div className="text-[10px] text-gray-500 mt-1">
-              {new Date(createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              {editedAt && (
-                <span className="ml-1">
-                  (edited)
-                </span>
+            <div className="flex items-center justify-between mt-1">
+              <div className="text-[10px] text-gray-500">
+                {new Date(createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                {editedAt && <span className="ml-1">(edited)</span>}
+              </div>
+              {onEdit && onDelete && !isEditing && (
+                <MessageActionButtons
+                  onEdit={onEdit}
+                  onDelete={onDelete}
+                  onRetry={onRetry}
+                  compact
+                />
               )}
             </div>
           )}
@@ -474,7 +459,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
   // ============================================
   return (
     <>
-      <div key={message.id} className="mb-2" style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 80px' }}>
+      <div key={message.id} className="mb-1" style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 80px' }}>
         {groupedParts.map((group, index) => {
           if (group.type === 'text-group') {
             // Type narrowing: we know this is a TextGroupPart
