@@ -39,11 +39,6 @@ struct Conversation: Identifiable, Codable {
     }
 }
 
-struct ConversationListResponse: Codable {
-    let conversations: [Conversation]
-    let total: Int
-}
-
 struct ConversationMessagesResponse: Codable {
     let messages: [Message]
     let pagination: Pagination?
