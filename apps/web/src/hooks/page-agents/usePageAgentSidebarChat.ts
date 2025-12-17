@@ -1,6 +1,6 @@
 import { useEffect, useRef, useMemo, useCallback } from 'react';
 import { useChat, UseChatOptions } from '@ai-sdk/react';
-import { UIMessage } from 'ai';
+import { UIMessage, type FileUIPart } from 'ai';
 import { SidebarAgentInfo } from './usePageAgentSidebarState';
 
 /**
@@ -10,7 +10,7 @@ export interface UseSidebarChatReturn {
   /** Current messages (from active mode) */
   messages: UIMessage[];
   /** Send a message */
-  sendMessage: (message: { text: string }, options?: { body?: Record<string, unknown> }) => void;
+  sendMessage: (message: { text: string; files?: FileUIPart[] }, options?: { body?: Record<string, unknown> }) => void;
   /** Current status */
   status: 'ready' | 'submitted' | 'streaming' | 'error';
   /** Current error (if any) */
@@ -132,7 +132,7 @@ export function usePageAgentSidebarChat({
 
   // Wrap sendMessage to use correct function
   const sendMessage = useCallback(
-    (message: { text: string }, options?: { body?: Record<string, unknown> }) => {
+    (message: { text: string; files?: FileUIPart[] }, options?: { body?: Record<string, unknown> }) => {
       if (selectedAgent) {
         agentSendMessage(message, options);
       } else {

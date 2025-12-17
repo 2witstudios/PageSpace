@@ -63,12 +63,13 @@ import {
 } from '@/lib/ai/shared';
 import {
   MCPToggle,
-  ChatMessagesArea,
-  ChatInputArea,
   ProviderSetupCard,
-  ChatMessagesAreaRef,
-  ChatInputAreaRef,
 } from '@/components/ai/shared/chat';
+import {
+  ChatLayout,
+  type ChatLayoutRef,
+} from '@/components/ai/chat/layouts';
+import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
 
 const GlobalAssistantView: React.FC = () => {
   const pathname = usePathname();
@@ -125,8 +126,8 @@ const GlobalAssistantView: React.FC = () => {
   const [agentSelectedModel, setAgentSelectedModel] = useState<string>('');
 
   // Refs
-  const messagesAreaRef = useRef<ChatMessagesAreaRef>(null);
-  const inputAreaRef = useRef<ChatInputAreaRef>(null);
+  const chatLayoutRef = useRef<ChatLayoutRef>(null);
+  const inputRef = useRef<ChatInputRef>(null);
   const prevStatusRef = useRef<string>('ready');
   const prevAgentStatusRef = useRef<string>('ready');
 
@@ -435,8 +436,7 @@ const GlobalAssistantView: React.FC = () => {
 
     sendMessage({ text: input }, { body: requestBody });
     setInput('');
-    inputAreaRef.current?.clear();
-    setTimeout(() => messagesAreaRef.current?.scrollToBottom(), 100);
+    setTimeout(() => chatLayoutRef.current?.scrollToBottom(), 100);
   };
 
   // ============================================
@@ -523,39 +523,53 @@ const GlobalAssistantView: React.FC = () => {
         )}
       </div>
 
-      {/* Chat Interface - unified for both modes */}
-      <ChatMessagesArea
-        ref={messagesAreaRef}
+      {/* Chat Interface - unified for both modes with floating input */}
+      <ChatLayout
+        ref={chatLayoutRef}
         messages={messages}
-        isLoading={isLoading}
-        isStreaming={isStreaming}
-        emptyMessage={
-          selectedAgent
-            ? `Start a conversation with ${selectedAgent.title}`
-            : 'Welcome to your Global Assistant! Ask me anything about your workspace.'
-        }
-        onEdit={handleEdit}
-        onDelete={handleDelete}
-        onRetry={handleRetry}
-        lastAssistantMessageId={lastAssistantMessageId}
-        lastUserMessageId={lastUserMessageId}
-      />
-
-      <ChatInputArea
-        ref={inputAreaRef}
-        value={input}
-        onChange={setInput}
+        input={input}
+        onInputChange={setInput}
         onSend={handleSendMessage}
         onStop={stop}
         isStreaming={isStreaming}
-        disabled={!isAnyProviderConfigured}
         isLoading={isLoading}
+        disabled={!isAnyProviderConfigured}
         placeholder={selectedAgent ? `Ask ${selectedAgent.title}...` : 'Ask about your workspace...'}
         driveId={selectedAgent ? selectedAgent.driveId : locationContext?.currentDrive?.id}
         crossDrive={!selectedAgent}
         error={error}
         showError={showError}
         onClearError={() => setShowError(false)}
+        welcomeTitle={
+          selectedAgent
+            ? `Chat with ${selectedAgent.title}`
+            : 'How can I help you today?'
+        }
+        welcomeSubtitle={
+          selectedAgent
+            ? 'Ask me anything!'
+            : 'Tell me what you\'re thinking about or working on.'
+        }
+        onEdit={handleEdit}
+        onDelete={handleDelete}
+        onRetry={handleRetry}
+        lastAssistantMessageId={lastAssistantMessageId}
+        lastUserMessageId={lastUserMessageId}
+        renderInput={(props) => (
+          <ChatInput
+            ref={inputRef}
+            value={props.value}
+            onChange={props.onChange}
+            onSend={props.onSend}
+            onStop={props.onStop}
+            isStreaming={props.isStreaming}
+            disabled={props.disabled}
+            placeholder={props.placeholder}
+            driveId={props.driveId}
+            crossDrive={props.crossDrive}
+            isReadOnly={isReadOnly}
+          />
+        )}
       />
     </div>
   );

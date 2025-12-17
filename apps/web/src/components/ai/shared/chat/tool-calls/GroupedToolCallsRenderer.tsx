@@ -101,7 +101,7 @@ export function GroupedToolCallsRenderer({ toolCalls, className }: GroupedToolCa
     });
 
     return stats;
-  }, [toolCallsWithStatus]);
+  }, [toolCallsWithStatus, toolCalls.length]);
 
   // Controlled open state - always starts closed
   const [isOpen, setIsOpen] = useState(false);

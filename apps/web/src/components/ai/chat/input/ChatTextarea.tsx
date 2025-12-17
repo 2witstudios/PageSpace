@@ -1,0 +1,144 @@
+'use client';
+
+import React, { forwardRef, useImperativeHandle, useRef } from 'react';
+import { useSuggestion } from '@/hooks/useSuggestion';
+import { Textarea } from '@/components/ui/textarea';
+import SuggestionPopup from '@/components/mentions/SuggestionPopup';
+import {
+  SuggestionProvider,
+  useSuggestionContext,
+} from '@/components/providers/SuggestionProvider';
+import { cn } from '@/lib/utils';
+
+export interface ChatTextareaProps {
+  /** Current input value */
+  value: string;
+  /** Input change handler */
+  onChange: (value: string) => void;
+  /** Send message handler (triggered on Enter without Shift) */
+  onSend: () => void;
+  /** Placeholder text */
+  placeholder?: string;
+  /** Drive ID for mention suggestions */
+  driveId?: string;
+  /** Enable cross-drive mention search */
+  crossDrive?: boolean;
+  /** Whether the input is disabled */
+  disabled?: boolean;
+  /** Additional class names */
+  className?: string;
+}
+
+export interface ChatTextareaRef {
+  /** Clear the input */
+  clear: () => void;
+  /** Focus the input */
+  focus: () => void;
+}
+
+/**
+ * ChatTextareaInner - Textarea with mention support
+ * Must be wrapped in SuggestionProvider
+ */
+const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
+  (
+    {
+      value,
+      onChange,
+      onSend,
+      placeholder = 'Type your message...',
+      driveId,
+      crossDrive = false,
+      disabled = false,
+      className,
+    },
+    ref
+  ) => {
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const context = useSuggestionContext();
+
+    const suggestion = useSuggestion({
+      inputRef: textareaRef as React.RefObject<HTMLTextAreaElement>,
+      onValueChange: onChange,
+      trigger: '@',
+      driveId,
+      crossDrive,
+      mentionFormat: 'markdown-typed',
+      variant: 'chat',
+      popupPlacement: 'top',
+    });
+
+    useImperativeHandle(ref, () => ({
+      clear: () => onChange(''),
+      focus: () => textareaRef.current?.focus(),
+    }));
+
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      // Let the suggestion system handle navigation keys when open
+      suggestion.handleKeyDown(e);
+
+      // Send on Enter (without Shift) when suggestions are closed
+      if (!context.isOpen && e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        if (value.trim() && !disabled) {
+          onSend();
+        }
+      }
+    };
+
+    return (
+      <div className="relative flex-1">
+        <Textarea
+          ref={textareaRef}
+          value={value}
+          onChange={(e) => suggestion.handleValueChange(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={placeholder}
+          disabled={disabled}
+          className={cn(
+            'min-h-[36px] max-h-48 resize-none',
+            'bg-card dark:bg-transparent border-none outline-none',
+            'text-foreground placeholder:text-muted-foreground',
+            'focus-visible:ring-0 focus-visible:ring-offset-0',
+            className
+          )}
+          rows={1}
+        />
+
+        <SuggestionPopup
+          isOpen={context.isOpen}
+          items={context.items}
+          selectedIndex={context.selectedIndex}
+          position={context.position}
+          loading={context.loading}
+          error={context.error}
+          onSelect={suggestion.actions.selectSuggestion}
+          onSelectionChange={suggestion.actions.selectItem}
+          variant="overlay"
+          popupPlacement="top"
+        />
+      </div>
+    );
+  }
+);
+ChatTextareaInner.displayName = 'ChatTextareaInner';
+
+/**
+ * ChatTextarea - Textarea with @ mention support
+ *
+ * Provides:
+ * - Auto-growing textarea
+ * - @ mention suggestions with search
+ * - Enter to send, Shift+Enter for newline
+ * - Cross-drive mention support
+ */
+export const ChatTextarea = forwardRef<ChatTextareaRef, ChatTextareaProps>(
+  (props, ref) => (
+    <SuggestionProvider>
+      <ChatTextareaInner {...props} ref={ref} />
+    </SuggestionProvider>
+  )
+);
+ChatTextarea.displayName = 'ChatTextarea';
+
+export default ChatTextarea;

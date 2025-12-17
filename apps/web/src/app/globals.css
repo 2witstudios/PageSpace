@@ -182,6 +182,55 @@
   }
 }
 
+/* Holographic sweep animation */
+@keyframes holographic-sweep {
+  0% {
+    transform: rotate(-45deg) translateY(-100%);
+  }
+  100% {
+    transform: rotate(-45deg) translateY(100%);
+  }
+}
+
+.holographic-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.holographic-card::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: linear-gradient(
+    0deg,
+    transparent,
+    transparent 35%,
+    oklch(0.62 0.16 235 / 0.02) 50%,
+    transparent 65%,
+    transparent
+  );
+  transform: rotate(-45deg) translateY(-100%);
+  transition: none;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.holographic-card:hover::before {
+  opacity: 1;
+  animation: holographic-sweep 0.6s ease-out forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .holographic-card:hover::before {
+    animation: none;
+    opacity: 1;
+  }
+}
+
 @layer components {
   /* Liquid Glass Utilities */
   .liquid-glass-thin {

@@ -32,13 +32,14 @@ import {
 } from '@/lib/ai/shared';
 import {
   MCPToggle,
-  ChatMessagesArea,
-  ChatInputArea,
   ProviderSetupCard,
-  ChatMessagesAreaRef,
-  ChatInputAreaRef,
 } from '@/components/ai/shared/chat';
 import { AiUsageMonitor, TasksDropdown } from '@/components/ai/shared';
+import {
+  ChatLayout,
+  type ChatLayoutRef,
+} from '@/components/ai/chat/layouts';
+import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
 
 interface AiChatViewProps {
   page: TreePage;
@@ -65,8 +66,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const [isSettingsSaving, setIsSettingsSaving] = useState(false);
 
   // Refs
-  const messagesAreaRef = useRef<ChatMessagesAreaRef>(null);
-  const inputAreaRef = useRef<ChatInputAreaRef>(null);
+  const chatLayoutRef = useRef<ChatLayoutRef>(null);
+  const inputRef = useRef<ChatInputRef>(null);
   const agentSettingsRef = useRef<PageAgentSettingsTabRef>(null);
 
   // ============================================
@@ -279,8 +280,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       }
     );
     setInput('');
-    inputAreaRef.current?.clear();
-    setTimeout(() => messagesAreaRef.current?.scrollToBottom(), 100);
+    inputRef.current?.clear();
+    setTimeout(() => chatLayoutRef.current?.scrollToBottom(), 100);
   }, [
     isReadOnly,
     input,
@@ -391,37 +392,46 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
         </div>
 
         {/* Chat Tab */}
-        <TabsContent value="chat" className="flex flex-col flex-1 overflow-hidden">
-          <ChatMessagesArea
-            ref={messagesAreaRef}
+        <TabsContent value="chat" className="flex flex-col flex-1 overflow-hidden relative">
+          <ChatLayout
+            ref={chatLayoutRef}
             messages={messages}
-            isLoading={isLoading}
+            input={input}
+            onInputChange={setInput}
+            onSend={handleSendMessage}
+            onStop={stop}
             isStreaming={isStreaming}
-            emptyMessage="Start a conversation with the AI assistant"
+            isLoading={isLoading}
+            disabled={!isAnyProviderConfigured}
+            placeholder={isReadOnly ? 'View only - cannot send messages' : 'Message AI...'}
+            driveId={driveId}
+            error={error}
+            showError={showError}
+            onClearError={() => setShowError(false)}
+            welcomeTitle={`Chat with ${page.title}`}
+            welcomeSubtitle={agentConfig?.systemPrompt ? 'Ask me anything!' : 'Start a conversation with the AI assistant'}
             onEdit={!isReadOnly ? handleEdit : undefined}
             onDelete={!isReadOnly ? handleDelete : undefined}
             onRetry={!isReadOnly ? handleRetry : undefined}
             lastAssistantMessageId={lastAssistantMessageId}
             lastUserMessageId={lastUserMessageId}
             isReadOnly={isReadOnly}
-          />
-
-          <ChatInputArea
-            ref={inputAreaRef}
-            value={input}
-            onChange={setInput}
-            onSend={handleSendMessage}
-            onStop={stop}
-            isStreaming={isStreaming}
-            disabled={!isAnyProviderConfigured}
-            isLoading={isLoading}
-            placeholder={isReadOnly ? 'View only - cannot send messages' : 'Message AI...'}
-            driveId={driveId}
-            error={error}
-            showError={showError}
-            onClearError={() => setShowError(false)}
-            isReadOnly={isReadOnly}
-            readOnlyMessage="You do not have permission to send messages in this AI chat"
+            renderInput={(props) => (
+              <ChatInput
+                ref={inputRef}
+                value={props.value}
+                onChange={props.onChange}
+                onSend={props.onSend}
+                onStop={props.onStop}
+                isStreaming={props.isStreaming}
+                disabled={props.disabled}
+                placeholder={props.placeholder}
+                driveId={props.driveId}
+                crossDrive={props.crossDrive}
+                isReadOnly={isReadOnly}
+                readOnlyMessage="You do not have permission to send messages in this AI chat"
+              />
+            )}
           />
         </TabsContent>
 

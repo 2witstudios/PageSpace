@@ -94,35 +94,16 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({
 
   return (
     <div
-      className={`group relative mb-2 ${role === 'user'
+      className={`group relative mb-1 ${role === 'user'
         ? 'p-3 rounded-lg bg-primary/10 dark:bg-accent/20 ml-2 sm:ml-8'
         : 'mr-2 sm:mr-8'
         }`}
     >
       {role === 'user' && (
-        <div className="flex items-center justify-between mb-1">
+        <div className="flex items-center mb-1">
           <div className="text-sm font-medium text-primary dark:text-primary">
             You
-            {editedAt && !isEditing && (
-              <span className="ml-2 text-xs text-muted-foreground">(edited)</span>
-            )}
           </div>
-          {onEdit && onDelete && !isEditing && (
-            <MessageActionButtons
-              onEdit={onEdit}
-              onDelete={onDelete}
-              onRetry={onRetry}
-            />
-          )}
-        </div>
-      )}
-      {role !== 'user' && onEdit && onDelete && !isEditing && (
-        <div className="flex justify-end mb-1">
-          <MessageActionButtons
-            onEdit={onEdit}
-            onDelete={onDelete}
-            onRetry={onRetry}
-          />
         </div>
       )}
 
@@ -140,12 +121,17 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({
             </div>
           </div>
           {createdAt && (
-            <div className="text-xs text-gray-500 mt-2">
-              {new Date(createdAt).toLocaleTimeString()}
-              {editedAt && (
-                <span className="ml-2">
-                  (edited {new Date(editedAt).toLocaleTimeString()})
-                </span>
+            <div className="flex items-center justify-between mt-2">
+              <div className="text-xs text-gray-500">
+                {new Date(createdAt).toLocaleTimeString()}
+                {editedAt && <span className="ml-2">(edited)</span>}
+              </div>
+              {onEdit && onDelete && !isEditing && (
+                <MessageActionButtons
+                  onEdit={onEdit}
+                  onDelete={onDelete}
+                  onRetry={onRetry}
+                />
               )}
             </div>
           )}
@@ -472,7 +458,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
   // ============================================
   return (
     <>
-      <div key={message.id} className="mb-4" style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 100px' }}>
+      <div key={message.id} className="mb-2" style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 100px' }}>
         {groupedParts.map((group, index) => {
           if (group.type === 'text-group') {
             // Type narrowing: we know this is a TextGroupPart

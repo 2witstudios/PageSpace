@@ -2,9 +2,9 @@ import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react'
 import { DefaultChatTransport } from 'ai';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
-import ChatInput, { ChatInputRef } from '@/components/messages/ChatInput';
+import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Loader2, Send, Plus, StopCircle } from 'lucide-react';
+import { Loader2, Plus } from 'lucide-react';
 import { CompactMessageRenderer, ReadOnlyToggle, AISelector, AiUsageMonitor, TasksDropdown } from '@/components/ai/shared';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth, patch, del } from '@/lib/auth/auth-fetch';
@@ -123,7 +123,6 @@ const SidebarChatTab: React.FC = () => {
   const currentProvider = useAssistantSettingsStore((state) => state.currentProvider);
   const currentModel = useAssistantSettingsStore((state) => state.currentModel);
   const loadSettings = useAssistantSettingsStore((state) => state.loadSettings);
-  const isAnyProviderConfigured = useAssistantSettingsStore((state) => state.isAnyProviderConfigured);
 
   // ============================================
   // Local Component State
@@ -147,14 +146,6 @@ const SidebarChatTab: React.FC = () => {
       scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight;
     }
   }, []);
-
-  // Determine if send button should be enabled
-  const canSend = useMemo(() => {
-    if (!input.trim()) return false;
-    if (!currentConversationId) return false;
-    if (selectedAgent) return true; // Agent mode has its own provider config
-    return isAnyProviderConfigured;
-  }, [input, currentConversationId, selectedAgent, isAnyProviderConfigured]);
 
   // ============================================
   // Effects: Drive Loading
@@ -345,6 +336,7 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   // Handlers
   // ============================================
+
   const handleNewConversation = useCallback(async () => {
     try {
       if (selectedAgent) {
@@ -382,7 +374,6 @@ const SidebarChatTab: React.FC = () => {
 
     sendMessage({ text: input }, { body });
     setInput('');
-    chatInputRef.current?.clear();
     setTimeout(scrollToBottom, 100);
   }, [
     input,
@@ -572,7 +563,7 @@ const SidebarChatTab: React.FC = () => {
       {/* Messages */}
       <div className="flex-1 min-h-0 overflow-hidden max-w-full" style={{ contain: 'layout' }}>
         <ScrollArea className="h-full p-3 max-w-full" ref={scrollAreaRef}>
-          <div className="space-y-3 max-w-full">
+          <div className="space-y-1.5 max-w-full">
             {displayMessages.length === 0 ? (
               <div className="flex items-center justify-center h-20 text-muted-foreground text-xs text-center">
                 <div>
@@ -647,39 +638,19 @@ const SidebarChatTab: React.FC = () => {
           />
         </div>
 
-        <div className="flex items-center space-x-2">
-          <ChatInput
-            ref={chatInputRef}
-            value={input}
-            onChange={setInput}
-            onSendMessage={handleSendMessage}
-            placeholder={locationContext
-              ? `Ask about ${locationContext.currentPage?.title || 'this page'}...`
-              : 'Ask about your workspace...'}
-            driveId={locationContext?.currentDrive?.id}
-            crossDrive={true}
-          />
-          {displayIsStreaming ? (
-            <Button
-              onClick={handleStop}
-              variant="destructive"
-              size="sm"
-              className="h-8 px-3"
-              title="Stop generating"
-            >
-              <StopCircle className="h-3 w-3" />
-            </Button>
-          ) : (
-            <Button
-              onClick={handleSendMessage}
-              disabled={!canSend}
-              size="sm"
-              className="h-8 px-3"
-            >
-              <Send className="h-3 w-3" />
-            </Button>
-          )}
-        </div>
+        <ChatInput
+          ref={chatInputRef}
+          value={input}
+          onChange={setInput}
+          onSend={handleSendMessage}
+          onStop={handleStop}
+          isStreaming={displayIsStreaming}
+          placeholder={locationContext
+            ? `Ask about ${locationContext.currentPage?.title || 'this page'}...`
+            : 'Ask about your workspace...'}
+          driveId={locationContext?.currentDrive?.id}
+          crossDrive={true}
+        />
       </div>
     </div>
   );

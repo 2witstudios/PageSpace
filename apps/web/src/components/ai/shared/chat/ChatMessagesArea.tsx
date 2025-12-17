@@ -110,7 +110,7 @@ export const ChatMessagesArea = forwardRef<ChatMessagesAreaRef, ChatMessagesArea
       <div className="flex-1 min-h-0 overflow-hidden px-4">
         <ScrollArea className="h-full" ref={scrollAreaRef}>
           <div className="max-w-4xl mx-auto w-full">
-            <div className="space-y-4 pr-1 sm:pr-4">
+            <div className="space-y-2 pr-1 sm:pr-4 pt-3 pb-24">
               {isLoading ? (
                 <LoadingSkeleton />
               ) : messages.length === 0 ? (
