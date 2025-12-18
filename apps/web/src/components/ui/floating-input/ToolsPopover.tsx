@@ -62,10 +62,9 @@ export function ToolsPopover({
   disabled = false,
   className,
 }: ToolsPopoverProps) {
-  // Count active tools for badge
+  // Count active tools for badge (exclude writeMode since it's default true)
   const activeCount = [
     webSearchEnabled,
-    writeMode,
     showPageTree,
     showMcp && mcpEnabled,
   ].filter(Boolean).length;
@@ -104,9 +103,7 @@ export function ToolsPopover({
       >
         <div className="space-y-1">
           {/* Web Search Toggle */}
-          <button
-            onClick={onWebSearchToggle}
-            disabled={disabled}
+          <div
             className={cn(
               'flex items-center justify-between w-full px-2 py-2 rounded-md transition-colors',
               'hover:bg-accent hover:text-accent-foreground',
@@ -131,12 +128,10 @@ export function ToolsPopover({
               disabled={disabled}
               className="scale-75"
             />
-          </button>
+          </div>
 
           {/* Write/Read Only Toggle */}
-          <button
-            onClick={onWriteModeToggle}
-            disabled={disabled}
+          <div
             className={cn(
               'flex items-center justify-between w-full px-2 py-2 rounded-md transition-colors',
               'hover:bg-accent hover:text-accent-foreground',
@@ -162,12 +157,10 @@ export function ToolsPopover({
               disabled={disabled}
               className="scale-75"
             />
-          </button>
+          </div>
 
           {/* Page Tree Context Toggle */}
-          <button
-            onClick={onShowPageTreeToggle}
-            disabled={disabled}
+          <div
             className={cn(
               'flex items-center justify-between w-full px-2 py-2 rounded-md transition-colors',
               'hover:bg-accent hover:text-accent-foreground',
@@ -192,15 +185,13 @@ export function ToolsPopover({
               disabled={disabled}
               className="scale-75"
             />
-          </button>
+          </div>
 
           {/* MCP Toggle (Desktop Only) */}
           {showMcp && (
             <>
               <div className="h-px bg-border my-2" />
-              <button
-                onClick={() => onMcpToggle?.(!mcpEnabled)}
-                disabled={disabled || mcpRunningServers === 0}
+              <div
                 className={cn(
                   'flex items-center justify-between w-full px-2 py-2 rounded-md transition-colors',
                   'hover:bg-accent hover:text-accent-foreground',
@@ -230,7 +221,7 @@ export function ToolsPopover({
                   disabled={disabled || mcpRunningServers === 0}
                   className="scale-75"
                 />
-              </button>
+              </div>
               {mcpRunningServers === 0 && (
                 <p className="text-xs text-muted-foreground px-2 pb-1">
                   No MCP servers running
