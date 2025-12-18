@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, pages, eq } from '@pagespace/db';
-import { getUserAccessLevel } from '@pagespace/lib/server';
+import { getUserAccessLevel, PageType, isSheetType, parseSheetContent, serializeSheetContent, updateSheetCells, isValidCellAddress } from '@pagespace/lib/server';
 import { z } from 'zod/v4';
 import prettier from 'prettier';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
@@ -73,13 +73,20 @@ function getNumberedLines(content: string): string[] {
   return lines.map((line, index) => `${(index + 1).toString().padStart(4, ' ')} | ${line}`);
 }
 
-// Schema for line operations
+// Schema for cell updates
+const cellUpdateSchema = z.object({
+  address: z.string(),
+  value: z.string(),
+});
+
+// Schema for line/cell operations
 const lineOperationSchema = z.object({
-  operation: z.enum(['read', 'replace', 'insert', 'delete']),
+  operation: z.enum(['read', 'replace', 'insert', 'delete', 'edit-cells']),
   pageId: z.string().optional(), // Optional page ID, will use current page if not provided
   startLine: z.number().min(1).optional(),
   endLine: z.number().min(1).optional(),
   content: z.string().optional(),
+  cells: z.array(cellUpdateSchema).optional(), // For edit-cells operation
 });
 
 export async function POST(req: NextRequest) {
@@ -91,7 +98,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { operation, pageId: providedPageId, startLine, endLine, content } = lineOperationSchema.parse(body);
+    const { operation, pageId: providedPageId, startLine, endLine, content, cells } = lineOperationSchema.parse(body);
     
     // Get the page ID (use provided or get current)
     const pageId = providedPageId || await getCurrentPageId(userId);
@@ -107,7 +114,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Validate write permissions for mutating operations
-    if (operation === 'replace' || operation === 'insert' || operation === 'delete') {
+    if (operation === 'replace' || operation === 'insert' || operation === 'delete' || operation === 'edit-cells') {
       if (!accessLevel.canEdit) {
         loggers.api.warn('MCP write operation denied - insufficient permissions', {
           userId,
@@ -286,7 +293,82 @@ export async function POST(req: NextRequest) {
           deletedLines: `${startLine}-${actualEndLine}`,
         });
       }
-      
+
+      case 'edit-cells': {
+        // Validate this is a SHEET type page
+        if (!isSheetType(page.type as PageType)) {
+          return NextResponse.json({
+            error: 'Page is not a sheet',
+            message: `This page is a ${page.type}. Use edit-cells only on SHEET pages.`,
+            pageType: page.type,
+          }, { status: 400 });
+        }
+
+        if (!cells || cells.length === 0) {
+          return NextResponse.json({ error: 'cells array is required for edit-cells operation' }, { status: 400 });
+        }
+
+        // Validate all cell addresses
+        const invalidAddresses = cells.filter(cell => !isValidCellAddress(cell.address));
+        if (invalidAddresses.length > 0) {
+          const examples = invalidAddresses.slice(0, 3).map(c => `"${c.address}"`).join(', ');
+          return NextResponse.json({
+            error: `Invalid cell addresses: ${examples}. Use A1-style format (e.g., A1, B2, AA100).`,
+          }, { status: 400 });
+        }
+
+        // Parse existing sheet content
+        const sheetData = parseSheetContent(currentContent);
+
+        // Apply cell updates
+        const updatedSheet = updateSheetCells(sheetData, cells);
+
+        // Serialize back to TOML format
+        const newContent = serializeSheetContent(updatedSheet, { pageId });
+
+        // Update the page
+        await db.update(pages).set({
+          content: newContent,
+          updatedAt: new Date(),
+        }).where(eq(pages.id, pageId));
+
+        // Broadcast content update event
+        const driveId = await getDriveIdFromPage(pageId);
+        if (driveId) {
+          await broadcastPageEvent(
+            createPageEventPayload(driveId, pageId, 'content-updated', {
+              title: page.title,
+              parentId: page.parentId
+            })
+          );
+        }
+
+        // Summarize changes for response
+        const formulaCount = cells.filter(c => c.value.trim().startsWith('=')).length;
+        const valueCount = cells.filter(c => c.value.trim() !== '' && !c.value.trim().startsWith('=')).length;
+        const clearCount = cells.filter(c => c.value.trim() === '').length;
+
+        return NextResponse.json({
+          pageId,
+          pageTitle: page.title,
+          cellsUpdated: cells.length,
+          operation: 'edit-cells',
+          stats: {
+            valuesSet: valueCount,
+            formulasSet: formulaCount,
+            cellsCleared: clearCount,
+            sheetDimensions: {
+              rows: updatedSheet.rowCount,
+              columns: updatedSheet.columnCount,
+            },
+          },
+          updatedCells: cells.map(c => ({
+            address: c.address.toUpperCase(),
+            type: c.value.trim() === '' ? 'cleared' : c.value.trim().startsWith('=') ? 'formula' : 'value',
+          })),
+        });
+      }
+
       default:
         return NextResponse.json({ error: 'Invalid operation' }, { status: 400 });
     }
