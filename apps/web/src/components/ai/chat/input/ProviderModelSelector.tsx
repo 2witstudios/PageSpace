@@ -44,7 +44,7 @@ export interface ProviderModelSelectorProps {
 }
 
 /**
- * Compact popover selector for AI provider and model selection.
+ * Two separate popover selectors for AI provider and model selection.
  * Used in the InputFooter for quick model switching.
  */
 export function ProviderModelSelector({
@@ -54,7 +54,8 @@ export function ProviderModelSelector({
   className,
   disabled = false,
 }: ProviderModelSelectorProps) {
-  const [open, setOpen] = useState(false);
+  const [providerOpen, setProviderOpen] = useState(false);
+  const [modelOpen, setModelOpen] = useState(false);
   const [providerSettings, setProviderSettings] =
     useState<ProviderSettings | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -118,19 +119,22 @@ export function ProviderModelSelector({
   // Handle provider selection
   const handleProviderSelect = useCallback(
     async (newProvider: string) => {
-      if (newProvider === provider) return;
+      if (newProvider === provider) {
+        setProviderOpen(false);
+        return;
+      }
 
       setIsSaving(true);
       try {
         const newModel = getDefaultModel(newProvider);
 
-        // Update user settings via API - patch returns parsed JSON, throws on error
         await patch('/api/ai/settings', {
           provider: newProvider,
           model: newModel,
         });
 
         onChange?.(newProvider, newModel);
+        setProviderOpen(false);
       } catch (error) {
         console.error('Failed to update provider:', error);
       } finally {
@@ -143,18 +147,20 @@ export function ProviderModelSelector({
   // Handle model selection
   const handleModelSelect = useCallback(
     async (newModel: string) => {
-      if (newModel === model || !provider) return;
+      if (newModel === model || !provider) {
+        setModelOpen(false);
+        return;
+      }
 
       setIsSaving(true);
       try {
-        // Update user settings via API - patch returns parsed JSON, throws on error
         await patch('/api/ai/settings', {
           provider,
           model: newModel,
         });
 
         onChange?.(provider, newModel);
-        setOpen(false);
+        setModelOpen(false);
       } catch (error) {
         console.error('Failed to update model:', error);
       } finally {
@@ -193,119 +199,120 @@ export function ProviderModelSelector({
     ];
   }, []);
 
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={disabled || isLoading}
-          className={cn(
-            'h-8 px-2 gap-1 text-muted-foreground hover:text-foreground hover:bg-transparent dark:hover:bg-transparent',
-            className
-          )}
-        >
-          {isLoading ? (
-            <Loader2 className="h-3 w-3 animate-spin" />
-          ) : (
-            <>
-              <span className="text-xs">{providerDisplayName}</span>
-              <span className="text-muted-foreground/50">/</span>
-              <span className="text-xs max-w-[80px] truncate">
-                {modelDisplayName}
-              </span>
-              <ChevronDown className="h-3 w-3 shrink-0" />
-            </>
-          )}
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-72 p-0" align="end" sideOffset={8}>
-        <div className="flex flex-col">
-          {/* Provider Section */}
-          <div className="p-3 border-b">
-            <div className="text-xs font-medium text-muted-foreground mb-2">
-              Provider
-            </div>
-            <ScrollArea className="max-h-[180px]">
-              <div className="space-y-2">
-                {providerGroups.map((group) => (
-                  <div key={group.label}>
-                    <div className="text-[10px] uppercase tracking-wider text-muted-foreground/60 mb-1 px-1">
-                      {group.label}
-                    </div>
-                    <div className="grid grid-cols-2 gap-1">
-                      {group.providers.map((p) => {
-                        const configured = isProviderConfigured(p.id);
-                        const isSelected = provider === p.id;
-                        return (
-                          <Button
-                            key={p.id}
-                            variant={isSelected ? 'secondary' : 'ghost'}
-                            size="sm"
-                            disabled={!configured || isSaving}
-                            onClick={() => handleProviderSelect(p.id)}
-                            className={cn(
-                              'justify-start text-xs h-7 px-2',
-                              !configured && 'opacity-50'
-                            )}
-                          >
-                            <span className="truncate flex-1 text-left">
-                              {p.name}
-                            </span>
-                            {isSelected && (
-                              <Check className="h-3 w-3 shrink-0 ml-1" />
-                            )}
-                          </Button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </ScrollArea>
-          </div>
+  if (isLoading) {
+    return (
+      <Button
+        variant="ghost"
+        size="sm"
+        disabled
+        className="h-8 px-2 gap-1 text-muted-foreground"
+      >
+        <Loader2 className="h-3 w-3 animate-spin" />
+      </Button>
+    );
+  }
 
-          {/* Model Section */}
-          <div className="p-3">
-            <div className="text-xs font-medium text-muted-foreground mb-2">
-              Model
-            </div>
-            <ScrollArea className="max-h-[200px]">
-              <div className="space-y-0.5">
-                {availableModels.length === 0 ? (
-                  <div className="text-xs text-muted-foreground px-2 py-2">
-                    {provider === 'ollama' || provider === 'lmstudio'
-                      ? 'Models discovered from local server'
-                      : 'No models available'}
+  return (
+    <div className={cn('flex items-center gap-0.5', className)}>
+      {/* Provider Selector */}
+      <Popover open={providerOpen} onOpenChange={setProviderOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={disabled || isSaving}
+            className="h-8 px-2 gap-1 text-muted-foreground hover:text-foreground hover:bg-transparent dark:hover:bg-transparent"
+          >
+            <span className="text-xs">{providerDisplayName}</span>
+            <ChevronDown className="h-3 w-3 shrink-0" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-52 p-0" align="end" sideOffset={8}>
+          <ScrollArea className="h-[280px] p-2">
+            <div className="space-y-2">
+              {providerGroups.map((group) => (
+                <div key={group.label}>
+                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground/60 mb-1 px-2">
+                    {group.label}
                   </div>
-                ) : (
-                  availableModels.map(([modelId, modelName]) => {
-                    const isSelected = model === modelId;
-                    return (
-                      <Button
-                        key={modelId}
-                        variant={isSelected ? 'secondary' : 'ghost'}
-                        size="sm"
-                        disabled={isSaving}
-                        onClick={() => handleModelSelect(modelId)}
-                        className="w-full justify-start text-xs h-7 px-2"
-                      >
-                        <span className="truncate flex-1 text-left">
-                          {modelName}
-                        </span>
-                        {isSelected && (
-                          <Check className="h-3 w-3 shrink-0 ml-1" />
-                        )}
-                      </Button>
-                    );
-                  })
-                )}
-              </div>
-            </ScrollArea>
-          </div>
-        </div>
-      </PopoverContent>
-    </Popover>
+                  <div className="space-y-0.5">
+                    {group.providers.map((p) => {
+                      const configured = isProviderConfigured(p.id);
+                      const isSelected = provider === p.id;
+                      return (
+                        <Button
+                          key={p.id}
+                          variant={isSelected ? 'secondary' : 'ghost'}
+                          size="sm"
+                          disabled={!configured || isSaving}
+                          onClick={() => handleProviderSelect(p.id)}
+                          className={cn(
+                            'w-full justify-between text-xs h-7 px-2 min-w-0',
+                            !configured && 'opacity-50'
+                          )}
+                        >
+                          <span className="truncate min-w-0">{p.name}</span>
+                          {isSelected && <Check className="h-3 w-3 shrink-0 ml-1" />}
+                        </Button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </ScrollArea>
+        </PopoverContent>
+      </Popover>
+
+      <span className="text-muted-foreground/30 text-xs">/</span>
+
+      {/* Model Selector */}
+      <Popover open={modelOpen} onOpenChange={setModelOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={disabled || isSaving}
+            className="h-8 px-2 gap-1 text-muted-foreground hover:text-foreground hover:bg-transparent dark:hover:bg-transparent"
+          >
+            <span className="text-xs max-w-[100px] truncate">
+              {modelDisplayName}
+            </span>
+            <ChevronDown className="h-3 w-3 shrink-0" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-52 p-0" align="end" sideOffset={8}>
+          <ScrollArea className="h-[200px] p-2">
+            <div className="space-y-0.5">
+              {availableModels.length === 0 ? (
+                <div className="text-xs text-muted-foreground px-2 py-2">
+                  {provider === 'ollama' || provider === 'lmstudio'
+                    ? 'Models discovered from local server'
+                    : 'No models available'}
+                </div>
+              ) : (
+                availableModels.map(([modelId, modelName]) => {
+                  const isSelected = model === modelId;
+                  return (
+                    <Button
+                      key={modelId}
+                      variant={isSelected ? 'secondary' : 'ghost'}
+                      size="sm"
+                      disabled={isSaving}
+                      onClick={() => handleModelSelect(modelId)}
+                      className="w-full justify-between text-xs h-7 px-2 min-w-0"
+                    >
+                      <span className="truncate min-w-0">{modelName}</span>
+                      {isSelected && <Check className="h-3 w-3 shrink-0 ml-1" />}
+                    </Button>
+                  );
+                })
+              )}
+            </div>
+          </ScrollArea>
+        </PopoverContent>
+      </Popover>
+    </div>
   );
 }
 
