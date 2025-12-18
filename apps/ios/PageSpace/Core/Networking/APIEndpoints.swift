@@ -62,4 +62,11 @@ enum APIEndpoints {
 
     // MARK: - Search
     static let search = "/api/search"
+
+    // MARK: - Page Agents
+    static let multiDriveAgents = "/api/ai/page-agents/multi-drive"
+
+    static func driveAgents(driveId: String) -> String {
+        "/api/drives/\(driveId)/agents"
+    }
 }
