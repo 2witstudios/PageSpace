@@ -148,7 +148,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
           selectedModel={currentModel}
           onProviderModelChange={setProviderSettings}
           hideModelSelector={hideModelSelector}
-          disabled={isStreaming}
+          disabled={isStreaming || disabled}
         />
       </div>
     );

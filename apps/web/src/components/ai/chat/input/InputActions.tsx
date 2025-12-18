@@ -35,7 +35,7 @@ export function InputActions({
   onSend,
   onStop,
   disabled = false,
-  variant: _variant = 'main',
+  variant = 'main',
   className,
 }: InputActionsProps) {
   const shouldReduceMotion = useReducedMotion();
@@ -57,8 +57,12 @@ export function InputActions({
       disabled={disabled}
       className={cn(
         "group flex items-center justify-center h-9 w-9 shrink-0 rounded-full disabled:opacity-50",
-        // Primary blue in light mode, muted in dark mode
-        'bg-primary text-primary-foreground dark:bg-muted dark:text-muted-foreground'
+        // Context-aware button styling:
+        // - main: primary blue in light, muted in dark (blends with InputCard)
+        // - sidebar: accent styling for better contrast in sidebar context
+        variant === 'sidebar'
+          ? 'bg-accent text-accent-foreground hover:bg-accent/80'
+          : 'bg-primary text-primary-foreground dark:bg-muted dark:text-muted-foreground'
       )}
       title="Send message"
       aria-label="Send message"

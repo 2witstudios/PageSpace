@@ -131,6 +131,9 @@ export function InputFooter({
                 <PencilOff className="h-4 w-4" />
               )}
               <span className="text-xs">{writeMode ? 'Write' : 'Read only'}</span>
+              <span className="sr-only">
+                {writeMode ? 'Switch to read only mode' : 'Switch to write mode'}
+              </span>
             </Button>
           </TooltipTrigger>
           <TooltipContent side="top">
