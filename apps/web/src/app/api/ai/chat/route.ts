@@ -451,7 +451,7 @@ export async function POST(request: Request) {
         }
       }
       // Apply read-only filtering on top of enabled tools
-      let postReadOnlyFiltered = filterToolsForReadOnly(filtered, readOnlyMode);
+      const postReadOnlyFiltered = filterToolsForReadOnly(filtered, readOnlyMode);
       // Apply web search filtering (exclude web_search if disabled)
       filteredTools = filterToolsForWebSearch(postReadOnlyFiltered, webSearchMode);
 
