@@ -57,10 +57,8 @@ export function InputActions({
       disabled={disabled}
       className={cn(
         "group flex items-center justify-center h-9 w-9 shrink-0 rounded-full disabled:opacity-50",
-        // Sidebar: primary blue fill in light mode for visibility
-        variant === 'sidebar'
-          ? 'bg-primary text-primary-foreground dark:bg-muted dark:text-muted-foreground'
-          : 'bg-muted text-muted-foreground'
+        // Primary blue in light mode, muted in dark mode
+        'bg-primary text-primary-foreground dark:bg-muted dark:text-muted-foreground'
       )}
       title="Send message"
       aria-label="Send message"

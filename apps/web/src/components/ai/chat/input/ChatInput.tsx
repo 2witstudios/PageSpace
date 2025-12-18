@@ -73,8 +73,10 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
     // Get settings from centralized store
     const webSearchEnabled = useAssistantSettingsStore((s) => s.webSearchEnabled);
     const writeMode = useAssistantSettingsStore((s) => s.writeMode);
+    const showPageTree = useAssistantSettingsStore((s) => s.showPageTree);
     const toggleWebSearch = useAssistantSettingsStore((s) => s.toggleWebSearch);
     const toggleWriteMode = useAssistantSettingsStore((s) => s.toggleWriteMode);
+    const toggleShowPageTree = useAssistantSettingsStore((s) => s.toggleShowPageTree);
     const currentProvider = useAssistantSettingsStore((s) => s.currentProvider);
     const currentModel = useAssistantSettingsStore((s) => s.currentModel);
     const setProviderSettings = useAssistantSettingsStore((s) => s.setProviderSettings);
@@ -137,6 +139,8 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
           onWebSearchToggle={toggleWebSearch}
           writeMode={writeMode}
           onWriteModeToggle={toggleWriteMode}
+          showPageTree={showPageTree}
+          onShowPageTreeToggle={toggleShowPageTree}
           onMicClick={toggleListening}
           isListening={isListening}
           isMicSupported={isSupported}

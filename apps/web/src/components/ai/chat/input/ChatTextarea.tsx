@@ -101,11 +101,11 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
           className={cn(
             'min-h-[36px] max-h-48 resize-none',
             // Context-aware background:
-            // - main: transparent to blend with InputCard (must override base Textarea's dark:bg-input/30)
+            // - main: transparent to blend with InputCard, no shadow in light mode for flush look
             // - sidebar: white in light mode for contrast, slight gray lift in dark mode
             variant === 'sidebar'
               ? 'bg-white dark:bg-card/50'
-              : 'bg-transparent dark:bg-transparent',
+              : 'bg-transparent dark:bg-transparent shadow-none dark:shadow-xs',
             'border-none outline-none',
             'text-foreground placeholder:text-muted-foreground',
             'focus-visible:ring-0 focus-visible:ring-offset-0',

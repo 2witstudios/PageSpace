@@ -46,6 +46,7 @@ interface AssistantSettingsState {
   toggleWebSearch: () => void;
   setWriteMode: (enabled: boolean) => void;
   toggleWriteMode: () => void;
+  toggleShowPageTree: () => void;
 }
 
 export const useAssistantSettingsStore = create<AssistantSettingsState>()((set, get) => ({
@@ -67,6 +68,11 @@ export const useAssistantSettingsStore = create<AssistantSettingsState>()((set, 
     if (typeof window !== 'undefined') {
       localStorage.setItem(SHOW_PAGE_TREE_KEY, String(show));
     }
+  },
+
+  toggleShowPageTree: () => {
+    const current = get().showPageTree;
+    get().setShowPageTree(!current);
   },
 
   setProviderSettings: (provider: string, model: string) => {
