@@ -16,15 +16,15 @@ export interface ToolsPopoverProps {
   /** Whether web search is enabled */
   webSearchEnabled?: boolean;
   /** Callback when web search is toggled */
-  onWebSearchToggle?: () => void;
+  onWebSearchToggle?: (enabled: boolean) => void;
   /** Whether write mode is active (true = write, false = read only) */
   writeMode?: boolean;
   /** Callback when write mode is toggled */
-  onWriteModeToggle?: () => void;
+  onWriteModeToggle?: (enabled: boolean) => void;
   /** Whether to show workspace page tree context to AI */
   showPageTree?: boolean;
   /** Callback when page tree context is toggled */
-  onShowPageTreeToggle?: () => void;
+  onShowPageTreeToggle?: (enabled: boolean) => void;
   /** Whether MCP is enabled for this conversation */
   mcpEnabled?: boolean;
   /** Callback when MCP is toggled */
