@@ -31,32 +31,37 @@ interface ProviderSettings {
   isAnyProviderConfigured: boolean;
 }
 
-/** Static provider groups for organized display */
-const PROVIDER_GROUPS = [
-  {
-    label: 'Default',
-    providers: [{ id: 'pagespace', name: 'PageSpace' }],
-  },
-  {
-    label: 'Cloud Providers',
-    providers: [
-      { id: 'openrouter', name: 'OpenRouter' },
-      { id: 'openrouter_free', name: 'OpenRouter (Free)' },
-      { id: 'google', name: 'Google AI' },
-      { id: 'openai', name: 'OpenAI' },
-      { id: 'anthropic', name: 'Anthropic' },
-      { id: 'xai', name: 'xAI (Grok)' },
-      { id: 'glm', name: 'GLM' },
-    ],
-  },
-  {
-    label: 'Local',
-    providers: [
-      { id: 'ollama', name: 'Ollama' },
-      { id: 'lmstudio', name: 'LM Studio' },
-    ],
-  },
-] as const;
+/** Category mapping for providers */
+const PROVIDER_CATEGORIES: Record<string, 'default' | 'cloud' | 'local'> = {
+  pagespace: 'default',
+  ollama: 'local',
+  lmstudio: 'local',
+  // All others default to 'cloud'
+};
+
+/** Derive provider groups from AI_PROVIDERS configuration */
+const PROVIDER_GROUPS = (() => {
+  const groups: { label: string; providers: { id: string; name: string }[] }[] = [
+    { label: 'Default', providers: [] },
+    { label: 'Cloud Providers', providers: [] },
+    { label: 'Local', providers: [] },
+  ];
+
+  for (const [id, config] of Object.entries(AI_PROVIDERS)) {
+    const category = PROVIDER_CATEGORIES[id] || 'cloud';
+    const provider = { id, name: config.name };
+
+    if (category === 'default') {
+      groups[0].providers.push(provider);
+    } else if (category === 'local') {
+      groups[2].providers.push(provider);
+    } else {
+      groups[1].providers.push(provider);
+    }
+  }
+
+  return groups;
+})();
 
 export interface ProviderModelSelectorProps {
   /** Currently selected provider */
@@ -101,6 +106,7 @@ export function ProviderModelSelector({
         }
       } catch (error) {
         console.error('Failed to fetch provider settings:', error);
+        toast.error('Failed to load AI provider settings');
       } finally {
         setIsLoading(false);
       }
