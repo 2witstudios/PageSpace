@@ -7,8 +7,9 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from '@/components/ui/tooltip';
-import { Mic, Globe, ChevronDown, Pencil, PencilOff } from 'lucide-react';
+import { Mic, Globe, Pencil, PencilOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { ProviderModelSelector } from '@/components/ai/chat/input/ProviderModelSelector';
 
 export interface InputFooterProps {
   /** Whether web search is enabled */
@@ -21,16 +22,16 @@ export interface InputFooterProps {
   onWriteModeToggle?: () => void;
   /** Callback when mic button is clicked */
   onMicClick?: () => void;
-  /** Callback when provider selector is clicked */
-  onProviderClick?: () => void;
-  /** Callback when model selector is clicked */
-  onModelClick?: () => void;
-  /** Currently selected provider name */
-  selectedProvider?: string;
-  /** Currently selected model name */
-  selectedModel?: string;
+  /** Currently selected provider */
+  selectedProvider?: string | null;
+  /** Currently selected model */
+  selectedModel?: string | null;
+  /** Callback when provider/model changes */
+  onProviderModelChange?: (provider: string, model: string) => void;
   /** Hide the provider/model selector (for compact layouts) */
   hideModelSelector?: boolean;
+  /** Disable the selector (e.g., during streaming) */
+  disabled?: boolean;
   /** Additional class names */
   className?: string;
 }
@@ -42,8 +43,7 @@ export interface InputFooterProps {
  * - Mic button (left)
  * - Web search toggle (left)
  * - Write/Read only toggle (left)
- * - Provider selector (right)
- * - Model selector (right)
+ * - Provider/Model selector (right) - Combined popover
  */
 export function InputFooter({
   webSearchEnabled = false,
@@ -51,11 +51,11 @@ export function InputFooter({
   writeMode = true,
   onWriteModeToggle,
   onMicClick,
-  onProviderClick,
-  onModelClick,
-  selectedProvider = 'OpenAI',
-  selectedModel = 'GPT-4o',
+  selectedProvider,
+  selectedModel,
+  onProviderModelChange,
   hideModelSelector = false,
+  disabled = false,
   className,
 }: InputFooterProps) {
   return (
@@ -75,6 +75,7 @@ export function InputFooter({
               variant="ghost"
               size="sm"
               onClick={onMicClick}
+              disabled={disabled}
               className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground hover:bg-transparent dark:hover:bg-transparent"
             >
               <Mic className="h-4 w-4" />
@@ -91,6 +92,7 @@ export function InputFooter({
               variant="ghost"
               size="sm"
               onClick={onWebSearchToggle}
+              disabled={disabled}
               className={cn(
                 'h-8 px-2 gap-1.5 hover:bg-transparent dark:hover:bg-transparent hover:text-foreground',
                 webSearchEnabled
@@ -116,6 +118,7 @@ export function InputFooter({
               variant="ghost"
               size="sm"
               onClick={onWriteModeToggle}
+              disabled={disabled}
               className={cn(
                 'h-8 px-2 gap-1.5 hover:bg-transparent dark:hover:bg-transparent hover:text-foreground',
                 writeMode
@@ -137,31 +140,14 @@ export function InputFooter({
         </Tooltip>
       </div>
 
-      {/* Right group */}
+      {/* Right group - Provider/Model Selector */}
       {!hideModelSelector && (
-        <div className="flex items-center gap-1">
-          {/* Provider selector */}
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onProviderClick}
-            className="h-8 px-2 gap-1 text-muted-foreground hover:text-foreground hover:bg-transparent dark:hover:bg-transparent"
-          >
-            <span className="text-xs">{selectedProvider}</span>
-            <ChevronDown className="h-3 w-3" />
-          </Button>
-
-          {/* Model selector */}
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onModelClick}
-            className="h-8 px-2 gap-1 text-muted-foreground hover:text-foreground hover:bg-transparent dark:hover:bg-transparent"
-          >
-            <span className="text-xs">{selectedModel}</span>
-            <ChevronDown className="h-3 w-3" />
-          </Button>
-        </div>
+        <ProviderModelSelector
+          provider={selectedProvider}
+          model={selectedModel}
+          onChange={onProviderModelChange}
+          disabled={disabled}
+        />
       )}
     </div>
   );

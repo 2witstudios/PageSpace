@@ -128,9 +128,12 @@ const SidebarChatTab: React.FC = () => {
   // Local Component State
   // ============================================
   const [input, setInput] = useState<string>('');
-  const [isReadOnly, setIsReadOnly] = useState<boolean>(false);
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
+
+  // Get web search and write mode from store
+  const webSearchEnabled = useAssistantSettingsStore((state) => state.webSearchEnabled);
+  const writeMode = useAssistantSettingsStore((state) => state.writeMode);
 
   // Refs
   const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -353,11 +356,15 @@ const SidebarChatTab: React.FC = () => {
   const handleSendMessage = useCallback(async () => {
     if (!input.trim() || !currentConversationId) return;
 
+    // Derive isReadOnly from writeMode (inverted)
+    const isReadOnly = !writeMode;
+
     const body = selectedAgent
       ? {
           chatId: selectedAgent.id,
           conversationId: agentConversationId,
           isReadOnly,
+          webSearchEnabled,
           provider: selectedAgent.aiProvider,
           model: selectedAgent.aiModel,
           systemPrompt: selectedAgent.systemPrompt,
@@ -366,6 +373,7 @@ const SidebarChatTab: React.FC = () => {
         }
       : {
           isReadOnly,
+          webSearchEnabled,
           showPageTree,
           locationContext: locationContext || undefined,
           selectedProvider: currentProvider,
@@ -380,7 +388,8 @@ const SidebarChatTab: React.FC = () => {
     currentConversationId,
     selectedAgent,
     agentConversationId,
-    isReadOnly,
+    writeMode,
+    webSearchEnabled,
     showPageTree,
     locationContext,
     currentProvider,

@@ -23,6 +23,7 @@ import {
   buildSystemPrompt,
   buildAgentAwarenessPrompt,
   filterToolsForReadOnly,
+  filterToolsForWebSearch,
   getPageTreeContext,
   getDriveListSummary,
   getModelCapabilities,
@@ -226,6 +227,7 @@ export async function POST(
       glmApiKey,
       locationContext,
       isReadOnly,
+      webSearchEnabled,
       showPageTree,
       mcpTools
     } = requestBody;
@@ -240,6 +242,8 @@ export async function POST(
 
     // Parse read-only mode early (needed for message saving)
     const readOnlyMode = isReadOnly === true;
+    // Parse web search mode (defaults to false - disabled)
+    const webSearchMode = webSearchEnabled === true;
 
     // Process @mentions in the user's message
     let mentionSystemPrompt = '';
@@ -612,9 +616,18 @@ MENTION PROCESSING:
       + (agentAwarenessPrompt ? '\n\n' + agentAwarenessPrompt : '')
       + pageTreePrompt;
 
-    // Filter tools based on read-only mode
+    // Filter tools based on read-only mode and web search toggle
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let finalTools: Record<string, any> = filterToolsForReadOnly(pageSpaceTools, readOnlyMode);
+    let postReadOnlyTools: Record<string, any> = filterToolsForReadOnly(pageSpaceTools, readOnlyMode);
+    // Apply web search filtering (exclude web_search if disabled)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let finalTools: Record<string, any> = filterToolsForWebSearch(postReadOnlyTools, webSearchMode);
+
+    loggers.api.debug('🔧 Global Assistant Chat API: Tool modes', {
+      isReadOnly: readOnlyMode,
+      webSearchEnabled: webSearchMode,
+      totalTools: Object.keys(finalTools).length
+    });
 
     // Merge MCP tools if provided
     if (mcpTools && mcpTools.length > 0) {

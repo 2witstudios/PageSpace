@@ -1,10 +1,11 @@
 'use client';
 
-import React, { forwardRef, useRef, useImperativeHandle, useState } from 'react';
+import React, { forwardRef, useRef, useImperativeHandle, useEffect } from 'react';
 import { cn } from '@/lib/utils';
 import { ChatTextarea, type ChatTextareaRef } from './ChatTextarea';
 import { InputActions } from './InputActions';
 import { InputFooter } from '@/components/ui/floating-input';
+import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 
 export interface ChatInputProps {
   /** Current input value */
@@ -25,10 +26,6 @@ export interface ChatInputProps {
   driveId?: string;
   /** Enable cross-drive mention search */
   crossDrive?: boolean;
-  /** Whether user is in read-only mode */
-  isReadOnly?: boolean;
-  /** Message to show when read-only */
-  readOnlyMessage?: string;
   /** Hide the model/provider selector in footer (for compact layouts) */
   hideModelSelector?: boolean;
 }
@@ -63,17 +60,26 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       placeholder = 'Type your message...',
       driveId,
       crossDrive = false,
-      isReadOnly = false,
-      readOnlyMessage = 'View only - cannot send messages',
       hideModelSelector = false,
     },
     ref
   ) => {
     const textareaRef = useRef<ChatTextareaRef>(null);
 
-    // Local state for footer toggles (UI preview only)
-    const [webSearchEnabled, setWebSearchEnabled] = useState(false);
-    const [writeMode, setWriteMode] = useState(true);
+    // Get settings from centralized store
+    const webSearchEnabled = useAssistantSettingsStore((s) => s.webSearchEnabled);
+    const writeMode = useAssistantSettingsStore((s) => s.writeMode);
+    const toggleWebSearch = useAssistantSettingsStore((s) => s.toggleWebSearch);
+    const toggleWriteMode = useAssistantSettingsStore((s) => s.toggleWriteMode);
+    const currentProvider = useAssistantSettingsStore((s) => s.currentProvider);
+    const currentModel = useAssistantSettingsStore((s) => s.currentModel);
+    const setProviderSettings = useAssistantSettingsStore((s) => s.setProviderSettings);
+    const loadSettings = useAssistantSettingsStore((s) => s.loadSettings);
+
+    // Load settings on mount
+    useEffect(() => {
+      loadSettings();
+    }, [loadSettings]);
 
     useImperativeHandle(ref, () => ({
       focus: () => textareaRef.current?.focus(),
@@ -81,14 +87,12 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
     }));
 
     const handleSend = () => {
-      if (value.trim() && !disabled && !isReadOnly) {
+      if (value.trim() && !disabled) {
         onSend();
       }
     };
 
-    const computedPlaceholder = isReadOnly ? readOnlyMessage : placeholder;
-    const isDisabled = disabled || isReadOnly;
-    const canSend = value.trim().length > 0 && !isDisabled;
+    const canSend = value.trim().length > 0 && !disabled;
 
     return (
       <div className={cn('flex flex-col relative')}>
@@ -99,10 +103,10 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
             value={value}
             onChange={onChange}
             onSend={handleSend}
-            placeholder={computedPlaceholder}
+            placeholder={placeholder}
             driveId={driveId}
             crossDrive={crossDrive}
-            disabled={isDisabled}
+            disabled={disabled}
           />
 
           <InputActions
@@ -116,27 +120,16 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
         {/* Footer menu */}
         <InputFooter
           webSearchEnabled={webSearchEnabled}
-          onWebSearchToggle={() => setWebSearchEnabled(!webSearchEnabled)}
+          onWebSearchToggle={toggleWebSearch}
           writeMode={writeMode}
-          onWriteModeToggle={() => setWriteMode(!writeMode)}
+          onWriteModeToggle={toggleWriteMode}
           onMicClick={() => console.log('Mic clicked')}
-          onProviderClick={() => console.log('Provider clicked')}
-          onModelClick={() => console.log('Model clicked')}
-          selectedProvider="OpenAI"
-          selectedModel="GPT-4o"
+          selectedProvider={currentProvider}
+          selectedModel={currentModel}
+          onProviderModelChange={setProviderSettings}
           hideModelSelector={hideModelSelector}
+          disabled={isStreaming}
         />
-
-        {/* Read-only indicator */}
-        {isReadOnly && (
-          <div className="px-3 pb-3">
-            <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg px-4 py-2">
-              <p className="text-sm text-yellow-800 dark:text-yellow-200 text-center">
-                {readOnlyMessage}
-              </p>
-            </div>
-          </div>
-        )}
       </div>
     );
   }

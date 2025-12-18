@@ -42,6 +42,7 @@ import {
   buildTimestampSystemPrompt,
   buildSystemPrompt,
   filterToolsForReadOnly,
+  filterToolsForWebSearch,
   getPageTreeContext,
   getModelCapabilities,
   convertMCPToolsToAISDKSchemas,
@@ -116,6 +117,7 @@ export async function POST(request: Request) {
       pageContext,
       mcpTools, // MCP tool schemas from desktop client (optional)
       isReadOnly, // Optional read-only mode toggle
+      webSearchEnabled, // Optional web search toggle (defaults to false)
     }: {
       messages: UIMessage[],
       chatId?: string,
@@ -131,6 +133,7 @@ export async function POST(request: Request) {
       glmApiKey?: string,
       mcpTools?: MCPTool[], // MCP tool schemas from desktop (client-side execution)
       isReadOnly?: boolean, // Optional read-only mode toggle
+      webSearchEnabled?: boolean, // Optional web search toggle (defaults to false)
       pageContext?: {
         pageId: string,
         pageTitle: string,
@@ -419,7 +422,9 @@ export async function POST(request: Request) {
 
     // Parse read-only mode (defaults to false for full access)
     const readOnlyMode = isReadOnly === true;
-    loggers.ai.debug('AI Page Chat API: Read-only mode', { isReadOnly: readOnlyMode });
+    // Parse web search mode (defaults to false - disabled)
+    const webSearchMode = webSearchEnabled === true;
+    loggers.ai.debug('AI Page Chat API: Tool modes', { isReadOnly: readOnlyMode, webSearchEnabled: webSearchMode });
 
     // Filter tools based on custom enabled tools configuration
     // - null or [] = no tools enabled (default behavior)
@@ -446,13 +451,16 @@ export async function POST(request: Request) {
         }
       }
       // Apply read-only filtering on top of enabled tools
-      filteredTools = filterToolsForReadOnly(filtered, readOnlyMode);
+      let postReadOnlyFiltered = filterToolsForReadOnly(filtered, readOnlyMode);
+      // Apply web search filtering (exclude web_search if disabled)
+      filteredTools = filterToolsForWebSearch(postReadOnlyFiltered, webSearchMode);
 
       loggers.ai.debug('AI Page Chat API: Filtered tools based on page configuration', {
         totalTools: Object.keys(pageSpaceTools).length,
         enabledTools: enabledTools.length,
         filteredTools: Object.keys(filteredTools).length,
-        isReadOnly: readOnlyMode
+        isReadOnly: readOnlyMode,
+        webSearchEnabled: webSearchMode
       });
     }
 
