@@ -11,6 +11,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { ChevronDown, Check, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { fetchWithAuth, patch } from '@/lib/auth/auth-fetch';
+import { toast } from 'sonner';
 import {
   AI_PROVIDERS,
   getModelDisplayName,
@@ -29,6 +30,33 @@ interface ProviderSettings {
   providers: Record<string, ProviderStatus>;
   isAnyProviderConfigured: boolean;
 }
+
+/** Static provider groups for organized display */
+const PROVIDER_GROUPS = [
+  {
+    label: 'Default',
+    providers: [{ id: 'pagespace', name: 'PageSpace' }],
+  },
+  {
+    label: 'Cloud Providers',
+    providers: [
+      { id: 'openrouter', name: 'OpenRouter' },
+      { id: 'openrouter_free', name: 'OpenRouter (Free)' },
+      { id: 'google', name: 'Google AI' },
+      { id: 'openai', name: 'OpenAI' },
+      { id: 'anthropic', name: 'Anthropic' },
+      { id: 'xai', name: 'xAI (Grok)' },
+      { id: 'glm', name: 'GLM' },
+    ],
+  },
+  {
+    label: 'Local',
+    providers: [
+      { id: 'ollama', name: 'Ollama' },
+      { id: 'lmstudio', name: 'LM Studio' },
+    ],
+  },
+] as const;
 
 export interface ProviderModelSelectorProps {
   /** Currently selected provider */
@@ -137,6 +165,7 @@ export function ProviderModelSelector({
         setProviderOpen(false);
       } catch (error) {
         console.error('Failed to update provider:', error);
+        toast.error('Failed to update provider');
       } finally {
         setIsSaving(false);
       }
@@ -163,41 +192,13 @@ export function ProviderModelSelector({
         setModelOpen(false);
       } catch (error) {
         console.error('Failed to update model:', error);
+        toast.error('Failed to update model');
       } finally {
         setIsSaving(false);
       }
     },
     [provider, model, onChange]
   );
-
-  // Provider groups for organized display
-  const providerGroups = useMemo(() => {
-    return [
-      {
-        label: 'Default',
-        providers: [{ id: 'pagespace', name: 'PageSpace' }],
-      },
-      {
-        label: 'Cloud Providers',
-        providers: [
-          { id: 'openrouter', name: 'OpenRouter' },
-          { id: 'openrouter_free', name: 'OpenRouter (Free)' },
-          { id: 'google', name: 'Google AI' },
-          { id: 'openai', name: 'OpenAI' },
-          { id: 'anthropic', name: 'Anthropic' },
-          { id: 'xai', name: 'xAI (Grok)' },
-          { id: 'glm', name: 'GLM' },
-        ],
-      },
-      {
-        label: 'Local',
-        providers: [
-          { id: 'ollama', name: 'Ollama' },
-          { id: 'lmstudio', name: 'LM Studio' },
-        ],
-      },
-    ];
-  }, []);
 
   if (isLoading) {
     return (
@@ -230,7 +231,7 @@ export function ProviderModelSelector({
         <PopoverContent className="w-52 p-0" align="end" sideOffset={8}>
           <ScrollArea className="h-[280px] p-2">
             <div className="space-y-2">
-              {providerGroups.map((group) => (
+              {PROVIDER_GROUPS.map((group) => (
                 <div key={group.label}>
                   <div className="text-[10px] uppercase tracking-wider text-muted-foreground/60 mb-1 px-2">
                     {group.label}

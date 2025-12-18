@@ -112,29 +112,30 @@ export const useAssistantSettingsStore = create<AssistantSettingsState>()((set, 
 
     set({ isLoading: true });
 
-    try {
-      // Load settings from localStorage (client-side only)
-      let showPageTree = false;
-      let webSearchEnabled = false;
-      let writeMode = true;
+    // Load settings from localStorage (client-side only) - outside try block
+    // so values are available in both success and error paths
+    let showPageTree = false;
+    let webSearchEnabled = false;
+    let writeMode = true;
 
-      if (typeof window !== 'undefined') {
-        const storedShowPageTree = localStorage.getItem(SHOW_PAGE_TREE_KEY);
-        if (storedShowPageTree !== null) {
-          showPageTree = storedShowPageTree === 'true';
-        }
-
-        const storedWebSearch = localStorage.getItem(WEB_SEARCH_KEY);
-        if (storedWebSearch !== null) {
-          webSearchEnabled = storedWebSearch === 'true';
-        }
-
-        const storedWriteMode = localStorage.getItem(WRITE_MODE_KEY);
-        if (storedWriteMode !== null) {
-          writeMode = storedWriteMode === 'true';
-        }
+    if (typeof window !== 'undefined') {
+      const storedShowPageTree = localStorage.getItem(SHOW_PAGE_TREE_KEY);
+      if (storedShowPageTree !== null) {
+        showPageTree = storedShowPageTree === 'true';
       }
 
+      const storedWebSearch = localStorage.getItem(WEB_SEARCH_KEY);
+      if (storedWebSearch !== null) {
+        webSearchEnabled = storedWebSearch === 'true';
+      }
+
+      const storedWriteMode = localStorage.getItem(WRITE_MODE_KEY);
+      if (storedWriteMode !== null) {
+        writeMode = storedWriteMode === 'true';
+      }
+    }
+
+    try {
       const response = await fetchWithAuth('/api/ai/settings');
       if (response.ok) {
         const data = await response.json();
@@ -155,7 +156,7 @@ export const useAssistantSettingsStore = create<AssistantSettingsState>()((set, 
       if (process.env.NODE_ENV === 'development') {
         console.warn('Failed to load assistant settings:', error);
       }
-      set({ isInitialized: true, isLoading: false });
+      set({ showPageTree, webSearchEnabled, writeMode, isInitialized: true, isLoading: false });
     }
   },
 }))

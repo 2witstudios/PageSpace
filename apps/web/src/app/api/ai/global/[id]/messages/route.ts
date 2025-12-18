@@ -617,11 +617,9 @@ MENTION PROCESSING:
       + pageTreePrompt;
 
     // Filter tools based on read-only mode and web search toggle
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let postReadOnlyTools: Record<string, any> = filterToolsForReadOnly(pageSpaceTools, readOnlyMode);
+    const postReadOnlyTools = filterToolsForReadOnly(pageSpaceTools, readOnlyMode);
     // Apply web search filtering (exclude web_search if disabled)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let finalTools: Record<string, any> = filterToolsForWebSearch(postReadOnlyTools, webSearchMode);
+    let finalTools = filterToolsForWebSearch(postReadOnlyTools, webSearchMode);
 
     loggers.api.debug('🔧 Global Assistant Chat API: Tool modes', {
       isReadOnly: readOnlyMode,
@@ -669,8 +667,8 @@ MENTION PROCESSING:
           };
         }
 
-        // Merge MCP tools with PageSpace tools
-        finalTools = { ...finalTools, ...mcpToolsWithExecute };
+        // Merge MCP tools with PageSpace tools (type assertion safe since MCP tools match AI SDK format)
+        finalTools = { ...finalTools, ...mcpToolsWithExecute } as typeof finalTools;
 
         loggers.api.info('Global Assistant Chat API: Successfully merged MCP tools', {
           totalTools: Object.keys(finalTools).length,

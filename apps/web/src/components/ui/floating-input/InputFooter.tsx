@@ -104,6 +104,9 @@ export function InputFooter({
               <span className={cn('text-xs', !webSearchEnabled && 'line-through')}>
                 Web
               </span>
+              <span className="sr-only">
+                {webSearchEnabled ? 'Disable web search' : 'Enable web search'}
+              </span>
             </Button>
           </TooltipTrigger>
           <TooltipContent side="top">
