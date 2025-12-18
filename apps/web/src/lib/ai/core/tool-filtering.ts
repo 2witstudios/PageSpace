@@ -1,8 +1,8 @@
 /**
- * Simple tool filtering for read-only mode
+ * Simple tool filtering for read-only mode and web search
  *
- * Replaces the complex role-based permission system with a simple
- * read-only toggle that filters out write/delete/create operations.
+ * Replaces the complex role-based permission system with simple
+ * toggles that filter out specific tools based on user settings.
  */
 
 // Tools that modify content (excluded in read-only mode)
@@ -24,6 +24,9 @@ const WRITE_TOOLS = new Set([
   // Task operations
   'update_task',
 ]);
+
+// Web search tools (excluded when web search is disabled)
+const WEB_SEARCH_TOOLS = new Set(['web_search']);
 
 /**
  * Check if a tool modifies content
@@ -48,9 +51,51 @@ export function filterToolsForReadOnly<T>(
 }
 
 /**
+ * Check if a tool is a web search tool
+ */
+export function isWebSearchTool(toolName: string): boolean {
+  return WEB_SEARCH_TOOLS.has(toolName);
+}
+
+/**
+ * Filter tools based on web search toggle
+ * Returns all tools if web search enabled, or excludes web_search if disabled
+ */
+export function filterToolsForWebSearch<T>(
+  tools: Record<string, T>,
+  webSearchEnabled: boolean
+): Record<string, T> {
+  if (webSearchEnabled) return tools;
+
+  return Object.fromEntries(
+    Object.entries(tools).filter(([name]) => !isWebSearchTool(name))
+  );
+}
+
+/**
+ * Combined tool filtering - applies both read-only and web search filters
+ */
+export function filterTools<T>(
+  tools: Record<string, T>,
+  options: { isReadOnly?: boolean; webSearchEnabled?: boolean }
+): Record<string, T> {
+  let filtered = tools;
+
+  if (options.isReadOnly) {
+    filtered = filterToolsForReadOnly(filtered, true);
+  }
+
+  if (options.webSearchEnabled === false) {
+    filtered = filterToolsForWebSearch(filtered, false);
+  }
+
+  return filtered;
+}
+
+/**
  * Get list of allowed tools for display purposes
  */
-export function getToolsSummary(isReadOnly: boolean): {
+export function getToolsSummary(isReadOnly: boolean, webSearchEnabled = true): {
   allowed: string[];
   denied: string[];
 } {
@@ -73,12 +118,21 @@ export function getToolsSummary(isReadOnly: boolean): {
     ...Array.from(WRITE_TOOLS),
   ];
 
-  if (!isReadOnly) {
+  if (!isReadOnly && webSearchEnabled) {
     return { allowed: allTools, denied: [] };
   }
 
-  const allowed = allTools.filter((name) => !isWriteTool(name));
-  const denied = allTools.filter((name) => isWriteTool(name));
+  const allowed = allTools.filter((name) => {
+    if (isReadOnly && isWriteTool(name)) return false;
+    if (!webSearchEnabled && isWebSearchTool(name)) return false;
+    return true;
+  });
+
+  const denied = allTools.filter((name) => {
+    if (isReadOnly && isWriteTool(name)) return true;
+    if (!webSearchEnabled && isWebSearchTool(name)) return true;
+    return false;
+  });
 
   return { allowed, denied };
 }

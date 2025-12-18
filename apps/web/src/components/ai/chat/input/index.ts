@@ -14,3 +14,8 @@ export {
   InputActions,
   type InputActionsProps,
 } from './InputActions';
+
+export {
+  ProviderModelSelector,
+  type ProviderModelSelectorProps,
+} from './ProviderModelSelector';

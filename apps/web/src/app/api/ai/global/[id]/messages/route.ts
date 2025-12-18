@@ -23,6 +23,7 @@ import {
   buildSystemPrompt,
   buildAgentAwarenessPrompt,
   filterToolsForReadOnly,
+  filterToolsForWebSearch,
   getPageTreeContext,
   getDriveListSummary,
   getModelCapabilities,
@@ -226,6 +227,7 @@ export async function POST(
       glmApiKey,
       locationContext,
       isReadOnly,
+      webSearchEnabled,
       showPageTree,
       mcpTools
     } = requestBody;
@@ -240,6 +242,8 @@ export async function POST(
 
     // Parse read-only mode early (needed for message saving)
     const readOnlyMode = isReadOnly === true;
+    // Parse web search mode (defaults to false - disabled)
+    const webSearchMode = webSearchEnabled === true;
 
     // Process @mentions in the user's message
     let mentionSystemPrompt = '';
@@ -612,9 +616,16 @@ MENTION PROCESSING:
       + (agentAwarenessPrompt ? '\n\n' + agentAwarenessPrompt : '')
       + pageTreePrompt;
 
-    // Filter tools based on read-only mode
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let finalTools: Record<string, any> = filterToolsForReadOnly(pageSpaceTools, readOnlyMode);
+    // Filter tools based on read-only mode and web search toggle
+    const postReadOnlyTools = filterToolsForReadOnly(pageSpaceTools, readOnlyMode);
+    // Apply web search filtering (exclude web_search if disabled)
+    let finalTools = filterToolsForWebSearch(postReadOnlyTools, webSearchMode);
+
+    loggers.api.debug('🔧 Global Assistant Chat API: Tool modes', {
+      isReadOnly: readOnlyMode,
+      webSearchEnabled: webSearchMode,
+      totalTools: Object.keys(finalTools).length
+    });
 
     // Merge MCP tools if provided
     if (mcpTools && mcpTools.length > 0) {
@@ -656,8 +667,8 @@ MENTION PROCESSING:
           };
         }
 
-        // Merge MCP tools with PageSpace tools
-        finalTools = { ...finalTools, ...mcpToolsWithExecute };
+        // Merge MCP tools with PageSpace tools (type assertion safe since MCP tools match AI SDK format)
+        finalTools = { ...finalTools, ...mcpToolsWithExecute } as typeof finalTools;
 
         loggers.api.info('Global Assistant Chat API: Successfully merged MCP tools', {
           totalTools: Object.keys(finalTools).length,

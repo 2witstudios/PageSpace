@@ -5,7 +5,8 @@ import { Button } from '@/components/ui/button';
 import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Loader2, Plus } from 'lucide-react';
-import { CompactMessageRenderer, ReadOnlyToggle, AISelector, AiUsageMonitor, TasksDropdown } from '@/components/ai/shared';
+import { ProviderModelSelector } from '@/components/ai/chat/input/ProviderModelSelector';
+import { CompactMessageRenderer, AISelector, AiUsageMonitor, TasksDropdown } from '@/components/ai/shared';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth, patch, del } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
@@ -122,15 +123,19 @@ const SidebarChatTab: React.FC = () => {
   const showPageTree = useAssistantSettingsStore((state) => state.showPageTree);
   const currentProvider = useAssistantSettingsStore((state) => state.currentProvider);
   const currentModel = useAssistantSettingsStore((state) => state.currentModel);
+  const setProviderSettings = useAssistantSettingsStore((state) => state.setProviderSettings);
   const loadSettings = useAssistantSettingsStore((state) => state.loadSettings);
 
   // ============================================
   // Local Component State
   // ============================================
   const [input, setInput] = useState<string>('');
-  const [isReadOnly, setIsReadOnly] = useState<boolean>(false);
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
+
+  // Get web search and write mode from store
+  const webSearchEnabled = useAssistantSettingsStore((state) => state.webSearchEnabled);
+  const writeMode = useAssistantSettingsStore((state) => state.writeMode);
 
   // Refs
   const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -353,11 +358,15 @@ const SidebarChatTab: React.FC = () => {
   const handleSendMessage = useCallback(async () => {
     if (!input.trim() || !currentConversationId) return;
 
+    // Derive isReadOnly from writeMode (inverted)
+    const isReadOnly = !writeMode;
+
     const body = selectedAgent
       ? {
           chatId: selectedAgent.id,
           conversationId: agentConversationId,
           isReadOnly,
+          webSearchEnabled,
           provider: selectedAgent.aiProvider,
           model: selectedAgent.aiModel,
           systemPrompt: selectedAgent.systemPrompt,
@@ -366,6 +375,7 @@ const SidebarChatTab: React.FC = () => {
         }
       : {
           isReadOnly,
+          webSearchEnabled,
           showPageTree,
           locationContext: locationContext || undefined,
           selectedProvider: currentProvider,
@@ -380,7 +390,8 @@ const SidebarChatTab: React.FC = () => {
     currentConversationId,
     selectedAgent,
     agentConversationId,
-    isReadOnly,
+    writeMode,
+    webSearchEnabled,
     showPageTree,
     locationContext,
     currentProvider,
@@ -630,11 +641,11 @@ const SidebarChatTab: React.FC = () => {
         )}
 
         <div className="px-1">
-          <ReadOnlyToggle
-            isReadOnly={isReadOnly}
-            onToggle={setIsReadOnly}
+          <ProviderModelSelector
+            provider={currentProvider}
+            model={currentModel}
+            onChange={setProviderSettings}
             disabled={status === 'streaming'}
-            size="sm"
           />
         </div>
 
@@ -650,6 +661,8 @@ const SidebarChatTab: React.FC = () => {
             : 'Ask about your workspace...'}
           driveId={locationContext?.currentDrive?.id}
           crossDrive={true}
+          hideModelSelector={true}
+          variant="sidebar"
         />
       </div>
     </div>

@@ -15,6 +15,8 @@ export interface InputActionsProps {
   onStop: () => void;
   /** Whether send is disabled */
   disabled?: boolean;
+  /** Style variant: 'main' for InputCard context, 'sidebar' for sidebar contrast */
+  variant?: 'main' | 'sidebar';
   /** Additional class names */
   className?: string;
 }
@@ -33,6 +35,7 @@ export function InputActions({
   onSend,
   onStop,
   disabled = false,
+  variant = 'main',
   className,
 }: InputActionsProps) {
   const shouldReduceMotion = useReducedMotion();
@@ -49,17 +52,23 @@ export function InputActions({
       <StopCircle className="h-4 w-4" />
     </Button>
   ) : (
-    <Button
+    <button
       onClick={onSend}
       disabled={disabled}
-      variant="ghost"
-      size="icon"
-      className="h-9 w-9 shrink-0 rounded-full bg-muted hover:bg-muted/80"
+      className={cn(
+        "group flex items-center justify-center h-9 w-9 shrink-0 rounded-full disabled:opacity-50",
+        // Context-aware button styling:
+        // - main: primary blue in light, muted in dark (blends with InputCard)
+        // - sidebar: accent styling for better contrast in sidebar context
+        variant === 'sidebar'
+          ? 'bg-accent text-accent-foreground hover:bg-accent/80'
+          : 'bg-primary text-primary-foreground dark:bg-muted dark:text-muted-foreground'
+      )}
       title="Send message"
       aria-label="Send message"
     >
-      <ArrowRight className="h-4 w-4" />
-    </Button>
+      <ArrowRight className="h-4 w-4 transition-all duration-200 group-hover:-rotate-90 group-hover:text-foreground" />
+    </button>
   );
 
   // Skip animation wrapper if reduced motion is preferred

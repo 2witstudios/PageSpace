@@ -45,7 +45,7 @@ import { DefaultChatTransport } from 'ai';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Settings, Plus, History } from 'lucide-react';
-import { ReadOnlyToggle, AiUsageMonitor, AISelector, TasksDropdown } from '@/components/ai/shared';
+import { AiUsageMonitor, AISelector, TasksDropdown } from '@/components/ai/shared';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -112,12 +112,16 @@ const GlobalAssistantView: React.FC = () => {
   const currentProvider = useAssistantSettingsStore((state) => state.currentProvider);
   const currentModel = useAssistantSettingsStore((state) => state.currentModel);
   const loadSettings = useAssistantSettingsStore((state) => state.loadSettings);
+  const webSearchEnabled = useAssistantSettingsStore((state) => state.webSearchEnabled);
+  const writeMode = useAssistantSettingsStore((state) => state.writeMode);
+
+  // Derive isReadOnly from writeMode (inverse) for API request body
+  const isReadOnly = !writeMode;
 
   // ============================================
   // LOCAL STATE
   // ============================================
   const [input, setInput] = useState<string>('');
-  const [isReadOnly, setIsReadOnly] = useState<boolean>(false);
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
 
@@ -423,10 +427,12 @@ const GlobalAssistantView: React.FC = () => {
           selectedProvider: agentSelectedProvider,
           selectedModel: agentSelectedModel,
           isReadOnly,
+          webSearchEnabled,
           mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
         }
       : {
           isReadOnly,
+          webSearchEnabled,
           showPageTree,
           locationContext: locationContext || undefined,
           selectedProvider: currentProvider,
@@ -506,14 +512,8 @@ const GlobalAssistantView: React.FC = () => {
         </div>
       </div>
 
-      {/* Chat Controls - unified for both modes */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 dark:border-[var(--separator)]">
-        <ReadOnlyToggle
-          isReadOnly={isReadOnly}
-          onToggle={setIsReadOnly}
-          disabled={isStreaming}
-          size="sm"
-        />
+      {/* Usage Monitor */}
+      <div className="flex items-center justify-end px-4 py-2 border-b border-gray-200 dark:border-[var(--separator)]">
         {selectedAgent ? (
           <AiUsageMonitor pageId={selectedAgent.id} compact />
         ) : (
@@ -567,7 +567,6 @@ const GlobalAssistantView: React.FC = () => {
             placeholder={props.placeholder}
             driveId={props.driveId}
             crossDrive={props.crossDrive}
-            isReadOnly={isReadOnly}
           />
         )}
       />
