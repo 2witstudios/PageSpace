@@ -135,14 +135,14 @@ describe('usePageAgentDashboardStore', () => {
       expect(result.current.activeTab).toBe('history');
     });
 
-    it('should update activeTab to settings', () => {
+    it('should update activeTab to activity', () => {
       const { result } = renderHook(() => usePageAgentDashboardStore());
 
       act(() => {
-        result.current.setActiveTab('settings');
+        result.current.setActiveTab('activity');
       });
 
-      expect(result.current.activeTab).toBe('settings');
+      expect(result.current.activeTab).toBe('activity');
     });
 
     it('should update activeTab to chat', () => {
@@ -166,11 +166,11 @@ describe('usePageAgentDashboardStore', () => {
       const agentBefore = result.current.selectedAgent;
 
       act(() => {
-        result.current.setActiveTab('settings');
+        result.current.setActiveTab('activity');
       });
 
       expect(result.current.selectedAgent).toEqual(agentBefore);
-      expect(result.current.activeTab).toBe('settings');
+      expect(result.current.activeTab).toBe('activity');
     });
   });
 
@@ -329,7 +329,7 @@ describe('usePageAgentDashboardStore', () => {
     it('should accept valid SidebarTab values', () => {
       const { result } = renderHook(() => usePageAgentDashboardStore());
 
-      const validTabs: SidebarTab[] = ['chat', 'history', 'settings'];
+      const validTabs: SidebarTab[] = ['chat', 'history', 'activity'];
 
       validTabs.forEach((tab) => {
         act(() => {
