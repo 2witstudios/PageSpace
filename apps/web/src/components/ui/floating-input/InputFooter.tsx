@@ -22,6 +22,10 @@ export interface InputFooterProps {
   onWriteModeToggle?: () => void;
   /** Callback when mic button is clicked */
   onMicClick?: () => void;
+  /** Whether microphone is currently listening */
+  isListening?: boolean;
+  /** Whether microphone is supported by the browser */
+  isMicSupported?: boolean;
   /** Currently selected provider */
   selectedProvider?: string | null;
   /** Currently selected model */
@@ -51,6 +55,8 @@ export function InputFooter({
   writeMode = true,
   onWriteModeToggle,
   onMicClick,
+  isListening = false,
+  isMicSupported = true,
   selectedProvider,
   selectedModel,
   onProviderModelChange,
@@ -144,14 +150,27 @@ export function InputFooter({
               variant="ghost"
               size="sm"
               onClick={onMicClick}
-              disabled={disabled}
-              className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground hover:bg-transparent dark:hover:bg-transparent"
+              disabled={disabled || !isMicSupported}
+              className={cn(
+                'h-8 w-8 p-0 transition-all duration-200 hover:bg-transparent dark:hover:bg-transparent',
+                isListening
+                  ? 'animate-pulse text-foreground'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
             >
               <Mic className="h-4 w-4" />
-              <span className="sr-only">Voice input</span>
+              <span className="sr-only">
+                {isListening ? 'Stop listening' : 'Voice input'}
+              </span>
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="top">Voice input</TooltipContent>
+          <TooltipContent side="top">
+            {!isMicSupported
+              ? 'Voice input not supported'
+              : isListening
+                ? 'Stop listening'
+                : 'Voice input'}
+          </TooltipContent>
         </Tooltip>
       </div>
     </div>

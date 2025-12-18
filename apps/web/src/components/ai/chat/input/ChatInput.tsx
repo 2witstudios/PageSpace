@@ -6,6 +6,7 @@ import { ChatTextarea, type ChatTextareaRef } from './ChatTextarea';
 import { InputActions } from './InputActions';
 import { InputFooter } from '@/components/ui/floating-input';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
+import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
 
 export interface ChatInputProps {
   /** Current input value */
@@ -81,6 +82,14 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       loadSettings();
     }, [loadSettings]);
 
+    // Speech recognition
+    const { isListening, isSupported, toggleListening } = useSpeechRecognition({
+      onTranscript: (text) => {
+        const newValue = value + (value ? ' ' : '') + text;
+        onChange(newValue);
+      },
+    });
+
     useImperativeHandle(ref, () => ({
       focus: () => textareaRef.current?.focus(),
       clear: () => textareaRef.current?.clear(),
@@ -123,7 +132,9 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
           onWebSearchToggle={toggleWebSearch}
           writeMode={writeMode}
           onWriteModeToggle={toggleWriteMode}
-          onMicClick={() => console.log('Mic clicked')}
+          onMicClick={toggleListening}
+          isListening={isListening}
+          isMicSupported={isSupported}
           selectedProvider={currentProvider}
           selectedModel={currentModel}
           onProviderModelChange={setProviderSettings}
