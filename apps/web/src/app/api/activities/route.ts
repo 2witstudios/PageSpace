@@ -35,12 +35,14 @@ export async function GET(request: Request) {
 
   try {
     // Parse and validate query parameters
+    // Note: searchParams.get() returns null, but Zod's .optional() and .default()
+    // only work with undefined, so we convert null → undefined
     const parseResult = querySchema.safeParse({
       context: searchParams.get('context') || 'user',
-      driveId: searchParams.get('driveId'),
-      pageId: searchParams.get('pageId'),
-      limit: searchParams.get('limit'),
-      offset: searchParams.get('offset'),
+      driveId: searchParams.get('driveId') ?? undefined,
+      pageId: searchParams.get('pageId') ?? undefined,
+      limit: searchParams.get('limit') ?? undefined,
+      offset: searchParams.get('offset') ?? undefined,
     });
 
     if (!parseResult.success) {
