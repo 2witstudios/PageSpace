@@ -66,12 +66,12 @@ export function InputActions({
 
   // Skip animation wrapper if reduced motion is preferred
   if (shouldReduceMotion) {
-    return <div className={cn('shrink-0', className)}>{buttonContent}</div>;
+    return <div className={cn('shrink-0 self-end', className)}>{buttonContent}</div>;
   }
 
   return (
     <motion.div
-      className={cn('shrink-0', className)}
+      className={cn('shrink-0 self-end', className)}
       whileTap={{ scale: 0.95 }}
       transition={{ duration: 0.1 }}
     >

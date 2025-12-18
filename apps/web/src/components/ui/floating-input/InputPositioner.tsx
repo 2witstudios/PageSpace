@@ -21,12 +21,12 @@ export interface InputPositionerProps {
 
 const positionVariants: Variants = {
   centered: {
-    top: '50%',
+    top: 'calc(50% - 50px)',
     bottom: 'auto',
     left: '50%',
     right: 'auto',
     x: '-50%',
-    y: '-50%',
+    y: 0,
   },
   docked: {
     top: 'auto',

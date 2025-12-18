@@ -123,7 +123,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
     return (
       <div className={cn('flex flex-col relative')}>
         {/* Input row */}
-        <div className="flex items-end gap-2 p-3">
+        <div className="flex items-start gap-2 p-3">
           <ChatTextarea
             ref={textareaRef}
             value={value}
