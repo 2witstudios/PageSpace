@@ -25,6 +25,8 @@ export interface ChatTextareaProps {
   crossDrive?: boolean;
   /** Whether the input is disabled */
   disabled?: boolean;
+  /** Style variant: 'main' for InputCard context, 'sidebar' for sidebar contrast */
+  variant?: 'main' | 'sidebar';
   /** Additional class names */
   className?: string;
 }
@@ -50,6 +52,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
       driveId,
       crossDrive = false,
       disabled = false,
+      variant = 'main',
       className,
     },
     ref
@@ -97,7 +100,13 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
           disabled={disabled}
           className={cn(
             'min-h-[36px] max-h-48 resize-none',
-            'bg-card dark:bg-transparent border-none outline-none',
+            // Context-aware background:
+            // - main: transparent to blend with InputCard (must override base Textarea's dark:bg-input/30)
+            // - sidebar: white in light mode for contrast, slight gray lift in dark mode
+            variant === 'sidebar'
+              ? 'bg-white dark:bg-card/50'
+              : 'bg-transparent dark:bg-transparent',
+            'border-none outline-none',
             'text-foreground placeholder:text-muted-foreground',
             'focus-visible:ring-0 focus-visible:ring-offset-0',
             className

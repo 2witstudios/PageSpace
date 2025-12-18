@@ -29,6 +29,8 @@ export interface ChatInputProps {
   crossDrive?: boolean;
   /** Hide the model/provider selector in footer (for compact layouts) */
   hideModelSelector?: boolean;
+  /** Style variant: 'main' for InputCard context, 'sidebar' for sidebar contrast */
+  variant?: 'main' | 'sidebar';
 }
 
 export interface ChatInputRef {
@@ -62,6 +64,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       driveId,
       crossDrive = false,
       hideModelSelector = false,
+      variant = 'main',
     },
     ref
   ) => {
@@ -116,6 +119,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
             driveId={driveId}
             crossDrive={crossDrive}
             disabled={disabled}
+            variant={variant}
           />
 
           <InputActions
@@ -123,6 +127,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
             onSend={handleSend}
             onStop={onStop}
             disabled={!canSend}
+            variant={variant}
           />
         </div>
 

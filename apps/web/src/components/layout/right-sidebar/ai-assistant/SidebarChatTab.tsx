@@ -662,6 +662,7 @@ const SidebarChatTab: React.FC = () => {
           driveId={locationContext?.currentDrive?.id}
           crossDrive={true}
           hideModelSelector={true}
+          variant="sidebar"
         />
       </div>
     </div>

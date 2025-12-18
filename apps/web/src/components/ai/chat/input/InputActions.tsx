@@ -15,6 +15,8 @@ export interface InputActionsProps {
   onStop: () => void;
   /** Whether send is disabled */
   disabled?: boolean;
+  /** Style variant: 'main' for InputCard context, 'sidebar' for sidebar contrast */
+  variant?: 'main' | 'sidebar';
   /** Additional class names */
   className?: string;
 }
@@ -33,6 +35,7 @@ export function InputActions({
   onSend,
   onStop,
   disabled = false,
+  variant = 'main',
   className,
 }: InputActionsProps) {
   const shouldReduceMotion = useReducedMotion();
@@ -52,7 +55,13 @@ export function InputActions({
     <button
       onClick={onSend}
       disabled={disabled}
-      className="group flex items-center justify-center h-9 w-9 shrink-0 rounded-full bg-muted text-muted-foreground disabled:opacity-50"
+      className={cn(
+        "group flex items-center justify-center h-9 w-9 shrink-0 rounded-full disabled:opacity-50",
+        // Sidebar: primary blue fill in light mode for visibility
+        variant === 'sidebar'
+          ? 'bg-primary text-primary-foreground dark:bg-muted dark:text-muted-foreground'
+          : 'bg-muted text-muted-foreground'
+      )}
       title="Send message"
       aria-label="Send message"
     >
