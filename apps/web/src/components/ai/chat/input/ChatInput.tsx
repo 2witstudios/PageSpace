@@ -141,7 +141,6 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
             onSend={handleSend}
             onStop={onStop}
             disabled={!canSend}
-            variant={variant}
           />
         </div>
 
