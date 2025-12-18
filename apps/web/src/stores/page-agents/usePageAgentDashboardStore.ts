@@ -9,7 +9,7 @@ import { AgentInfo } from '@/types/agent';
 export type { AgentInfo } from '@/types/agent';
 
 /** Tab types for the right sidebar */
-export type SidebarTab = 'chat' | 'history' | 'settings';
+export type SidebarTab = 'chat' | 'history' | 'activity';
 
 interface AgentState {
   // Selected agent (null = Global Assistant mode)
