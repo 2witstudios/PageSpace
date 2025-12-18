@@ -44,7 +44,7 @@ import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
-import { Settings, Plus, History } from 'lucide-react';
+import { Activity, Plus, History } from 'lucide-react';
 import { AiUsageMonitor, AISelector, TasksDropdown } from '@/components/ai/shared';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore } from '@/hooks/useDrive';
@@ -406,9 +406,9 @@ const GlobalAssistantView: React.FC = () => {
     }
   };
 
-  const handleOpenSettings = () => {
+  const handleOpenActivity = () => {
     if (!rightSidebarOpen) toggleRightSidebar();
-    setActiveTab('settings');
+    setActiveTab('activity');
   };
 
   const handleOpenHistory = () => {
@@ -459,7 +459,7 @@ const GlobalAssistantView: React.FC = () => {
 
   // Show provider setup if needed
   if (needsSetup) {
-    return <ProviderSetupCard mode="redirect" onOpenSettings={handleOpenSettings} />;
+    return <ProviderSetupCard mode="redirect" onOpenSettings={handleOpenActivity} />;
   }
 
   return (
@@ -478,11 +478,11 @@ const GlobalAssistantView: React.FC = () => {
           <Button
             variant="ghost"
             size="icon"
-            onClick={handleOpenSettings}
+            onClick={handleOpenActivity}
             className="h-8 w-8"
-            title="Open Settings"
+            title="Open Activity"
           >
-            <Settings className="h-4 w-4" />
+            <Activity className="h-4 w-4" />
           </Button>
           <Button
             variant="ghost"
