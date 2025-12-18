@@ -29,6 +29,8 @@ export interface ChatInputProps {
   isReadOnly?: boolean;
   /** Message to show when read-only */
   readOnlyMessage?: string;
+  /** Hide the model/provider selector in footer (for compact layouts) */
+  hideModelSelector?: boolean;
 }
 
 export interface ChatInputRef {
@@ -63,6 +65,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       crossDrive = false,
       isReadOnly = false,
       readOnlyMessage = 'View only - cannot send messages',
+      hideModelSelector = false,
     },
     ref
   ) => {
@@ -121,6 +124,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
           onModelClick={() => console.log('Model clicked')}
           selectedProvider="OpenAI"
           selectedModel="GPT-4o"
+          hideModelSelector={hideModelSelector}
         />
 
         {/* Read-only indicator */}

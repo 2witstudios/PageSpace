@@ -29,6 +29,8 @@ export interface InputFooterProps {
   selectedProvider?: string;
   /** Currently selected model name */
   selectedModel?: string;
+  /** Hide the provider/model selector (for compact layouts) */
+  hideModelSelector?: boolean;
   /** Additional class names */
   className?: string;
 }
@@ -53,6 +55,7 @@ export function InputFooter({
   onModelClick,
   selectedProvider = 'OpenAI',
   selectedModel = 'GPT-4o',
+  hideModelSelector = false,
   className,
 }: InputFooterProps) {
   return (
@@ -72,7 +75,7 @@ export function InputFooter({
               variant="ghost"
               size="sm"
               onClick={onMicClick}
-              className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
+              className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground hover:bg-transparent dark:hover:bg-transparent"
             >
               <Mic className="h-4 w-4" />
               <span className="sr-only">Voice input</span>
@@ -89,7 +92,7 @@ export function InputFooter({
               size="sm"
               onClick={onWebSearchToggle}
               className={cn(
-                'h-8 px-2 gap-1.5 hover:text-muted-foreground',
+                'h-8 px-2 gap-1.5 hover:bg-transparent dark:hover:bg-transparent hover:text-foreground',
                 webSearchEnabled
                   ? 'text-muted-foreground'
                   : 'text-muted-foreground/20'
@@ -114,7 +117,7 @@ export function InputFooter({
               size="sm"
               onClick={onWriteModeToggle}
               className={cn(
-                'h-8 px-2 gap-1.5 hover:text-muted-foreground',
+                'h-8 px-2 gap-1.5 hover:bg-transparent dark:hover:bg-transparent hover:text-foreground',
                 writeMode
                   ? 'text-muted-foreground'
                   : 'text-muted-foreground/20'
@@ -135,29 +138,31 @@ export function InputFooter({
       </div>
 
       {/* Right group */}
-      <div className="flex items-center gap-1">
-        {/* Provider selector */}
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onProviderClick}
-          className="h-8 px-2 gap-1 text-muted-foreground hover:text-foreground"
-        >
-          <span className="text-xs">{selectedProvider}</span>
-          <ChevronDown className="h-3 w-3" />
-        </Button>
+      {!hideModelSelector && (
+        <div className="flex items-center gap-1">
+          {/* Provider selector */}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onProviderClick}
+            className="h-8 px-2 gap-1 text-muted-foreground hover:text-foreground hover:bg-transparent dark:hover:bg-transparent"
+          >
+            <span className="text-xs">{selectedProvider}</span>
+            <ChevronDown className="h-3 w-3" />
+          </Button>
 
-        {/* Model selector */}
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onModelClick}
-          className="h-8 px-2 gap-1 text-muted-foreground hover:text-foreground"
-        >
-          <span className="text-xs">{selectedModel}</span>
-          <ChevronDown className="h-3 w-3" />
-        </Button>
-      </div>
+          {/* Model selector */}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onModelClick}
+            className="h-8 px-2 gap-1 text-muted-foreground hover:text-foreground hover:bg-transparent dark:hover:bg-transparent"
+          >
+            <span className="text-xs">{selectedModel}</span>
+            <ChevronDown className="h-3 w-3" />
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

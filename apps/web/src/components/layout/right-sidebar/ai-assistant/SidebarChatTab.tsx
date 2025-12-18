@@ -4,8 +4,8 @@ import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Loader2, Plus } from 'lucide-react';
-import { CompactMessageRenderer, ReadOnlyToggle, AISelector, AiUsageMonitor, TasksDropdown } from '@/components/ai/shared';
+import { Loader2, Plus, ChevronDown } from 'lucide-react';
+import { CompactMessageRenderer, AISelector, AiUsageMonitor, TasksDropdown } from '@/components/ai/shared';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth, patch, del } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
@@ -629,13 +629,22 @@ const SidebarChatTab: React.FC = () => {
           </div>
         )}
 
-        <div className="px-1">
-          <ReadOnlyToggle
-            isReadOnly={isReadOnly}
-            onToggle={setIsReadOnly}
-            disabled={status === 'streaming'}
-            size="sm"
-          />
+        <div className="flex items-center gap-2 px-1 text-xs text-muted-foreground">
+          <button
+            onClick={() => console.log('Provider clicked')}
+            className="hover:text-foreground transition-colors flex items-center gap-1"
+          >
+            <span>{currentProvider || 'No provider'}</span>
+            <ChevronDown className="h-3 w-3" />
+          </button>
+          <span className="text-muted-foreground/50">/</span>
+          <button
+            onClick={() => console.log('Model clicked')}
+            className="hover:text-foreground transition-colors flex items-center gap-1"
+          >
+            <span>{currentModel || 'No model'}</span>
+            <ChevronDown className="h-3 w-3" />
+          </button>
         </div>
 
         <ChatInput
@@ -650,6 +659,7 @@ const SidebarChatTab: React.FC = () => {
             : 'Ask about your workspace...'}
           driveId={locationContext?.currentDrive?.id}
           crossDrive={true}
+          hideModelSelector={true}
         />
       </div>
     </div>

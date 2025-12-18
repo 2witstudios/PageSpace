@@ -49,17 +49,15 @@ export function InputActions({
       <StopCircle className="h-4 w-4" />
     </Button>
   ) : (
-    <Button
+    <button
       onClick={onSend}
       disabled={disabled}
-      variant="ghost"
-      size="icon"
-      className="h-9 w-9 shrink-0 rounded-full bg-muted hover:bg-muted/80"
+      className="group flex items-center justify-center h-9 w-9 shrink-0 rounded-full bg-muted text-muted-foreground disabled:opacity-50"
       title="Send message"
       aria-label="Send message"
     >
-      <ArrowRight className="h-4 w-4" />
-    </Button>
+      <ArrowRight className="h-4 w-4 transition-all duration-200 group-hover:-rotate-90 group-hover:text-foreground" />
+    </button>
   );
 
   // Skip animation wrapper if reduced motion is preferred
