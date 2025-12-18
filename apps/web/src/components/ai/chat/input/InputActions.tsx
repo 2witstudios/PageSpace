@@ -35,7 +35,7 @@ export function InputActions({
   onSend,
   onStop,
   disabled = false,
-  variant = 'main',
+  variant: _variant = 'main',
   className,
 }: InputActionsProps) {
   const shouldReduceMotion = useReducedMotion();
