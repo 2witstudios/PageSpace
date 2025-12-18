@@ -40,10 +40,10 @@ export interface InputFooterProps {
  * InputFooter - Footer menu for the floating input card.
  *
  * Contains:
- * - Mic button (left)
  * - Web search toggle (left)
  * - Write/Read only toggle (left)
- * - Provider/Model selector (right) - Combined popover
+ * - Provider/Model selector (right)
+ * - Mic button (right, after model selector)
  */
 export function InputFooter({
   webSearchEnabled = false,
@@ -68,23 +68,6 @@ export function InputFooter({
     >
       {/* Left group */}
       <div className="flex items-center gap-1">
-        {/* Mic button */}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onMicClick}
-              disabled={disabled}
-              className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground hover:bg-transparent dark:hover:bg-transparent"
-            >
-              <Mic className="h-4 w-4" />
-              <span className="sr-only">Voice input</span>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top">Voice input</TooltipContent>
-        </Tooltip>
-
         {/* Web search toggle */}
         <Tooltip>
           <TooltipTrigger asChild>
@@ -143,15 +126,34 @@ export function InputFooter({
         </Tooltip>
       </div>
 
-      {/* Right group - Provider/Model Selector */}
-      {!hideModelSelector && (
-        <ProviderModelSelector
-          provider={selectedProvider}
-          model={selectedModel}
-          onChange={onProviderModelChange}
-          disabled={disabled}
-        />
-      )}
+      {/* Right group - Provider/Model Selector + Mic */}
+      <div className="flex items-center gap-1">
+        {!hideModelSelector && (
+          <ProviderModelSelector
+            provider={selectedProvider}
+            model={selectedModel}
+            onChange={onProviderModelChange}
+            disabled={disabled}
+          />
+        )}
+
+        {/* Mic button */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onMicClick}
+              disabled={disabled}
+              className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground hover:bg-transparent dark:hover:bg-transparent"
+            >
+              <Mic className="h-4 w-4" />
+              <span className="sr-only">Voice input</span>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="top">Voice input</TooltipContent>
+        </Tooltip>
+      </div>
     </div>
   );
 }
