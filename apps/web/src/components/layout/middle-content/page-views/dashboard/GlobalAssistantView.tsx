@@ -62,7 +62,6 @@ import {
   LocationContext,
 } from '@/lib/ai/shared';
 import {
-  MCPToggle,
   ProviderSetupCard,
 } from '@/components/ai/shared/chat';
 import {
@@ -475,12 +474,6 @@ const GlobalAssistantView: React.FC = () => {
           />
         </div>
         <div className="flex items-center space-x-2">
-          <MCPToggle
-            isDesktop={isDesktop}
-            mcpEnabled={mcpEnabled}
-            runningServers={runningServers}
-            onToggle={setMcpEnabled}
-          />
           <TasksDropdown messages={messages} driveId={selectedAgent?.driveId || locationContext?.currentDrive?.id} />
           <Button
             variant="ghost"
@@ -555,6 +548,10 @@ const GlobalAssistantView: React.FC = () => {
         onRetry={handleRetry}
         lastAssistantMessageId={lastAssistantMessageId}
         lastUserMessageId={lastUserMessageId}
+        mcpEnabled={mcpEnabled}
+        onMcpToggle={setMcpEnabled}
+        mcpRunningServers={runningServers}
+        showMcp={isDesktop}
         renderInput={(props) => (
           <ChatInput
             ref={inputRef}
@@ -567,6 +564,10 @@ const GlobalAssistantView: React.FC = () => {
             placeholder={props.placeholder}
             driveId={props.driveId}
             crossDrive={props.crossDrive}
+            mcpEnabled={props.mcpEnabled}
+            onMcpToggle={props.onMcpToggle}
+            mcpRunningServers={props.mcpRunningServers}
+            showMcp={props.showMcp}
           />
         )}
       />
