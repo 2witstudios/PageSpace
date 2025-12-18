@@ -288,7 +288,7 @@ export function ProviderModelSelector({
               {availableModels.length === 0 ? (
                 <div className="text-xs text-muted-foreground px-2 py-2">
                   {provider === 'ollama' || provider === 'lmstudio'
-                    ? 'Models discovered from local server'
+                    ? 'No models found. Start your local server.'
                     : 'No models available'}
                 </div>
               ) : (
