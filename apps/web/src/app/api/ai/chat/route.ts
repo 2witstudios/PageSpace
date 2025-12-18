@@ -711,6 +711,9 @@ export async function POST(request: Request) {
             abortSignal: request.signal, // Enable stop/abort functionality from client
             experimental_context: {
               userId,
+              aiProvider: currentProvider,
+              aiModel: currentModel,
+              conversationId: chatId,
               locationContext: pageContext ? {
                 currentPage: {
                   id: pageContext.pageId,
@@ -726,7 +729,7 @@ export async function POST(request: Request) {
                 breadcrumbs: pageContext.breadcrumbs,
               } : undefined,
               modelCapabilities: getModelCapabilities(currentModel, currentProvider)
-            }, // Pass userId, location context, and model capabilities to tools
+            }, // Pass userId, AI context, location context, and model capabilities to tools
             maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
             onAbort: () => {
               loggers.ai.info('🛑 AI Chat API: Stream aborted by user', {

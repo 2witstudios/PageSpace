@@ -167,7 +167,13 @@ export function logDriveActivity(
     id: string;
     name?: string;
   },
-  metadata?: Record<string, unknown>
+  options?: {
+    isAiGenerated?: boolean;
+    aiProvider?: string;
+    aiModel?: string;
+    aiConversationId?: string;
+    metadata?: Record<string, unknown>;
+  }
 ): void {
   logActivity({
     userId,
@@ -176,7 +182,11 @@ export function logDriveActivity(
     resourceId: drive.id,
     resourceTitle: drive.name,
     driveId: drive.id,
-    metadata,
+    isAiGenerated: options?.isAiGenerated,
+    aiProvider: options?.aiProvider,
+    aiModel: options?.aiModel,
+    aiConversationId: options?.aiConversationId,
+    metadata: options?.metadata,
   }).catch(() => {
     // Silent fail - already logged in logActivity
   });
@@ -197,6 +207,10 @@ export function logAgentConfigActivity(
     updatedFields?: string[];
     previousValues?: Record<string, unknown>;
     newValues?: Record<string, unknown>;
+    isAiGenerated?: boolean;
+    aiProvider?: string;
+    aiModel?: string;
+    aiConversationId?: string;
   }
 ): void {
   logActivity({
@@ -207,7 +221,13 @@ export function logAgentConfigActivity(
     resourceTitle: agent.name,
     driveId: agent.driveId,
     pageId: agent.id, // Agents are stored as pages
-    ...changes,
+    isAiGenerated: changes.isAiGenerated,
+    aiProvider: changes.aiProvider,
+    aiModel: changes.aiModel,
+    aiConversationId: changes.aiConversationId,
+    updatedFields: changes.updatedFields,
+    previousValues: changes.previousValues,
+    newValues: changes.newValues,
   }).catch(() => {
     // Silent fail - already logged in logActivity
   });

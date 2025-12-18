@@ -717,6 +717,9 @@ MENTION PROCESSING:
       abortSignal: request.signal, // Enable stop/abort functionality from client
       experimental_context: {
         userId,
+        aiProvider: currentProvider,
+        aiModel: currentModel,
+        conversationId,
         locationContext,
         modelCapabilities: getModelCapabilities(currentModel, currentProvider)
       },

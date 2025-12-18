@@ -241,6 +241,8 @@ export async function POST(request: Request) {
     // Build execution context for tool execution
     const executionContext: ToolExecutionContext = {
       userId,
+      aiProvider: agent.aiProvider ?? undefined,
+      aiModel: agent.aiModel ?? undefined,
       conversationId: `agent-consult-${agentId}-${Date.now()}`,
       locationContext: {
         currentPage: {

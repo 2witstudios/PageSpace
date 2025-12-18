@@ -3,8 +3,18 @@ import { z } from 'zod';
 import { db, taskLists, taskItems, pages, eq, and, desc, asc } from '@pagespace/db';
 import { type ToolExecutionContext } from '../core';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { canUserEditPage } from '@pagespace/lib/server';
+import { canUserEditPage, logPageActivity } from '@pagespace/lib/server';
 import { getDefaultContent, PageType } from '@pagespace/lib';
+
+// Helper: Extract AI attribution context for activity logging
+function getAiContext(context: ToolExecutionContext) {
+  return {
+    isAiGenerated: true,
+    aiProvider: context.aiProvider,
+    aiModel: context.aiModel,
+    aiConversationId: context.conversationId,
+  };
+}
 
 /**
  * Helper to verify page access for page-linked task lists
@@ -270,6 +280,16 @@ When creating tasks:
               }),
             ),
           ]);
+
+          // Log activity for AI-generated task/page creation
+          logPageActivity(userId, 'create', {
+            id: createdPage.id,
+            title: createdPage.title,
+            driveId: taskListPage.driveId,
+          }, {
+            ...getAiContext(context as ToolExecutionContext),
+            metadata: { taskId: resultTask.id, taskTitle: resultTask.title },
+          });
 
           message = `Created task "${resultTask.title}" with linked document page`;
         }

@@ -13,12 +13,24 @@ import {
   isValidCellAddress,
   isSheetType,
   loggers,
+  logPageActivity,
+  logDriveActivity,
 } from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload, broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { type ToolExecutionContext } from '../core';
 import { maskIdentifier } from '@/lib/logging/mask';
 
 const pageWriteLogger = loggers.ai.child({ module: 'page-write-tools' });
+
+// Helper: Extract AI attribution context for activity logging
+function getAiContext(context: ToolExecutionContext) {
+  return {
+    isAiGenerated: true,
+    aiProvider: context.aiProvider,
+    aiModel: context.aiModel,
+    aiConversationId: context.conversationId,
+  };
+}
 
 // Helper: Trash a single page or recursively with children
 async function trashPage(
@@ -281,6 +293,20 @@ export const pageWriteTools = {
           })
         );
 
+        // Log activity for AI-generated content update
+        logPageActivity(userId, 'update', {
+          id: page.id,
+          title: page.title,
+          driveId: page.driveId,
+          content: newContent,
+        }, {
+          ...getAiContext(context as ToolExecutionContext),
+          metadata: {
+            linesChanged: endLine - startLine + 1,
+            changeType: isDeletion ? 'deletion' : 'replacement',
+          },
+        });
+
         return {
           success: true,
           path,
@@ -411,6 +437,16 @@ export const pageWriteTools = {
           })
         );
 
+        // Log activity for AI-generated page creation
+        logPageActivity(userId, 'create', {
+          id: newPage.id,
+          title: newPage.title,
+          driveId: drive.id,
+        }, {
+          ...getAiContext(context as ToolExecutionContext),
+          metadata: { pageType: newPage.type, parentId },
+        });
+
         // Build response
         const nextSteps: string[] = [];
         if (isDocumentPage(type as PageType)) {
@@ -503,6 +539,16 @@ export const pageWriteTools = {
           })
         );
 
+        // Log activity for AI-generated rename
+        logPageActivity(userId, 'update', {
+          id: renamedPage.id,
+          title: renamedPage.title,
+          driveId: page.driveId,
+        }, {
+          ...getAiContext(context as ToolExecutionContext),
+          updatedFields: ['title'],
+        });
+
         return {
           success: true,
           path,
@@ -553,6 +599,17 @@ export const pageWriteTools = {
       try {
         if (type === 'page') {
           const { page, childrenCount } = await trashPage(userId, id, withChildren);
+
+          // Log activity for AI-generated trash operation
+          logPageActivity(userId, 'trash', {
+            id: page.id,
+            title: page.title,
+            driveId: page.driveId,
+          }, {
+            ...getAiContext(context as ToolExecutionContext),
+            metadata: { withChildren, childrenCount },
+          });
+
           return {
             success: true,
             type: 'page',
@@ -570,6 +627,15 @@ export const pageWriteTools = {
             throw new Error('Drive name confirmation is required for trashing drives (confirmDriveName parameter)');
           }
           const drive = await trashDrive(userId, id, confirmDriveName);
+
+          // Log activity for AI-generated drive trash
+          logDriveActivity(userId, 'trash', {
+            id: drive.id,
+            name: drive.name,
+          }, {
+            ...getAiContext(context as ToolExecutionContext),
+          });
+
           return {
             success: true,
             type: 'drive',
@@ -609,6 +675,14 @@ export const pageWriteTools = {
       try {
         if (type === 'page') {
           const page = await restorePage(userId, id);
+
+          // Log activity for AI-generated restore operation
+          logPageActivity(userId, 'restore', {
+            id: page.id,
+            title: page.title,
+            driveId: page.driveId,
+          }, getAiContext(context as ToolExecutionContext));
+
           return {
             success: true,
             type: 'page',
@@ -619,6 +693,13 @@ export const pageWriteTools = {
           };
         } else {
           const drive = await restoreDrive(userId, id);
+
+          // Log activity for AI-generated drive restore
+          logDriveActivity(userId, 'restore', {
+            id: drive.id,
+            name: drive.name,
+          }, getAiContext(context as ToolExecutionContext));
+
           return {
             success: true,
             type: 'drive',
@@ -718,6 +799,16 @@ export const pageWriteTools = {
             title: movedPage.title
           })
         );
+
+        // Log activity for AI-generated move operation
+        logPageActivity(userId, 'move', {
+          id: movedPage.id,
+          title: movedPage.title,
+          driveId: page.driveId,
+        }, {
+          ...getAiContext(context as ToolExecutionContext),
+          metadata: { newParentId, position },
+        });
 
         return {
           success: true,
@@ -824,6 +915,17 @@ export const pageWriteTools = {
             title: page.title
           })
         );
+
+        // Log activity for AI-generated sheet edit
+        logPageActivity(userId, 'update', {
+          id: page.id,
+          title: page.title,
+          driveId: page.driveId,
+          content: newContent,
+        }, {
+          ...getAiContext(context as ToolExecutionContext),
+          metadata: { cellsUpdated: cells.length },
+        });
 
         // Summarize changes for response
         const formulaCount = cells.filter(c => c.value.trim().startsWith('=')).length;
