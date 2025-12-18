@@ -3,6 +3,7 @@ import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers, agentAwarenessCache, pageTreeCache } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
+import { logPageActivity } from '@pagespace/lib';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { pageService } from '@/services/api';
 
@@ -82,6 +83,13 @@ export async function POST(request: Request) {
       type: result.page.type,
       driveId: result.driveId,
       parentId: result.page.parentId,
+    });
+
+    // Log to activity audit trail
+    logPageActivity(userId, 'create', {
+      id: result.page.id,
+      title: result.page.title ?? undefined,
+      driveId: result.driveId,
     });
 
     return NextResponse.json(result.page, { status: 201 });
