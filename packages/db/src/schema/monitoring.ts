@@ -2,19 +2,22 @@
  * Database schema for monitoring, logging, and analytics
  */
 
-import { 
-  pgTable, 
-  text, 
-  timestamp, 
-  integer, 
-  boolean, 
-  jsonb, 
+import {
+  pgTable,
+  text,
+  timestamp,
+  integer,
+  boolean,
+  jsonb,
   index,
   real,
   uuid,
   pgEnum
 } from 'drizzle-orm/pg-core';
+import { relations } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
+import { users } from './auth';
+import { drives, pages } from './core';
 
 // Enums
 export const logLevelEnum = pgEnum('log_level', ['trace', 'debug', 'info', 'warn', 'error', 'fatal']);
@@ -344,4 +347,90 @@ export const alertHistory = pgTable('alert_history', {
   typeIdx: index('idx_alerts_type').on(table.type, table.timestamp),
   severityIdx: index('idx_alerts_severity').on(table.severity),
   acknowledgedIdx: index('idx_alerts_acknowledged').on(table.acknowledged),
+}));
+
+// Activity logging enums
+export const activityOperationEnum = pgEnum('activity_operation', [
+  'create',
+  'update',
+  'delete',
+  'restore',
+  'reorder',
+  'permission_grant',
+  'permission_update',
+  'permission_revoke',
+  'trash',
+  'move',
+  'agent_config_update'
+]);
+
+export const activityResourceEnum = pgEnum('activity_resource', [
+  'page',
+  'drive',
+  'permission',
+  'agent'
+]);
+
+/**
+ * Activity logs - comprehensive audit trail for all user operations
+ * Designed for enterprise auditability with future rollback support
+ */
+export const activityLogs = pgTable('activity_logs', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  timestamp: timestamp('timestamp', { mode: 'date' }).defaultNow().notNull(),
+
+  // Actor (who performed the action)
+  userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+
+  // AI Attribution
+  isAiGenerated: boolean('isAiGenerated').default(false).notNull(),
+  aiProvider: text('aiProvider'),
+  aiModel: text('aiModel'),
+  aiConversationId: text('aiConversationId'),
+
+  // Target resource
+  operation: activityOperationEnum('operation').notNull(),
+  resourceType: activityResourceEnum('resourceType').notNull(),
+  resourceId: text('resourceId').notNull(),
+  resourceTitle: text('resourceTitle'),
+
+  // Hierarchical context (for filtering)
+  driveId: text('driveId').notNull().references(() => drives.id, { onDelete: 'cascade' }),
+  pageId: text('pageId').references(() => pages.id, { onDelete: 'set null' }),
+
+  // Content snapshot for future rollback support
+  contentSnapshot: text('contentSnapshot'),
+
+  // Change details
+  updatedFields: jsonb('updatedFields').$type<string[]>(),
+  previousValues: jsonb('previousValues').$type<Record<string, unknown>>(),
+  newValues: jsonb('newValues').$type<Record<string, unknown>>(),
+  metadata: jsonb('metadata').$type<Record<string, unknown>>(),
+
+  // Retention management
+  isArchived: boolean('isArchived').default(false).notNull(),
+}, (table) => ({
+  timestampIdx: index('idx_activity_logs_timestamp').on(table.timestamp),
+  userTimestampIdx: index('idx_activity_logs_user_timestamp').on(table.userId, table.timestamp),
+  driveTimestampIdx: index('idx_activity_logs_drive_timestamp').on(table.driveId, table.timestamp),
+  pageTimestampIdx: index('idx_activity_logs_page_timestamp').on(table.pageId, table.timestamp),
+  archivedIdx: index('idx_activity_logs_archived').on(table.isArchived),
+}));
+
+/**
+ * Relations for activity logs
+ */
+export const activityLogsRelations = relations(activityLogs, ({ one }) => ({
+  user: one(users, {
+    fields: [activityLogs.userId],
+    references: [users.id],
+  }),
+  drive: one(drives, {
+    fields: [activityLogs.driveId],
+    references: [drives.id],
+  }),
+  page: one(pages, {
+    fields: [activityLogs.pageId],
+    references: [pages.id],
+  }),
 }));
