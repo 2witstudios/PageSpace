@@ -1,7 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db, pages, eq, and } from '@pagespace/db';
-import { canUserEditPage } from '@pagespace/lib/server';
+import { canUserEditPage, logAgentConfigActivity } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { maskIdentifier } from '@/lib/logging/mask';
@@ -121,6 +121,20 @@ export const agentTools = {
             title: agent.title
           })
         );
+
+        // Log activity for AI-generated agent config update
+        const ctx = context as ToolExecutionContext;
+        logAgentConfigActivity(userId, {
+          id: agent.id,
+          name: agent.title,
+          driveId: agent.driveId,
+        }, {
+          updatedFields: Object.keys(updateData).filter(key => key !== 'updatedAt'),
+          isAiGenerated: true,
+          aiProvider: ctx?.aiProvider,
+          aiModel: ctx?.aiModel,
+          aiConversationId: ctx?.conversationId,
+        });
 
         return {
           success: true,

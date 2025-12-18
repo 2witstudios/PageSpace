@@ -32,6 +32,9 @@ export * from './auth/oauth-types';
 // Logging utilities (server-only)
 export * from './logging';
 
+// Monitoring (activity logging, AI monitoring)
+export * from './monitoring';
+
 // Notifications
 export * from './notifications';
 
