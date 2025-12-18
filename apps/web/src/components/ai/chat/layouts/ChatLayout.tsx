@@ -70,7 +70,20 @@ export interface ChatLayoutProps {
     placeholder?: string;
     driveId?: string;
     crossDrive?: boolean;
+    mcpEnabled?: boolean;
+    onMcpToggle?: (enabled: boolean) => void;
+    mcpRunningServers?: number;
+    showMcp?: boolean;
   }) => React.ReactNode;
+
+  /** MCP enabled state */
+  mcpEnabled?: boolean;
+  /** MCP toggle callback */
+  onMcpToggle?: (enabled: boolean) => void;
+  /** MCP running servers count */
+  mcpRunningServers?: number;
+  /** Whether to show MCP toggle (desktop only) */
+  showMcp?: boolean;
 }
 
 export interface ChatLayoutRef {
@@ -111,6 +124,10 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
       lastUserMessageId,
       isReadOnly = false,
       renderInput,
+      mcpEnabled = false,
+      onMcpToggle,
+      mcpRunningServers = 0,
+      showMcp = false,
     },
     ref
   ) => {
@@ -175,6 +192,10 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
           placeholder,
           driveId,
           crossDrive,
+          mcpEnabled,
+          onMcpToggle,
+          mcpRunningServers,
+          showMcp,
         })
       : defaultInputContent;
 

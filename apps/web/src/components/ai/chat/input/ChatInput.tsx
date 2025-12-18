@@ -31,6 +31,14 @@ export interface ChatInputProps {
   hideModelSelector?: boolean;
   /** Style variant: 'main' for InputCard context, 'sidebar' for sidebar contrast */
   variant?: 'main' | 'sidebar';
+  /** Whether MCP is enabled for this conversation */
+  mcpEnabled?: boolean;
+  /** Callback when MCP is toggled */
+  onMcpToggle?: (enabled: boolean) => void;
+  /** Number of running MCP servers */
+  mcpRunningServers?: number;
+  /** Whether MCP section should be shown (desktop only) */
+  showMcp?: boolean;
 }
 
 export interface ChatInputRef {
@@ -65,6 +73,10 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       crossDrive = false,
       hideModelSelector = false,
       variant = 'main',
+      mcpEnabled = false,
+      onMcpToggle,
+      mcpRunningServers = 0,
+      showMcp = false,
     },
     ref
   ) => {
@@ -141,6 +153,10 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
           onWriteModeToggle={toggleWriteMode}
           showPageTree={showPageTree}
           onShowPageTreeToggle={toggleShowPageTree}
+          mcpEnabled={mcpEnabled}
+          onMcpToggle={onMcpToggle}
+          mcpRunningServers={mcpRunningServers}
+          showMcp={showMcp}
           onMicClick={toggleListening}
           isListening={isListening}
           isMicSupported={isSupported}

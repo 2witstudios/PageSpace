@@ -31,7 +31,6 @@ import {
   AgentConfig,
 } from '@/lib/ai/shared';
 import {
-  MCPToggle,
   ProviderSetupCard,
 } from '@/components/ai/shared/chat';
 import { AiUsageMonitor, TasksDropdown } from '@/components/ai/shared';
@@ -347,13 +346,6 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
               <div className="flex items-center gap-3">
                 <AiUsageMonitor pageId={page.id} compact />
 
-                <MCPToggle
-                  isDesktop={isDesktop}
-                  mcpEnabled={mcpEnabled}
-                  runningServers={runningServers}
-                  onToggle={setMcpEnabled}
-                />
-
                 <TasksDropdown messages={messages} driveId={driveId} />
 
                 <Button
@@ -416,6 +408,10 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             lastAssistantMessageId={lastAssistantMessageId}
             lastUserMessageId={lastUserMessageId}
             isReadOnly={isReadOnly}
+            mcpEnabled={mcpEnabled}
+            onMcpToggle={setMcpEnabled}
+            mcpRunningServers={runningServers}
+            showMcp={isDesktop}
             renderInput={(props) => (
               <ChatInput
                 ref={inputRef}
@@ -428,6 +424,10 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                 placeholder={props.placeholder}
                 driveId={props.driveId}
                 crossDrive={props.crossDrive}
+                mcpEnabled={props.mcpEnabled}
+                onMcpToggle={props.onMcpToggle}
+                mcpRunningServers={props.mcpRunningServers}
+                showMcp={props.showMcp}
               />
             )}
           />
