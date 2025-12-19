@@ -79,6 +79,9 @@ export * from './monitoring/ai-monitoring';
 export * from './monitoring/activity-tracker';
 export * from './monitoring/activity-logger';
 
+// Repository seams (server-only)
+export * from './repositories';
+
 // Rate limiting and caching services (server-only)
 export { rateLimitCache } from './services/rate-limit-cache';
 export type { ProviderType, UsageTrackingResult } from './services/rate-limit-cache';

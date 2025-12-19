@@ -21,14 +21,16 @@ import {
 import { formatDistanceToNow } from 'date-fns';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
-interface ActivityUser {
+// Exported for unit testing
+export interface ActivityUser {
   id: string;
   name: string | null;
   email: string;
   image: string | null;
 }
 
-interface ActivityItem {
+// Exported for unit testing
+export interface ActivityItem {
   id: string;
   timestamp: string;
   operation: string;
@@ -38,7 +40,51 @@ interface ActivityItem {
   isAiGenerated: boolean;
   aiProvider: string | null;
   aiModel: string | null;
-  user: ActivityUser;
+  // User relation - null when user has been deleted (FK set null)
+  user: ActivityUser | null;
+  // Denormalized actor info - preserved for audit trail when user is deleted
+  actorEmail: string | null;
+  actorDisplayName: string | null;
+}
+
+/**
+ * Get display name for an activity actor.
+ * Prioritizes user relation, falls back to denormalized actor info.
+ * Exported for unit testing.
+ */
+export function getActorDisplayName(activity: ActivityItem): string {
+  // Prefer user relation if available
+  if (activity.user?.name) {
+    return activity.user.name;
+  }
+  // Fall back to denormalized actor display name
+  if (activity.actorDisplayName) {
+    return activity.actorDisplayName;
+  }
+  // Fall back to actor email
+  if (activity.actorEmail) {
+    return activity.actorEmail;
+  }
+  // Ultimate fallback
+  return 'Unknown';
+}
+
+/**
+ * Get avatar info for an activity actor.
+ */
+function getActorAvatar(activity: ActivityItem): { image: string | null; initial: string } {
+  if (activity.user) {
+    return {
+      image: activity.user.image,
+      initial: activity.user.name?.[0]?.toUpperCase() || '?',
+    };
+  }
+  // Deleted user - use first character of display name or email
+  const displayName = activity.actorDisplayName || activity.actorEmail;
+  return {
+    image: null,
+    initial: displayName?.[0]?.toUpperCase() || '?',
+  };
 }
 
 interface ActivityResponse {
@@ -161,7 +207,7 @@ export default function SidebarActivityTab() {
     return activities.filter(
       (a) =>
         a.resourceTitle?.toLowerCase().includes(query) ||
-        a.user.name?.toLowerCase().includes(query) ||
+        getActorDisplayName(a).toLowerCase().includes(query) ||
         operationLabels[a.operation]?.toLowerCase().includes(query)
     );
   }, [activities, searchQuery]);
@@ -234,9 +280,9 @@ export default function SidebarActivityTab() {
                     </div>
                   ) : (
                     <Avatar className="h-6 w-6 flex-shrink-0">
-                      <AvatarImage src={activity.user.image || undefined} />
+                      <AvatarImage src={getActorAvatar(activity).image || undefined} />
                       <AvatarFallback className="text-xs bg-muted">
-                        {activity.user.name?.[0]?.toUpperCase() || '?'}
+                        {getActorAvatar(activity).initial}
                       </AvatarFallback>
                     </Avatar>
                   )}
@@ -246,8 +292,8 @@ export default function SidebarActivityTab() {
                     <div className="flex items-center gap-1 text-sm">
                       <span className="font-medium truncate">
                         {activity.isAiGenerated
-                          ? `${activity.user.name || 'User'} (via AI)`
-                          : activity.user.name || 'Unknown'}
+                          ? `${getActorDisplayName(activity)} (via AI)`
+                          : getActorDisplayName(activity)}
                       </span>
                     </div>
 

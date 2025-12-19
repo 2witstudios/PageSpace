@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from "zod/v4";
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { loggers, agentAwarenessCache, pageTreeCache } from '@pagespace/lib/server';
+import { loggers, agentAwarenessCache, pageTreeCache, getActorInfo } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { logPageActivity } from '@pagespace/lib';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
@@ -103,13 +103,15 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
       hasTitleUpdate: !!safeBody.title
     });
 
-    // Log to activity audit trail
+    // Log to activity audit trail with actor info
+    const actorInfo = await getActorInfo(userId);
     logPageActivity(userId, 'update', {
       id: pageId,
       title: result.page.title ?? undefined,
       driveId: result.driveId,
       content: safeBody.content, // Snapshot for rollback
     }, {
+      ...actorInfo,
       updatedFields: result.updatedFields,
     });
 
@@ -176,12 +178,14 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
       pageType: result.pageType
     });
 
-    // Log to activity audit trail
+    // Log to activity audit trail with actor info
+    const actorInfo = await getActorInfo(userId);
     logPageActivity(userId, 'trash', {
       id: pageId,
       title: result.pageTitle ?? undefined,
       driveId: result.driveId,
     }, {
+      ...actorInfo,
       metadata: { trashChildren, pageType: result.pageType },
     });
 

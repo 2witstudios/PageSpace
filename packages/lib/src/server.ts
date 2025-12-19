@@ -35,6 +35,9 @@ export * from './logging';
 // Monitoring (activity logging, AI monitoring)
 export * from './monitoring';
 
+// Repository seams for testable database access
+export * from './repositories';
+
 // Notifications
 export * from './notifications';
 

@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { db, pages, drives, eq, and, desc, isNull, inArray } from '@pagespace/db';
+import { db, pages, drives, eq, and } from '@pagespace/db';
 import {
   canUserEditPage,
   canUserDeletePage,
@@ -15,6 +15,9 @@ import {
   loggers,
   logPageActivity,
   logDriveActivity,
+  getActorInfo,
+  pageRepository,
+  driveRepository,
 } from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload, broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { type ToolExecutionContext } from '../core';
@@ -22,9 +25,11 @@ import { maskIdentifier } from '@/lib/logging/mask';
 
 const pageWriteLogger = loggers.ai.child({ module: 'page-write-tools' });
 
-// Helper: Extract AI attribution context for activity logging
-function getAiContext(context: ToolExecutionContext) {
+// Helper: Extract AI attribution context with actor info for activity logging
+async function getAiContextWithActor(context: ToolExecutionContext) {
+  const actorInfo = await getActorInfo(context.userId);
   return {
+    ...actorInfo,
     isAiGenerated: true,
     aiProvider: context.aiProvider,
     aiModel: context.aiModel,
@@ -38,9 +43,8 @@ async function trashPage(
   pageId: string,
   withChildren: boolean
 ): Promise<{ page: { id: string; title: string; type: string; driveId: string; parentId: string | null }; childrenCount: number }> {
-  const page = await db.query.pages.findFirst({
-    where: and(eq(pages.id, pageId), eq(pages.isTrashed, false)),
-  });
+  // Use repository seam for page lookup
+  const page = await pageRepository.findById(pageId);
 
   if (!page) {
     throw new Error(`Page with ID "${pageId}" not found`);
@@ -61,33 +65,16 @@ async function trashPage(
   let childrenCount = 0;
 
   if (withChildren) {
-    const getAllChildPages = async (parentId: string): Promise<string[]> => {
-      const children = await db
-        .select({ id: pages.id })
-        .from(pages)
-        .where(and(eq(pages.driveId, page.driveId), eq(pages.parentId, parentId), eq(pages.isTrashed, false)));
-
-      const childIds = children.map(child => child.id);
-      const grandChildIds: string[] = [];
-      for (const child of children) {
-        grandChildIds.push(...await getAllChildPages(child.id));
-      }
-      return [...childIds, ...grandChildIds];
-    };
-
-    const childPageIds = await getAllChildPages(page.id);
+    // Use repository seam for recursive child lookup
+    const childPageIds = await pageRepository.getChildIds(page.driveId, page.id);
     childrenCount = childPageIds.length;
     const allPageIds = [page.id, ...childPageIds];
 
-    await db
-      .update(pages)
-      .set({ isTrashed: true, trashedAt: new Date(), updatedAt: new Date() })
-      .where(and(eq(pages.driveId, page.driveId), inArray(pages.id, allPageIds)));
+    // Use repository seam for batch trash
+    await pageRepository.trashMany(page.driveId, allPageIds);
   } else {
-    await db
-      .update(pages)
-      .set({ isTrashed: true, trashedAt: new Date(), updatedAt: new Date() })
-      .where(eq(pages.id, page.id));
+    // Use repository seam for single page trash
+    await pageRepository.trash(page.id);
   }
 
   await broadcastPageEvent(
@@ -103,9 +90,8 @@ async function trashDrive(
   driveId: string,
   confirmDriveName: string
 ): Promise<{ id: string; name: string; slug: string }> {
-  const drive = await db.query.drives.findFirst({
-    where: and(eq(drives.id, driveId), eq(drives.ownerId, userId)),
-  });
+  // Use repository seam for drive lookup
+  const drive = await driveRepository.findByIdAndOwner(driveId, userId);
 
   if (!drive) {
     throw new Error('Drive not found or you do not have permission to delete it');
@@ -119,10 +105,8 @@ async function trashDrive(
     throw new Error('Drive is already in trash');
   }
 
-  await db
-    .update(drives)
-    .set({ isTrashed: true, trashedAt: new Date(), updatedAt: new Date() })
-    .where(eq(drives.id, drive.id));
+  // Use repository seam for drive trash
+  await driveRepository.trash(drive.id);
 
   await broadcastDriveEvent(createDriveEventPayload(drive.id, 'deleted', { name: drive.name, slug: drive.slug }));
 
@@ -134,9 +118,8 @@ async function restorePage(
   userId: string,
   pageId: string
 ): Promise<{ id: string; title: string; type: string; driveId: string; parentId: string | null }> {
-  const trashedPage = await db.query.pages.findFirst({
-    where: and(eq(pages.id, pageId), eq(pages.isTrashed, true)),
-  });
+  // Use repository seam for trashed page lookup
+  const trashedPage = await pageRepository.findTrashedById(pageId);
 
   if (!trashedPage) {
     throw new Error(`Trashed page with ID "${pageId}" not found`);
@@ -147,11 +130,8 @@ async function restorePage(
     throw new Error('Insufficient permissions to restore this page');
   }
 
-  const [restoredPage] = await db
-    .update(pages)
-    .set({ isTrashed: false, trashedAt: null, updatedAt: new Date() })
-    .where(eq(pages.id, trashedPage.id))
-    .returning({ id: pages.id, title: pages.title, type: pages.type, parentId: pages.parentId });
+  // Use repository seam for page restore
+  const restoredPage = await pageRepository.restore(trashedPage.id);
 
   await broadcastPageEvent(
     createPageEventPayload(trashedPage.driveId, restoredPage.id, 'restored', { title: restoredPage.title, parentId: restoredPage.parentId })
@@ -165,9 +145,8 @@ async function restoreDrive(
   userId: string,
   driveId: string
 ): Promise<{ id: string; name: string; slug: string }> {
-  const drive = await db.query.drives.findFirst({
-    where: and(eq(drives.id, driveId), eq(drives.ownerId, userId)),
-  });
+  // Use repository seam for drive lookup
+  const drive = await driveRepository.findByIdAndOwner(driveId, userId);
 
   if (!drive) {
     throw new Error('Drive not found or you do not have permission to restore it');
@@ -177,11 +156,8 @@ async function restoreDrive(
     throw new Error('Drive is not in trash');
   }
 
-  const [restoredDrive] = await db
-    .update(drives)
-    .set({ isTrashed: false, trashedAt: null, updatedAt: new Date() })
-    .where(eq(drives.id, drive.id))
-    .returning({ id: drives.id, name: drives.name, slug: drives.slug });
+  // Use repository seam for drive restore
+  const restoredDrive = await driveRepository.restore(drive.id);
 
   await broadcastDriveEvent(createDriveEventPayload(restoredDrive.id, 'updated', { name: restoredDrive.name, slug: restoredDrive.slug }));
 
@@ -208,13 +184,8 @@ export const pageWriteTools = {
       }
 
       try {
-        // Get the page directly by ID
-        const page = await db.query.pages.findFirst({
-          where: and(
-            eq(pages.id, pageId),
-            eq(pages.isTrashed, false)
-          ),
-        });
+        // Get the page via repository seam
+        const page = await pageRepository.findById(pageId);
 
         if (!page) {
           throw new Error(`Page with ID "${pageId}" not found`);
@@ -277,14 +248,8 @@ export const pageWriteTools = {
 
         const newContent = newLines.join('\n');
 
-        // Update the page content
-        await db
-          .update(pages)
-          .set({
-            content: newContent,
-            updatedAt: new Date(),
-          })
-          .where(eq(pages.id, page.id));
+        // Update the page content via repository seam
+        await pageRepository.update(page.id, { content: newContent });
 
         // Broadcast content update event
         await broadcastPageEvent(
@@ -300,7 +265,7 @@ export const pageWriteTools = {
           driveId: page.driveId,
           content: newContent,
         }, {
-          ...getAiContext(context as ToolExecutionContext),
+          ...await getAiContextWithActor(context as ToolExecutionContext),
           metadata: {
             linesChanged: endLine - startLine + 1,
             changeType: isDeletion ? 'deletion' : 'replacement',
@@ -358,28 +323,17 @@ export const pageWriteTools = {
       }
 
       try {
-        // Get the drive directly by ID
-        const [drive] = await db
-          .select({ id: drives.id, ownerId: drives.ownerId })
-          .from(drives)
-          .where(eq(drives.id, driveId));
-          
+        // Get the drive via repository seam
+        const drive = await driveRepository.findByIdBasic(driveId);
+
         if (!drive) {
           throw new Error(`Drive with ID "${driveId}" not found`);
         }
 
         // If parentId is provided, verify it exists and belongs to this drive
         if (parentId) {
-          const [parentPage] = await db
-            .select({ id: pages.id })
-            .from(pages)
-            .where(and(
-              eq(pages.id, parentId),
-              eq(pages.driveId, driveId),
-              eq(pages.isTrashed, false)
-            ));
-
-          if (!parentPage) {
+          const parentExists = await pageRepository.existsInDrive(parentId, driveId);
+          if (!parentExists) {
             throw new Error(`Parent page with ID "${parentId}" not found in this drive`);
           }
         }
@@ -398,21 +352,11 @@ export const pageWriteTools = {
           }
         }
 
-        // Get next position
-        const siblingPages = await db
-          .select({ position: pages.position })
-          .from(pages)
-          .where(and(
-            eq(pages.driveId, drive.id),
-            parentId ? eq(pages.parentId, parentId) : isNull(pages.parentId),
-            eq(pages.isTrashed, false)
-          ))
-          .orderBy(desc(pages.position));
+        // Get next position via repository seam
+        const nextPosition = await pageRepository.getNextPosition(drive.id, parentId || null);
 
-        const nextPosition = siblingPages.length > 0 ? siblingPages[0].position + 1 : 1;
-
-        // Prepare page data
-        const pageData = {
+        // Create the page via repository seam
+        const newPage = await pageRepository.create({
           title,
           type,
           content: '',
@@ -420,13 +364,7 @@ export const pageWriteTools = {
           driveId: drive.id,
           parentId: parentId || null,
           isTrashed: false,
-        };
-
-        // Create the page
-        const [newPage] = await db
-          .insert(pages)
-          .values(pageData)
-          .returning({ id: pages.id, title: pages.title, type: pages.type });
+        });
 
         // Broadcast page creation event
         await broadcastPageEvent(
@@ -443,7 +381,7 @@ export const pageWriteTools = {
           title: newPage.title,
           driveId: drive.id,
         }, {
-          ...getAiContext(context as ToolExecutionContext),
+          ...await getAiContextWithActor(context as ToolExecutionContext),
           metadata: { pageType: newPage.type, parentId },
         });
 
@@ -503,13 +441,8 @@ export const pageWriteTools = {
       }
 
       try {
-        // Get the page directly by ID
-        const page = await db.query.pages.findFirst({
-          where: and(
-            eq(pages.id, pageId),
-            eq(pages.isTrashed, false)
-          ),
-        });
+        // Get the page via repository seam
+        const page = await pageRepository.findById(pageId);
 
         if (!page) {
           throw new Error(`Page with ID "${pageId}" not found`);
@@ -521,15 +454,8 @@ export const pageWriteTools = {
           throw new Error('Insufficient permissions to rename this page');
         }
 
-        // Update the page title
-        const [renamedPage] = await db
-          .update(pages)
-          .set({
-            title,
-            updatedAt: new Date(),
-          })
-          .where(eq(pages.id, page.id))
-          .returning({ id: pages.id, title: pages.title, type: pages.type, parentId: pages.parentId });
+        // Update the page title via repository seam
+        const renamedPage = await pageRepository.update(page.id, { title });
 
         // Broadcast page update event for title change
         await broadcastPageEvent(
@@ -545,7 +471,7 @@ export const pageWriteTools = {
           title: renamedPage.title,
           driveId: page.driveId,
         }, {
-          ...getAiContext(context as ToolExecutionContext),
+          ...await getAiContextWithActor(context as ToolExecutionContext),
           updatedFields: ['title'],
         });
 
@@ -606,7 +532,7 @@ export const pageWriteTools = {
             title: page.title,
             driveId: page.driveId,
           }, {
-            ...getAiContext(context as ToolExecutionContext),
+            ...await getAiContextWithActor(context as ToolExecutionContext),
             metadata: { withChildren, childrenCount },
           });
 
@@ -633,7 +559,7 @@ export const pageWriteTools = {
             id: drive.id,
             name: drive.name,
           }, {
-            ...getAiContext(context as ToolExecutionContext),
+            ...await getAiContextWithActor(context as ToolExecutionContext),
           });
 
           return {
@@ -681,7 +607,7 @@ export const pageWriteTools = {
             id: page.id,
             title: page.title,
             driveId: page.driveId,
-          }, getAiContext(context as ToolExecutionContext));
+          }, await getAiContextWithActor(context as ToolExecutionContext));
 
           return {
             success: true,
@@ -698,7 +624,7 @@ export const pageWriteTools = {
           logDriveActivity(userId, 'restore', {
             id: drive.id,
             name: drive.name,
-          }, getAiContext(context as ToolExecutionContext));
+          }, await getAiContextWithActor(context as ToolExecutionContext));
 
           return {
             success: true,
@@ -739,13 +665,8 @@ export const pageWriteTools = {
       }
 
       try {
-        // Get the page to move directly by ID
-        const page = await db.query.pages.findFirst({
-          where: and(
-            eq(pages.id, pageId),
-            eq(pages.isTrashed, false)
-          ),
-        });
+        // Get the page to move via repository seam
+        const page = await pageRepository.findById(pageId);
 
         if (!page) {
           throw new Error(`Page with ID "${pageId}" not found`);
@@ -759,16 +680,8 @@ export const pageWriteTools = {
 
         // If newParentId is provided, verify it exists and is in the same drive
         if (newParentId) {
-          const [parentPage] = await db
-            .select({ id: pages.id })
-            .from(pages)
-            .where(and(
-              eq(pages.id, newParentId),
-              eq(pages.driveId, page.driveId),
-              eq(pages.isTrashed, false)
-            ));
-
-          if (!parentPage) {
+          const parentExists = await pageRepository.existsInDrive(newParentId, page.driveId);
+          if (!parentExists) {
             throw new Error(`Parent page with ID "${newParentId}" not found in this drive`);
           }
         }
@@ -781,16 +694,11 @@ export const pageWriteTools = {
           }
         }
 
-        // Update the page's parent and position
-        const [movedPage] = await db
-          .update(pages)
-          .set({
-            parentId: newParentId,
-            position: position,
-            updatedAt: new Date(),
-          })
-          .where(eq(pages.id, page.id))
-          .returning({ id: pages.id, title: pages.title, type: pages.type });
+        // Update the page's parent and position via repository seam
+        const movedPage = await pageRepository.update(page.id, {
+          parentId: newParentId,
+          position: position,
+        });
 
         // Broadcast page move event
         await broadcastPageEvent(
@@ -806,7 +714,7 @@ export const pageWriteTools = {
           title: movedPage.title,
           driveId: page.driveId,
         }, {
-          ...getAiContext(context as ToolExecutionContext),
+          ...await getAiContextWithActor(context as ToolExecutionContext),
           metadata: { newParentId, position },
         });
 
@@ -851,13 +759,8 @@ export const pageWriteTools = {
       }
 
       try {
-        // Get the page directly by ID
-        const page = await db.query.pages.findFirst({
-          where: and(
-            eq(pages.id, pageId),
-            eq(pages.isTrashed, false)
-          ),
-        });
+        // Get the page via repository seam
+        const page = await pageRepository.findById(pageId);
 
         if (!page) {
           throw new Error(`Page with ID "${pageId}" not found`);
@@ -900,14 +803,8 @@ export const pageWriteTools = {
         // Serialize back to TOML format
         const newContent = serializeSheetContent(updatedSheet, { pageId: page.id });
 
-        // Update the page content in database
-        await db
-          .update(pages)
-          .set({
-            content: newContent,
-            updatedAt: new Date(),
-          })
-          .where(eq(pages.id, page.id));
+        // Update the page content via repository seam
+        await pageRepository.update(page.id, { content: newContent });
 
         // Broadcast content update event
         await broadcastPageEvent(
@@ -923,7 +820,7 @@ export const pageWriteTools = {
           driveId: page.driveId,
           content: newContent,
         }, {
-          ...getAiContext(context as ToolExecutionContext),
+          ...await getAiContextWithActor(context as ToolExecutionContext),
           metadata: { cellsUpdated: cells.length },
         });
 

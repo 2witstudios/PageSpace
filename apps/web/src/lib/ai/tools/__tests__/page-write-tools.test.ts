@@ -1,36 +1,22 @@
-import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Mock database and dependencies
-vi.mock('@pagespace/db', () => ({
-  db: {
-    select: vi.fn().mockReturnThis(),
-    from: vi.fn().mockReturnThis(),
-    where: vi.fn(),
-    orderBy: vi.fn().mockReturnThis(),
-    update: vi.fn().mockReturnThis(),
-    set: vi.fn().mockReturnThis(),
-    insert: vi.fn().mockReturnThis(),
-    values: vi.fn().mockReturnThis(),
-    returning: vi.fn(),
-    query: {
-      pages: { findFirst: vi.fn() },
-      drives: { findFirst: vi.fn() },
-    },
-  },
-  pages: { id: 'id', driveId: 'driveId' },
-  drives: { id: 'id', ownerId: 'ownerId' },
-  eq: vi.fn(),
-  and: vi.fn(),
-  desc: vi.fn(),
-  isNull: vi.fn(),
-  inArray: vi.fn(),
-}));
+/**
+ * Page Write Tools Tests
+ *
+ * These tests mock repository seams (pageRepository, driveRepository) at the
+ * proper architectural boundary. This approach is:
+ * - Refactor-resistant: internal query changes won't break tests
+ * - Observable: tests verify behavior, not implementation
+ * - Maintainable: single mock point per boundary
+ */
 
+// Mock repository seams - the proper architectural boundaries
 vi.mock('@pagespace/lib/server', () => ({
   canUserEditPage: vi.fn(),
   canUserDeletePage: vi.fn(),
   logPageActivity: vi.fn(),
   logDriveActivity: vi.fn(),
+  getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' }),
   PageType: {
     FOLDER: 'FOLDER',
     DOCUMENT: 'DOCUMENT',
@@ -58,6 +44,26 @@ vi.mock('@pagespace/lib/server', () => ({
       })),
     },
   },
+  // Repository seams
+  pageRepository: {
+    findById: vi.fn(),
+    findTrashedById: vi.fn(),
+    existsInDrive: vi.fn(),
+    getNextPosition: vi.fn(),
+    create: vi.fn(),
+    update: vi.fn(),
+    trash: vi.fn(),
+    trashMany: vi.fn(),
+    restore: vi.fn(),
+    getChildIds: vi.fn(),
+  },
+  driveRepository: {
+    findById: vi.fn(),
+    findByIdBasic: vi.fn(),
+    findByIdAndOwner: vi.fn(),
+    trash: vi.fn(),
+    restore: vi.fn(),
+  },
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -72,28 +78,12 @@ vi.mock('@/lib/logging/mask', () => ({
 }));
 
 import { pageWriteTools } from '../page-write-tools';
-import { db } from '@pagespace/db';
-import { canUserEditPage } from '@pagespace/lib/server';
+import { canUserEditPage, pageRepository, driveRepository } from '@pagespace/lib/server';
 import type { ToolExecutionContext } from '../../core';
 
-const mockDb = vi.mocked(db);
 const mockCanUserEditPage = vi.mocked(canUserEditPage);
-
-interface MockDb {
-  select: Mock;
-  from: Mock;
-  where: Mock;
-  orderBy: Mock;
-  update: Mock;
-  set: Mock;
-  insert: Mock;
-  values: Mock;
-  returning: Mock;
-  query: {
-    pages: { findFirst: Mock };
-    drives: { findFirst: Mock };
-  };
-}
+const mockPageRepo = vi.mocked(pageRepository);
+const mockDriveRepo = vi.mocked(driveRepository);
 
 describe('page-write-tools', () => {
   beforeEach(() => {
@@ -118,29 +108,39 @@ describe('page-write-tools', () => {
     });
 
     it('throws error when page not found', async () => {
-      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(null);
+      // Arrange: repository returns null
+      mockPageRepo.findById.mockResolvedValue(null);
 
       const context = {
         toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
+      // Act & Assert
       await expect(
         pageWriteTools.replace_lines.execute!(
           { path: '/drive/page', pageId: 'non-existent', startLine: 1, content: 'new' },
           context
         )
       ).rejects.toThrow('Page with ID "non-existent" not found');
+
+      // Verify repository was called with correct ID
+      expect(mockPageRepo.findById).toHaveBeenCalledWith('non-existent');
     });
 
     it('returns error for FILE type pages', async () => {
-      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue({
+      // Arrange: repository returns FILE page
+      mockPageRepo.findById.mockResolvedValue({
         id: 'page-1',
         title: 'uploaded.pdf',
         type: 'FILE',
         content: '',
         mimeType: 'application/pdf',
         driveId: 'drive-1',
+        parentId: null,
+        position: 1,
+        isTrashed: false,
+        trashedAt: null,
       });
 
       const context = {
@@ -148,23 +148,30 @@ describe('page-write-tools', () => {
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
+      // Act
       const result = await pageWriteTools.replace_lines.execute!(
         { path: '/drive/page', pageId: 'page-1', startLine: 1, content: 'new' },
         context
       );
 
+      // Assert: observable error response
       if (!('error' in result)) throw new Error('Expected error result');
       expect(result.success).toBe(false);
       expect(result.error).toBe('Cannot edit FILE pages');
     });
 
     it('returns error for SHEET type pages', async () => {
-      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue({
+      // Arrange: repository returns SHEET page
+      mockPageRepo.findById.mockResolvedValue({
         id: 'page-1',
         title: 'My Sheet',
         type: 'SHEET',
         content: '',
         driveId: 'drive-1',
+        parentId: null,
+        position: 1,
+        isTrashed: false,
+        trashedAt: null,
       });
 
       const context = {
@@ -172,43 +179,60 @@ describe('page-write-tools', () => {
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
+      // Act
       const result = await pageWriteTools.replace_lines.execute!(
         { path: '/drive/page', pageId: 'page-1', startLine: 1, content: 'new' },
         context
       );
 
+      // Assert: observable error response
       if (!('error' in result)) throw new Error('Expected error result');
       expect(result.success).toBe(false);
       expect(result.error).toBe('Cannot use line editing on sheets');
     });
 
     it('replaces lines in document successfully', async () => {
-      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue({
+      // Arrange: repository returns DOCUMENT page
+      mockPageRepo.findById.mockResolvedValue({
         id: 'page-1',
         title: 'Test Doc',
         type: 'DOCUMENT',
         content: 'Line 1\nLine 2\nLine 3',
         driveId: 'drive-1',
+        parentId: null,
+        position: 1,
+        isTrashed: false,
+        trashedAt: null,
       });
       mockCanUserEditPage.mockResolvedValue(true);
+      mockPageRepo.update.mockResolvedValue({
+        id: 'page-1',
+        title: 'Test Doc',
+        type: 'DOCUMENT',
+        parentId: null,
+      });
 
       const context = {
         toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
+      // Act
       const result = await pageWriteTools.replace_lines.execute!(
         { path: '/drive/page', pageId: 'page-1', startLine: 2, content: 'New Line 2' },
         context
       );
 
-      // Observable outcomes prove the operation succeeded
+      // Assert: observable outcomes
       if ('error' in result) throw new Error(`Expected success but got error: ${result.error}`);
-      expect((result as { success: boolean }).success).toBe(true);
-      if (!('linesReplaced' in result)) throw new Error('Expected linesReplaced in success result');
-      expect((result as { linesReplaced: number }).linesReplaced).toBe(1);
-      // Verify permission check was called with correct arguments
+      expect(result.success).toBe(true);
+      expect(result.linesReplaced).toBe(1);
+
+      // Verify repository interactions with correct payloads
       expect(mockCanUserEditPage).toHaveBeenCalledWith('user-123', 'page-1');
+      expect(mockPageRepo.update).toHaveBeenCalledWith('page-1', {
+        content: 'Line 1\nNew Line 2\nLine 3',
+      });
     });
   });
 
@@ -230,19 +254,66 @@ describe('page-write-tools', () => {
     });
 
     it('throws error when drive not found', async () => {
-      ((mockDb as unknown as MockDb).where as Mock).mockResolvedValue([]);
+      // Arrange: repository returns null
+      mockDriveRepo.findByIdBasic.mockResolvedValue(null);
 
       const context = {
         toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
+      // Act & Assert
       await expect(
         pageWriteTools.create_page.execute!(
           { driveId: 'non-existent', title: 'New Page', type: 'DOCUMENT' },
           context
         )
       ).rejects.toThrow('Drive with ID "non-existent" not found');
+
+      // Verify repository was called
+      expect(mockDriveRepo.findByIdBasic).toHaveBeenCalledWith('non-existent');
+    });
+
+    it('creates page successfully at root level', async () => {
+      // Arrange
+      mockDriveRepo.findByIdBasic.mockResolvedValue({
+        id: 'drive-1',
+        ownerId: 'user-123',
+      });
+      mockPageRepo.getNextPosition.mockResolvedValue(1);
+      mockPageRepo.create.mockResolvedValue({
+        id: 'new-page-1',
+        title: 'New Page',
+        type: 'DOCUMENT',
+      });
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      // Act
+      const result = await pageWriteTools.create_page.execute!(
+        { driveId: 'drive-1', title: 'New Page', type: 'DOCUMENT' },
+        context
+      );
+
+      // Assert: observable outcomes
+      if ('error' in result) throw new Error(`Expected success but got error`);
+      expect(result.success).toBe(true);
+      expect(result.id).toBe('new-page-1');
+      expect(result.title).toBe('New Page');
+
+      // Verify repository was called with correct payload
+      expect(mockPageRepo.create).toHaveBeenCalledWith({
+        title: 'New Page',
+        type: 'DOCUMENT',
+        content: '',
+        position: 1,
+        driveId: 'drive-1',
+        parentId: null,
+        isTrashed: false,
+      });
     });
   });
 
@@ -261,6 +332,45 @@ describe('page-write-tools', () => {
           context
         )
       ).rejects.toThrow('User authentication required');
+    });
+
+    it('renames page successfully', async () => {
+      // Arrange
+      mockPageRepo.findById.mockResolvedValue({
+        id: 'page-1',
+        title: 'Old Title',
+        type: 'DOCUMENT',
+        content: '',
+        driveId: 'drive-1',
+        parentId: null,
+        position: 1,
+        isTrashed: false,
+        trashedAt: null,
+      });
+      mockCanUserEditPage.mockResolvedValue(true);
+      mockPageRepo.update.mockResolvedValue({
+        id: 'page-1',
+        title: 'New Title',
+        type: 'DOCUMENT',
+        parentId: null,
+      });
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      // Act
+      const result = await pageWriteTools.rename_page.execute!(
+        { path: '/drive/page', pageId: 'page-1', title: 'New Title' },
+        context
+      );
+
+      // Assert
+      if ('error' in result) throw new Error('Expected success');
+      expect(result.success).toBe(true);
+      expect(result.title).toBe('New Title');
+      expect(mockPageRepo.update).toHaveBeenCalledWith('page-1', { title: 'New Title' });
     });
   });
 
@@ -350,12 +460,17 @@ describe('page-write-tools', () => {
     });
 
     it('returns error for non-sheet pages', async () => {
-      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue({
+      // Arrange: repository returns non-SHEET page
+      mockPageRepo.findById.mockResolvedValue({
         id: 'page-1',
         title: 'Document',
         type: 'DOCUMENT',
         content: '',
         driveId: 'drive-1',
+        parentId: null,
+        position: 1,
+        isTrashed: false,
+        trashedAt: null,
       });
 
       const context = {
@@ -363,11 +478,13 @@ describe('page-write-tools', () => {
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
+      // Act
       const result = await pageWriteTools.edit_sheet_cells.execute!(
         { pageId: 'page-1', cells: [{ address: 'A1', value: 'test' }] },
         context
       );
 
+      // Assert: observable error response
       if (!('error' in result)) throw new Error('Expected error result');
       expect(result.success).toBe(false);
       expect(result.error).toBe('Page is not a sheet');

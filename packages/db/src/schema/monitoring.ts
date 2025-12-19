@@ -380,7 +380,12 @@ export const activityLogs = pgTable('activity_logs', {
   timestamp: timestamp('timestamp', { mode: 'date' }).defaultNow().notNull(),
 
   // Actor (who performed the action)
-  userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  // Note: Using 'set null' to preserve audit trail if user is deleted (SOX/GDPR compliance)
+  userId: text('userId').references(() => users.id, { onDelete: 'set null' }),
+  // Denormalized actor info - snapshot at write time for audit trail preservation
+  // Default 'legacy@unknown' is for migration of existing records only - app layer enforces this field
+  actorEmail: text('actorEmail').default('legacy@unknown').notNull(),
+  actorDisplayName: text('actorDisplayName'),
 
   // AI Attribution
   isAiGenerated: boolean('isAiGenerated').default(false).notNull(),

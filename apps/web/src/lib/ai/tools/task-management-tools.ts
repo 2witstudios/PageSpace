@@ -3,12 +3,14 @@ import { z } from 'zod';
 import { db, taskLists, taskItems, pages, eq, and, desc, asc } from '@pagespace/db';
 import { type ToolExecutionContext } from '../core';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { canUserEditPage, logPageActivity } from '@pagespace/lib/server';
+import { canUserEditPage, logPageActivity, getActorInfo } from '@pagespace/lib/server';
 import { getDefaultContent, PageType } from '@pagespace/lib';
 
-// Helper: Extract AI attribution context for activity logging
-function getAiContext(context: ToolExecutionContext) {
+// Helper: Extract AI attribution context with actor info for activity logging
+async function getAiContextWithActor(context: ToolExecutionContext) {
+  const actorInfo = await getActorInfo(context.userId);
   return {
+    ...actorInfo,
     isAiGenerated: true,
     aiProvider: context.aiProvider,
     aiModel: context.aiModel,
@@ -287,7 +289,7 @@ When creating tasks:
             title: createdPage.title,
             driveId: taskListPage.driveId,
           }, {
-            ...getAiContext(context as ToolExecutionContext),
+            ...await getAiContextWithActor(context as ToolExecutionContext),
             metadata: { taskId: resultTask.id, taskTitle: resultTask.title },
           });
 

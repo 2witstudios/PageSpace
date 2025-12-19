@@ -1,5 +1,6 @@
-import { users, db, eq, drives, driveMembers, sql } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { users, db, eq } from '@pagespace/db';
+import { createHash } from 'crypto';
+import { loggers, accountRepository, activityLogRepository } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createServiceToken, verifyServiceToken, type ServiceTokenClaims } from '@pagespace/lib/auth-utils';
 
@@ -104,6 +105,15 @@ export async function PATCH(req: Request) {
 // Processor service URL
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
 
+/**
+ * Create an anonymized identifier for GDPR-compliant audit trail preservation.
+ * Uses a deterministic hash so the same user ID always produces the same anonymized ID.
+ */
+function createAnonymizedActorEmail(userId: string): string {
+  const hash = createHash('sha256').update(userId).digest('hex').slice(0, 12);
+  return `deleted_user_${hash}`;
+}
+
 interface AvatarServiceToken {
   token: string;
   claims: ServiceTokenClaims;
@@ -146,15 +156,8 @@ export async function DELETE(req: Request) {
     const body = await req.json();
     const { emailConfirmation } = body;
 
-    // Get user details
-    const user = await db.query.users.findFirst({
-      where: eq(users.id, userId),
-      columns: {
-        id: true,
-        email: true,
-        image: true,
-      },
-    });
+    // Get user details via repository seam
+    const user = await accountRepository.findById(userId);
 
     if (!user) {
       return Response.json({ error: 'User not found' }, { status: 404 });
@@ -165,31 +168,18 @@ export async function DELETE(req: Request) {
       return Response.json({ error: 'Email confirmation does not match your account email' }, { status: 400 });
     }
 
-    // Check and categorize owned drives
-    const ownedDrives = await db.query.drives.findMany({
-      where: eq(drives.ownerId, userId),
-      columns: {
-        id: true,
-        name: true,
-      },
-    });
+    // Check and categorize owned drives via repository seam
+    const ownedDrives = await accountRepository.getOwnedDrives(userId);
 
     if (ownedDrives.length > 0) {
       const driveIds = ownedDrives.map(d => d.id);
 
-      // Count members for each drive
+      // Count members for each drive via repository seam
       const memberCounts = await Promise.all(
-        driveIds.map(async (driveId) => {
-          const count = await db
-            .select({ count: sql<number>`count(*)` })
-            .from(driveMembers)
-            .where(eq(driveMembers.driveId, driveId));
-
-          return {
-            driveId,
-            memberCount: Number(count[0]?.count || 0),
-          };
-        })
+        driveIds.map(async (driveId) => ({
+          driveId,
+          memberCount: await accountRepository.getDriveMemberCount(driveId),
+        }))
       );
 
       // Categorize into solo and multi-member drives
@@ -218,10 +208,10 @@ export async function DELETE(req: Request) {
         );
       }
 
-      // Auto-delete solo drives
+      // Auto-delete solo drives via repository seam
       if (soloDriveIds.length > 0) {
         for (const driveId of soloDriveIds) {
-          await db.delete(drives).where(eq(drives.id, driveId));
+          await accountRepository.deleteDrive(driveId);
         }
         loggers.auth.info(`Auto-deleted ${soloDriveIds.length} solo drives for user ${userId}`);
       }
@@ -244,8 +234,21 @@ export async function DELETE(req: Request) {
       }
     }
 
-    // Delete the user (CASCADE will handle related records)
-    await db.delete(users).where(eq(users.id, userId));
+    // Anonymize activity logs before user deletion (GDPR compliance + SOX audit trail)
+    // This preserves the audit trail while removing PII
+    const anonymizeResult = await activityLogRepository.anonymizeForUser(
+      userId,
+      createAnonymizedActorEmail(userId)
+    );
+    if (anonymizeResult.success) {
+      loggers.auth.info(`Anonymized activity logs for user ${userId}`);
+    } else {
+      // Log error but don't fail the deletion - user has right to delete their account
+      loggers.auth.error('Could not anonymize activity logs during account deletion:', new Error(anonymizeResult.error));
+    }
+
+    // Delete the user via repository seam (FK set null will preserve activity logs with userId = null)
+    await accountRepository.deleteUser(userId);
 
     loggers.auth.info(`User account deleted: ${userId}`);
 

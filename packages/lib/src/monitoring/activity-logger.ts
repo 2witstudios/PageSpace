@@ -5,8 +5,43 @@
  * Designed for auditability with future rollback support.
  */
 
-import { db, activityLogs } from '@pagespace/db';
+import { db, activityLogs, users, eq } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
+
+/**
+ * Actor info for audit logging - snapshotted at write time
+ */
+export interface ActorInfo {
+  actorEmail: string;
+  actorDisplayName?: string;
+}
+
+/**
+ * Fetch actor info from database for audit logging.
+ * Returns email and display name for the given user ID.
+ * Falls back to 'unknown@system' if user not found (shouldn't happen).
+ */
+export async function getActorInfo(userId: string): Promise<ActorInfo> {
+  try {
+    const user = await db.query.users.findFirst({
+      where: eq(users.id, userId),
+      columns: { email: true, name: true },
+    });
+
+    if (!user) {
+      console.warn(`[ActivityLogger] User ${userId} not found for actor info`);
+      return { actorEmail: 'unknown@system' };
+    }
+
+    return {
+      actorEmail: user.email,
+      actorDisplayName: user.name ?? undefined,
+    };
+  } catch (error) {
+    console.error('[ActivityLogger] Failed to fetch actor info:', error);
+    return { actorEmail: 'unknown@system' };
+  }
+}
 
 // Type definitions matching the database schema
 export type ActivityOperation =
@@ -33,6 +68,10 @@ export interface ActivityLogInput {
   driveId: string;
   pageId?: string;
 
+  // Actor snapshot - denormalized for audit trail preservation after user deletion
+  actorEmail: string;
+  actorDisplayName?: string;
+
   // AI attribution
   isAiGenerated?: boolean;
   aiProvider?: string;
@@ -57,6 +96,8 @@ export async function logActivity(input: ActivityLogInput): Promise<void> {
       id: createId(),
       timestamp: new Date(),
       userId: input.userId,
+      actorEmail: input.actorEmail,
+      actorDisplayName: input.actorDisplayName,
       operation: input.operation,
       resourceType: input.resourceType,
       resourceId: input.resourceId,
@@ -94,6 +135,8 @@ export function logPageActivity(
     content?: string;
   },
   options?: {
+    actorEmail?: string;
+    actorDisplayName?: string;
     isAiGenerated?: boolean;
     aiProvider?: string;
     aiModel?: string;
@@ -106,6 +149,8 @@ export function logPageActivity(
 ): void {
   logActivity({
     userId,
+    actorEmail: options?.actorEmail ?? 'unknown@system',
+    actorDisplayName: options?.actorDisplayName,
     operation,
     resourceType: 'page',
     resourceId: page.id,
@@ -113,7 +158,14 @@ export function logPageActivity(
     driveId: page.driveId,
     pageId: page.id,
     contentSnapshot: page.content,
-    ...options,
+    isAiGenerated: options?.isAiGenerated,
+    aiProvider: options?.aiProvider,
+    aiModel: options?.aiModel,
+    aiConversationId: options?.aiConversationId,
+    updatedFields: options?.updatedFields,
+    previousValues: options?.previousValues,
+    newValues: options?.newValues,
+    metadata: options?.metadata,
   }).catch(() => {
     // Silent fail - already logged in logActivity
   });
@@ -137,10 +189,16 @@ export function logPermissionActivity(
       canDelete?: boolean;
     };
     pageTitle?: string;
+  },
+  options?: {
+    actorEmail?: string;
+    actorDisplayName?: string;
   }
 ): void {
   logActivity({
     userId,
+    actorEmail: options?.actorEmail ?? 'unknown@system',
+    actorDisplayName: options?.actorDisplayName,
     operation,
     resourceType: 'permission',
     resourceId: data.pageId,
@@ -168,6 +226,8 @@ export function logDriveActivity(
     name?: string;
   },
   options?: {
+    actorEmail?: string;
+    actorDisplayName?: string;
     isAiGenerated?: boolean;
     aiProvider?: string;
     aiModel?: string;
@@ -177,6 +237,8 @@ export function logDriveActivity(
 ): void {
   logActivity({
     userId,
+    actorEmail: options?.actorEmail ?? 'unknown@system',
+    actorDisplayName: options?.actorDisplayName,
     operation,
     resourceType: 'drive',
     resourceId: drive.id,
@@ -211,10 +273,16 @@ export function logAgentConfigActivity(
     aiProvider?: string;
     aiModel?: string;
     aiConversationId?: string;
+  },
+  options?: {
+    actorEmail?: string;
+    actorDisplayName?: string;
   }
 ): void {
   logActivity({
     userId,
+    actorEmail: options?.actorEmail ?? 'unknown@system',
+    actorDisplayName: options?.actorDisplayName,
     operation: 'agent_config_update',
     resourceType: 'agent',
     resourceId: agent.id,
