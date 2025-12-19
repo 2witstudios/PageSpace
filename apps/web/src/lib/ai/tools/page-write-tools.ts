@@ -1,6 +1,5 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { db, pages, drives, eq, and } from '@pagespace/db';
 import {
   canUserEditPage,
   canUserDeletePage,
