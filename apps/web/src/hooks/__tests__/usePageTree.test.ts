@@ -35,6 +35,7 @@ vi.mock('@/stores/useEditingStore', () => ({
       isAnyEditing: mockIsAnyEditing,
     }),
   },
+  isEditingActive: () => mockIsAnyEditing(),
 }));
 
 vi.mock('@/lib/tree/tree-utils', () => ({
