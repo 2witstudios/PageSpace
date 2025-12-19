@@ -85,7 +85,7 @@ const mockCanUserEditPage = vi.mocked(canUserEditPage);
 const mockPageRepo = vi.mocked(pageRepository);
 const mockDriveRepo = vi.mocked(driveRepository);
 const mockLogPageActivity = vi.mocked(logPageActivity);
-const mockLogDriveActivity = vi.mocked(logDriveActivity);
+const _mockLogDriveActivity = vi.mocked(logDriveActivity);
 
 describe('page-write-tools', () => {
   beforeEach(() => {
