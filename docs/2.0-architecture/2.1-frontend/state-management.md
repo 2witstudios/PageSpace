@@ -1,6 +1,6 @@
 # Frontend State Management Architecture
 
-**Last Updated:** 2025-01-17
+**Last Updated:** 2025-12-19
 
 This document provides a definitive guide to the frontend state management system in this application. It is designed to be the single source of truth for understanding how application data and UI state are fetched, cached, managed, and displayed.
 
@@ -75,20 +75,23 @@ const { data, error, isLoading, mutate } = useSWR(
 );
 ```
 
-### Application State (Pointers)
+### Application State (URL-based Navigation)
 
 **Purpose:** Track what the user is currently viewing.
 
-**Tool:** Zustand stores (simple, non-persisted)
+**Tool:** Next.js App Router `useParams()` hook
 
-**Stores:**
-- Layout store: Active drive ID, active page ID, view type, sidebar states
-- Drive store: Drive list cache with 5-minute TTL
+**Pattern:** Navigation state is derived from the URL, not stored in Zustand. This follows Next.js App Router best practices where the URL is the source of truth for navigation.
 
 **Key Pattern:**
 ```typescript
-const { activeDriveId, activePageId, centerViewType } = useLayoutStore();
+// Navigation state comes from URL params
+const params = useParams();
+const driveId = params.driveId as string;
+const pageId = params.pageId as string;
 ```
+
+**Note:** PageSpace uses URL-based navigation rather than Zustand for tracking active pages. This provides automatic browser history support, shareable URLs, and simpler state management.
 
 ### Document State (Content & Editing)
 
@@ -154,30 +157,24 @@ const { leftSidebarOpen, treeExpanded, setTreeExpanded } = useUIStore();
 
 ## 3. Key Stores and Hooks
 
-### Layout Store (Application Pointers)
+### Layout Store (Sidebar State)
 
 **File:** `apps/web/src/stores/useLayoutStore.ts`
 
 **Responsibilities:**
-- Track active drive ID
-- Track active page ID
-- Track center view type (document, folder, settings, etc.)
-- Manage sidebar open/closed states
-- Cache navigation data (5-minute TTL)
+- Manage sidebar open/closed states (persisted to localStorage)
+- Track hydration state
 
 **Key State:**
 ```typescript
 {
-  activeDriveId: string | null;
-  activePageId: string | null;
-  centerViewType: 'document' | 'folder' | 'ai-chat' | 'channel' | 'canvas' | 'settings' | 'loading';
   leftSidebarOpen: boolean;
   rightSidebarOpen: boolean;
-  viewCache: Map<string, CachedView>;
+  rehydrated: boolean;
 }
 ```
 
-**Important:** This store **does NOT** contain document content or `isDirty` state. It only contains pointers (IDs) and UI layout state.
+**Note:** This store is focused only on sidebar visibility. Navigation state (active page, drive) is managed via URL params using Next.js App Router's `useParams()` hook. This separation keeps the store simple and leverages the browser's built-in navigation.
 
 ### Document Manager Store (Content & Editing)
 
@@ -274,27 +271,33 @@ This separation is critical to prevent save indicator flicker. See [Editor Archi
 
 **Caching Strategy:** 5-minute client-side cache to avoid redundant API calls when switching between drives.
 
-### UI Store (Persistence)
+### UI Store (Tree State)
 
 **File:** `apps/web/src/stores/useUIStore.ts`
 
 **Responsibilities:**
-- Persist sidebar open/closed state
 - Persist expanded/collapsed folders in PageTree
-- Persist scroll positions
-- Remember user UI preferences across sessions
+- Persist scroll positions in the tree
 
 **Persistence:** Uses `localStorage` via Zustand's `persist` middleware with custom serialization for `Set` types.
 
 **State:**
 ```typescript
 {
-  leftSidebarOpen: boolean;
-  rightSidebarOpen: boolean;
   treeExpanded: Set<string>;  // Set of expanded folder IDs
   treeScrollPosition: number;
 }
 ```
+
+**Access Pattern:**
+```typescript
+// Use the useTreeState hook for clean access
+import { useTreeState } from '@/hooks/useUI';
+
+const { expanded, isExpanded, toggleExpanded, scrollPosition } = useTreeState();
+```
+
+**Note:** Sidebar visibility is managed separately in `useLayoutStore`. The UI store is focused specifically on tree navigation state.
 
 ### Server State Hooks (SWR)
 
@@ -347,16 +350,15 @@ useSWR(key, fetcher, {
 sequenceDiagram
     participant User
     participant PageTree
-    participant LayoutStore
+    participant NextRouter
     participant DocumentView
     participant useDocument Hook
     participant DocumentManagerStore
-    participant SWR
     participant API
 
     User->>PageTree: Clicks on a page
-    PageTree->>LayoutStore: setActivePageId("page-5")
-    PageTree->>LayoutStore: setCenterViewType("document")
+    PageTree->>NextRouter: router.push("/dashboard/driveId/page-5")
+    NextRouter->>DocumentView: URL params change (pageId="page-5")
 
     DocumentView->>useDocument Hook: useDocument("page-5")
     useDocument Hook->>DocumentManagerStore: Check if document exists
@@ -391,39 +393,38 @@ sequenceDiagram
 
 **URL:** `/dashboard/[driveId]/[pageId]`
 
-1. Layout extracts `driveId` and `pageId` from URL
-2. Layout calls `useLayoutStore.setState({ activeDriveId, activePageId })`
-3. Layout sets `centerViewType: 'document'`
+1. Next.js App Router parses URL and provides params
+2. Components use `useParams()` to access `driveId` and `pageId`
+3. View component is selected based on page type
 
 #### 2. Component Rendering
 
 **LeftSidebar:**
-- Uses `usePageTree(activeDriveId)` to fetch navigation tree
-- Uses `useUIStore` to determine which folders are expanded
+- Uses `usePageTree(driveId)` to fetch navigation tree (driveId from URL params)
+- Uses `useTreeState()` hook to determine which folders are expanded
 - Renders tree with expand/collapse controls
 
 **MiddleContent (DocumentView):**
-- Reads `activePageId` from `useLayoutStore`
-- Calls `useDocument(activePageId)` hook
+- Gets `pageId` from `useParams()` hook
+- Calls `useDocument(pageId)` hook
 - Hook checks `useDocumentManagerStore` for existing document state
 - If not in store, fetches from API and initializes
 - Renders editor with document content
 
 **RightSidebar:**
-- Uses `usePageTree` and `activePageId` to show page details
+- Uses `usePageTree` and `pageId` from params to show page details
 - Independent of document editing state
 
 #### 3. User Clicks New Page
 
 1. User clicks page in tree → `onClick` handler
-2. Handler calls `navigateToPage(newPageId)` from layout store
-3. Layout store updates `activePageId` pointer
-4. URL updates via Next.js router
-5. **Document state is NOT cleared** - old document remains in store
-6. `useDocument(newPageId)` initializes new document
-7. Component re-renders with new content
+2. Handler uses Next.js `router.push()` to navigate to new URL
+3. URL changes → `useParams()` returns new `pageId`
+4. **Document state is NOT cleared** - old document remains in store
+5. `useDocument(newPageId)` initializes new document
+6. Component re-renders with new content
 
-**Key Point:** Multiple documents can exist in `useDocumentManagerStore` simultaneously. Switching pages doesn't lose unsaved work.
+**Key Point:** Multiple documents can exist in `useDocumentManagerStore` simultaneously. Switching pages doesn't lose unsaved work. Navigation is URL-driven, not store-driven.
 
 #### 4. User Edits Document
 
@@ -474,25 +475,27 @@ Before the document state was decoupled, every layout change or navigation actio
 - `isDirty` flag resetting unexpectedly
 - "Unsaved changes" warnings appearing incorrectly
 
-### The Solution: Separate Store
+### The Solution: URL-based Navigation + Separate Document Store
 
 **Architecture Decision:**
 
 ```
-❌ BEFORE (Coupled):
+✅ CURRENT ARCHITECTURE:
+
+Navigation State:
+  → URL params via useParams() hook
+  → driveId, pageId from URL
+  → Browser handles history
+
 useLayoutStore {
-  activeDriveId,
-  activePageId,
-  documentContent,        // ← WRONG: Content in navigation store
-  isDirty,                // ← WRONG: Save state in navigation store
-  centerViewType
+  leftSidebarOpen,        // Sidebar visibility only
+  rightSidebarOpen,
+  rehydrated
 }
 
-✅ AFTER (Decoupled):
-useLayoutStore {
-  activeDriveId,          // Pointer only
-  activePageId,           // Pointer only
-  centerViewType          // UI state only
+useUIStore {
+  treeExpanded,           // Tree navigation state
+  treeScrollPosition
 }
 
 useDocumentManagerStore {
@@ -515,15 +518,17 @@ useDocumentManagerStore {
 
 ### Migration Guide
 
-If you're updating old code that coupled document state with layout:
+If you're updating old code that used store-based navigation:
 
 ```typescript
 // ❌ OLD PATTERN (Don't use)
-const { activeDriveId, activePageId, documentContent } = useLayoutStore();
+const { activeDriveId, activePageId } = useLayoutStore();
 
 // ✅ NEW PATTERN (Correct)
-const { activeDriveId, activePageId } = useLayoutStore();
-const { document } = useDocument(activePageId);
+const params = useParams();
+const driveId = params.driveId as string;
+const pageId = params.pageId as string;
+const { document } = useDocument(pageId);
 ```
 
 ## 6. Best Practices
@@ -536,11 +541,13 @@ const { document } = useDocument(activePageId);
 - ✅ Read-only display data
 - ✅ Metadata that changes infrequently
 
-**Application State (Layout Store):**
-- ✅ Active drive ID
-- ✅ Active page ID
-- ✅ Current view type
-- ✅ Navigation state
+**Navigation State (URL params):**
+- ✅ Active drive ID (from URL)
+- ✅ Active page ID (from URL)
+- ✅ Use `useParams()` hook
+
+**Layout State (Layout Store):**
+- ✅ Sidebar visibility
 
 **Document State (Document Manager Store):**
 - ✅ Document content being edited
@@ -549,11 +556,8 @@ const { document } = useDocument(activePageId);
 - ✅ Multi-document editing state
 
 **UI State (UI Store):**
-- ✅ Sidebar visibility
-- ✅ Expanded/collapsed folders
-- ✅ Scroll positions
-- ✅ Theme preferences
-- ✅ User interface preferences
+- ✅ Expanded/collapsed folders in tree
+- ✅ Tree scroll position
 
 ### SWR Configuration for Stability
 
@@ -618,14 +622,26 @@ This prevents SWR revalidations during active editing.
 const layoutStore = useLayoutStore();
 
 // ✅ GOOD: Subscribe to specific values
-const activePageId = useLayoutStore(state => state.activePageId);
-const activeDriveId = useLayoutStore(state => state.activeDriveId);
+const leftSidebarOpen = useLayoutStore(state => state.leftSidebarOpen);
+```
+
+**For navigation, use URL params:**
+```typescript
+// ✅ CORRECT: Navigation from URL
+const params = useParams();
+const pageId = params.pageId as string;
 ```
 
 **For document state, use the hook:**
 ```typescript
 // ✅ CORRECT: Hook provides optimized selectors
 const { document, isDirty } = useDocument(pageId);
+```
+
+**For tree state, use the hook:**
+```typescript
+// ✅ CORRECT: Tree state hook
+const { isExpanded, toggleExpanded } = useTreeState();
 ```
 
 ### Debugging State Management
@@ -661,20 +677,25 @@ In development mode, click the bug icon (bottom-right) to see:
 
 ## Summary
 
-PageSpace's state management architecture separates concerns into four distinct layers:
+PageSpace's state management architecture separates concerns into distinct layers:
 
 1. **Server State (SWR):** Database-backed data with caching
-2. **Application State (Layout Store):** Navigation pointers (drive ID, page ID)
-3. **Document State (Document Manager Store):** **Completely isolated** content, dirty state, auto-save
-4. **UI State (UI Store):** Interface preferences with localStorage persistence
+2. **Navigation State (URL params):** Active drive and page via Next.js App Router
+3. **Layout State (Layout Store):** Sidebar visibility (persisted)
+4. **Document State (Document Manager Store):** **Completely isolated** content, dirty state, auto-save
+5. **UI State (UI Store):** Tree expansion and scroll position (persisted)
 
-**The critical architectural decision** is the complete decoupling of document state from navigation/layout state. This prevents re-render cascades, enables stable editing, and provides reliable auto-save functionality.
+**Key Architectural Decisions:**
+- Navigation uses URL params (`useParams()`) rather than Zustand stores - this provides browser history support and shareable URLs
+- Document state is completely decoupled from navigation/layout state - this prevents re-render cascades during editing
+- Stores are kept minimal and focused on their specific concerns
 
 **Key Principles:**
-- Server data managed by SWR
-- Application context managed by layout store (pointers only)
+- Server data managed by SWR with conservative revalidation
+- Navigation managed by URL (not stores)
+- Sidebar state managed by layout store
 - Document editing managed by dedicated store (completely isolated)
-- UI preferences managed by UI store (persisted)
+- Tree state managed by UI store (persisted)
 
 This architecture enables a professional, stable editing experience while maintaining clean separation of concerns.
 
@@ -684,4 +705,4 @@ This architecture enables a professional, stable editing experience while mainta
 - [SYSTEMIC-RE-RENDER-ISSUE.md](../../SYSTEMIC-RE-RENDER-ISSUE.md) - Historical context for this architecture
 - [UI Refresh Protection](../../3.0-guides-and-tools/ui-refresh-protection.md) - Preventing interruptions during editing
 
-**Last Updated:** 2025-01-17
+**Last Updated:** 2025-12-19

@@ -4,7 +4,6 @@ import React, { Component, ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { AlertTriangle, RefreshCw, Home, Bug } from 'lucide-react';
-import { useLayoutStore } from '@/stores/useLayoutStore';
 
 interface Props {
   children: ReactNode;
@@ -68,13 +67,7 @@ export class LayoutErrorBoundary extends Component<Props, State> {
       // Clear localStorage that might be corrupted
       localStorage.removeItem('layout-storage');
       sessionStorage.clear();
-      
-      // Clear layout store cache
-      if (typeof window !== 'undefined') {
-        const layoutStore = useLayoutStore.getState();
-        layoutStore.clearCache();
-      }
-      
+
       console.log('Cleared potentially corrupted state');
     } catch (clearError) {
       console.error('Failed to clear corrupted state:', clearError);

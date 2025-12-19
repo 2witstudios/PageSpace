@@ -9,13 +9,12 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
-import { 
-  Settings, 
-  Database, 
-  Navigation, 
-  FileText, 
-  Clock, 
-  MemoryStick,
+import {
+  Settings,
+  Database,
+  Navigation,
+  FileText,
+  Clock,
   Trash,
   RefreshCw,
   Bug,
@@ -38,7 +37,6 @@ export function DebugPanel() {
   const avgLoadTime = getAverageLoadTime();
 
   const clearCache = () => {
-    layoutStore.clearCache();
     localStorage.removeItem('layout-storage');
     sessionStorage.clear();
     window.location.reload();
@@ -214,22 +212,6 @@ export function DebugPanel() {
                     </h3>
                     <div className="space-y-2 text-sm">
                       <div className="grid grid-cols-2 gap-2">
-                        <span className="text-muted-foreground">Active Drive:</span>
-                        <span className="font-mono text-xs">
-                          {layoutStore.activeDriveId || 'None'}
-                        </span>
-                      </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <span className="text-muted-foreground">Active Page:</span>
-                        <span className="font-mono text-xs">
-                          {layoutStore.activePageId || 'None'}
-                        </span>
-                      </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <span className="text-muted-foreground">View Type:</span>
-                        <span className="capitalize">{layoutStore.centerViewType}</span>
-                      </div>
-                      <div className="grid grid-cols-2 gap-2">
                         <span className="text-muted-foreground">Left Sidebar:</span>
                         <Badge variant={layoutStore.leftSidebarOpen ? "default" : "secondary"}>
                           {layoutStore.leftSidebarOpen ? "Open" : "Closed"}
@@ -239,6 +221,12 @@ export function DebugPanel() {
                         <span className="text-muted-foreground">Right Sidebar:</span>
                         <Badge variant={layoutStore.rightSidebarOpen ? "default" : "secondary"}>
                           {layoutStore.rightSidebarOpen ? "Open" : "Closed"}
+                        </Badge>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <span className="text-muted-foreground">Rehydrated:</span>
+                        <Badge variant={layoutStore.rehydrated ? "default" : "secondary"}>
+                          {layoutStore.rehydrated ? "Yes" : "No"}
                         </Badge>
                       </div>
                     </div>
@@ -273,36 +261,6 @@ export function DebugPanel() {
                       </div>
                     ) : (
                       <p className="text-sm text-muted-foreground">No documents loaded</p>
-                    )}
-                  </div>
-
-                <Separator />
-
-                {/* Cache State */}
-                  <div className="space-y-3">
-                    <h3 className="font-semibold flex items-center gap-2">
-                      <MemoryStick size={16} />
-                      View Cache ({layoutStore.viewCache.size})
-                    </h3>
-                    {layoutStore.viewCache.size > 0 ? (
-                      <div className="space-y-2 max-h-32 overflow-y-auto">
-                        {Array.from(layoutStore.viewCache.entries()).map(([id, view]) => (
-                          <div key={id} className="p-2 bg-muted rounded text-xs">
-                            <div className="flex items-center justify-between">
-                              <span className="font-mono truncate">{id}</span>
-                              <Badge variant="outline">
-                                {view.viewType}
-                              </Badge>
-                            </div>
-                            <div className="text-muted-foreground mt-1">
-                              <Clock size={12} className="inline mr-1" />
-                              {new Date(view.timestamp).toLocaleTimeString()}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-sm text-muted-foreground">No cached views</p>
                     )}
                   </div>
 

@@ -19,7 +19,6 @@ import MCPSettingsView from './page-views/settings/mcp/MCPSettingsView';
 import CanvasPageView from './page-views/canvas/CanvasPageView';
 import GlobalAssistantView from './page-views/dashboard/GlobalAssistantView';
 import { memo, useState, useEffect } from 'react';
-import { useLayoutStore } from '@/stores/useLayoutStore';
 import { cn } from '@/lib/utils';
 
 // Memoized page content component to prevent unnecessary re-renders
@@ -111,18 +110,18 @@ PageContent.displayName = 'PageContent';
 
 // Optimized header component
 const OptimizedViewHeader = memo(() => {
-  const layoutStore = useLayoutStore();
+  const params = useParams();
   const pathname = usePathname();
-  
+
   // Only show header when we have a page or are on special routes
-  const shouldShowHeader = layoutStore.activePageId || 
-                          pathname.endsWith('/settings') || 
+  const shouldShowHeader = params.pageId ||
+                          pathname.endsWith('/settings') ||
                           pathname.endsWith('/settings/mcp');
-  
+
   if (!shouldShowHeader) {
     return null;
   }
-  
+
   return (
     <div className="transition-opacity duration-150">
       <ViewHeader />
