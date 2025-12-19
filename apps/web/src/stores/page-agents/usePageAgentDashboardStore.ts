@@ -290,8 +290,8 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
           isConversationLoading: false,
         });
 
-        // Update URL
-        setChatParams({ agentId: agent.id, conversationId: mostRecent.id }, 'push');
+        // Update URL (use 'replace' for auto-loading to avoid polluting history)
+        setChatParams({ agentId: agent.id, conversationId: mostRecent.id }, 'replace');
         return;
       }
 

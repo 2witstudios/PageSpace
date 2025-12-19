@@ -490,7 +490,7 @@ Before the document state was decoupled, every layout change or navigation actio
 
 **Architecture Decision:**
 
-```
+```text
 ✅ CURRENT ARCHITECTURE:
 
 Navigation State:

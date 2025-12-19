@@ -3,7 +3,7 @@ import { useState, useCallback } from 'react';
 import { mergeChildren } from '@/lib/tree/tree-utils';
 import { Page } from '@pagespace/lib/client';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { useEditingStore } from '@/stores/useEditingStore';
+import { isEditingActive, useEditingStore } from '@/stores/useEditingStore';
 
 type User = {
   id: string;
@@ -49,12 +49,11 @@ const fetcher = async (url: string) => {
 
 export function usePageTree(driveId?: string, trashView?: boolean) {
   const swrKey = driveId ? (trashView ? `/api/drives/${encodeURIComponent(driveId)}/trash` : `/api/drives/${encodeURIComponent(driveId)}/pages`) : null;
-  const isAnyActive = useEditingStore(state => state.isAnyActive());
   const { data, error, mutate } = useSWR<TreePage[]>(
     swrKey,
     fetcher,
     {
-      isPaused: () => isAnyActive,
+      isPaused: isEditingActive,
     }
   );
   const { cache } = useSWRConfig();

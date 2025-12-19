@@ -8,7 +8,7 @@ import useSWR, { mutate } from 'swr';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
 import type { UIMessage } from 'ai';
-import { useEditingStore } from '@/stores/useEditingStore';
+import { isEditingActive } from '@/stores/useEditingStore';
 import {
   ConversationData,
   RawConversationData,
@@ -68,7 +68,6 @@ export function useConversations({
 }: UseConversationsOptions): UseConversationsResult {
   // Determine API endpoints based on mode
   const isAgentMode = Boolean(agentId);
-  const isAnyActive = useEditingStore(state => state.isAnyActive());
 
   // SWR key for conversations list
   const swrKey = useMemo(() => {
@@ -87,7 +86,7 @@ export function useConversations({
       return response.json();
     },
     {
-      isPaused: () => isAnyActive,
+      isPaused: isEditingActive,
       revalidateOnFocus: false,
       revalidateOnReconnect: false,
       dedupingInterval: 5000,

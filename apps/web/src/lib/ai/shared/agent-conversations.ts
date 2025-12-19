@@ -29,7 +29,7 @@ export async function fetchAgentConversationMessages(
     `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages`
   );
   if (!response.ok) {
-    throw new Error('Failed to load conversation messages');
+    throw new Error(`Failed to load messages for agent ${agentId}, conversation ${conversationId}`);
   }
   const data = (await response.json()) as AgentMessagesResponse | UIMessage[];
   if (Array.isArray(data)) {
@@ -45,7 +45,7 @@ export async function fetchMostRecentAgentConversation(
     `/api/ai/page-agents/${agentId}/conversations?limit=1`
   );
   if (!response.ok) {
-    throw new Error('Failed to load conversations');
+    throw new Error(`Failed to load conversations for agent ${agentId}`);
   }
   const data = (await response.json()) as AgentConversationsResponse;
   return data.conversations?.[0] ?? null;
@@ -58,7 +58,7 @@ export async function createAgentConversation(agentId: string): Promise<string> 
     body: JSON.stringify({}),
   });
   if (!response.ok) {
-    throw new Error('Failed to create conversation');
+    throw new Error(`Failed to create conversation for agent ${agentId}`);
   }
   const data = (await response.json()) as AgentConversationCreateResponse;
   const conversationId = data.conversationId || data.id;
