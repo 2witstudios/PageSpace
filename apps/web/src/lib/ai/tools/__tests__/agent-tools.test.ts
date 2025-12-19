@@ -17,6 +17,7 @@ vi.mock('@pagespace/db', () => ({
 
 vi.mock('@pagespace/lib/server', () => ({
   canUserEditPage: vi.fn(),
+  logAgentConfigActivity: vi.fn(),
   loggers: {
     ai: {
       child: vi.fn(() => ({
