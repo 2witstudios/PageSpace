@@ -58,15 +58,16 @@ export async function GET(request: Request) {
     let whereCondition;
 
     switch (params.context) {
-      case 'user':
+      case 'user': {
         // User's own activity (dashboard view)
         whereCondition = and(
           eq(activityLogs.userId, userId),
           eq(activityLogs.isArchived, false)
         );
         break;
+      }
 
-      case 'drive':
+      case 'drive': {
         // All activity within a drive
         if (!params.driveId) {
           return NextResponse.json(
@@ -89,8 +90,9 @@ export async function GET(request: Request) {
           eq(activityLogs.isArchived, false)
         );
         break;
+      }
 
-      case 'page':
+      case 'page': {
         // All edits to a specific page
         if (!params.pageId) {
           return NextResponse.json(
@@ -113,6 +115,7 @@ export async function GET(request: Request) {
           eq(activityLogs.isArchived, false)
         );
         break;
+      }
 
       default:
         return NextResponse.json(

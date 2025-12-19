@@ -713,7 +713,7 @@ export async function POST(request: Request) {
               userId,
               aiProvider: currentProvider,
               aiModel: currentModel,
-              conversationId: chatId,
+              conversationId,
               locationContext: pageContext ? {
                 currentPage: {
                   id: pageContext.pageId,
