@@ -2,7 +2,6 @@
 
 import React, { createContext, useContext, useEffect, useMemo, ReactNode } from 'react';
 import Link from 'next/link';
-import { useLayoutStore } from '@/stores/useLayoutStore';
 import { LayoutErrorBoundary } from './LayoutErrorBoundary';
 import { useUnsavedChanges } from '@/hooks/useUnsavedChanges';
 
@@ -19,41 +18,19 @@ interface NavigationProviderProps {
   enableErrorBoundary?: boolean;
 }
 
-export function NavigationProvider({ 
-  children, 
-  enableErrorBoundary = true 
+export function NavigationProvider({
+  children,
+  enableErrorBoundary = true
 }: NavigationProviderProps) {
-  const layoutStore = useLayoutStore();
   useUnsavedChanges();
 
   useEffect(() => {
     if (process.env.NODE_ENV === 'development') {
-      console.log('🔧 NavigationProvider mounted');
+      console.log('NavigationProvider mounted');
     }
   }, []);
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (process.env.NODE_ENV === 'development') {
-        console.log('🧹 NavigationProvider cleaning up...');
-      }
-
-      // Get current state for cleanup
-      const currentState = useLayoutStore.getState();
-
-      // Save current view before unmounting
-      if (currentState.activePageId) {
-        currentState.saveCurrentView();
-      }
-
-      // Note: Document saves are now handled by individual page views (DocumentView, SheetView)
-      // on their own unmount, blur, and keyboard shortcut events
-    };
-  }, []); // No dependencies to prevent loops
-
   // Memoize context value to prevent unnecessary re-renders
-  // This empty object is stable and doesn't need to change
   const contextValue: NavigationContextType = useMemo(() => ({}), []);
 
   const content = (
@@ -70,9 +47,6 @@ export function NavigationProvider({
           if (process.env.NODE_ENV === 'development') {
             console.error('NavigationProvider error:', error, errorInfo);
           }
-          
-          // Clear potentially corrupted navigation state
-          layoutStore.clearCache();
         }}
       >
         {content}
