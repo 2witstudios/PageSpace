@@ -193,3 +193,59 @@ struct PageAIMessageRequest: Codable {
 struct PageAIMessagesResponse: Codable {
     let messages: [Message]
 }
+
+// MARK: - Multi-Drive Agents API Response
+
+struct MultiDriveAgentsResponse: Codable {
+    let success: Bool
+    let totalCount: Int
+    let driveCount: Int
+    let summary: String?
+    let agentsByDrive: [DriveAgentGroup]?
+    let agents: [AgentSummary]? // When groupByDrive=false
+}
+
+struct DriveAgentGroup: Codable {
+    let driveId: String
+    let driveName: String
+    let driveSlug: String
+    let agentCount: Int
+    let agents: [AgentSummary]
+}
+
+struct AgentSummary: Codable {
+    let id: String
+    let title: String?
+    let parentId: String?
+    let position: Int?
+    let aiProvider: String?
+    let aiModel: String?
+    let hasWelcomeMessage: Bool?
+    let createdAt: Date?
+    let updatedAt: Date?
+    let driveId: String?
+    let driveName: String?
+    let driveSlug: String?
+    let hasSystemPrompt: Bool?
+    let systemPromptPreview: String?
+    let enabledToolsCount: Int?
+
+    /// Convert to Agent model for UI display
+    func toAgent() -> Agent {
+        Agent(
+            id: "page_\(id)",
+            type: .pageAI,
+            title: title ?? "Untitled Agent",
+            subtitle: driveName.map { "\($0)" },
+            icon: "bubble.left.and.text.bubble.right",
+            driveId: driveId,
+            driveName: driveName,
+            pageId: id,
+            pagePath: nil,
+            aiProvider: aiProvider,
+            aiModel: aiModel,
+            systemPrompt: nil, // Not included in summary
+            enabledTools: nil  // Not included in summary
+        )
+    }
+}

@@ -22,75 +22,56 @@ class AgentService: ObservableObject {
         error = nil
 
         var allAgents: [Agent] = []
-        var globalAgent: Agent?
-        var errorMessages: [String] = []
 
-        // 1. Create Global Assistant agent (no conversation ID needed)
-        globalAgent = Agent(
+        // 1. Create Global Assistant agent (always available)
+        let globalAgent = Agent(
             id: "global_default",
             type: .global,
             title: "Global Assistant",
             subtitle: "Your personal AI assistant",
             icon: "brain.head.profile"
         )
-        allAgents.append(globalAgent!)
+        allAgents.append(globalAgent)
         print("✅ Global Assistant agent created")
 
-        // 2. Load all drives and their AI chat pages
+        // 2. Load all page agents via dedicated multi-drive endpoint
         do {
-            let drives: [Drive] = try await apiClient.request(
-                endpoint: APIEndpoints.drives,
+            let response: MultiDriveAgentsResponse = try await apiClient.request(
+                endpoint: APIEndpoints.multiDriveAgents,
                 method: .GET
             )
-            print("✅ Loaded \(drives.count) drives")
+            print("✅ Loaded agents from \(response.driveCount) drives")
 
-            // For each drive, load pages and filter AI_CHAT pages
-            for drive in drives {
-                do {
-                    // Backend returns tree array directly (not wrapped)
-                    let pageTree: [Page] = try await apiClient.request(
-                        endpoint: APIEndpoints.drivePages(driveId: drive.id),
-                        method: .GET
-                    )
-
-                    // Flatten tree structure to get all pages
-                    let allPages = flattenPageTree(pageTree)
-                    print("✅ Drive '\(drive.name)': Loaded \(allPages.count) pages")
-
-                    // Filter to AI_CHAT pages only
-                    let aiChatPages = allPages.filter { $0.type == .aiChat }
-                    print("  └─ Found \(aiChatPages.count) AI chat pages")
-
-                    // Create agents from AI chat pages
-                    for page in aiChatPages {
-                        let agent = Agent.fromPage(page, drive: drive)
-                        allAgents.append(agent)
+            // Convert AgentSummary to Agent models
+            if let agentGroups = response.agentsByDrive {
+                for group in agentGroups {
+                    print("  └─ Drive '\(group.driveName)': \(group.agentCount) agents")
+                    for agentSummary in group.agents {
+                        allAgents.append(agentSummary.toAgent())
                     }
-                } catch {
-                    // Log error but continue with other drives
-                    let errorMsg = "Failed to load pages for drive '\(drive.name)': \(error.localizedDescription)"
-                    errorMessages.append(errorMsg)
-                    print("❌ \(errorMsg)")
+                }
+            } else if let flatAgents = response.agents {
+                // Flat list response (groupByDrive=false)
+                for agentSummary in flatAgents {
+                    allAgents.append(agentSummary.toAgent())
                 }
             }
+
+            print("📊 Total page agents loaded: \(response.totalCount)")
         } catch {
-            // If we can't load drives, that's a critical error
-            errorMessages.append("Failed to load drives: \(error.localizedDescription)")
-            print("❌ Drives error: \(error)")
+            // Log error but don't fail completely - we still have global agent
+            let errorMsg = "Failed to load page agents: \(error.localizedDescription)"
+            self.error = errorMsg
+            print("❌ \(errorMsg)")
         }
 
-        // Update published property with whatever we managed to load
+        // Update published property
         agents = allAgents
-        print("📊 Total agents loaded: \(allAgents.count)")
+        print("📊 Total agents available: \(allAgents.count)")
 
         // Set default selected agent to global if none selected
-        if selectedAgent == nil, let defaultAgent = globalAgent {
-            selectedAgent = defaultAgent
-        }
-
-        // Set error message if any errors occurred (but don't fail completely)
-        if !errorMessages.isEmpty {
-            self.error = errorMessages.joined(separator: "\n")
+        if selectedAgent == nil {
+            selectedAgent = globalAgent
         }
 
         isLoading = false

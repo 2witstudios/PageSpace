@@ -90,9 +90,10 @@ struct ProviderStatuses: Codable {
     let ollama: ProviderStatus?
     let lmstudio: ProviderStatus?
     let glm: ProviderStatus?
+    let minimax: ProviderStatus?
 
     enum CodingKeys: String, CodingKey {
-        case pagespace, openrouter, google, openai, anthropic, xai, ollama, lmstudio, glm
+        case pagespace, openrouter, google, openai, anthropic, xai, ollama, lmstudio, glm, minimax
     }
 }
 
@@ -143,6 +144,8 @@ extension AISettings {
             return providers.lmstudio?.isConfigured ?? false
         case "glm":
             return providers.glm?.isConfigured ?? false
+        case "minimax":
+            return providers.minimax?.isConfigured ?? false
         default:
             return false
         }
