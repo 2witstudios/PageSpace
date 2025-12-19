@@ -8,6 +8,7 @@ import useSWR, { mutate } from 'swr';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
 import type { UIMessage } from 'ai';
+import { isEditingActive } from '@/stores/useEditingStore';
 import {
   ConversationData,
   RawConversationData,
@@ -85,6 +86,7 @@ export function useConversations({
       return response.json();
     },
     {
+      isPaused: isEditingActive,
       revalidateOnFocus: false,
       revalidateOnReconnect: false,
       dedupingInterval: 5000,

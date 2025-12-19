@@ -14,6 +14,7 @@ import { del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
 import { usePageAgentSidebarState } from '@/hooks/page-agents';
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
+import { setConversationId } from '@/lib/url-state';
 import type { AgentInfo } from '@/types/agent';
 
 interface Conversation {
@@ -140,9 +141,7 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
       await loadGlobalConversation(conversationId);
 
       // Update URL for browser history
-      const url = new URL(window.location.href);
-      url.searchParams.set('c', conversationId);
-      window.history.pushState({}, '', url.toString());
+      setConversationId(conversationId, 'push');
     }
   };
 

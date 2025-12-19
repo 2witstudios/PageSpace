@@ -47,6 +47,17 @@ Our architecture is built on a **server-centric** model for data, with clear sep
 
 See [Editor Architecture](../2.6-features/editor-architecture.md) for comprehensive documentation of the document editing system.
 
+### AI Assistant State Boundaries (Intentional Separation)
+
+AI assistant state is intentionally separated to preserve UX and permission boundaries:
+
+- **Global Assistant**: Shared context (`GlobalChatContext`) for workspace-wide chat.
+- **Dashboard Agent Mode**: `usePageAgentDashboardStore` manages agent selection + conversations for dashboard/drive routes.
+- **Sidebar Agent Mode (page routes)**: `usePageAgentSidebarState` keeps sidebar chat independent from the page content.
+- **AI_CHAT Pages**: `AiChatView` manages its own conversations and permissions.
+
+Shared conversation fetch/create helpers live in `apps/web/src/lib/ai/shared/agent-conversations.ts` to keep behavior consistent without merging state. URL param mechanics are centralized in `apps/web/src/lib/url-state.ts`.
+
 ## 2. The Four Types of State
 
 ### Server State (SWR)
@@ -479,7 +490,7 @@ Before the document state was decoupled, every layout change or navigation actio
 
 **Architecture Decision:**
 
-```
+```text
 ✅ CURRENT ARCHITECTURE:
 
 Navigation State:

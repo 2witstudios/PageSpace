@@ -60,16 +60,16 @@ interface EditingState {
 Use `isPaused()` option to conditionally pause SWR revalidation:
 
 ```typescript
-import { useEditingStore } from '@/stores/useEditingStore';
-
-const isAnyActive = useEditingStore(state => state.isAnyActive());
+import { isEditingActive } from '@/stores/useEditingStore';
 
 const { data, error } = useSWR('/api/endpoint', fetcher, {
   refreshInterval: 300000, // 5 minutes (reduced from 30-60s)
   revalidateOnFocus: false, // Disable focus revalidation
-  isPaused: () => isAnyActive, // State-based pausing
+  isPaused: isEditingActive, // Reads live state when SWR calls it
 });
 ```
+
+**Important:** Use the `isEditingActive` helper function directly, not a React hook selector. The helper reads store state via `getState()` when called, ensuring SWR always sees the current editing state rather than a stale value captured at render time.
 
 **Applied to:**
 - `UsageCounter.tsx` - disabled polling, rely on Socket.IO
@@ -329,10 +329,10 @@ useEffect(() => {
 
 3. **Protect SWR calls:**
 ```typescript
-const isAnyActive = useEditingStore(state => state.isAnyActive());
+import { isEditingActive } from '@/stores/useEditingStore';
 
 useSWR(key, fetcher, {
-  isPaused: () => isAnyActive,
+  isPaused: isEditingActive, // Use helper, not hook selector
   refreshInterval: 300000, // 5 minutes
   revalidateOnFocus: false,
 });

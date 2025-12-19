@@ -1,5 +1,6 @@
 import useSWR from 'swr';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { isEditingActive } from '@/stores/useEditingStore';
 
 interface BreadcrumbItem {
   id: string;
@@ -21,7 +22,10 @@ const fetcher = async (url: string) => {
 export function useBreadcrumbs(pageId: string | null) {
   const { data, error } = useSWR<BreadcrumbItem[]>(
     pageId ? `/api/pages/${pageId}/breadcrumbs` : null,
-    fetcher
+    fetcher,
+    {
+      isPaused: isEditingActive,
+    }
   );
 
   return {

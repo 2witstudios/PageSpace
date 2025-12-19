@@ -4,6 +4,7 @@ import React, { createContext, useContext, ReactNode, useState, useCallback, use
 import { DefaultChatTransport, UIMessage } from 'ai';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { conversationState } from '@/lib/ai/core/conversation-state';
+import { getAgentId, getConversationId, setConversationId } from '@/lib/url-state';
 
 /**
  * Global Chat Context - ONLY for Global Assistant state
@@ -113,11 +114,8 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
         conversationState.setActiveConversationId(newConversation.id);
 
         // Update URL to reflect new conversation (only if no agent selected)
-        const urlParams = new URLSearchParams(window.location.search);
-        if (!urlParams.get('agent')) {
-          const url = new URL(window.location.href);
-          url.searchParams.set('c', newConversation.id);
-          window.history.pushState({}, '', url.toString());
+        if (!getAgentId()) {
+          setConversationId(newConversation.id, 'push');
         }
 
         setIsInitialized(true);
@@ -143,9 +141,8 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const initializeGlobalChat = async () => {
       try {
-        const urlParams = new URLSearchParams(window.location.search);
-        const urlConversationId = urlParams.get('c');
-        const urlAgentId = urlParams.get('agent');
+        const urlConversationId = getConversationId();
+        const urlAgentId = getAgentId();
         const cookieConversationId = conversationState.getActiveConversationId();
         const cookieAgentId = conversationState.getActiveAgentId();
 
@@ -171,9 +168,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
 
             // Only update URL if no agent is selected
             if (!hasAgent) {
-              const url = new URL(window.location.href);
-              url.searchParams.set('c', conversation.id);
-              window.history.replaceState({}, '', url.toString());
+              setConversationId(conversation.id, 'replace');
             }
             return;
           }
