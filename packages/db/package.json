@@ -17,6 +17,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "db:migrate": "tsx src/migrate.ts",
+    "db:migrate:local": "DATABASE_URL=postgresql://user:password@localhost:5432/pagespace tsx src/migrate.ts",
     "db:studio": "drizzle-kit studio",
     "db:seed": "tsx src/seed.ts",
     "promote-admin": "tsx src/promote-admin.ts"

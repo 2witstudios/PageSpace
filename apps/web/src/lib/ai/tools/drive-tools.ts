@@ -1,9 +1,21 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db, pages, drives, eq, and, driveMembers, pagePermissions, ne } from '@pagespace/db';
-import { slugify } from '@pagespace/lib/server';
+import { slugify, logDriveActivity, getActorInfo } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { type ToolExecutionContext } from '../core';
+
+// Helper: Extract AI attribution context with actor info for activity logging
+async function getAiContextWithActor(context: ToolExecutionContext) {
+  const actorInfo = await getActorInfo(context.userId);
+  return {
+    ...actorInfo,
+    isAiGenerated: true,
+    aiProvider: context.aiProvider,
+    aiModel: context.aiModel,
+    aiConversationId: context.conversationId,
+  };
+}
 
 export const driveTools = {
   /**
@@ -144,6 +156,12 @@ export const driveTools = {
           })
         );
 
+        // Log activity for AI-generated drive creation
+        logDriveActivity(userId, 'create', {
+          id: newDrive.id,
+          name: newDrive.name,
+        }, await getAiContextWithActor(context as ToolExecutionContext));
+
         return {
           success: true,
           drive: {
@@ -229,6 +247,15 @@ export const driveTools = {
             slug: updatedDrive.slug,
           })
         );
+
+        // Log activity for AI-generated drive rename
+        logDriveActivity(userId, 'update', {
+          id: updatedDrive.id,
+          name: updatedDrive.name,
+        }, {
+          ...await getAiContextWithActor(context as ToolExecutionContext),
+          metadata: { oldName: drive.name, newName: updatedDrive.name },
+        });
 
         return {
           success: true,

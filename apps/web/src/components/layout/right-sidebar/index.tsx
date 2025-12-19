@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { History, MessageSquare, Settings } from "lucide-react";
+import { History, MessageSquare, Activity } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { usePageAgentSidebarState, useSidebarAgentStore } from "@/hooks/page-agents";
@@ -11,7 +11,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 
 import SidebarChatTab from "./ai-assistant/SidebarChatTab";
 import SidebarHistoryTab from "./ai-assistant/SidebarHistoryTab";
-import SidebarSettingsTab from "./ai-assistant/SidebarSettingsTab";
+import SidebarActivityTab from "./ai-assistant/SidebarActivityTab";
 
 export interface RightPanelProps {
   className?: string;
@@ -19,7 +19,7 @@ export interface RightPanelProps {
 }
 
 /**
- * Right sidebar panel - contains AI Assistant chat, history, and settings.
+ * Right sidebar panel - contains AI Assistant chat, history, and activity.
  *
  * TAB STATE MANAGEMENT:
  * - Dashboard context: Uses usePageAgentDashboardStore.activeTab (synced with GlobalAssistantView)
@@ -143,15 +143,15 @@ export default function RightPanel({ className }: RightPanelProps) {
             </TabsTrigger>
 
             <TabsTrigger
-              value="settings"
+              value="activity"
               className={triggerBaseStyles}
             >
-              <Settings className="h-4 w-4" />
-              <span className="hidden md:inline">Settings</span>
+              <Activity className="h-4 w-4" />
+              <span className="hidden md:inline">Activity</span>
               <div
                 className={cn(
                   "absolute bottom-0 left-1/2 h-0.5 w-1/2 -translate-x-1/2 bg-primary transition-opacity",
-                  activeTab === "settings" ? "opacity-100" : "opacity-0"
+                  activeTab === "activity" ? "opacity-100" : "opacity-0"
                 )}
               />
             </TabsTrigger>
@@ -190,16 +190,14 @@ export default function RightPanel({ className }: RightPanelProps) {
             />
           </TabsContent>
           <TabsContent
-            value="settings"
+            value="activity"
             forceMount
             className={cn(
               "h-full m-0 outline-none",
-              activeTab === "settings" ? "flex flex-col" : "hidden"
+              activeTab === "activity" ? "flex flex-col" : "hidden"
             )}
           >
-            <SidebarSettingsTab
-              selectedAgent={selectedAgent}
-            />
+            <SidebarActivityTab />
           </TabsContent>
         </div>
       </Tabs>

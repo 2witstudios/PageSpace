@@ -2,8 +2,10 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { z } from 'zod/v4';
 import { createPermissionNotification } from '@pagespace/lib';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, getActorInfo } from '@pagespace/lib/server';
+import { logPermissionActivity } from '@pagespace/lib';
 import { permissionManagementService } from '@/services/api';
+import { db, pages, eq } from '@pagespace/db';
 
 const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
@@ -94,6 +96,27 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       currentUserId
     );
 
+    // Log to activity audit trail with actor info
+    const page = await db.query.pages.findFirst({
+      where: eq(pages.id, pageId),
+      columns: { driveId: true, title: true },
+    });
+    if (page?.driveId) {
+      const actorInfo = await getActorInfo(currentUserId);
+      logPermissionActivity(
+        currentUserId,
+        result.isUpdate ? 'permission_update' : 'permission_grant',
+        {
+          pageId,
+          driveId: page.driveId,
+          targetUserId: userId,
+          permissions: { canView, canEdit, canShare, canDelete },
+          pageTitle: page.title ?? undefined,
+        },
+        actorInfo
+      );
+    }
+
     return NextResponse.json(result.permission, { status: result.isUpdate ? 200 : 201 });
   } catch (error) {
     loggers.api.error('Error creating permission:', error as Error);
@@ -138,6 +161,21 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
       {},
       currentUserId
     );
+
+    // Log to activity audit trail with actor info
+    const page = await db.query.pages.findFirst({
+      where: eq(pages.id, pageId),
+      columns: { driveId: true, title: true },
+    });
+    if (page?.driveId) {
+      const actorInfo = await getActorInfo(currentUserId);
+      logPermissionActivity(currentUserId, 'permission_revoke', {
+        pageId,
+        driveId: page.driveId,
+        targetUserId: userId,
+        pageTitle: page.title ?? undefined,
+      }, actorInfo);
+    }
 
     return NextResponse.json({ success: true });
   } catch (error) {

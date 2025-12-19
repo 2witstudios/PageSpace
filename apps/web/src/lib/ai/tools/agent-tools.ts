@@ -1,8 +1,12 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { db, pages, eq, and } from '@pagespace/db';
-import { canUserEditPage } from '@pagespace/lib/server';
-import { loggers } from '@pagespace/lib/server';
+import {
+  canUserEditPage,
+  logAgentConfigActivity,
+  getActorInfo,
+  loggers,
+  agentRepository,
+} from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { type ToolExecutionContext, pageSpaceTools } from '../core';
@@ -35,14 +39,8 @@ export const agentTools = {
       }
 
       try {
-        // Get the agent page
-        const agent = await db.query.pages.findFirst({
-          where: and(
-            eq(pages.id, agentId),
-            eq(pages.type, 'AI_CHAT'),
-            eq(pages.isTrashed, false)
-          ),
-        });
+        // Get the agent page via repository seam
+        const agent = await agentRepository.findById(agentId);
 
         if (!agent) {
           throw new Error(`AI agent with ID "${agentId}" not found`);
@@ -109,11 +107,8 @@ export const agentTools = {
           updateData.pageTreeScope = pageTreeScope;
         }
 
-        // Update the agent configuration
-        await db
-          .update(pages)
-          .set(updateData)
-          .where(eq(pages.id, agent.id));
+        // Update the agent configuration via repository seam
+        await agentRepository.updateConfig(agent.id, updateData);
 
         // Broadcast update event
         await broadcastPageEvent(
@@ -121,6 +116,21 @@ export const agentTools = {
             title: agent.title
           })
         );
+
+        // Log activity for AI-generated agent config update
+        const ctx = context as ToolExecutionContext;
+        const actorInfo = await getActorInfo(userId);
+        logAgentConfigActivity(userId, {
+          id: agent.id,
+          name: agent.title,
+          driveId: agent.driveId,
+        }, {
+          updatedFields: Object.keys(updateData).filter(key => key !== 'updatedAt'),
+          isAiGenerated: true,
+          aiProvider: ctx?.aiProvider,
+          aiModel: ctx?.aiModel,
+          aiConversationId: ctx?.conversationId,
+        }, actorInfo);
 
         return {
           success: true,

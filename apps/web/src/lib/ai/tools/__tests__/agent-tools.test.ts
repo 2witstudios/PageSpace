@@ -1,22 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { ToolExecutionContext } from '../../core';
 
-// Mock database and dependencies
-vi.mock('@pagespace/db', () => ({
-  db: {
-    update: vi.fn().mockReturnThis(),
-    set: vi.fn().mockReturnThis(),
-    where: vi.fn(),
-    query: {
-      pages: { findFirst: vi.fn() },
-    },
-  },
-  pages: { id: 'id', type: 'type' },
-  eq: vi.fn(),
-  and: vi.fn(),
-}));
-
+// Mock repository seams - the proper boundary for tests
 vi.mock('@pagespace/lib/server', () => ({
   canUserEditPage: vi.fn(),
+  logAgentConfigActivity: vi.fn(),
+  getActorInfo: vi.fn().mockResolvedValue({
+    actorEmail: 'test@example.com',
+    actorDisplayName: 'Test User',
+  }),
   loggers: {
     ai: {
       child: vi.fn(() => ({
@@ -26,6 +18,10 @@ vi.mock('@pagespace/lib/server', () => ({
         debug: vi.fn(),
       })),
     },
+  },
+  agentRepository: {
+    findById: vi.fn(),
+    updateConfig: vi.fn(),
   },
 }));
 
@@ -47,12 +43,12 @@ vi.mock('../../core', () => ({
 }));
 
 import { agentTools } from '../agent-tools';
-import { db } from '@pagespace/db';
-import { canUserEditPage } from '@pagespace/lib/server';
-import type { ToolExecutionContext } from '../../core';
+import { canUserEditPage, agentRepository } from '@pagespace/lib/server';
+import { broadcastPageEvent } from '@/lib/websocket';
 
-const mockDb = vi.mocked(db);
+const mockAgentRepository = vi.mocked(agentRepository);
 const mockCanUserEditPage = vi.mocked(canUserEditPage);
+const mockBroadcastPageEvent = vi.mocked(broadcastPageEvent);
 
 describe('agent-tools', () => {
   beforeEach(() => {
@@ -66,82 +62,128 @@ describe('agent-tools', () => {
     });
 
     it('requires user authentication', async () => {
+      // Arrange
       const context = { toolCallId: '1', messages: [], experimental_context: {} };
 
+      // Act & Assert
       await expect(
         agentTools.update_agent_config.execute!(
           { agentPath: '/drive/agent', agentId: 'agent-1' },
           context
         )
       ).rejects.toThrow('User authentication required');
+
+      // Repository should not be called without auth
+      expect(mockAgentRepository.findById).not.toHaveBeenCalled();
     });
 
     it('throws error when agent not found', async () => {
-      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(null);
+      // Arrange
+      mockAgentRepository.findById.mockResolvedValue(null);
 
       const context = {
-        toolCallId: '1', messages: [],
+        toolCallId: '1',
+        messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
+      // Act & Assert
       await expect(
         agentTools.update_agent_config.execute!(
           { agentPath: '/drive/agent', agentId: 'non-existent' },
           context
         )
       ).rejects.toThrow('AI agent with ID "non-existent" not found');
+
+      // Verify repository was queried with correct ID
+      expect(mockAgentRepository.findById).toHaveBeenCalledWith('non-existent');
     });
 
     it('throws error when user lacks permission', async () => {
-      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue({
+      // Arrange
+      const mockAgent = {
         id: 'agent-1',
         title: 'My Agent',
         type: 'AI_CHAT',
         driveId: 'drive-1',
         systemPrompt: null,
         enabledTools: null,
-      });
+        aiProvider: null,
+        aiModel: null,
+        agentDefinition: null,
+        visibleToGlobalAssistant: false,
+        includeDrivePrompt: false,
+        includePageTree: false,
+        pageTreeScope: null,
+      };
+      mockAgentRepository.findById.mockResolvedValue(mockAgent);
       mockCanUserEditPage.mockResolvedValue(false);
 
       const context = {
-        toolCallId: '1', messages: [],
+        toolCallId: '1',
+        messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
+      // Act & Assert
       await expect(
         agentTools.update_agent_config.execute!(
           { agentPath: '/drive/agent', agentId: 'agent-1' },
           context
         )
       ).rejects.toThrow('Insufficient permissions to update this AI agent');
+
+      // Verify permission check was called with correct params
+      expect(mockCanUserEditPage).toHaveBeenCalledWith('user-123', 'agent-1');
+      // Verify updateConfig was NOT called
+      expect(mockAgentRepository.updateConfig).not.toHaveBeenCalled();
     });
 
-    it('validates enabled tools', async () => {
-      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue({
+    it('validates enabled tools against available tools', async () => {
+      // Arrange
+      const mockAgent = {
         id: 'agent-1',
         title: 'My Agent',
         type: 'AI_CHAT',
         driveId: 'drive-1',
         systemPrompt: null,
         enabledTools: null,
-      });
+        aiProvider: null,
+        aiModel: null,
+        agentDefinition: null,
+        visibleToGlobalAssistant: false,
+        includeDrivePrompt: false,
+        includePageTree: false,
+        pageTreeScope: null,
+      };
+      mockAgentRepository.findById.mockResolvedValue(mockAgent);
       mockCanUserEditPage.mockResolvedValue(true);
 
       const context = {
-        toolCallId: '1', messages: [],
+        toolCallId: '1',
+        messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
+      // Act & Assert
       await expect(
         agentTools.update_agent_config.execute!(
-          { agentPath: '/drive/agent', agentId: 'agent-1', enabledTools: ['invalid_tool'] },
+          {
+            agentPath: '/drive/agent',
+            agentId: 'agent-1',
+            enabledTools: ['invalid_tool', 'also_invalid'],
+          },
           context
         )
       ).rejects.toThrow('Invalid tools specified');
+
+      // Verify updateConfig was NOT called due to validation failure
+      expect(mockAgentRepository.updateConfig).not.toHaveBeenCalled();
     });
 
-    it('updates agent configuration successfully', async () => {
-      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue({
+    it('updates agent configuration with system prompt and tools', async () => {
+      // Arrange
+      const mockAgent = {
         id: 'agent-1',
         title: 'My Agent',
         type: 'AI_CHAT',
@@ -150,14 +192,23 @@ describe('agent-tools', () => {
         enabledTools: null,
         aiProvider: null,
         aiModel: null,
-      });
+        agentDefinition: null,
+        visibleToGlobalAssistant: false,
+        includeDrivePrompt: false,
+        includePageTree: false,
+        pageTreeScope: null,
+      };
+      mockAgentRepository.findById.mockResolvedValue(mockAgent);
       mockCanUserEditPage.mockResolvedValue(true);
+      mockAgentRepository.updateConfig.mockResolvedValue();
 
       const context = {
-        toolCallId: '1', messages: [],
+        toolCallId: '1',
+        messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
+      // Act
       const result = await agentTools.update_agent_config.execute!(
         {
           agentPath: '/drive/agent',
@@ -168,13 +219,33 @@ describe('agent-tools', () => {
         context
       );
 
-      expect((result as { success: boolean }).success).toBe(true);
-      expect((result as { title: string }).title).toBe('My Agent');
-      expect((result as { agentConfig: { enabledToolsCount: number } }).agentConfig.enabledToolsCount).toBe(2);
+      // Assert - verify result payload
+      expect(result).toMatchObject({
+        success: true,
+        id: 'agent-1',
+        title: 'My Agent',
+        agentConfig: {
+          enabledToolsCount: 2,
+          enabledTools: ['list_drives', 'list_pages'],
+        },
+      });
+
+      // Assert - verify repository was called with correct data
+      expect(mockAgentRepository.updateConfig).toHaveBeenCalledWith(
+        'agent-1',
+        expect.objectContaining({
+          systemPrompt: 'New system prompt',
+          enabledTools: ['list_drives', 'list_pages'],
+        })
+      );
+
+      // Assert - verify broadcast was called
+      expect(mockBroadcastPageEvent).toHaveBeenCalled();
     });
 
     it('updates provider and model settings', async () => {
-      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue({
+      // Arrange
+      const mockAgent = {
         id: 'agent-1',
         title: 'My Agent',
         type: 'AI_CHAT',
@@ -183,14 +254,23 @@ describe('agent-tools', () => {
         enabledTools: null,
         aiProvider: null,
         aiModel: null,
-      });
+        agentDefinition: null,
+        visibleToGlobalAssistant: false,
+        includeDrivePrompt: false,
+        includePageTree: false,
+        pageTreeScope: null,
+      };
+      mockAgentRepository.findById.mockResolvedValue(mockAgent);
       mockCanUserEditPage.mockResolvedValue(true);
+      mockAgentRepository.updateConfig.mockResolvedValue();
 
       const context = {
-        toolCallId: '1', messages: [],
+        toolCallId: '1',
+        messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
+      // Act
       const result = await agentTools.update_agent_config.execute!(
         {
           agentPath: '/drive/agent',
@@ -201,10 +281,105 @@ describe('agent-tools', () => {
         context
       );
 
-      expect((result as { success: boolean }).success).toBe(true);
-      expect((result as { agentConfig: { aiProvider: string } }).agentConfig.aiProvider).toBe('google');
-      expect((result as { agentConfig: { aiModel: string } }).agentConfig.aiModel).toBe('gemini-pro');
+      // Assert - verify result contains updated provider/model
+      expect(result).toMatchObject({
+        success: true,
+        agentConfig: {
+          aiProvider: 'google',
+          aiModel: 'gemini-pro',
+        },
+      });
 
+      // Assert - verify repository received correct update data
+      expect(mockAgentRepository.updateConfig).toHaveBeenCalledWith(
+        'agent-1',
+        expect.objectContaining({
+          aiProvider: 'google',
+          aiModel: 'gemini-pro',
+        })
+      );
+    });
+
+    it('updates visibility and context settings', async () => {
+      // Arrange
+      const mockAgent = {
+        id: 'agent-1',
+        title: 'My Agent',
+        type: 'AI_CHAT',
+        driveId: 'drive-1',
+        systemPrompt: null,
+        enabledTools: null,
+        aiProvider: null,
+        aiModel: null,
+        agentDefinition: null,
+        visibleToGlobalAssistant: false,
+        includeDrivePrompt: false,
+        includePageTree: false,
+        pageTreeScope: null,
+      };
+      mockAgentRepository.findById.mockResolvedValue(mockAgent);
+      mockCanUserEditPage.mockResolvedValue(true);
+      mockAgentRepository.updateConfig.mockResolvedValue();
+
+      const context = {
+        toolCallId: '1',
+        messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      // Act
+      const result = await agentTools.update_agent_config.execute!(
+        {
+          agentPath: '/drive/agent',
+          agentId: 'agent-1',
+          visibleToGlobalAssistant: true,
+          includeDrivePrompt: true,
+          includePageTree: true,
+          pageTreeScope: 'drive',
+        },
+        context
+      );
+
+      // Assert
+      expect(result).toMatchObject({
+        success: true,
+        updatedFields: expect.arrayContaining([
+          'visibleToGlobalAssistant',
+          'includeDrivePrompt',
+          'includePageTree',
+          'pageTreeScope',
+        ]),
+      });
+
+      // Verify repository received correct update data
+      expect(mockAgentRepository.updateConfig).toHaveBeenCalledWith(
+        'agent-1',
+        expect.objectContaining({
+          visibleToGlobalAssistant: true,
+          includeDrivePrompt: true,
+          includePageTree: true,
+          pageTreeScope: 'drive',
+        })
+      );
+    });
+
+    it('handles repository errors gracefully', async () => {
+      // Arrange
+      mockAgentRepository.findById.mockRejectedValue(new Error('Database connection failed'));
+
+      const context = {
+        toolCallId: '1',
+        messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      // Act & Assert
+      await expect(
+        agentTools.update_agent_config.execute!(
+          { agentPath: '/drive/agent', agentId: 'agent-1' },
+          context
+        )
+      ).rejects.toThrow('Failed to update agent configuration');
     });
   });
 });

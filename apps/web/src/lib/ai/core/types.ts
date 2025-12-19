@@ -8,6 +8,9 @@ import { ModelCapabilities } from './model-capabilities';
 export interface ToolExecutionContext {
   userId: string;
   conversationId?: string;
+  // AI attribution for activity logging
+  aiProvider?: string;
+  aiModel?: string;
   locationContext?: {
     currentPage?: {
       id: string;

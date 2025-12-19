@@ -148,6 +148,20 @@
       "when": 1765606395898,
       "tag": "0020_free_blockbuster",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1766082406540,
+      "tag": "0021_bright_big_bertha",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1766166031436,
+      "tag": "0022_funny_oracle",
+      "breakpoints": true
     }
   ]
 }
