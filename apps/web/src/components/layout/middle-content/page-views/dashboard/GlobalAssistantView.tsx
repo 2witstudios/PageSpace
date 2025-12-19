@@ -459,7 +459,15 @@ const GlobalAssistantView: React.FC = () => {
 
   // Show provider setup if needed
   if (needsSetup) {
-    return <ProviderSetupCard mode="redirect" onOpenSettings={handleOpenActivity} />;
+    return (
+      <ProviderSetupCard
+        mode="inline"
+        onApiKeySubmit={(provider) => {
+          // Reload settings after API key submission to detect newly configured provider
+          loadSettings();
+        }}
+      />
+    );
   }
 
   return (

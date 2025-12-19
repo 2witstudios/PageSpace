@@ -395,7 +395,8 @@ export const activityLogs = pgTable('activity_logs', {
   resourceTitle: text('resourceTitle'),
 
   // Hierarchical context (for filtering)
-  driveId: text('driveId').notNull().references(() => drives.id, { onDelete: 'cascade' }),
+  // Note: Using 'set null' to preserve audit trail if drive/page is hard-deleted
+  driveId: text('driveId').references(() => drives.id, { onDelete: 'set null' }),
   pageId: text('pageId').references(() => pages.id, { onDelete: 'set null' }),
 
   // Content snapshot for future rollback support
