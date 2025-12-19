@@ -2,9 +2,13 @@ import { useEffect, useRef } from 'react';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { UIMessage } from 'ai';
-import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
 import { AgentInfo, isValidAgentInfo } from '@/types/agent';
+import {
+  createAgentConversation,
+  fetchAgentConversationMessages,
+  fetchMostRecentAgentConversation,
+} from '@/lib/ai/shared';
 
 /**
  * SidebarAgentInfo is now an alias for the shared AgentInfo type.
@@ -231,35 +235,19 @@ export function usePageAgentSidebarState(): UseSidebarAgentStateReturn {
 
       // Try to load most recent conversation
       try {
-        const response = await fetchWithAuth(
-          `/api/ai/page-agents/${selectedAgent.id}/conversations?limit=1`
-        );
+        const mostRecent = await fetchMostRecentAgentConversation(selectedAgent.id);
 
         // Abort if agent changed during fetch
         if (loadingAgentIdRef.current !== currentAgentId) return;
 
-        if (response.ok) {
-          const data = await response.json();
-          if (data.conversations && data.conversations.length > 0) {
-            const mostRecent = data.conversations[0];
-            // Load messages
-            const messagesResponse = await fetchWithAuth(
-              `/api/ai/page-agents/${selectedAgent.id}/conversations/${mostRecent.id}/messages`
-            );
+        if (mostRecent) {
+          const messages = await fetchAgentConversationMessages(selectedAgent.id, mostRecent.id);
 
-            // Abort if agent changed during fetch
-            if (loadingAgentIdRef.current !== currentAgentId) return;
+          // Abort if agent changed during fetch
+          if (loadingAgentIdRef.current !== currentAgentId) return;
 
-            if (messagesResponse.ok) {
-              const messagesData = await messagesResponse.json();
-              setConversationLoaded(
-                mostRecent.id,
-                messagesData.messages || [],
-                selectedAgent.id
-              );
-              return;
-            }
-          }
+          setConversationLoaded(mostRecent.id, messages, selectedAgent.id);
+          return;
         }
       } catch (error) {
         // Abort if agent changed during error handling
@@ -272,25 +260,12 @@ export function usePageAgentSidebarState(): UseSidebarAgentStateReturn {
 
       // No existing conversation - create new one
       try {
-        const response = await fetchWithAuth(
-          `/api/ai/page-agents/${selectedAgent.id}/conversations`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({}),
-          }
-        );
+        const newConversationId = await createAgentConversation(selectedAgent.id);
 
         // Abort if agent changed during fetch
         if (loadingAgentIdRef.current !== currentAgentId) return;
 
-        if (response.ok) {
-          const data = await response.json();
-          const newConversationId = data.conversationId || data.id;
-          setConversationCreated(newConversationId, selectedAgent.id);
-        } else {
-          throw new Error('Failed to create conversation');
-        }
+        setConversationCreated(newConversationId, selectedAgent.id);
       } catch (error) {
         // Abort if agent changed during error handling
         if (loadingAgentIdRef.current !== currentAgentId) return;
@@ -319,20 +294,9 @@ export function usePageAgentSidebarState(): UseSidebarAgentStateReturn {
     if (!agent) return null;
 
     try {
-      const response = await fetchWithAuth(
-        `/api/ai/page-agents/${agent.id}/conversations`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({}),
-        }
-      );
-      if (response.ok) {
-        const data = await response.json();
-        const newConversationId = data.conversationId || data.id;
-        store.setConversationCreated(newConversationId, agent.id);
-        return newConversationId;
-      }
+      const newConversationId = await createAgentConversation(agent.id);
+      store.setConversationCreated(newConversationId, agent.id);
+      return newConversationId;
     } catch (error) {
       console.error('Failed to create new conversation:', error);
       toast.error('Failed to create new conversation');
@@ -349,13 +313,8 @@ export function usePageAgentSidebarState(): UseSidebarAgentStateReturn {
     if (!agent || !conversationId) return;
 
     try {
-      const response = await fetchWithAuth(
-        `/api/ai/page-agents/${agent.id}/conversations/${conversationId}/messages`
-      );
-      if (response.ok) {
-        const data = await response.json();
-        store.updateMessages(data.messages || []);
-      }
+      const messages = await fetchAgentConversationMessages(agent.id, conversationId);
+      store.updateMessages(messages);
     } catch (error) {
       console.error('Failed to refresh agent conversation:', error);
     }

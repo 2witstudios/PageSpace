@@ -49,7 +49,14 @@ const fetcher = async (url: string) => {
 
 export function usePageTree(driveId?: string, trashView?: boolean) {
   const swrKey = driveId ? (trashView ? `/api/drives/${encodeURIComponent(driveId)}/trash` : `/api/drives/${encodeURIComponent(driveId)}/pages`) : null;
-  const { data, error, mutate } = useSWR<TreePage[]>(swrKey, fetcher);
+  const isAnyActive = useEditingStore(state => state.isAnyActive());
+  const { data, error, mutate } = useSWR<TreePage[]>(
+    swrKey,
+    fetcher,
+    {
+      isPaused: () => isAnyActive,
+    }
+  );
   const { cache } = useSWRConfig();
 
   const [childLoadingMap, setChildLoadingMap] = useState<Record<string, boolean>>({});
