@@ -730,7 +730,7 @@ export const pageWriteTools = {
 
         // Update the page's parent and position via repository seam
         const movedPage = await pageRepository.update(page.id, {
-          parentId: newParentId,
+          parentId: newParentId ?? null,
           position: position,
         });
 

@@ -78,12 +78,14 @@ vi.mock('@/lib/logging/mask', () => ({
 }));
 
 import { pageWriteTools } from '../page-write-tools';
-import { canUserEditPage, pageRepository, driveRepository } from '@pagespace/lib/server';
+import { canUserEditPage, pageRepository, driveRepository, logPageActivity, logDriveActivity } from '@pagespace/lib/server';
 import type { ToolExecutionContext } from '../../core';
 
 const mockCanUserEditPage = vi.mocked(canUserEditPage);
 const mockPageRepo = vi.mocked(pageRepository);
 const mockDriveRepo = vi.mocked(driveRepository);
+const mockLogPageActivity = vi.mocked(logPageActivity);
+const mockLogDriveActivity = vi.mocked(logDriveActivity);
 
 describe('page-write-tools', () => {
   beforeEach(() => {
@@ -234,6 +236,9 @@ describe('page-write-tools', () => {
       expect(mockPageRepo.update).toHaveBeenCalledWith('page-1', {
         content: 'Line 1\nNew Line 2\nLine 3',
       });
+
+      // Verify activity logging was called (fire-and-forget)
+      expect(mockLogPageActivity).toHaveBeenCalled();
     });
   });
 
@@ -316,6 +321,9 @@ describe('page-write-tools', () => {
         parentId: null,
         isTrashed: false,
       });
+
+      // Verify activity logging was called (fire-and-forget)
+      expect(mockLogPageActivity).toHaveBeenCalled();
     });
   });
 
@@ -374,6 +382,9 @@ describe('page-write-tools', () => {
       expect(success.success).toBe(true);
       expect(success.title).toBe('New Title');
       expect(mockPageRepo.update).toHaveBeenCalledWith('page-1', { title: 'New Title' });
+
+      // Verify activity logging was called (fire-and-forget)
+      expect(mockLogPageActivity).toHaveBeenCalled();
     });
   });
 
