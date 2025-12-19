@@ -462,7 +462,7 @@ const GlobalAssistantView: React.FC = () => {
     return (
       <ProviderSetupCard
         mode="inline"
-        onApiKeySubmit={(provider) => {
+        onApiKeySubmit={(_provider) => {
           // Reload settings after API key submission to detect newly configured provider
           loadSettings();
         }}
