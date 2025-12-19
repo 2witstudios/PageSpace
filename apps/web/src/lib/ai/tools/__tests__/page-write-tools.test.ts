@@ -29,6 +29,8 @@ vi.mock('@pagespace/db', () => ({
 vi.mock('@pagespace/lib/server', () => ({
   canUserEditPage: vi.fn(),
   canUserDeletePage: vi.fn(),
+  logPageActivity: vi.fn(),
+  logDriveActivity: vi.fn(),
   PageType: {
     FOLDER: 'FOLDER',
     DOCUMENT: 'DOCUMENT',

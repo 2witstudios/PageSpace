@@ -37,6 +37,7 @@ vi.mock('@/lib/auth', () => ({
 
 vi.mock('@pagespace/lib', () => ({
   createPermissionNotification: vi.fn(),
+  logPermissionActivity: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
@@ -48,6 +49,18 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+}));
+
+vi.mock('@pagespace/db', () => ({
+  db: {
+    query: {
+      pages: {
+        findFirst: vi.fn().mockResolvedValue({ driveId: 'drive_123', title: 'Test Page' }),
+      },
+    },
+  },
+  pages: { id: 'id' },
+  eq: vi.fn(),
 }));
 
 import { permissionManagementService } from '@/services/api';
