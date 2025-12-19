@@ -17,6 +17,7 @@ import {
   getActorInfo,
   pageRepository,
   driveRepository,
+  type ActivityOperation,
 } from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload, broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { type ToolExecutionContext } from '../core';
@@ -24,16 +25,64 @@ import { maskIdentifier } from '@/lib/logging/mask';
 
 const pageWriteLogger = loggers.ai.child({ module: 'page-write-tools' });
 
-// Helper: Extract AI attribution context with actor info for activity logging
-async function getAiContextWithActor(context: ToolExecutionContext) {
-  const actorInfo = await getActorInfo(context.userId);
-  return {
-    ...actorInfo,
-    isAiGenerated: true,
-    aiProvider: context.aiProvider,
-    aiModel: context.aiModel,
-    aiConversationId: context.conversationId,
-  };
+// Helper: Non-blocking activity logging with AI context (fire-and-forget)
+function logPageActivityAsync(
+  userId: string,
+  action: ActivityOperation,
+  page: { id: string; title: string; driveId: string; content?: string },
+  context: ToolExecutionContext,
+  metadata?: Record<string, unknown>
+) {
+  getActorInfo(context.userId)
+    .then(actorInfo => {
+      logPageActivity(userId, action, page, {
+        ...actorInfo,
+        isAiGenerated: true,
+        aiProvider: context.aiProvider ?? 'unknown',
+        aiModel: context.aiModel ?? 'unknown',
+        aiConversationId: context.conversationId,
+        metadata,
+      });
+    })
+    .catch(err => {
+      pageWriteLogger.warn('Failed to get actor info for logging', { error: err });
+      // Still log the activity without actor info
+      logPageActivity(userId, action, page, {
+        isAiGenerated: true,
+        aiProvider: context.aiProvider ?? 'unknown',
+        aiModel: context.aiModel ?? 'unknown',
+        aiConversationId: context.conversationId,
+        metadata,
+      });
+    });
+}
+
+// Helper: Non-blocking drive activity logging with AI context (fire-and-forget)
+function logDriveActivityAsync(
+  userId: string,
+  action: ActivityOperation,
+  drive: { id: string; name: string },
+  context: ToolExecutionContext
+) {
+  getActorInfo(context.userId)
+    .then(actorInfo => {
+      logDriveActivity(userId, action, drive, {
+        ...actorInfo,
+        isAiGenerated: true,
+        aiProvider: context.aiProvider ?? 'unknown',
+        aiModel: context.aiModel ?? 'unknown',
+        aiConversationId: context.conversationId,
+      });
+    })
+    .catch(err => {
+      pageWriteLogger.warn('Failed to get actor info for drive logging', { error: err });
+      logDriveActivity(userId, action, drive, {
+        isAiGenerated: true,
+        aiProvider: context.aiProvider ?? 'unknown',
+        aiModel: context.aiModel ?? 'unknown',
+        aiConversationId: context.conversationId,
+      });
+    });
 }
 
 // Helper: Trash a single page or recursively with children
@@ -257,18 +306,15 @@ export const pageWriteTools = {
           })
         );
 
-        // Log activity for AI-generated content update
-        logPageActivity(userId, 'update', {
+        // Log activity for AI-generated content update (fire-and-forget)
+        logPageActivityAsync(userId, 'update', {
           id: page.id,
           title: page.title,
           driveId: page.driveId,
           content: newContent,
-        }, {
-          ...await getAiContextWithActor(context as ToolExecutionContext),
-          metadata: {
-            linesChanged: endLine - startLine + 1,
-            changeType: isDeletion ? 'deletion' : 'replacement',
-          },
+        }, context as ToolExecutionContext, {
+          linesChanged: endLine - startLine + 1,
+          changeType: isDeletion ? 'deletion' : 'replacement',
         });
 
         return {
@@ -374,15 +420,12 @@ export const pageWriteTools = {
           })
         );
 
-        // Log activity for AI-generated page creation
-        logPageActivity(userId, 'create', {
+        // Log activity for AI-generated page creation (fire-and-forget)
+        logPageActivityAsync(userId, 'create', {
           id: newPage.id,
           title: newPage.title,
           driveId: drive.id,
-        }, {
-          ...await getAiContextWithActor(context as ToolExecutionContext),
-          metadata: { pageType: newPage.type, parentId },
-        });
+        }, context as ToolExecutionContext, { pageType: newPage.type, parentId });
 
         // Build response
         const nextSteps: string[] = [];
@@ -464,15 +507,12 @@ export const pageWriteTools = {
           })
         );
 
-        // Log activity for AI-generated rename
-        logPageActivity(userId, 'update', {
+        // Log activity for AI-generated rename (fire-and-forget)
+        logPageActivityAsync(userId, 'update', {
           id: renamedPage.id,
           title: renamedPage.title,
           driveId: page.driveId,
-        }, {
-          ...await getAiContextWithActor(context as ToolExecutionContext),
-          updatedFields: ['title'],
-        });
+        }, context as ToolExecutionContext, { updatedFields: ['title'] });
 
         return {
           success: true,
@@ -525,15 +565,12 @@ export const pageWriteTools = {
         if (type === 'page') {
           const { page, childrenCount } = await trashPage(userId, id, withChildren);
 
-          // Log activity for AI-generated trash operation
-          logPageActivity(userId, 'trash', {
+          // Log activity for AI-generated trash operation (fire-and-forget)
+          logPageActivityAsync(userId, 'trash', {
             id: page.id,
             title: page.title,
             driveId: page.driveId,
-          }, {
-            ...await getAiContextWithActor(context as ToolExecutionContext),
-            metadata: { withChildren, childrenCount },
-          });
+          }, context as ToolExecutionContext, { withChildren, childrenCount });
 
           return {
             success: true,
@@ -553,13 +590,11 @@ export const pageWriteTools = {
           }
           const drive = await trashDrive(userId, id, confirmDriveName);
 
-          // Log activity for AI-generated drive trash
-          logDriveActivity(userId, 'trash', {
+          // Log activity for AI-generated drive trash (fire-and-forget)
+          logDriveActivityAsync(userId, 'trash', {
             id: drive.id,
             name: drive.name,
-          }, {
-            ...await getAiContextWithActor(context as ToolExecutionContext),
-          });
+          }, context as ToolExecutionContext);
 
           return {
             success: true,
@@ -601,12 +636,12 @@ export const pageWriteTools = {
         if (type === 'page') {
           const page = await restorePage(userId, id);
 
-          // Log activity for AI-generated restore operation
-          logPageActivity(userId, 'restore', {
+          // Log activity for AI-generated restore operation (fire-and-forget)
+          logPageActivityAsync(userId, 'restore', {
             id: page.id,
             title: page.title,
             driveId: page.driveId,
-          }, await getAiContextWithActor(context as ToolExecutionContext));
+          }, context as ToolExecutionContext);
 
           return {
             success: true,
@@ -619,11 +654,11 @@ export const pageWriteTools = {
         } else {
           const drive = await restoreDrive(userId, id);
 
-          // Log activity for AI-generated drive restore
-          logDriveActivity(userId, 'restore', {
+          // Log activity for AI-generated drive restore (fire-and-forget)
+          logDriveActivityAsync(userId, 'restore', {
             id: drive.id,
             name: drive.name,
-          }, await getAiContextWithActor(context as ToolExecutionContext));
+          }, context as ToolExecutionContext);
 
           return {
             success: true,
@@ -707,15 +742,12 @@ export const pageWriteTools = {
           })
         );
 
-        // Log activity for AI-generated move operation
-        logPageActivity(userId, 'move', {
+        // Log activity for AI-generated move operation (fire-and-forget)
+        logPageActivityAsync(userId, 'move', {
           id: movedPage.id,
           title: movedPage.title,
           driveId: page.driveId,
-        }, {
-          ...await getAiContextWithActor(context as ToolExecutionContext),
-          metadata: { newParentId, position },
-        });
+        }, context as ToolExecutionContext, { newParentId, position });
 
         return {
           success: true,
@@ -812,16 +844,13 @@ export const pageWriteTools = {
           })
         );
 
-        // Log activity for AI-generated sheet edit
-        logPageActivity(userId, 'update', {
+        // Log activity for AI-generated sheet edit (fire-and-forget)
+        logPageActivityAsync(userId, 'update', {
           id: page.id,
           title: page.title,
           driveId: page.driveId,
           content: newContent,
-        }, {
-          ...await getAiContextWithActor(context as ToolExecutionContext),
-          metadata: { cellsUpdated: cells.length },
-        });
+        }, context as ToolExecutionContext, { cellsUpdated: cells.length });
 
         // Summarize changes for response
         const formulaCount = cells.filter(c => c.value.trim().startsWith('=')).length;

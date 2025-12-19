@@ -225,8 +225,9 @@ describe('page-write-tools', () => {
 
       // Assert: observable outcomes
       if ('error' in result) throw new Error(`Expected success but got error: ${result.error}`);
-      expect(result.success).toBe(true);
-      expect(result.linesReplaced).toBe(1);
+      const success = result as { success: boolean; linesReplaced: number };
+      expect(success.success).toBe(true);
+      expect(success.linesReplaced).toBe(1);
 
       // Verify repository interactions with correct payloads
       expect(mockCanUserEditPage).toHaveBeenCalledWith('user-123', 'page-1');
@@ -300,9 +301,10 @@ describe('page-write-tools', () => {
 
       // Assert: observable outcomes
       if ('error' in result) throw new Error(`Expected success but got error`);
-      expect(result.success).toBe(true);
-      expect(result.id).toBe('new-page-1');
-      expect(result.title).toBe('New Page');
+      const success = result as { success: boolean; id: string; title: string };
+      expect(success.success).toBe(true);
+      expect(success.id).toBe('new-page-1');
+      expect(success.title).toBe('New Page');
 
       // Verify repository was called with correct payload
       expect(mockPageRepo.create).toHaveBeenCalledWith({
@@ -368,8 +370,9 @@ describe('page-write-tools', () => {
 
       // Assert
       if ('error' in result) throw new Error('Expected success');
-      expect(result.success).toBe(true);
-      expect(result.title).toBe('New Title');
+      const success = result as { success: boolean; title: string };
+      expect(success.success).toBe(true);
+      expect(success.title).toBe('New Title');
       expect(mockPageRepo.update).toHaveBeenCalledWith('page-1', { title: 'New Title' });
     });
   });
