@@ -1,43 +1,28 @@
 /**
- * Repository for authentication-related database operations.
- * This seam isolates query-builder details from route handlers,
- * enabling proper unit testing of auth routes without ORM chain mocking.
+ * Auth Repository - Clean seam for authentication operations
+ *
+ * Provides testable boundary for auth-related database operations.
+ * Tests should mock this repository, not the ORM chains.
+ *
+ * User type is derived from the Drizzle schema to ensure type safety
+ * and prevent mismatches between the interface and database columns.
  */
 
-import {
-  db,
-  users,
-  refreshTokens,
-  deviceTokens,
-  eq,
-  and,
-  isNull,
-  sql,
-  type InferSelectModel,
-} from '@pagespace/db';
-import { createId } from '@paralleldrive/cuid2';
+import { db, users, eq, sql, InferSelectModel } from '@pagespace/db';
 
-// Types derived from Drizzle schema - ensures type safety without manual definitions
+// Derive User type directly from the schema - ensures type safety
 export type User = InferSelectModel<typeof users>;
-export type RefreshToken = InferSelectModel<typeof refreshTokens>;
-export type RefreshTokenWithUser = RefreshToken & { user: User };
 
-export type PlatformType = 'web' | 'desktop' | 'ios' | 'android';
-
-export interface CreateRefreshTokenInput {
-  token: string;
-  userId: string;
-  device?: string | null;
-  userAgent?: string | null;
-  ip?: string;
-  expiresAt: Date;
-  deviceTokenId?: string;
-  platform?: PlatformType;
-}
+// Subset type for auth operations that only need specific fields
+export type AuthUser = Pick<
+  User,
+  'id' | 'email' | 'name' | 'password' | 'tokenVersion' | 'role' | 'emailVerified' | 'provider'
+>;
 
 export const authRepository = {
   /**
-   * Find a user by email address
+   * Find user by email address
+   * Returns the full user record or null if not found
    */
   async findUserByEmail(email: string): Promise<User | null> {
     const user = await db.query.users.findFirst({
@@ -47,66 +32,61 @@ export const authRepository = {
   },
 
   /**
-   * Find a user by ID
+   * Find user by ID
+   * Returns the full user record or null if not found
    */
-  async findUserById(userId: string): Promise<User | null> {
+  async findUserById(id: string): Promise<User | null> {
     const user = await db.query.users.findFirst({
-      where: eq(users.id, userId),
+      where: eq(users.id, id),
     });
     return user ?? null;
   },
 
   /**
-   * Store a new refresh token in the database
+   * Find user by email with only auth-relevant fields
+   * More efficient for login flows that don't need all columns
    */
-  async createRefreshToken(input: CreateRefreshTokenInput): Promise<void> {
-    await db.insert(refreshTokens).values({
-      id: createId(),
-      token: input.token,
-      userId: input.userId,
-      device: input.device,
-      userAgent: input.userAgent,
-      ip: input.ip,
-      lastUsedAt: new Date(),
-      platform: input.platform ?? 'web',
-      expiresAt: input.expiresAt,
-      deviceTokenId: input.deviceTokenId,
-    });
-  },
-
-  /**
-   * Find a refresh token with its associated user (for refresh flow)
-   */
-  async findRefreshTokenWithUser(
-    token: string
-  ): Promise<RefreshTokenWithUser | null> {
-    const record = await db.query.refreshTokens.findFirst({
-      where: eq(refreshTokens.token, token),
-      with: {
-        user: true,
+  async findAuthUserByEmail(email: string): Promise<AuthUser | null> {
+    const user = await db.query.users.findFirst({
+      where: eq(users.email, email),
+      columns: {
+        id: true,
+        email: true,
+        name: true,
+        password: true,
+        tokenVersion: true,
+        role: true,
+        emailVerified: true,
+        provider: true,
       },
     });
-    return record ?? null;
+    return user ?? null;
   },
 
   /**
-   * Delete a refresh token by its value (for token rotation)
+   * Find user by ID with only auth-relevant fields
    */
-  async deleteRefreshToken(token: string): Promise<void> {
-    await db.delete(refreshTokens).where(eq(refreshTokens.token, token));
+  async findAuthUserById(id: string): Promise<AuthUser | null> {
+    const user = await db.query.users.findFirst({
+      where: eq(users.id, id),
+      columns: {
+        id: true,
+        email: true,
+        name: true,
+        password: true,
+        tokenVersion: true,
+        role: true,
+        emailVerified: true,
+        provider: true,
+      },
+    });
+    return user ?? null;
   },
 
   /**
-   * Delete all refresh tokens for a user (for logout all devices)
+   * Increment user's token version to invalidate all existing tokens
    */
-  async deleteAllUserRefreshTokens(userId: string): Promise<void> {
-    await db.delete(refreshTokens).where(eq(refreshTokens.userId, userId));
-  },
-
-  /**
-   * Increment user's token version (invalidates all existing tokens)
-   */
-  async incrementUserTokenVersion(userId: string): Promise<void> {
+  async incrementTokenVersion(userId: string): Promise<void> {
     await db
       .update(users)
       .set({ tokenVersion: sql`${users.tokenVersion} + 1` })
@@ -114,27 +94,12 @@ export const authRepository = {
   },
 
   /**
-   * Revoke all device tokens for a user (marks as revoked)
+   * Update user's email verification timestamp
    */
-  async revokeAllUserDeviceTokens(userId: string): Promise<void> {
-    await db
-      .update(deviceTokens)
-      .set({ revokedAt: new Date() })
-      .where(
-        and(eq(deviceTokens.userId, userId), isNull(deviceTokens.revokedAt))
-      );
-  },
-
-  /**
-   * Update user's token version (for security invalidation)
-   */
-  async updateUserTokenVersion(
-    userId: string,
-    newVersion: number
-  ): Promise<void> {
+  async markEmailVerified(userId: string): Promise<void> {
     await db
       .update(users)
-      .set({ tokenVersion: newVersion })
+      .set({ emailVerified: new Date() })
       .where(eq(users.id, userId));
   },
 };
