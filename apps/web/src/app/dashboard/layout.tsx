@@ -5,6 +5,7 @@ import Layout from "@/components/layout/Layout";
 
 // Routes that render full-page content instead of CenterPanel
 const FULL_PAGE_ROUTES = [
+  '/dashboard/activity',
   '/dashboard/connections',
   '/dashboard/messages',
   '/dashboard/storage',
