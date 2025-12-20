@@ -1,12 +1,11 @@
+import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 
 // Mock Streamdown with a simple implementation that passes children through
 vi.mock('streamdown', () => ({
   Streamdown: ({ children, mode, className }: { children: string; mode: string; className?: string }) => (
-    <div data-testid="streamdown" data-mode={mode} className={className}>
-      {children}
-    </div>
+    React.createElement('div', { 'data-testid': 'streamdown', 'data-mode': mode, className }, children)
   ),
 }));
 
