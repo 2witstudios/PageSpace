@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,25 @@ export default function SignUp() {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState("Creating account...");
+  const [loginCsrfToken, setLoginCsrfToken] = useState<string | null>(null);
+
+  // Fetch login CSRF token on mount (prevents Login CSRF attacks)
+  useEffect(() => {
+    const fetchCsrfToken = async () => {
+      try {
+        const response = await fetch('/api/auth/login-csrf', {
+          credentials: 'include',
+        });
+        if (response.ok) {
+          const data = await response.json();
+          setLoginCsrfToken(data.csrfToken);
+        }
+      } catch (error) {
+        console.error('Failed to fetch login CSRF token:', error);
+      }
+    };
+    fetchCsrfToken();
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -60,6 +79,7 @@ export default function SignUp() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...(loginCsrfToken && { "X-Login-CSRF-Token": loginCsrfToken }),
         },
         body: JSON.stringify({
           name,

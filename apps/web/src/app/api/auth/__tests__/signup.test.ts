@@ -90,6 +90,12 @@ vi.mock('@paralleldrive/cuid2', () => ({
 
 vi.mock('cookie', () => ({
   serialize: vi.fn().mockReturnValue('mock-cookie'),
+  parse: vi.fn(() => ({ login_csrf: 'valid-csrf-token' })),
+}));
+
+// Mock login CSRF validation
+vi.mock('../login-csrf/route', () => ({
+  validateLoginCSRFToken: vi.fn(() => true),
 }));
 
 vi.mock('@/lib/onboarding/getting-started-drive', () => ({
@@ -129,6 +135,23 @@ describe('/api/auth/signup', () => {
     acceptedTos: true,
   };
 
+  // Helper function to create requests with CSRF headers
+  const createSignupRequest = (
+    payload: Record<string, unknown>,
+    additionalHeaders: Record<string, string> = {}
+  ) => {
+    return new Request('http://localhost/api/auth/signup', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Login-CSRF-Token': 'valid-csrf-token',
+        'Cookie': 'login_csrf=valid-csrf-token',
+        ...additionalHeaders,
+      },
+      body: JSON.stringify(payload),
+    });
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
 
@@ -140,11 +163,7 @@ describe('/api/auth/signup', () => {
   describe('with valid input', () => {
     it('returns 303 redirect to dashboard on successful signup', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload),
-      });
+      const request = createSignupRequest(validSignupPayload);
 
       // Act
       const response = await POST(request);
@@ -156,11 +175,7 @@ describe('/api/auth/signup', () => {
 
     it('sets httpOnly cookies for accessToken and refreshToken', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload),
-      });
+      const request = createSignupRequest(validSignupPayload);
 
       // Act
       const response = await POST(request);
@@ -195,11 +210,7 @@ describe('/api/auth/signup', () => {
 
     it('hashes password with bcrypt cost factor 12', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload),
-      });
+      const request = createSignupRequest(validSignupPayload);
 
       // Act
       await POST(request);
@@ -235,11 +246,7 @@ describe('/api/auth/signup', () => {
       });
       (db.insert as Mock).mockReturnValue({ values: mockValues });
 
-      const request = new Request('http://localhost/api/auth/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload),
-      });
+      const request = createSignupRequest(validSignupPayload);
 
       // Act
       await POST(request);
@@ -256,11 +263,7 @@ describe('/api/auth/signup', () => {
 
     it('creates a personal drive for new user', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload),
-      });
+      const request = createSignupRequest(validSignupPayload);
 
       // Act
       await POST(request);
@@ -270,11 +273,7 @@ describe('/api/auth/signup', () => {
 
     it('sends verification email', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload),
-      });
+      const request = createSignupRequest(validSignupPayload);
 
       // Act
       await POST(request);
@@ -291,11 +290,7 @@ describe('/api/auth/signup', () => {
 
     it('creates notification for email verification', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload),
-      });
+      const request = createSignupRequest(validSignupPayload);
 
       // Act
       await POST(request);
@@ -311,13 +306,8 @@ describe('/api/auth/signup', () => {
 
     it('logs successful signup event', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/signup', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-forwarded-for': '192.168.1.1',
-        },
-        body: JSON.stringify(validSignupPayload),
+      const request = createSignupRequest(validSignupPayload, {
+        'x-forwarded-for': '192.168.1.1',
       });
 
       // Act
@@ -342,13 +332,8 @@ describe('/api/auth/signup', () => {
 
     it('resets rate limits on successful signup', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/signup', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-forwarded-for': '192.168.1.1',
-        },
-        body: JSON.stringify(validSignupPayload),
+      const request = createSignupRequest(validSignupPayload, {
+        'x-forwarded-for': '192.168.1.1',
       });
 
       // Act
@@ -361,11 +346,7 @@ describe('/api/auth/signup', () => {
 
     it('generates tokens for automatic authentication', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload),
-      });
+      const request = createSignupRequest(validSignupPayload);
 
       // Act
       await POST(request);
@@ -379,11 +360,7 @@ describe('/api/auth/signup', () => {
       // Arrange
       (sendEmail as Mock).mockRejectedValue(new Error('SMTP error'));
 
-      const request = new Request('http://localhost/api/auth/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload),
-      });
+      const request = createSignupRequest(validSignupPayload);
 
       // Act
       const response = await POST(request);
@@ -399,11 +376,7 @@ describe('/api/auth/signup', () => {
         new Error('Database error')
       );
 
-      const request = new Request('http://localhost/api/auth/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload),
-      });
+      const request = createSignupRequest(validSignupPayload);
 
       // Act
       const response = await POST(request);
@@ -428,11 +401,7 @@ describe('/api/auth/signup', () => {
         email: 'new@example.com',
       });
 
-      const request = new Request('http://localhost/api/auth/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload),
-      });
+      const request = createSignupRequest(validSignupPayload);
 
       // Act
       const response = await POST(request);
@@ -450,13 +419,8 @@ describe('/api/auth/signup', () => {
         email: 'new@example.com',
       });
 
-      const request = new Request('http://localhost/api/auth/signup', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-forwarded-for': '192.168.1.1',
-        },
-        body: JSON.stringify(validSignupPayload),
+      const request = createSignupRequest(validSignupPayload, {
+        'x-forwarded-for': '192.168.1.1',
       });
 
       // Act
@@ -480,11 +444,7 @@ describe('/api/auth/signup', () => {
       // @ts-expect-error - intentionally testing invalid input
       delete payload.name;
 
-      const request = new Request('http://localhost/api/auth/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
+      const request = createSignupRequest(payload);
 
       // Act
       const response = await POST(request);
@@ -497,13 +457,9 @@ describe('/api/auth/signup', () => {
 
     it('returns 400 for invalid email format', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...validSignupPayload,
-          email: 'not-an-email',
-        }),
+      const request = createSignupRequest({
+        ...validSignupPayload,
+        email: 'not-an-email',
       });
 
       // Act
@@ -517,14 +473,10 @@ describe('/api/auth/signup', () => {
 
     it('returns 400 for password shorter than 12 characters', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...validSignupPayload,
-          password: 'Short1!',
-          confirmPassword: 'Short1!',
-        }),
+      const request = createSignupRequest({
+        ...validSignupPayload,
+        password: 'Short1!',
+        confirmPassword: 'Short1!',
       });
 
       // Act
@@ -538,14 +490,10 @@ describe('/api/auth/signup', () => {
 
     it('returns 400 for password without uppercase', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...validSignupPayload,
-          password: 'validpass123!',
-          confirmPassword: 'validpass123!',
-        }),
+      const request = createSignupRequest({
+        ...validSignupPayload,
+        password: 'validpass123!',
+        confirmPassword: 'validpass123!',
       });
 
       // Act
@@ -559,14 +507,10 @@ describe('/api/auth/signup', () => {
 
     it('returns 400 for password without lowercase', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...validSignupPayload,
-          password: 'VALIDPASS123!',
-          confirmPassword: 'VALIDPASS123!',
-        }),
+      const request = createSignupRequest({
+        ...validSignupPayload,
+        password: 'VALIDPASS123!',
+        confirmPassword: 'VALIDPASS123!',
       });
 
       // Act
@@ -580,14 +524,10 @@ describe('/api/auth/signup', () => {
 
     it('returns 400 for password without number', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...validSignupPayload,
-          password: 'ValidPassword!',
-          confirmPassword: 'ValidPassword!',
-        }),
+      const request = createSignupRequest({
+        ...validSignupPayload,
+        password: 'ValidPassword!',
+        confirmPassword: 'ValidPassword!',
       });
 
       // Act
@@ -601,13 +541,9 @@ describe('/api/auth/signup', () => {
 
     it('returns 400 when passwords do not match', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...validSignupPayload,
-          confirmPassword: 'DifferentPass123!',
-        }),
+      const request = createSignupRequest({
+        ...validSignupPayload,
+        confirmPassword: 'DifferentPass123!',
       });
 
       // Act
@@ -621,13 +557,9 @@ describe('/api/auth/signup', () => {
 
     it('returns 400 when ToS not accepted', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...validSignupPayload,
-          acceptedTos: false,
-        }),
+      const request = createSignupRequest({
+        ...validSignupPayload,
+        acceptedTos: false,
       });
 
       // Act
@@ -647,13 +579,8 @@ describe('/api/auth/signup', () => {
         .mockReturnValueOnce({ allowed: false, retryAfter: 3600 })
         .mockReturnValue({ allowed: true });
 
-      const request = new Request('http://localhost/api/auth/signup', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-forwarded-for': '192.168.1.1',
-        },
-        body: JSON.stringify(validSignupPayload),
+      const request = createSignupRequest(validSignupPayload, {
+        'x-forwarded-for': '192.168.1.1',
       });
 
       // Act
@@ -672,11 +599,7 @@ describe('/api/auth/signup', () => {
         .mockReturnValueOnce({ allowed: true })
         .mockReturnValueOnce({ allowed: false, retryAfter: 3600 });
 
-      const request = new Request('http://localhost/api/auth/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload),
-      });
+      const request = createSignupRequest(validSignupPayload);
 
       // Act
       const response = await POST(request);
@@ -691,13 +614,8 @@ describe('/api/auth/signup', () => {
       // Arrange
       (checkRateLimit as Mock).mockReturnValue({ allowed: false, retryAfter: 3600 });
 
-      const request = new Request('http://localhost/api/auth/signup', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-forwarded-for': '192.168.1.1',
-        },
-        body: JSON.stringify(validSignupPayload),
+      const request = createSignupRequest(validSignupPayload, {
+        'x-forwarded-for': '192.168.1.1',
       });
 
       // Act
@@ -723,11 +641,7 @@ describe('/api/auth/signup', () => {
         deviceName: 'Test Device',
       };
 
-      const request = new Request('http://localhost/api/auth/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payloadWithDevice),
-      });
+      const request = createSignupRequest(payloadWithDevice);
 
       // Act
       const response = await POST(request);
@@ -738,11 +652,7 @@ describe('/api/auth/signup', () => {
 
     it('does not create device token when deviceId is not provided', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload),
-      });
+      const request = createSignupRequest(validSignupPayload);
 
       // Act
       const response = await POST(request);
@@ -759,11 +669,7 @@ describe('/api/auth/signup', () => {
         throw new Error('Database connection failed');
       });
 
-      const request = new Request('http://localhost/api/auth/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload),
-      });
+      const request = createSignupRequest(validSignupPayload);
 
       // Act
       const response = await POST(request);

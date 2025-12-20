@@ -63,6 +63,12 @@ vi.mock('@paralleldrive/cuid2', () => ({
 
 vi.mock('cookie', () => ({
   serialize: vi.fn().mockReturnValue('mock-cookie'),
+  parse: vi.fn(() => ({ login_csrf: 'valid-csrf-token' })),
+}));
+
+// Mock login CSRF validation
+vi.mock('../login-csrf/route', () => ({
+  validateLoginCSRFToken: vi.fn(() => true),
 }));
 
 import { serialize } from 'cookie';
@@ -93,6 +99,23 @@ describe('/api/auth/login', () => {
     password: 'validPassword123',
   };
 
+  // Helper function to create requests with CSRF headers
+  const createLoginRequest = (
+    payload: Record<string, unknown>,
+    additionalHeaders: Record<string, string> = {}
+  ) => {
+    return new Request('http://localhost/api/auth/login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Login-CSRF-Token': 'valid-csrf-token',
+        'Cookie': 'login_csrf=valid-csrf-token',
+        ...additionalHeaders,
+      },
+      body: JSON.stringify(payload),
+    });
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
 
@@ -105,11 +128,7 @@ describe('/api/auth/login', () => {
   describe('with valid credentials', () => {
     it('returns 200 and user data on successful login', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validLoginPayload),
-      });
+      const request = createLoginRequest(validLoginPayload);
 
       // Act
       const response = await POST(request);
@@ -124,11 +143,7 @@ describe('/api/auth/login', () => {
 
     it('sets httpOnly cookies for accessToken and refreshToken', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validLoginPayload),
-      });
+      const request = createLoginRequest(validLoginPayload);
 
       // Act
       const response = await POST(request);
@@ -161,11 +176,7 @@ describe('/api/auth/login', () => {
 
     it('generates access and refresh tokens with correct user data', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validLoginPayload),
-      });
+      const request = createLoginRequest(validLoginPayload);
 
       // Act
       await POST(request);
@@ -185,13 +196,8 @@ describe('/api/auth/login', () => {
 
     it('resets rate limits on successful login', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-forwarded-for': '192.168.1.1',
-        },
-        body: JSON.stringify(validLoginPayload),
+      const request = createLoginRequest(validLoginPayload, {
+        'x-forwarded-for': '192.168.1.1',
       });
 
       // Act
@@ -204,13 +210,8 @@ describe('/api/auth/login', () => {
 
     it('logs successful login event', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-forwarded-for': '192.168.1.1',
-        },
-        body: JSON.stringify(validLoginPayload),
+      const request = createLoginRequest(validLoginPayload, {
+        'x-forwarded-for': '192.168.1.1',
       });
 
       // Act
@@ -240,11 +241,7 @@ describe('/api/auth/login', () => {
         deviceId: 'device-123',
         deviceName: 'Test Device',
       };
-      const request = new Request('http://localhost/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payloadWithDevice),
-      });
+      const request = createLoginRequest(payloadWithDevice);
 
       // Act
       const response = await POST(request);
@@ -268,13 +265,9 @@ describe('/api/auth/login', () => {
       (db.query.users.findFirst as Mock).mockResolvedValue(null);
       (bcrypt.compare as Mock).mockResolvedValue(false);
 
-      const request = new Request('http://localhost/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: 'nonexistent@example.com',
-          password: 'anypassword',
-        }),
+      const request = createLoginRequest({
+        email: 'nonexistent@example.com',
+        password: 'anypassword',
       });
 
       // Act
@@ -290,13 +283,9 @@ describe('/api/auth/login', () => {
       // Arrange
       (bcrypt.compare as Mock).mockResolvedValue(false);
 
-      const request = new Request('http://localhost/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: 'test@example.com',
-          password: 'wrongpassword',
-        }),
+      const request = createLoginRequest({
+        email: 'test@example.com',
+        password: 'wrongpassword',
       });
 
       // Act
@@ -312,13 +301,9 @@ describe('/api/auth/login', () => {
       // Arrange - ensure bcrypt.compare is called even when user doesn't exist
       (db.query.users.findFirst as Mock).mockResolvedValue(null);
 
-      const request = new Request('http://localhost/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: 'nonexistent@example.com',
-          password: 'anypassword',
-        }),
+      const request = createLoginRequest({
+        email: 'nonexistent@example.com',
+        password: 'anypassword',
       });
 
       // Act
@@ -344,16 +329,11 @@ describe('/api/auth/login', () => {
       // Arrange
       (bcrypt.compare as Mock).mockResolvedValue(false);
 
-      const request = new Request('http://localhost/api/auth/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-forwarded-for': '192.168.1.1',
-        },
-        body: JSON.stringify({
-          email: 'test@example.com',
-          password: 'wrongpassword',
-        }),
+      const request = createLoginRequest({
+        email: 'test@example.com',
+        password: 'wrongpassword',
+      }, {
+        'x-forwarded-for': '192.168.1.1',
       });
 
       // Act
@@ -376,11 +356,7 @@ describe('/api/auth/login', () => {
         password: null, // OAuth user has no password
       });
 
-      const request = new Request('http://localhost/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validLoginPayload),
-      });
+      const request = createLoginRequest(validLoginPayload);
 
       // Act
       const response = await POST(request);
@@ -395,11 +371,7 @@ describe('/api/auth/login', () => {
   describe('input validation', () => {
     it('returns 400 for missing email', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: 'somepassword' }),
-      });
+      const request = createLoginRequest({ password: 'somepassword' });
 
       // Act
       const response = await POST(request);
@@ -412,11 +384,7 @@ describe('/api/auth/login', () => {
 
     it('returns 400 for invalid email format', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: 'not-an-email', password: 'somepassword' }),
-      });
+      const request = createLoginRequest({ email: 'not-an-email', password: 'somepassword' });
 
       // Act
       const response = await POST(request);
@@ -429,11 +397,7 @@ describe('/api/auth/login', () => {
 
     it('returns 400 for missing password', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: 'test@example.com' }),
-      });
+      const request = createLoginRequest({ email: 'test@example.com' });
 
       // Act
       const response = await POST(request);
@@ -446,11 +410,7 @@ describe('/api/auth/login', () => {
 
     it('returns 400 for empty password', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: 'test@example.com', password: '' }),
-      });
+      const request = createLoginRequest({ email: 'test@example.com', password: '' });
 
       // Act
       const response = await POST(request);
@@ -469,13 +429,8 @@ describe('/api/auth/login', () => {
         .mockReturnValueOnce({ allowed: false, retryAfter: 900 }) // IP limit
         .mockReturnValue({ allowed: true }); // email limit
 
-      const request = new Request('http://localhost/api/auth/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-forwarded-for': '192.168.1.1',
-        },
-        body: JSON.stringify(validLoginPayload),
+      const request = createLoginRequest(validLoginPayload, {
+        'x-forwarded-for': '192.168.1.1',
       });
 
       // Act
@@ -495,11 +450,7 @@ describe('/api/auth/login', () => {
         .mockReturnValueOnce({ allowed: true }) // IP limit
         .mockReturnValueOnce({ allowed: false, retryAfter: 900 }); // email limit
 
-      const request = new Request('http://localhost/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validLoginPayload),
-      });
+      const request = createLoginRequest(validLoginPayload);
 
       // Act
       const response = await POST(request);
@@ -514,11 +465,7 @@ describe('/api/auth/login', () => {
       // Arrange
       (checkRateLimit as Mock).mockReturnValue({ allowed: false, retryAfter: 900 });
 
-      const request = new Request('http://localhost/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validLoginPayload),
-      });
+      const request = createLoginRequest(validLoginPayload);
 
       // Act
       await POST(request);
@@ -531,13 +478,8 @@ describe('/api/auth/login', () => {
   describe('IP extraction', () => {
     it('extracts IP from x-forwarded-for header', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-forwarded-for': '203.0.113.195, 70.41.3.18, 150.172.238.178',
-        },
-        body: JSON.stringify(validLoginPayload),
+      const request = createLoginRequest(validLoginPayload, {
+        'x-forwarded-for': '203.0.113.195, 70.41.3.18, 150.172.238.178',
       });
 
       // Act
@@ -549,13 +491,8 @@ describe('/api/auth/login', () => {
 
     it('extracts IP from x-real-ip header when x-forwarded-for is missing', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-real-ip': '192.168.1.100',
-        },
-        body: JSON.stringify(validLoginPayload),
+      const request = createLoginRequest(validLoginPayload, {
+        'x-real-ip': '192.168.1.100',
       });
 
       // Act
@@ -567,11 +504,7 @@ describe('/api/auth/login', () => {
 
     it('uses "unknown" as fallback IP when headers are missing', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validLoginPayload),
-      });
+      const request = createLoginRequest(validLoginPayload);
 
       // Act
       await POST(request);
@@ -586,11 +519,7 @@ describe('/api/auth/login', () => {
       // Arrange
       (db.query.users.findFirst as Mock).mockRejectedValue(new Error('Database connection failed'));
 
-      const request = new Request('http://localhost/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validLoginPayload),
-      });
+      const request = createLoginRequest(validLoginPayload);
 
       // Act
       const response = await POST(request);
@@ -607,11 +536,7 @@ describe('/api/auth/login', () => {
         new Error('Sensitive database error: connection string leaked')
       );
 
-      const request = new Request('http://localhost/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validLoginPayload),
-      });
+      const request = createLoginRequest(validLoginPayload);
 
       // Act
       const response = await POST(request);
@@ -626,13 +551,9 @@ describe('/api/auth/login', () => {
   describe('case sensitivity', () => {
     it('normalizes email to lowercase for rate limiting', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: 'TEST@EXAMPLE.COM',
-          password: 'validPassword123',
-        }),
+      const request = createLoginRequest({
+        email: 'TEST@EXAMPLE.COM',
+        password: 'validPassword123',
       });
 
       // Act
