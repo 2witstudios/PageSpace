@@ -73,3 +73,17 @@ export type ValidToolState = typeof VALID_TOOL_STATES[number];
 export function isValidToolState(value: unknown): value is ValidToolState {
   return typeof value === 'string' && (VALID_TOOL_STATES as readonly string[]).includes(value);
 }
+
+/**
+ * Type guard for TextGroupPart
+ */
+export function isTextGroupPart(part: GroupedPart): part is TextGroupPart {
+  return part.type === 'text-group';
+}
+
+/**
+ * Type guard for ToolGroupPart
+ */
+export function isToolGroupPart(part: GroupedPart): part is ToolGroupPart {
+  return part.type.startsWith('tool-');
+}

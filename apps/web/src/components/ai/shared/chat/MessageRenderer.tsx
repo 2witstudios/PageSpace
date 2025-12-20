@@ -10,7 +10,8 @@ import { useSocket } from '@/hooks/useSocket';
 import { ErrorBoundary } from '@/components/ai/shared/ErrorBoundary';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useGroupedParts } from './useGroupedParts';
-import type { ConversationMessage, TextPart, TextGroupPart, ToolGroupPart } from './message-types';
+import type { ConversationMessage, TextPart } from './message-types';
+import { isTextGroupPart, isToolGroupPart } from './message-types';
 
 interface TextBlockProps {
   parts: TextPart[];
@@ -328,18 +329,16 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
     <>
       <div key={message.id} className="mb-2" style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 100px' }}>
         {groupedParts.map((group, index) => {
-          if (group.type === 'text-group') {
-            // Type narrowing: we know this is a TextGroupPart
-            const textGroup = group as TextGroupPart;
+          if (isTextGroupPart(group)) {
             const isLastTextBlock = index === groupedParts.length - 1;
 
             return (
               <TextBlock
                 key={`${message.id}-text-${index}`}
-                parts={textGroup.parts}
+                parts={group.parts}
                 role={message.role as 'user' | 'assistant' | 'system'}
                 messageId={message.id}
-                createdAt={isLastTextBlock ? createdAt : undefined} // Only show timestamp on last part
+                createdAt={isLastTextBlock ? createdAt : undefined}
                 editedAt={isLastTextBlock ? editedAt : undefined}
                 onEdit={onEdit ? () => setIsEditing(true) : undefined}
                 onDelete={onDelete ? () => setShowDeleteDialog(true) : undefined}
@@ -350,19 +349,17 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
                 isStreaming={isStreaming}
               />
             );
-          } else if (group.type.startsWith('tool-')) {
-            // Type narrowing: we know this is a ToolGroupPart
-            const toolGroup = group as ToolGroupPart;
+          } else if (isToolGroupPart(group)) {
             return (
               <div key={`${message.id}-tool-${index}`} className="mr-2 sm:mr-8">
                 <ToolCallRenderer
                   part={{
-                    type: toolGroup.type,
-                    toolName: toolGroup.toolName,
-                    toolCallId: toolGroup.toolCallId,
-                    input: toolGroup.input,
-                    output: toolGroup.output,
-                    state: toolGroup.state,
+                    type: group.type,
+                    toolName: group.toolName,
+                    toolCallId: group.toolCallId,
+                    input: group.input,
+                    output: group.output,
+                    state: group.state,
                   }}
                 />
               </div>
