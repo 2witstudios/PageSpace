@@ -53,7 +53,7 @@ vi.mock('cookie', () => ({
 }));
 
 // Mock login CSRF validation
-vi.mock('../login-csrf/route', () => ({
+vi.mock('@/lib/auth/login-csrf-utils', () => ({
   validateLoginCSRFToken: vi.fn(() => true),
 }));
 

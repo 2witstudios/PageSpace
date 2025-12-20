@@ -17,7 +17,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent, logSecurityEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
-import { validateLoginCSRFToken } from '../login-csrf/route';
+import { validateLoginCSRFToken } from '@/lib/auth/login-csrf-utils';
 
 const loginSchema = z.object({
   email: z.email(),

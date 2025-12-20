@@ -12,7 +12,7 @@ import { VerificationEmail } from '@pagespace/lib/email-templates/VerificationEm
 import React from 'react';
 import { NextResponse } from 'next/server';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
-import { validateLoginCSRFToken } from '../login-csrf/route';
+import { validateLoginCSRFToken } from '@/lib/auth/login-csrf-utils';
 
 const signupSchema = z.object({
   name: z.string().min(1, {
