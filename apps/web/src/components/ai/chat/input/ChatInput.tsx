@@ -31,12 +31,20 @@ export interface ChatInputProps {
   hideModelSelector?: boolean;
   /** Style variant: 'main' for InputCard context, 'sidebar' for sidebar contrast */
   variant?: 'main' | 'sidebar';
-  /** Whether MCP is enabled for this conversation */
-  mcpEnabled?: boolean;
-  /** Callback when MCP is toggled */
-  onMcpToggle?: (enabled: boolean) => void;
   /** Number of running MCP servers */
   mcpRunningServers?: number;
+  /** Names of running MCP servers */
+  mcpServerNames?: string[];
+  /** Number of enabled MCP servers */
+  mcpEnabledCount?: number;
+  /** Whether all MCP servers are enabled */
+  mcpAllEnabled?: boolean;
+  /** Toggle all MCP servers */
+  onMcpToggleAll?: (enabled: boolean) => void;
+  /** Check if specific server is enabled */
+  isMcpServerEnabled?: (serverName: string) => boolean;
+  /** Toggle specific server */
+  onMcpServerToggle?: (serverName: string, enabled: boolean) => void;
   /** Whether MCP section should be shown (desktop only) */
   showMcp?: boolean;
 }
@@ -73,9 +81,13 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       crossDrive = false,
       hideModelSelector = false,
       variant = 'main',
-      mcpEnabled = false,
-      onMcpToggle,
       mcpRunningServers = 0,
+      mcpServerNames = [],
+      mcpEnabledCount = 0,
+      mcpAllEnabled = false,
+      onMcpToggleAll,
+      isMcpServerEnabled,
+      onMcpServerToggle,
       showMcp = false,
     },
     ref
@@ -152,9 +164,13 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
           onWriteModeToggle={toggleWriteMode}
           showPageTree={showPageTree}
           onShowPageTreeToggle={toggleShowPageTree}
-          mcpEnabled={mcpEnabled}
-          onMcpToggle={onMcpToggle}
           mcpRunningServers={mcpRunningServers}
+          mcpServerNames={mcpServerNames}
+          mcpEnabledCount={mcpEnabledCount}
+          mcpAllEnabled={mcpAllEnabled}
+          onMcpToggleAll={onMcpToggleAll}
+          isMcpServerEnabled={isMcpServerEnabled}
+          onMcpServerToggle={onMcpServerToggle}
           showMcp={showMcp}
           onMicClick={toggleListening}
           isListening={isListening}

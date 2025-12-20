@@ -1,22 +1,26 @@
 /**
  * MCP Store - Manages MCP server settings and per-chat MCP toggle state
- * Zustand store for per-chat MCP configuration
+ * Zustand store for per-chat, per-server MCP configuration
  *
- * MCP is enabled by default when servers are running.
- * Users can disable MCP per-chat if desired (opt-out model).
+ * MCP servers are enabled by default when running.
+ * Users can disable individual MCP servers per-chat (opt-out model).
  */
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 interface MCPStoreState {
-  // Per-chat MCP toggles - map of chatId to enabled state
-  // Default is true (enabled), users can opt-out per-chat
-  perChatMCP: Record<string, boolean>;
+  // Per-chat, per-server MCP toggles
+  // Structure: { chatId: { serverName: enabled } }
+  // Default is true (enabled) for all servers, users can opt-out per-server
+  perChatServerMCP: Record<string, Record<string, boolean>>;
 
-  // Actions
-  setChatMCPEnabled: (chatId: string, enabled: boolean) => void;
-  isChatMCPEnabled: (chatId: string) => boolean;
+  // Actions for per-server control
+  setServerEnabled: (chatId: string, serverName: string, enabled: boolean) => void;
+  isServerEnabled: (chatId: string, serverName: string) => boolean;
+  setAllServersEnabled: (chatId: string, enabled: boolean, serverNames: string[]) => void;
+  areAllServersEnabled: (chatId: string, serverNames: string[]) => boolean;
+  getEnabledServers: (chatId: string, serverNames: string[]) => string[];
 
   // Reset functions
   clearChatMCPSettings: (chatId: string) => void;
@@ -30,45 +34,79 @@ interface MCPStoreState {
 export const useMCPStore = create<MCPStoreState>()(
   persist(
     (set, get) => ({
-      // Default state - empty perChatMCP map (defaults to enabled)
-      perChatMCP: {},
+      // Default state - empty map (defaults to all servers enabled)
+      perChatServerMCP: {},
 
-      // Set per-chat MCP enabled/disabled
-      setChatMCPEnabled: (chatId: string, enabled: boolean) => {
+      // Set specific server enabled/disabled for a chat
+      setServerEnabled: (chatId: string, serverName: string, enabled: boolean) => {
         set((state) => ({
-          perChatMCP: {
-            ...state.perChatMCP,
-            [chatId]: enabled,
+          perChatServerMCP: {
+            ...state.perChatServerMCP,
+            [chatId]: {
+              ...state.perChatServerMCP[chatId],
+              [serverName]: enabled,
+            },
           },
         }));
       },
 
-      // Check if MCP is enabled for a specific chat
-      // Returns true by default (opt-out model), false only if explicitly disabled
-      isChatMCPEnabled: (chatId: string): boolean => {
+      // Check if a specific server is enabled for a chat
+      // Returns true by default (opt-out model)
+      isServerEnabled: (chatId: string, serverName: string): boolean => {
         const state = get();
-        // If no per-chat setting exists, default to true (enabled)
-        // Users must explicitly disable MCP per-chat
-        return state.perChatMCP[chatId] ?? true;
+        return state.perChatServerMCP[chatId]?.[serverName] ?? true;
       },
 
-      // Clear per-chat MCP setting for a specific chat
+      // Enable or disable all servers at once for a chat
+      setAllServersEnabled: (chatId: string, enabled: boolean, serverNames: string[]) => {
+        set((state) => {
+          const serverSettings: Record<string, boolean> = {};
+          for (const name of serverNames) {
+            serverSettings[name] = enabled;
+          }
+          return {
+            perChatServerMCP: {
+              ...state.perChatServerMCP,
+              [chatId]: serverSettings,
+            },
+          };
+        });
+      },
+
+      // Check if all servers are enabled for a chat
+      areAllServersEnabled: (chatId: string, serverNames: string[]): boolean => {
+        const state = get();
+        if (serverNames.length === 0) return false;
+        return serverNames.every(
+          (name) => state.perChatServerMCP[chatId]?.[name] ?? true
+        );
+      },
+
+      // Get list of enabled server names for a chat
+      getEnabledServers: (chatId: string, serverNames: string[]): string[] => {
+        const state = get();
+        return serverNames.filter(
+          (name) => state.perChatServerMCP[chatId]?.[name] ?? true
+        );
+      },
+
+      // Clear per-chat MCP settings for a specific chat
       clearChatMCPSettings: (chatId: string) => {
         set((state) => {
-          const newPerChatMCP = { ...state.perChatMCP };
-          delete newPerChatMCP[chatId];
-          return { perChatMCP: newPerChatMCP };
+          const newSettings = { ...state.perChatServerMCP };
+          delete newSettings[chatId];
+          return { perChatServerMCP: newSettings };
         });
       },
 
       // Clear all per-chat MCP settings
       clearAllChatMCPSettings: () => {
-        set({ perChatMCP: {} });
+        set({ perChatServerMCP: {} });
       },
     }),
     {
       name: 'mcp-settings', // localStorage key
-      version: 2, // Increment version to reset old settings with global toggle
+      version: 3, // Increment version to migrate to per-server structure
     }
   )
 );
