@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { UIMessage } from 'ai';
-import { ToolCallRenderer, GroupedToolCallsRenderer } from './tool-calls';
+import { ToolCallRenderer } from './tool-calls';
 
 import { StreamingMarkdown } from './StreamingMarkdown';
 import { MessageActionButtons } from './MessageActionButtons';
@@ -48,12 +48,7 @@ interface ToolGroupPart {
   state: 'input-streaming' | 'input-available' | 'output-available' | 'output-error' | 'done' | 'streaming';
 }
 
-interface ToolCallsGroupPart {
-  type: 'tool-calls-group';
-  tools: ToolGroupPart[];
-}
-
-type GroupedPart = TextGroupPart | ToolGroupPart | ToolCallsGroupPart;
+type GroupedPart = TextGroupPart | ToolGroupPart;
 
 interface TextBlockProps {
   parts: TextPart[];
@@ -283,28 +278,17 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
 
     const groups: GroupedPart[] = [];
     let currentTextGroup: TextPart[] = [];
-    let currentToolGroup: ToolGroupPart[] = [];
 
     message.parts.forEach((part) => {
-      // Skip step-start and reasoning parts - they shouldn't break up tool groups
+      // Skip step-start and reasoning parts
       if (part.type === 'step-start' || part.type === 'reasoning') {
         return;
       }
 
       if (part.type === 'text') {
-        // If we have accumulated tool parts, add them as a group
-        if (currentToolGroup.length > 0) {
-          // Always create a group for tool calls, even single ones
-          groups.push({
-            type: 'tool-calls-group',
-            tools: currentToolGroup
-          });
-          currentToolGroup = [];
-        }
-
         currentTextGroup.push(part as TextPart);
       } else if (part.type.startsWith('tool-')) {
-        // If we have accumulated text parts, add them as a group
+        // If we have accumulated text parts, add them as a group first
         if (currentTextGroup.length > 0) {
           groups.push({
             type: 'text-group',
@@ -326,17 +310,8 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
         };
         const state: ValidState = isValidState(toolPart.state) ? toolPart.state : 'input-available';
 
-        // Check if tool type changed - flush current group if different type
-        if (currentToolGroup.length > 0 && currentToolGroup[0].type !== part.type) {
-          groups.push({
-            type: 'tool-calls-group',
-            tools: currentToolGroup
-          });
-          currentToolGroup = [];
-        }
-
-        // Add the tool part to current group
-        currentToolGroup.push({
+        // Add each tool individually (no grouping)
+        groups.push({
           type: part.type,
           toolCallId,
           toolName,
@@ -352,15 +327,6 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
       groups.push({
         type: 'text-group',
         parts: currentTextGroup
-      });
-    }
-
-    // Add any remaining tool parts
-    if (currentToolGroup.length > 0) {
-      // Always create a group for tool calls, even single ones
-      groups.push({
-        type: 'tool-calls-group',
-        tools: currentToolGroup
       });
     }
 
@@ -480,23 +446,6 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
                 onSaveEdit={handleSaveEdit}
                 onCancelEdit={() => setIsEditing(false)}
                 isStreaming={isStreaming}
-              />
-            );
-          } else if (group.type === 'tool-calls-group') {
-            // Type narrowing: we know this is a ToolCallsGroupPart
-            const toolCallsGroup = group as ToolCallsGroupPart;
-            return (
-              <GroupedToolCallsRenderer
-                key={`${message.id}-toolgroup-${index}`}
-                toolCalls={toolCallsGroup.tools.map((tool) => ({
-                  type: tool.type,
-                  toolName: tool.toolName,
-                  toolCallId: tool.toolCallId,
-                  input: tool.input,
-                  output: tool.output,
-                  state: tool.state,
-                }))}
-                className="mr-2 sm:mr-8"
               />
             );
           } else if (group.type.startsWith('tool-')) {
