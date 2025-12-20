@@ -12,6 +12,7 @@
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
+    "test": "vitest run",
     "build": "electron-vite build",
     "package": "pnpm build && electron-builder",
     "package:mac": "pnpm build && electron-builder --mac --publish never",
