@@ -32,6 +32,7 @@ export const AI_PRICING = {
 
   // OpenRouter Paid Models - Google
   'google/gemini-3-pro-preview': { input: 1.25, output: 5.00 },
+  'google/gemini-3-flash-preview': { input: 0.10, output: 0.40 },
   'meta-llama/llama-3.1-405b-instruct': { input: 3.00, output: 3.00 },
   'mistralai/mistral-medium-3.1': { input: 2.70, output: 8.10 },
   'mistralai/mistral-small-3.2-24b-instruct': { input: 0.20, output: 0.60 },
@@ -42,6 +43,7 @@ export const AI_PRICING = {
   
   // Google AI Direct Models
   'gemini-3-pro': { input: 1.25, output: 5.00 },
+  'gemini-3-flash-preview': { input: 0.10, output: 0.40 },
   'gemini-2.0-flash-exp': { input: 0.00, output: 0.00 }, // Free during preview
   'gemini-1.5-flash': { input: 0.075, output: 0.30 },
   'gemini-1.5-flash-8b': { input: 0.0375, output: 0.15 },
@@ -108,6 +110,7 @@ export const MODEL_CONTEXT_WINDOWS = {
 
   // OpenRouter Models - Google
   'google/gemini-3-pro-preview': 1048576,
+  'google/gemini-3-flash-preview': 1048576,
   'google/gemini-2.5-pro': 2000000,
   'google/gemini-2.5-flash': 1000000,
   'google/gemini-2.5-flash-lite': 1000000,
@@ -116,6 +119,7 @@ export const MODEL_CONTEXT_WINDOWS = {
 
   // Google AI Direct Models
   'gemini-3-pro': 1048576,
+  'gemini-3-flash-preview': 1048576,
   'gemini-2.5-pro': 2000000,
   'gemini-2.5-flash': 1000000,
   'gemini-2.0-pro-exp': 2000000,
