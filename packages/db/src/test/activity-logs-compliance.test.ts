@@ -83,23 +83,28 @@ describe('activity_logs schema compliance', () => {
       expect(log?.actorDisplayName).toBe('John Doe')
     })
 
-    it('should require actorEmail (not null)', async () => {
-      // Attempt to insert without actorEmail should fail
+    it('should use default actorEmail when not provided', async () => {
+      // When actorEmail is omitted, the default 'legacy@unknown' is used
       const logId = createId()
 
-      await expect(
-        db.insert(activityLogs).values({
-          id: logId,
-          userId: testUser.id,
-          // actorEmail intentionally omitted
-          operation: 'create',
-          resourceType: 'page',
-          resourceId: createId(),
-          driveId: testDrive.id,
-          isAiGenerated: false,
-          isArchived: false,
-        } as typeof activityLogs.$inferInsert)
-      ).rejects.toThrow()
+      await db.insert(activityLogs).values({
+        id: logId,
+        userId: testUser.id,
+        // actorEmail intentionally omitted - should use default
+        operation: 'create',
+        resourceType: 'page',
+        resourceId: createId(),
+        driveId: testDrive.id,
+        isAiGenerated: false,
+        isArchived: false,
+      } as typeof activityLogs.$inferInsert)
+
+      const log = await db.query.activityLogs.findFirst({
+        where: eq(activityLogs.id, logId),
+      })
+
+      expect(log).toBeDefined()
+      expect(log?.actorEmail).toBe('legacy@unknown')
     })
 
     it('should allow null actorDisplayName', async () => {

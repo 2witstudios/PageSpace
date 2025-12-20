@@ -192,8 +192,13 @@ export function validateTimeout(timeout: number): number {
  * @returns Effective timeout in milliseconds
  */
 export function getEffectiveTimeout(config: MCPServerConfig): number {
-  if (config.timeout !== undefined && typeof config.timeout === 'number' && config.timeout > 0) {
-    return validateTimeout(config.timeout);
+  if (config.timeout !== undefined && typeof config.timeout === 'number') {
+    if (config.timeout < 0) {
+      return MCP_CONSTANTS.TOOL_EXECUTION_TIMEOUT_MIN;
+    }
+    if (config.timeout > 0) {
+      return validateTimeout(config.timeout);
+    }
   }
   return MCP_CONSTANTS.TOOL_EXECUTION_TIMEOUT_MS;
 }

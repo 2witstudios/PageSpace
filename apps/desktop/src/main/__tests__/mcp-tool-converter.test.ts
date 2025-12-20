@@ -209,8 +209,8 @@ describe('MCP Tool Converter - Type Safety', () => {
       const result = convertMCPToolsToAISDK(tools);
 
       expect(result.size).toBe(2);
-      expect(result.has('mcp__server__valid-tool-1')).toBe(true);
-      expect(result.has('mcp__server__valid-tool-2')).toBe(true);
+      expect(result.has('mcp:server:valid-tool-1')).toBe(true);
+      expect(result.has('mcp:server:valid-tool-2')).toBe(true);
     });
   });
 
