@@ -1,5 +1,4 @@
-import React, { useMemo, useState, useEffect } from 'react';
-import { UIMessage } from 'ai';
+import React, { useState, useEffect } from 'react';
 import { ToolCallRenderer } from './tool-calls';
 
 import { StreamingMarkdown } from './StreamingMarkdown';
@@ -10,45 +9,8 @@ import { TodoListMessage } from './TodoListMessage';
 import { useSocket } from '@/hooks/useSocket';
 import { ErrorBoundary } from '@/components/ai/shared/ErrorBoundary';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
-
-// Extended message interface that includes database fields
-interface ConversationMessage extends UIMessage {
-  messageType?: 'standard' | 'todo_list';
-  conversationId?: string;
-  isActive?: boolean;
-  editedAt?: Date;
-  createdAt?: Date;
-}
-
-interface TextPart {
-  type: 'text';
-  text: string;
-}
-
-interface ToolPart {
-  type: string; // "tool-{toolName}"
-  toolCallId: string;
-  toolName: string;
-  input?: Record<string, unknown>;
-  output?: unknown;
-  state: 'input-streaming' | 'input-available' | 'output-available' | 'output-error';
-}
-
-interface TextGroupPart {
-  type: 'text-group';
-  parts: TextPart[];
-}
-
-interface ToolGroupPart {
-  type: string; // "tool-{toolName}"
-  toolCallId: string;
-  toolName: string;
-  input?: Record<string, unknown>;
-  output?: unknown;
-  state: 'input-streaming' | 'input-available' | 'output-available' | 'output-error' | 'done' | 'streaming';
-}
-
-type GroupedPart = TextGroupPart | ToolGroupPart;
+import { useGroupedParts } from './useGroupedParts';
+import type { ConversationMessage, TextPart, TextGroupPart, ToolGroupPart } from './message-types';
 
 interface TextBlockProps {
   parts: TextPart[];
@@ -271,67 +233,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
   // ============================================
   // Standard Message Rendering
   // ============================================
-  const groupedParts = useMemo(() => {
-    if (!message.parts || message.parts.length === 0) {
-      return [];
-    }
-
-    const groups: GroupedPart[] = [];
-    let currentTextGroup: TextPart[] = [];
-
-    message.parts.forEach((part) => {
-      // Skip step-start and reasoning parts
-      if (part.type === 'step-start' || part.type === 'reasoning') {
-        return;
-      }
-
-      if (part.type === 'text') {
-        currentTextGroup.push(part as TextPart);
-      } else if (part.type.startsWith('tool-')) {
-        // If we have accumulated text parts, add them as a group first
-        if (currentTextGroup.length > 0) {
-          groups.push({
-            type: 'text-group',
-            parts: currentTextGroup
-          });
-          currentTextGroup = [];
-        }
-
-        // Type guard and safe property access for tool parts
-        const toolPart = part as ToolPart & Record<string, unknown>;
-        const toolCallId = typeof toolPart.toolCallId === 'string' ? toolPart.toolCallId : '';
-        const toolName = typeof toolPart.toolName === 'string' ? toolPart.toolName : part.type.replace('tool-', '');
-
-        // Ensure state is one of the valid values with proper type checking
-        const validStates = ['input-streaming', 'input-available', 'output-available', 'output-error', 'done', 'streaming'] as const;
-        type ValidState = typeof validStates[number];
-        const isValidState = (value: unknown): value is ValidState => {
-          return typeof value === 'string' && (validStates as readonly string[]).includes(value);
-        };
-        const state: ValidState = isValidState(toolPart.state) ? toolPart.state : 'input-available';
-
-        // Add each tool individually (no grouping)
-        groups.push({
-          type: part.type,
-          toolCallId,
-          toolName,
-          input: toolPart.input,
-          output: toolPart.output,
-          state,
-        });
-      }
-    });
-
-    // Add any remaining text parts
-    if (currentTextGroup.length > 0) {
-      groups.push({
-        type: 'text-group',
-        parts: currentTextGroup
-      });
-    }
-
-    return groups;
-  }, [message.parts]);
+  const groupedParts = useGroupedParts(message.parts);
 
   const createdAt = message.createdAt;
   const editedAt = message.editedAt;
