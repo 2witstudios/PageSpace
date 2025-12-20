@@ -10,7 +10,7 @@ import { ErrorBoundary } from '@/components/ai/shared/ErrorBoundary';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useGroupedParts } from './useGroupedParts';
 import type { ConversationMessage, TextPart } from './message-types';
-import { isTextGroupPart, isToolGroupPart } from './message-types';
+import { isTextGroupPart, isProcessedToolPart } from './message-types';
 import styles from './CompactMessageRenderer.module.css';
 
 interface CompactTextBlockProps {
@@ -350,7 +350,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
                 isStreaming={isStreaming}
               />
             );
-          } else if (isToolGroupPart(group)) {
+          } else if (isProcessedToolPart(group)) {
             return (
               <div key={`${message.id}-tool-${index}`} className="mt-1">
                 <CompactToolCallRenderer

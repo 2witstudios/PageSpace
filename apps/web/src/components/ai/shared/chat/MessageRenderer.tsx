@@ -11,7 +11,7 @@ import { ErrorBoundary } from '@/components/ai/shared/ErrorBoundary';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useGroupedParts } from './useGroupedParts';
 import type { ConversationMessage, TextPart } from './message-types';
-import { isTextGroupPart, isToolGroupPart } from './message-types';
+import { isTextGroupPart, isProcessedToolPart } from './message-types';
 
 interface TextBlockProps {
   parts: TextPart[];
@@ -349,7 +349,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
                 isStreaming={isStreaming}
               />
             );
-          } else if (isToolGroupPart(group)) {
+          } else if (isProcessedToolPart(group)) {
             return (
               <div key={`${message.id}-tool-${index}`} className="mr-2 sm:mr-8">
                 <ToolCallRenderer

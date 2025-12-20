@@ -45,9 +45,9 @@ export interface TextGroupPart {
 }
 
 /**
- * A processed tool part for rendering
+ * A processed tool part for rendering (normalized from raw ToolPart)
  */
-export interface ToolGroupPart {
+export interface ProcessedToolPart {
   type: string; // "tool-{toolName}"
   toolCallId: string;
   toolName: string;
@@ -57,9 +57,9 @@ export interface ToolGroupPart {
 }
 
 /**
- * Union type for all grouped parts
+ * Union type for processed message parts
  */
-export type GroupedPart = TextGroupPart | ToolGroupPart;
+export type GroupedPart = TextGroupPart | ProcessedToolPart;
 
 /**
  * Valid tool states for type checking
@@ -82,8 +82,8 @@ export function isTextGroupPart(part: GroupedPart): part is TextGroupPart {
 }
 
 /**
- * Type guard for ToolGroupPart
+ * Type guard for ProcessedToolPart
  */
-export function isToolGroupPart(part: GroupedPart): part is ToolGroupPart {
+export function isProcessedToolPart(part: GroupedPart): part is ProcessedToolPart {
   return part.type.startsWith('tool-');
 }
