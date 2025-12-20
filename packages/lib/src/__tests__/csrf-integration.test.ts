@@ -270,12 +270,16 @@ describe('CSRF Integration Tests (no crypto mocking)', () => {
   })
 
   describe('edge cases', () => {
-    it('emptySessionId_validationRejectsAsExpected', () => {
-      // Edge case: empty string session ID
-      // The implementation correctly rejects empty session IDs for security
-      const token = generateCSRFToken('')
-      expect(token).toBeTruthy() // Token generation works
-      expect(validateCSRFToken(token, '')).toBe(false) // But validation correctly rejects empty session
+    it('emptySessionId_throwsError', () => {
+      // Security: empty session IDs are rejected upfront during generation
+      // This prevents generating tokens that would never validate
+      expect(() => generateCSRFToken('')).toThrow('sessionId is required for CSRF token generation')
+    })
+
+    it('whitespaceOnlySessionId_throwsError', () => {
+      // Security: whitespace-only session IDs are also rejected
+      expect(() => generateCSRFToken('   ')).toThrow('sessionId is required for CSRF token generation')
+      expect(() => generateCSRFToken('\t\n')).toThrow('sessionId is required for CSRF token generation')
     })
 
     it('specialCharactersInUserId_handledCorrectly', () => {
