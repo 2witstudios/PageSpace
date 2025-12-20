@@ -76,7 +76,7 @@ jobs:
           JWT_SECRET: test-secret-key-minimum-32-characters-long-for-ci
           JWT_ISSUER: pagespace-test
           JWT_AUDIENCE: pagespace-test-users
-        run: pnpm test
+        run: pnpm test:turbo
 
   lint:
     name: Lint & TypeScript Check

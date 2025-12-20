@@ -1,0 +1,20 @@
+# Test-only services - runs independently from the main application
+# Usage: docker compose -f docker-compose.test.yml up -d
+
+services:
+  postgres-test:
+    image: postgres:17.5-alpine
+    container_name: pagespace-postgres-test
+    ports:
+      - "5433:5432"  # Different port to avoid conflict with dev postgres
+    environment:
+      - POSTGRES_DB=pagespace_test
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d pagespace_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    tmpfs:
+      - /var/lib/postgresql/data  # Use tmpfs for faster tests, data is ephemeral
