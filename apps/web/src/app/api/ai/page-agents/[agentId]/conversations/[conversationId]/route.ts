@@ -1,8 +1,11 @@
 import { NextResponse } from 'next/server';
-import { authenticateHybridRequest, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
+
+// Auth options: PATCH and DELETE are write operations requiring CSRF protection
+const AUTH_OPTIONS_WRITE = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 
 /**
  * PATCH /api/ai/page-agents/[agentId]/conversations/[conversationId]
@@ -15,7 +18,7 @@ export async function PATCH(
   context: { params: Promise<{ agentId: string; conversationId: string }> }
 ) {
   try {
-    const auth = await authenticateHybridRequest(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) return auth.error;
 
     const { agentId, conversationId } = await context.params;
@@ -81,7 +84,7 @@ export async function DELETE(
   context: { params: Promise<{ agentId: string; conversationId: string }> }
 ) {
   try {
-    const auth = await authenticateHybridRequest(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) return auth.error;
 
     const { agentId, conversationId } = await context.params;

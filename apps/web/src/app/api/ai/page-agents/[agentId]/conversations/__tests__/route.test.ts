@@ -33,7 +33,7 @@ vi.mock('@/lib/repositories/conversation-repository', () => ({
 
 // Mock auth (boundary)
 vi.mock('@/lib/auth', () => ({
-  authenticateHybridRequest: vi.fn(),
+  authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
 }));
 
@@ -54,7 +54,7 @@ vi.mock('@paralleldrive/cuid2', () => ({
 }));
 
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
-import { authenticateHybridRequest, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage, loggers } from '@pagespace/lib/server';
 
 // Test fixtures
@@ -96,7 +96,7 @@ describe('GET /api/ai/page-agents/[agentId]/conversations', () => {
     vi.clearAllMocks();
 
     // Default: authenticated user
-    vi.mocked(authenticateHybridRequest).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
 
     // Default: permission granted
@@ -113,7 +113,7 @@ describe('GET /api/ai/page-agents/[agentId]/conversations', () => {
   describe('authentication', () => {
     it('should return 401 when not authenticated', async () => {
       vi.mocked(isAuthError).mockReturnValue(true);
-      vi.mocked(authenticateHybridRequest).mockResolvedValue(mockAuthError(401));
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
       const request = createRequest(mockAgentId, 'GET');
       const context = createContext(mockAgentId);
@@ -251,7 +251,7 @@ describe('POST /api/ai/page-agents/[agentId]/conversations', () => {
     vi.clearAllMocks();
 
     // Default: authenticated user
-    vi.mocked(authenticateHybridRequest).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
 
     // Default: permission granted
@@ -264,7 +264,7 @@ describe('POST /api/ai/page-agents/[agentId]/conversations', () => {
   describe('authentication', () => {
     it('should return 401 when not authenticated', async () => {
       vi.mocked(isAuthError).mockReturnValue(true);
-      vi.mocked(authenticateHybridRequest).mockResolvedValue(mockAuthError(401));
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
       const request = createRequest(mockAgentId, 'POST', {});
       const context = createContext(mockAgentId);

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createId } from '@paralleldrive/cuid2';
-import { authenticateHybridRequest, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import {
@@ -8,6 +8,10 @@ import {
   extractPreviewText,
   generateTitle,
 } from '@/lib/repositories/conversation-repository';
+
+// Auth options: GET is read-only, POST creates new conversations
+const AUTH_OPTIONS_READ = { allow: ['jwt', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 
 /**
  * GET /api/ai/page-agents/[agentId]/conversations
@@ -20,7 +24,7 @@ export async function GET(
   context: { params: Promise<{ agentId: string }> }
 ) {
   try {
-    const auth = await authenticateHybridRequest(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
 
     const { agentId } = await context.params;
@@ -110,7 +114,7 @@ export async function POST(
   context: { params: Promise<{ agentId: string }> }
 ) {
   try {
-    const auth = await authenticateHybridRequest(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) return auth.error;
 
     const { agentId } = await context.params;

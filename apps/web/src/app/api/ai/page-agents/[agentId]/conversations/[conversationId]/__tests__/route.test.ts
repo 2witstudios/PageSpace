@@ -23,7 +23,7 @@ vi.mock('@/lib/repositories/conversation-repository', () => ({
 
 // Mock auth (boundary)
 vi.mock('@/lib/auth', () => ({
-  authenticateHybridRequest: vi.fn(),
+  authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
 }));
 
@@ -39,7 +39,7 @@ vi.mock('@pagespace/lib/server', () => ({
 }));
 
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
-import { authenticateHybridRequest, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserEditPage, loggers } from '@pagespace/lib/server';
 
 // Test fixtures
@@ -90,7 +90,7 @@ describe('PATCH /api/ai/page-agents/[agentId]/conversations/[conversationId]', (
     vi.clearAllMocks();
 
     // Default: authenticated user
-    vi.mocked(authenticateHybridRequest).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
 
     // Default: permission granted
@@ -106,7 +106,7 @@ describe('PATCH /api/ai/page-agents/[agentId]/conversations/[conversationId]', (
   describe('authentication', () => {
     it('should return 401 when not authenticated', async () => {
       vi.mocked(isAuthError).mockReturnValue(true);
-      vi.mocked(authenticateHybridRequest).mockResolvedValue(mockAuthError(401));
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
       const request = createRequest(mockAgentId, mockConversationId, 'PATCH', { title: 'Updated' });
       const context = createContext(mockAgentId, mockConversationId);
@@ -212,7 +212,7 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
     vi.clearAllMocks();
 
     // Default: authenticated user
-    vi.mocked(authenticateHybridRequest).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
 
     // Default: permission granted
@@ -241,7 +241,7 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
   describe('authentication', () => {
     it('should return 401 when not authenticated', async () => {
       vi.mocked(isAuthError).mockReturnValue(true);
-      vi.mocked(authenticateHybridRequest).mockResolvedValue(mockAuthError(401));
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
       const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
       const context = createContext(mockAgentId, mockConversationId);

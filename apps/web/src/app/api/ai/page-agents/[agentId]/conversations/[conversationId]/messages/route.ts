@@ -1,9 +1,12 @@
 import { NextResponse } from 'next/server';
-import { authenticateHybridRequest, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, chatMessages, pages, eq, and } from '@pagespace/db';
 import { canUserViewPage } from '@pagespace/lib/server';
 import { convertDbMessageToUIMessage } from '@/lib/ai/core';
 import { loggers } from '@pagespace/lib/server';
+
+// Auth options: GET is read-only operation
+const AUTH_OPTIONS_READ = { allow: ['jwt', 'mcp'] as const, requireCSRF: false };
 
 /**
  * GET /api/ai/page-agents/[agentId]/conversations/[conversationId]/messages
@@ -44,7 +47,7 @@ export async function GET(
   context: { params: Promise<{ agentId: string; conversationId: string }> }
 ) {
   try {
-    const auth = await authenticateHybridRequest(request);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
 
     const { agentId, conversationId } = await context.params;

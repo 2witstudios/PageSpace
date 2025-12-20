@@ -20,7 +20,7 @@ vi.mock('@/lib/repositories/chat-message-repository', () => ({
 
 // Mock auth (boundary)
 vi.mock('@/lib/auth', () => ({
-  authenticateHybridRequest: vi.fn(),
+  authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
 }));
 
@@ -45,7 +45,7 @@ vi.mock('@/lib/ai/core', () => ({
 }));
 
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
-import { authenticateHybridRequest, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage, loggers } from '@pagespace/lib/server';
 import { convertDbMessageToUIMessage } from '@/lib/ai/core';
 
@@ -103,7 +103,7 @@ describe('GET /api/ai/chat/messages', () => {
     vi.clearAllMocks();
 
     // Default: authenticated user
-    vi.mocked(authenticateHybridRequest).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
 
     // Default: permission granted
@@ -116,7 +116,7 @@ describe('GET /api/ai/chat/messages', () => {
   describe('authentication', () => {
     it('should return 401 when not authenticated', async () => {
       vi.mocked(isAuthError).mockReturnValue(true);
-      vi.mocked(authenticateHybridRequest).mockResolvedValue(mockAuthError(401));
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
       const request = createRequest(mockPageId);
 

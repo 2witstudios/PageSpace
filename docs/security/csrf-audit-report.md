@@ -276,12 +276,12 @@ event = stripe.webhooks.constructEvent(payload, signature, webhookSecret);
 
 ## 4. Remediation Priority
 
-| Priority | Finding | Effort | Impact |
-|----------|---------|--------|--------|
-| **P1** | Add CSRF to `authenticateHybridRequest` routes | Low | High |
-| **P2** | Add Login CSRF protection | Medium | Medium |
-| **P3** | Add Origin header validation | Low | Low |
-| **P4** | Add WebSocket Origin logging | Low | Low |
+| Priority | Finding | Effort | Impact | Status |
+|----------|---------|--------|--------|--------|
+| **P1** | Add CSRF to `authenticateHybridRequest` routes | Low | High | **FIXED** |
+| **P2** | Add Login CSRF protection | Medium | Medium | **FIXED** |
+| **P3** | Add Origin header validation | Low | Low | Open |
+| **P4** | Add WebSocket Origin logging | Low | Low | Open |
 
 ---
 
