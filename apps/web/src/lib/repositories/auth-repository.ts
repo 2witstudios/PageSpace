@@ -18,7 +18,7 @@ export interface User {
   image?: string | null;
   provider?: string | null;
   googleId?: string | null;
-  emailVerified?: boolean;
+  emailVerified?: Date | null;
 }
 
 export interface RefreshTokenRecord {
@@ -29,6 +29,8 @@ export interface RefreshTokenRecord {
   expiresAt: Date;
 }
 
+export type PlatformType = 'web' | 'desktop' | 'ios' | 'android';
+
 export interface CreateRefreshTokenInput {
   token: string;
   userId: string;
@@ -37,7 +39,7 @@ export interface CreateRefreshTokenInput {
   ip?: string;
   expiresAt: Date;
   deviceTokenId?: string;
-  platform?: string;
+  platform?: PlatformType;
 }
 
 export const authRepository = {

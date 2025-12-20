@@ -31,6 +31,7 @@ import { authRepository } from '@/lib/repositories/auth-repository';
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
 
 // Test fixtures
+const mockVerifiedDate = new Date('2024-01-15T10:00:00Z');
 const mockUser: User = {
   id: 'test-user-id',
   name: 'Test User',
@@ -39,7 +40,7 @@ const mockUser: User = {
   role: 'user',
   provider: 'email',
   googleId: null,
-  emailVerified: true,
+  emailVerified: mockVerifiedDate, // Date when email was verified
   password: '$2a$12$hashedpassword', // Should NOT be exposed
   tokenVersion: 0,
 };
@@ -81,7 +82,8 @@ describe('GET /api/auth/me', () => {
       expect(body.email).toBe(mockUser.email);
       expect(body.image).toBe(mockUser.image);
       expect(body.role).toBe(mockUser.role);
-      expect(body.emailVerified).toBe(mockUser.emailVerified);
+      // Date is serialized to ISO string in JSON response
+      expect(body.emailVerified).toBe(mockVerifiedDate.toISOString());
     });
 
     it('does not expose sensitive fields like password', async () => {
@@ -159,23 +161,24 @@ describe('GET /api/auth/me', () => {
   });
 
   describe('email verification status', () => {
-    it('returns emailVerified: false for unverified users', async () => {
+    it('returns null emailVerified for unverified users', async () => {
       vi.mocked(authRepository.findUserById).mockResolvedValue({
         ...mockUser,
-        emailVerified: false,
+        emailVerified: null, // Not verified - null in database
       });
 
       const response = await GET(createRequest());
       const body = await response.json();
 
-      expect(body.emailVerified).toBe(false);
+      expect(body.emailVerified).toBeNull();
     });
 
-    it('returns emailVerified: true for verified users', async () => {
+    it('returns verification date for verified users', async () => {
       const response = await GET(createRequest());
       const body = await response.json();
 
-      expect(body.emailVerified).toBe(true);
+      // Date is serialized to ISO string
+      expect(body.emailVerified).toBe(mockVerifiedDate.toISOString());
     });
   });
 });
