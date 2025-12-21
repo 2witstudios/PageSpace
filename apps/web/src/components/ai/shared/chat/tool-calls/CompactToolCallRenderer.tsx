@@ -144,17 +144,19 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
 
       // File-based tools
       if (['read_page', 'replace_lines', 'list_pages'].includes(toolName)) {
-        if (params.path) {
-          const fileName = params.path.split('/').pop();
-          return `${base}: ${fileName}`;
-        }
+        if (params.title) return `${base}: "${params.title}"`;
         if (params.dir) return `${base}: ${params.dir}`;
       }
 
       // Title-based tools
-      if (['create_page', 'rename_page', 'move_page'].includes(toolName)) {
+      if (['create_page', 'move_page'].includes(toolName)) {
         if (params.title) return `${base}: "${params.title}"`;
         if (params.name) return `${base}: "${params.name}"`;
+      }
+
+      // Rename uses currentTitle for display (title is the new name)
+      if (toolName === 'rename_page') {
+        if (params.currentTitle) return `${base}: "${params.currentTitle}"`;
       }
 
       // Trash/Restore

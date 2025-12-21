@@ -90,12 +90,12 @@ export const pageReadTools = {
    * Read existing documents to understand context and content
    */
   read_page: tool({
-    description: 'Read the content of any page (document, AI chat, channel, etc.) using its path. Returns the full content with line numbers for reference.',
+    description: 'Read the content of any page (document, AI chat, channel, etc.) using its ID. Returns the full content with line numbers for reference.',
     inputSchema: z.object({
-      path: z.string().describe('The document path using titles like "/driveSlug/Folder Name/Document Title" for semantic context'),
+      title: z.string().describe('The document title for display context'),
       pageId: z.string().describe('The unique ID of the page to read'),
     }),
-    execute: async ({ path, pageId }, { experimental_context: context }) => {
+    execute: async ({ title, pageId }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -137,7 +137,6 @@ export const pageReadTools = {
                 success: false,
                 error: 'File is still being processed',
                 status: page.processingStatus,
-                path,
                 title: page.title,
                 type: page.type,
                 suggestion: 'Please try again in a moment'
@@ -152,7 +151,6 @@ export const pageReadTools = {
                 return {
                   success: true,
                   type: 'visual_requires_vision_model',
-                  path,
                   title: page.title,
                   mimeType: page.mimeType,
                   message: `This is a visual file (${page.mimeType || 'image'}). To view its content, please switch to a vision-capable model.`,
@@ -169,7 +167,6 @@ export const pageReadTools = {
               return {
                 success: true,
                 type: 'visual_content_metadata',
-                path,
                 pageId: page.id,
                 title: page.title,
                 message: `Found visual content: "${page.title}" (${page.mimeType || 'unknown type'})`,
@@ -194,7 +191,6 @@ export const pageReadTools = {
                 success: false,
                 error: 'Failed to extract content from this file',
                 processingError: page.processingError,
-                path,
                 title: page.title,
                 type: page.type,
                 suggestion: 'Try reprocessing the file or contact support'
@@ -245,7 +241,6 @@ export const pageReadTools = {
 
           return {
             success: true,
-            path,
             title: page.title,
             type: 'TASK_LIST',
             taskListId: taskList.id,
@@ -301,7 +296,6 @@ export const pageReadTools = {
 
         return {
           success: true,
-          path,
           title: page.title,
           type: page.type,
           isTaskLinked,
@@ -327,7 +321,7 @@ export const pageReadTools = {
         };
       } catch (error) {
         console.error('Error reading document:', error);
-        throw new Error(`Failed to read document at ${path}: ${error instanceof Error ? error.message : String(error)}`);
+        throw new Error(`Failed to read document "${title}": ${error instanceof Error ? error.message : String(error)}`);
       }
     }
   }),

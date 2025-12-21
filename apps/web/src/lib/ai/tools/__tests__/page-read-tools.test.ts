@@ -102,7 +102,7 @@ describe('page-read-tools', () => {
 
       await expect(
         pageReadTools.read_page.execute!(
-          { path: '/drive/page', pageId: 'page-1' },
+          { title: 'Test Page', pageId: 'page-1' },
           context
         )
       ).rejects.toThrow('User authentication required');
@@ -118,7 +118,7 @@ describe('page-read-tools', () => {
 
       await expect(
         pageReadTools.read_page.execute!(
-          { path: '/drive/page', pageId: 'non-existent' },
+          { title: 'Test Page', pageId: 'non-existent' },
           context
         )
       ).rejects.toThrow('Page with ID "non-existent" not found');

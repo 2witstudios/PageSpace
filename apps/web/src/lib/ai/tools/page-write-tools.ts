@@ -219,13 +219,13 @@ export const pageWriteTools = {
   replace_lines: tool({
     description: 'Replace one or more lines in a document with new content. Specify start and end line numbers (1-based indexing).',
     inputSchema: z.object({
-      path: z.string().describe('The document path using titles like "/driveSlug/Folder Name/Document Title" for semantic context'),
+      title: z.string().describe('The document title for display context'),
       pageId: z.string().describe('The unique ID of the page to edit'),
       startLine: z.number().describe('Starting line number (1-based)'),
       endLine: z.number().optional().describe('Ending line number (1-based, optional, defaults to startLine)'),
       content: z.string().describe('New content to replace the lines with'),
     }),
-    execute: async ({ path, pageId, startLine, endLine = startLine, content }, { experimental_context: context }) => {
+    execute: async ({ title, pageId, startLine, endLine = startLine, content }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -319,7 +319,6 @@ export const pageWriteTools = {
 
         return {
           success: true,
-          path,
           title: page.title,
           linesReplaced: endLine - startLine + 1,
           newLineCount: newLines.length,
@@ -343,9 +342,9 @@ export const pageWriteTools = {
         pageWriteLogger.error('Failed to replace lines', error instanceof Error ? error : undefined, {
           userId: maskIdentifier(userId),
           pageId: maskIdentifier(pageId),
-          path,
+          title,
         });
-        throw new Error(`Failed to replace lines in ${path}: ${error instanceof Error ? error.message : String(error)}`);
+        throw new Error(`Failed to replace lines in "${title}": ${error instanceof Error ? error.message : String(error)}`);
       }
     },
   }),
@@ -472,11 +471,11 @@ export const pageWriteTools = {
   rename_page: tool({
     description: 'Change the title of an existing page. Updates the page title while preserving all content and structure.',
     inputSchema: z.object({
-      path: z.string().describe('The page path using titles like "/driveSlug/Folder Name/Page Title" for semantic context'),
+      currentTitle: z.string().describe('The current title of the page for display context'),
       pageId: z.string().describe('The unique ID of the page to rename'),
       title: z.string().describe('New title for the page'),
     }),
-    execute: async ({ path, pageId, title }, { experimental_context: context }) => {
+    execute: async ({ currentTitle, pageId, title }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -516,11 +515,10 @@ export const pageWriteTools = {
 
         return {
           success: true,
-          path,
           id: renamedPage.id,
           title: renamedPage.title,
           type: renamedPage.type,
-          message: `Successfully renamed page to "${renamedPage.title}"`,
+          message: `Successfully renamed page from "${currentTitle}" to "${renamedPage.title}"`,
           summary: `Renamed page to "${renamedPage.title}"`,
           stats: {
             pageType: renamedPage.type,
@@ -535,10 +533,10 @@ export const pageWriteTools = {
         pageWriteLogger.error('Failed to rename page', error instanceof Error ? error : undefined, {
           userId: maskIdentifier(userId),
           pageId: maskIdentifier(pageId),
-          path,
+          currentTitle,
           newTitle: title,
         });
-        throw new Error(`Failed to rename page at ${path}: ${error instanceof Error ? error.message : String(error)}`);
+        throw new Error(`Failed to rename page "${currentTitle}": ${error instanceof Error ? error.message : String(error)}`);
       }
     },
   }),
@@ -551,11 +549,11 @@ export const pageWriteTools = {
     inputSchema: z.object({
       type: z.enum(['page', 'drive']).describe('Whether to trash a page or a drive'),
       id: z.string().describe('The unique ID of the page or drive to trash'),
-      path: z.string().optional().describe('For pages: the path using titles for semantic context'),
+      title: z.string().optional().describe('For pages: the title for display context'),
       withChildren: z.boolean().optional().default(false).describe('For pages: whether to trash all children recursively'),
       confirmDriveName: z.string().optional().describe('For drives: the exact name of the drive (required for safety confirmation)'),
     }),
-    execute: async ({ type, id, path, withChildren = false, confirmDriveName }, { experimental_context: context }) => {
+    execute: async ({ type, id, title, withChildren = false, confirmDriveName }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -575,7 +573,6 @@ export const pageWriteTools = {
           return {
             success: true,
             type: 'page',
-            path,
             id: page.id,
             title: page.title,
             pageType: page.type,
@@ -611,8 +608,9 @@ export const pageWriteTools = {
           userId: maskIdentifier(userId),
           type,
           id: maskIdentifier(id),
+          title,
         });
-        throw new Error(`Failed to trash ${type}: ${error instanceof Error ? error.message : String(error)}`);
+        throw new Error(`Failed to trash ${type}${title ? ` "${title}"` : ''}: ${error instanceof Error ? error.message : String(error)}`);
       }
     },
   }),
@@ -686,13 +684,13 @@ export const pageWriteTools = {
   move_page: tool({
     description: 'Move a page to a different parent folder or change its position within the current parent.',
     inputSchema: z.object({
-      path: z.string().describe('The page path using titles like "/driveSlug/Folder Name/Page Title" for semantic context'),
+      title: z.string().describe('The title of the page being moved for display context'),
       pageId: z.string().describe('The unique ID of the page to move'),
-      newParentPath: z.string().describe('New parent folder path like "/driveSlug/New Folder" for semantic context'),
+      newParentTitle: z.string().optional().describe('Title of the destination folder (omit for root level)'),
       newParentId: z.string().optional().describe('The unique ID of the new parent page (omit for root level)'),
       position: z.number().describe('Position within the new parent (1-based, higher numbers appear later)'),
     }),
-    execute: async ({ path, pageId, newParentPath, newParentId, position }, { experimental_context: context }) => {
+    execute: async ({ title, pageId, newParentTitle, newParentId, position }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -751,22 +749,22 @@ export const pageWriteTools = {
 
         return {
           success: true,
-          path,
-          newParentPath,
           position,
           id: movedPage.id,
           title: movedPage.title,
           type: movedPage.type,
-          message: `Successfully moved "${movedPage.title}" to ${newParentPath} at position ${position}`,
+          message: newParentId
+            ? `Successfully moved "${movedPage.title}" to "${newParentTitle ?? 'parent folder'}" at position ${position}`
+            : `Successfully moved "${movedPage.title}" to root at position ${position}`,
         };
       } catch (error) {
         pageWriteLogger.error('Failed to move page', error instanceof Error ? error : undefined, {
           userId: maskIdentifier(userId),
           pageId: maskIdentifier(pageId),
-          path,
+          title,
           newParentId: maskIdentifier(newParentId || undefined),
         });
-        throw new Error(`Failed to move page from ${path}: ${error instanceof Error ? error.message : String(error)}`);
+        throw new Error(`Failed to move page "${title}": ${error instanceof Error ? error.message : String(error)}`);
       }
     },
   }),
