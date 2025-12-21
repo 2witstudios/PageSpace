@@ -170,10 +170,10 @@ export async function GET(request: Request) {
       filterConditions.push(eq(activityLogs.userId, params.actorId));
     }
     if (params.operation) {
-      filterConditions.push(eq(activityLogs.operation, params.operation));
+      filterConditions.push(eq(activityLogs.operation, params.operation as typeof activityLogs.operation._.data));
     }
     if (params.resourceType) {
-      filterConditions.push(eq(activityLogs.resourceType, params.resourceType));
+      filterConditions.push(eq(activityLogs.resourceType, params.resourceType as typeof activityLogs.resourceType._.data));
     }
 
     const finalWhereCondition = filterConditions.length > 0
