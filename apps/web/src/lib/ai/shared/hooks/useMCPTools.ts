@@ -48,8 +48,8 @@ export function useMCPTools({ conversationId }: UseMCPToolsOptions): UseMCPTools
   const mcp = useMCP();
 
   // Use Zustand selectors to subscribe to specific state slices
-  // This ensures useMemo/useCallback re-run when state changes
-  const perChatServerMCP = useMCPStore((state) => state.perChatServerMCP);
+  // _perChatServerMCP triggers re-renders when state changes (value unused, subscription only)
+  const _perChatServerMCP = useMCPStore((state) => state.perChatServerMCP);
   const getEnabledServersFn = useMCPStore((state) => state.getEnabledServers);
   const areAllServersEnabledFn = useMCPStore((state) => state.areAllServersEnabled);
   const isServerEnabledFn = useMCPStore((state) => state.isServerEnabled);
@@ -74,17 +74,13 @@ export function useMCPTools({ conversationId }: UseMCPToolsOptions): UseMCPTools
   const runningServers = runningServerNames.length;
 
   // Get enabled servers for this chat
-  // perChatServerMCP in deps ensures re-computation when store state changes
-  const enabledServerNames = useMemo(() => {
-    return getEnabledServersFn(chatId, runningServerNames);
-  }, [getEnabledServersFn, chatId, runningServerNames, perChatServerMCP]);
-
+  // perChatServerMCP selector subscription ensures re-render when state changes
+  // No useMemo needed - getter functions read current state via get()
+  const enabledServerNames = getEnabledServersFn(chatId, runningServerNames);
   const enabledServerCount = enabledServerNames.length;
 
   // Check if all servers are enabled
-  const allServersEnabled = useMemo(() => {
-    return areAllServersEnabledFn(chatId, runningServerNames);
-  }, [areAllServersEnabledFn, chatId, runningServerNames, perChatServerMCP]);
+  const allServersEnabled = areAllServersEnabledFn(chatId, runningServerNames);
 
   // Check if specific server is enabled
   const isServerEnabled = useCallback(
