@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { db, activityLogs, eq, and, desc, gte, lte, sql } from '@pagespace/db';
+import { db, activityLogs, eq, and, desc, gte, lt, sql } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { generateCSV } from '@pagespace/lib';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
@@ -133,7 +133,7 @@ export async function GET(request: Request) {
     if (params.endDate) {
       const endOfDay = new Date(params.endDate);
       endOfDay.setDate(endOfDay.getDate() + 1);
-      filterConditions.push(lte(activityLogs.timestamp, endOfDay));
+      filterConditions.push(lt(activityLogs.timestamp, endOfDay));
     }
     if (params.actorId) {
       filterConditions.push(eq(activityLogs.userId, params.actorId));

@@ -168,9 +168,9 @@ export function ActivityDashboard({ context, driveId: initialDriveId, driveName 
     }
   };
 
-  const handleRefresh = () => {
-    fetchActivities();
-    toast.success('Activity refreshed');
+  const handleRefresh = async () => {
+    await fetchActivities();
+    // fetchActivities already shows error toast on failure
   };
 
   const handleFiltersChange = (newFilters: Partial<ActivityFilters>) => {
