@@ -62,10 +62,12 @@ export const AI_PROVIDERS = {
 
       // Google Models (via OpenRouter)
       'google/gemini-3-pro-preview': 'Gemini 3 Pro',
+      'google/gemini-3-flash-preview': 'Gemini 3 Flash (Preview)',
       'google/gemini-2.5-pro': 'Gemini 2.5 Pro',
       'google/gemini-2.5-flash': 'Gemini 2.5 Flash',
       'google/gemini-2.5-flash-lite': 'Gemini 2.5 Flash Lite',
       'google/gemini-2.5-flash-lite-preview-06-17': 'Gemini 2.5 Flash Lite Preview',
+      'google/gemini-2.0-pro': 'Gemini 2.0 Pro',
 
       // AI21 Models
       'ai21/jamba-mini-1.7': 'Jamba Mini 1.7',
@@ -131,6 +133,7 @@ export const AI_PROVIDERS = {
     models: {
       // Gemini 3 Series (2025)
       'gemini-3-pro': 'Gemini 3 Pro',
+      'gemini-3-flash-preview': 'Gemini 3 Flash (Preview)',
       // Gemini 2.5 Series (2025)
       'gemini-2.5-pro': 'Gemini 2.5 Pro',
       'gemini-2.5-flash': 'Gemini 2.5 Flash',
@@ -138,7 +141,12 @@ export const AI_PROVIDERS = {
       // Gemini 2.0 Series (2025)
       'gemini-2.0-pro-exp': 'Gemini 2.0 Pro (Experimental)',
       'gemini-2.0-flash': 'Gemini 2.0 Flash',
+      'gemini-2.0-flash-exp': 'Gemini 2.0 Flash (Experimental)',
       'gemini-2.0-flash-lite': 'Gemini 2.0 Flash-Lite',
+      // Gemini 1.5 Series
+      'gemini-1.5-pro': 'Gemini 1.5 Pro',
+      'gemini-1.5-flash': 'Gemini 1.5 Flash',
+      'gemini-1.5-flash-8b': 'Gemini 1.5 Flash 8B',
     },
   },
   openai: {
