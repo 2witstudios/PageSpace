@@ -47,6 +47,7 @@ export const AI_PRICING = {
   'google/gemini-2.5-flash': { input: 0.075, output: 0.30 },
   'google/gemini-2.5-flash-lite': { input: 0.02, output: 0.08 },
   'google/gemini-2.5-flash-lite-preview-06-17': { input: 0.02, output: 0.08 },
+  'google/gemini-2.0-pro': { input: 1.25, output: 5.00 },
 
   // OpenRouter Paid Models - Chinese/Asian
   'z-ai/glm-4.5v': { input: 0.10, output: 0.40 },
