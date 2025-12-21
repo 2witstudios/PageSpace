@@ -1,5 +1,6 @@
 import { db, users, pages, drives, storageEvents, eq, sql, and, isNull, inArray } from '@pagespace/db';
 import { getStorageConfigFromSubscription, getStorageTierFromSubscription, type SubscriptionTier } from './subscription-utils';
+import { formatBytes, parseBytes } from '../client-safe';
 
 export interface StorageQuota {
   userId: string;
@@ -353,39 +354,8 @@ function getWarningLevel(percent: number): 'none' | 'warning' | 'critical' {
   return 'none';
 }
 
-/**
- * Format bytes to human-readable string
- */
-export function formatBytes(bytes: number): string {
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  if (bytes === 0) return '0 B';
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  return `${Math.round(bytes / Math.pow(1024, i) * 100) / 100} ${sizes[i]}`;
-}
-
-/**
- * Parse human-readable size to bytes
- */
-export function parseBytes(size: string): number {
-  // Defensive check for undefined/null input
-  if (!size || typeof size !== 'string') {
-    throw new Error(`Invalid size parameter: expected string, got ${typeof size}`);
-  }
-
-  const units: Record<string, number> = {
-    B: 1,
-    KB: 1024,
-    MB: 1024 * 1024,
-    GB: 1024 * 1024 * 1024,
-    TB: 1024 * 1024 * 1024 * 1024
-  };
-
-  const match = size.match(/^(\d+(?:\.\d+)?)\s*([KMGT]?B)$/i);
-  if (!match) throw new Error(`Invalid size format: "${size}"`);
-
-  const [, value, unit] = match;
-  return Math.floor(parseFloat(value) * (units[unit.toUpperCase()] || 1));
-}
+// Re-export for backward compatibility (canonical versions are in client-safe.ts)
+export { formatBytes, parseBytes } from '../client-safe';
 
 /**
  * @deprecated - Removed: Use subscription tier changes instead

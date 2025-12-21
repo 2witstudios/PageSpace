@@ -10,6 +10,7 @@ import {
   createNotification,
   decodeToken,
   validateOrCreateDeviceToken,
+  getClientIP,
 } from '@pagespace/lib/server';
 import { generateCSRFToken, getSessionIdFromJWT } from '@pagespace/lib/server';
 import { createId } from '@paralleldrive/cuid2';
@@ -42,9 +43,7 @@ const signupSchema = z.object({
 });
 
 export async function POST(req: Request) {
-  const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] ||
-                   req.headers.get('x-real-ip') ||
-                   'unknown';
+  const clientIP = getClientIP(req);
 
   let email: string | undefined;
 

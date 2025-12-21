@@ -11,6 +11,7 @@ import {
   RATE_LIMIT_CONFIGS,
   decodeToken,
   validateOrCreateDeviceToken,
+  getClientIP,
 } from '@pagespace/lib/server';
 import { serialize } from 'cookie';
 import { createId } from '@paralleldrive/cuid2';
@@ -41,9 +42,7 @@ export async function POST(req: Request) {
     const { email, password, deviceId, deviceName, deviceToken: existingDeviceToken } = validation.data;
 
     // Rate limiting by IP address and email
-    const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] || 
-                     req.headers.get('x-real-ip') || 
-                     'unknown';
+    const clientIP = getClientIP(req);
     
     const ipRateLimit = checkRateLimit(clientIP, RATE_LIMIT_CONFIGS.LOGIN);
     const emailRateLimit = checkRateLimit(email.toLowerCase(), RATE_LIMIT_CONFIGS.LOGIN);

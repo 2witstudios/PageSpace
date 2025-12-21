@@ -5,6 +5,7 @@
 
 import { NextResponse } from 'next/server';
 import { trackActivity, trackFeature, trackError } from '@pagespace/lib/activity-tracker';
+import { getClientIP } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: false };
@@ -19,9 +20,7 @@ export async function POST(request: Request) {
     }
     
     // Get client IP and user agent
-    const ip = request.headers.get('x-forwarded-for')?.split(',')[0] || 
-               request.headers.get('x-real-ip') || 
-               'unknown';
+    const ip = getClientIP(request);
     const userAgent = request.headers.get('user-agent') || 'unknown';
     
     // Parse tracking data

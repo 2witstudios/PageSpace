@@ -1,6 +1,7 @@
 // All exports including Node.js-only utilities
 export * from './auth/auth-utils';
 export * from './auth/device-auth-utils';
+export { getClientIP, detectPlatform, extractDeviceMetadata } from './auth/device-fingerprint-utils';
 export * from './auth/csrf-utils';
 export * from './encryption';
 export * from './content';

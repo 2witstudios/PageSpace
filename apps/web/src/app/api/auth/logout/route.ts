@@ -1,7 +1,7 @@
 import { refreshTokens } from '@pagespace/db';
 import { db, eq } from '@pagespace/db';
 import { parse, serialize } from 'cookie';
-import { loggers, logAuthEvent } from '@pagespace/lib/server';
+import { loggers, logAuthEvent, getClientIP } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { revokeDeviceTokenByValue, revokeDeviceTokensByDevice } from '@pagespace/lib/device-auth-utils';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
@@ -16,9 +16,7 @@ export async function POST(req: Request) {
   const cookies = parse(cookieHeader || '');
   const refreshTokenValue = cookies.refreshToken;
 
-  const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] ||
-                   req.headers.get('x-real-ip') ||
-                   'unknown';
+  const clientIP = getClientIP(req);
 
   // Revoke device token to ensure proper device separation
   // This prevents token reuse when logging back in on different devices

@@ -27,7 +27,7 @@ import {
   isToolExecuteMessage,
   isToolResultMessage,
 } from '@/lib/websocket';
-import { decodeToken } from '@pagespace/lib/server';
+import { decodeToken, getClientIP } from '@pagespace/lib/server';
 import { getCookieValueFromHeader } from '@/lib/utils/get-cookie-value';
 
 // Initialize cleanup interval on module load
@@ -72,8 +72,7 @@ export async function UPGRADE(
   request: NextRequest
 ) {
   const requestUrl = request.url;
-  const clientIp =
-    request.headers.get('x-forwarded-for')?.split(',')[0].trim() || 'unknown';
+  const clientIp = getClientIP(request);
 
   // SECURITY CHECK 1: Verify secure connection in production
   if (!isSecureConnection(requestUrl, request)) {

@@ -1,6 +1,6 @@
 import { users, refreshTokens, deviceTokens } from '@pagespace/db';
 import { db, eq, sql, and, isNull } from '@pagespace/db';
-import { decodeToken, generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, checkRateLimit, RATE_LIMIT_CONFIGS } from '@pagespace/lib/server';
+import { decodeToken, generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, checkRateLimit, RATE_LIMIT_CONFIGS, getClientIP } from '@pagespace/lib/server';
 import { validateDeviceToken } from '@pagespace/lib/device-auth-utils';
 import { serialize } from 'cookie';
 import { parse } from 'cookie';
@@ -16,9 +16,7 @@ export async function POST(req: Request) {
   }
 
   // Rate limiting by IP address for refresh attempts
-  const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] || 
-                   req.headers.get('x-real-ip') || 
-                   'unknown';
+  const clientIP = getClientIP(req);
   
   const rateLimit = checkRateLimit(`refresh:${clientIP}`, RATE_LIMIT_CONFIGS.REFRESH);
   

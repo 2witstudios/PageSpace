@@ -58,6 +58,7 @@ import {
   generateCSRFToken,
   getSessionIdFromJWT,
   validateOrCreateDeviceToken,
+  getClientIP,
 } from '@pagespace/lib/server';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
@@ -101,10 +102,7 @@ export async function POST(req: Request) {
     platform = requestPlatform;
 
     // Rate limiting by IP address
-    const clientIP =
-      req.headers.get('x-forwarded-for')?.split(',')[0] ||
-      req.headers.get('x-real-ip') ||
-      'unknown';
+    const clientIP = getClientIP(req);
 
     const ipRateLimit = checkRateLimit(clientIP, RATE_LIMIT_CONFIGS.LOGIN);
     if (!ipRateLimit.allowed) {

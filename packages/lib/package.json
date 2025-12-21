@@ -255,6 +255,7 @@
     }
   },
   "dependencies": {
+    "zod": "^3.24.4",
     "@iarna/toml": "^2.2.5",
     "@pagespace/db": "workspace:*",
     "@paralleldrive/cuid2": "^2.2.2",
