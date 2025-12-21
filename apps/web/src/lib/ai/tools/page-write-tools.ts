@@ -608,8 +608,9 @@ export const pageWriteTools = {
           userId: maskIdentifier(userId),
           type,
           id: maskIdentifier(id),
+          title,
         });
-        throw new Error(`Failed to trash ${type}: ${error instanceof Error ? error.message : String(error)}`);
+        throw new Error(`Failed to trash ${type}${title ? ` "${title}"` : ''}: ${error instanceof Error ? error.message : String(error)}`);
       }
     },
   }),
