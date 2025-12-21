@@ -395,7 +395,7 @@ export interface AIUsageData {
   driveId?: string;
   success?: boolean;
   error?: string;
-  metadata?: any;
+  metadata?: Record<string, unknown>;
 
   // Context tracking - track actual conversation context vs billing tokens
   contextMessages?: string[]; // Array of message IDs included in this call's context
@@ -657,8 +657,8 @@ export async function getPopularAIFeatures(
     
     for (const record of usage) {
       if (record.metadata && typeof record.metadata === 'object') {
-        const metadata = record.metadata as any;
-        const feature = metadata.type || metadata.feature || 'general_chat';
+        const metadata = record.metadata as Record<string, unknown>;
+        const feature = (metadata.type as string) || (metadata.feature as string) || 'general_chat';
         
         if (!featureMap.has(feature)) {
           featureMap.set(feature, new Set());
