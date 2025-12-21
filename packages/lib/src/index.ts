@@ -47,6 +47,8 @@ export * from './sheets';
 // Auth and security utilities (server-only)
 export * from './auth/auth-utils';
 export * from './auth/device-auth-utils';
+// Device fingerprint utilities (getClientIP is commonly used across API routes)
+export { getClientIP, detectPlatform, extractDeviceMetadata } from './auth/device-fingerprint-utils';
 export {
   createServiceToken as createServiceTokenV2,
   verifyServiceToken as verifyServiceTokenV2,
@@ -100,6 +102,9 @@ export * from './file-processing';
 
 // Real-time and broadcasting utilities (server-only)
 export * from './auth/broadcast-auth';
+
+// MCP utilities (shared across web and desktop)
+export * from './mcp';
 
 // Note: This index includes server-side dependencies and should NOT be imported
 // from client-side components. Use '@pagespace/lib/client-safe' for client-side imports.

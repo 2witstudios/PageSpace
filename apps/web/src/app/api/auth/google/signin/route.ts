@@ -1,5 +1,5 @@
 import { z } from 'zod/v4';
-import { checkRateLimit, RATE_LIMIT_CONFIGS } from '@pagespace/lib/server';
+import { checkRateLimit, RATE_LIMIT_CONFIGS, getClientIP } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import crypto from 'crypto';
 
@@ -19,9 +19,7 @@ export async function POST(req: Request) {
     }
 
     // Rate limiting by IP address
-    const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] || 
-                     req.headers.get('x-real-ip') || 
-                     'unknown';
+    const clientIP = getClientIP(req);
     
     const ipRateLimit = checkRateLimit(clientIP, RATE_LIMIT_CONFIGS.LOGIN);
     if (!ipRateLimit.allowed) {

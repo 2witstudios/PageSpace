@@ -10,6 +10,7 @@ import {
   RATE_LIMIT_CONFIGS,
   generateCSRFToken,
   getSessionIdFromJWT,
+  getClientIP,
 } from '@pagespace/lib/server';
 import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/server';
@@ -31,10 +32,7 @@ export async function POST(req: Request) {
 
     const { deviceToken, deviceId } = validation.data;
 
-    const clientIP =
-      req.headers.get('x-forwarded-for')?.split(',')[0] ||
-      req.headers.get('x-real-ip') ||
-      'unknown';
+    const clientIP = getClientIP(req);
 
     // Rate limiting by IP address for refresh attempts
     const rateLimit = checkRateLimit(`refresh:device:${clientIP}`, RATE_LIMIT_CONFIGS.REFRESH);

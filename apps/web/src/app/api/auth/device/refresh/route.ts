@@ -11,6 +11,7 @@ import {
   getRefreshTokenMaxAge,
   generateCSRFToken,
   getSessionIdFromJWT,
+  getClientIP,
 } from '@pagespace/lib/server';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
@@ -35,10 +36,7 @@ export async function POST(req: Request) {
 
     const { deviceToken, deviceId, userAgent, appVersion } = validation.data;
 
-    const clientIP =
-      req.headers.get('x-forwarded-for')?.split(',')[0] ||
-      req.headers.get('x-real-ip') ||
-      'unknown';
+    const clientIP = getClientIP(req);
 
     const deviceRecord = await validateDeviceToken(deviceToken);
     if (!deviceRecord) {

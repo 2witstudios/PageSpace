@@ -1,5 +1,5 @@
 import { users, db, eq, deviceTokens, sql, and, isNull } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, getClientIP } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getUserDeviceTokens, revokeAllUserDeviceTokens, decodeDeviceToken, createDeviceTokenRecord, revokeExpiredDeviceTokens } from '@pagespace/lib/device-auth-utils';
 
@@ -142,7 +142,7 @@ export async function DELETE(req: Request) {
         {
           deviceName: currentDeviceInfo.deviceName || undefined,
           userAgent: req.headers.get('user-agent') ?? undefined,
-          ipAddress: req.headers.get('x-forwarded-for')?.split(',')[0] || req.headers.get('x-real-ip') || undefined,
+          ipAddress: getClientIP(req) !== 'unknown' ? getClientIP(req) : undefined,
         }
       );
 

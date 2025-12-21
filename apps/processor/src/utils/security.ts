@@ -1,4 +1,9 @@
 import path from 'path';
+// Import canonical file security utilities from @pagespace/lib
+import {
+  DANGEROUS_MIME_TYPES as LIB_DANGEROUS_MIME_TYPES,
+  isDangerousMimeType as libIsDangerousMimeType
+} from '@pagespace/lib';
 
 export const SAFE_EXTENSION_PATTERN = /^[a-z0-9]{1,8}$/i;
 export const DEFAULT_EXTENSION = '.bin';
@@ -96,22 +101,7 @@ export function sanitizeFilename(filename: string | null | undefined): string {
     || 'file';
 }
 
-/**
- * Dangerous MIME types that can execute JavaScript
- */
-export const DANGEROUS_MIME_TYPES = [
-  'text/html',
-  'application/xhtml+xml',
-  'image/svg+xml',
-  'application/xml',
-  'text/xml',
-] as const;
-
-/**
- * Check if MIME type is dangerous (can execute scripts)
- */
-export function isDangerousMimeType(mimeType: string | null | undefined): boolean {
-  if (!mimeType) return false;
-  const normalized = mimeType.toLowerCase().split(';')[0].trim();
-  return DANGEROUS_MIME_TYPES.includes(normalized as any);
-}
+// Re-export file security utilities from @pagespace/lib (canonical source)
+// These were previously duplicated here but are now consolidated
+export const DANGEROUS_MIME_TYPES = LIB_DANGEROUS_MIME_TYPES;
+export const isDangerousMimeType = libIsDangerousMimeType;

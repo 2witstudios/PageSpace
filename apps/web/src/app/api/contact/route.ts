@@ -1,7 +1,7 @@
 import { contactSubmissions, db } from '@pagespace/db';
 import { z } from 'zod/v4';
 import { createId } from '@paralleldrive/cuid2';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, getClientIP } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
@@ -14,9 +14,7 @@ const contactSchema = z.object({
 });
 
 export async function POST(request: Request) {
-  const clientIP = request.headers.get('x-forwarded-for')?.split(',')[0] ||
-                   request.headers.get('x-real-ip') ||
-                   'unknown';
+  const clientIP = getClientIP(request);
 
   try {
     // Authenticate request (optional - allows unauthenticated contact forms)
