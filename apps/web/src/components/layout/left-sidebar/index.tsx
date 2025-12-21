@@ -25,7 +25,7 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
-import { getPermissionErrorMessage } from "@/hooks/use-permissions";
+import { getPermissionErrorMessage, canManageDrive } from "@/hooks/use-permissions";
 import { useDriveStore } from "@/hooks/useDrive";
 
 import CreatePageDialog from "./CreatePageDialog";
@@ -53,7 +53,7 @@ export default function Sidebar({ className }: SidebarProps) {
   const { mutate } = useSWRConfig();
 
   const drive = drives.find((d) => d.id === driveId);
-  const canCreatePages = drive?.isOwned || drive?.role === 'ADMIN' || false;
+  const canManage = canManageDrive(drive);
 
   useEffect(() => {
     if (driveId && user?.id) {
@@ -90,7 +90,7 @@ export default function Sidebar({ className }: SidebarProps) {
                     onChange={(event) => setSearchQuery(event.target.value)}
                   />
                 </div>
-                {canCreatePages ? (
+                {canManage ? (
                   <Button variant="ghost" size="icon" onClick={() => setCreatePageOpen(true)}>
                     <Plus className="h-5 w-5" />
                   </Button>
@@ -123,7 +123,7 @@ export default function Sidebar({ className }: SidebarProps) {
         </div>
 
         <div className="mt-auto space-y-1">
-          {driveId && (drive?.isOwned || drive?.role === 'ADMIN') && (
+          {driveId && canManage && (
             <Link
               href={`/dashboard/${driveId}/members`}
               className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
@@ -148,7 +148,7 @@ export default function Sidebar({ className }: SidebarProps) {
             <Activity className="h-4 w-4" />
             Activity
           </Link>
-          {driveId && (drive?.isOwned || drive?.role === 'ADMIN') && (
+          {driveId && canManage && (
             <Link
               href={`/dashboard/${driveId}/settings`}
               className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"

@@ -119,3 +119,12 @@ export function getPermissionErrorMessage(action: string, resource: string = 'pa
 
   return actionMessages[action] || `You don't have permission to ${action} this ${resource}`;
 }
+
+/**
+ * Check if user can manage a drive (is owner or admin)
+ * Works with drive objects from the store that have isOwned and role properties
+ */
+export function canManageDrive(drive: { isOwned?: boolean; role?: string } | null | undefined): boolean {
+  if (!drive) return false;
+  return drive.isOwned === true || drive.role === 'ADMIN';
+}
