@@ -105,9 +105,10 @@ export function useMCPTools({ conversationId }: UseMCPToolsOptions): UseMCPTools
   );
 
   // Fetch MCP tools when servers are running
+  // Depend on runningServerNames (not count) to refetch when specific servers change
   useEffect(() => {
     const fetchMCPTools = async () => {
-      if (mcp.isDesktop && runningServers > 0 && window.electron) {
+      if (mcp.isDesktop && runningServerNames.length > 0 && window.electron) {
         try {
           const tools = await window.electron.mcp.getAvailableTools();
           setAllMcpToolSchemas(tools);
@@ -123,7 +124,7 @@ export function useMCPTools({ conversationId }: UseMCPToolsOptions): UseMCPTools
     };
 
     fetchMCPTools();
-  }, [mcp.isDesktop, runningServers]);
+  }, [mcp.isDesktop, runningServerNames]);
 
   // Filter tools to only include those from enabled servers
   const mcpToolSchemas = useMemo(() => {
