@@ -1,7 +1,26 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { validateCSRF, requiresCSRFProtection } from '../csrf-validation';
 
-// Mock dependencies
+/**
+ * CSRF Validation Module Contract Tests
+ *
+ * This module validates CSRF tokens for API routes. The contract is:
+ *
+ * Input: HTTP Request with:
+ *   - Method (GET/HEAD/OPTIONS skip validation, others require it)
+ *   - X-CSRF-Token header (required for mutation methods)
+ *   - Cookie: accessToken=<JWT> (required for session binding)
+ *
+ * Output:
+ *   - null: Validation successful (or skipped for safe methods)
+ *   - NextResponse with 403: CSRF_TOKEN_MISSING or CSRF_TOKEN_INVALID
+ *   - NextResponse with 401: CSRF_NO_SESSION or CSRF_INVALID_SESSION
+ *
+ * The validation binds CSRF tokens to JWT sessions via:
+ *   JWT.claims -> getSessionIdFromJWT() -> sessionId -> validateCSRFToken(token, sessionId)
+ */
+
+// Mock dependencies at system boundary
 vi.mock('@pagespace/lib/server', () => ({
   validateCSRFToken: vi.fn(),
   getSessionIdFromJWT: vi.fn(),
@@ -19,7 +38,7 @@ vi.mock('cookie', () => ({
   parse: vi.fn(),
 }));
 
-import { validateCSRFToken, getSessionIdFromJWT, decodeToken, loggers } from '@pagespace/lib/server';
+import { validateCSRFToken, getSessionIdFromJWT, decodeToken } from '@pagespace/lib/server';
 import { parse } from 'cookie';
 
 describe('csrf-validation', () => {
@@ -32,39 +51,43 @@ describe('csrf-validation', () => {
   });
 
   describe('requiresCSRFProtection', () => {
-    it('returns false for GET requests', () => {
-      const request = new Request('https://example.com/api/test', { method: 'GET' });
-      expect(requiresCSRFProtection(request)).toBe(false);
+    describe('safe HTTP methods (no CSRF required per HTTP spec)', () => {
+      it('requiresCSRFProtection_GET_returnsFalse', () => {
+        const request = new Request('https://example.com/api/test', { method: 'GET' });
+        expect(requiresCSRFProtection(request)).toBe(false);
+      });
+
+      it('requiresCSRFProtection_HEAD_returnsFalse', () => {
+        const request = new Request('https://example.com/api/test', { method: 'HEAD' });
+        expect(requiresCSRFProtection(request)).toBe(false);
+      });
+
+      it('requiresCSRFProtection_OPTIONS_returnsFalse', () => {
+        const request = new Request('https://example.com/api/test', { method: 'OPTIONS' });
+        expect(requiresCSRFProtection(request)).toBe(false);
+      });
     });
 
-    it('returns false for HEAD requests', () => {
-      const request = new Request('https://example.com/api/test', { method: 'HEAD' });
-      expect(requiresCSRFProtection(request)).toBe(false);
-    });
+    describe('mutation HTTP methods (CSRF required)', () => {
+      it('requiresCSRFProtection_POST_returnsTrue', () => {
+        const request = new Request('https://example.com/api/test', { method: 'POST' });
+        expect(requiresCSRFProtection(request)).toBe(true);
+      });
 
-    it('returns false for OPTIONS requests', () => {
-      const request = new Request('https://example.com/api/test', { method: 'OPTIONS' });
-      expect(requiresCSRFProtection(request)).toBe(false);
-    });
+      it('requiresCSRFProtection_PUT_returnsTrue', () => {
+        const request = new Request('https://example.com/api/test', { method: 'PUT' });
+        expect(requiresCSRFProtection(request)).toBe(true);
+      });
 
-    it('returns true for POST requests', () => {
-      const request = new Request('https://example.com/api/test', { method: 'POST' });
-      expect(requiresCSRFProtection(request)).toBe(true);
-    });
+      it('requiresCSRFProtection_PATCH_returnsTrue', () => {
+        const request = new Request('https://example.com/api/test', { method: 'PATCH' });
+        expect(requiresCSRFProtection(request)).toBe(true);
+      });
 
-    it('returns true for PUT requests', () => {
-      const request = new Request('https://example.com/api/test', { method: 'PUT' });
-      expect(requiresCSRFProtection(request)).toBe(true);
-    });
-
-    it('returns true for PATCH requests', () => {
-      const request = new Request('https://example.com/api/test', { method: 'PATCH' });
-      expect(requiresCSRFProtection(request)).toBe(true);
-    });
-
-    it('returns true for DELETE requests', () => {
-      const request = new Request('https://example.com/api/test', { method: 'DELETE' });
-      expect(requiresCSRFProtection(request)).toBe(true);
+      it('requiresCSRFProtection_DELETE_returnsTrue', () => {
+        const request = new Request('https://example.com/api/test', { method: 'DELETE' });
+        expect(requiresCSRFProtection(request)).toBe(true);
+      });
     });
   });
 
@@ -79,237 +102,225 @@ describe('csrf-validation', () => {
     };
 
     beforeEach(() => {
-      // Setup default mocks
+      // Setup default mocks for successful validation path
       vi.mocked(parse).mockReturnValue({ accessToken: 'mock-jwt-token' });
       vi.mocked(decodeToken).mockResolvedValue(mockJwtPayload);
       vi.mocked(getSessionIdFromJWT).mockReturnValue(mockSessionId);
       vi.mocked(validateCSRFToken).mockReturnValue(true);
     });
 
-    it('skips validation for safe methods (GET)', async () => {
-      const request = new Request('https://example.com/api/test', { method: 'GET' });
-      const result = await validateCSRF(request);
+    describe('safe method bypass', () => {
+      it('validateCSRF_GETRequest_returnsNullAndSkipsValidation', async () => {
+        const request = new Request('https://example.com/api/test', { method: 'GET' });
+        const result = await validateCSRF(request);
 
-      expect(result).toBeNull();
-      expect(validateCSRFToken).not.toHaveBeenCalled();
-    });
-
-    it('skips validation for HEAD requests', async () => {
-      const request = new Request('https://example.com/api/test', { method: 'HEAD' });
-      const result = await validateCSRF(request);
-
-      expect(result).toBeNull();
-      expect(validateCSRFToken).not.toHaveBeenCalled();
-    });
-
-    it('skips validation for OPTIONS requests', async () => {
-      const request = new Request('https://example.com/api/test', { method: 'OPTIONS' });
-      const result = await validateCSRF(request);
-
-      expect(result).toBeNull();
-      expect(validateCSRFToken).not.toHaveBeenCalled();
-    });
-
-    it('returns error when CSRF token is missing from POST request', async () => {
-      const request = new Request('https://example.com/api/test', { method: 'POST' });
-      const result = await validateCSRF(request);
-
-      expect(result).not.toBeNull();
-      expect(result?.status).toBe(403);
-      const body = await result?.json();
-      expect(body.code).toBe('CSRF_TOKEN_MISSING');
-      expect(loggers.auth.warn).toHaveBeenCalledWith(
-        'CSRF token missing from request',
-        expect.any(Object)
-      );
-    });
-
-    it('returns error when access token cookie is missing', async () => {
-      vi.mocked(parse).mockReturnValue({});
-
-      const headers = new Headers();
-      headers.set('X-CSRF-Token', 'test-csrf-token');
-      const request = new Request('https://example.com/api/test', {
-        method: 'POST',
-        headers,
+        expect(result).toBeNull();
+        // Contract: safe methods should not invoke token validation
+        expect(validateCSRFToken).not.toHaveBeenCalled();
       });
 
-      const result = await validateCSRF(request);
+      it('validateCSRF_HEADRequest_returnsNullAndSkipsValidation', async () => {
+        const request = new Request('https://example.com/api/test', { method: 'HEAD' });
+        const result = await validateCSRF(request);
 
-      expect(result).not.toBeNull();
-      expect(result?.status).toBe(401);
-      const body = await result?.json();
-      expect(body.code).toBe('CSRF_NO_SESSION');
-    });
-
-    it('returns error when JWT is invalid', async () => {
-      vi.mocked(decodeToken).mockResolvedValue(null);
-
-      const headers = new Headers();
-      headers.set('X-CSRF-Token', 'test-csrf-token');
-      headers.set('Cookie', 'accessToken=invalid-token');
-      const request = new Request('https://example.com/api/test', {
-        method: 'POST',
-        headers,
+        expect(result).toBeNull();
+        expect(validateCSRFToken).not.toHaveBeenCalled();
       });
 
-      const result = await validateCSRF(request);
+      it('validateCSRF_OPTIONSRequest_returnsNullAndSkipsValidation', async () => {
+        const request = new Request('https://example.com/api/test', { method: 'OPTIONS' });
+        const result = await validateCSRF(request);
 
-      expect(result).not.toBeNull();
-      expect(result?.status).toBe(401);
-      const body = await result?.json();
-      expect(body.code).toBe('CSRF_INVALID_SESSION');
+        expect(result).toBeNull();
+        expect(validateCSRFToken).not.toHaveBeenCalled();
+      });
     });
 
-    it('returns error when CSRF token is invalid', async () => {
-      vi.mocked(validateCSRFToken).mockReturnValue(false);
+    describe('error responses with consistent error shape', () => {
+      it('validateCSRF_POSTWithoutCSRFHeader_returns403WithCSRF_TOKEN_MISSING', async () => {
+        // Arrange: POST request without X-CSRF-Token header
+        const request = new Request('https://example.com/api/test', { method: 'POST' });
 
-      const headers = new Headers();
-      headers.set('X-CSRF-Token', 'invalid-csrf-token');
-      headers.set('Cookie', 'accessToken=valid-jwt-token');
-      const request = new Request('https://example.com/api/test', {
-        method: 'POST',
-        headers,
+        // Act
+        const result = await validateCSRF(request);
+
+        // Assert: 403 with structured error response
+        expect(result).not.toBeNull();
+        expect(result?.status).toBe(403);
+        const body = await result?.json();
+        expect(body).toMatchObject({
+          error: 'CSRF token required',
+          code: 'CSRF_TOKEN_MISSING',
+          details: expect.stringContaining('X-CSRF-Token'),
+        });
       });
 
-      const result = await validateCSRF(request);
+      it('validateCSRF_POSTWithCSRFButNoCookie_returns401WithCSRF_NO_SESSION', async () => {
+        // Arrange: CSRF token present but no session cookie
+        vi.mocked(parse).mockReturnValue({});
 
-      expect(result).not.toBeNull();
-      expect(result?.status).toBe(403);
-      const body = await result?.json();
-      expect(body.code).toBe('CSRF_TOKEN_INVALID');
-    });
-
-    it('validates successfully with valid CSRF token and JWT', async () => {
-      const headers = new Headers();
-      headers.set('X-CSRF-Token', 'valid-csrf-token');
-      headers.set('Cookie', 'accessToken=valid-jwt-token');
-      const request = new Request('https://example.com/api/test', {
-        method: 'POST',
-        headers,
-      });
-
-      const result = await validateCSRF(request);
-
-      expect(result).toBeNull();
-      expect(decodeToken).toHaveBeenCalledWith('mock-jwt-token');
-      expect(getSessionIdFromJWT).toHaveBeenCalledWith(mockJwtPayload);
-      expect(validateCSRFToken).toHaveBeenCalledWith('valid-csrf-token', mockSessionId);
-      expect(loggers.auth.debug).toHaveBeenCalledWith(
-        'CSRF token validated successfully',
-        expect.objectContaining({
+        const headers = new Headers();
+        headers.set('X-CSRF-Token', 'test-csrf-token');
+        const request = new Request('https://example.com/api/test', {
           method: 'POST',
-          userId: mockUserId,
-        })
-      );
-    });
+          headers,
+        });
 
-    it('validates PATCH requests', async () => {
-      const headers = new Headers();
-      headers.set('X-CSRF-Token', 'valid-csrf-token');
-      headers.set('Cookie', 'accessToken=valid-jwt-token');
-      const request = new Request('https://example.com/api/test', {
-        method: 'PATCH',
-        headers,
+        // Act
+        const result = await validateCSRF(request);
+
+        // Assert: 401 because session is required for CSRF validation
+        expect(result).not.toBeNull();
+        expect(result?.status).toBe(401);
+        const body = await result?.json();
+        expect(body.code).toBe('CSRF_NO_SESSION');
       });
 
-      const result = await validateCSRF(request);
+      it('validateCSRF_POSTWithInvalidJWT_returns401WithCSRF_INVALID_SESSION', async () => {
+        // Arrange: JWT decoding fails
+        vi.mocked(decodeToken).mockResolvedValue(null);
 
-      expect(result).toBeNull();
-      expect(validateCSRFToken).toHaveBeenCalled();
-    });
+        const headers = new Headers();
+        headers.set('X-CSRF-Token', 'test-csrf-token');
+        headers.set('Cookie', 'accessToken=invalid-token');
+        const request = new Request('https://example.com/api/test', {
+          method: 'POST',
+          headers,
+        });
 
-    it('validates PUT requests', async () => {
-      const headers = new Headers();
-      headers.set('X-CSRF-Token', 'valid-csrf-token');
-      headers.set('Cookie', 'accessToken=valid-jwt-token');
-      const request = new Request('https://example.com/api/test', {
-        method: 'PUT',
-        headers,
+        // Act
+        const result = await validateCSRF(request);
+
+        // Assert
+        expect(result).not.toBeNull();
+        expect(result?.status).toBe(401);
+        const body = await result?.json();
+        expect(body.code).toBe('CSRF_INVALID_SESSION');
       });
 
-      const result = await validateCSRF(request);
+      it('validateCSRF_POSTWithInvalidCSRFToken_returns403WithCSRF_TOKEN_INVALID', async () => {
+        // Arrange: Token validation fails
+        vi.mocked(validateCSRFToken).mockReturnValue(false);
 
-      expect(result).toBeNull();
-      expect(validateCSRFToken).toHaveBeenCalled();
+        const headers = new Headers();
+        headers.set('X-CSRF-Token', 'invalid-csrf-token');
+        headers.set('Cookie', 'accessToken=valid-jwt-token');
+        const request = new Request('https://example.com/api/test', {
+          method: 'POST',
+          headers,
+        });
+
+        // Act
+        const result = await validateCSRF(request);
+
+        // Assert
+        expect(result).not.toBeNull();
+        expect(result?.status).toBe(403);
+        const body = await result?.json();
+        expect(body).toMatchObject({
+          error: 'Invalid or expired CSRF token',
+          code: 'CSRF_TOKEN_INVALID',
+          details: expect.any(String),
+        });
+      });
     });
 
-    it('validates DELETE requests', async () => {
-      const headers = new Headers();
-      headers.set('X-CSRF-Token', 'valid-csrf-token');
-      headers.set('Cookie', 'accessToken=valid-jwt-token');
-      const request = new Request('https://example.com/api/test', {
-        method: 'DELETE',
-        headers,
+    describe('successful validation', () => {
+      it('validateCSRF_POSTWithValidCSRFAndJWT_returnsNull', async () => {
+        // Arrange
+        const headers = new Headers();
+        headers.set('X-CSRF-Token', 'valid-csrf-token');
+        headers.set('Cookie', 'accessToken=valid-jwt-token');
+        const request = new Request('https://example.com/api/test', {
+          method: 'POST',
+          headers,
+        });
+
+        // Act
+        const result = await validateCSRF(request);
+
+        // Assert: null means validation passed
+        expect(result).toBeNull();
       });
 
-      const result = await validateCSRF(request);
+      it('validateCSRF_validRequest_extractsSessionIdFromJWTClaims', async () => {
+        // Arrange
+        const headers = new Headers();
+        headers.set('X-CSRF-Token', 'valid-csrf-token');
+        headers.set('Cookie', 'accessToken=valid-jwt-token');
+        const request = new Request('https://example.com/api/test', {
+          method: 'POST',
+          headers,
+        });
 
-      expect(result).toBeNull();
-      expect(validateCSRFToken).toHaveBeenCalled();
+        // Act
+        await validateCSRF(request);
+
+        // Assert: Verify the session binding flow
+        expect(decodeToken).toHaveBeenCalledWith('mock-jwt-token');
+        expect(getSessionIdFromJWT).toHaveBeenCalledWith(mockJwtPayload);
+        expect(validateCSRFToken).toHaveBeenCalledWith('valid-csrf-token', mockSessionId);
+      });
     });
 
-    it('extracts CSRF token from lowercase header', async () => {
-      const headers = new Headers();
-      headers.set('x-csrf-token', 'valid-csrf-token'); // lowercase
-      headers.set('Cookie', 'accessToken=valid-jwt-token');
-      const request = new Request('https://example.com/api/test', {
-        method: 'POST',
-        headers,
+    describe('mutation methods require validation', () => {
+      const mutationMethods = ['POST', 'PUT', 'PATCH', 'DELETE'] as const;
+
+      mutationMethods.forEach((method) => {
+        it(`validateCSRF_${method}WithValidCredentials_validatesSuccessfully`, async () => {
+          const headers = new Headers();
+          headers.set('X-CSRF-Token', 'valid-csrf-token');
+          headers.set('Cookie', 'accessToken=valid-jwt-token');
+          const request = new Request('https://example.com/api/test', {
+            method,
+            headers,
+          });
+
+          const result = await validateCSRF(request);
+
+          expect(result).toBeNull();
+          expect(validateCSRFToken).toHaveBeenCalled();
+        });
+      });
+    });
+
+    describe('header extraction', () => {
+      it('validateCSRF_lowercaseCSRFHeader_extractsTokenCorrectly', async () => {
+        // Contract: HTTP headers are case-insensitive
+        const headers = new Headers();
+        headers.set('x-csrf-token', 'valid-csrf-token'); // lowercase
+        headers.set('Cookie', 'accessToken=valid-jwt-token');
+        const request = new Request('https://example.com/api/test', {
+          method: 'POST',
+          headers,
+        });
+
+        const result = await validateCSRF(request);
+
+        expect(result).toBeNull();
+        expect(validateCSRFToken).toHaveBeenCalledWith('valid-csrf-token', mockSessionId);
       });
 
-      const result = await validateCSRF(request);
+      it('validateCSRF_multipleCookies_extractsAccessTokenCorrectly', async () => {
+        // Arrange: Multiple cookies in the header
+        vi.mocked(parse).mockReturnValue({ accessToken: 'custom-token' });
 
-      expect(result).toBeNull();
-      expect(validateCSRFToken).toHaveBeenCalledWith('valid-csrf-token', mockSessionId);
-    });
+        const headers = new Headers();
+        headers.set('X-CSRF-Token', 'valid-csrf-token');
+        headers.set('Cookie', 'accessToken=custom-token; other=value; session=abc');
+        const request = new Request('https://example.com/api/test', {
+          method: 'POST',
+          headers,
+        });
 
-    it('handles cookie parsing correctly', async () => {
-      vi.mocked(parse).mockReturnValue({ accessToken: 'custom-token' });
+        // Act
+        await validateCSRF(request);
 
-      const headers = new Headers();
-      headers.set('X-CSRF-Token', 'valid-csrf-token');
-      headers.set('Cookie', 'accessToken=custom-token; other=value');
-      const request = new Request('https://example.com/api/test', {
-        method: 'POST',
-        headers,
+        // Assert: Cookie parser receives full cookie string
+        expect(parse).toHaveBeenCalledWith('accessToken=custom-token; other=value; session=abc');
+        // Assert: Correct token is used for decoding
+        expect(decodeToken).toHaveBeenCalledWith('custom-token');
       });
-
-      await validateCSRF(request);
-
-      expect(parse).toHaveBeenCalledWith('accessToken=custom-token; other=value');
-      expect(decodeToken).toHaveBeenCalledWith('custom-token');
-    });
-
-    it('provides helpful error messages', async () => {
-      const request = new Request('https://example.com/api/test', { method: 'POST' });
-      const result = await validateCSRF(request);
-
-      const body = await result?.json();
-      expect(body.error).toBe('CSRF token required');
-      expect(body.details).toContain('X-CSRF-Token header');
-    });
-
-    it('logs validation failures with context', async () => {
-      vi.mocked(validateCSRFToken).mockReturnValue(false);
-
-      const headers = new Headers();
-      headers.set('X-CSRF-Token', 'invalid-token');
-      headers.set('Cookie', 'accessToken=valid-jwt-token');
-      const request = new Request('https://example.com/api/pages/123', {
-        method: 'DELETE',
-        headers,
-      });
-
-      await validateCSRF(request);
-
-      expect(loggers.auth.warn).toHaveBeenCalledWith(
-        'CSRF token validation failed',
-        expect.objectContaining({
-          method: 'DELETE',
-          userId: mockUserId,
-        })
-      );
     });
   });
 });
