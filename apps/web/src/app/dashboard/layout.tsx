@@ -5,6 +5,7 @@ import Layout from "@/components/layout/Layout";
 
 // Routes that render full-page content instead of CenterPanel
 const FULL_PAGE_ROUTES = [
+  '/dashboard/activity',
   '/dashboard/connections',
   '/dashboard/messages',
   '/dashboard/storage',
@@ -15,9 +16,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const pathname = usePathname();
 
   // Check if current route should render its children directly
+  // Also match /dashboard/[driveId]/activity pattern
   const isFullPageRoute = FULL_PAGE_ROUTES.some(route =>
     pathname?.startsWith(route)
-  );
+  ) || pathname?.match(/^\/dashboard\/[^/]+\/activity/);
 
   if (isFullPageRoute) {
     return <Layout>{children}</Layout>;
