@@ -3,7 +3,6 @@
  */
 
 // Chat infrastructure
-export { MCPToggle } from './MCPToggle';
 export { ChatMessagesArea, type ChatMessagesAreaRef } from './ChatMessagesArea';
 export { ChatInputArea, type ChatInputAreaRef } from './ChatInputArea';
 export { StreamingIndicator } from './StreamingIndicator';

@@ -25,12 +25,20 @@ export interface InputFooterProps {
   showPageTree?: boolean;
   /** Callback when page tree context is toggled */
   onShowPageTreeToggle?: (enabled: boolean) => void;
-  /** Whether MCP is enabled for this conversation */
-  mcpEnabled?: boolean;
-  /** Callback when MCP is toggled */
-  onMcpToggle?: (enabled: boolean) => void;
   /** Number of running MCP servers */
   mcpRunningServers?: number;
+  /** Names of running MCP servers */
+  mcpServerNames?: string[];
+  /** Number of enabled MCP servers */
+  mcpEnabledCount?: number;
+  /** Whether all MCP servers are enabled */
+  mcpAllEnabled?: boolean;
+  /** Toggle all MCP servers */
+  onMcpToggleAll?: (enabled: boolean) => void;
+  /** Check if specific server is enabled */
+  isMcpServerEnabled?: (serverName: string) => boolean;
+  /** Toggle specific server */
+  onMcpServerToggle?: (serverName: string, enabled: boolean) => void;
   /** Whether MCP section should be shown (desktop only) */
   showMcp?: boolean;
   /** Callback when mic button is clicked */
@@ -68,9 +76,13 @@ export function InputFooter({
   onWriteModeToggle,
   showPageTree = false,
   onShowPageTreeToggle,
-  mcpEnabled = false,
-  onMcpToggle,
   mcpRunningServers = 0,
+  mcpServerNames = [],
+  mcpEnabledCount = 0,
+  mcpAllEnabled = false,
+  onMcpToggleAll,
+  isMcpServerEnabled,
+  onMcpServerToggle,
   showMcp = false,
   onMicClick,
   isListening = false,
@@ -99,9 +111,13 @@ export function InputFooter({
           onWriteModeToggle={onWriteModeToggle}
           showPageTree={showPageTree}
           onShowPageTreeToggle={onShowPageTreeToggle}
-          mcpEnabled={mcpEnabled}
-          onMcpToggle={onMcpToggle}
           mcpRunningServers={mcpRunningServers}
+          mcpServerNames={mcpServerNames}
+          mcpEnabledCount={mcpEnabledCount}
+          mcpAllEnabled={mcpAllEnabled}
+          onMcpToggleAll={onMcpToggleAll}
+          isMcpServerEnabled={isMcpServerEnabled}
+          onMcpServerToggle={onMcpServerToggle}
           showMcp={showMcp}
           disabled={disabled}
         />

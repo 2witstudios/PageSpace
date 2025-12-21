@@ -142,8 +142,17 @@ const GlobalAssistantView: React.FC = () => {
   const { isLoading: isLoadingProviders, isAnyProviderConfigured, needsSetup } =
     useProviderSettings();
 
-  const { isDesktop, mcpEnabled, setMcpEnabled, runningServers, mcpToolSchemas } =
-    useMCPTools({ conversationId: currentConversationId });
+  const {
+    isDesktop,
+    runningServers,
+    runningServerNames,
+    mcpToolSchemas,
+    enabledServerCount,
+    isServerEnabled,
+    setServerEnabled,
+    allServersEnabled,
+    setAllServersEnabled,
+  } = useMCPTools({ conversationId: currentConversationId });
 
   // Get drives from store
   const { drives, fetchDrives } = useDriveStore();
@@ -556,9 +565,13 @@ const GlobalAssistantView: React.FC = () => {
         onRetry={handleRetry}
         lastAssistantMessageId={lastAssistantMessageId}
         lastUserMessageId={lastUserMessageId}
-        mcpEnabled={mcpEnabled}
-        onMcpToggle={setMcpEnabled}
         mcpRunningServers={runningServers}
+        mcpServerNames={runningServerNames}
+        mcpEnabledCount={enabledServerCount}
+        mcpAllEnabled={allServersEnabled}
+        onMcpToggleAll={setAllServersEnabled}
+        isMcpServerEnabled={isServerEnabled}
+        onMcpServerToggle={setServerEnabled}
         showMcp={isDesktop}
         renderInput={(props) => (
           <ChatInput
@@ -572,9 +585,13 @@ const GlobalAssistantView: React.FC = () => {
             placeholder={props.placeholder}
             driveId={props.driveId}
             crossDrive={props.crossDrive}
-            mcpEnabled={props.mcpEnabled}
-            onMcpToggle={props.onMcpToggle}
             mcpRunningServers={props.mcpRunningServers}
+            mcpServerNames={props.mcpServerNames}
+            mcpEnabledCount={props.mcpEnabledCount}
+            mcpAllEnabled={props.mcpAllEnabled}
+            onMcpToggleAll={props.onMcpToggleAll}
+            isMcpServerEnabled={props.isMcpServerEnabled}
+            onMcpServerToggle={props.onMcpServerToggle}
             showMcp={props.showMcp}
           />
         )}

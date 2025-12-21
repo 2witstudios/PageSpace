@@ -83,8 +83,17 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     isProviderConfigured,
   } = useProviderSettings({ pageId: page.id });
 
-  const { isDesktop, mcpEnabled, setMcpEnabled, runningServers, mcpToolSchemas } =
-    useMCPTools({ conversationId: currentConversationId });
+  const {
+    isDesktop,
+    runningServers,
+    runningServerNames,
+    mcpToolSchemas,
+    enabledServerCount,
+    isServerEnabled,
+    setServerEnabled,
+    allServersEnabled,
+    setAllServersEnabled,
+  } = useMCPTools({ conversationId: currentConversationId });
 
   const {
     conversations,
@@ -408,9 +417,13 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             lastAssistantMessageId={lastAssistantMessageId}
             lastUserMessageId={lastUserMessageId}
             isReadOnly={isReadOnly}
-            mcpEnabled={mcpEnabled}
-            onMcpToggle={setMcpEnabled}
             mcpRunningServers={runningServers}
+            mcpServerNames={runningServerNames}
+            mcpEnabledCount={enabledServerCount}
+            mcpAllEnabled={allServersEnabled}
+            onMcpToggleAll={setAllServersEnabled}
+            isMcpServerEnabled={isServerEnabled}
+            onMcpServerToggle={setServerEnabled}
             showMcp={isDesktop}
             renderInput={(props) => (
               <ChatInput
@@ -424,9 +437,13 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                 placeholder={props.placeholder}
                 driveId={props.driveId}
                 crossDrive={props.crossDrive}
-                mcpEnabled={props.mcpEnabled}
-                onMcpToggle={props.onMcpToggle}
                 mcpRunningServers={props.mcpRunningServers}
+                mcpServerNames={props.mcpServerNames}
+                mcpEnabledCount={props.mcpEnabledCount}
+                mcpAllEnabled={props.mcpAllEnabled}
+                onMcpToggleAll={props.onMcpToggleAll}
+                isMcpServerEnabled={props.isMcpServerEnabled}
+                onMcpServerToggle={props.onMcpServerToggle}
                 showMcp={props.showMcp}
               />
             )}
