@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useSWRConfig } from "swr";
 import {
+  Activity,
   HardDrive,
   Lock,
   Plus,
@@ -148,6 +149,13 @@ export default function Sidebar({ className }: SidebarProps) {
           >
             <Trash2 className="h-4 w-4" />
             Trash
+          </Link>
+          <Link
+            href={driveId ? `/dashboard/${driveId}/activity` : "/dashboard/activity"}
+            className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+          >
+            <Activity className="h-4 w-4" />
+            Activity
           </Link>
           {!driveId && (
             <>

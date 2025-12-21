@@ -1,13 +1,15 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { db, activityLogs, eq, and, desc, count, gte, lte, sql } from '@pagespace/db';
+import { db, activityLogs, eq, and, desc, gte, lte, sql } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
+import { generateCSV } from '@pagespace/lib';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage, isUserDriveMember } from '@pagespace/lib';
+import { format } from 'date-fns';
 
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: false };
 
-// Query parameter schema
+// Query parameter schema (same as main activities route)
 const querySchema = z.object({
   context: z.enum(['user', 'drive', 'page']),
   driveId: z.string().optional(),
@@ -18,18 +20,12 @@ const querySchema = z.object({
   actorId: z.string().optional(),
   operation: z.string().optional(),
   resourceType: z.string().optional(),
-  // Pagination
-  limit: z.coerce.number().int().min(1).max(100).default(50),
-  offset: z.coerce.number().int().min(0).default(0),
 });
 
 /**
- * GET /api/activities
+ * GET /api/activities/export
  *
- * Fetch activity logs based on context:
- * - user: User's own activity (for dashboard)
- * - drive: All activity within a drive (for drive view)
- * - page: All edits to a specific page (for page view)
+ * Export activity logs as CSV with current filters applied.
  */
 export async function GET(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
@@ -41,22 +37,15 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
 
   try {
-    // Parse and validate query parameters
-    // Note: searchParams.get() returns null, but Zod's .optional() and .default()
-    // only work with undefined, so we convert null → undefined
     const parseResult = querySchema.safeParse({
       context: searchParams.get('context') || 'user',
       driveId: searchParams.get('driveId') ?? undefined,
       pageId: searchParams.get('pageId') ?? undefined,
-      // Filter parameters
       startDate: searchParams.get('startDate') ?? undefined,
       endDate: searchParams.get('endDate') ?? undefined,
       actorId: searchParams.get('actorId') ?? undefined,
       operation: searchParams.get('operation') ?? undefined,
       resourceType: searchParams.get('resourceType') ?? undefined,
-      // Pagination
-      limit: searchParams.get('limit') ?? undefined,
-      offset: searchParams.get('offset') ?? undefined,
     });
 
     if (!parseResult.success) {
@@ -73,7 +62,6 @@ export async function GET(request: Request) {
 
     switch (params.context) {
       case 'user': {
-        // User's own activity (dashboard view)
         whereCondition = and(
           eq(activityLogs.userId, userId),
           eq(activityLogs.isArchived, false)
@@ -82,7 +70,6 @@ export async function GET(request: Request) {
       }
 
       case 'drive': {
-        // All activity within a drive
         if (!params.driveId) {
           return NextResponse.json(
             { error: 'driveId is required for drive context' },
@@ -90,7 +77,6 @@ export async function GET(request: Request) {
           );
         }
 
-        // Verify user can view drive
         const canViewDrive = await isUserDriveMember(userId, params.driveId);
         if (!canViewDrive) {
           return NextResponse.json(
@@ -107,7 +93,6 @@ export async function GET(request: Request) {
       }
 
       case 'page': {
-        // All edits to a specific page
         if (!params.pageId) {
           return NextResponse.json(
             { error: 'pageId is required for page context' },
@@ -115,7 +100,6 @@ export async function GET(request: Request) {
           );
         }
 
-        // Verify user can view page
         const canViewPage = await canUserViewPage(userId, params.pageId);
         if (!canViewPage) {
           return NextResponse.json(
@@ -147,7 +131,6 @@ export async function GET(request: Request) {
       filterConditions.push(gte(activityLogs.timestamp, params.startDate));
     }
     if (params.endDate) {
-      // Add one day to endDate to include the full day
       const endOfDay = new Date(params.endDate);
       endOfDay.setDate(endOfDay.getDate() + 1);
       filterConditions.push(lte(activityLogs.timestamp, endOfDay));
@@ -166,40 +149,60 @@ export async function GET(request: Request) {
       ? and(...filterConditions)
       : undefined;
 
-    // Fetch activities with user info
+    // Fetch all activities (no pagination for export)
     const activities = await db.query.activityLogs.findMany({
       where: finalWhereCondition,
       with: {
         user: {
-          columns: { id: true, name: true, email: true, image: true },
+          columns: { id: true, name: true, email: true },
         },
       },
       orderBy: [desc(activityLogs.timestamp)],
-      limit: params.limit,
-      offset: params.offset,
+      limit: 10000, // Safety limit
     });
 
-    // Get total count for pagination
-    const [countResult] = await db
-      .select({ total: count() })
-      .from(activityLogs)
-      .where(finalWhereCondition);
+    // Build CSV data
+    const headers = [
+      'Timestamp',
+      'Actor Name',
+      'Actor Email',
+      'Operation',
+      'Resource Type',
+      'Resource Title',
+      'AI Generated',
+      'AI Model',
+      'Changed Fields',
+    ];
 
-    const total = countResult?.total ?? 0;
+    const rows = activities.map(activity => [
+      format(new Date(activity.timestamp), 'yyyy-MM-dd HH:mm:ss'),
+      activity.actorDisplayName || activity.user?.name || '',
+      activity.actorEmail || activity.user?.email || '',
+      activity.operation,
+      activity.resourceType,
+      activity.resourceTitle || '',
+      activity.isAiGenerated ? 'Yes' : 'No',
+      activity.isAiGenerated ? `${activity.aiProvider || ''}/${activity.aiModel || ''}` : '',
+      activity.updatedFields ? activity.updatedFields.join(', ') : '',
+    ]);
 
-    return NextResponse.json({
-      activities,
-      pagination: {
-        total,
-        limit: params.limit,
-        offset: params.offset,
-        hasMore: params.offset + activities.length < total,
+    const csvData = [headers, ...rows];
+    const csvContent = generateCSV(csvData);
+
+    // Generate filename with date range
+    const today = format(new Date(), 'yyyy-MM-dd');
+    const filename = `activity-export-${today}.csv`;
+
+    return new Response(csvContent, {
+      headers: {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${filename}"`,
       },
     });
   } catch (error) {
-    loggers.api.error('Error fetching activities:', error as Error);
+    loggers.api.error('Error exporting activities:', error as Error);
     return NextResponse.json(
-      { error: 'Failed to fetch activities' },
+      { error: 'Failed to export activities' },
       { status: 500 }
     );
   }
