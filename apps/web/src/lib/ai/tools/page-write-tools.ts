@@ -753,8 +753,8 @@ export const pageWriteTools = {
           id: movedPage.id,
           title: movedPage.title,
           type: movedPage.type,
-          message: newParentTitle
-            ? `Successfully moved "${movedPage.title}" to "${newParentTitle}" at position ${position}`
+          message: newParentId
+            ? `Successfully moved "${movedPage.title}" to "${newParentTitle ?? 'parent folder'}" at position ${position}`
             : `Successfully moved "${movedPage.title}" to root at position ${position}`,
         };
       } catch (error) {
