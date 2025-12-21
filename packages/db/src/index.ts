@@ -10,7 +10,7 @@ export {
 } from 'drizzle-orm';
 
 // Re-export types
-export type { SQL } from 'drizzle-orm';
+export type { SQL, InferSelectModel, InferInsertModel } from 'drizzle-orm';
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,

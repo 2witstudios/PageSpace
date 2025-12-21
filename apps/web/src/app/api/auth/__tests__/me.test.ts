@@ -1,252 +1,194 @@
+/**
+ * Contract tests for GET /api/auth/me
+ *
+ * These tests verify the Request → Response contract.
+ * Database operations are mocked at the repository seam (not ORM chains).
+ *
+ * Coverage:
+ * - Authentication (token validation)
+ * - User profile retrieval
+ * - Security (no password exposure, role-based responses)
+ */
+
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
 import { GET } from '../me/route';
+import type { User } from '@/lib/repositories/auth-repository';
 
-// Mock dependencies
-vi.mock('@pagespace/db', () => ({
-  users: { id: 'id' },
-  db: {
-    query: {
-      users: {
-        findFirst: vi.fn(),
-      },
-    },
+// Mock the repository seam (boundary)
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserById: vi.fn(),
   },
-  eq: vi.fn((field, value) => ({ field, value })),
 }));
 
+// Mock auth helpers (boundary)
 vi.mock('@/lib/auth/auth-helpers', () => ({
   requireAuth: vi.fn(),
   isAuthError: vi.fn(),
 }));
 
-import { db, eq } from '@pagespace/db';
+import { authRepository } from '@/lib/repositories/auth-repository';
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
 
-describe('/api/auth/me', () => {
-  const mockUser = {
-    id: 'test-user-id',
-    name: 'Test User',
-    email: 'test@example.com',
-    image: 'https://example.com/avatar.png',
-    role: 'user' as const,
-    provider: 'email',
-    googleId: null,
-    emailVerified: true,
-  };
+// Test fixtures
+const mockVerifiedDate = new Date('2024-01-15T10:00:00Z');
+const mockUser: User = {
+  id: 'test-user-id',
+  name: 'Test User',
+  email: 'test@example.com',
+  image: 'https://example.com/avatar.png',
+  role: 'user',
+  provider: 'email',
+  googleId: null,
+  emailVerified: mockVerifiedDate,
+  password: '$2a$12$hashedpassword',
+  tokenVersion: 0,
+  currentAiProvider: 'pagespace',
+  currentAiModel: 'glm-4.5-air',
+  storageUsedBytes: 0,
+  activeUploads: 0,
+  lastStorageCalculated: null,
+  stripeCustomerId: null,
+  subscriptionTier: 'free',
+  tosAcceptedAt: null,
+  createdAt: new Date('2024-01-01T00:00:00Z'),
+  updatedAt: new Date('2024-01-01T00:00:00Z'),
+};
 
+const mockAuthSuccess = {
+  userId: 'test-user-id',
+  role: 'user',
+  tokenVersion: 0,
+  tokenType: 'jwt',
+};
+
+const createRequest = () => {
+  return new Request('http://localhost/api/auth/me', {
+    method: 'GET',
+    headers: {
+      Cookie: 'accessToken=valid-token',
+    },
+  });
+};
+
+describe('GET /api/auth/me', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
     // Default: authenticated user
-    (requireAuth as unknown as Mock).mockResolvedValue({
-      userId: 'test-user-id',
-      role: 'user',
-      tokenVersion: 0,
-      tokenType: 'jwt',
-    });
+    (requireAuth as unknown as Mock).mockResolvedValue(mockAuthSuccess);
     (isAuthError as unknown as Mock).mockReturnValue(false);
-    (db.query.users.findFirst as unknown as Mock).mockResolvedValue(mockUser);
+    vi.mocked(authRepository.findUserById).mockResolvedValue(mockUser);
   });
 
   describe('successful retrieval', () => {
     it('returns 200 with user profile data', async () => {
-      // Arrange
-      const request = new Request('http://localhost/api/auth/me', {
-        method: 'GET',
-        headers: {
-          Cookie: 'accessToken=valid-token',
-        },
-      });
-
-      // Act
-      const response = await GET(request);
+      const response = await GET(createRequest());
       const body = await response.json();
 
-      // Assert
       expect(response.status).toBe(200);
       expect(body.id).toBe(mockUser.id);
       expect(body.name).toBe(mockUser.name);
       expect(body.email).toBe(mockUser.email);
       expect(body.image).toBe(mockUser.image);
       expect(body.role).toBe(mockUser.role);
-      expect(body.emailVerified).toBe(mockUser.emailVerified);
+      // Date is serialized to ISO string in JSON response
+      expect(body.emailVerified).toBe(mockVerifiedDate.toISOString());
     });
 
     it('does not expose sensitive fields like password', async () => {
-      // Arrange
-      const userWithPassword = { ...mockUser, password: 'hashed-password' };
-      (db.query.users.findFirst as Mock).mockResolvedValue(userWithPassword);
-
-      const request = new Request('http://localhost/api/auth/me', {
-        method: 'GET',
-        headers: {
-          Cookie: 'accessToken=valid-token',
-        },
-      });
-
-      // Act
-      const response = await GET(request);
+      const response = await GET(createRequest());
       const body = await response.json();
 
-      // Assert
+      // Security: password must never be in response
       expect(body.password).toBeUndefined();
+      expect(body.tokenVersion).toBeUndefined();
     });
 
     it('returns admin role for admin users', async () => {
-      // Arrange
-      const adminUser = { ...mockUser, role: 'admin' as const };
-      (db.query.users.findFirst as Mock).mockResolvedValue(adminUser);
-      (requireAuth as unknown as Mock).mockResolvedValue({
-        userId: 'test-user-id',
+      vi.mocked(authRepository.findUserById).mockResolvedValue({
+        ...mockUser,
         role: 'admin',
-        tokenVersion: 0,
-        tokenType: 'jwt',
+      });
+      (requireAuth as unknown as Mock).mockResolvedValue({
+        ...mockAuthSuccess,
+        role: 'admin',
       });
 
-      const request = new Request('http://localhost/api/auth/me', {
-        method: 'GET',
-        headers: {
-          Cookie: 'accessToken=valid-token',
-        },
-      });
-
-      // Act
-      const response = await GET(request);
+      const response = await GET(createRequest());
       const body = await response.json();
 
-      // Assert
       expect(body.role).toBe('admin');
     });
   });
 
   describe('authentication', () => {
     it('returns 401 when not authenticated', async () => {
-      // Arrange
       const mockResponse = new Response('Unauthorized', { status: 401 });
       (requireAuth as unknown as Mock).mockResolvedValue(mockResponse);
       (isAuthError as unknown as Mock).mockReturnValue(true);
 
-      const request = new Request('http://localhost/api/auth/me', {
-        method: 'GET',
-      });
+      const response = await GET(createRequest());
 
-      // Act
-      const response = await GET(request);
-
-      // Assert
       expect(response.status).toBe(401);
     });
 
-    it('queries database with authenticated userId', async () => {
-      // Arrange
-      const request = new Request('http://localhost/api/auth/me', {
-        method: 'GET',
-        headers: {
-          Cookie: 'accessToken=valid-token',
-        },
-      });
+    it('calls repository with authenticated userId', async () => {
+      await GET(createRequest());
 
-      // Act
-      await GET(request);
-
-      // Assert - verify query is scoped to the authenticated user ID
-      expect(db.query.users.findFirst).toHaveBeenCalled();
-      expect(eq).toHaveBeenCalled();
-      // Verify eq was called with the users.id field and the authenticated user's ID
-      const eqCalls = (eq as Mock).mock.calls;
-      const userIdCall = eqCalls.find(
-        (call) => call[1] === 'test-user-id'
-      );
-      expect(userIdCall).toBeDefined();
+      expect(authRepository.findUserById).toHaveBeenCalledWith('test-user-id');
     });
   });
 
   describe('user not found', () => {
     it('returns 404 when authenticated user is not found in database', async () => {
-      // Arrange - rare edge case: token valid but user deleted
-      (db.query.users.findFirst as Mock).mockResolvedValue(null);
+      // Edge case: token valid but user deleted
+      vi.mocked(authRepository.findUserById).mockResolvedValue(null);
 
-      const request = new Request('http://localhost/api/auth/me', {
-        method: 'GET',
-        headers: {
-          Cookie: 'accessToken=valid-token',
-        },
-      });
-
-      // Act
-      const response = await GET(request);
+      const response = await GET(createRequest());
       const body = await response.json();
 
-      // Assert
       expect(response.status).toBe(404);
       expect(body.error).toBe('User not found');
     });
   });
 
   describe('OAuth users', () => {
-    it('includes provider information for Google OAuth users', async () => {
-      // Arrange
-      const oauthUser = {
+    it('returns correct email for Google OAuth users', async () => {
+      const oauthUser: User = {
         ...mockUser,
         provider: 'google',
         googleId: 'google-123',
       };
-      (db.query.users.findFirst as Mock).mockResolvedValue(oauthUser);
+      vi.mocked(authRepository.findUserById).mockResolvedValue(oauthUser);
 
-      const request = new Request('http://localhost/api/auth/me', {
-        method: 'GET',
-        headers: {
-          Cookie: 'accessToken=valid-token',
-        },
-      });
-
-      // Act
-      const response = await GET(request);
+      const response = await GET(createRequest());
       const body = await response.json();
 
-      // Assert
       expect(response.status).toBe(200);
-      // Note: The actual route implementation controls what fields are returned
       expect(body.email).toBe(oauthUser.email);
     });
   });
 
   describe('email verification status', () => {
-    it('returns emailVerified: false for unverified users', async () => {
-      // Arrange
-      const unverifiedUser = { ...mockUser, emailVerified: false };
-      (db.query.users.findFirst as Mock).mockResolvedValue(unverifiedUser);
-
-      const request = new Request('http://localhost/api/auth/me', {
-        method: 'GET',
-        headers: {
-          Cookie: 'accessToken=valid-token',
-        },
+    it('returns null emailVerified for unverified users', async () => {
+      vi.mocked(authRepository.findUserById).mockResolvedValue({
+        ...mockUser,
+        emailVerified: null, // Not verified - null in database
       });
 
-      // Act
-      const response = await GET(request);
+      const response = await GET(createRequest());
       const body = await response.json();
 
-      // Assert
-      expect(body.emailVerified).toBe(false);
+      expect(body.emailVerified).toBeNull();
     });
 
-    it('returns emailVerified: true for verified users', async () => {
-      // Arrange
-      const request = new Request('http://localhost/api/auth/me', {
-        method: 'GET',
-        headers: {
-          Cookie: 'accessToken=valid-token',
-        },
-      });
-
-      // Act
-      const response = await GET(request);
+    it('returns verification date for verified users', async () => {
+      const response = await GET(createRequest());
       const body = await response.json();
 
-      // Assert
-      expect(body.emailVerified).toBe(true);
+      // Date is serialized to ISO string
+      expect(body.emailVerified).toBe(mockVerifiedDate.toISOString());
     });
   });
 });
