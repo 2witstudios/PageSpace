@@ -199,7 +199,7 @@ export async function GET(request: Request) {
       activity.resourceType,
       activity.resourceTitle || '',
       activity.isAiGenerated ? 'Yes' : 'No',
-      activity.isAiGenerated ? `${activity.aiProvider || ''}/${activity.aiModel || ''}` : '',
+      activity.isAiGenerated ? [activity.aiProvider, activity.aiModel].filter(Boolean).join('/') : '',
       activity.updatedFields ? activity.updatedFields.join(', ') : '',
     ]);
 
@@ -207,8 +207,17 @@ export async function GET(request: Request) {
     const csvContent = generateCSV(csvData);
 
     // Generate filename with date range
-    const today = format(new Date(), 'yyyy-MM-dd');
-    const filename = `activity-export-${today}.csv`;
+    let filename = 'activity-export';
+    if (params.startDate && params.endDate) {
+      filename += `-${format(params.startDate, 'yyyy-MM-dd')}-to-${format(params.endDate, 'yyyy-MM-dd')}`;
+    } else if (params.startDate) {
+      filename += `-from-${format(params.startDate, 'yyyy-MM-dd')}`;
+    } else if (params.endDate) {
+      filename += `-until-${format(params.endDate, 'yyyy-MM-dd')}`;
+    } else {
+      filename += `-${format(new Date(), 'yyyy-MM-dd')}`;
+    }
+    filename += '.csv';
 
     // Check if results were truncated
     const isTruncated = activities.length === 10000;

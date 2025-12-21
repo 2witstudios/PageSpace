@@ -33,8 +33,12 @@ export function ActivityDashboard({ context, driveId: initialDriveId, driveName 
   // Filter state from URL params
   const [selectedDriveId, setSelectedDriveId] = useState<string | undefined>(initialDriveId);
   const [filters, setFilters] = useState<ActivityFilters>(() => ({
-    startDate: searchParams.get('startDate') ? new Date(searchParams.get('startDate')!) : undefined,
-    endDate: searchParams.get('endDate') ? new Date(searchParams.get('endDate')!) : undefined,
+    startDate: searchParams.get('startDate')
+      ? new Date(searchParams.get('startDate') as string)
+      : undefined,
+    endDate: searchParams.get('endDate')
+      ? new Date(searchParams.get('endDate') as string)
+      : undefined,
     actorId: searchParams.get('actorId') || undefined,
     operation: searchParams.get('operation') || undefined,
     resourceType: searchParams.get('resourceType') || undefined,
@@ -89,7 +93,8 @@ export function ActivityDashboard({ context, driveId: initialDriveId, driveName 
     } catch (err) {
       console.error('Error fetching drives:', err);
     }
-  }, [context, selectedDriveId]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- selectedDriveId is only checked, not derived from
+  }, [context]);
 
   // Fetch activities
   const fetchActivities = useCallback(
