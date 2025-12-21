@@ -103,7 +103,7 @@ describe('page-write-tools', () => {
 
       await expect(
         pageWriteTools.replace_lines.execute!(
-          { path: '/drive/page', pageId: 'page-1', startLine: 1, content: 'new' },
+          { title: 'Test Doc', pageId: 'page-1', startLine: 1, content: 'new' },
           context
         )
       ).rejects.toThrow('User authentication required');
@@ -121,7 +121,7 @@ describe('page-write-tools', () => {
       // Act & Assert
       await expect(
         pageWriteTools.replace_lines.execute!(
-          { path: '/drive/page', pageId: 'non-existent', startLine: 1, content: 'new' },
+          { title: 'Test Doc', pageId: 'non-existent', startLine: 1, content: 'new' },
           context
         )
       ).rejects.toThrow('Page with ID "non-existent" not found');
@@ -152,7 +152,7 @@ describe('page-write-tools', () => {
 
       // Act
       const result = await pageWriteTools.replace_lines.execute!(
-        { path: '/drive/page', pageId: 'page-1', startLine: 1, content: 'new' },
+        { title: 'uploaded.pdf', pageId: 'page-1', startLine: 1, content: 'new' },
         context
       );
 
@@ -183,7 +183,7 @@ describe('page-write-tools', () => {
 
       // Act
       const result = await pageWriteTools.replace_lines.execute!(
-        { path: '/drive/page', pageId: 'page-1', startLine: 1, content: 'new' },
+        { title: 'My Sheet', pageId: 'page-1', startLine: 1, content: 'new' },
         context
       );
 
@@ -221,7 +221,7 @@ describe('page-write-tools', () => {
 
       // Act
       const result = await pageWriteTools.replace_lines.execute!(
-        { path: '/drive/page', pageId: 'page-1', startLine: 2, content: 'New Line 2' },
+        { title: 'Test Doc', pageId: 'page-1', startLine: 2, content: 'New Line 2' },
         context
       );
 
@@ -338,7 +338,7 @@ describe('page-write-tools', () => {
 
       await expect(
         pageWriteTools.rename_page.execute!(
-          { path: '/drive/page', pageId: 'page-1', title: 'New Title' },
+          { currentTitle: 'Old Title', pageId: 'page-1', title: 'New Title' },
           context
         )
       ).rejects.toThrow('User authentication required');
@@ -372,7 +372,7 @@ describe('page-write-tools', () => {
 
       // Act
       const result = await pageWriteTools.rename_page.execute!(
-        { path: '/drive/page', pageId: 'page-1', title: 'New Title' },
+        { currentTitle: 'Old Title', pageId: 'page-1', title: 'New Title' },
         context
       );
 
@@ -449,7 +449,7 @@ describe('page-write-tools', () => {
 
       await expect(
         pageWriteTools.move_page.execute!(
-          { path: '/old', pageId: 'page-1', newParentPath: '/new', position: 1 },
+          { title: 'Test Page', pageId: 'page-1', newParentTitle: 'New Folder', position: 1 },
           context
         )
       ).rejects.toThrow('User authentication required');
