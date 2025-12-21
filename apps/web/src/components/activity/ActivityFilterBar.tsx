@@ -39,7 +39,7 @@ export function ActivityFilterBar({
           onValueChange={(value) => onDriveChange(value === 'all' ? '' : value)}
         >
           <SelectTrigger className="w-[180px]">
-            <SelectValue placeholder={context === 'drive' ? 'Select drive' : 'All drives'} />
+            <SelectValue placeholder="All drives" />
           </SelectTrigger>
           <SelectContent>
             {context === 'user' && (
