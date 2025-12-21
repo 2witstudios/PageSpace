@@ -488,8 +488,8 @@ export interface AIToolUsage {
   model: string;
   toolName: string;
   toolId?: string;
-  args?: any;
-  result?: any;
+  args?: unknown;
+  result?: unknown;
   duration?: number;
   success?: boolean;
   error?: string;
