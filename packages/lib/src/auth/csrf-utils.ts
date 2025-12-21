@@ -13,22 +13,23 @@ const CSRF_SEPARATOR = '.';
 
 /**
  * Generates a CSRF token for the given session ID
- * @throws Error if sessionId is empty or whitespace-only
+ * @throws {Error} if sessionId is empty or invalid
  */
 export function generateCSRFToken(sessionId: string): string {
-  if (!sessionId || sessionId.trim() === '') {
-    throw new Error('sessionId is required for CSRF token generation');
+  // Validate sessionId upfront - empty session IDs produce unusable tokens
+  if (!sessionId || typeof sessionId !== 'string' || sessionId.trim() === '') {
+    throw new Error('Invalid sessionId: must be a non-empty string');
   }
 
   const tokenValue = randomBytes(CSRF_TOKEN_LENGTH).toString('hex');
   const timestamp = Math.floor(Date.now() / 1000).toString();
-  
+
   // Create HMAC signature: sessionId.tokenValue.timestamp
   const payload = `${sessionId}${CSRF_SEPARATOR}${tokenValue}${CSRF_SEPARATOR}${timestamp}`;
   const signature = createHmac('sha256', getCSRFSecret())
     .update(payload)
     .digest('hex');
-  
+
   return `${tokenValue}${CSRF_SEPARATOR}${timestamp}${CSRF_SEPARATOR}${signature}`;
 }
 

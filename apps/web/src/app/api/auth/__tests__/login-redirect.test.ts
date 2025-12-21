@@ -49,6 +49,12 @@ vi.mock('@pagespace/lib/activity-tracker', () => ({
 
 vi.mock('cookie', () => ({
   serialize: vi.fn(() => 'mock-cookie'),
+  parse: vi.fn(() => ({ login_csrf: 'valid-csrf-token' })),
+}));
+
+// Mock login CSRF validation
+vi.mock('@/lib/auth/login-csrf-utils', () => ({
+  validateLoginCSRFToken: vi.fn(() => true),
 }));
 
 vi.mock('@paralleldrive/cuid2', () => ({
@@ -111,7 +117,11 @@ describe('/api/auth/login redirect', () => {
   test('given user has no drives, should return redirectTo Getting Started drive', async () => {
     const request = new Request('http://localhost/api/auth/login', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Login-CSRF-Token': 'valid-csrf-token',
+        'Cookie': 'login_csrf=valid-csrf-token',
+      },
       body: JSON.stringify({
         email: 'test@example.com',
         password: 'Password123456',
@@ -130,7 +140,11 @@ describe('/api/auth/login redirect', () => {
 
     const request = new Request('http://localhost/api/auth/login', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Login-CSRF-Token': 'valid-csrf-token',
+        'Cookie': 'login_csrf=valid-csrf-token',
+      },
       body: JSON.stringify({
         email: 'test@example.com',
         password: 'Password123456',
@@ -149,7 +163,11 @@ describe('/api/auth/login redirect', () => {
 
     const request = new Request('http://localhost/api/auth/login', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Login-CSRF-Token': 'valid-csrf-token',
+        'Cookie': 'login_csrf=valid-csrf-token',
+      },
       body: JSON.stringify({
         email: 'test@example.com',
         password: 'Password123456',

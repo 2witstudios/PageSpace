@@ -67,6 +67,12 @@ vi.mock('@pagespace/lib/activity-tracker', () => ({
 
 vi.mock('cookie', () => ({
   serialize: vi.fn().mockReturnValue('mock-cookie'),
+  parse: vi.fn(() => ({ login_csrf: 'valid-csrf-token' })),
+}));
+
+// Mock login CSRF validation
+vi.mock('@/lib/auth/login-csrf-utils', () => ({
+  validateLoginCSRFToken: vi.fn(() => true),
 }));
 
 vi.mock('@/lib/onboarding/getting-started-drive', () => ({
@@ -115,13 +121,19 @@ const validLoginPayload = {
   password: 'validPassword123',
 };
 
-const createRequest = (
+// Helper function to create requests with CSRF headers
+const createLoginRequest = (
   payload: Record<string, unknown>,
-  headers: Record<string, string> = {}
+  additionalHeaders: Record<string, string> = {}
 ) => {
   return new Request('http://localhost/api/auth/login', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...headers },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Login-CSRF-Token': 'valid-csrf-token',
+      'Cookie': 'login_csrf=valid-csrf-token',
+      ...additionalHeaders,
+    },
     body: JSON.stringify(payload),
   });
 };
@@ -139,7 +151,8 @@ describe('POST /api/auth/login', () => {
 
   describe('successful login', () => {
     it('returns 200 and user data on successful login', async () => {
-      const response = await POST(createRequest(validLoginPayload));
+      const request = createLoginRequest(validLoginPayload);
+      const response = await POST(request);
       const body = await response.json();
 
       expect(response.status).toBe(200);
@@ -149,7 +162,8 @@ describe('POST /api/auth/login', () => {
     });
 
     it('sets httpOnly cookies for accessToken and refreshToken', async () => {
-      const response = await POST(createRequest(validLoginPayload));
+      const request = createLoginRequest(validLoginPayload);
+      const response = await POST(request);
 
       expect(response.headers.get('set-cookie')).toBeTruthy();
 
@@ -177,7 +191,8 @@ describe('POST /api/auth/login', () => {
     });
 
     it('generates access and refresh tokens with correct user data', async () => {
-      await POST(createRequest(validLoginPayload));
+      const request = createLoginRequest(validLoginPayload);
+      await POST(request);
 
       expect(generateAccessToken).toHaveBeenCalledWith(
         mockUser.id,
@@ -192,7 +207,7 @@ describe('POST /api/auth/login', () => {
     });
 
     it('stores refresh token via repository', async () => {
-      await POST(createRequest(validLoginPayload));
+      await POST(createLoginRequest(validLoginPayload));
 
       expect(authRepository.createRefreshToken).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -204,7 +219,7 @@ describe('POST /api/auth/login', () => {
     });
 
     it('resets rate limits on successful login', async () => {
-      const request = createRequest(validLoginPayload, {
+      const request = createLoginRequest(validLoginPayload, {
         'x-forwarded-for': '192.168.1.1',
       });
 
@@ -215,7 +230,7 @@ describe('POST /api/auth/login', () => {
     });
 
     it('logs successful login event', async () => {
-      const request = createRequest(validLoginPayload, {
+      const request = createLoginRequest(validLoginPayload, {
         'x-forwarded-for': '192.168.1.1',
       });
 
@@ -243,8 +258,8 @@ describe('POST /api/auth/login', () => {
         deviceId: 'device-123',
         deviceName: 'Test Device',
       };
-
-      const response = await POST(createRequest(payloadWithDevice));
+      const request = createLoginRequest(payloadWithDevice);
+      const response = await POST(request);
       const body = await response.json();
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
@@ -263,12 +278,11 @@ describe('POST /api/auth/login', () => {
       vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
       (bcrypt.compare as Mock).mockResolvedValue(false);
 
-      const response = await POST(
-        createRequest({
-          email: 'nonexistent@example.com',
-          password: 'anypassword',
-        })
-      );
+      const request = createLoginRequest({
+        email: 'nonexistent@example.com',
+        password: 'anypassword',
+      });
+      const response = await POST(request);
       const body = await response.json();
 
       expect(response.status).toBe(401);
@@ -278,12 +292,11 @@ describe('POST /api/auth/login', () => {
     it('returns 401 for incorrect password', async () => {
       (bcrypt.compare as Mock).mockResolvedValue(false);
 
-      const response = await POST(
-        createRequest({
-          email: 'test@example.com',
-          password: 'wrongpassword',
-        })
-      );
+      const request = createLoginRequest({
+        email: 'test@example.com',
+        password: 'wrongpassword',
+      });
+      const response = await POST(request);
       const body = await response.json();
 
       expect(response.status).toBe(401);
@@ -295,12 +308,11 @@ describe('POST /api/auth/login', () => {
       // This prevents timing attacks that could reveal user existence
       vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
 
-      await POST(
-        createRequest({
-          email: 'nonexistent@example.com',
-          password: 'anypassword',
-        })
-      );
+      const request = createLoginRequest({
+        email: 'nonexistent@example.com',
+        password: 'anypassword',
+      });
+      await POST(request);
 
       expect(bcrypt.compare).toHaveBeenCalled();
       const [password, hash] = (bcrypt.compare as Mock).mock.calls[0];
@@ -314,10 +326,12 @@ describe('POST /api/auth/login', () => {
     it('logs failed login attempt', async () => {
       (bcrypt.compare as Mock).mockResolvedValue(false);
 
-      const request = createRequest(
-        { email: 'test@example.com', password: 'wrongpassword' },
-        { 'x-forwarded-for': '192.168.1.1' }
-      );
+      const request = createLoginRequest({
+        email: 'test@example.com',
+        password: 'wrongpassword',
+      }, {
+        'x-forwarded-for': '192.168.1.1',
+      });
 
       await POST(request);
 
@@ -336,7 +350,8 @@ describe('POST /api/auth/login', () => {
         password: null, // OAuth user has no password
       });
 
-      const response = await POST(createRequest(validLoginPayload));
+      const request = createLoginRequest(validLoginPayload);
+      const response = await POST(request);
       const body = await response.json();
 
       expect(response.status).toBe(401);
@@ -346,7 +361,8 @@ describe('POST /api/auth/login', () => {
 
   describe('input validation', () => {
     it('returns 400 for missing email', async () => {
-      const response = await POST(createRequest({ password: 'somepassword' }));
+      const request = createLoginRequest({ password: 'somepassword' });
+      const response = await POST(request);
       const body = await response.json();
 
       expect(response.status).toBe(400);
@@ -354,9 +370,8 @@ describe('POST /api/auth/login', () => {
     });
 
     it('returns 400 for invalid email format', async () => {
-      const response = await POST(
-        createRequest({ email: 'not-an-email', password: 'somepassword' })
-      );
+      const request = createLoginRequest({ email: 'not-an-email', password: 'somepassword' });
+      const response = await POST(request);
       const body = await response.json();
 
       expect(response.status).toBe(400);
@@ -364,7 +379,8 @@ describe('POST /api/auth/login', () => {
     });
 
     it('returns 400 for missing password', async () => {
-      const response = await POST(createRequest({ email: 'test@example.com' }));
+      const request = createLoginRequest({ email: 'test@example.com' });
+      const response = await POST(request);
       const body = await response.json();
 
       expect(response.status).toBe(400);
@@ -372,9 +388,8 @@ describe('POST /api/auth/login', () => {
     });
 
     it('returns 400 for empty password', async () => {
-      const response = await POST(
-        createRequest({ email: 'test@example.com', password: '' })
-      );
+      const request = createLoginRequest({ email: 'test@example.com', password: '' });
+      const response = await POST(request);
       const body = await response.json();
 
       expect(response.status).toBe(400);
@@ -388,7 +403,7 @@ describe('POST /api/auth/login', () => {
         .mockReturnValueOnce({ allowed: false, retryAfter: 900 }) // IP limit
         .mockReturnValue({ allowed: true }); // email limit
 
-      const request = createRequest(validLoginPayload, {
+      const request = createLoginRequest(validLoginPayload, {
         'x-forwarded-for': '192.168.1.1',
       });
 
@@ -406,7 +421,8 @@ describe('POST /api/auth/login', () => {
         .mockReturnValueOnce({ allowed: true }) // IP limit
         .mockReturnValueOnce({ allowed: false, retryAfter: 900 }); // email limit
 
-      const response = await POST(createRequest(validLoginPayload));
+      const request = createLoginRequest(validLoginPayload);
+      const response = await POST(request);
       const body = await response.json();
 
       expect(response.status).toBe(429);
@@ -414,12 +430,10 @@ describe('POST /api/auth/login', () => {
     });
 
     it('checks rate limits before database query', async () => {
-      (checkRateLimit as Mock).mockReturnValue({
-        allowed: false,
-        retryAfter: 900,
-      });
+      (checkRateLimit as Mock).mockReturnValue({ allowed: false, retryAfter: 900 });
 
-      await POST(createRequest(validLoginPayload));
+      const request = createLoginRequest(validLoginPayload);
+      await POST(request);
 
       // Database should not be queried when rate limited
       expect(authRepository.findUserByEmail).not.toHaveBeenCalled();
@@ -428,7 +442,7 @@ describe('POST /api/auth/login', () => {
 
   describe('IP extraction', () => {
     it('extracts IP from x-forwarded-for header', async () => {
-      const request = createRequest(validLoginPayload, {
+      const request = createLoginRequest(validLoginPayload, {
         'x-forwarded-for': '203.0.113.195, 70.41.3.18, 150.172.238.178',
       });
 
@@ -441,7 +455,7 @@ describe('POST /api/auth/login', () => {
     });
 
     it('extracts IP from x-real-ip header when x-forwarded-for is missing', async () => {
-      const request = createRequest(validLoginPayload, {
+      const request = createLoginRequest(validLoginPayload, {
         'x-real-ip': '192.168.1.100',
       });
 
@@ -454,7 +468,8 @@ describe('POST /api/auth/login', () => {
     });
 
     it('uses "unknown" as fallback IP when headers are missing', async () => {
-      await POST(createRequest(validLoginPayload));
+      const request = createLoginRequest(validLoginPayload);
+      await POST(request);
 
       expect(checkRateLimit).toHaveBeenCalledWith('unknown', expect.any(Object));
     });
@@ -466,7 +481,8 @@ describe('POST /api/auth/login', () => {
         new Error('Database connection failed')
       );
 
-      const response = await POST(createRequest(validLoginPayload));
+      const request = createLoginRequest(validLoginPayload);
+      const response = await POST(request);
       const body = await response.json();
 
       expect(response.status).toBe(500);
@@ -478,7 +494,8 @@ describe('POST /api/auth/login', () => {
         new Error('Sensitive database error: connection string leaked')
       );
 
-      const response = await POST(createRequest(validLoginPayload));
+      const request = createLoginRequest(validLoginPayload);
+      const response = await POST(request);
       const body = await response.json();
 
       expect(body.error).not.toContain('Sensitive');
@@ -488,7 +505,7 @@ describe('POST /api/auth/login', () => {
 
   describe('case sensitivity', () => {
     it('normalizes email to lowercase for rate limiting', async () => {
-      const request = createRequest({
+      const request = createLoginRequest({
         email: 'TEST@EXAMPLE.COM',
         password: 'validPassword123',
       });

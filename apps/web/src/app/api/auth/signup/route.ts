@@ -3,16 +3,16 @@ import bcrypt from 'bcryptjs';
 import { z } from 'zod/v4';
 import { generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, checkRateLimit, resetRateLimit, RATE_LIMIT_CONFIGS, createNotification, decodeToken, validateOrCreateDeviceToken } from '@pagespace/lib/server';
 import { createId } from '@paralleldrive/cuid2';
-import { loggers, logAuthEvent } from '@pagespace/lib/server';
+import { loggers, logAuthEvent, logSecurityEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
-import { serialize } from 'cookie';
+import { serialize, parse } from 'cookie';
 import { createVerificationToken } from '@pagespace/lib/verification-utils';
 import { sendEmail } from '@pagespace/lib/services/email-service';
 import { VerificationEmail } from '@pagespace/lib/email-templates/VerificationEmail';
 import React from 'react';
 import { NextResponse } from 'next/server';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
-// Removed AI defaults dependency
+import { validateLoginCSRFToken } from '@/lib/auth/login-csrf-utils';
 
 const signupSchema = z.object({
   name: z.string().min(1, {
@@ -45,6 +45,56 @@ export async function POST(req: Request) {
   let email: string | undefined;
 
   try {
+    // Validate Login CSRF token to prevent Login CSRF attacks
+    // This prevents attackers from forcing victims to create an attacker-controlled account
+    const csrfTokenHeader = req.headers.get('x-login-csrf-token');
+    const cookieHeader = req.headers.get('cookie');
+    const cookies = parse(cookieHeader || '');
+    const csrfTokenCookie = cookies.login_csrf;
+
+    // Both header and cookie must be present and match
+    if (!csrfTokenHeader || !csrfTokenCookie) {
+      logSecurityEvent('signup_csrf_missing', {
+        ip: clientIP,
+        hasHeader: !!csrfTokenHeader,
+        hasCookie: !!csrfTokenCookie,
+      });
+      return Response.json(
+        {
+          error: 'Login CSRF token required',
+          code: 'LOGIN_CSRF_MISSING',
+          details: 'Please refresh the page and try again',
+        },
+        { status: 403 }
+      );
+    }
+
+    // Verify tokens match (double-submit pattern)
+    if (csrfTokenHeader !== csrfTokenCookie) {
+      logSecurityEvent('signup_csrf_mismatch', { ip: clientIP });
+      return Response.json(
+        {
+          error: 'Invalid login CSRF token',
+          code: 'LOGIN_CSRF_MISMATCH',
+          details: 'Please refresh the page and try again',
+        },
+        { status: 403 }
+      );
+    }
+
+    // Validate token signature and expiry
+    if (!validateLoginCSRFToken(csrfTokenHeader)) {
+      logSecurityEvent('signup_csrf_invalid', { ip: clientIP });
+      return Response.json(
+        {
+          error: 'Invalid or expired login CSRF token',
+          code: 'LOGIN_CSRF_INVALID',
+          details: 'Please refresh the page and try again',
+        },
+        { status: 403 }
+      );
+    }
+
     const body = await req.json();
     const validation = signupSchema.safeParse(body);
 

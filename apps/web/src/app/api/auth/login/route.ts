@@ -10,10 +10,11 @@ import {
   decodeToken,
   validateOrCreateDeviceToken,
 } from '@pagespace/lib/server';
-import { serialize } from 'cookie';
-import { loggers, logAuthEvent } from '@pagespace/lib/server';
+import { serialize, parse } from 'cookie';
+import { loggers, logAuthEvent, logSecurityEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { validateLoginCSRFToken } from '@/lib/auth/login-csrf-utils';
 import { authRepository } from '@/lib/repositories/auth-repository';
 
 const loginSchema = z.object({
@@ -29,6 +30,61 @@ const loginSchema = z.object({
 
 export async function POST(req: Request) {
   try {
+    // Get client IP early for logging
+    const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] ||
+                     req.headers.get('x-real-ip') ||
+                     'unknown';
+
+    // Validate Login CSRF token to prevent Login CSRF attacks
+    // This prevents attackers from forcing victims to log into attacker's account
+    const csrfTokenHeader = req.headers.get('x-login-csrf-token');
+    const cookieHeader = req.headers.get('cookie');
+    const cookies = parse(cookieHeader || '');
+    const csrfTokenCookie = cookies.login_csrf;
+
+    // Both header and cookie must be present and match
+    if (!csrfTokenHeader || !csrfTokenCookie) {
+      logSecurityEvent('login_csrf_missing', {
+        ip: clientIP,
+        hasHeader: !!csrfTokenHeader,
+        hasCookie: !!csrfTokenCookie,
+      });
+      return Response.json(
+        {
+          error: 'Login CSRF token required',
+          code: 'LOGIN_CSRF_MISSING',
+          details: 'Please refresh the page and try again',
+        },
+        { status: 403 }
+      );
+    }
+
+    // Verify tokens match (double-submit pattern)
+    if (csrfTokenHeader !== csrfTokenCookie) {
+      logSecurityEvent('login_csrf_mismatch', { ip: clientIP });
+      return Response.json(
+        {
+          error: 'Invalid login CSRF token',
+          code: 'LOGIN_CSRF_MISMATCH',
+          details: 'Please refresh the page and try again',
+        },
+        { status: 403 }
+      );
+    }
+
+    // Validate token signature and expiry
+    if (!validateLoginCSRFToken(csrfTokenHeader)) {
+      logSecurityEvent('login_csrf_invalid', { ip: clientIP });
+      return Response.json(
+        {
+          error: 'Invalid or expired login CSRF token',
+          code: 'LOGIN_CSRF_INVALID',
+          details: 'Please refresh the page and try again',
+        },
+        { status: 403 }
+      );
+    }
+
     const body = await req.json();
     const validation = loginSchema.safeParse(body);
 
@@ -37,11 +93,6 @@ export async function POST(req: Request) {
     }
 
     const { email, password, deviceId, deviceName, deviceToken: existingDeviceToken } = validation.data;
-
-    // Rate limiting by IP address and email
-    const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] || 
-                     req.headers.get('x-real-ip') || 
-                     'unknown';
     
     const ipRateLimit = checkRateLimit(clientIP, RATE_LIMIT_CONFIGS.LOGIN);
     const emailRateLimit = checkRateLimit(email.toLowerCase(), RATE_LIMIT_CONFIGS.LOGIN);

@@ -177,7 +177,9 @@ export function logAuthEvent(
  * Log security events
  */
 export function logSecurityEvent(
-  event: 'rate_limit' | 'invalid_token' | 'unauthorized' | 'suspicious_activity',
+  event: 'rate_limit' | 'invalid_token' | 'unauthorized' | 'suspicious_activity' |
+         'login_csrf_missing' | 'login_csrf_mismatch' | 'login_csrf_invalid' |
+         'signup_csrf_missing' | 'signup_csrf_mismatch' | 'signup_csrf_invalid',
   details: Record<string, any>
 ): void {
   loggers.security.warn(`Security event: ${event}`, details);

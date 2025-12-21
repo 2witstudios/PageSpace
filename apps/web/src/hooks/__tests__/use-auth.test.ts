@@ -297,10 +297,16 @@ describe('useAuth', () => {
     });
 
     it('should include device information in login request body', async () => {
-      vi.mocked(global.fetch).mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ id: 'user-123' }),
-      } as Response);
+      // Mock both CSRF fetch (first call) and login fetch (second call)
+      vi.mocked(global.fetch)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ csrfToken: 'test-csrf-token' }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ id: 'user-123' }),
+        } as Response);
 
       const { result } = renderHook(() => useAuth());
 
@@ -309,8 +315,9 @@ describe('useAuth', () => {
       });
 
       // Observable: API called with correct payload (parse JSON for accurate assertion)
-      expect(global.fetch).toHaveBeenCalled();
-      const [, init] = vi.mocked(global.fetch).mock.calls[0] ?? [];
+      // Note: calls[0] is CSRF token fetch, calls[1] is the login call
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+      const [, init] = vi.mocked(global.fetch).mock.calls[1] ?? [];
       const body = JSON.parse(String((init as RequestInit | undefined)?.body ?? '{}')) as {
         deviceId?: string;
         deviceName?: string;

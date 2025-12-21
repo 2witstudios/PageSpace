@@ -76,6 +76,21 @@ export function useAuth(): {
   const login = useCallback(async (email: string, password: string) => {
     setLoading(true);
     try {
+      // Fetch login CSRF token first (prevents Login CSRF attacks)
+      let loginCsrfToken: string | null = null;
+      try {
+        const csrfResponse = await fetch('/api/auth/login-csrf', {
+          credentials: 'include',
+        });
+        if (csrfResponse.ok) {
+          const csrfData = await csrfResponse.json();
+          loginCsrfToken = csrfData.csrfToken;
+        }
+      } catch (csrfError) {
+        console.error('Failed to fetch login CSRF token:', csrfError);
+        // Continue without CSRF token - server will reject if required
+      }
+
       const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
 
       if (isDesktop && window.electron) {
@@ -153,7 +168,10 @@ export function useAuth(): {
 
       const response = await fetch('/api/auth/login', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(loginCsrfToken && { 'X-Login-CSRF-Token': loginCsrfToken }),
+        },
         body: JSON.stringify({
           email,
           password,

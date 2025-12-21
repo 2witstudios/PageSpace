@@ -85,6 +85,25 @@ describe('csrf-utils', () => {
       // Signature should be hex (64 chars for sha256)
       expect(parts[2]).toMatch(/^[0-9a-f]{64}$/)
     })
+
+    it('throws error for empty sessionId', () => {
+      expect(() => generateCSRFToken('')).toThrow('Invalid sessionId: must be a non-empty string')
+    })
+
+    it('throws error for whitespace-only sessionId', () => {
+      expect(() => generateCSRFToken('   ')).toThrow('Invalid sessionId: must be a non-empty string')
+      expect(() => generateCSRFToken('\t\n')).toThrow('Invalid sessionId: must be a non-empty string')
+    })
+
+    it('throws error for null or undefined sessionId', () => {
+      expect(() => generateCSRFToken(null as any)).toThrow('Invalid sessionId: must be a non-empty string')
+      expect(() => generateCSRFToken(undefined as any)).toThrow('Invalid sessionId: must be a non-empty string')
+    })
+
+    it('throws error for non-string sessionId', () => {
+      expect(() => generateCSRFToken(123 as any)).toThrow('Invalid sessionId: must be a non-empty string')
+      expect(() => generateCSRFToken({} as any)).toThrow('Invalid sessionId: must be a non-empty string')
+    })
   })
 
   describe('validateCSRFToken', () => {
