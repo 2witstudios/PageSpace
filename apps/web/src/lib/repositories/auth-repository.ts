@@ -4,30 +4,23 @@
  * enabling proper unit testing of auth routes without ORM chain mocking.
  */
 
-import { db, users, refreshTokens, deviceTokens, eq, and, isNull, sql } from '@pagespace/db';
+import {
+  db,
+  users,
+  refreshTokens,
+  deviceTokens,
+  eq,
+  and,
+  isNull,
+  sql,
+  type InferSelectModel,
+} from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 
-// Types for repository operations
-export interface User {
-  id: string;
-  email: string;
-  name: string | null;
-  password: string | null;
-  tokenVersion: number;
-  role: 'user' | 'admin';
-  image?: string | null;
-  provider?: string | null;
-  googleId?: string | null;
-  emailVerified?: Date | null;
-}
-
-export interface RefreshTokenRecord {
-  id: string;
-  token: string;
-  userId: string;
-  user: User;
-  expiresAt: Date;
-}
+// Types derived from Drizzle schema - ensures type safety without manual definitions
+export type User = InferSelectModel<typeof users>;
+export type RefreshToken = InferSelectModel<typeof refreshTokens>;
+export type RefreshTokenWithUser = RefreshToken & { user: User };
 
 export type PlatformType = 'web' | 'desktop' | 'ios' | 'android';
 
@@ -50,7 +43,7 @@ export const authRepository = {
     const user = await db.query.users.findFirst({
       where: eq(users.email, email),
     });
-    return (user as User) || null;
+    return user ?? null;
   },
 
   /**
@@ -60,7 +53,7 @@ export const authRepository = {
     const user = await db.query.users.findFirst({
       where: eq(users.id, userId),
     });
-    return (user as User) || null;
+    return user ?? null;
   },
 
   /**
@@ -86,14 +79,14 @@ export const authRepository = {
    */
   async findRefreshTokenWithUser(
     token: string
-  ): Promise<RefreshTokenRecord | null> {
+  ): Promise<RefreshTokenWithUser | null> {
     const record = await db.query.refreshTokens.findFirst({
       where: eq(refreshTokens.token, token),
       with: {
         user: true,
       },
     });
-    return (record as RefreshTokenRecord) || null;
+    return record ?? null;
   },
 
   /**

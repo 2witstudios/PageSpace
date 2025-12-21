@@ -40,9 +40,19 @@ const mockUser: User = {
   role: 'user',
   provider: 'email',
   googleId: null,
-  emailVerified: mockVerifiedDate, // Date when email was verified
-  password: '$2a$12$hashedpassword', // Should NOT be exposed
+  emailVerified: mockVerifiedDate,
+  password: '$2a$12$hashedpassword',
   tokenVersion: 0,
+  currentAiProvider: 'pagespace',
+  currentAiModel: 'glm-4.5-air',
+  storageUsedBytes: 0,
+  activeUploads: 0,
+  lastStorageCalculated: null,
+  stripeCustomerId: null,
+  subscriptionTier: 'free',
+  tosAcceptedAt: null,
+  createdAt: new Date('2024-01-01T00:00:00Z'),
+  updatedAt: new Date('2024-01-01T00:00:00Z'),
 };
 
 const mockAuthSuccess = {

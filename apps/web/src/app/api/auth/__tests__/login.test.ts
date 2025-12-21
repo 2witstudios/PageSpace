@@ -94,6 +94,20 @@ const mockUser: User = {
   password: '$2a$12$hashedpassword',
   tokenVersion: 0,
   role: 'user',
+  provider: 'email',
+  image: null,
+  googleId: null,
+  emailVerified: null,
+  currentAiProvider: 'pagespace',
+  currentAiModel: 'glm-4.5-air',
+  storageUsedBytes: 0,
+  activeUploads: 0,
+  lastStorageCalculated: null,
+  stripeCustomerId: null,
+  subscriptionTier: 'free',
+  tosAcceptedAt: null,
+  createdAt: new Date('2024-01-01T00:00:00Z'),
+  updatedAt: new Date('2024-01-01T00:00:00Z'),
 };
 
 const validLoginPayload = {
