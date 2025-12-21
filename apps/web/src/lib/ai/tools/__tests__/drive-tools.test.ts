@@ -124,7 +124,7 @@ describe('drive-tools', () => {
 
       await expect(
         driveTools.rename_drive.execute!(
-          { driveId: 'drive-1', name: 'New Name' },
+          { currentName: 'Old Name', driveId: 'drive-1', name: 'New Name' },
           context
         )
       ).rejects.toThrow('User authentication required');
@@ -140,7 +140,7 @@ describe('drive-tools', () => {
 
       await expect(
         driveTools.rename_drive.execute!(
-          { driveId: 'non-existent', name: 'New Name' },
+          { currentName: 'My Drive', driveId: 'non-existent', name: 'New Name' },
           context
         )
       ).rejects.toThrow('Drive not found or you do not have permission to rename it');
