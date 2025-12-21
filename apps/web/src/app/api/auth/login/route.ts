@@ -11,7 +11,6 @@ import {
   validateOrCreateDeviceToken,
 } from '@pagespace/lib/server';
 import { serialize, parse } from 'cookie';
-import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent, logSecurityEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
