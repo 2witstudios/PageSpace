@@ -273,13 +273,13 @@ describe('CSRF Integration Tests (no crypto mocking)', () => {
     it('emptySessionId_throwsError', () => {
       // Security: empty session IDs are rejected upfront during generation
       // This prevents generating tokens that would never validate
-      expect(() => generateCSRFToken('')).toThrow('sessionId is required for CSRF token generation')
+      expect(() => generateCSRFToken('')).toThrow('Invalid sessionId: must be a non-empty string')
     })
 
     it('whitespaceOnlySessionId_throwsError', () => {
       // Security: whitespace-only session IDs are also rejected
-      expect(() => generateCSRFToken('   ')).toThrow('sessionId is required for CSRF token generation')
-      expect(() => generateCSRFToken('\t\n')).toThrow('sessionId is required for CSRF token generation')
+      expect(() => generateCSRFToken('   ')).toThrow('Invalid sessionId: must be a non-empty string')
+      expect(() => generateCSRFToken('\t\n')).toThrow('Invalid sessionId: must be a non-empty string')
     })
 
     it('specialCharactersInUserId_handledCorrectly', () => {
