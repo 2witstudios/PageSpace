@@ -329,8 +329,8 @@ describe('CSRF Integration Tests (no crypto mocking)', () => {
 
       const token = generateCSRFToken(sessionId)
 
-      // Advance to exactly 3599 seconds (just before 1 hour default maxAge)
-      vi.advanceTimersByTime(3599 * 1000)
+      // Advance to exactly 3600 seconds (exactly at 1 hour default maxAge)
+      vi.advanceTimersByTime(3600 * 1000)
 
       expect(validateCSRFToken(token, sessionId)).toBe(true)
     })
