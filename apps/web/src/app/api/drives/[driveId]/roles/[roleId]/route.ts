@@ -7,6 +7,7 @@ import {
   deleteDriveRole,
   validateRolePermissions,
 } from '@pagespace/lib/server';
+import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
@@ -101,6 +102,16 @@ export async function PATCH(
       permissions,
     });
 
+    // Log activity for audit trail
+    const actorInfo = await getActorInfo(userId);
+    logRoleActivity(userId, 'update', {
+      roleId,
+      roleName: updatedRole.name,
+      driveId,
+      permissions: permissions as Record<string, boolean> | undefined,
+      previousPermissions: existingRole.permissions as Record<string, boolean>,
+    }, actorInfo);
+
     return NextResponse.json({ role: updatedRole });
   } catch (error) {
     console.error('Error updating role:', error);
@@ -142,6 +153,15 @@ export async function DELETE(
     }
 
     await deleteDriveRole(driveId, roleId);
+
+    // Log activity for audit trail
+    const actorInfo = await getActorInfo(userId);
+    logRoleActivity(userId, 'delete', {
+      roleId,
+      roleName: existingRole.name,
+      driveId,
+      previousPermissions: existingRole.permissions as Record<string, boolean>,
+    }, actorInfo);
 
     return NextResponse.json({ success: true });
   } catch (error) {

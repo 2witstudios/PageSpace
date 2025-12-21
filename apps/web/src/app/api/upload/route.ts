@@ -14,6 +14,7 @@ import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkMemoryMiddleware } from '@pagespace/lib/services/memory-monitor';
 import { createServiceToken } from '@pagespace/lib/auth-utils';
 import { sanitizeFilenameForHeader } from '@pagespace/lib/utils/file-security';
+import { getActorInfo, logFileActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 // Define allowed file types and size limits
 
@@ -343,6 +344,17 @@ export async function POST(request: NextRequest) {
         driveId,
         eventType: 'upload'
       });
+
+      // Log activity for audit trail
+      const actorInfo = await getActorInfo(userId);
+      logFileActivity(userId, 'upload', {
+        fileId: contentHash,
+        fileName: file.name,
+        fileType: mimeType,
+        fileSize: resolvedSize,
+        driveId,
+        pageId: newPage.id,
+      }, actorInfo);
 
       // Release upload slot and decrement counter
       uploadSemaphore.releaseUploadSlot(uploadSlot);

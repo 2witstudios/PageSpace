@@ -3,6 +3,7 @@ import { createHash } from 'crypto';
 import { loggers, accountRepository, activityLogRepository } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createServiceToken, verifyServiceToken, type ServiceTokenClaims } from '@pagespace/lib/auth-utils';
+import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
@@ -89,6 +90,17 @@ export async function PATCH(req: Request) {
     if (!updatedUser) {
       return Response.json({ error: 'Failed to update user' }, { status: 500 });
     }
+
+    // Log activity for audit trail (profile updates may be security-relevant)
+    const actorInfo = await getActorInfo(userId);
+    const updatedFields: string[] = [];
+    if (name) updatedFields.push('name');
+    if (email) updatedFields.push('email');
+    logUserActivity(userId, 'profile_update', {
+      targetUserId: userId,
+      targetUserEmail: updatedUser.email,
+      updatedFields,
+    }, actorInfo);
 
     return Response.json({
       id: updatedUser.id,
@@ -233,6 +245,14 @@ export async function DELETE(req: Request) {
         loggers.auth.error('Could not delete user avatar during account deletion:', error as Error);
       }
     }
+
+    // CRITICAL: Log account deletion BEFORE anonymization (required for GDPR compliance)
+    // This ensures we have an audit record of who deleted their account and when
+    const actorInfo = await getActorInfo(userId);
+    logUserActivity(userId, 'account_delete', {
+      targetUserId: userId,
+      targetUserEmail: user.email,
+    }, actorInfo);
 
     // Anonymize activity logs before user deletion (GDPR compliance + SOX audit trail)
     // This preserves the audit trail while removing PII

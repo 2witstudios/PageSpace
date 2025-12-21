@@ -2,6 +2,7 @@ import { db, eq, deviceTokens, refreshTokens } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { revokeDeviceToken } from '@pagespace/lib/device-auth-utils';
+import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -50,6 +51,15 @@ export async function DELETE(
       isCurrentDevice,
       refreshTokensDeleted: deletedTokens.length,
     });
+
+    // Log activity for audit trail (device revocation is a security event)
+    const actorInfo = await getActorInfo(userId);
+    logTokenActivity(userId, 'token_revoke', {
+      tokenId: deviceId,
+      tokenType: 'device',
+      tokenName: device.deviceName ?? undefined,
+      deviceInfo: `${device.platform ?? 'Unknown'} - ${device.deviceName ?? 'Unknown'}`,
+    }, actorInfo);
 
     return Response.json({
       message: 'Device revoked successfully',

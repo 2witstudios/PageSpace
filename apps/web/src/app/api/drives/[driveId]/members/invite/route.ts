@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
 import { db, eq, and } from '@pagespace/db';
-import { driveMembers, drives, pagePermissions, pages } from '@pagespace/db';
+import { driveMembers, drives, pagePermissions, pages, users } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createDriveNotification, isEmailVerified } from '@pagespace/lib';
 import { loggers } from '@pagespace/lib/server';
 import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
+import { getActorInfo, logMemberActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -180,6 +181,20 @@ export async function POST(
       role,
       userId
     );
+
+    // Log activity for audit trail
+    const actorInfo = await getActorInfo(userId);
+    const invitedUser = await db.query.users.findFirst({
+      where: eq(users.id, invitedUserId),
+      columns: { email: true },
+    });
+    logMemberActivity(userId, 'member_add', {
+      driveId,
+      driveName: drive[0].name,
+      targetUserId: invitedUserId,
+      targetUserEmail: invitedUser?.email,
+      role,
+    }, actorInfo);
 
     return NextResponse.json({
       memberId,

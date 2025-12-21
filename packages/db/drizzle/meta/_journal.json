@@ -162,6 +162,13 @@
       "when": 1766166031436,
       "tag": "0022_funny_oracle",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1766361600000,
+      "tag": "0023_activity_log_enums_expansion",
+      "breakpoints": true
     }
   ]
 }

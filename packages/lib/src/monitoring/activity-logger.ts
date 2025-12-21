@@ -55,9 +55,38 @@ export type ActivityOperation =
   | 'permission_revoke'
   | 'trash'
   | 'move'
-  | 'agent_config_update';
+  | 'agent_config_update'
+  // Membership operations
+  | 'member_add'
+  | 'member_remove'
+  | 'member_role_change'
+  // Authentication/Security operations
+  | 'login'
+  | 'logout'
+  | 'signup'
+  | 'password_change'
+  | 'email_change'
+  | 'token_create'
+  | 'token_revoke'
+  // File operations
+  | 'upload'
+  | 'convert'
+  // Account operations
+  | 'account_delete'
+  | 'profile_update'
+  | 'avatar_update';
 
-export type ActivityResourceType = 'page' | 'drive' | 'permission' | 'agent';
+export type ActivityResourceType =
+  | 'page'
+  | 'drive'
+  | 'permission'
+  | 'agent'
+  | 'user'
+  | 'member'
+  | 'role'
+  | 'file'
+  | 'token'
+  | 'device';
 
 export interface ActivityLogInput {
   userId: string;
@@ -296,6 +325,214 @@ export function logAgentConfigActivity(
     updatedFields: changes.updatedFields,
     previousValues: changes.previousValues,
     newValues: changes.newValues,
+  }).catch(() => {
+    // Silent fail - already logged in logActivity
+  });
+}
+
+/**
+ * Convenience wrapper for drive membership operations.
+ * Fire-and-forget - call without await.
+ */
+export function logMemberActivity(
+  userId: string,
+  operation: 'member_add' | 'member_remove' | 'member_role_change',
+  data: {
+    driveId: string;
+    driveName?: string;
+    targetUserId: string;
+    targetUserEmail?: string;
+    role?: string;
+    previousRole?: string;
+  },
+  options?: {
+    actorEmail?: string;
+    actorDisplayName?: string;
+  }
+): void {
+  logActivity({
+    userId,
+    actorEmail: options?.actorEmail ?? 'unknown@system',
+    actorDisplayName: options?.actorDisplayName,
+    operation,
+    resourceType: 'member',
+    resourceId: data.targetUserId,
+    resourceTitle: data.targetUserEmail,
+    driveId: data.driveId,
+    previousValues: data.previousRole ? { role: data.previousRole } : undefined,
+    newValues: data.role ? { role: data.role } : undefined,
+    metadata: {
+      targetUserId: data.targetUserId,
+      targetUserEmail: data.targetUserEmail,
+      driveName: data.driveName,
+    },
+  }).catch(() => {
+    // Silent fail - already logged in logActivity
+  });
+}
+
+/**
+ * Convenience wrapper for drive role operations.
+ * Fire-and-forget - call without await.
+ */
+export function logRoleActivity(
+  userId: string,
+  operation: 'create' | 'update' | 'delete',
+  data: {
+    roleId: string;
+    roleName?: string;
+    driveId: string;
+    permissions?: Record<string, boolean>;
+    previousPermissions?: Record<string, boolean>;
+  },
+  options?: {
+    actorEmail?: string;
+    actorDisplayName?: string;
+  }
+): void {
+  logActivity({
+    userId,
+    actorEmail: options?.actorEmail ?? 'unknown@system',
+    actorDisplayName: options?.actorDisplayName,
+    operation,
+    resourceType: 'role',
+    resourceId: data.roleId,
+    resourceTitle: data.roleName,
+    driveId: data.driveId,
+    previousValues: data.previousPermissions
+      ? { permissions: data.previousPermissions }
+      : undefined,
+    newValues: data.permissions ? { permissions: data.permissions } : undefined,
+  }).catch(() => {
+    // Silent fail - already logged in logActivity
+  });
+}
+
+/**
+ * Convenience wrapper for user account operations.
+ * Fire-and-forget - call without await.
+ */
+export function logUserActivity(
+  userId: string,
+  operation:
+    | 'signup'
+    | 'login'
+    | 'logout'
+    | 'password_change'
+    | 'email_change'
+    | 'profile_update'
+    | 'avatar_update'
+    | 'account_delete',
+  data: {
+    targetUserId: string;
+    targetUserEmail?: string;
+    previousEmail?: string;
+    newEmail?: string;
+    updatedFields?: string[];
+    ip?: string;
+    userAgent?: string;
+  },
+  options?: {
+    actorEmail?: string;
+    actorDisplayName?: string;
+  }
+): void {
+  // For user operations, we use a special driveId marker
+  logActivity({
+    userId,
+    actorEmail: options?.actorEmail ?? 'unknown@system',
+    actorDisplayName: options?.actorDisplayName,
+    operation,
+    resourceType: 'user',
+    resourceId: data.targetUserId,
+    resourceTitle: data.targetUserEmail,
+    driveId: 'system', // System-level operations don't belong to a specific drive
+    updatedFields: data.updatedFields,
+    previousValues: data.previousEmail ? { email: data.previousEmail } : undefined,
+    newValues: data.newEmail ? { email: data.newEmail } : undefined,
+    metadata: {
+      ip: data.ip,
+      userAgent: data.userAgent,
+    },
+  }).catch(() => {
+    // Silent fail - already logged in logActivity
+  });
+}
+
+/**
+ * Convenience wrapper for token/device operations.
+ * Fire-and-forget - call without await.
+ */
+export function logTokenActivity(
+  userId: string,
+  operation: 'token_create' | 'token_revoke',
+  data: {
+    tokenId: string;
+    tokenType: 'device' | 'mcp' | 'api';
+    tokenName?: string;
+    deviceInfo?: string;
+    ip?: string;
+    userAgent?: string;
+  },
+  options?: {
+    actorEmail?: string;
+    actorDisplayName?: string;
+  }
+): void {
+  logActivity({
+    userId,
+    actorEmail: options?.actorEmail ?? 'unknown@system',
+    actorDisplayName: options?.actorDisplayName,
+    operation,
+    resourceType: data.tokenType === 'device' ? 'device' : 'token',
+    resourceId: data.tokenId,
+    resourceTitle: data.tokenName ?? data.deviceInfo,
+    driveId: 'system', // System-level operations
+    metadata: {
+      tokenType: data.tokenType,
+      deviceInfo: data.deviceInfo,
+      ip: data.ip,
+      userAgent: data.userAgent,
+    },
+  }).catch(() => {
+    // Silent fail - already logged in logActivity
+  });
+}
+
+/**
+ * Convenience wrapper for file operations.
+ * Fire-and-forget - call without await.
+ */
+export function logFileActivity(
+  userId: string,
+  operation: 'upload' | 'convert' | 'delete',
+  data: {
+    fileId: string;
+    fileName?: string;
+    fileType?: string;
+    fileSize?: number;
+    driveId: string;
+    pageId?: string;
+  },
+  options?: {
+    actorEmail?: string;
+    actorDisplayName?: string;
+  }
+): void {
+  logActivity({
+    userId,
+    actorEmail: options?.actorEmail ?? 'unknown@system',
+    actorDisplayName: options?.actorDisplayName,
+    operation,
+    resourceType: 'file',
+    resourceId: data.fileId,
+    resourceTitle: data.fileName,
+    driveId: data.driveId,
+    pageId: data.pageId,
+    metadata: {
+      fileType: data.fileType,
+      fileSize: data.fileSize,
+    },
   }).catch(() => {
     // Silent fail - already logged in logActivity
   });

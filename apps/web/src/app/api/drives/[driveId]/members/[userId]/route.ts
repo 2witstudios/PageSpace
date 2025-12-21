@@ -10,6 +10,7 @@ import {
 } from '@pagespace/lib/server';
 import { createDriveNotification } from '@pagespace/lib';
 import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
+import { getActorInfo, logMemberActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
@@ -129,6 +130,17 @@ export async function PATCH(
           driveName: access.drive.name
         })
       );
+
+      // Log activity for audit trail (role change is a critical security event)
+      const actorInfo = await getActorInfo(currentUserId);
+      logMemberActivity(currentUserId, 'member_role_change', {
+        driveId,
+        driveName: access.drive.name,
+        targetUserId: userId,
+        targetUserEmail: memberData.email,
+        role: role as string,
+        previousRole: oldRole as string,
+      }, actorInfo);
     }
 
     // Update permissions

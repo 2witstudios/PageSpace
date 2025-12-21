@@ -2,6 +2,7 @@ import { users, deviceTokens, db, eq, and, isNull } from '@pagespace/db';
 import bcrypt from 'bcryptjs';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -78,6 +79,13 @@ export async function POST(req: Request) {
     loggers.auth.info('Password changed - invalidated all sessions and device tokens', {
       userId,
     });
+
+    // Log activity for audit trail (password changes are critical security events)
+    const actorInfo = await getActorInfo(userId);
+    logUserActivity(userId, 'password_change', {
+      targetUserId: userId,
+      targetUserEmail: undefined, // Don't expose email in logs for password changes
+    }, actorInfo);
 
     return Response.json({
       message: 'Password changed successfully. Please log in again with your new password.'
