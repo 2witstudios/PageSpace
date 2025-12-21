@@ -107,6 +107,14 @@ export const useMCPStore = create<MCPStoreState>()(
     {
       name: 'mcp-settings', // localStorage key
       version: 3, // Increment version to migrate to per-server structure
+      migrate: (persistedState: unknown, version: number) => {
+        if (version < 3) {
+          // Old versions had different structure (perChatMCP: boolean per chat)
+          // Start fresh with per-server model - all servers default to enabled
+          return { perChatServerMCP: {} };
+        }
+        return persistedState as MCPStoreState;
+      },
     }
   )
 );

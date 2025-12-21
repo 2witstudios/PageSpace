@@ -46,7 +46,15 @@ interface UseMCPToolsResult {
  */
 export function useMCPTools({ conversationId }: UseMCPToolsOptions): UseMCPToolsResult {
   const mcp = useMCP();
-  const store = useMCPStore();
+
+  // Use Zustand selectors to subscribe to specific state slices
+  // This ensures useMemo/useCallback re-run when state changes
+  const perChatServerMCP = useMCPStore((state) => state.perChatServerMCP);
+  const getEnabledServersFn = useMCPStore((state) => state.getEnabledServers);
+  const areAllServersEnabledFn = useMCPStore((state) => state.areAllServersEnabled);
+  const isServerEnabledFn = useMCPStore((state) => state.isServerEnabled);
+  const setServerEnabledFn = useMCPStore((state) => state.setServerEnabled);
+  const setAllServersEnabledFn = useMCPStore((state) => state.setAllServersEnabled);
 
   // Chat ID for per-chat settings (or 'global' fallback)
   const chatId = conversationId || 'global';
@@ -66,37 +74,38 @@ export function useMCPTools({ conversationId }: UseMCPToolsOptions): UseMCPTools
   const runningServers = runningServerNames.length;
 
   // Get enabled servers for this chat
+  // perChatServerMCP in deps ensures re-computation when store state changes
   const enabledServerNames = useMemo(() => {
-    return store.getEnabledServers(chatId, runningServerNames);
-  }, [store, chatId, runningServerNames]);
+    return getEnabledServersFn(chatId, runningServerNames);
+  }, [getEnabledServersFn, chatId, runningServerNames, perChatServerMCP]);
 
   const enabledServerCount = enabledServerNames.length;
 
   // Check if all servers are enabled
   const allServersEnabled = useMemo(() => {
-    return store.areAllServersEnabled(chatId, runningServerNames);
-  }, [store, chatId, runningServerNames]);
+    return areAllServersEnabledFn(chatId, runningServerNames);
+  }, [areAllServersEnabledFn, chatId, runningServerNames, perChatServerMCP]);
 
   // Check if specific server is enabled
   const isServerEnabled = useCallback(
-    (serverName: string) => store.isServerEnabled(chatId, serverName),
-    [store, chatId]
+    (serverName: string) => isServerEnabledFn(chatId, serverName),
+    [isServerEnabledFn, chatId]
   );
 
   // Set specific server enabled/disabled
   const setServerEnabled = useCallback(
     (serverName: string, enabled: boolean) => {
-      store.setServerEnabled(chatId, serverName, enabled);
+      setServerEnabledFn(chatId, serverName, enabled);
     },
-    [store, chatId]
+    [setServerEnabledFn, chatId]
   );
 
   // Toggle all servers at once
   const setAllServersEnabled = useCallback(
     (enabled: boolean) => {
-      store.setAllServersEnabled(chatId, enabled, runningServerNames);
+      setAllServersEnabledFn(chatId, enabled, runningServerNames);
     },
-    [store, chatId, runningServerNames]
+    [setAllServersEnabledFn, chatId, runningServerNames]
   );
 
   // Fetch MCP tools when servers are running
