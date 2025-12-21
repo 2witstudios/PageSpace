@@ -27,9 +27,12 @@ const querySchema = z.object({
  * GET /api/activities
  *
  * Fetch activity logs based on context:
- * - user: User's own activity (for dashboard)
+ * - user: User's own activity (for dashboard), optionally filtered by driveId
  * - drive: All activity within a drive (for drive view)
  * - page: All edits to a specific page (for page view)
+ *
+ * Note: actorId filter is only applied in drive/page context since user context
+ * already filters by the authenticated user.
  */
 export async function GET(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
@@ -166,7 +169,8 @@ export async function GET(request: Request) {
       endOfDay.setDate(endOfDay.getDate() + 1);
       filterConditions.push(lt(activityLogs.timestamp, endOfDay));
     }
-    if (params.actorId) {
+    // actorId filter only applies in drive/page context (user context already filters by authenticated user)
+    if (params.actorId && params.context !== 'user') {
       filterConditions.push(eq(activityLogs.userId, params.actorId));
     }
     if (params.operation) {
