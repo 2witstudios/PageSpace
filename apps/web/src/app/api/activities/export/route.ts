@@ -62,10 +62,24 @@ export async function GET(request: Request) {
 
     switch (params.context) {
       case 'user': {
-        whereCondition = and(
+        const userConditions = [
           eq(activityLogs.userId, userId),
           eq(activityLogs.isArchived, false)
-        );
+        ];
+
+        // Optional drive filter for user context
+        if (params.driveId) {
+          const canViewDrive = await isUserDriveMember(userId, params.driveId);
+          if (!canViewDrive) {
+            return NextResponse.json(
+              { error: 'Unauthorized - you do not have access to this drive' },
+              { status: 403 }
+            );
+          }
+          userConditions.push(eq(activityLogs.driveId, params.driveId));
+        }
+
+        whereCondition = and(...userConditions);
         break;
       }
 

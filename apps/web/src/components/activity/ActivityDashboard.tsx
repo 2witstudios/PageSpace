@@ -38,6 +38,7 @@ export function ActivityDashboard({ context, driveId: initialDriveId, driveName 
     actorId: searchParams.get('actorId') || undefined,
     operation: searchParams.get('operation') || undefined,
     resourceType: searchParams.get('resourceType') || undefined,
+    driveId: searchParams.get('driveId') || undefined,
   }));
 
   // Update URL when filters change
@@ -58,6 +59,10 @@ export function ActivityDashboard({ context, driveId: initialDriveId, driveName 
     }
     if (newFilters.resourceType) {
       params.set('resourceType', newFilters.resourceType);
+    }
+    // For user context, driveId is a filter (not in the URL path)
+    if (newFilters.driveId && !newDriveId) {
+      params.set('driveId', newFilters.driveId);
     }
 
     const queryString = params.toString();
@@ -104,6 +109,8 @@ export function ActivityDashboard({ context, driveId: initialDriveId, driveName 
 
         if (context === 'drive' && selectedDriveId) {
           params.set('driveId', selectedDriveId);
+        } else if (context === 'user' && filters.driveId) {
+          params.set('driveId', filters.driveId);
         }
         if (filters.startDate) {
           params.set('startDate', filters.startDate.toISOString());
@@ -147,12 +154,10 @@ export function ActivityDashboard({ context, driveId: initialDriveId, driveName 
     [context, selectedDriveId, filters]
   );
 
-  // Initial load
+  // Initial load - always fetch drives (needed for drive filter in user context too)
   useEffect(() => {
-    if (context === 'drive') {
-      fetchDrives();
-    }
-  }, [context, fetchDrives]);
+    fetchDrives();
+  }, [fetchDrives]);
 
   // Fetch activities when filters or drive changes
   useEffect(() => {
@@ -180,11 +185,19 @@ export function ActivityDashboard({ context, driveId: initialDriveId, driveName 
   };
 
   const handleDriveChange = (driveId: string) => {
-    setSelectedDriveId(driveId);
-    // Clear actor filter when switching drives (actors are drive-specific)
-    const updatedFilters = { ...filters, actorId: undefined };
-    setFilters(updatedFilters);
-    updateUrl(updatedFilters, driveId);
+    if (context === 'drive') {
+      // For drive context, navigate to the drive's activity page
+      setSelectedDriveId(driveId);
+      // Clear actor filter when switching drives (actors are drive-specific)
+      const updatedFilters = { ...filters, actorId: undefined };
+      setFilters(updatedFilters);
+      updateUrl(updatedFilters, driveId);
+    } else {
+      // For user context, driveId is just a filter
+      const updatedFilters = { ...filters, driveId: driveId || undefined };
+      setFilters(updatedFilters);
+      updateUrl(updatedFilters, undefined);
+    }
   };
 
   // Loading skeleton
@@ -208,7 +221,9 @@ export function ActivityDashboard({ context, driveId: initialDriveId, driveName 
 
   const description = context === 'drive'
     ? 'Activity log for all members of this drive'
-    : 'Your recent activity across all drives';
+    : filters.driveId
+      ? `Your recent activity in ${drives.find(d => d.id === filters.driveId)?.name || 'selected drive'}`
+      : 'Your recent activity across all drives';
 
   return (
     <div className="h-full overflow-y-auto">
@@ -257,11 +272,11 @@ export function ActivityDashboard({ context, driveId: initialDriveId, driveName 
         <div className="mb-6">
           <ActivityFilterBar
             context={context}
-            driveId={selectedDriveId}
+            driveId={context === 'drive' ? selectedDriveId : filters.driveId}
             drives={drives}
             filters={filters}
             onFiltersChange={handleFiltersChange}
-            onDriveChange={context === 'drive' ? handleDriveChange : undefined}
+            onDriveChange={handleDriveChange}
           />
         </div>
 

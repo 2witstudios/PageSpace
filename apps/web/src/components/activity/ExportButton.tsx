@@ -23,8 +23,10 @@ export function ExportButton({ context, driveId, filters }: ExportButtonProps) {
       const params = new URLSearchParams();
       params.set('context', context);
 
-      if (driveId) {
-        params.set('driveId', driveId);
+      // Use driveId prop or fallback to filters.driveId for user context
+      const effectiveDriveId = driveId || filters.driveId;
+      if (effectiveDriveId) {
+        params.set('driveId', effectiveDriveId);
       }
       if (filters.startDate) {
         params.set('startDate', filters.startDate.toISOString());

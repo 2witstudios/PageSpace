@@ -32,13 +32,19 @@ export function ActivityFilterBar({
 }: ActivityFilterBarProps) {
   return (
     <div className="flex flex-wrap items-center gap-3">
-      {/* Drive Selector (only in drive context with multiple drives) */}
-      {context === 'drive' && drives.length > 0 && onDriveChange && (
-        <Select value={driveId || ''} onValueChange={onDriveChange}>
+      {/* Drive Selector */}
+      {drives.length > 0 && onDriveChange && (
+        <Select
+          value={driveId || 'all'}
+          onValueChange={(value) => onDriveChange(value === 'all' ? '' : value)}
+        >
           <SelectTrigger className="w-[180px]">
-            <SelectValue placeholder="Select drive" />
+            <SelectValue placeholder={context === 'drive' ? 'Select drive' : 'All drives'} />
           </SelectTrigger>
           <SelectContent>
+            {context === 'user' && (
+              <SelectItem value="all">All drives</SelectItem>
+            )}
             {drives.map((drive) => (
               <SelectItem key={drive.id} value={drive.id}>
                 {drive.name}

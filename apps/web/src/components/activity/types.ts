@@ -56,6 +56,7 @@ export interface ActivityFilters {
   actorId?: string;
   operation?: string;
   resourceType?: string;
+  driveId?: string;
 }
 
 export interface OperationConfig {
