@@ -32,8 +32,8 @@ export function ActivityFilterBar({
 }: ActivityFilterBarProps) {
   return (
     <div className="flex flex-wrap items-center gap-3">
-      {/* Drive Selector */}
-      {drives.length > 0 && onDriveChange && (
+      {/* Drive Selector - only in user context (dashboard) */}
+      {context === 'user' && drives.length > 0 && onDriveChange && (
         <Select
           value={driveId || 'all'}
           onValueChange={(value) => onDriveChange(value === 'all' ? '' : value)}
