@@ -124,24 +124,47 @@ export default function Sidebar({ className }: SidebarProps) {
 
         <div className="mt-auto space-y-1">
           {driveId && (drive?.isOwned || drive?.role) && (
-            <>
-              <Link
-                href={`/dashboard/${driveId}/members`}
-                className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
-              >
-                <Users className="h-4 w-4" />
-                Members
-              </Link>
-              {(drive?.isOwned || drive?.role === 'ADMIN') && (
-                <Link
-                  href={`/dashboard/${driveId}/settings`}
-                  className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
-                >
-                  <Settings className="h-4 w-4" />
-                  Drive Settings
-                </Link>
-              )}
-            </>
+            <Link
+              href={`/dashboard/${driveId}/members`}
+              className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+            >
+              <Users className="h-4 w-4" />
+              Members
+            </Link>
+          )}
+          {!driveId && (
+            <Link
+              href="/dashboard/storage"
+              className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+            >
+              <HardDrive className="h-4 w-4" />
+              Storage
+            </Link>
+          )}
+          <Link
+            href={driveId ? `/dashboard/${driveId}/activity` : "/dashboard/activity"}
+            className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+          >
+            <Activity className="h-4 w-4" />
+            Activity
+          </Link>
+          {driveId && (drive?.isOwned || drive?.role === 'ADMIN') && (
+            <Link
+              href={`/dashboard/${driveId}/settings`}
+              className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+            >
+              <Settings className="h-4 w-4" />
+              Drive Settings
+            </Link>
+          )}
+          {!driveId && (
+            <Link
+              href="/settings"
+              className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+            >
+              <Settings className="h-4 w-4" />
+              Settings
+            </Link>
           )}
           <Link
             href={driveId ? `/dashboard/${driveId}/trash` : "/dashboard/trash"}
@@ -150,31 +173,6 @@ export default function Sidebar({ className }: SidebarProps) {
             <Trash2 className="h-4 w-4" />
             Trash
           </Link>
-          <Link
-            href={driveId ? `/dashboard/${driveId}/activity` : "/dashboard/activity"}
-            className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
-          >
-            <Activity className="h-4 w-4" />
-            Activity
-          </Link>
-          {!driveId && (
-            <>
-              <Link
-                href="/dashboard/storage"
-                className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
-              >
-                <HardDrive className="h-4 w-4" />
-                Storage
-              </Link>
-              <Link
-                href="/settings"
-                className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
-              >
-                <Settings className="h-4 w-4" />
-                Settings
-              </Link>
-            </>
-          )}
         </div>
 
         <CreatePageDialog

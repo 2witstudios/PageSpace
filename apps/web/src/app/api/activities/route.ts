@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { db, activityLogs, eq, and, desc, count, gte, lt, sql } from '@pagespace/db';
+import { db, activityLogs, eq, and, desc, count, gte, lt } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage, isUserDriveMember } from '@pagespace/lib';
@@ -156,10 +156,10 @@ export async function GET(request: Request) {
       filterConditions.push(eq(activityLogs.userId, params.actorId));
     }
     if (params.operation) {
-      filterConditions.push(sql`${activityLogs.operation} = ${params.operation}`);
+      filterConditions.push(eq(activityLogs.operation, params.operation));
     }
     if (params.resourceType) {
-      filterConditions.push(sql`${activityLogs.resourceType} = ${params.resourceType}`);
+      filterConditions.push(eq(activityLogs.resourceType, params.resourceType));
     }
 
     const finalWhereCondition = filterConditions.length > 0

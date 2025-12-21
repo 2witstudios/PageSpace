@@ -2,8 +2,9 @@ import { isToday, isYesterday, isThisWeek, format } from 'date-fns';
 import type { ActivityLog } from './types';
 
 export function getInitials(name: string | null, email: string): string {
-  if (name) {
-    return name
+  const trimmedName = name?.trim();
+  if (trimmedName) {
+    return trimmedName
       .split(' ')
       .filter((n) => n.length > 0)
       .map((n) => n[0])
@@ -19,6 +20,12 @@ export function groupActivitiesByDate(activities: ActivityLog[]): Map<string, Ac
 
   activities.forEach((activity) => {
     const date = new Date(activity.timestamp);
+
+    // Skip invalid dates
+    if (isNaN(date.getTime())) {
+      return;
+    }
+
     let groupKey: string;
 
     if (isToday(date)) {
@@ -53,5 +60,6 @@ export function formatDateRange(startDate?: Date, endDate?: Date): string {
   if (endDate) {
     return `Until ${format(endDate, 'MMM d, yyyy')}`;
   }
+  // All cases are covered above; this should never be reached
   return 'All time';
 }

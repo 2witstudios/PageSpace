@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { db, activityLogs, eq, and, desc, gte, lt, sql } from '@pagespace/db';
+import { db, activityLogs, eq, and, desc, gte, lt } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { generateCSV } from '@pagespace/lib';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
@@ -139,10 +139,10 @@ export async function GET(request: Request) {
       filterConditions.push(eq(activityLogs.userId, params.actorId));
     }
     if (params.operation) {
-      filterConditions.push(sql`${activityLogs.operation} = ${params.operation}`);
+      filterConditions.push(eq(activityLogs.operation, params.operation));
     }
     if (params.resourceType) {
-      filterConditions.push(sql`${activityLogs.resourceType} = ${params.resourceType}`);
+      filterConditions.push(eq(activityLogs.resourceType, params.resourceType));
     }
 
     const finalWhereCondition = filterConditions.length > 0
@@ -193,10 +193,14 @@ export async function GET(request: Request) {
     const today = format(new Date(), 'yyyy-MM-dd');
     const filename = `activity-export-${today}.csv`;
 
+    // Check if results were truncated
+    const isTruncated = activities.length === 10000;
+
     return new Response(csvContent, {
       headers: {
         'Content-Type': 'text/csv; charset=utf-8',
         'Content-Disposition': `attachment; filename="${filename}"`,
+        ...(isTruncated && { 'X-Truncated': 'true', 'X-Truncated-At': '10000' }),
       },
     });
   } catch (error) {
