@@ -194,10 +194,11 @@ export const driveTools = {
   rename_drive: tool({
     description: 'Rename an existing workspace/drive. Only the drive owner can rename their drives.',
     inputSchema: z.object({
+      currentName: z.string().describe('Current name of the drive for display context'),
       driveId: z.string().describe('The unique ID of the drive to rename'),
       name: z.string().describe('The new name for the drive'),
     }),
-    execute: async ({ driveId, name }, { experimental_context: context }) => {
+    execute: async ({ currentName, driveId, name }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -279,7 +280,7 @@ export const driveTools = {
         };
       } catch (error) {
         console.error('Error renaming drive:', error);
-        throw new Error(`Failed to rename drive: ${error instanceof Error ? error.message : String(error)}`);
+        throw new Error(`Failed to rename drive "${currentName}": ${error instanceof Error ? error.message : String(error)}`);
       }
     },
   }),

@@ -164,6 +164,21 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
         if (params.title || params.name) return `${base}: "${params.title || params.name}"`;
       }
 
+      // Drive-based tools - show which drive
+      if (['list_pages', 'list_trash'].includes(toolName)) {
+        if (params.driveSlug) return `${base}: "${params.driveSlug}"`;
+      }
+
+      // Drive creation
+      if (toolName === 'create_drive') {
+        if (params.name) return `${base}: "${params.name}"`;
+      }
+
+      // Drive rename - show current name
+      if (toolName === 'rename_drive') {
+        if (params.currentName) return `${base}: "${params.currentName}"`;
+      }
+
       return base;
     } catch {
       return base;
