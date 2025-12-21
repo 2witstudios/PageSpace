@@ -44,6 +44,7 @@ let AI_PROVIDERS: [String: AIProvider] = [
             "openai/o1-mini": "OpenAI o1-mini",
             "openai/o1-preview": "OpenAI o1-preview",
             // Google Models
+            "google/gemini-3-flash-preview": "Gemini 3 Flash (Preview)",
             "google/gemini-pro-1.5": "Gemini Pro 1.5",
             "google/gemini-flash-1.5": "Gemini Flash 1.5",
             // xAI Models (2025)
@@ -102,6 +103,8 @@ let AI_PROVIDERS: [String: AIProvider] = [
     "google": AIProvider(
         name: "Google AI",
         models: [
+            // Gemini 3 Series (2025)
+            "gemini-3-flash-preview": "Gemini 3 Flash (Preview)",
             // Gemini 2.5 Series (2025)
             "gemini-2.5-pro": "Gemini 2.5 Pro",
             "gemini-2.5-flash": "Gemini 2.5 Flash",

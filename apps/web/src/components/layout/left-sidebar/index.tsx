@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useSWRConfig } from "swr";
 import {
+  Activity,
   HardDrive,
   Lock,
   Plus,
@@ -24,7 +25,7 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
-import { getPermissionErrorMessage } from "@/hooks/use-permissions";
+import { getPermissionErrorMessage, canManageDrive } from "@/hooks/use-permissions";
 import { useDriveStore } from "@/hooks/useDrive";
 
 import CreatePageDialog from "./CreatePageDialog";
@@ -52,7 +53,7 @@ export default function Sidebar({ className }: SidebarProps) {
   const { mutate } = useSWRConfig();
 
   const drive = drives.find((d) => d.id === driveId);
-  const canCreatePages = drive?.isOwned || drive?.role === 'ADMIN' || false;
+  const canManage = canManageDrive(drive);
 
   useEffect(() => {
     if (driveId && user?.id) {
@@ -89,7 +90,7 @@ export default function Sidebar({ className }: SidebarProps) {
                     onChange={(event) => setSearchQuery(event.target.value)}
                   />
                 </div>
-                {canCreatePages ? (
+                {canManage ? (
                   <Button variant="ghost" size="icon" onClick={() => setCreatePageOpen(true)}>
                     <Plus className="h-5 w-5" />
                   </Button>
@@ -122,25 +123,48 @@ export default function Sidebar({ className }: SidebarProps) {
         </div>
 
         <div className="mt-auto space-y-1">
-          {driveId && (drive?.isOwned || drive?.role) && (
-            <>
-              <Link
-                href={`/dashboard/${driveId}/members`}
-                className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
-              >
-                <Users className="h-4 w-4" />
-                Members
-              </Link>
-              {(drive?.isOwned || drive?.role === 'ADMIN') && (
-                <Link
-                  href={`/dashboard/${driveId}/settings`}
-                  className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
-                >
-                  <Settings className="h-4 w-4" />
-                  Drive Settings
-                </Link>
-              )}
-            </>
+          {driveId && canManage && (
+            <Link
+              href={`/dashboard/${driveId}/members`}
+              className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+            >
+              <Users className="h-4 w-4" />
+              Members
+            </Link>
+          )}
+          {!driveId && (
+            <Link
+              href="/dashboard/storage"
+              className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+            >
+              <HardDrive className="h-4 w-4" />
+              Storage
+            </Link>
+          )}
+          <Link
+            href={driveId ? `/dashboard/${driveId}/activity` : "/dashboard/activity"}
+            className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+          >
+            <Activity className="h-4 w-4" />
+            Activity
+          </Link>
+          {driveId && canManage && (
+            <Link
+              href={`/dashboard/${driveId}/settings`}
+              className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+            >
+              <Settings className="h-4 w-4" />
+              Drive Settings
+            </Link>
+          )}
+          {!driveId && (
+            <Link
+              href="/settings"
+              className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+            >
+              <Settings className="h-4 w-4" />
+              Settings
+            </Link>
           )}
           <Link
             href={driveId ? `/dashboard/${driveId}/trash` : "/dashboard/trash"}
@@ -149,24 +173,6 @@ export default function Sidebar({ className }: SidebarProps) {
             <Trash2 className="h-4 w-4" />
             Trash
           </Link>
-          {!driveId && (
-            <>
-              <Link
-                href="/dashboard/storage"
-                className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
-              >
-                <HardDrive className="h-4 w-4" />
-                Storage
-              </Link>
-              <Link
-                href="/settings"
-                className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
-              >
-                <Settings className="h-4 w-4" />
-                Settings
-              </Link>
-            </>
-          )}
         </div>
 
         <CreatePageDialog

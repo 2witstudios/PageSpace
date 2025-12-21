@@ -1,6 +1,5 @@
-import React, { useMemo, useState, useEffect } from 'react';
-import { UIMessage } from 'ai';
-import { ToolCallRenderer, GroupedToolCallsRenderer } from './tool-calls';
+import React, { useState, useEffect } from 'react';
+import { ToolCallRenderer } from './tool-calls';
 
 import { StreamingMarkdown } from './StreamingMarkdown';
 import { MessageActionButtons } from './MessageActionButtons';
@@ -10,50 +9,9 @@ import { TodoListMessage } from './TodoListMessage';
 import { useSocket } from '@/hooks/useSocket';
 import { ErrorBoundary } from '@/components/ai/shared/ErrorBoundary';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
-
-// Extended message interface that includes database fields
-interface ConversationMessage extends UIMessage {
-  messageType?: 'standard' | 'todo_list';
-  conversationId?: string;
-  isActive?: boolean;
-  editedAt?: Date;
-  createdAt?: Date;
-}
-
-interface TextPart {
-  type: 'text';
-  text: string;
-}
-
-interface ToolPart {
-  type: string; // "tool-{toolName}"
-  toolCallId: string;
-  toolName: string;
-  input?: Record<string, unknown>;
-  output?: unknown;
-  state: 'input-streaming' | 'input-available' | 'output-available' | 'output-error';
-}
-
-interface TextGroupPart {
-  type: 'text-group';
-  parts: TextPart[];
-}
-
-interface ToolGroupPart {
-  type: string; // "tool-{toolName}"
-  toolCallId: string;
-  toolName: string;
-  input?: Record<string, unknown>;
-  output?: unknown;
-  state: 'input-streaming' | 'input-available' | 'output-available' | 'output-error' | 'done' | 'streaming';
-}
-
-interface ToolCallsGroupPart {
-  type: 'tool-calls-group';
-  tools: ToolGroupPart[];
-}
-
-type GroupedPart = TextGroupPart | ToolGroupPart | ToolCallsGroupPart;
+import { useGroupedParts } from './useGroupedParts';
+import type { ConversationMessage, TextPart } from './message-types';
+import { isTextGroupPart, isProcessedToolPart } from './message-types';
 
 interface TextBlockProps {
   parts: TextPart[];
@@ -276,96 +234,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
   // ============================================
   // Standard Message Rendering
   // ============================================
-  const groupedParts = useMemo(() => {
-    if (!message.parts || message.parts.length === 0) {
-      return [];
-    }
-
-    const groups: GroupedPart[] = [];
-    let currentTextGroup: TextPart[] = [];
-    let currentToolGroup: ToolGroupPart[] = [];
-
-    message.parts.forEach((part) => {
-      // Skip step-start and reasoning parts - they shouldn't break up tool groups
-      if (part.type === 'step-start' || part.type === 'reasoning') {
-        return;
-      }
-
-      if (part.type === 'text') {
-        // If we have accumulated tool parts, add them as a group
-        if (currentToolGroup.length > 0) {
-          // Always create a group for tool calls, even single ones
-          groups.push({
-            type: 'tool-calls-group',
-            tools: currentToolGroup
-          });
-          currentToolGroup = [];
-        }
-
-        currentTextGroup.push(part as TextPart);
-      } else if (part.type.startsWith('tool-')) {
-        // If we have accumulated text parts, add them as a group
-        if (currentTextGroup.length > 0) {
-          groups.push({
-            type: 'text-group',
-            parts: currentTextGroup
-          });
-          currentTextGroup = [];
-        }
-
-        // Type guard and safe property access for tool parts
-        const toolPart = part as ToolPart & Record<string, unknown>;
-        const toolCallId = typeof toolPart.toolCallId === 'string' ? toolPart.toolCallId : '';
-        const toolName = typeof toolPart.toolName === 'string' ? toolPart.toolName : part.type.replace('tool-', '');
-
-        // Ensure state is one of the valid values with proper type checking
-        const validStates = ['input-streaming', 'input-available', 'output-available', 'output-error', 'done', 'streaming'] as const;
-        type ValidState = typeof validStates[number];
-        const isValidState = (value: unknown): value is ValidState => {
-          return typeof value === 'string' && (validStates as readonly string[]).includes(value);
-        };
-        const state: ValidState = isValidState(toolPart.state) ? toolPart.state : 'input-available';
-
-        // Check if tool type changed - flush current group if different type
-        if (currentToolGroup.length > 0 && currentToolGroup[0].type !== part.type) {
-          groups.push({
-            type: 'tool-calls-group',
-            tools: currentToolGroup
-          });
-          currentToolGroup = [];
-        }
-
-        // Add the tool part to current group
-        currentToolGroup.push({
-          type: part.type,
-          toolCallId,
-          toolName,
-          input: toolPart.input,
-          output: toolPart.output,
-          state,
-        });
-      }
-    });
-
-    // Add any remaining text parts
-    if (currentTextGroup.length > 0) {
-      groups.push({
-        type: 'text-group',
-        parts: currentTextGroup
-      });
-    }
-
-    // Add any remaining tool parts
-    if (currentToolGroup.length > 0) {
-      // Always create a group for tool calls, even single ones
-      groups.push({
-        type: 'tool-calls-group',
-        tools: currentToolGroup
-      });
-    }
-
-    return groups;
-  }, [message.parts]);
+  const groupedParts = useGroupedParts(message.parts);
 
   const createdAt = message.createdAt;
   const editedAt = message.editedAt;
@@ -460,18 +329,16 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
     <>
       <div key={message.id} className="mb-2" style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 100px' }}>
         {groupedParts.map((group, index) => {
-          if (group.type === 'text-group') {
-            // Type narrowing: we know this is a TextGroupPart
-            const textGroup = group as TextGroupPart;
+          if (isTextGroupPart(group)) {
             const isLastTextBlock = index === groupedParts.length - 1;
 
             return (
               <TextBlock
                 key={`${message.id}-text-${index}`}
-                parts={textGroup.parts}
+                parts={group.parts}
                 role={message.role as 'user' | 'assistant' | 'system'}
                 messageId={message.id}
-                createdAt={isLastTextBlock ? createdAt : undefined} // Only show timestamp on last part
+                createdAt={isLastTextBlock ? createdAt : undefined}
                 editedAt={isLastTextBlock ? editedAt : undefined}
                 onEdit={onEdit ? () => setIsEditing(true) : undefined}
                 onDelete={onDelete ? () => setShowDeleteDialog(true) : undefined}
@@ -482,36 +349,17 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
                 isStreaming={isStreaming}
               />
             );
-          } else if (group.type === 'tool-calls-group') {
-            // Type narrowing: we know this is a ToolCallsGroupPart
-            const toolCallsGroup = group as ToolCallsGroupPart;
-            return (
-              <GroupedToolCallsRenderer
-                key={`${message.id}-toolgroup-${index}`}
-                toolCalls={toolCallsGroup.tools.map((tool) => ({
-                  type: tool.type,
-                  toolName: tool.toolName,
-                  toolCallId: tool.toolCallId,
-                  input: tool.input,
-                  output: tool.output,
-                  state: tool.state,
-                }))}
-                className="mr-2 sm:mr-8"
-              />
-            );
-          } else if (group.type.startsWith('tool-')) {
-            // Type narrowing: we know this is a ToolGroupPart
-            const toolGroup = group as ToolGroupPart;
+          } else if (isProcessedToolPart(group)) {
             return (
               <div key={`${message.id}-tool-${index}`} className="mr-2 sm:mr-8">
                 <ToolCallRenderer
                   part={{
-                    type: toolGroup.type,
-                    toolName: toolGroup.toolName,
-                    toolCallId: toolGroup.toolCallId,
-                    input: toolGroup.input,
-                    output: toolGroup.output,
-                    state: toolGroup.state,
+                    type: group.type,
+                    toolName: group.toolName,
+                    toolCallId: group.toolCallId,
+                    input: group.input,
+                    output: group.output,
+                    state: group.state,
                   }}
                 />
               </div>

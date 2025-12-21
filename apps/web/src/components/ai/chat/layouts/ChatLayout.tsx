@@ -70,18 +70,30 @@ export interface ChatLayoutProps {
     placeholder?: string;
     driveId?: string;
     crossDrive?: boolean;
-    mcpEnabled?: boolean;
-    onMcpToggle?: (enabled: boolean) => void;
     mcpRunningServers?: number;
+    mcpServerNames?: string[];
+    mcpEnabledCount?: number;
+    mcpAllEnabled?: boolean;
+    onMcpToggleAll?: (enabled: boolean) => void;
+    isMcpServerEnabled?: (serverName: string) => boolean;
+    onMcpServerToggle?: (serverName: string, enabled: boolean) => void;
     showMcp?: boolean;
   }) => React.ReactNode;
 
-  /** MCP enabled state */
-  mcpEnabled?: boolean;
-  /** MCP toggle callback */
-  onMcpToggle?: (enabled: boolean) => void;
   /** MCP running servers count */
   mcpRunningServers?: number;
+  /** Names of running MCP servers */
+  mcpServerNames?: string[];
+  /** Number of enabled MCP servers */
+  mcpEnabledCount?: number;
+  /** Whether all MCP servers are enabled */
+  mcpAllEnabled?: boolean;
+  /** Toggle all MCP servers */
+  onMcpToggleAll?: (enabled: boolean) => void;
+  /** Check if specific server is enabled */
+  isMcpServerEnabled?: (serverName: string) => boolean;
+  /** Toggle specific server */
+  onMcpServerToggle?: (serverName: string, enabled: boolean) => void;
   /** Whether to show MCP toggle (desktop only) */
   showMcp?: boolean;
 }
@@ -124,9 +136,13 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
       lastUserMessageId,
       isReadOnly = false,
       renderInput,
-      mcpEnabled = false,
-      onMcpToggle,
       mcpRunningServers = 0,
+      mcpServerNames = [],
+      mcpEnabledCount = 0,
+      mcpAllEnabled = false,
+      onMcpToggleAll,
+      isMcpServerEnabled,
+      onMcpServerToggle,
       showMcp = false,
     },
     ref
@@ -192,9 +208,13 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
           placeholder,
           driveId,
           crossDrive,
-          mcpEnabled,
-          onMcpToggle,
           mcpRunningServers,
+          mcpServerNames,
+          mcpEnabledCount,
+          mcpAllEnabled,
+          onMcpToggleAll,
+          isMcpServerEnabled,
+          onMcpServerToggle,
           showMcp,
         })
       : defaultInputContent;

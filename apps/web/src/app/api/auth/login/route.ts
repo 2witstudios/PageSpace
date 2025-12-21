@@ -1,5 +1,3 @@
-import { users, refreshTokens } from '@pagespace/db';
-import { db, eq } from '@pagespace/db';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod/v4';
 import {
@@ -18,6 +16,7 @@ import { loggers, logAuthEvent, logSecurityEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { validateLoginCSRFToken } from '@/lib/auth/login-csrf-utils';
+import { authRepository } from '@/lib/repositories/auth-repository';
 
 const loginSchema = z.object({
   email: z.email(),
@@ -129,9 +128,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const user = await db.query.users.findFirst({
-      where: eq(users.email, email),
-    });
+    const user = await authRepository.findUserByEmail(email);
 
     // Always perform bcrypt comparison to prevent timing attacks
     // Use a fake hash for non-existent users to maintain consistent timing
@@ -171,17 +168,15 @@ export async function POST(req: Request) {
       deviceTokenRecordId = recordId;
     }
 
-    await db.insert(refreshTokens).values({
-      id: createId(),
+    await authRepository.createRefreshToken({
       token: refreshToken,
       userId: user.id,
       device: req.headers.get('user-agent'),
       userAgent: req.headers.get('user-agent'),
       ip: clientIP,
-      lastUsedAt: new Date(),
-      platform: 'web',
       expiresAt: refreshExpiresAt,
-      deviceTokenId: deviceTokenRecordId,  // Link refresh token to device token for revocation
+      deviceTokenId: deviceTokenRecordId,
+      platform: 'web',
     });
 
     // Reset rate limits on successful login
