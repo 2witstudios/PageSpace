@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
-import { db, taskItems, taskLists, eq } from '@pagespace/db';
+import { db, taskItems, taskLists, pages, eq } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/server';
 import { broadcastTaskEvent } from '@/lib/websocket';
+import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -27,6 +28,12 @@ export async function PATCH(
       error: 'You need edit permission to reorder tasks',
     }, { status: 403 });
   }
+
+  // Get task list page for driveId
+  const taskListPage = await db.query.pages.findFirst({
+    where: eq(pages.id, pageId),
+    columns: { driveId: true, title: true },
+  });
 
   // Verify task list exists for this page
   const taskList = await db.query.taskLists.findFirst({
@@ -71,6 +78,26 @@ export async function PATCH(
     pageId,
     data: { tasks },
   });
+
+  // Log task reorder for compliance (fire-and-forget)
+  if (taskListPage) {
+    const actorInfo = await getActorInfo(userId);
+    logPageActivity(userId, 'reorder', {
+      id: pageId,
+      title: taskListPage.title || 'Task List',
+      driveId: taskListPage.driveId,
+    }, {
+      ...actorInfo,
+      metadata: {
+        taskListId: taskList.id,
+        reorderedTaskIds: tasks.map((t: { id: string }) => t.id),
+        newPositions: tasks.map((t: { id: string; position: number }) => ({
+          id: t.id,
+          position: t.position,
+        })),
+      },
+    });
+  }
 
   return NextResponse.json({ success: true });
 }

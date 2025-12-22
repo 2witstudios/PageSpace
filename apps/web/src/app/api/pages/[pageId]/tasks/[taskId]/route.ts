@@ -3,6 +3,7 @@ import { db, taskItems, taskLists, pages, eq, and } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/server';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -171,6 +172,24 @@ export async function PATCH(
 
   await Promise.all(broadcasts);
 
+  // Log task update for compliance (fire-and-forget)
+  if (existingTask.pageId && taskListPage) {
+    const actorInfo = await getActorInfo(userId);
+    logPageActivity(userId, 'update', {
+      id: existingTask.pageId,
+      title: updatedTask.title,
+      driveId: taskListPage.driveId,
+    }, {
+      ...actorInfo,
+      updatedFields: Object.keys(updates),
+      metadata: {
+        taskId,
+        taskListId: taskList.id,
+        taskListPageId: pageId,
+      },
+    });
+  }
+
   return NextResponse.json(taskWithRelations);
 }
 
@@ -239,6 +258,24 @@ export async function DELETE(
       data: { id: taskId },
     });
 
+    // Log task deletion for compliance (fire-and-forget)
+    if (taskListPage) {
+      const actorInfo = await getActorInfo(userId);
+      logPageActivity(userId, 'delete', {
+        id: pageId, // Use task list page as reference since task has no page
+        title: existingTask.title,
+        driveId: taskListPage.driveId,
+      }, {
+        ...actorInfo,
+        metadata: {
+          taskId,
+          taskListId: taskList.id,
+          taskListPageId: pageId,
+          isConversationTask: true,
+        },
+      });
+    }
+
     return NextResponse.json({ success: true });
   }
 
@@ -272,6 +309,23 @@ export async function DELETE(
   }
 
   await Promise.all(broadcasts);
+
+  // Log task deletion (via page trash) for compliance (fire-and-forget)
+  if (taskListPage) {
+    const actorInfo = await getActorInfo(userId);
+    logPageActivity(userId, 'trash', {
+      id: linkedPageId,
+      title: existingTask.title,
+      driveId: taskListPage.driveId,
+    }, {
+      ...actorInfo,
+      metadata: {
+        taskId,
+        taskListId: taskList.id,
+        taskListPageId: pageId,
+      },
+    });
+  }
 
   return NextResponse.json({ success: true });
 }
