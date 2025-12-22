@@ -58,12 +58,13 @@ vi.mock('crypto', () => ({
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
-  getActorInfo: vi.fn().mockResolvedValue({ email: 'test@example.com' }),
+  getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@example.com' }),
   logTokenActivity: vi.fn(),
 }));
 
 import { db } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 describe('/api/auth/mcp-tokens', () => {
   beforeEach(() => {
@@ -125,6 +126,20 @@ describe('/api/auth/mcp-tokens', () => {
         expect(capturedValues).toBeDefined();
         expect(capturedValues!.name).toBe('My API Token');
         expect(capturedValues!.userId).toBe('test-user-id');
+
+        // Assert - verify activity logging for token creation (boundary contract)
+        expect(logTokenActivity).toHaveBeenCalledWith(
+          'test-user-id',
+          'token_create',
+          expect.objectContaining({
+            tokenId: 'new-mcp-token-id',
+            tokenType: 'mcp',
+            tokenName: 'My API Token',
+          }),
+          expect.objectContaining({
+            actorEmail: 'test@example.com',
+          })
+        );
       });
 
       it('generates token with mcp_ prefix', async () => {
@@ -456,6 +471,20 @@ describe('/api/auth/mcp-tokens', () => {
         // Assert
         expect(response.status).toBe(200);
         expect(body.message).toBe('Token revoked successfully');
+
+        // Assert - verify activity logging for token revocation (boundary contract)
+        expect(logTokenActivity).toHaveBeenCalledWith(
+          'test-user-id',
+          'token_revoke',
+          expect.objectContaining({
+            tokenId: 'token-123',
+            tokenType: 'mcp',
+            tokenName: 'Test Token',
+          }),
+          expect.objectContaining({
+            actorEmail: 'test@example.com',
+          })
+        );
       });
 
       it('sets revokedAt timestamp instead of deleting', async () => {
