@@ -467,6 +467,7 @@ export const activityLogs = pgTable('activity_logs', {
   driveTimestampIdx: index('idx_activity_logs_drive_timestamp').on(table.driveId, table.timestamp),
   pageTimestampIdx: index('idx_activity_logs_page_timestamp').on(table.pageId, table.timestamp),
   archivedIdx: index('idx_activity_logs_archived').on(table.isArchived),
+  rollbackFromActivityIdIdx: index('idx_activity_logs_rollback_from').on(table.rollbackFromActivityId),
 }));
 
 /**
