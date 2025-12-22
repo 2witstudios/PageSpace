@@ -521,11 +521,20 @@ export const agentCommunicationTools = {
         
         // 10. Create enhanced execution context for nested calls
         // Preserve locationContext so nested agents know which drive/page they're operating in
+        // Include chain tracking for activity logging (Tier 1)
         const nestedContext = {
           ...executionContext,
           agentCallDepth: callDepth + 1,
           currentAgentId: agentId,
           locationContext: executionContext?.locationContext, // Explicitly preserve location context
+          // Chain tracking for audit trail
+          parentAgentId: executionContext?.locationContext?.currentPage?.id,
+          parentConversationId: executionContext?.conversationId,
+          agentChain: [
+            ...(executionContext?.agentChain || []),
+            agentId,
+          ],
+          requestOrigin: 'agent' as const,
         } as ToolExecutionContext & { agentCallDepth: number; currentAgentId: string };
         
         // 11. Process with target agent's configuration (ephemeral - no persistence)

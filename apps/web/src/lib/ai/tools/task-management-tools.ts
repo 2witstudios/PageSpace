@@ -9,12 +9,21 @@ import { getDefaultContent, PageType } from '@pagespace/lib';
 // Helper: Extract AI attribution context with actor info for activity logging
 async function getAiContextWithActor(context: ToolExecutionContext) {
   const actorInfo = await getActorInfo(context.userId);
+  // Build chain metadata (Tier 1)
+  const chainMetadata = {
+    ...(context.parentAgentId && { parentAgentId: context.parentAgentId }),
+    ...(context.parentConversationId && { parentConversationId: context.parentConversationId }),
+    ...(context.agentChain?.length && { agentChain: context.agentChain }),
+    ...(context.requestOrigin && { requestOrigin: context.requestOrigin }),
+  };
+
   return {
     ...actorInfo,
     isAiGenerated: true,
     aiProvider: context.aiProvider,
     aiModel: context.aiModel,
     aiConversationId: context.conversationId,
+    metadata: Object.keys(chainMetadata).length > 0 ? chainMetadata : undefined,
   };
 }
 

@@ -33,6 +33,15 @@ function logPageActivityAsync(
   context: ToolExecutionContext,
   metadata?: Record<string, unknown>
 ) {
+  // Build metadata with agent chain context (Tier 1)
+  const chainMetadata = {
+    ...metadata,
+    ...(context.parentAgentId && { parentAgentId: context.parentAgentId }),
+    ...(context.parentConversationId && { parentConversationId: context.parentConversationId }),
+    ...(context.agentChain?.length && { agentChain: context.agentChain }),
+    ...(context.requestOrigin && { requestOrigin: context.requestOrigin }),
+  };
+
   getActorInfo(context.userId)
     .then(actorInfo => {
       logPageActivity(userId, action, page, {
@@ -41,7 +50,7 @@ function logPageActivityAsync(
         aiProvider: context.aiProvider ?? 'unknown',
         aiModel: context.aiModel ?? 'unknown',
         aiConversationId: context.conversationId,
-        metadata,
+        metadata: chainMetadata,
       });
     })
     .catch(err => {
@@ -52,7 +61,7 @@ function logPageActivityAsync(
         aiProvider: context.aiProvider ?? 'unknown',
         aiModel: context.aiModel ?? 'unknown',
         aiConversationId: context.conversationId,
-        metadata,
+        metadata: chainMetadata,
       });
     });
 }
@@ -60,10 +69,18 @@ function logPageActivityAsync(
 // Helper: Non-blocking drive activity logging with AI context (fire-and-forget)
 function logDriveActivityAsync(
   userId: string,
-  action: ActivityOperation,
+  action: 'create' | 'update' | 'delete' | 'restore' | 'trash' | 'ownership_transfer',
   drive: { id: string; name: string },
   context: ToolExecutionContext
 ) {
+  // Build metadata with agent chain context (Tier 1)
+  const chainMetadata = {
+    ...(context.parentAgentId && { parentAgentId: context.parentAgentId }),
+    ...(context.parentConversationId && { parentConversationId: context.parentConversationId }),
+    ...(context.agentChain?.length && { agentChain: context.agentChain }),
+    ...(context.requestOrigin && { requestOrigin: context.requestOrigin }),
+  };
+
   getActorInfo(context.userId)
     .then(actorInfo => {
       logDriveActivity(userId, action, drive, {
@@ -72,6 +89,7 @@ function logDriveActivityAsync(
         aiProvider: context.aiProvider ?? 'unknown',
         aiModel: context.aiModel ?? 'unknown',
         aiConversationId: context.conversationId,
+        metadata: Object.keys(chainMetadata).length > 0 ? chainMetadata : undefined,
       });
     })
     .catch(err => {
@@ -81,6 +99,7 @@ function logDriveActivityAsync(
         aiProvider: context.aiProvider ?? 'unknown',
         aiModel: context.aiModel ?? 'unknown',
         aiConversationId: context.conversationId,
+        metadata: Object.keys(chainMetadata).length > 0 ? chainMetadata : undefined,
       });
     });
 }

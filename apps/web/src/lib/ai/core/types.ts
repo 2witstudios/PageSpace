@@ -27,4 +27,10 @@ export interface ToolExecutionContext {
     breadcrumbs?: string[];
   };
   modelCapabilities?: ModelCapabilities;
+
+  // Agent chain tracking (Tier 1) - for tracking changes made by sub-agents
+  parentAgentId?: string;           // Agent that called this agent via ask_agent
+  parentConversationId?: string;    // Parent's conversation ID for linking
+  agentChain?: string[];            // Full chain: [rootAgentId, ...intermediates, currentAgentId]
+  requestOrigin?: 'user' | 'agent'; // Whether request came from user or another agent
 }
