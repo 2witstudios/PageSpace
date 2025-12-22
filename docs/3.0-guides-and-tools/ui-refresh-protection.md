@@ -57,21 +57,43 @@ interface EditingState {
 
 #### 1. SWR Polling Protection
 
-Use `isPaused()` option to conditionally pause SWR revalidation:
+Use `isPaused()` option to conditionally pause SWR revalidation **after initial load**:
 
 ```typescript
+import { useRef } from 'react';
 import { isEditingActive } from '@/stores/useEditingStore';
 
-const { data, error } = useSWR('/api/endpoint', fetcher, {
-  refreshInterval: 300000, // 5 minutes (reduced from 30-60s)
-  revalidateOnFocus: false, // Disable focus revalidation
-  isPaused: isEditingActive, // Reads live state when SWR calls it
-});
+function useMyData(key: string) {
+  // Track if initial data has been loaded - CRITICAL to avoid blocking first fetch
+  const hasLoadedRef = useRef(false);
+
+  const { data, error } = useSWR(key, fetcher, {
+    refreshInterval: 300000, // 5 minutes (reduced from 30-60s)
+    revalidateOnFocus: false, // Disable focus revalidation
+    // Only pause revalidation AFTER initial load - never block the first fetch
+    isPaused: () => hasLoadedRef.current && isEditingActive(),
+    onSuccess: () => {
+      hasLoadedRef.current = true;
+    },
+  });
+
+  return { data, error };
+}
 ```
 
-**Important:** Use the `isEditingActive` helper function directly, not a React hook selector. The helper reads store state via `getState()` when called, ensuring SWR always sees the current editing state rather than a stale value captured at render time.
+**CRITICAL:** The `isPaused` function blocks ALL fetching, including the initial fetch. You MUST use a ref to track whether initial data has loaded and only pause revalidation afterward. Without this pattern, components will be stuck in a perpetual loading state if any editing session is active during mount.
+
+**Pattern breakdown:**
+1. `hasLoadedRef.current` starts as `false`, so `isPaused` returns `false` on initial mount
+2. Initial fetch proceeds normally
+3. `onSuccess` sets `hasLoadedRef.current = true`
+4. Subsequent revalidations check both `hasLoadedRef.current` AND `isEditingActive()`
+5. Revalidation is paused only when both conditions are true
 
 **Applied to:**
+- `useBreadcrumbs.ts` - page header breadcrumbs
+- `usePageTree.ts` - page tree data
+- `useConversations.ts` - AI conversation history
 - `UsageCounter.tsx` - disabled polling, rely on Socket.IO
 - `UserDropdown.tsx` - 30s/60s → 5 minutes + isPaused()
 - `EditorToggles.tsx` - added revalidateOnFocus: false
@@ -327,15 +349,22 @@ useEffect(() => {
 }, [isEditing]);
 ```
 
-3. **Protect SWR calls:**
+3. **Protect SWR calls (with initial load safeguard):**
 ```typescript
+import { useRef } from 'react';
 import { isEditingActive } from '@/stores/useEditingStore';
 
-useSWR(key, fetcher, {
-  isPaused: isEditingActive, // Use helper, not hook selector
-  refreshInterval: 300000, // 5 minutes
-  revalidateOnFocus: false,
-});
+function useMyHook(key: string) {
+  const hasLoadedRef = useRef(false);
+
+  return useSWR(key, fetcher, {
+    // CRITICAL: Only pause AFTER initial load to avoid blocking first fetch
+    isPaused: () => hasLoadedRef.current && isEditingActive(),
+    onSuccess: () => { hasLoadedRef.current = true; },
+    refreshInterval: 300000, // 5 minutes
+    revalidateOnFocus: false,
+  });
+}
 ```
 
 ## Related Files

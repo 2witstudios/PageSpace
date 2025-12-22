@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import useSWR from 'swr';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { isEditingActive } from '@/stores/useEditingStore';
@@ -20,11 +21,18 @@ const fetcher = async (url: string) => {
 };
 
 export function useBreadcrumbs(pageId: string | null) {
+  // Track if initial data has been loaded to avoid blocking first fetch
+  const hasLoadedRef = useRef(false);
+
   const { data, error } = useSWR<BreadcrumbItem[]>(
     pageId ? `/api/pages/${pageId}/breadcrumbs` : null,
     fetcher,
     {
-      isPaused: isEditingActive,
+      // Only pause revalidation after initial load - never block the first fetch
+      isPaused: () => hasLoadedRef.current && isEditingActive(),
+      onSuccess: () => {
+        hasLoadedRef.current = true;
+      },
     }
   );
 
