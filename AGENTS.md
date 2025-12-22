@@ -96,8 +96,10 @@ export async function GET(
 ### 3.2. Coding Style & Naming Conventions
 
 - TypeScript strict mode; ESM modules
-- **Filenames**: kebab-case (`image-processor.ts`)
-- **React components**: PascalCase
+- **Filenames**: kebab-case (`image-processor.ts`), with exceptions:
+  - React hooks: camelCase matching export (`useAuth.ts`)
+  - Zustand stores: camelCase with `use` prefix (`useAuthStore.ts`)
+  - React components: PascalCase (`UserProfile.tsx`)
 - **Variables/functions**: camelCase
 - **Constants**: UPPER_SNAKE_CASE
 - **Types/enums**: PascalCase
