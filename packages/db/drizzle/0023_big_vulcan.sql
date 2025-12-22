@@ -1,0 +1,21 @@
+ALTER TYPE "activity_operation" ADD VALUE 'member_add';--> statement-breakpoint
+ALTER TYPE "activity_operation" ADD VALUE 'member_remove';--> statement-breakpoint
+ALTER TYPE "activity_operation" ADD VALUE 'member_role_change';--> statement-breakpoint
+ALTER TYPE "activity_operation" ADD VALUE 'login';--> statement-breakpoint
+ALTER TYPE "activity_operation" ADD VALUE 'logout';--> statement-breakpoint
+ALTER TYPE "activity_operation" ADD VALUE 'signup';--> statement-breakpoint
+ALTER TYPE "activity_operation" ADD VALUE 'password_change';--> statement-breakpoint
+ALTER TYPE "activity_operation" ADD VALUE 'email_change';--> statement-breakpoint
+ALTER TYPE "activity_operation" ADD VALUE 'token_create';--> statement-breakpoint
+ALTER TYPE "activity_operation" ADD VALUE 'token_revoke';--> statement-breakpoint
+ALTER TYPE "activity_operation" ADD VALUE 'upload';--> statement-breakpoint
+ALTER TYPE "activity_operation" ADD VALUE 'convert';--> statement-breakpoint
+ALTER TYPE "activity_operation" ADD VALUE 'account_delete';--> statement-breakpoint
+ALTER TYPE "activity_operation" ADD VALUE 'profile_update';--> statement-breakpoint
+ALTER TYPE "activity_operation" ADD VALUE 'avatar_update';--> statement-breakpoint
+ALTER TYPE "activity_resource" ADD VALUE 'user';--> statement-breakpoint
+ALTER TYPE "activity_resource" ADD VALUE 'member';--> statement-breakpoint
+ALTER TYPE "activity_resource" ADD VALUE 'role';--> statement-breakpoint
+ALTER TYPE "activity_resource" ADD VALUE 'file';--> statement-breakpoint
+ALTER TYPE "activity_resource" ADD VALUE 'token';--> statement-breakpoint
+ALTER TYPE "activity_resource" ADD VALUE 'device';

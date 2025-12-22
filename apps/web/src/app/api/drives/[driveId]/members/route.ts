@@ -7,6 +7,7 @@ import {
   isMemberOfDrive,
   addDriveMember,
 } from '@pagespace/lib/server';
+import { getActorInfo, logMemberActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
@@ -86,6 +87,15 @@ export async function POST(
       userId: invitedUserId,
       role: role as 'ADMIN' | 'MEMBER',
     });
+
+    // Log activity for audit trail
+    const actorInfo = await getActorInfo(userId);
+    logMemberActivity(userId, 'member_add', {
+      driveId,
+      driveName: access.drive.name,
+      targetUserId: invitedUserId,
+      role: role as string,
+    }, actorInfo);
 
     return NextResponse.json({ member: newMember });
   } catch (error) {

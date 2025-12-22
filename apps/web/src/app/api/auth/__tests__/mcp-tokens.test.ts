@@ -21,6 +21,7 @@ vi.mock('@pagespace/db', () => ({
     query: {
       mcpTokens: {
         findMany: vi.fn(),
+        findFirst: vi.fn().mockResolvedValue({ id: 'token-123', name: 'Test Token' }),
       },
     },
     update: vi.fn().mockReturnValue({
@@ -54,6 +55,11 @@ vi.mock('crypto', () => ({
   randomBytes: vi.fn().mockReturnValue({
     toString: vi.fn().mockReturnValue('randomBase64UrlString'),
   }),
+}));
+
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+  getActorInfo: vi.fn().mockResolvedValue({ email: 'test@example.com' }),
+  logTokenActivity: vi.fn(),
 }));
 
 import { db } from '@pagespace/db';
@@ -490,14 +496,8 @@ describe('/api/auth/mcp-tokens', () => {
 
     describe('token not found', () => {
       it('returns 404 when token does not exist', async () => {
-        // Arrange
-        (db.update as Mock).mockReturnValue({
-          set: vi.fn().mockReturnValue({
-            where: vi.fn().mockReturnValue({
-              returning: vi.fn().mockResolvedValue([]),
-            }),
-          }),
-        });
+        // Arrange - findFirst returns undefined when token doesn't exist
+        (db.query.mcpTokens.findFirst as Mock).mockResolvedValueOnce(undefined);
 
         const request = new NextRequest(
           'http://localhost/api/auth/mcp-tokens/nonexistent-token',
@@ -519,14 +519,8 @@ describe('/api/auth/mcp-tokens', () => {
       });
 
       it('returns 404 when token belongs to different user', async () => {
-        // Arrange - token exists but doesn't match userId
-        (db.update as Mock).mockReturnValue({
-          set: vi.fn().mockReturnValue({
-            where: vi.fn().mockReturnValue({
-              returning: vi.fn().mockResolvedValue([]),
-            }),
-          }),
-        });
+        // Arrange - findFirst returns undefined when token doesn't match userId
+        (db.query.mcpTokens.findFirst as Mock).mockResolvedValueOnce(undefined);
 
         const request = new NextRequest(
           'http://localhost/api/auth/mcp-tokens/other-user-token',

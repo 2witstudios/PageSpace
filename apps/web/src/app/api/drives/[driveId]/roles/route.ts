@@ -6,6 +6,7 @@ import {
   createDriveRole,
   validateRolePermissions,
 } from '@pagespace/lib/server';
+import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
@@ -89,6 +90,23 @@ export async function POST(
       isDefault,
       permissions,
     });
+
+    // Log activity for audit trail
+    const actorInfo = await getActorInfo(userId);
+    // Transform RolePermissions to Record<string, boolean> for audit logging
+    const permissionsSummary = Object.entries(permissions).reduce(
+      (acc, [key, perms]) => {
+        acc[key] = perms.canView || perms.canEdit || perms.canShare;
+        return acc;
+      },
+      {} as Record<string, boolean>
+    );
+    logRoleActivity(userId, 'create', {
+      roleId: newRole.id,
+      roleName: newRole.name,
+      driveId,
+      permissions: permissionsSummary,
+    }, actorInfo);
 
     return NextResponse.json({ role: newRole }, { status: 201 });
   } catch (error) {

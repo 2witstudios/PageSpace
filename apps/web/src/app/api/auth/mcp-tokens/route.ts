@@ -4,6 +4,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import * as crypto from 'crypto';
 import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/server';
+import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
@@ -38,6 +39,14 @@ export async function POST(req: NextRequest) {
       token,
       name,
     }).returning();
+
+    // Log activity for audit trail (token creation is a security event)
+    const actorInfo = await getActorInfo(userId);
+    logTokenActivity(userId, 'token_create', {
+      tokenId: newToken.id,
+      tokenType: 'mcp',
+      tokenName: newToken.name,
+    }, actorInfo);
 
     // Return the token (only shown once to the user)
     return NextResponse.json({

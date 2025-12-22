@@ -10,6 +10,7 @@ import {
 import { loggers } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS_READ = { allow: ['jwt', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
@@ -105,6 +106,23 @@ export async function PATCH(
       );
     }
 
+    // Log activity for audit trail
+    const actorInfo = await getActorInfo(userId);
+    const updatedFields = Object.keys(validatedBody).filter(
+      (key) => validatedBody[key as keyof typeof validatedBody] !== undefined
+    );
+    logDriveActivity(userId, 'update', {
+      id: driveId,
+      name: updatedDrive?.name ?? drive.name,
+    }, {
+      ...actorInfo,
+      metadata: {
+        updatedFields,
+        previousName: drive.name,
+        newName: validatedBody.name,
+      },
+    });
+
     return NextResponse.json(updatedDrive);
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -159,6 +177,13 @@ export async function DELETE(
         slug: drive.slug,
       })
     );
+
+    // Log activity for audit trail
+    const actorInfo = await getActorInfo(userId);
+    logDriveActivity(userId, 'trash', {
+      id: driveId,
+      name: drive.name,
+    }, actorInfo);
 
     return NextResponse.json({ success: true });
   } catch (error) {

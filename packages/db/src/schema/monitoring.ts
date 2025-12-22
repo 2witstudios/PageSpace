@@ -361,14 +361,40 @@ export const activityOperationEnum = pgEnum('activity_operation', [
   'permission_revoke',
   'trash',
   'move',
-  'agent_config_update'
+  'agent_config_update',
+  // Membership operations
+  'member_add',
+  'member_remove',
+  'member_role_change',
+  // Authentication/Security operations
+  'login',
+  'logout',
+  'signup',
+  'password_change',
+  'email_change',
+  'token_create',
+  'token_revoke',
+  // File operations
+  'upload',
+  'convert',
+  // Account operations
+  'account_delete',
+  'profile_update',
+  'avatar_update'
 ]);
 
 export const activityResourceEnum = pgEnum('activity_resource', [
   'page',
   'drive',
   'permission',
-  'agent'
+  'agent',
+  // New resource types
+  'user',
+  'member',
+  'role',
+  'file',
+  'token',
+  'device'
 ]);
 
 /**

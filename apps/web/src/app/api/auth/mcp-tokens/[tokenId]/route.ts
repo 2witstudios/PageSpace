@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db, mcpTokens, eq, and } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
+import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -17,8 +18,18 @@ export async function DELETE(
   const { tokenId } = await context.params;
 
   try {
+    // Get the token first to capture its name for the audit log
+    const existingToken = await db.query.mcpTokens.findFirst({
+      where: and(eq(mcpTokens.id, tokenId), eq(mcpTokens.userId, userId)),
+      columns: { id: true, name: true },
+    });
+
+    if (!existingToken) {
+      return new NextResponse('Token not found', { status: 404 });
+    }
+
     // Verify the token belongs to the user and revoke it
-    const result = await db
+    await db
       .update(mcpTokens)
       .set({ revokedAt: new Date() })
       .where(
@@ -26,12 +37,15 @@ export async function DELETE(
           eq(mcpTokens.id, tokenId),
           eq(mcpTokens.userId, userId)
         )
-      )
-      .returning({ id: mcpTokens.id });
+      );
 
-    if (result.length === 0) {
-      return new NextResponse('Token not found', { status: 404 });
-    }
+    // Log activity for audit trail (token revocation is a security event)
+    const actorInfo = await getActorInfo(userId);
+    logTokenActivity(userId, 'token_revoke', {
+      tokenId,
+      tokenType: 'mcp',
+      tokenName: existingToken.name,
+    }, actorInfo);
 
     return NextResponse.json({ message: 'Token revoked successfully' });
   } catch (error) {

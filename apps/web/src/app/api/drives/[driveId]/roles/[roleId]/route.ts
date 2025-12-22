@@ -7,9 +7,26 @@ import {
   deleteDriveRole,
   validateRolePermissions,
 } from '@pagespace/lib/server';
+import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
+
+/**
+ * Transform RolePermissions to Record<string, boolean> for audit logging.
+ * Each page key maps to true if any permission (canView, canEdit, canShare) is granted.
+ */
+function summarizePermissions(
+  permissions: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>
+): Record<string, boolean> {
+  return Object.entries(permissions).reduce(
+    (acc, [key, perms]) => {
+      acc[key] = perms.canView || perms.canEdit || perms.canShare;
+      return acc;
+    },
+    {} as Record<string, boolean>
+  );
+}
 
 // GET /api/drives/[driveId]/roles/[roleId] - Get a specific role
 export async function GET(
@@ -101,6 +118,16 @@ export async function PATCH(
       permissions,
     });
 
+    // Log activity for audit trail
+    const actorInfo = await getActorInfo(userId);
+    logRoleActivity(userId, 'update', {
+      roleId,
+      roleName: updatedRole.name,
+      driveId,
+      permissions: permissions ? summarizePermissions(permissions) : undefined,
+      previousPermissions: summarizePermissions(existingRole.permissions),
+    }, actorInfo);
+
     return NextResponse.json({ role: updatedRole });
   } catch (error) {
     console.error('Error updating role:', error);
@@ -142,6 +169,15 @@ export async function DELETE(
     }
 
     await deleteDriveRole(driveId, roleId);
+
+    // Log activity for audit trail
+    const actorInfo = await getActorInfo(userId);
+    logRoleActivity(userId, 'delete', {
+      roleId,
+      roleName: existingRole.name,
+      driveId,
+      previousPermissions: summarizePermissions(existingRole.permissions),
+    }, actorInfo);
 
     return NextResponse.json({ success: true });
   } catch (error) {
