@@ -5,7 +5,7 @@ import { usePageStore } from '@/hooks/usePage';
 import { usePageTree } from '@/hooks/usePageTree';
 import { findNodeAndParent } from '@/lib/tree/tree-utils';
 import { useParams } from 'next/navigation';
-import { usePermissions, getPermissionErrorMessage } from '@/hooks/use-permissions';
+import { usePermissions, getPermissionErrorMessage } from '@/hooks/usePermissions';
 import {
   Dialog,
   DialogContent,

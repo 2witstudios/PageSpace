@@ -24,8 +24,8 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { useAuth } from "@/hooks/use-auth";
-import { getPermissionErrorMessage, canManageDrive } from "@/hooks/use-permissions";
+import { useAuth } from "@/hooks/useAuth";
+import { getPermissionErrorMessage, canManageDrive } from "@/hooks/usePermissions";
 import { useDriveStore } from "@/hooks/useDrive";
 
 import CreatePageDialog from "./CreatePageDialog";

@@ -6,7 +6,7 @@ import { Progress } from '@/components/ui/progress';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Activity, DollarSign, Database, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useSocketStore } from '@/stores/socketStore';
+import { useSocketStore } from '@/stores/useSocketStore';
 
 interface AiUsageMonitorProps {
   conversationId?: string | null | undefined;

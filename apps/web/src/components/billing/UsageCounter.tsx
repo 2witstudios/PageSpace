@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { AlertCircle } from 'lucide-react';
 import useSWR from 'swr';
-import { useSocketStore } from '@/stores/socketStore';
+import { useSocketStore } from '@/stores/useSocketStore';
 import type { UsageEventPayload } from '@/lib/websocket';
 import { createClientLogger } from '@/lib/logging/client-logger';
 import { maskIdentifier } from '@/lib/logging/mask';

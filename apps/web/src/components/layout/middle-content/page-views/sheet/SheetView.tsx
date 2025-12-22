@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { TreePage, usePageTree } from '@/hooks/usePageTree';
 import { useDocument } from '@/hooks/useDocument';
 import { useSocket } from '@/hooks/useSocket';
-import { useAuth } from '@/hooks/use-auth';
+import { useAuth } from '@/hooks/useAuth';
 import { PageEventPayload } from '@/lib/websocket';
 import { toast } from 'sonner';
 import {

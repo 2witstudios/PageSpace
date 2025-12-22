@@ -44,7 +44,7 @@ vi.mock('@/lib/logging/mask', () => ({
 }));
 
 // Import after mocks
-import { useSocketStore } from '../stores/socketStore';
+import { useSocketStore } from '../stores/useSocketStore';
 import { io } from 'socket.io-client';
 import { getCookieValue } from '@/lib/utils/get-cookie-value';
 import { broadcastPageEvent, type PageEventPayload } from '@/lib/websocket';

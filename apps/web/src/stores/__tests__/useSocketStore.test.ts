@@ -18,7 +18,7 @@ vi.mock('@/lib/utils/get-cookie-value', () => ({
 }));
 
 // Import after mocks are set up
-import { useSocketStore } from '../socketStore';
+import { useSocketStore } from '../useSocketStore';
 import { io } from 'socket.io-client';
 import { getCookieValue } from '@/lib/utils/get-cookie-value';
 

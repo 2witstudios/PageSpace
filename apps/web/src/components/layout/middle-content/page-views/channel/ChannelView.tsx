@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
-import { useAuth } from '@/hooks/use-auth';
-import { usePermissions, getPermissionErrorMessage } from '@/hooks/use-permissions';
+import { useAuth } from '@/hooks/useAuth';
+import { usePermissions, getPermissionErrorMessage } from '@/hooks/usePermissions';
 import { io, Socket } from 'socket.io-client';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';

@@ -24,8 +24,8 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
-import { useNotificationStore } from '@/stores/notificationStore';
-import { useSocketStore } from '@/stores/socketStore';
+import { useNotificationStore } from '@/stores/useNotificationStore';
+import { useSocketStore } from '@/stores/useSocketStore';
 import { isConnectionRequest } from '@pagespace/lib/client-safe';
 import { patch } from '@/lib/auth/auth-fetch';
 

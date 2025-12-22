@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { PermissionsGrid, PermissionsGridRef } from '@/components/members/PermissionsGrid';
 import { UserSearch } from '@/components/members/UserSearch';
 import { ChevronLeft, UserPlus, User, RefreshCw, Shield } from 'lucide-react';
-import { useToast } from '@/hooks/use-toast';
+import { useToast } from '@/hooks/useToast';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';

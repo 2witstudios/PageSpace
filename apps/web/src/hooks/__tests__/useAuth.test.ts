@@ -144,7 +144,7 @@ vi.mock('@/stores/auth-store', () => {
 });
 
 // Import after mocks
-import { useAuth } from '../use-auth';
+import { useAuth } from '../useAuth';
 
 type UseAuthReturn = ReturnType<typeof useAuth>;
 type LoginResult = Awaited<ReturnType<UseAuthReturn['actions']['login']>>;
