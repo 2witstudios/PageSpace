@@ -127,6 +127,16 @@
       "import": "./dist/permissions/permissions-cached.js",
       "require": "./dist/permissions/permissions-cached.js"
     },
+    "./permissions": {
+      "types": "./dist/permissions/index.d.ts",
+      "import": "./dist/permissions/index.js",
+      "require": "./dist/permissions/index.js"
+    },
+    "./monitoring": {
+      "types": "./dist/monitoring/index.d.ts",
+      "import": "./dist/monitoring/index.js",
+      "require": "./dist/monitoring/index.js"
+    },
     "./logger-browser": {
       "types": "./dist/logging/logger-browser.d.ts",
       "import": "./dist/logging/logger-browser.js",
@@ -235,6 +245,12 @@
       ],
       "permissions-cached": [
         "./dist/permissions/permissions-cached.d.ts"
+      ],
+      "permissions": [
+        "./dist/permissions/index.d.ts"
+      ],
+      "monitoring": [
+        "./dist/monitoring/index.d.ts"
       ],
       "logger-browser": [
         "./dist/logging/logger-browser.d.ts"

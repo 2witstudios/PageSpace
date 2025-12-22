@@ -5,12 +5,11 @@
  * Allows users to restore resources to previous states based on activity logs.
  */
 
-import { db, activityLogs, pages, drives, driveMembers, users, eq, and, desc, gte, lte } from '@pagespace/db';
+import { db, activityLogs, pages, drives, driveMembers, driveRoles, pagePermissions, users, eq, and, desc, gte, lte } from '@pagespace/db';
 import {
   canUserRollback,
   isRollbackableOperation,
   type RollbackContext,
-  type ActivityForPermissionCheck,
 } from '@pagespace/lib/permissions';
 import {
   logRollbackActivity,
@@ -360,7 +359,7 @@ export async function executeRollback(
  */
 async function rollbackPageChange(
   activity: ActivityLogForRollback,
-  currentValues: Record<string, unknown> | null
+  _currentValues: Record<string, unknown> | null
 ): Promise<Record<string, unknown>> {
   if (!activity.pageId) {
     throw new Error('Page ID not found in activity');
@@ -407,7 +406,7 @@ async function rollbackPageChange(
  */
 async function rollbackDriveChange(
   activity: ActivityLogForRollback,
-  currentValues: Record<string, unknown> | null
+  _currentValues: Record<string, unknown> | null
 ): Promise<Record<string, unknown>> {
   if (!activity.driveId) {
     throw new Error('Drive ID not found in activity');
@@ -449,17 +448,98 @@ async function rollbackDriveChange(
 async function rollbackPermissionChange(
   activity: ActivityLogForRollback
 ): Promise<Record<string, unknown>> {
-  // Permission changes are complex - need to handle grant/update/revoke
-  const metadata = activity.metadata || {};
+  const metadata = activity.metadata as { permissionId?: string; targetUserId?: string } | null;
   const previousValues = activity.previousValues || {};
 
-  // For now, log a warning - full implementation would need pagePermissions table operations
-  loggers.api.warn('[RollbackService] Permission rollback not fully implemented', {
-    activityId: activity.id,
-    operation: activity.operation,
-  });
+  if (!activity.pageId) {
+    throw new Error('Page ID not found in activity');
+  }
 
-  return previousValues;
+  const targetUserId = metadata?.targetUserId || (previousValues.userId as string);
+  if (!targetUserId) {
+    throw new Error('Target user ID not found in activity');
+  }
+
+  switch (activity.operation) {
+    case 'permission_grant': {
+      // A permission was granted - rollback by deleting it
+      await db
+        .delete(pagePermissions)
+        .where(
+          and(
+            eq(pagePermissions.pageId, activity.pageId),
+            eq(pagePermissions.userId, targetUserId)
+          )
+        );
+
+      loggers.api.info('[RollbackService] Deleted permission that was granted', {
+        pageId: activity.pageId,
+        userId: targetUserId,
+      });
+
+      return { deleted: true, pageId: activity.pageId, userId: targetUserId };
+    }
+
+    case 'permission_revoke': {
+      // A permission was revoked - rollback by re-creating it with previous values
+      const permissionData = {
+        pageId: activity.pageId,
+        userId: targetUserId,
+        canView: (previousValues.canView as boolean) ?? false,
+        canEdit: (previousValues.canEdit as boolean) ?? false,
+        canShare: (previousValues.canShare as boolean) ?? false,
+        canDelete: (previousValues.canDelete as boolean) ?? false,
+        grantedBy: previousValues.grantedBy as string | null,
+        note: previousValues.note as string | null,
+      };
+
+      await db.insert(pagePermissions).values(permissionData);
+
+      loggers.api.info('[RollbackService] Re-created revoked permission', {
+        pageId: activity.pageId,
+        userId: targetUserId,
+      });
+
+      return permissionData;
+    }
+
+    case 'permission_update': {
+      // A permission was updated - rollback by restoring previous values
+      const updateData: Record<string, unknown> = {};
+
+      const permissionFields = ['canView', 'canEdit', 'canShare', 'canDelete', 'note', 'expiresAt'];
+      for (const field of permissionFields) {
+        if (field in previousValues) {
+          updateData[field] = previousValues[field];
+        }
+      }
+
+      if (Object.keys(updateData).length === 0) {
+        throw new Error('No permission values to restore');
+      }
+
+      await db
+        .update(pagePermissions)
+        .set(updateData)
+        .where(
+          and(
+            eq(pagePermissions.pageId, activity.pageId),
+            eq(pagePermissions.userId, targetUserId)
+          )
+        );
+
+      loggers.api.info('[RollbackService] Restored previous permission values', {
+        pageId: activity.pageId,
+        userId: targetUserId,
+        restoredFields: Object.keys(updateData),
+      });
+
+      return updateData;
+    }
+
+    default:
+      throw new Error(`Unsupported permission operation: ${activity.operation}`);
+  }
 }
 
 /**
@@ -467,7 +547,7 @@ async function rollbackPermissionChange(
  */
 async function rollbackAgentConfigChange(
   activity: ActivityLogForRollback,
-  currentValues: Record<string, unknown> | null
+  _currentValues: Record<string, unknown> | null
 ): Promise<Record<string, unknown>> {
   // Agent configs are stored in pages table
   if (!activity.pageId) {
@@ -515,16 +595,95 @@ async function rollbackAgentConfigChange(
 async function rollbackMemberChange(
   activity: ActivityLogForRollback
 ): Promise<Record<string, unknown>> {
-  const metadata = activity.metadata || {};
+  const metadata = activity.metadata as { memberId?: string; targetUserId?: string } | null;
   const previousValues = activity.previousValues || {};
 
-  // Member changes involve driveMembers table
-  loggers.api.warn('[RollbackService] Member rollback not fully implemented', {
-    activityId: activity.id,
-    operation: activity.operation,
+  if (!activity.driveId) {
+    throw new Error('Drive ID not found in activity');
+  }
+
+  const targetUserId = metadata?.targetUserId || (previousValues.userId as string);
+  if (!targetUserId) {
+    throw new Error('Target user ID not found in activity');
+  }
+
+  // Determine if this was an add, remove, or role change based on operation and context
+  const wasAdded = activity.operation === 'create' || !previousValues.role;
+  const wasRemoved = activity.operation === 'delete' || activity.operation === 'trash';
+
+  if (wasAdded && !wasRemoved) {
+    // Member was added - rollback by removing them
+    await db
+      .delete(driveMembers)
+      .where(
+        and(
+          eq(driveMembers.driveId, activity.driveId),
+          eq(driveMembers.userId, targetUserId)
+        )
+      );
+
+    loggers.api.info('[RollbackService] Removed member that was added', {
+      driveId: activity.driveId,
+      userId: targetUserId,
+    });
+
+    return { deleted: true, driveId: activity.driveId, userId: targetUserId };
+  }
+
+  if (wasRemoved) {
+    // Member was removed - rollback by re-adding them with previous values
+    const memberData = {
+      driveId: activity.driveId,
+      userId: targetUserId,
+      role: (previousValues.role as 'OWNER' | 'ADMIN' | 'MEMBER') || 'MEMBER',
+      customRoleId: previousValues.customRoleId as string | null,
+      invitedBy: previousValues.invitedBy as string | null,
+      invitedAt: previousValues.invitedAt ? new Date(previousValues.invitedAt as string) : new Date(),
+      acceptedAt: previousValues.acceptedAt ? new Date(previousValues.acceptedAt as string) : new Date(),
+    };
+
+    await db.insert(driveMembers).values(memberData);
+
+    loggers.api.info('[RollbackService] Re-added removed member', {
+      driveId: activity.driveId,
+      userId: targetUserId,
+      role: memberData.role,
+    });
+
+    return memberData;
+  }
+
+  // Role/customRole was changed - restore previous values
+  const updateData: Record<string, unknown> = {};
+
+  if ('role' in previousValues) {
+    updateData.role = previousValues.role;
+  }
+  if ('customRoleId' in previousValues) {
+    updateData.customRoleId = previousValues.customRoleId;
+  }
+
+  if (Object.keys(updateData).length === 0) {
+    throw new Error('No member values to restore');
+  }
+
+  await db
+    .update(driveMembers)
+    .set(updateData)
+    .where(
+      and(
+        eq(driveMembers.driveId, activity.driveId),
+        eq(driveMembers.userId, targetUserId)
+      )
+    );
+
+  loggers.api.info('[RollbackService] Restored previous member values', {
+    driveId: activity.driveId,
+    userId: targetUserId,
+    restoredFields: Object.keys(updateData),
   });
 
-  return previousValues;
+  return updateData;
 }
 
 /**
@@ -533,15 +692,89 @@ async function rollbackMemberChange(
 async function rollbackRoleChange(
   activity: ActivityLogForRollback
 ): Promise<Record<string, unknown>> {
+  const metadata = activity.metadata as { roleId?: string } | null;
   const previousValues = activity.previousValues || {};
 
-  // Role changes involve driveRoles table
-  loggers.api.warn('[RollbackService] Role rollback not fully implemented', {
-    activityId: activity.id,
-    operation: activity.operation,
+  if (!activity.driveId) {
+    throw new Error('Drive ID not found in activity');
+  }
+
+  const roleId = activity.resourceId || metadata?.roleId;
+  if (!roleId) {
+    throw new Error('Role ID not found in activity');
+  }
+
+  // Determine if this was a create, delete, or update
+  const wasCreated = activity.operation === 'create';
+  const wasDeleted = activity.operation === 'delete' || activity.operation === 'trash';
+
+  if (wasCreated) {
+    // Role was created - rollback by deleting it
+    await db
+      .delete(driveRoles)
+      .where(eq(driveRoles.id, roleId));
+
+    loggers.api.info('[RollbackService] Deleted role that was created', {
+      driveId: activity.driveId,
+      roleId,
+    });
+
+    return { deleted: true, roleId };
+  }
+
+  if (wasDeleted) {
+    // Role was deleted - rollback by re-creating it with previous values
+    const roleData = {
+      id: roleId,
+      driveId: activity.driveId,
+      name: (previousValues.name as string) || 'Restored Role',
+      description: previousValues.description as string | null,
+      color: previousValues.color as string | null,
+      isDefault: (previousValues.isDefault as boolean) ?? false,
+      permissions: (previousValues.permissions as Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>) || {},
+      position: (previousValues.position as number) ?? 0,
+      updatedAt: new Date(),
+    };
+
+    await db.insert(driveRoles).values(roleData);
+
+    loggers.api.info('[RollbackService] Re-created deleted role', {
+      driveId: activity.driveId,
+      roleId,
+      name: roleData.name,
+    });
+
+    return roleData;
+  }
+
+  // Role was updated - restore previous values
+  const updateData: Record<string, unknown> = {};
+
+  const roleFields = ['name', 'description', 'color', 'isDefault', 'permissions', 'position'];
+  for (const field of roleFields) {
+    if (field in previousValues) {
+      updateData[field] = previousValues[field];
+    }
+  }
+
+  if (Object.keys(updateData).length === 0) {
+    throw new Error('No role values to restore');
+  }
+
+  updateData.updatedAt = new Date();
+
+  await db
+    .update(driveRoles)
+    .set(updateData)
+    .where(eq(driveRoles.id, roleId));
+
+  loggers.api.info('[RollbackService] Restored previous role values', {
+    driveId: activity.driveId,
+    roleId,
+    restoredFields: Object.keys(updateData),
   });
 
-  return previousValues;
+  return updateData;
 }
 
 /**

@@ -17,7 +17,6 @@ import { Badge } from '@/components/ui/badge';
 interface RollbackConfirmDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  activityId: string;
   resourceTitle: string | null;
   operation: string;
   timestamp: string;
@@ -28,7 +27,6 @@ interface RollbackConfirmDialogProps {
 export function RollbackConfirmDialog({
   open,
   onOpenChange,
-  activityId,
   resourceTitle,
   operation,
   timestamp,

@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { History, Loader2, X, Filter, RefreshCw } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { History, Loader2, Filter, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Sheet,
@@ -21,7 +21,7 @@ import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { VersionHistoryItem } from './VersionHistoryItem';
-import { useToast } from '@/hooks/use-toast';
+import { useToast } from '@/hooks/useToast';
 import type { ActivityLog } from '@/components/activity/types';
 
 interface VersionHistoryPanelProps {
@@ -106,7 +106,7 @@ export function VersionHistoryPanel({
 
       setHasMore(data.pagination.hasMore);
       setRetentionDays(data.retentionDays);
-    } catch (error) {
+    } catch {
       toast({
         title: 'Error',
         description: 'Failed to load version history',
@@ -117,10 +117,14 @@ export function VersionHistoryPanel({
     }
   }, [pageId, driveId, offset, showAiOnly, operationFilter, toast]);
 
-  // Fetch on open
+  // Keep a ref to the latest fetchVersions to avoid stale closure issues
+  const fetchVersionsRef = useRef(fetchVersions);
+  fetchVersionsRef.current = fetchVersions;
+
+  // Fetch on open or filter change
   useEffect(() => {
     if (open) {
-      fetchVersions(true);
+      fetchVersionsRef.current(true);
     }
   }, [open, showAiOnly, operationFilter]);
 

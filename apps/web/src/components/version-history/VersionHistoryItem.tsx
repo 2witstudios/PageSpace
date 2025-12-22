@@ -134,7 +134,6 @@ export function VersionHistoryItem({
       <RollbackConfirmDialog
         open={showConfirm}
         onOpenChange={setShowConfirm}
-        activityId={activity.id}
         resourceTitle={activity.resourceTitle}
         operation={opConfig.label}
         timestamp={activity.timestamp}
