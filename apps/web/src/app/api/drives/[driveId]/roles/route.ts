@@ -97,7 +97,7 @@ export async function POST(
       roleId: newRole.id,
       roleName: newRole.name,
       driveId,
-      permissions: permissions as Record<string, boolean>,
+      permissions: permissions as unknown as Record<string, boolean>,
     }, actorInfo);
 
     return NextResponse.json({ role: newRole }, { status: 201 });

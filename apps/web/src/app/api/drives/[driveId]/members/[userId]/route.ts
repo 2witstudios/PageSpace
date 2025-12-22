@@ -137,7 +137,7 @@ export async function PATCH(
         driveId,
         driveName: access.drive.name,
         targetUserId: userId,
-        targetUserEmail: memberData.email,
+        targetUserEmail: memberData.user?.email,
         role: role as string,
         previousRole: oldRole as string,
       }, actorInfo);

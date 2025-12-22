@@ -108,8 +108,8 @@ export async function PATCH(
       roleId,
       roleName: updatedRole.name,
       driveId,
-      permissions: permissions as Record<string, boolean> | undefined,
-      previousPermissions: existingRole.permissions as Record<string, boolean>,
+      permissions: permissions as unknown as Record<string, boolean> | undefined,
+      previousPermissions: existingRole.permissions as unknown as Record<string, boolean>,
     }, actorInfo);
 
     return NextResponse.json({ role: updatedRole });
@@ -160,7 +160,7 @@ export async function DELETE(
       roleId,
       roleName: existingRole.name,
       driveId,
-      previousPermissions: existingRole.permissions as Record<string, boolean>,
+      previousPermissions: existingRole.permissions as unknown as Record<string, boolean>,
     }, actorInfo);
 
     return NextResponse.json({ success: true });

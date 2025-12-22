@@ -59,14 +59,13 @@ export async function PATCH(request: Request) {
     const actorInfo = await getActorInfo(auth.userId);
     logPageActivity(auth.userId, 'reorder', {
       id: pageId,
-      title: result.pageTitle,
+      title: result.pageTitle ?? undefined,
       driveId: result.driveId,
     }, {
       ...actorInfo,
       metadata: {
         newParentId,
         newPosition,
-        previousParentId: result.previousParentId,
       },
     });
 

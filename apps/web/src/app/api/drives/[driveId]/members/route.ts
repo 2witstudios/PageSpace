@@ -94,7 +94,6 @@ export async function POST(
       driveId,
       driveName: access.drive.name,
       targetUserId: invitedUserId,
-      targetUserEmail: newMember.email,
       role: role as string,
     }, actorInfo);
 
