@@ -380,7 +380,14 @@ export const activityOperationEnum = pgEnum('activity_operation', [
   // Account operations
   'account_delete',
   'profile_update',
-  'avatar_update'
+  'avatar_update',
+  // Message operations (Tier 1)
+  'message_update',
+  'message_delete',
+  // Role operations (Tier 1)
+  'role_reorder',
+  // Drive ownership operations (Tier 1)
+  'ownership_transfer'
 ]);
 
 export const activityResourceEnum = pgEnum('activity_resource', [
@@ -394,7 +401,9 @@ export const activityResourceEnum = pgEnum('activity_resource', [
   'role',
   'file',
   'token',
-  'device'
+  'device',
+  // Message resource (Tier 1)
+  'message'
 ]);
 
 /**
