@@ -7,6 +7,8 @@ import {
   chatMessageRepository,
   processMessageContentUpdate,
 } from '@/lib/repositories/chat-message-repository';
+import { db, pages, eq } from '@pagespace/db';
+import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 
@@ -56,11 +58,39 @@ export async function PATCH(
       );
     }
 
+    // Get page info for driveId (needed for activity logging)
+    const page = await db.query.pages.findFirst({
+      where: eq(pages.id, message.pageId),
+      columns: { driveId: true },
+    });
+
+    if (!page) {
+      loggers.api.warn('Page not found for message - data integrity issue', {
+        messageId: maskIdentifier(messageId),
+        pageId: maskIdentifier(message.pageId)
+      });
+    }
+
+    // Store original content for activity logging
+    const originalContent = message.content;
+
     // Process content, preserving structured format if present
     const updatedContent = processMessageContentUpdate(message.content, content);
 
     // Update the message content and set editedAt
     await chatMessageRepository.updateMessageContent(messageId, updatedContent);
+
+    // Log activity for audit trail
+    const actorInfo = await getActorInfo(userId);
+    logMessageActivity(userId, 'message_update', {
+      id: messageId,
+      pageId: message.pageId,
+      driveId: page?.driveId ?? null,
+      conversationType: 'ai_chat',
+    }, actorInfo, {
+      previousContent: originalContent,
+      newContent: updatedContent,
+    });
 
     loggers.api.info('Message edited successfully', {
       userId: maskIdentifier(userId),
@@ -118,8 +148,35 @@ export async function DELETE(
       );
     }
 
+    // Get page info for driveId (needed for activity logging)
+    const page = await db.query.pages.findFirst({
+      where: eq(pages.id, message.pageId),
+      columns: { driveId: true },
+    });
+
+    if (!page) {
+      loggers.api.warn('Page not found for message - data integrity issue', {
+        messageId: maskIdentifier(messageId),
+        pageId: maskIdentifier(message.pageId)
+      });
+    }
+
+    // Store content for audit trail before deletion
+    const deletedContent = message.content;
+
     // Soft delete the message
     await chatMessageRepository.softDeleteMessage(messageId);
+
+    // Log activity for audit trail
+    const actorInfo = await getActorInfo(userId);
+    logMessageActivity(userId, 'message_delete', {
+      id: messageId,
+      pageId: message.pageId,
+      driveId: page?.driveId ?? null,
+      conversationType: 'ai_chat',
+    }, actorInfo, {
+      previousContent: deletedContent,
+    });
 
     loggers.api.info('Message deleted successfully', {
       userId: maskIdentifier(userId),
