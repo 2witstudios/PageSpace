@@ -94,7 +94,7 @@ export interface ActivityLogInput {
   resourceType: ActivityResourceType;
   resourceId: string;
   resourceTitle?: string;
-  driveId: string;
+  driveId: string | null;
   pageId?: string;
 
   // Actor snapshot - denormalized for audit trail preservation after user deletion
@@ -446,7 +446,7 @@ export function logUserActivity(
     resourceType: 'user',
     resourceId: data.targetUserId,
     resourceTitle: data.targetUserEmail,
-    driveId: 'system', // System-level operations don't belong to a specific drive
+    driveId: null, // System-level operations don't belong to a specific drive
     updatedFields: data.updatedFields,
     previousValues: data.previousEmail ? { email: data.previousEmail } : undefined,
     newValues: data.newEmail ? { email: data.newEmail } : undefined,
@@ -487,7 +487,7 @@ export function logTokenActivity(
     resourceType: data.tokenType === 'device' ? 'device' : 'token',
     resourceId: data.tokenId,
     resourceTitle: data.tokenName ?? data.deviceInfo,
-    driveId: 'system', // System-level operations
+    driveId: null, // System-level operations
     metadata: {
       tokenType: data.tokenType,
       deviceInfo: data.deviceInfo,
