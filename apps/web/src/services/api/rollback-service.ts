@@ -992,12 +992,12 @@ export async function getDriveVersionHistory(
  * Get user's retention limit based on subscription tier
  */
 export async function getUserRetentionDays(userId: string): Promise<number> {
-  // Default retention days by tier
+  // Default retention days by tier (ordered: free < pro < founder < business)
   const defaultRetention: Record<string, number> = {
     free: 7,
     pro: 30,
-    business: 90,
-    founder: -1, // unlimited
+    founder: 90,
+    business: -1, // unlimited
   };
 
   try {

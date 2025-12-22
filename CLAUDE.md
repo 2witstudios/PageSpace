@@ -153,6 +153,18 @@ useSWR(key, fetcher, {
 
 See [docs/3.0-guides-and-tools/ui-refresh-protection.md](docs/3.0-guides-and-tools/ui-refresh-protection.md) for complete documentation.
 
+### 4.3. Critical Rules
+
+**CRITICAL: Package Manager**
+- **ALWAYS use `pnpm`** - This is a pnpm workspace project
+- **NEVER use `npm`** for install, run, or any other commands
+- All scripts in package.json are designed for pnpm
+
+**CRITICAL: Database Migrations**
+- **NEVER manually create or edit SQL migration files** in `packages/db/drizzle/`
+- **ALWAYS use Drizzle generate commands**: `pnpm db:generate`
+- Migration files are auto-generated from schema changes in `packages/db/src/schema/`
+
 ## 5. CLAUDE CODE INTEGRATION & MCP TOOLS
 
 ### 5.1. MCP Tools Integration
