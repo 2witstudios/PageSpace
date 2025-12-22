@@ -12,6 +12,22 @@ import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activit
 const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
 
+/**
+ * Transform RolePermissions to Record<string, boolean> for audit logging.
+ * Each page key maps to true if any permission (canView, canEdit, canShare) is granted.
+ */
+function summarizePermissions(
+  permissions: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>
+): Record<string, boolean> {
+  return Object.entries(permissions).reduce(
+    (acc, [key, perms]) => {
+      acc[key] = perms.canView || perms.canEdit || perms.canShare;
+      return acc;
+    },
+    {} as Record<string, boolean>
+  );
+}
+
 // GET /api/drives/[driveId]/roles/[roleId] - Get a specific role
 export async function GET(
   request: Request,
@@ -108,8 +124,8 @@ export async function PATCH(
       roleId,
       roleName: updatedRole.name,
       driveId,
-      permissions: permissions as unknown as Record<string, boolean> | undefined,
-      previousPermissions: existingRole.permissions as unknown as Record<string, boolean>,
+      permissions: permissions ? summarizePermissions(permissions) : undefined,
+      previousPermissions: summarizePermissions(existingRole.permissions),
     }, actorInfo);
 
     return NextResponse.json({ role: updatedRole });
@@ -160,7 +176,7 @@ export async function DELETE(
       roleId,
       roleName: existingRole.name,
       driveId,
-      previousPermissions: existingRole.permissions as unknown as Record<string, boolean>,
+      previousPermissions: summarizePermissions(existingRole.permissions),
     }, actorInfo);
 
     return NextResponse.json({ success: true });
