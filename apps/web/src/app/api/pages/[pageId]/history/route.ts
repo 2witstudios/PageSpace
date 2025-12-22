@@ -3,7 +3,7 @@ import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib';
 import { getPageVersionHistory, getUserRetentionDays } from '@/services/api';
-import { isRollbackableOperation } from '@pagespace/lib/permissions';
+import { isActivityEligibleForRollback } from '@pagespace/lib/permissions';
 
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: false };
 
@@ -92,8 +92,7 @@ export async function GET(
   // Add rollback eligibility to each activity
   const versionsWithRollback = activities.map((activity) => ({
     ...activity,
-    canRollback: isRollbackableOperation(activity.operation) &&
-      (activity.previousValues !== null || activity.contentSnapshot !== null),
+    canRollback: isActivityEligibleForRollback(activity),
   }));
 
   return NextResponse.json({

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getActivityById, previewRollback } from '@/services/api';
+import { canUserViewPage, isUserDriveMember } from '@pagespace/lib/permissions';
 import type { RollbackContext } from '@pagespace/lib/permissions';
 
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: false };
@@ -48,6 +49,31 @@ export async function GET(
     return NextResponse.json(
       { error: 'Activity not found' },
       { status: 404 }
+    );
+  }
+
+  // Authorization check: User must have access to the associated resource
+  if (activity.pageId) {
+    const canView = await canUserViewPage(userId, activity.pageId);
+    if (!canView) {
+      return NextResponse.json(
+        { error: 'Unauthorized - you do not have access to this page' },
+        { status: 403 }
+      );
+    }
+  } else if (activity.driveId) {
+    const isMember = await isUserDriveMember(userId, activity.driveId);
+    if (!isMember) {
+      return NextResponse.json(
+        { error: 'Unauthorized - you do not have access to this drive' },
+        { status: 403 }
+      );
+    }
+  } else if (activity.userId !== userId) {
+    // User-level activities can only be viewed by the activity owner
+    return NextResponse.json(
+      { error: 'Unauthorized - you do not have access to this activity' },
+      { status: 403 }
     );
   }
 

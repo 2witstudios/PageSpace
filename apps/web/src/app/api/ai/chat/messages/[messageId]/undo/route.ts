@@ -139,8 +139,8 @@ export async function POST(
       // Partial success or failure
       return NextResponse.json(
         {
-          success: false,
           ...result,
+          success: false,
           message: 'Some operations could not be completed',
         },
         { status: result.messagesDeleted > 0 || result.activitiesRolledBack > 0 ? 207 : 500 }
@@ -148,8 +148,8 @@ export async function POST(
     }
 
     return NextResponse.json({
-      success: true,
       ...result,
+      success: true,
       message: mode === 'messages_only'
         ? `Deleted ${result.messagesDeleted} messages`
         : `Deleted ${result.messagesDeleted} messages and undid ${result.activitiesRolledBack} changes`,
