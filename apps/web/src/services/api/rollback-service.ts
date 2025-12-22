@@ -5,7 +5,7 @@
  * Allows users to restore resources to previous states based on activity logs.
  */
 
-import { db, activityLogs, pages, drives, driveMembers, driveRoles, pagePermissions, users, eq, and, desc, gte, lte } from '@pagespace/db';
+import { db, activityLogs, pages, drives, driveMembers, driveRoles, pagePermissions, users, chatMessages, eq, and, desc, gte, lte } from '@pagespace/db';
 import {
   canUserRollback,
   isRollbackableOperation,
@@ -304,6 +304,10 @@ export async function executeRollback(
 
       case 'role':
         restoredValues = await rollbackRoleChange(activity);
+        break;
+
+      case 'message':
+        restoredValues = await rollbackMessageChange(activity);
         break;
 
       default:
@@ -775,6 +779,63 @@ async function rollbackRoleChange(
   });
 
   return updateData;
+}
+
+/**
+ * Rollback a message change (edit or delete)
+ */
+async function rollbackMessageChange(
+  activity: ActivityLogForRollback
+): Promise<Record<string, unknown>> {
+  const previousValues = activity.previousValues || {};
+  const messageId = activity.resourceId;
+
+  if (!messageId) {
+    throw new Error('Message ID not found in activity');
+  }
+
+  switch (activity.operation) {
+    case 'message_update': {
+      // Restore previous content, clear editedAt
+      const previousContent = previousValues.content as string;
+      if (!previousContent) {
+        throw new Error('No previous content found for message rollback');
+      }
+
+      await db
+        .update(chatMessages)
+        .set({
+          content: previousContent,
+          editedAt: null,
+        })
+        .where(eq(chatMessages.id, messageId));
+
+      loggers.api.info('[RollbackService] Restored previous message content', {
+        messageId,
+        pageId: activity.pageId,
+      });
+
+      return { content: previousContent, editedAt: null };
+    }
+
+    case 'message_delete': {
+      // Undelete - set isActive = true
+      await db
+        .update(chatMessages)
+        .set({ isActive: true })
+        .where(eq(chatMessages.id, messageId));
+
+      loggers.api.info('[RollbackService] Restored deleted message', {
+        messageId,
+        pageId: activity.pageId,
+      });
+
+      return { restored: true, isActive: true };
+    }
+
+    default:
+      throw new Error(`Unsupported message operation: ${activity.operation}`);
+  }
 }
 
 /**

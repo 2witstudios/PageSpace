@@ -389,7 +389,10 @@ export const activityOperationEnum = pgEnum('activity_operation', [
   // Drive ownership operations (Tier 1)
   'ownership_transfer',
   // Version history operations
-  'rollback'
+  'rollback',
+  // AI conversation undo operations
+  'conversation_undo',
+  'conversation_undo_with_changes'
 ]);
 
 export const activityResourceEnum = pgEnum('activity_resource', [
@@ -405,7 +408,9 @@ export const activityResourceEnum = pgEnum('activity_resource', [
   'token',
   'device',
   // Message resource (Tier 1)
-  'message'
+  'message',
+  // AI conversation resource
+  'conversation'
 ]);
 
 /**

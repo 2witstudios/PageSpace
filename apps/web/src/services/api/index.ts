@@ -55,3 +55,13 @@ export type {
   RollbackResult,
   VersionHistoryOptions,
 } from './rollback-service';
+
+export {
+  previewAiUndo,
+  executeAiUndo,
+} from './ai-undo-service';
+export type {
+  AiUndoPreview,
+  UndoMode,
+  AiUndoResult,
+} from './ai-undo-service';

@@ -83,7 +83,10 @@ export type ActivityOperation =
   // Drive ownership operations (Tier 1)
   | 'ownership_transfer'
   // Version history operations
-  | 'rollback';
+  | 'rollback'
+  // AI conversation undo operations
+  | 'conversation_undo'
+  | 'conversation_undo_with_changes';
 
 export type ActivityResourceType =
   | 'page'
@@ -97,7 +100,9 @@ export type ActivityResourceType =
   | 'token'
   | 'device'
   // Message resource (Tier 1)
-  | 'message';
+  | 'message'
+  // AI conversation resource
+  | 'conversation';
 
 export interface ActivityLogInput {
   userId: string;
@@ -667,6 +672,52 @@ export function logRollbackActivity(
       ...options?.metadata,
       rollbackFromActivityId,
       contentFormat: options?.contentFormat,
+    },
+  }).catch(() => {
+    // Silent fail - already logged in logActivity
+  });
+}
+
+/**
+ * Convenience wrapper for AI conversation undo operations.
+ * Logs when a user undoes an AI conversation from a specific message point.
+ * Fire-and-forget - call without await.
+ */
+export function logConversationUndo(
+  userId: string,
+  conversationId: string,
+  messageId: string, // The message we're undoing from
+  actorInfo: ActorInfo,
+  options: {
+    mode: 'messages_only' | 'messages_and_changes';
+    messagesDeleted: number;
+    activitiesRolledBack: number;
+    rolledBackActivityIds?: string[]; // For potential re-undo
+    pageId?: string;
+    driveId?: string | null;
+  }
+): void {
+  const operation: ActivityOperation =
+    options.mode === 'messages_only' ? 'conversation_undo' : 'conversation_undo_with_changes';
+
+  logActivity({
+    userId,
+    actorEmail: actorInfo.actorEmail,
+    actorDisplayName: actorInfo.actorDisplayName,
+    operation,
+    resourceType: 'conversation',
+    resourceId: conversationId,
+    driveId: options.driveId ?? null,
+    pageId: options.pageId,
+    previousValues: {
+      messagesWereActive: true,
+    },
+    metadata: {
+      messageId,
+      messagesDeleted: options.messagesDeleted,
+      activitiesRolledBack: options.activitiesRolledBack,
+      rolledBackActivityIds: options.rolledBackActivityIds,
+      mode: options.mode,
     },
   }).catch(() => {
     // Silent fail - already logged in logActivity

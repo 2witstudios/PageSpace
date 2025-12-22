@@ -1,11 +1,12 @@
 import React from 'react';
 import { Button } from '@/components/ui/button';
-import { Pencil, Trash2, RotateCw } from 'lucide-react';
+import { Pencil, Trash2, RotateCw, Undo2 } from 'lucide-react';
 
 interface MessageActionButtonsProps {
   onEdit: () => void;
   onDelete: () => void;
   onRetry?: () => void; // Only available for last assistant message
+  onUndoFromHere?: () => void; // Undo from this message forward (AI messages with tool calls)
   disabled?: boolean;
   compact?: boolean; // For sidebar compact view
 }
@@ -14,6 +15,7 @@ export const MessageActionButtons: React.FC<MessageActionButtonsProps> = ({
   onEdit,
   onDelete,
   onRetry,
+  onUndoFromHere,
   disabled = false,
   compact = false,
 }) => {
@@ -32,6 +34,18 @@ export const MessageActionButtons: React.FC<MessageActionButtonsProps> = ({
           title="Retry this message"
         >
           <RotateCw className={iconSize} />
+        </Button>
+      )}
+      {onUndoFromHere && (
+        <Button
+          variant="ghost"
+          size={buttonSize}
+          onClick={onUndoFromHere}
+          disabled={disabled}
+          className="h-5 px-1"
+          title="Undo from here"
+        >
+          <Undo2 className={iconSize} />
         </Button>
       )}
       <Button
