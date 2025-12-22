@@ -16,7 +16,7 @@ import { AlertTriangle } from 'lucide-react';
 import type { Device } from '@/hooks/useDevices';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
-import { useAuth } from '@/hooks/use-auth';
+import { useAuth } from '@/hooks/useAuth';
 
 interface RevokeDeviceDialogProps {
   device: Device;

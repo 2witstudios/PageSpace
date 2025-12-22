@@ -1,6 +1,6 @@
 'use client';
 
-import { useAuthStore } from '@/stores/auth-store';
+import { useAuthStore } from '@/stores/useAuthStore';
 import { Button } from '@/components/ui/button';
 import { AlertCircle } from 'lucide-react';
 import Link from 'next/link';

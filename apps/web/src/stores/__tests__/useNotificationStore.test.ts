@@ -25,7 +25,7 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   del: (...args: unknown[]) => mockDel(...args),
 }));
 
-import { useNotificationStore } from '../notificationStore';
+import { useNotificationStore } from '../useNotificationStore';
 
 type Notification = LegacyNotification & {
   title: string;

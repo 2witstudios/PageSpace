@@ -4,8 +4,8 @@ import { useEffect } from 'react';
 import { Bell } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { useNotificationStore } from '@/stores/notificationStore';
-import { useSocketStore } from '@/stores/socketStore';
+import { useNotificationStore } from '@/stores/useNotificationStore';
+import { useSocketStore } from '@/stores/useSocketStore';
 import NotificationDropdown from './NotificationDropdown';
 
 export default function NotificationBell() {

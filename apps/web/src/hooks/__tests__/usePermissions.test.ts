@@ -26,7 +26,7 @@ vi.mock('../use-auth', () => ({
 
 import useSWR from 'swr';
 import { useEditingStore } from '@/stores/useEditingStore';
-import { usePermissions } from '../use-permissions';
+import { usePermissions } from '../usePermissions';
 
 describe('usePermissions', () => {
   beforeEach(() => {

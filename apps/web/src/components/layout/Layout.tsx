@@ -1,14 +1,14 @@
 "use client";
 
-import { useAuth } from "@/hooks/use-auth";
+import { useAuth } from "@/hooks/useAuth";
 import TopBar from "@/components/layout/main-header";
 import MemoizedSidebar from "@/components/layout/left-sidebar/MemoizedSidebar";
 import CenterPanel from "@/components/layout/middle-content/CenterPanel";
 import RightPanel from "@/components/layout/right-sidebar";
 import { NavigationProvider } from "@/components/layout/NavigationProvider";
 import { GlobalChatProvider } from "@/contexts/GlobalChatContext";
-import { useBreakpoint } from "@/hooks/use-breakpoint";
-import { useResponsivePanels } from "@/hooks/use-responsive-panels";
+import { useBreakpoint } from "@/hooks/useBreakpoint";
+import { useResponsivePanels } from "@/hooks/useResponsivePanels";
 import { motion, AnimatePresence } from "motion/react";
 import { DebugPanel } from "./DebugPanel";
 import { useLayoutStore } from "@/stores/useLayoutStore";

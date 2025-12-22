@@ -111,7 +111,7 @@ vi.mock('@/lib/analytics', () => ({
   getDeviceName: () => mockGetDeviceName(),
 }));
 
-vi.mock('@/hooks/use-token-refresh', () => ({
+vi.mock('@/hooks/useTokenRefresh', () => ({
   useTokenRefresh: () => ({
     refreshToken: mockRefreshToken,
     startTokenRefresh: mockStartTokenRefresh,
@@ -119,7 +119,7 @@ vi.mock('@/hooks/use-token-refresh', () => ({
   }),
 }));
 
-vi.mock('@/stores/auth-store', () => {
+vi.mock('@/stores/useAuthStore', () => {
   const useAuthStoreMock = vi.fn(<T,>(selector?: (s: typeof mockAuthStore) => T): T | typeof mockAuthStore => {
     if (typeof selector === 'function') {
       return selector(mockAuthStore);
@@ -144,7 +144,7 @@ vi.mock('@/stores/auth-store', () => {
 });
 
 // Import after mocks
-import { useAuth } from '../use-auth';
+import { useAuth } from '../useAuth';
 
 type UseAuthReturn = ReturnType<typeof useAuth>;
 type LoginResult = Awaited<ReturnType<UseAuthReturn['actions']['login']>>;

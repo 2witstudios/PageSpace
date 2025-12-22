@@ -4,7 +4,7 @@ import { useBreadcrumbs } from "@/hooks/useBreadcrumbs";
 import { usePageStore } from "@/hooks/usePage";
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
-import { useMobile } from "@/hooks/use-mobile";
+import { useMobile } from "@/hooks/useMobile";
 
 export function Breadcrumbs() {
   const pageId = usePageStore((state) => state.pageId);

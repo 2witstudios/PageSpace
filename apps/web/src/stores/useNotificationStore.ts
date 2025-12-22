@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { useSocketStore } from './socketStore';
+import { useSocketStore } from './useSocketStore';
 import type { LegacyNotification } from '@pagespace/lib/client-safe';
 import { patch, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 

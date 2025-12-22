@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { useAuthStore, authStoreHelpers } from '../auth-store';
+import { useAuthStore, authStoreHelpers } from '../useAuthStore';
 
 // Mock localStorage
 const mockLocalStorage = (() => {

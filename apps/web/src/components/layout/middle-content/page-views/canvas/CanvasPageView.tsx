@@ -9,7 +9,7 @@ import { ShadowCanvas } from '@/components/canvas/ShadowCanvas';
 import { ErrorBoundary } from '@/components/ai/shared';
 import { TreePage } from '@/hooks/usePageTree';
 import { useDocumentStore } from '@/stores/useDocumentStore';
-import { useAuth } from '@/hooks/use-auth';
+import { useAuth } from '@/hooks/useAuth';
 import { useSocket } from '@/hooks/useSocket';
 import { PageEventPayload } from '@/lib/websocket';
 

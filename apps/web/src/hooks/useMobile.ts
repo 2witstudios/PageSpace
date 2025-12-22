@@ -1,6 +1,6 @@
 "use client";
 
-import { useBreakpoint } from "./use-breakpoint";
+import { useBreakpoint } from "./useBreakpoint";
 
 const MOBILE_QUERY = "(max-width: 767px)";
 
