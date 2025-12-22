@@ -219,11 +219,16 @@ export async function executeAiUndo(
 
         try {
           // Determine context based on resource type
-          let context: RollbackContext = 'ai_tool';
-          if (activity.resourceType === 'drive') {
-            context = 'drive';
-          } else if (activity.resourceType === 'page') {
-            context = 'page';
+          let context: RollbackContext;
+          switch (activity.resourceType) {
+            case 'drive':
+              context = 'drive';
+              break;
+            case 'page':
+              context = 'page';
+              break;
+            default:
+              context = 'ai_tool';
           }
 
           const result = await executeRollback(activity.id, userId, context);
@@ -239,17 +244,19 @@ export async function executeAiUndo(
       }
     }
 
-    // Soft-delete all messages from this point forward in the conversation
-    await db
-      .update(chatMessages)
-      .set({ isActive: false })
-      .where(
-        and(
-          eq(chatMessages.conversationId, conversationId),
-          gte(chatMessages.createdAt, message.createdAt),
-          eq(chatMessages.isActive, true)
-        )
-      );
+    // Soft-delete messages in a transaction to ensure atomicity
+    await db.transaction(async (tx) => {
+      await tx
+        .update(chatMessages)
+        .set({ isActive: false })
+        .where(
+          and(
+            eq(chatMessages.conversationId, conversationId),
+            gte(chatMessages.createdAt, message.createdAt),
+            eq(chatMessages.isActive, true)
+          )
+        );
+    });
 
     // Get count of deleted messages (Drizzle doesn't return count directly, use preview)
     messagesDeleted = preview.messagesAffected;

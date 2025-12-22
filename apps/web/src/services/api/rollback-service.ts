@@ -5,18 +5,43 @@
  * Allows users to restore resources to previous states based on activity logs.
  */
 
-import { db, activityLogs, pages, drives, driveMembers, driveRoles, pagePermissions, users, chatMessages, eq, and, desc, gte, lte } from '@pagespace/db';
+import { db, activityLogs, pages, drives, driveMembers, driveRoles, pagePermissions, users, chatMessages, eq, and, desc, gte, lte, count } from '@pagespace/db';
 import {
   canUserRollback,
   isRollbackableOperation,
   type RollbackContext,
 } from '@pagespace/lib/permissions';
+
+// Re-export RollbackContext for consumers
+export type { RollbackContext };
 import {
   logRollbackActivity,
   getActorInfo,
   type ActivityResourceType,
 } from '@pagespace/lib/monitoring';
 import { loggers } from '@pagespace/lib/server';
+
+/**
+ * Valid activity operations for filtering
+ */
+const VALID_OPERATIONS = [
+  'create', 'update', 'delete', 'restore', 'reorder',
+  'permission_grant', 'permission_update', 'permission_revoke',
+  'trash', 'move', 'agent_config_update',
+  'member_add', 'member_remove', 'member_role_change',
+  'login', 'logout', 'signup', 'password_change', 'email_change',
+  'token_create', 'token_revoke', 'upload', 'convert',
+  'account_delete', 'profile_update', 'avatar_update',
+  'message_update', 'message_delete', 'role_reorder', 'ownership_transfer',
+  'rollback', 'conversation_undo', 'conversation_undo_with_changes',
+] as const;
+
+/**
+ * Check if a string is a valid activity operation
+ */
+function isValidOperation(operation: string): boolean {
+  return VALID_OPERATIONS.includes(operation as typeof VALID_OPERATIONS[number]);
+}
 
 /**
  * Activity log with full details for rollback
@@ -47,7 +72,7 @@ export interface ActivityLogForRollback {
  * Result of a rollback preview
  */
 export interface RollbackPreview {
-  activity: ActivityLogForRollback;
+  activity: ActivityLogForRollback | null;
   canRollback: boolean;
   reason?: string;
   currentValues: Record<string, unknown> | null;
@@ -78,6 +103,7 @@ export interface VersionHistoryOptions {
   actorId?: string;
   operation?: string;
   includeAiOnly?: boolean;
+  resourceType?: string;
 }
 
 /**
@@ -140,7 +166,7 @@ export async function previewRollback(
 
   if (!activity) {
     return {
-      activity: null as unknown as ActivityLogForRollback,
+      activity: null,
       canRollback: false,
       reason: 'Activity not found',
       currentValues: null,
@@ -263,7 +289,7 @@ export async function executeRollback(
 ): Promise<RollbackResult> {
   const preview = await previewRollback(activityId, userId, context);
 
-  if (!preview.canRollback) {
+  if (!preview.canRollback || !preview.activity) {
     return {
       success: false,
       message: preview.reason || 'Cannot rollback this activity',
@@ -860,8 +886,7 @@ export async function getPageVersionHistory(
     if (actorId) {
       conditions.push(eq(activityLogs.userId, actorId));
     }
-    if (operation) {
-      // Type assertion needed since operation comes from user input
+    if (operation && isValidOperation(operation)) {
       conditions.push(eq(activityLogs.operation, operation as typeof activityLogs.operation.enumValues[number]));
     }
     if (includeAiOnly) {
@@ -877,7 +902,7 @@ export async function getPageVersionHistory(
         .limit(limit)
         .offset(offset),
       db
-        .select({ count: activityLogs.id })
+        .select({ value: count() })
         .from(activityLogs)
         .where(and(...conditions)),
     ]);
@@ -904,7 +929,7 @@ export async function getPageVersionHistory(
         newValues: a.newValues as Record<string, unknown> | null,
         metadata: a.metadata as Record<string, unknown> | null,
       })),
-      total: countResult.length,
+      total: countResult[0]?.value ?? 0,
     };
   } catch (error) {
     loggers.api.error('[RollbackService] Error fetching page version history', {
@@ -923,7 +948,7 @@ export async function getDriveVersionHistory(
   userId: string,
   options: VersionHistoryOptions = {}
 ): Promise<{ activities: ActivityLogForRollback[]; total: number }> {
-  const { limit = 50, offset = 0, startDate, endDate, actorId, operation } = options;
+  const { limit = 50, offset = 0, startDate, endDate, actorId, operation, resourceType } = options;
 
   try {
     const conditions = [eq(activityLogs.driveId, driveId)];
@@ -937,8 +962,11 @@ export async function getDriveVersionHistory(
     if (actorId) {
       conditions.push(eq(activityLogs.userId, actorId));
     }
-    if (operation) {
+    if (operation && isValidOperation(operation)) {
       conditions.push(eq(activityLogs.operation, operation as typeof activityLogs.operation.enumValues[number]));
+    }
+    if (resourceType) {
+      conditions.push(eq(activityLogs.resourceType, resourceType as typeof activityLogs.resourceType.enumValues[number]));
     }
 
     const [activities, countResult] = await Promise.all([
@@ -950,7 +978,7 @@ export async function getDriveVersionHistory(
         .limit(limit)
         .offset(offset),
       db
-        .select({ count: activityLogs.id })
+        .select({ value: count() })
         .from(activityLogs)
         .where(and(...conditions)),
     ]);
@@ -977,7 +1005,7 @@ export async function getDriveVersionHistory(
         newValues: a.newValues as Record<string, unknown> | null,
         metadata: a.metadata as Record<string, unknown> | null,
       })),
-      total: countResult.length,
+      total: countResult[0]?.value ?? 0,
     };
   } catch (error) {
     loggers.api.error('[RollbackService] Error fetching drive version history', {
