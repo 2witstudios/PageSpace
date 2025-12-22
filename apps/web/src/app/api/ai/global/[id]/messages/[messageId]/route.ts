@@ -4,6 +4,7 @@ import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { processMessageContentUpdate } from '@/lib/repositories/chat-message-repository';
+import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -47,11 +48,27 @@ export async function PATCH(
       return NextResponse.json({ error: 'Message not found' }, { status: 404 });
     }
 
+    // Store original content for activity logging
+    const originalContent = message.content;
+
     // Process content update (preserving structure if needed)
     const updatedContent = processMessageContentUpdate(message.content, content);
 
     // Update the message content
     await globalConversationRepository.updateMessageContent(messageId, updatedContent);
+
+    // Log activity for audit trail
+    const actorInfo = await getActorInfo(userId);
+    logMessageActivity(userId, 'message_update', {
+      id: messageId,
+      pageId: conversationId, // Global conversations use conversationId as identifier
+      driveId: null, // Global conversations are user-level, not drive-level
+      conversationType: 'global',
+    }, actorInfo, {
+      previousContent: originalContent,
+      newContent: updatedContent,
+      aiConversationId: conversationId,
+    });
 
     loggers.api.info('Global Assistant message edited successfully', {
       userId: maskIdentifier(userId),
@@ -103,8 +120,23 @@ export async function DELETE(
       return NextResponse.json({ error: 'Message not found' }, { status: 404 });
     }
 
+    // Store content for audit trail before deletion
+    const deletedContent = message.content;
+
     // Soft delete the message
     await globalConversationRepository.softDeleteMessage(messageId);
+
+    // Log activity for audit trail
+    const actorInfo = await getActorInfo(userId);
+    logMessageActivity(userId, 'message_delete', {
+      id: messageId,
+      pageId: conversationId, // Global conversations use conversationId as identifier
+      driveId: null, // Global conversations are user-level, not drive-level
+      conversationType: 'global',
+    }, actorInfo, {
+      previousContent: deletedContent,
+      aiConversationId: conversationId,
+    });
 
     loggers.api.info('Global Assistant message deleted successfully', {
       userId: maskIdentifier(userId),
