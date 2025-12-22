@@ -4,6 +4,7 @@ import { canUserEditPage, agentAwarenessCache } from '@pagespace/lib/server';
 import { db, pages, drives, eq } from '@pagespace/db';
 import { pageSpaceTools } from '@/lib/ai/core';
 import { loggers } from '@pagespace/lib/server';
+import { getActorInfo, logAgentConfigActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
@@ -191,10 +192,32 @@ export async function PATCH(
         await agentAwarenessCache.invalidateDriveAgents(page.driveId);
       }
 
+      // Log activity for audit trail
+      const actorInfo = await getActorInfo(userId);
+      const updatedFields = Object.keys(updateData);
+      const previousValues: Record<string, unknown> = {};
+      const newValues: Record<string, unknown> = {};
+
+      // Capture previous and new values for changed fields
+      for (const field of updatedFields) {
+        previousValues[field] = page[field as keyof typeof page];
+        newValues[field] = updateData[field as keyof typeof updateData];
+      }
+
+      logAgentConfigActivity(userId, {
+        id: pageId,
+        name: page.title ?? undefined,
+        driveId: page.driveId,
+      }, {
+        updatedFields,
+        previousValues,
+        newValues,
+      }, actorInfo);
+
       loggers.api.info('Page agent configuration updated', {
         pageId,
         userId,
-        updatedFields: Object.keys(updateData),
+        updatedFields,
       });
     }
 

@@ -7,6 +7,7 @@ import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { pageSpaceTools } from '@/lib/ai/core';
 import { loggers } from '@pagespace/lib/server';
 import { pageAgentRepository, type AgentConfigUpdate } from '@/lib/repositories/page-agent-repository';
+import { getActorInfo, logAgentConfigActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 /**
  * PUT /api/ai/page-agents/{agentId}/config
@@ -116,6 +117,27 @@ export async function PUT(
     if (updatedFields.includes('agentDefinition') || updatedFields.includes('visibleToGlobalAssistant')) {
       await agentAwarenessCache.invalidateDriveAgents(updatedAgent.driveId);
     }
+
+    // Log activity for audit trail
+    const actorInfo = await getActorInfo(userId);
+    const previousValues: Record<string, unknown> = {};
+    const newValues: Record<string, unknown> = {};
+
+    // Capture previous and new values for changed fields
+    for (const field of updatedFields) {
+      previousValues[field] = agent[field as keyof typeof agent];
+      newValues[field] = updateData[field as keyof typeof updateData];
+    }
+
+    logAgentConfigActivity(userId, {
+      id: agentId,
+      name: updatedAgent.title ?? undefined,
+      driveId: updatedAgent.driveId,
+    }, {
+      updatedFields,
+      previousValues,
+      newValues,
+    }, actorInfo);
 
     loggers.api.info('AI agent configuration updated', {
       agentId: updatedAgent.id,
