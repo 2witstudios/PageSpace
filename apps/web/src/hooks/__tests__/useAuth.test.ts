@@ -111,7 +111,7 @@ vi.mock('@/lib/analytics', () => ({
   getDeviceName: () => mockGetDeviceName(),
 }));
 
-vi.mock('@/hooks/use-token-refresh', () => ({
+vi.mock('@/hooks/useTokenRefresh', () => ({
   useTokenRefresh: () => ({
     refreshToken: mockRefreshToken,
     startTokenRefresh: mockStartTokenRefresh,

@@ -19,12 +19,12 @@ const { mockUseAuth, mockConnect, mockDisconnect, mockGetSocket } = vi.hoisted((
 }));
 
 // Mock useAuth hook - use full path since test is in __tests__ subdirectory
-vi.mock('@/hooks/use-auth', () => ({
+vi.mock('@/hooks/useAuth', () => ({
   useAuth: () => mockUseAuth(),
 }));
 
 // Mock socket store with proper getState
-vi.mock('@/stores/socketStore', () => {
+vi.mock('@/stores/useSocketStore', () => {
   const mockState = {
     getSocket: mockGetSocket,
     connect: mockConnect,
