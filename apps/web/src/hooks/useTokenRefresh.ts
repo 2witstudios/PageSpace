@@ -81,7 +81,7 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
               const userData = await userResponse.json();
 
               // Update Zustand store directly (avoid orphaned SWR mutate)
-              const { useAuthStore } = await import('@/stores/auth-store');
+              const { useAuthStore } = await import('@/stores/useAuthStore');
               const authStore = useAuthStore.getState();
               authStore.setUser(userData);
               authStore.clearFailedAttempts();

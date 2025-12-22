@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { useLayoutStore } from "@/stores/useLayoutStore";
-import { useBreakpoint } from "./use-breakpoint";
+import { useBreakpoint } from "./useBreakpoint";
 
 const CLOSE_LEFT_QUERY = "(max-width: 1023px)";
 
