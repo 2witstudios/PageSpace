@@ -3,6 +3,7 @@ import { pages, favorites, pageTags, pagePermissions, chatMessages, channelMessa
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserDeletePage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
+import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -41,9 +42,21 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
       return NextResponse.json({ error: 'Page is not in trash' }, { status: 400 });
     }
 
+    // Capture page info before deletion for audit trail
+    const pageTitle = page.title;
+    const driveId = page.driveId;
+
     await db.transaction(async (tx) => {
       await recursivelyDelete(pageId, tx);
     });
+
+    // Log permanent deletion for compliance (fire-and-forget)
+    const actorInfo = await getActorInfo(userId);
+    logPageActivity(userId, 'delete', {
+      id: pageId,
+      title: pageTitle,
+      driveId,
+    }, actorInfo);
 
     return NextResponse.json({ message: 'Page permanently deleted.' });
   } catch (error) {

@@ -4,6 +4,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { getDefaultContent, PageType } from '@pagespace/lib';
+import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
@@ -275,6 +276,21 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       }),
     ),
   ]);
+
+  // Log task creation for compliance (fire-and-forget)
+  const actorInfo = await getActorInfo(userId);
+  logPageActivity(userId, 'create', {
+    id: result.page.id,
+    title: result.task.title,
+    driveId: taskListPage.driveId,
+  }, {
+    ...actorInfo,
+    metadata: {
+      taskId: result.task.id,
+      taskListId: taskList.id,
+      taskListPageId: pageId,
+    },
+  });
 
   return NextResponse.json({
     ...taskWithRelations,

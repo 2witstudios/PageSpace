@@ -5,6 +5,7 @@ import { slugify } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateMCPRequest, isAuthError } from '@/lib/auth';
+import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 // Schema for drive creation
 const createDriveSchema = z.object({
@@ -44,6 +45,16 @@ export async function POST(req: NextRequest) {
         slug: newDrive.slug,
       })
     );
+
+    // Log MCP drive creation for compliance (fire-and-forget)
+    const actorInfo = await getActorInfo(userId);
+    logDriveActivity(userId, 'create', {
+      id: newDrive.id,
+      name: newDrive.name,
+    }, {
+      ...actorInfo,
+      metadata: { source: 'mcp' },
+    });
 
     return NextResponse.json(newDrive, { status: 201 });
   } catch (error) {

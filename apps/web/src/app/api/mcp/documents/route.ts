@@ -6,6 +6,7 @@ import prettier from 'prettier';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateMCPRequest, isAuthError } from '@/lib/auth';
+import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 // Get the current page ID for the user
 async function getCurrentPageId(userId: string): Promise<string | null> {
@@ -192,7 +193,24 @@ export async function POST(req: NextRequest) {
             })
           );
         }
-        
+
+        // Log MCP document operation for compliance (fire-and-forget)
+        if (driveId) {
+          const actorInfo = await getActorInfo(userId);
+          logPageActivity(userId, 'update', {
+            id: pageId,
+            title: page.title,
+            driveId,
+          }, {
+            ...actorInfo,
+            metadata: {
+              source: 'mcp',
+              mcpOperation: 'replace',
+              affectedLines: `${startLine}-${actualEndLine}`,
+            },
+          });
+        }
+
         const numberedLines = getNumberedLines(newContent);
         return NextResponse.json({
           pageId,
@@ -208,7 +226,7 @@ export async function POST(req: NextRequest) {
         if (!startLine || !content) {
           return NextResponse.json({ error: 'startLine and content are required for insert' }, { status: 400 });
         }
-        
+
         // Insert at line (convert to 0-based index)
         const insertIndex = Math.min(startLine - 1, lines.length);
         const newLines = [
@@ -216,15 +234,15 @@ export async function POST(req: NextRequest) {
           ...content.split('\n'),
           ...lines.slice(insertIndex),
         ];
-        
+
         const newContent = await formatHtml(newLines.join('\n'));
-        
+
         // Update the page
         await db.update(pages).set({
           content: newContent,
           updatedAt: new Date(),
         }).where(eq(pages.id, pageId));
-        
+
         // Broadcast content update event
         const driveId = await getDriveIdFromPage(pageId);
         if (driveId) {
@@ -235,7 +253,25 @@ export async function POST(req: NextRequest) {
             })
           );
         }
-        
+
+        // Log MCP document operation for compliance (fire-and-forget)
+        if (driveId) {
+          const actorInfo = await getActorInfo(userId);
+          logPageActivity(userId, 'update', {
+            id: pageId,
+            title: page.title,
+            driveId,
+          }, {
+            ...actorInfo,
+            metadata: {
+              source: 'mcp',
+              mcpOperation: 'insert',
+              insertedAt: startLine,
+              linesInserted: content.split('\n').length,
+            },
+          });
+        }
+
         const numberedLines = getNumberedLines(newContent);
         return NextResponse.json({
           pageId,
@@ -251,27 +287,27 @@ export async function POST(req: NextRequest) {
         if (!startLine) {
           return NextResponse.json({ error: 'startLine is required for delete' }, { status: 400 });
         }
-        
+
         const actualEndLine = endLine || startLine;
-        
+
         if (startLine > lines.length || actualEndLine > lines.length) {
           return NextResponse.json({ error: 'Line number out of range' }, { status: 400 });
         }
-        
+
         // Delete lines (convert to 0-based index)
         const newLines = [
           ...lines.slice(0, startLine - 1),
           ...lines.slice(actualEndLine),
         ];
-        
+
         const newContent = await formatHtml(newLines.join('\n'));
-        
+
         // Update the page
         await db.update(pages).set({
           content: newContent,
           updatedAt: new Date(),
         }).where(eq(pages.id, pageId));
-        
+
         // Broadcast content update event
         const driveId = await getDriveIdFromPage(pageId);
         if (driveId) {
@@ -282,7 +318,24 @@ export async function POST(req: NextRequest) {
             })
           );
         }
-        
+
+        // Log MCP document operation for compliance (fire-and-forget)
+        if (driveId) {
+          const actorInfo = await getActorInfo(userId);
+          logPageActivity(userId, 'update', {
+            id: pageId,
+            title: page.title,
+            driveId,
+          }, {
+            ...actorInfo,
+            metadata: {
+              source: 'mcp',
+              mcpOperation: 'delete',
+              deletedLines: `${startLine}-${actualEndLine}`,
+            },
+          });
+        }
+
         const numberedLines = getNumberedLines(newContent);
         return NextResponse.json({
           pageId,
@@ -347,6 +400,26 @@ export async function POST(req: NextRequest) {
         const formulaCount = cells.filter(c => c.value.trim().startsWith('=')).length;
         const valueCount = cells.filter(c => c.value.trim() !== '' && !c.value.trim().startsWith('=')).length;
         const clearCount = cells.filter(c => c.value.trim() === '').length;
+
+        // Log MCP document operation for compliance (fire-and-forget)
+        if (driveId) {
+          const actorInfo = await getActorInfo(userId);
+          logPageActivity(userId, 'update', {
+            id: pageId,
+            title: page.title,
+            driveId,
+          }, {
+            ...actorInfo,
+            metadata: {
+              source: 'mcp',
+              mcpOperation: 'edit-cells',
+              cellsUpdated: cells.length,
+              valuesSet: valueCount,
+              formulasSet: formulaCount,
+              cellsCleared: clearCount,
+            },
+          });
+        }
 
         return NextResponse.json({
           pageId,

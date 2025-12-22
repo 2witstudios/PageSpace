@@ -11,6 +11,7 @@ import {
 import { createDriveNotification } from '@pagespace/lib';
 import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
 import { getActorInfo, logMemberActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { db, driveMembers, pagePermissions, pages, eq, and, inArray } from '@pagespace/db';
 
 const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
@@ -160,6 +161,107 @@ export async function PATCH(
     loggers.api.error('Error updating member permissions:', error as Error);
     return NextResponse.json(
       { error: 'Failed to update member permissions' },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * DELETE /api/drives/[driveId]/members/[userId]
+ * Remove a member from the drive (kick)
+ * This also removes all their page permissions within the drive
+ */
+export async function DELETE(
+  request: Request,
+  context: { params: Promise<{ driveId: string; userId: string }> }
+) {
+  try {
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
+    if (isAuthError(auth)) return auth.error;
+    const currentUserId = auth.userId;
+
+    const { driveId, userId: targetUserId } = await context.params;
+
+    // Check if current user is owner or admin
+    const access = await checkDriveAccess(driveId, currentUserId);
+
+    if (!access.drive) {
+      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+    }
+
+    if (!access.isOwner && !access.isAdmin) {
+      return NextResponse.json({ error: 'Only drive owners and admins can remove members' }, { status: 403 });
+    }
+
+    // Cannot remove the drive owner
+    if (targetUserId === access.drive.ownerId) {
+      return NextResponse.json({ error: 'Cannot remove the drive owner' }, { status: 400 });
+    }
+
+    // Cannot remove yourself (use leave drive instead)
+    if (targetUserId === currentUserId) {
+      return NextResponse.json({ error: 'Cannot remove yourself. Use leave drive instead.' }, { status: 400 });
+    }
+
+    // Verify member exists
+    const memberData = await getDriveMemberDetails(driveId, targetUserId);
+    if (!memberData) {
+      return NextResponse.json({ error: 'Member not found' }, { status: 404 });
+    }
+
+    // Remove member and their permissions in a transaction
+    await db.transaction(async (tx) => {
+      // Get all pages in this drive
+      const drivePages = await tx.select({ id: pages.id })
+        .from(pages)
+        .where(eq(pages.driveId, driveId));
+
+      // Delete all pagePermissions for this user on these pages
+      if (drivePages.length > 0) {
+        const pageIds = drivePages.map(p => p.id);
+        await tx.delete(pagePermissions)
+          .where(and(
+            inArray(pagePermissions.pageId, pageIds),
+            eq(pagePermissions.userId, targetUserId)
+          ));
+      }
+
+      // Delete drive membership
+      await tx.delete(driveMembers)
+        .where(and(
+          eq(driveMembers.driveId, driveId),
+          eq(driveMembers.userId, targetUserId)
+        ));
+    });
+
+    // Log member removal for audit trail (fire-and-forget)
+    const actorInfo = await getActorInfo(currentUserId);
+    logMemberActivity(currentUserId, 'member_remove', {
+      driveId,
+      driveName: access.drive.name,
+      targetUserId,
+      targetUserEmail: memberData.user?.email,
+    }, actorInfo);
+
+    // Broadcast member removal event
+    await broadcastDriveMemberEvent(
+      createDriveMemberEventPayload(driveId, targetUserId, 'member_removed', {
+        driveName: access.drive.name,
+      })
+    );
+
+    // Note: No in-app notification sent for removal - the broadcast event
+    // will trigger a page refresh/redirect for the removed user, and the
+    // activity log provides an audit trail for compliance
+
+    return NextResponse.json({
+      success: true,
+      message: 'Member removed successfully',
+    });
+  } catch (error) {
+    loggers.api.error('Error removing member:', error as Error);
+    return NextResponse.json(
+      { error: 'Failed to remove member' },
       { status: 500 }
     );
   }

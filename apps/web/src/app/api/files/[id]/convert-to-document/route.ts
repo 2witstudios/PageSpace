@@ -6,6 +6,7 @@ import mammoth from 'mammoth';
 import { createId } from '@paralleldrive/cuid2';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { createServiceToken } from '@pagespace/lib/auth-utils';
+import { getActorInfo, logFileActivity, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -153,6 +154,31 @@ export async function POST(
         })
       );
     }
+
+    // Log file conversion and page creation for compliance (fire-and-forget)
+    const actorInfo = await getActorInfo(userId);
+
+    // Log the file conversion operation
+    logFileActivity(userId, 'convert', {
+      fileId: filePage.id,
+      fileName: filePage.originalFileName || filePage.title,
+      fileType: filePage.mimeType || undefined,
+      driveId: filePage.driveId,
+      pageId: newPage.id, // Link to the created page
+    }, actorInfo);
+
+    // Log the new page creation with metadata about the source file
+    logPageActivity(userId, 'create', {
+      id: newPage.id,
+      title: newPage.title,
+      driveId: filePage.driveId,
+    }, {
+      ...actorInfo,
+      metadata: {
+        convertedFromFileId: filePage.id,
+        convertedFromFileName: filePage.originalFileName || filePage.title,
+      },
+    });
 
     return NextResponse.json({
       success: true,
