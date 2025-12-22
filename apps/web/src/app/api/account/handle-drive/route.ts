@@ -1,6 +1,7 @@
 import { db, eq, and, drives, driveMembers } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -68,6 +69,17 @@ export async function POST(req: Request) {
         .update(drives)
         .set({ ownerId: newOwnerId })
         .where(eq(drives.id, driveId));
+
+      // Log activity for audit trail
+      const actorInfo = await getActorInfo(userId);
+      logDriveActivity(userId, 'ownership_transfer', {
+        id: driveId,
+        name: drive.name,
+      }, {
+        ...actorInfo,
+        previousValues: { ownerId: userId },
+        newValues: { ownerId: newOwnerId },
+      });
 
       loggers.auth.info(`Drive ownership transferred: ${driveId} from ${userId} to ${newOwnerId}`);
 

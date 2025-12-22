@@ -4,6 +4,8 @@ import {
   checkDriveAccessForRoles,
   reorderDriveRoles,
 } from '@pagespace/lib/server';
+import { db, driveRoles, eq, asc } from '@pagespace/db';
+import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -37,7 +39,24 @@ export async function PATCH(
       return NextResponse.json({ error: 'roleIds must be an array' }, { status: 400 });
     }
 
+    // Capture previous order before reordering
+    const previousRoles = await db
+      .select({ id: driveRoles.id })
+      .from(driveRoles)
+      .where(eq(driveRoles.driveId, driveId))
+      .orderBy(asc(driveRoles.position));
+    const previousOrder = previousRoles.map(r => r.id);
+
     await reorderDriveRoles(driveId, roleIds);
+
+    // Log activity for audit trail
+    const actorInfo = await getActorInfo(userId);
+    logRoleActivity(userId, 'role_reorder', {
+      driveId,
+      driveName: access.drive.name,
+      previousOrder,
+      newOrder: roleIds,
+    }, actorInfo);
 
     return NextResponse.json({ success: true });
   } catch (error) {
