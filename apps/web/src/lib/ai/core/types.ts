@@ -33,4 +33,5 @@ export interface ToolExecutionContext {
   parentConversationId?: string;    // Parent's conversation ID for linking
   agentChain?: string[];            // Full chain: [rootAgentId, ...intermediates, currentAgentId]
   requestOrigin?: 'user' | 'agent'; // Whether request came from user or another agent
+  agentCallDepth?: number;          // Depth of agent call chain (0 = direct user request)
 }

@@ -89,17 +89,24 @@ export async function PATCH(
     // Update the message content and set editedAt
     await chatMessageRepository.updateMessageContent(messageId, updatedContent);
 
-    // Log activity for audit trail
-    const actorInfo = await getActorInfo(userId);
-    logMessageActivity(userId, 'message_update', {
-      id: messageId,
-      pageId: message.pageId,
-      driveId,
-      conversationType: 'ai_chat',
-    }, actorInfo, {
-      previousContent: originalContent,
-      newContent: updatedContent,
-    });
+    // Log activity for audit trail (non-blocking)
+    try {
+      const actorInfo = await getActorInfo(userId);
+      logMessageActivity(userId, 'message_update', {
+        id: messageId,
+        pageId: message.pageId,
+        driveId,
+        conversationType: 'ai_chat',
+      }, actorInfo, {
+        previousContent: originalContent,
+        newContent: updatedContent,
+      });
+    } catch (loggingError) {
+      loggers.api.error('Failed to log message update activity', loggingError as Error, {
+        messageId: maskIdentifier(messageId),
+        pageId: maskIdentifier(message.pageId)
+      });
+    }
 
     loggers.api.info('Message edited successfully', {
       userId: maskIdentifier(userId),
@@ -166,16 +173,23 @@ export async function DELETE(
     // Soft delete the message
     await chatMessageRepository.softDeleteMessage(messageId);
 
-    // Log activity for audit trail
-    const actorInfo = await getActorInfo(userId);
-    logMessageActivity(userId, 'message_delete', {
-      id: messageId,
-      pageId: message.pageId,
-      driveId,
-      conversationType: 'ai_chat',
-    }, actorInfo, {
-      previousContent: deletedContent,
-    });
+    // Log activity for audit trail (non-blocking)
+    try {
+      const actorInfo = await getActorInfo(userId);
+      logMessageActivity(userId, 'message_delete', {
+        id: messageId,
+        pageId: message.pageId,
+        driveId,
+        conversationType: 'ai_chat',
+      }, actorInfo, {
+        previousContent: deletedContent,
+      });
+    } catch (loggingError) {
+      loggers.api.error('Failed to log message deletion activity', loggingError as Error, {
+        messageId: maskIdentifier(messageId),
+        pageId: maskIdentifier(message.pageId)
+      });
+    }
 
     loggers.api.info('Message deleted successfully', {
       userId: maskIdentifier(userId),
