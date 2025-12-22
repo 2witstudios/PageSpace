@@ -15,6 +15,7 @@ import {
 import { operationConfig, resourceTypeIcons, defaultOperationConfig } from '@/components/activity/constants';
 import { getInitials } from '@/components/activity/utils';
 import { RollbackConfirmDialog } from './RollbackConfirmDialog';
+import { useToast } from '@/hooks/useToast';
 import type { ActivityLog } from '@/components/activity/types';
 
 interface VersionHistoryItemProps {
@@ -30,6 +31,7 @@ export function VersionHistoryItem({
 }: VersionHistoryItemProps) {
   const [showConfirm, setShowConfirm] = useState(false);
   const [previewWarnings, setPreviewWarnings] = useState<string[]>([]);
+  const { toast } = useToast();
 
   const opConfig = operationConfig[activity.operation] || defaultOperationConfig;
   const OpIcon = opConfig.icon;
@@ -42,9 +44,17 @@ export function VersionHistoryItem({
     // Fetch preview to get warnings
     try {
       const response = await fetch(`/api/activities/${activity.id}?context=${context}`);
+      if (!response.ok) {
+        throw new Error('Failed to load preview');
+      }
       const data = await response.json();
       setPreviewWarnings(data.warnings || []);
-    } catch {
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: error instanceof Error ? error.message : 'Failed to load rollback preview',
+        variant: 'destructive',
+      });
       setPreviewWarnings([]);
     }
     setShowConfirm(true);

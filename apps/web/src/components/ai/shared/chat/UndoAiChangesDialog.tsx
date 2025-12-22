@@ -15,7 +15,7 @@ import {
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { fetchWithAuth, postWithAuth } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import type { AiUndoPreview, UndoMode } from '@/services/api';
 
 interface UndoAiChangesDialogProps {
@@ -48,8 +48,14 @@ export const UndoAiChangesDialog: React.FC<UndoAiChangesDialogProps> = ({
       fetchWithAuth(`/api/ai/chat/messages/${messageId}/undo`)
         .then(async (res) => {
           if (!res.ok) {
-            const data = await res.json();
-            throw new Error(data.error || 'Failed to load preview');
+            let errorMessage = 'Failed to load preview';
+            try {
+              const data = await res.json();
+              errorMessage = data.error || errorMessage;
+            } catch {
+              // Response wasn't JSON, use default message
+            }
+            throw new Error(errorMessage);
           }
           return res.json();
         })
@@ -57,7 +63,7 @@ export const UndoAiChangesDialog: React.FC<UndoAiChangesDialogProps> = ({
           setPreview(data);
         })
         .catch((err) => {
-          setError(err.message);
+          setError(err instanceof Error ? err.message : 'Failed to load preview');
         })
         .finally(() => {
           setLoading(false);
@@ -72,11 +78,17 @@ export const UndoAiChangesDialog: React.FC<UndoAiChangesDialogProps> = ({
     setError(null);
 
     try {
-      const res = await postWithAuth(`/api/ai/chat/messages/${messageId}/undo`, { mode });
-      const data = await res.json();
+      const res = await post<Response>(`/api/ai/chat/messages/${messageId}/undo`, { mode });
 
       if (!res.ok) {
-        throw new Error(data.error || 'Failed to undo changes');
+        let errorMessage = 'Failed to undo changes';
+        try {
+          const data = await res.json();
+          errorMessage = data.error || errorMessage;
+        } catch {
+          // Response wasn't JSON, use default message
+        }
+        throw new Error(errorMessage);
       }
 
       onOpenChange(false);

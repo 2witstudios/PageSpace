@@ -22,6 +22,7 @@ import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { VersionHistoryItem } from './VersionHistoryItem';
 import { useToast } from '@/hooks/useToast';
+import { post } from '@/lib/auth/auth-fetch';
 import type { ActivityLog } from '@/components/activity/types';
 
 interface VersionHistoryPanelProps {
@@ -130,11 +131,7 @@ export function VersionHistoryPanel({
 
   const handleRollback = async (activityId: string) => {
     try {
-      const response = await fetch(`/api/activities/${activityId}/rollback`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ context }),
-      });
+      const response = await post<Response>(`/api/activities/${activityId}/rollback`, { context });
 
       if (!response.ok) {
         const error = await response.json();
@@ -154,7 +151,7 @@ export function VersionHistoryPanel({
         description: error instanceof Error ? error.message : 'Failed to rollback',
         variant: 'destructive',
       });
-      throw error;
+      // Don't re-throw - error is handled via toast notification
     }
   };
 
