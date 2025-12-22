@@ -72,7 +72,7 @@ export async function canUserRollback(
   }
 
   switch (context) {
-    case 'ai_tool':
+    case 'ai_tool': {
       // Only user's own AI-generated changes
       if (activity.userId !== userId) {
         return {
@@ -87,8 +87,9 @@ export async function canUserRollback(
         };
       }
       return { canRollback: true };
+    }
 
-    case 'drive':
+    case 'drive': {
       // Drive admin can rollback anyone's changes in the drive
       if (!activity.driveId) {
         return {
@@ -104,8 +105,9 @@ export async function canUserRollback(
         };
       }
       return { canRollback: true };
+    }
 
-    case 'user_dashboard':
+    case 'user_dashboard': {
       // User can rollback all their own changes
       if (activity.userId !== userId) {
         return {
@@ -114,8 +116,9 @@ export async function canUserRollback(
         };
       }
       return { canRollback: true };
+    }
 
-    case 'page':
+    case 'page': {
       // Anyone with edit permission can rollback changes to that page
       if (!activity.pageId) {
         return {
@@ -131,12 +134,14 @@ export async function canUserRollback(
         };
       }
       return { canRollback: true };
+    }
 
-    default:
+    default: {
       return {
         canRollback: false,
         reason: 'Unknown rollback context',
       };
+    }
   }
 }
 
@@ -179,4 +184,20 @@ export function isRollbackableOperation(operation: string): boolean {
     'ownership_transfer',
   ];
   return rollbackableOperations.includes(operation);
+}
+
+/**
+ * Check if an activity is structurally eligible for rollback.
+ * This checks the operation type and whether the activity has data to restore from.
+ * Note: This does NOT check user permissions - use canUserRollback() for that.
+ */
+export function isActivityEligibleForRollback(activity: {
+  operation: string;
+  previousValues: unknown | null;
+  contentSnapshot: string | null;
+}): boolean {
+  return (
+    isRollbackableOperation(activity.operation) &&
+    (activity.previousValues !== null || activity.contentSnapshot !== null)
+  );
 }
