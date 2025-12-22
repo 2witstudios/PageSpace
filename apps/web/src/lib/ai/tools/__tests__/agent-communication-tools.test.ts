@@ -78,7 +78,9 @@ vi.mock('../../core', () => ({
 import { agentCommunicationTools } from '../agent-communication-tools';
 import { db } from '@pagespace/db';
 import { canUserViewPage } from '@pagespace/lib/server';
+import { createAIProvider, saveMessageToDatabase } from '../../core';
 import type { ToolExecutionContext } from '../../core';
+import { generateText } from 'ai';
 
 const mockDb = vi.mocked(db);
 const mockCanUserViewPage = vi.mocked(canUserViewPage);
@@ -256,6 +258,245 @@ describe('agent-communication-tools', () => {
           context
         )
       ).rejects.toThrow('Maximum agent consultation depth');
+    });
+
+    describe('chain context tracking', () => {
+      const mockAgent = {
+        id: 'agent-1',
+        title: 'Test Agent',
+        type: 'AI_CHAT',
+        driveId: 'drive-1',
+        systemPrompt: 'I am a helpful agent',
+        enabledTools: null,
+        aiProvider: null,
+        aiModel: null,
+        isTrashed: false,
+      };
+
+      beforeEach(() => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(mockAgent);
+        mockCanUserViewPage.mockResolvedValue(true);
+        (mockDb.select as Mock).mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              orderBy: vi.fn().mockResolvedValue([]),
+            }),
+          }),
+        });
+        vi.mocked(createAIProvider).mockResolvedValue({
+          model: { modelId: 'test-model' } as unknown as ReturnType<typeof createAIProvider> extends Promise<infer T> ? T extends { model: infer M } ? M : never : never,
+        } as Awaited<ReturnType<typeof createAIProvider>>);
+        vi.mocked(generateText).mockResolvedValue({
+          text: 'Agent response',
+          steps: [],
+        } as unknown as ReturnType<typeof generateText> extends Promise<infer T> ? T : never);
+        vi.mocked(saveMessageToDatabase).mockResolvedValue(undefined);
+      });
+
+      it('should set parentAgentId from calling agent location context', async () => {
+        const parentAgentPageId = 'parent-agent-page-123';
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: {
+            userId: 'user-123',
+            locationContext: {
+              currentPage: { id: parentAgentPageId, title: 'Parent Agent', type: 'AI_CHAT' },
+              currentDrive: { id: 'drive-1', name: 'Test Drive', slug: 'test' },
+            },
+          } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          {
+            agentPath: '/test/agent',
+            agentId: 'agent-1',
+            question: 'Test question',
+          },
+          context
+        );
+
+        // Verify generateText was called with nested context containing parentAgentId
+        expect(generateText).toHaveBeenCalledWith(
+          expect.objectContaining({
+            experimental_context: expect.objectContaining({
+              parentAgentId: parentAgentPageId,
+            }),
+          })
+        );
+      });
+
+      it('should append current agent to agentChain', async () => {
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: {
+            userId: 'user-123',
+            agentChain: ['root-agent'],
+          } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          {
+            agentPath: '/test/agent',
+            agentId: 'agent-1',
+            question: 'Test question',
+          },
+          context
+        );
+
+        // Verify agentChain includes both parent and current agent
+        expect(generateText).toHaveBeenCalledWith(
+          expect.objectContaining({
+            experimental_context: expect.objectContaining({
+              agentChain: ['root-agent', 'agent-1'],
+            }),
+          })
+        );
+      });
+
+      it('should set requestOrigin to "agent" for nested calls', async () => {
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: {
+            userId: 'user-123',
+          } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          {
+            agentPath: '/test/agent',
+            agentId: 'agent-1',
+            question: 'Test question',
+          },
+          context
+        );
+
+        expect(generateText).toHaveBeenCalledWith(
+          expect.objectContaining({
+            experimental_context: expect.objectContaining({
+              requestOrigin: 'agent',
+            }),
+          })
+        );
+      });
+
+      it('should preserve parentConversationId from parent context', async () => {
+        const parentConversationId = 'parent-conv-123';
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: {
+            userId: 'user-123',
+            conversationId: parentConversationId,
+          } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          {
+            agentPath: '/test/agent',
+            agentId: 'agent-1',
+            question: 'Test question',
+          },
+          context
+        );
+
+        expect(generateText).toHaveBeenCalledWith(
+          expect.objectContaining({
+            experimental_context: expect.objectContaining({
+              parentConversationId: parentConversationId,
+            }),
+          })
+        );
+      });
+
+      it('should accumulate agentChain across multiple nested calls', async () => {
+        // Simulate a chain: grandparent -> parent -> current
+        const existingChain = ['grandparent-agent', 'parent-agent'];
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: {
+            userId: 'user-123',
+            agentChain: existingChain,
+          } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          {
+            agentPath: '/test/agent',
+            agentId: 'agent-1',
+            question: 'Test question',
+          },
+          context
+        );
+
+        expect(generateText).toHaveBeenCalledWith(
+          expect.objectContaining({
+            experimental_context: expect.objectContaining({
+              agentChain: ['grandparent-agent', 'parent-agent', 'agent-1'],
+            }),
+          })
+        );
+      });
+
+      it('should start fresh agentChain when called directly by user', async () => {
+        // No existing agentChain in context
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: {
+            userId: 'user-123',
+            // No agentChain
+          } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          {
+            agentPath: '/test/agent',
+            agentId: 'agent-1',
+            question: 'Test question',
+          },
+          context
+        );
+
+        expect(generateText).toHaveBeenCalledWith(
+          expect.objectContaining({
+            experimental_context: expect.objectContaining({
+              agentChain: ['agent-1'],
+            }),
+          })
+        );
+      });
+
+      it('should increment agentCallDepth for nested context', async () => {
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: {
+            userId: 'user-123',
+            agentCallDepth: 1,
+          } as ToolExecutionContext & { agentCallDepth: number },
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          {
+            agentPath: '/test/agent',
+            agentId: 'agent-1',
+            question: 'Test question',
+          },
+          context
+        );
+
+        expect(generateText).toHaveBeenCalledWith(
+          expect.objectContaining({
+            experimental_context: expect.objectContaining({
+              agentCallDepth: 2,
+            }),
+          })
+        );
+      });
     });
   });
 });
