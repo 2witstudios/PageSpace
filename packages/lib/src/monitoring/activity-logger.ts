@@ -81,7 +81,9 @@ export type ActivityOperation =
   // Role operations (Tier 1)
   | 'role_reorder'
   // Drive ownership operations (Tier 1)
-  | 'ownership_transfer';
+  | 'ownership_transfer'
+  // Version history operations
+  | 'rollback';
 
 export type ActivityResourceType =
   | 'page'
@@ -611,6 +613,60 @@ export function logMessageActivity(
     aiConversationId: options?.aiConversationId,
     metadata: {
       conversationType: message.conversationType,
+    },
+  }).catch(() => {
+    // Silent fail - already logged in logActivity
+  });
+}
+
+/**
+ * Convenience wrapper for rollback operations.
+ * Logs when a user restores a resource to a previous state.
+ * Fire-and-forget - call without await.
+ */
+export function logRollbackActivity(
+  userId: string,
+  rollbackFromActivityId: string,
+  resource: {
+    resourceType: ActivityResourceType;
+    resourceId: string;
+    resourceTitle?: string;
+    driveId: string | null;
+    pageId?: string;
+  },
+  actorInfo: ActorInfo,
+  options?: {
+    /** Values that were restored (from the original activity's previousValues) */
+    restoredValues?: Record<string, unknown>;
+    /** Values that were replaced (current state before rollback) */
+    replacedValues?: Record<string, unknown>;
+    /** Content snapshot if rolling back content */
+    contentSnapshot?: string;
+    /** Format of the content being restored */
+    contentFormat?: 'text' | 'html' | 'json' | 'tiptap';
+    /** Additional context */
+    metadata?: Record<string, unknown>;
+  }
+): void {
+  logActivity({
+    userId,
+    actorEmail: actorInfo.actorEmail,
+    actorDisplayName: actorInfo.actorDisplayName,
+    operation: 'rollback',
+    resourceType: resource.resourceType,
+    resourceId: resource.resourceId,
+    resourceTitle: resource.resourceTitle,
+    driveId: resource.driveId,
+    pageId: resource.pageId,
+    contentSnapshot: options?.contentSnapshot,
+    // previousValues = state before rollback (what we're replacing)
+    previousValues: options?.replacedValues,
+    // newValues = state after rollback (what we restored to)
+    newValues: options?.restoredValues,
+    metadata: {
+      ...options?.metadata,
+      rollbackFromActivityId,
+      contentFormat: options?.contentFormat,
     },
   }).catch(() => {
     // Silent fail - already logged in logActivity

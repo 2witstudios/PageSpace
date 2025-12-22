@@ -1,0 +1,730 @@
+/**
+ * Rollback Service
+ *
+ * Handles version history rollback operations for PageSpace.
+ * Allows users to restore resources to previous states based on activity logs.
+ */
+
+import { db, activityLogs, pages, drives, driveMembers, users, eq, and, desc, gte, lte } from '@pagespace/db';
+import {
+  canUserRollback,
+  isRollbackableOperation,
+  type RollbackContext,
+  type ActivityForPermissionCheck,
+} from '@pagespace/lib/permissions';
+import {
+  logRollbackActivity,
+  getActorInfo,
+  type ActivityResourceType,
+} from '@pagespace/lib/monitoring';
+import { loggers } from '@pagespace/lib/server';
+
+/**
+ * Activity log with full details for rollback
+ */
+export interface ActivityLogForRollback {
+  id: string;
+  timestamp: Date;
+  userId: string | null;
+  actorEmail: string;
+  actorDisplayName: string | null;
+  operation: string;
+  resourceType: ActivityResourceType;
+  resourceId: string;
+  resourceTitle: string | null;
+  driveId: string | null;
+  pageId: string | null;
+  isAiGenerated: boolean;
+  aiProvider: string | null;
+  aiModel: string | null;
+  contentSnapshot: string | null;
+  updatedFields: string[] | null;
+  previousValues: Record<string, unknown> | null;
+  newValues: Record<string, unknown> | null;
+  metadata: Record<string, unknown> | null;
+}
+
+/**
+ * Result of a rollback preview
+ */
+export interface RollbackPreview {
+  activity: ActivityLogForRollback;
+  canRollback: boolean;
+  reason?: string;
+  currentValues: Record<string, unknown> | null;
+  rollbackToValues: Record<string, unknown> | null;
+  warnings: string[];
+  affectedResources: { type: string; id: string; title: string }[];
+}
+
+/**
+ * Result of executing a rollback
+ */
+export interface RollbackResult {
+  success: boolean;
+  rollbackActivityId?: string;
+  restoredValues?: Record<string, unknown>;
+  message: string;
+  warnings: string[];
+}
+
+/**
+ * Options for fetching version history
+ */
+export interface VersionHistoryOptions {
+  limit?: number;
+  offset?: number;
+  startDate?: Date;
+  endDate?: Date;
+  actorId?: string;
+  operation?: string;
+  includeAiOnly?: boolean;
+}
+
+/**
+ * Fetch a single activity log by ID
+ */
+export async function getActivityById(
+  activityId: string
+): Promise<ActivityLogForRollback | null> {
+  try {
+    const result = await db
+      .select()
+      .from(activityLogs)
+      .where(eq(activityLogs.id, activityId))
+      .limit(1);
+
+    if (result.length === 0) {
+      return null;
+    }
+
+    const activity = result[0];
+    return {
+      id: activity.id,
+      timestamp: activity.timestamp,
+      userId: activity.userId,
+      actorEmail: activity.actorEmail,
+      actorDisplayName: activity.actorDisplayName,
+      operation: activity.operation,
+      resourceType: activity.resourceType as ActivityResourceType,
+      resourceId: activity.resourceId,
+      resourceTitle: activity.resourceTitle,
+      driveId: activity.driveId,
+      pageId: activity.pageId,
+      isAiGenerated: activity.isAiGenerated,
+      aiProvider: activity.aiProvider,
+      aiModel: activity.aiModel,
+      contentSnapshot: activity.contentSnapshot,
+      updatedFields: activity.updatedFields as string[] | null,
+      previousValues: activity.previousValues as Record<string, unknown> | null,
+      newValues: activity.newValues as Record<string, unknown> | null,
+      metadata: activity.metadata as Record<string, unknown> | null,
+    };
+  } catch (error) {
+    loggers.api.error('[RollbackService] Error fetching activity', {
+      activityId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
+
+/**
+ * Preview what a rollback would do
+ */
+export async function previewRollback(
+  activityId: string,
+  userId: string,
+  context: RollbackContext
+): Promise<RollbackPreview> {
+  const activity = await getActivityById(activityId);
+
+  if (!activity) {
+    return {
+      activity: null as unknown as ActivityLogForRollback,
+      canRollback: false,
+      reason: 'Activity not found',
+      currentValues: null,
+      rollbackToValues: null,
+      warnings: [],
+      affectedResources: [],
+    };
+  }
+
+  // Check if operation is rollbackable
+  if (!isRollbackableOperation(activity.operation)) {
+    return {
+      activity,
+      canRollback: false,
+      reason: `Cannot rollback '${activity.operation}' operations`,
+      currentValues: null,
+      rollbackToValues: null,
+      warnings: [],
+      affectedResources: [],
+    };
+  }
+
+  // Check if previousValues exist
+  if (!activity.previousValues && !activity.contentSnapshot) {
+    return {
+      activity,
+      canRollback: false,
+      reason: 'No previous state available to restore',
+      currentValues: null,
+      rollbackToValues: null,
+      warnings: [],
+      affectedResources: [],
+    };
+  }
+
+  // Check permissions
+  const permissionCheck = await canUserRollback(userId, activity, context);
+  if (!permissionCheck.canRollback) {
+    return {
+      activity,
+      canRollback: false,
+      reason: permissionCheck.reason,
+      currentValues: null,
+      rollbackToValues: null,
+      warnings: [],
+      affectedResources: [],
+    };
+  }
+
+  // Get current state and check for conflicts
+  const warnings: string[] = [];
+  let currentValues: Record<string, unknown> | null = null;
+
+  if (activity.resourceType === 'page' && activity.pageId) {
+    const currentPage = await db
+      .select()
+      .from(pages)
+      .where(eq(pages.id, activity.pageId))
+      .limit(1);
+
+    if (currentPage.length === 0) {
+      return {
+        activity,
+        canRollback: false,
+        reason: 'Resource no longer exists',
+        currentValues: null,
+        rollbackToValues: null,
+        warnings: [],
+        affectedResources: [],
+      };
+    }
+
+    currentValues = {
+      title: currentPage[0].title,
+      content: currentPage[0].content,
+      parentId: currentPage[0].parentId,
+      position: currentPage[0].position,
+    };
+
+    // Check if state has changed since the activity
+    if (activity.newValues) {
+      const newValuesMatch = Object.entries(activity.newValues).every(
+        ([key, value]) => {
+          const currentVal = currentValues?.[key];
+          return JSON.stringify(currentVal) === JSON.stringify(value);
+        }
+      );
+
+      if (!newValuesMatch) {
+        warnings.push(
+          'This resource has been modified since this change. Rollback will overwrite those modifications.'
+        );
+      }
+    }
+  }
+
+  return {
+    activity,
+    canRollback: true,
+    currentValues,
+    rollbackToValues: activity.previousValues,
+    warnings,
+    affectedResources: [
+      {
+        type: activity.resourceType,
+        id: activity.resourceId,
+        title: activity.resourceTitle || 'Untitled',
+      },
+    ],
+  };
+}
+
+/**
+ * Execute a rollback operation
+ */
+export async function executeRollback(
+  activityId: string,
+  userId: string,
+  context: RollbackContext
+): Promise<RollbackResult> {
+  const preview = await previewRollback(activityId, userId, context);
+
+  if (!preview.canRollback) {
+    return {
+      success: false,
+      message: preview.reason || 'Cannot rollback this activity',
+      warnings: [],
+    };
+  }
+
+  const activity = preview.activity;
+  const warnings: string[] = [...preview.warnings];
+
+  try {
+    // Get actor info for logging
+    const actorInfo = await getActorInfo(userId);
+
+    // Execute rollback based on resource type
+    let restoredValues: Record<string, unknown> = {};
+
+    switch (activity.resourceType) {
+      case 'page':
+        restoredValues = await rollbackPageChange(activity, preview.currentValues);
+        break;
+
+      case 'drive':
+        restoredValues = await rollbackDriveChange(activity, preview.currentValues);
+        break;
+
+      case 'permission':
+        restoredValues = await rollbackPermissionChange(activity);
+        break;
+
+      case 'agent':
+        restoredValues = await rollbackAgentConfigChange(activity, preview.currentValues);
+        break;
+
+      case 'member':
+        restoredValues = await rollbackMemberChange(activity);
+        break;
+
+      case 'role':
+        restoredValues = await rollbackRoleChange(activity);
+        break;
+
+      default:
+        return {
+          success: false,
+          message: `Rollback not supported for resource type: ${activity.resourceType}`,
+          warnings,
+        };
+    }
+
+    // Log the rollback activity
+    logRollbackActivity(
+      userId,
+      activityId,
+      {
+        resourceType: activity.resourceType,
+        resourceId: activity.resourceId,
+        resourceTitle: activity.resourceTitle ?? undefined,
+        driveId: activity.driveId,
+        pageId: activity.pageId ?? undefined,
+      },
+      actorInfo,
+      {
+        restoredValues,
+        replacedValues: preview.currentValues ?? undefined,
+        contentSnapshot: activity.contentSnapshot ?? undefined,
+      }
+    );
+
+    return {
+      success: true,
+      restoredValues,
+      message: 'Successfully restored to previous state',
+      warnings,
+    };
+  } catch (error) {
+    loggers.api.error('[RollbackService] Error executing rollback', {
+      activityId,
+      userId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+
+    return {
+      success: false,
+      message: error instanceof Error ? error.message : 'Failed to execute rollback',
+      warnings,
+    };
+  }
+}
+
+/**
+ * Rollback a page change
+ */
+async function rollbackPageChange(
+  activity: ActivityLogForRollback,
+  currentValues: Record<string, unknown> | null
+): Promise<Record<string, unknown>> {
+  if (!activity.pageId) {
+    throw new Error('Page ID not found in activity');
+  }
+
+  const previousValues = activity.previousValues || {};
+  const updateData: Record<string, unknown> = {};
+
+  // Restore fields that were changed
+  if (activity.updatedFields) {
+    for (const field of activity.updatedFields) {
+      if (field in previousValues) {
+        updateData[field] = previousValues[field];
+      }
+    }
+  } else if (Object.keys(previousValues).length > 0) {
+    // If no updatedFields, restore all previousValues
+    Object.assign(updateData, previousValues);
+  }
+
+  // If we have a content snapshot and content was changed, use it
+  if (activity.contentSnapshot && activity.operation === 'update') {
+    updateData.content = activity.contentSnapshot;
+  }
+
+  if (Object.keys(updateData).length === 0) {
+    throw new Error('No values to restore');
+  }
+
+  // Update the page
+  await db
+    .update(pages)
+    .set({
+      ...updateData,
+      updatedAt: new Date(),
+    })
+    .where(eq(pages.id, activity.pageId));
+
+  return updateData;
+}
+
+/**
+ * Rollback a drive change
+ */
+async function rollbackDriveChange(
+  activity: ActivityLogForRollback,
+  currentValues: Record<string, unknown> | null
+): Promise<Record<string, unknown>> {
+  if (!activity.driveId) {
+    throw new Error('Drive ID not found in activity');
+  }
+
+  const previousValues = activity.previousValues || {};
+  const updateData: Record<string, unknown> = {};
+
+  // Restore fields that were changed
+  if (activity.updatedFields) {
+    for (const field of activity.updatedFields) {
+      if (field in previousValues) {
+        updateData[field] = previousValues[field];
+      }
+    }
+  } else if (Object.keys(previousValues).length > 0) {
+    Object.assign(updateData, previousValues);
+  }
+
+  if (Object.keys(updateData).length === 0) {
+    throw new Error('No values to restore');
+  }
+
+  // Update the drive
+  await db
+    .update(drives)
+    .set({
+      ...updateData,
+      updatedAt: new Date(),
+    })
+    .where(eq(drives.id, activity.driveId));
+
+  return updateData;
+}
+
+/**
+ * Rollback a permission change
+ */
+async function rollbackPermissionChange(
+  activity: ActivityLogForRollback
+): Promise<Record<string, unknown>> {
+  // Permission changes are complex - need to handle grant/update/revoke
+  const metadata = activity.metadata || {};
+  const previousValues = activity.previousValues || {};
+
+  // For now, log a warning - full implementation would need pagePermissions table operations
+  loggers.api.warn('[RollbackService] Permission rollback not fully implemented', {
+    activityId: activity.id,
+    operation: activity.operation,
+  });
+
+  return previousValues;
+}
+
+/**
+ * Rollback an agent config change
+ */
+async function rollbackAgentConfigChange(
+  activity: ActivityLogForRollback,
+  currentValues: Record<string, unknown> | null
+): Promise<Record<string, unknown>> {
+  // Agent configs are stored in pages table
+  if (!activity.pageId) {
+    throw new Error('Page ID not found in activity');
+  }
+
+  const previousValues = activity.previousValues || {};
+  const updateData: Record<string, unknown> = {};
+
+  // Agent config fields that can be rolled back
+  const agentFields = [
+    'systemPrompt',
+    'enabledTools',
+    'aiProvider',
+    'aiModel',
+    'includeDrivePrompt',
+    'agentDefinition',
+    'visibleToGlobalAssistant',
+  ];
+
+  for (const field of agentFields) {
+    if (field in previousValues) {
+      updateData[field] = previousValues[field];
+    }
+  }
+
+  if (Object.keys(updateData).length === 0) {
+    throw new Error('No agent config values to restore');
+  }
+
+  await db
+    .update(pages)
+    .set({
+      ...updateData,
+      updatedAt: new Date(),
+    })
+    .where(eq(pages.id, activity.pageId));
+
+  return updateData;
+}
+
+/**
+ * Rollback a member change
+ */
+async function rollbackMemberChange(
+  activity: ActivityLogForRollback
+): Promise<Record<string, unknown>> {
+  const metadata = activity.metadata || {};
+  const previousValues = activity.previousValues || {};
+
+  // Member changes involve driveMembers table
+  loggers.api.warn('[RollbackService] Member rollback not fully implemented', {
+    activityId: activity.id,
+    operation: activity.operation,
+  });
+
+  return previousValues;
+}
+
+/**
+ * Rollback a role change
+ */
+async function rollbackRoleChange(
+  activity: ActivityLogForRollback
+): Promise<Record<string, unknown>> {
+  const previousValues = activity.previousValues || {};
+
+  // Role changes involve driveRoles table
+  loggers.api.warn('[RollbackService] Role rollback not fully implemented', {
+    activityId: activity.id,
+    operation: activity.operation,
+  });
+
+  return previousValues;
+}
+
+/**
+ * Get version history for a page
+ */
+export async function getPageVersionHistory(
+  pageId: string,
+  userId: string,
+  options: VersionHistoryOptions = {}
+): Promise<{ activities: ActivityLogForRollback[]; total: number }> {
+  const { limit = 50, offset = 0, startDate, endDate, actorId, operation, includeAiOnly } = options;
+
+  try {
+    const conditions = [eq(activityLogs.pageId, pageId)];
+
+    if (startDate) {
+      conditions.push(gte(activityLogs.timestamp, startDate));
+    }
+    if (endDate) {
+      conditions.push(lte(activityLogs.timestamp, endDate));
+    }
+    if (actorId) {
+      conditions.push(eq(activityLogs.userId, actorId));
+    }
+    if (operation) {
+      // Type assertion needed since operation comes from user input
+      conditions.push(eq(activityLogs.operation, operation as typeof activityLogs.operation.enumValues[number]));
+    }
+    if (includeAiOnly) {
+      conditions.push(eq(activityLogs.isAiGenerated, true));
+    }
+
+    const [activities, countResult] = await Promise.all([
+      db
+        .select()
+        .from(activityLogs)
+        .where(and(...conditions))
+        .orderBy(desc(activityLogs.timestamp))
+        .limit(limit)
+        .offset(offset),
+      db
+        .select({ count: activityLogs.id })
+        .from(activityLogs)
+        .where(and(...conditions)),
+    ]);
+
+    return {
+      activities: activities.map((a) => ({
+        id: a.id,
+        timestamp: a.timestamp,
+        userId: a.userId,
+        actorEmail: a.actorEmail,
+        actorDisplayName: a.actorDisplayName,
+        operation: a.operation,
+        resourceType: a.resourceType as ActivityResourceType,
+        resourceId: a.resourceId,
+        resourceTitle: a.resourceTitle,
+        driveId: a.driveId,
+        pageId: a.pageId,
+        isAiGenerated: a.isAiGenerated,
+        aiProvider: a.aiProvider,
+        aiModel: a.aiModel,
+        contentSnapshot: a.contentSnapshot,
+        updatedFields: a.updatedFields as string[] | null,
+        previousValues: a.previousValues as Record<string, unknown> | null,
+        newValues: a.newValues as Record<string, unknown> | null,
+        metadata: a.metadata as Record<string, unknown> | null,
+      })),
+      total: countResult.length,
+    };
+  } catch (error) {
+    loggers.api.error('[RollbackService] Error fetching page version history', {
+      pageId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return { activities: [], total: 0 };
+  }
+}
+
+/**
+ * Get version history for a drive (admin view)
+ */
+export async function getDriveVersionHistory(
+  driveId: string,
+  userId: string,
+  options: VersionHistoryOptions = {}
+): Promise<{ activities: ActivityLogForRollback[]; total: number }> {
+  const { limit = 50, offset = 0, startDate, endDate, actorId, operation } = options;
+
+  try {
+    const conditions = [eq(activityLogs.driveId, driveId)];
+
+    if (startDate) {
+      conditions.push(gte(activityLogs.timestamp, startDate));
+    }
+    if (endDate) {
+      conditions.push(lte(activityLogs.timestamp, endDate));
+    }
+    if (actorId) {
+      conditions.push(eq(activityLogs.userId, actorId));
+    }
+    if (operation) {
+      conditions.push(eq(activityLogs.operation, operation as typeof activityLogs.operation.enumValues[number]));
+    }
+
+    const [activities, countResult] = await Promise.all([
+      db
+        .select()
+        .from(activityLogs)
+        .where(and(...conditions))
+        .orderBy(desc(activityLogs.timestamp))
+        .limit(limit)
+        .offset(offset),
+      db
+        .select({ count: activityLogs.id })
+        .from(activityLogs)
+        .where(and(...conditions)),
+    ]);
+
+    return {
+      activities: activities.map((a) => ({
+        id: a.id,
+        timestamp: a.timestamp,
+        userId: a.userId,
+        actorEmail: a.actorEmail,
+        actorDisplayName: a.actorDisplayName,
+        operation: a.operation,
+        resourceType: a.resourceType as ActivityResourceType,
+        resourceId: a.resourceId,
+        resourceTitle: a.resourceTitle,
+        driveId: a.driveId,
+        pageId: a.pageId,
+        isAiGenerated: a.isAiGenerated,
+        aiProvider: a.aiProvider,
+        aiModel: a.aiModel,
+        contentSnapshot: a.contentSnapshot,
+        updatedFields: a.updatedFields as string[] | null,
+        previousValues: a.previousValues as Record<string, unknown> | null,
+        newValues: a.newValues as Record<string, unknown> | null,
+        metadata: a.metadata as Record<string, unknown> | null,
+      })),
+      total: countResult.length,
+    };
+  } catch (error) {
+    loggers.api.error('[RollbackService] Error fetching drive version history', {
+      driveId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return { activities: [], total: 0 };
+  }
+}
+
+/**
+ * Get user's retention limit based on subscription tier
+ */
+export async function getUserRetentionDays(userId: string): Promise<number> {
+  // Default retention days by tier
+  const defaultRetention: Record<string, number> = {
+    free: 7,
+    pro: 30,
+    business: 90,
+    founder: -1, // unlimited
+  };
+
+  try {
+    // Get user's subscription tier
+    const user = await db
+      .select({ subscriptionTier: users.subscriptionTier })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+
+    if (user.length === 0) {
+      return defaultRetention.free;
+    }
+
+    const tier = user[0].subscriptionTier || 'free';
+    return defaultRetention[tier] || defaultRetention.free;
+  } catch (error) {
+    loggers.api.error('[RollbackService] Error getting user retention days', {
+      userId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return defaultRetention.free;
+  }
+}

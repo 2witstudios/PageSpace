@@ -40,3 +40,18 @@ export type {
   CreatePageParams,
   PageService,
 } from './page-service';
+
+export {
+  getActivityById,
+  previewRollback,
+  executeRollback,
+  getPageVersionHistory,
+  getDriveVersionHistory,
+  getUserRetentionDays,
+} from './rollback-service';
+export type {
+  ActivityLogForRollback,
+  RollbackPreview,
+  RollbackResult,
+  VersionHistoryOptions,
+} from './rollback-service';

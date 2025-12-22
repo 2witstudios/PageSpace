@@ -176,6 +176,13 @@
       "when": 1766426065093,
       "tag": "0024_nebulous_forge",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1766435628447,
+      "tag": "0025_icy_wallflower",
+      "breakpoints": true
     }
   ]
 }

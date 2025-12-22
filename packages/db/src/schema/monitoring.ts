@@ -387,7 +387,9 @@ export const activityOperationEnum = pgEnum('activity_operation', [
   // Role operations (Tier 1)
   'role_reorder',
   // Drive ownership operations (Tier 1)
-  'ownership_transfer'
+  'ownership_transfer',
+  // Version history operations
+  'rollback'
 ]);
 
 export const activityResourceEnum = pgEnum('activity_resource', [
@@ -439,8 +441,12 @@ export const activityLogs = pgTable('activity_logs', {
   driveId: text('driveId').references(() => drives.id, { onDelete: 'set null' }),
   pageId: text('pageId').references(() => pages.id, { onDelete: 'set null' }),
 
-  // Content snapshot for future rollback support
+  // Content snapshot for rollback support
   contentSnapshot: text('contentSnapshot'),
+  contentFormat: text('contentFormat'), // 'text' | 'html' | 'json' | 'tiptap' - for proper content parsing during rollback
+
+  // Rollback tracking
+  rollbackFromActivityId: text('rollbackFromActivityId'), // Links rollback operation to the source activity that was restored
 
   // Change details
   updatedFields: jsonb('updatedFields').$type<string[]>(),
@@ -475,3 +481,15 @@ export const activityLogsRelations = relations(activityLogs, ({ one }) => ({
     references: [pages.id],
   }),
 }));
+
+/**
+ * Retention policies - plan-based version history retention limits
+ * Determines how long activity logs are accessible for rollback
+ */
+export const retentionPolicies = pgTable('retention_policies', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  subscriptionTier: text('subscriptionTier').notNull().unique(), // 'free' | 'pro' | 'business' | 'founder'
+  retentionDays: integer('retentionDays').notNull(), // -1 = unlimited
+  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
+});

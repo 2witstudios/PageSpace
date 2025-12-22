@@ -15,3 +15,6 @@ export {
   grantPagePermissions,
   revokePagePermissions,
 } from './permissions';
+
+// Export rollback permissions
+export * from './rollback-permissions';
