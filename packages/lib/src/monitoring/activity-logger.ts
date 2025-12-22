@@ -125,10 +125,14 @@ export interface ActivityLogInput {
 
   // Content & change tracking
   contentSnapshot?: string;
+  contentFormat?: 'text' | 'html' | 'json' | 'tiptap';
   updatedFields?: string[];
   previousValues?: Record<string, unknown>;
   newValues?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
+
+  // Rollback support
+  rollbackFromActivityId?: string;
 }
 
 /**
@@ -154,10 +158,12 @@ export async function logActivity(input: ActivityLogInput): Promise<void> {
       aiModel: input.aiModel,
       aiConversationId: input.aiConversationId,
       contentSnapshot: input.contentSnapshot,
+      contentFormat: input.contentFormat,
       updatedFields: input.updatedFields,
       previousValues: input.previousValues,
       newValues: input.newValues,
       metadata: input.metadata,
+      rollbackFromActivityId: input.rollbackFromActivityId,
       isArchived: false,
     });
   } catch (error) {
