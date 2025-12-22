@@ -13,6 +13,25 @@ import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/acti
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 
 /**
+ * Helper to get driveId from a page for activity logging
+ */
+async function getPageDriveId(pageId: string, messageId: string): Promise<string | null> {
+  const page = await db.query.pages.findFirst({
+    where: eq(pages.id, pageId),
+    columns: { driveId: true },
+  });
+
+  if (!page) {
+    loggers.api.warn('Page not found for message - data integrity issue', {
+      messageId: maskIdentifier(messageId),
+      pageId: maskIdentifier(pageId)
+    });
+  }
+
+  return page?.driveId ?? null;
+}
+
+/**
  * PATCH - Edit message content
  * Updates a chat message's content and sets editedAt timestamp
  */
@@ -58,18 +77,8 @@ export async function PATCH(
       );
     }
 
-    // Get page info for driveId (needed for activity logging)
-    const page = await db.query.pages.findFirst({
-      where: eq(pages.id, message.pageId),
-      columns: { driveId: true },
-    });
-
-    if (!page) {
-      loggers.api.warn('Page not found for message - data integrity issue', {
-        messageId: maskIdentifier(messageId),
-        pageId: maskIdentifier(message.pageId)
-      });
-    }
+    // Get driveId for activity logging
+    const driveId = await getPageDriveId(message.pageId, messageId);
 
     // Store original content for activity logging
     const originalContent = message.content;
@@ -85,7 +94,7 @@ export async function PATCH(
     logMessageActivity(userId, 'message_update', {
       id: messageId,
       pageId: message.pageId,
-      driveId: page?.driveId ?? null,
+      driveId,
       conversationType: 'ai_chat',
     }, actorInfo, {
       previousContent: originalContent,
@@ -148,18 +157,8 @@ export async function DELETE(
       );
     }
 
-    // Get page info for driveId (needed for activity logging)
-    const page = await db.query.pages.findFirst({
-      where: eq(pages.id, message.pageId),
-      columns: { driveId: true },
-    });
-
-    if (!page) {
-      loggers.api.warn('Page not found for message - data integrity issue', {
-        messageId: maskIdentifier(messageId),
-        pageId: maskIdentifier(message.pageId)
-      });
-    }
+    // Get driveId for activity logging
+    const driveId = await getPageDriveId(message.pageId, messageId);
 
     // Store content for audit trail before deletion
     const deletedContent = message.content;
@@ -172,7 +171,7 @@ export async function DELETE(
     logMessageActivity(userId, 'message_delete', {
       id: messageId,
       pageId: message.pageId,
-      driveId: page?.driveId ?? null,
+      driveId,
       conversationType: 'ai_chat',
     }, actorInfo, {
       previousContent: deletedContent,

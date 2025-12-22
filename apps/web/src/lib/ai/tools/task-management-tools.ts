@@ -293,13 +293,18 @@ When creating tasks:
           ]);
 
           // Log activity for AI-generated task/page creation
+          const aiContext = await getAiContextWithActor(context as ToolExecutionContext);
           logPageActivity(userId, 'create', {
             id: createdPage.id,
             title: createdPage.title,
             driveId: taskListPage.driveId,
           }, {
-            ...await getAiContextWithActor(context as ToolExecutionContext),
-            metadata: { taskId: resultTask.id, taskTitle: resultTask.title },
+            ...aiContext,
+            metadata: {
+              ...aiContext.metadata,
+              taskId: resultTask.id,
+              taskTitle: resultTask.title,
+            },
           });
 
           message = `Created task "${resultTask.title}" with linked document page`;

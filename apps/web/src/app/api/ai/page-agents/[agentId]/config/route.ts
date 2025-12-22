@@ -125,8 +125,12 @@ export async function PUT(
 
     // Capture previous and new values for changed fields
     for (const field of updatedFields) {
-      previousValues[field] = agent[field as keyof typeof agent];
-      newValues[field] = updateData[field as keyof typeof updateData];
+      if (field in agent) {
+        previousValues[field] = agent[field as keyof typeof agent];
+      }
+      if (field in updateData) {
+        newValues[field] = updateData[field as keyof typeof updateData];
+      }
     }
 
     logAgentConfigActivity(userId, {

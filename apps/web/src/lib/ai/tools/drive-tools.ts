@@ -259,12 +259,17 @@ export const driveTools = {
         );
 
         // Log activity for AI-generated drive rename
+        const aiContext = await getAiContextWithActor(context as ToolExecutionContext);
         logDriveActivity(userId, 'update', {
           id: updatedDrive.id,
           name: updatedDrive.name,
         }, {
-          ...await getAiContextWithActor(context as ToolExecutionContext),
-          metadata: { oldName: drive.name, newName: updatedDrive.name },
+          ...aiContext,
+          metadata: {
+            ...aiContext.metadata,
+            oldName: drive.name,
+            newName: updatedDrive.name,
+          },
         });
 
         return {
