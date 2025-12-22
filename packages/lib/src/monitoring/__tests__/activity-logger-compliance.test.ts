@@ -34,6 +34,8 @@ import {
   logPermissionActivity,
   logDriveActivity,
   logAgentConfigActivity,
+  logMessageActivity,
+  logRoleActivity,
   type ActivityLogInput,
 } from '../activity-logger';
 
@@ -250,6 +252,244 @@ describe('activity logger compliance', () => {
         actorDisplayName: 'John Doe',
         operation: 'agent_config_update',
         resourceType: 'agent',
+      });
+    });
+  });
+
+  describe('logMessageActivity convenience wrapper', () => {
+    it('should pass message_update operation with content tracking', async () => {
+      // Arrange & Act
+      logMessageActivity(
+        'user-123',
+        'message_update',
+        {
+          id: 'msg-1',
+          pageId: 'page-1',
+          driveId: 'drive-1',
+          conversationType: 'ai_chat',
+        },
+        { actorEmail: 'john@example.com' },
+        {
+          previousContent: 'Old text',
+          newContent: 'New text',
+        }
+      );
+
+      // Wait for async execution
+      await vi.waitFor(() => {
+        expect(capturedInsertValues).not.toBeNull();
+      });
+
+      // Assert
+      expect(capturedInsertValues).toMatchObject({
+        operation: 'message_update',
+        resourceType: 'message',
+        resourceId: 'msg-1',
+        pageId: 'page-1',
+        driveId: 'drive-1',
+        actorEmail: 'john@example.com',
+        previousValues: { content: 'Old text' },
+        newValues: { content: 'New text' },
+      });
+    });
+
+    it('should pass message_delete operation with previous content', async () => {
+      // Arrange & Act
+      logMessageActivity(
+        'user-123',
+        'message_delete',
+        {
+          id: 'msg-1',
+          pageId: 'page-1',
+          driveId: null, // Global conversations have null driveId
+          conversationType: 'global',
+        },
+        { actorEmail: 'john@example.com' },
+        {
+          previousContent: 'Deleted message text',
+        }
+      );
+
+      // Wait for async execution
+      await vi.waitFor(() => {
+        expect(capturedInsertValues).not.toBeNull();
+      });
+
+      // Assert
+      expect(capturedInsertValues).toMatchObject({
+        operation: 'message_delete',
+        resourceType: 'message',
+        driveId: null,
+        previousValues: { content: 'Deleted message text' },
+      });
+    });
+
+    it('should include conversationType in metadata', async () => {
+      // Arrange & Act
+      logMessageActivity(
+        'user-123',
+        'message_update',
+        {
+          id: 'msg-1',
+          pageId: 'page-1',
+          driveId: 'drive-1',
+          conversationType: 'channel',
+        },
+        { actorEmail: 'john@example.com' },
+        {}
+      );
+
+      // Wait for async execution
+      await vi.waitFor(() => {
+        expect(capturedInsertValues).not.toBeNull();
+      });
+
+      // Assert
+      expect(capturedInsertValues?.metadata).toMatchObject({
+        conversationType: 'channel',
+      });
+    });
+
+    it('should pass AI attribution fields when provided', async () => {
+      // Arrange & Act
+      logMessageActivity(
+        'user-123',
+        'message_update',
+        {
+          id: 'msg-1',
+          pageId: 'page-1',
+          driveId: 'drive-1',
+          conversationType: 'ai_chat',
+        },
+        { actorEmail: 'john@example.com' },
+        {
+          isAiGenerated: true,
+          aiProvider: 'openai',
+          aiModel: 'gpt-4',
+          aiConversationId: 'conv-1',
+        }
+      );
+
+      // Wait for async execution
+      await vi.waitFor(() => {
+        expect(capturedInsertValues).not.toBeNull();
+      });
+
+      // Assert
+      expect(capturedInsertValues).toMatchObject({
+        isAiGenerated: true,
+        aiProvider: 'openai',
+        aiModel: 'gpt-4',
+        aiConversationId: 'conv-1',
+      });
+    });
+
+    it('should pass actorDisplayName when provided', async () => {
+      // Arrange & Act
+      logMessageActivity(
+        'user-123',
+        'message_update',
+        {
+          id: 'msg-1',
+          pageId: 'page-1',
+          driveId: 'drive-1',
+          conversationType: 'ai_chat',
+        },
+        { actorEmail: 'john@example.com', actorDisplayName: 'John Doe' },
+        {}
+      );
+
+      // Wait for async execution
+      await vi.waitFor(() => {
+        expect(capturedInsertValues).not.toBeNull();
+      });
+
+      // Assert
+      expect(capturedInsertValues).toMatchObject({
+        actorEmail: 'john@example.com',
+        actorDisplayName: 'John Doe',
+      });
+    });
+  });
+
+  describe('logRoleActivity convenience wrapper', () => {
+    it('should pass role_reorder with previous and new order', async () => {
+      // Arrange & Act
+      logRoleActivity(
+        'user-123',
+        'role_reorder',
+        {
+          driveId: 'drive-1',
+          driveName: 'Test Drive',
+          previousOrder: ['role-1', 'role-2', 'role-3'],
+          newOrder: ['role-3', 'role-1', 'role-2'],
+        },
+        { actorEmail: 'john@example.com' }
+      );
+
+      // Wait for async execution
+      await vi.waitFor(() => {
+        expect(capturedInsertValues).not.toBeNull();
+      });
+
+      // Assert
+      expect(capturedInsertValues).toMatchObject({
+        operation: 'role_reorder',
+        resourceType: 'role',
+        driveId: 'drive-1',
+        actorEmail: 'john@example.com',
+        previousValues: { order: ['role-1', 'role-2', 'role-3'] },
+        newValues: { order: ['role-3', 'role-1', 'role-2'] },
+      });
+    });
+
+    it('should include driveName in metadata for role_reorder', async () => {
+      // Arrange & Act
+      logRoleActivity(
+        'user-123',
+        'role_reorder',
+        {
+          driveId: 'drive-1',
+          driveName: 'Test Drive',
+          previousOrder: ['role-1'],
+          newOrder: ['role-1'],
+        },
+        { actorEmail: 'john@example.com' }
+      );
+
+      // Wait for async execution
+      await vi.waitFor(() => {
+        expect(capturedInsertValues).not.toBeNull();
+      });
+
+      // Assert
+      expect(capturedInsertValues?.metadata).toMatchObject({
+        driveName: 'Test Drive',
+      });
+    });
+
+    it('should use driveId as resourceId for role_reorder', async () => {
+      // Arrange & Act
+      logRoleActivity(
+        'user-123',
+        'role_reorder',
+        {
+          driveId: 'drive-1',
+          driveName: 'Test Drive',
+          previousOrder: ['role-1'],
+          newOrder: ['role-1'],
+        },
+        { actorEmail: 'john@example.com' }
+      );
+
+      // Wait for async execution
+      await vi.waitFor(() => {
+        expect(capturedInsertValues).not.toBeNull();
+      });
+
+      // Assert - for reorder, resourceId is the driveId since it affects multiple roles
+      expect(capturedInsertValues).toMatchObject({
+        resourceId: 'drive-1',
       });
     });
   });

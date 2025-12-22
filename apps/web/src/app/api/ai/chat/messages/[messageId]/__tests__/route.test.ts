@@ -43,7 +43,28 @@ vi.mock('@/lib/logging/mask', () => ({
   maskIdentifier: vi.fn((id: string) => `***${id.slice(-4)}`),
 }));
 
+// Mock activity logger (boundary)
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+  getActorInfo: vi.fn(),
+  logMessageActivity: vi.fn(),
+}));
+
+// Mock database for page lookup (boundary)
+vi.mock('@pagespace/db', () => ({
+  db: {
+    query: {
+      pages: {
+        findFirst: vi.fn(),
+      },
+    },
+  },
+  pages: {},
+  eq: vi.fn(),
+}));
+
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
+import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { db } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserEditPage, loggers } from '@pagespace/lib/server';
 
@@ -111,6 +132,15 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
 
     // Default: update succeeds
     vi.mocked(chatMessageRepository.updateMessageContent).mockResolvedValue(undefined);
+
+    // Default: page lookup for driveId
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive_123' });
+
+    // Default: actor info for activity logging
+    vi.mocked(getActorInfo).mockResolvedValue({
+      actorEmail: 'test@example.com',
+      actorDisplayName: 'Test User',
+    });
   });
 
   describe('authentication', () => {
@@ -283,6 +313,98 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
       expect(loggers.api.error).toHaveBeenCalled();
     });
   });
+
+  describe('activity logging boundary', () => {
+    it('should log message_update with content diff on successful PATCH', async () => {
+      const existingMessage = mockChatMessage({ content: 'Original content' });
+      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(existingMessage);
+
+      const request = createPatchRequest(mockMessageId, { content: 'Updated content' });
+      const context = createContext(mockMessageId);
+
+      await PATCH(request, context);
+
+      expect(logMessageActivity).toHaveBeenCalledWith(
+        mockUserId,
+        'message_update',
+        expect.objectContaining({
+          id: mockMessageId,
+          pageId: mockPageId,
+          driveId: 'drive_123',
+          conversationType: 'ai_chat',
+        }),
+        expect.objectContaining({
+          actorEmail: 'test@example.com',
+        }),
+        expect.objectContaining({
+          previousContent: 'Original content',
+          newContent: 'Updated content',
+        })
+      );
+    });
+
+    it('should call getActorInfo with userId', async () => {
+      const request = createPatchRequest(mockMessageId, { content: 'Updated' });
+      const context = createContext(mockMessageId);
+
+      await PATCH(request, context);
+
+      expect(getActorInfo).toHaveBeenCalledWith(mockUserId);
+    });
+
+    it('should NOT log activity when authentication fails', async () => {
+      vi.mocked(isAuthError).mockReturnValue(true);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
+
+      const request = createPatchRequest(mockMessageId, { content: 'Updated' });
+      const context = createContext(mockMessageId);
+
+      await PATCH(request, context);
+
+      expect(logMessageActivity).not.toHaveBeenCalled();
+    });
+
+    it('should NOT log activity when message not found', async () => {
+      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(null);
+
+      const request = createPatchRequest(mockMessageId, { content: 'Updated' });
+      const context = createContext(mockMessageId);
+
+      await PATCH(request, context);
+
+      expect(logMessageActivity).not.toHaveBeenCalled();
+    });
+
+    it('should NOT log activity when permission denied', async () => {
+      vi.mocked(canUserEditPage).mockResolvedValue(false);
+
+      const request = createPatchRequest(mockMessageId, { content: 'Updated' });
+      const context = createContext(mockMessageId);
+
+      await PATCH(request, context);
+
+      expect(logMessageActivity).not.toHaveBeenCalled();
+    });
+
+    it('should handle null driveId when page not found', async () => {
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(null);
+
+      const request = createPatchRequest(mockMessageId, { content: 'Updated' });
+      const context = createContext(mockMessageId);
+
+      await PATCH(request, context);
+
+      expect(logMessageActivity).toHaveBeenCalledWith(
+        mockUserId,
+        'message_update',
+        expect.objectContaining({
+          driveId: null,
+        }),
+        expect.any(Object),
+        expect.any(Object)
+      );
+    });
+  });
 });
 
 describe('DELETE /api/ai/chat/messages/[messageId]', () => {
@@ -306,6 +428,15 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
 
     // Default: delete succeeds
     vi.mocked(chatMessageRepository.softDeleteMessage).mockResolvedValue(undefined);
+
+    // Default: page lookup for driveId
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive_123' });
+
+    // Default: actor info for activity logging
+    vi.mocked(getActorInfo).mockResolvedValue({
+      actorEmail: 'test@example.com',
+      actorDisplayName: 'Test User',
+    });
   });
 
   describe('authentication', () => {
@@ -416,6 +547,97 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to delete message');
       expect(loggers.api.error).toHaveBeenCalled();
+    });
+  });
+
+  describe('activity logging boundary', () => {
+    it('should log message_delete with previous content on successful DELETE', async () => {
+      const existingMessage = mockChatMessage({ content: 'Content to be deleted' });
+      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(existingMessage);
+
+      const request = createDeleteRequest(mockMessageId);
+      const context = createContext(mockMessageId);
+
+      await DELETE(request, context);
+
+      expect(logMessageActivity).toHaveBeenCalledWith(
+        mockUserId,
+        'message_delete',
+        expect.objectContaining({
+          id: mockMessageId,
+          pageId: mockPageId,
+          driveId: 'drive_123',
+          conversationType: 'ai_chat',
+        }),
+        expect.objectContaining({
+          actorEmail: 'test@example.com',
+        }),
+        expect.objectContaining({
+          previousContent: 'Content to be deleted',
+        })
+      );
+    });
+
+    it('should call getActorInfo with userId', async () => {
+      const request = createDeleteRequest(mockMessageId);
+      const context = createContext(mockMessageId);
+
+      await DELETE(request, context);
+
+      expect(getActorInfo).toHaveBeenCalledWith(mockUserId);
+    });
+
+    it('should NOT log activity when authentication fails', async () => {
+      vi.mocked(isAuthError).mockReturnValue(true);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
+
+      const request = createDeleteRequest(mockMessageId);
+      const context = createContext(mockMessageId);
+
+      await DELETE(request, context);
+
+      expect(logMessageActivity).not.toHaveBeenCalled();
+    });
+
+    it('should NOT log activity when message not found', async () => {
+      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(null);
+
+      const request = createDeleteRequest(mockMessageId);
+      const context = createContext(mockMessageId);
+
+      await DELETE(request, context);
+
+      expect(logMessageActivity).not.toHaveBeenCalled();
+    });
+
+    it('should NOT log activity when permission denied', async () => {
+      vi.mocked(canUserEditPage).mockResolvedValue(false);
+
+      const request = createDeleteRequest(mockMessageId);
+      const context = createContext(mockMessageId);
+
+      await DELETE(request, context);
+
+      expect(logMessageActivity).not.toHaveBeenCalled();
+    });
+
+    it('should handle null driveId when page not found', async () => {
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(null);
+
+      const request = createDeleteRequest(mockMessageId);
+      const context = createContext(mockMessageId);
+
+      await DELETE(request, context);
+
+      expect(logMessageActivity).toHaveBeenCalledWith(
+        mockUserId,
+        'message_delete',
+        expect.objectContaining({
+          driveId: null,
+        }),
+        expect.any(Object),
+        expect.any(Object)
+      );
     });
   });
 });

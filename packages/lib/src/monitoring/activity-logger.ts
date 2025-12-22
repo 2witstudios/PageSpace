@@ -74,7 +74,14 @@ export type ActivityOperation =
   // Account operations
   | 'account_delete'
   | 'profile_update'
-  | 'avatar_update';
+  | 'avatar_update'
+  // Message operations (Tier 1)
+  | 'message_update'
+  | 'message_delete'
+  // Role operations (Tier 1)
+  | 'role_reorder'
+  // Drive ownership operations (Tier 1)
+  | 'ownership_transfer';
 
 export type ActivityResourceType =
   | 'page'
@@ -86,7 +93,9 @@ export type ActivityResourceType =
   | 'role'
   | 'file'
   | 'token'
-  | 'device';
+  | 'device'
+  // Message resource (Tier 1)
+  | 'message';
 
 export interface ActivityLogInput {
   userId: string;
@@ -249,7 +258,7 @@ export function logPermissionActivity(
  */
 export function logDriveActivity(
   userId: string,
-  operation: ActivityOperation,
+  operation: 'create' | 'update' | 'delete' | 'restore' | 'trash' | 'ownership_transfer',
   drive: {
     id: string;
     name?: string;
@@ -262,6 +271,9 @@ export function logDriveActivity(
     aiModel?: string;
     aiConversationId?: string;
     metadata?: Record<string, unknown>;
+    // For ownership_transfer
+    previousValues?: { ownerId?: string };
+    newValues?: { ownerId?: string };
   }
 ): void {
   logActivity({
@@ -277,6 +289,8 @@ export function logDriveActivity(
     aiProvider: options?.aiProvider,
     aiModel: options?.aiModel,
     aiConversationId: options?.aiConversationId,
+    previousValues: options?.previousValues,
+    newValues: options?.newValues,
     metadata: options?.metadata,
   }).catch(() => {
     // Silent fail - already logged in logActivity
@@ -302,6 +316,7 @@ export function logAgentConfigActivity(
     aiProvider?: string;
     aiModel?: string;
     aiConversationId?: string;
+    metadata?: Record<string, unknown>; // For agent chain tracking
   },
   options?: {
     actorEmail?: string;
@@ -325,6 +340,7 @@ export function logAgentConfigActivity(
     updatedFields: changes.updatedFields,
     previousValues: changes.previousValues,
     newValues: changes.newValues,
+    metadata: changes.metadata,
   }).catch(() => {
     // Silent fail - already logged in logActivity
   });
@@ -377,32 +393,49 @@ export function logMemberActivity(
  */
 export function logRoleActivity(
   userId: string,
-  operation: 'create' | 'update' | 'delete',
+  operation: 'create' | 'update' | 'delete' | 'role_reorder',
   data: {
-    roleId: string;
+    roleId?: string; // Optional for reorder (affects multiple roles)
     roleName?: string;
     driveId: string;
+    driveName?: string;
     permissions?: Record<string, boolean>;
     previousPermissions?: Record<string, boolean>;
+    // For reorder operations
+    previousOrder?: string[];
+    newOrder?: string[];
   },
   options?: {
     actorEmail?: string;
     actorDisplayName?: string;
   }
 ): void {
+  // Build previousValues and newValues based on operation type
+  let previousValues: Record<string, unknown> | undefined;
+  let newValues: Record<string, unknown> | undefined;
+
+  if (operation === 'role_reorder') {
+    previousValues = data.previousOrder ? { order: data.previousOrder } : undefined;
+    newValues = data.newOrder ? { order: data.newOrder } : undefined;
+  } else {
+    previousValues = data.previousPermissions
+      ? { permissions: data.previousPermissions }
+      : undefined;
+    newValues = data.permissions ? { permissions: data.permissions } : undefined;
+  }
+
   logActivity({
     userId,
     actorEmail: options?.actorEmail ?? 'unknown@system',
     actorDisplayName: options?.actorDisplayName,
     operation,
     resourceType: 'role',
-    resourceId: data.roleId,
-    resourceTitle: data.roleName,
+    resourceId: data.roleId ?? data.driveId, // Use driveId as resourceId for reorder
+    resourceTitle: data.roleName ?? data.driveName,
     driveId: data.driveId,
-    previousValues: data.previousPermissions
-      ? { permissions: data.previousPermissions }
-      : undefined,
-    newValues: data.permissions ? { permissions: data.permissions } : undefined,
+    previousValues,
+    newValues,
+    metadata: operation === 'role_reorder' ? { driveName: data.driveName } : undefined,
   }).catch(() => {
     // Silent fail - already logged in logActivity
   });
@@ -532,6 +565,52 @@ export function logFileActivity(
     metadata: {
       fileType: data.fileType,
       fileSize: data.fileSize,
+    },
+  }).catch(() => {
+    // Silent fail - already logged in logActivity
+  });
+}
+
+/**
+ * Convenience wrapper for message operations (edit/delete in shared chats).
+ * Fire-and-forget - call without await.
+ */
+export function logMessageActivity(
+  userId: string,
+  operation: 'message_update' | 'message_delete',
+  message: {
+    id: string;
+    pageId: string;
+    driveId: string | null; // null for user-level conversations (global assistant)
+    conversationType: 'ai_chat' | 'global' | 'channel';
+  },
+  actorInfo: ActorInfo,
+  options?: {
+    previousContent?: string;
+    newContent?: string;
+    isAiGenerated?: boolean;
+    aiProvider?: string;
+    aiModel?: string;
+    aiConversationId?: string;
+  }
+): void {
+  logActivity({
+    userId,
+    actorEmail: actorInfo.actorEmail,
+    actorDisplayName: actorInfo.actorDisplayName,
+    operation,
+    resourceType: 'message',
+    resourceId: message.id,
+    driveId: message.driveId,
+    pageId: message.pageId,
+    previousValues: options?.previousContent ? { content: options.previousContent } : undefined,
+    newValues: options?.newContent ? { content: options.newContent } : undefined,
+    isAiGenerated: options?.isAiGenerated ?? false,
+    aiProvider: options?.aiProvider,
+    aiModel: options?.aiModel,
+    aiConversationId: options?.aiConversationId,
+    metadata: {
+      conversationType: message.conversationType,
     },
   }).catch(() => {
     // Silent fail - already logged in logActivity

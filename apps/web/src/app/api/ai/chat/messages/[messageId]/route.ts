@@ -7,8 +7,29 @@ import {
   chatMessageRepository,
   processMessageContentUpdate,
 } from '@/lib/repositories/chat-message-repository';
+import { db, pages, eq } from '@pagespace/db';
+import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
+
+/**
+ * Helper to get driveId from a page for activity logging
+ */
+async function getPageDriveId(pageId: string, messageId: string): Promise<string | null> {
+  const page = await db.query.pages.findFirst({
+    where: eq(pages.id, pageId),
+    columns: { driveId: true },
+  });
+
+  if (!page) {
+    loggers.api.warn('Page not found for message - data integrity issue', {
+      messageId: maskIdentifier(messageId),
+      pageId: maskIdentifier(pageId)
+    });
+  }
+
+  return page?.driveId ?? null;
+}
 
 /**
  * PATCH - Edit message content
@@ -56,11 +77,36 @@ export async function PATCH(
       );
     }
 
+    // Get driveId for activity logging
+    const driveId = await getPageDriveId(message.pageId, messageId);
+
+    // Store original content for activity logging
+    const originalContent = message.content;
+
     // Process content, preserving structured format if present
     const updatedContent = processMessageContentUpdate(message.content, content);
 
     // Update the message content and set editedAt
     await chatMessageRepository.updateMessageContent(messageId, updatedContent);
+
+    // Log activity for audit trail (non-blocking)
+    try {
+      const actorInfo = await getActorInfo(userId);
+      logMessageActivity(userId, 'message_update', {
+        id: messageId,
+        pageId: message.pageId,
+        driveId,
+        conversationType: 'ai_chat',
+      }, actorInfo, {
+        previousContent: originalContent,
+        newContent: updatedContent,
+      });
+    } catch (loggingError) {
+      loggers.api.error('Failed to log message update activity', loggingError as Error, {
+        messageId: maskIdentifier(messageId),
+        pageId: maskIdentifier(message.pageId)
+      });
+    }
 
     loggers.api.info('Message edited successfully', {
       userId: maskIdentifier(userId),
@@ -118,8 +164,32 @@ export async function DELETE(
       );
     }
 
+    // Get driveId for activity logging
+    const driveId = await getPageDriveId(message.pageId, messageId);
+
+    // Store content for audit trail before deletion
+    const deletedContent = message.content;
+
     // Soft delete the message
     await chatMessageRepository.softDeleteMessage(messageId);
+
+    // Log activity for audit trail (non-blocking)
+    try {
+      const actorInfo = await getActorInfo(userId);
+      logMessageActivity(userId, 'message_delete', {
+        id: messageId,
+        pageId: message.pageId,
+        driveId,
+        conversationType: 'ai_chat',
+      }, actorInfo, {
+        previousContent: deletedContent,
+      });
+    } catch (loggingError) {
+      loggers.api.error('Failed to log message deletion activity', loggingError as Error, {
+        messageId: maskIdentifier(messageId),
+        pageId: maskIdentifier(message.pageId)
+      });
+    }
 
     loggers.api.info('Message deleted successfully', {
       userId: maskIdentifier(userId),

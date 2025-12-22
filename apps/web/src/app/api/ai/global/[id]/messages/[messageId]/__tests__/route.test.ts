@@ -47,7 +47,14 @@ vi.mock('@/lib/logging/mask', () => ({
   maskIdentifier: vi.fn((id: string) => `***${id.slice(-4)}`),
 }));
 
+// Mock activity logger (boundary)
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+  getActorInfo: vi.fn(),
+  logMessageActivity: vi.fn(),
+}));
+
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
+import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 
@@ -131,6 +138,12 @@ describe('PATCH /api/ai/global/[id]/messages/[messageId]', () => {
 
     // Default: update succeeds
     vi.mocked(globalConversationRepository.updateMessageContent).mockResolvedValue(undefined);
+
+    // Default: actor info for activity logging
+    vi.mocked(getActorInfo).mockResolvedValue({
+      actorEmail: 'test@example.com',
+      actorDisplayName: 'Test User',
+    });
   });
 
   describe('authentication', () => {
@@ -262,6 +275,80 @@ describe('PATCH /api/ai/global/[id]/messages/[messageId]', () => {
       expect(loggers.api.error).toHaveBeenCalled();
     });
   });
+
+  describe('activity logging boundary', () => {
+    it('should log message_update with null driveId for global conversations', async () => {
+      const existingMessage = mockMessage({ content: 'Original content' });
+      vi.mocked(globalConversationRepository.getMessageById).mockResolvedValue(existingMessage);
+
+      const request = createPatchRequest(mockConversationId, mockMessageId, { content: 'Updated content' });
+      const context = createContext(mockConversationId, mockMessageId);
+
+      await PATCH(request, context);
+
+      expect(logMessageActivity).toHaveBeenCalledWith(
+        mockUserId,
+        'message_update',
+        expect.objectContaining({
+          id: mockMessageId,
+          pageId: mockConversationId,
+          driveId: null,
+          conversationType: 'global',
+        }),
+        expect.objectContaining({
+          actorEmail: 'test@example.com',
+        }),
+        expect.objectContaining({
+          previousContent: 'Original content',
+          newContent: 'Updated content',
+          aiConversationId: mockConversationId,
+        })
+      );
+    });
+
+    it('should call getActorInfo with userId', async () => {
+      const request = createPatchRequest(mockConversationId, mockMessageId, { content: 'Updated' });
+      const context = createContext(mockConversationId, mockMessageId);
+
+      await PATCH(request, context);
+
+      expect(getActorInfo).toHaveBeenCalledWith(mockUserId);
+    });
+
+    it('should NOT log activity when authentication fails', async () => {
+      vi.mocked(isAuthError).mockReturnValue(true);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
+
+      const request = createPatchRequest(mockConversationId, mockMessageId, { content: 'Updated' });
+      const context = createContext(mockConversationId, mockMessageId);
+
+      await PATCH(request, context);
+
+      expect(logMessageActivity).not.toHaveBeenCalled();
+    });
+
+    it('should NOT log activity when conversation not found', async () => {
+      vi.mocked(globalConversationRepository.getConversationById).mockResolvedValue(null);
+
+      const request = createPatchRequest(mockConversationId, mockMessageId, { content: 'Updated' });
+      const context = createContext(mockConversationId, mockMessageId);
+
+      await PATCH(request, context);
+
+      expect(logMessageActivity).not.toHaveBeenCalled();
+    });
+
+    it('should NOT log activity when message not found', async () => {
+      vi.mocked(globalConversationRepository.getMessageById).mockResolvedValue(null);
+
+      const request = createPatchRequest(mockConversationId, mockMessageId, { content: 'Updated' });
+      const context = createContext(mockConversationId, mockMessageId);
+
+      await PATCH(request, context);
+
+      expect(logMessageActivity).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('DELETE /api/ai/global/[id]/messages/[messageId]', () => {
@@ -282,6 +369,12 @@ describe('DELETE /api/ai/global/[id]/messages/[messageId]', () => {
 
     // Default: delete succeeds
     vi.mocked(globalConversationRepository.softDeleteMessage).mockResolvedValue(undefined);
+
+    // Default: actor info for activity logging
+    vi.mocked(getActorInfo).mockResolvedValue({
+      actorEmail: 'test@example.com',
+      actorDisplayName: 'Test User',
+    });
   });
 
   describe('authentication', () => {
@@ -376,6 +469,79 @@ describe('DELETE /api/ai/global/[id]/messages/[messageId]', () => {
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to delete message');
       expect(loggers.api.error).toHaveBeenCalled();
+    });
+  });
+
+  describe('activity logging boundary', () => {
+    it('should log message_delete with previous content for global conversations', async () => {
+      const existingMessage = mockMessage({ content: 'Content to be deleted' });
+      vi.mocked(globalConversationRepository.getMessageById).mockResolvedValue(existingMessage);
+
+      const request = createDeleteRequest(mockConversationId, mockMessageId);
+      const context = createContext(mockConversationId, mockMessageId);
+
+      await DELETE(request, context);
+
+      expect(logMessageActivity).toHaveBeenCalledWith(
+        mockUserId,
+        'message_delete',
+        expect.objectContaining({
+          id: mockMessageId,
+          pageId: mockConversationId,
+          driveId: null,
+          conversationType: 'global',
+        }),
+        expect.objectContaining({
+          actorEmail: 'test@example.com',
+        }),
+        expect.objectContaining({
+          previousContent: 'Content to be deleted',
+          aiConversationId: mockConversationId,
+        })
+      );
+    });
+
+    it('should call getActorInfo with userId', async () => {
+      const request = createDeleteRequest(mockConversationId, mockMessageId);
+      const context = createContext(mockConversationId, mockMessageId);
+
+      await DELETE(request, context);
+
+      expect(getActorInfo).toHaveBeenCalledWith(mockUserId);
+    });
+
+    it('should NOT log activity when authentication fails', async () => {
+      vi.mocked(isAuthError).mockReturnValue(true);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
+
+      const request = createDeleteRequest(mockConversationId, mockMessageId);
+      const context = createContext(mockConversationId, mockMessageId);
+
+      await DELETE(request, context);
+
+      expect(logMessageActivity).not.toHaveBeenCalled();
+    });
+
+    it('should NOT log activity when conversation not found', async () => {
+      vi.mocked(globalConversationRepository.getConversationById).mockResolvedValue(null);
+
+      const request = createDeleteRequest(mockConversationId, mockMessageId);
+      const context = createContext(mockConversationId, mockMessageId);
+
+      await DELETE(request, context);
+
+      expect(logMessageActivity).not.toHaveBeenCalled();
+    });
+
+    it('should NOT log activity when message not found', async () => {
+      vi.mocked(globalConversationRepository.getMessageById).mockResolvedValue(null);
+
+      const request = createDeleteRequest(mockConversationId, mockMessageId);
+      const context = createContext(mockConversationId, mockMessageId);
+
+      await DELETE(request, context);
+
+      expect(logMessageActivity).not.toHaveBeenCalled();
     });
   });
 });

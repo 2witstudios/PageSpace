@@ -120,6 +120,13 @@ export const agentTools = {
         // Log activity for AI-generated agent config update
         const ctx = context as ToolExecutionContext;
         const actorInfo = await getActorInfo(userId);
+        // Build chain metadata (Tier 1)
+        const chainMetadata = {
+          ...(ctx?.parentAgentId && { parentAgentId: ctx.parentAgentId }),
+          ...(ctx?.parentConversationId && { parentConversationId: ctx.parentConversationId }),
+          ...(ctx?.agentChain?.length && { agentChain: ctx.agentChain }),
+          ...(ctx?.requestOrigin && { requestOrigin: ctx.requestOrigin }),
+        };
         logAgentConfigActivity(userId, {
           id: agent.id,
           name: agent.title,
@@ -130,6 +137,7 @@ export const agentTools = {
           aiProvider: ctx?.aiProvider,
           aiModel: ctx?.aiModel,
           aiConversationId: ctx?.conversationId,
+          metadata: Object.keys(chainMetadata).length > 0 ? chainMetadata : undefined,
         }, actorInfo);
 
         return {

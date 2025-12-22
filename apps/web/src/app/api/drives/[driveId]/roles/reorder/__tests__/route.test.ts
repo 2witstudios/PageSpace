@@ -20,11 +20,36 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
+// Mock activity logger (boundary)
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+  getActorInfo: vi.fn(),
+  logRoleActivity: vi.fn(),
+}));
+
+// Mock database for previous order query
+const { mockOrderBy, mockWhere, mockFrom, mockSelect } = vi.hoisted(() => {
+  const mockOrderBy = vi.fn();
+  const mockWhere = vi.fn().mockReturnValue({ orderBy: mockOrderBy });
+  const mockFrom = vi.fn().mockReturnValue({ where: mockWhere });
+  const mockSelect = vi.fn().mockReturnValue({ from: mockFrom });
+  return { mockOrderBy, mockWhere, mockFrom, mockSelect };
+});
+
+vi.mock('@pagespace/db', () => ({
+  db: {
+    select: mockSelect,
+  },
+  driveRoles: {},
+  eq: vi.fn(),
+  asc: vi.fn(),
+}));
+
 import {
   checkDriveAccessForRoles,
   reorderDriveRoles,
 } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 // ============================================================================
 // Test Fixtures
@@ -72,6 +97,24 @@ describe('PATCH /api/drives/[driveId]/roles/reorder', () => {
     vi.resetAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
+
+    // Re-setup the chained mock after resetAllMocks
+    mockSelect.mockReturnValue({ from: mockFrom });
+    mockFrom.mockReturnValue({ where: mockWhere });
+    mockWhere.mockReturnValue({ orderBy: mockOrderBy });
+
+    // Default: previous order query returns roles
+    mockOrderBy.mockResolvedValue([
+      { id: 'role_1' },
+      { id: 'role_2' },
+      { id: 'role_3' },
+    ]);
+
+    // Default: actor info for activity logging
+    vi.mocked(getActorInfo).mockResolvedValue({
+      actorEmail: 'test@example.com',
+      actorDisplayName: 'Test User',
+    });
   });
 
   describe('authentication', () => {
@@ -282,6 +325,109 @@ describe('PATCH /api/drives/[driveId]/roles/reorder', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to reorder roles');
+    });
+  });
+
+  describe('activity logging boundary', () => {
+    it('should log role_reorder with previous and new order on success', async () => {
+      vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test Drive' }),
+      }));
+      vi.mocked(reorderDriveRoles).mockResolvedValue(undefined);
+
+      const newOrder = ['role_3', 'role_1', 'role_2'];
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/reorder`, {
+        method: 'PATCH',
+        body: JSON.stringify({ roleIds: newOrder }),
+      });
+      await PATCH(request, createContext(mockDriveId));
+
+      expect(logRoleActivity).toHaveBeenCalledWith(
+        mockUserId,
+        'role_reorder',
+        expect.objectContaining({
+          driveId: mockDriveId,
+          driveName: 'Test Drive',
+          previousOrder: ['role_1', 'role_2', 'role_3'],
+          newOrder: newOrder,
+        }),
+        expect.objectContaining({
+          actorEmail: 'test@example.com',
+        })
+      );
+    });
+
+    it('should call getActorInfo with userId', async () => {
+      vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+      }));
+      vi.mocked(reorderDriveRoles).mockResolvedValue(undefined);
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/reorder`, {
+        method: 'PATCH',
+        body: JSON.stringify({ roleIds: ['role_1'] }),
+      });
+      await PATCH(request, createContext(mockDriveId));
+
+      expect(getActorInfo).toHaveBeenCalledWith(mockUserId);
+    });
+
+    it('should NOT log activity when authentication fails', async () => {
+      vi.mocked(isAuthError).mockReturnValue(true);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/reorder`, {
+        method: 'PATCH',
+        body: JSON.stringify({ roleIds: ['role_1'] }),
+      });
+      await PATCH(request, createContext(mockDriveId));
+
+      expect(logRoleActivity).not.toHaveBeenCalled();
+    });
+
+    it('should NOT log activity when drive not found', async () => {
+      vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({ drive: null }));
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/reorder`, {
+        method: 'PATCH',
+        body: JSON.stringify({ roleIds: ['role_1'] }),
+      });
+      await PATCH(request, createContext(mockDriveId));
+
+      expect(logRoleActivity).not.toHaveBeenCalled();
+    });
+
+    it('should NOT log activity when user lacks permission', async () => {
+      vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({
+        isOwner: false,
+        isAdmin: false,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+      }));
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/reorder`, {
+        method: 'PATCH',
+        body: JSON.stringify({ roleIds: ['role_1'] }),
+      });
+      await PATCH(request, createContext(mockDriveId));
+
+      expect(logRoleActivity).not.toHaveBeenCalled();
+    });
+
+    it('should NOT log activity when roleIds validation fails', async () => {
+      vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+      }));
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/reorder`, {
+        method: 'PATCH',
+        body: JSON.stringify({ roleIds: 'not-an-array' }),
+      });
+      await PATCH(request, createContext(mockDriveId));
+
+      expect(logRoleActivity).not.toHaveBeenCalled();
     });
   });
 });

@@ -169,6 +169,13 @@
       "when": 1766377348836,
       "tag": "0023_big_vulcan",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1766426065093,
+      "tag": "0024_nebulous_forge",
+      "breakpoints": true
     }
   ]
 }

@@ -39,9 +39,16 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
+// Mock activity logger (boundary)
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+  getActorInfo: vi.fn(),
+  logDriveActivity: vi.fn(),
+}));
+
 import { db } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 // Helper to create mock WebAuthResult
 const mockWebAuth = (userId: string, tokenVersion = 0): WebAuthResult => ({
@@ -135,6 +142,12 @@ describe('POST /api/account/handle-drive', () => {
     // Setup default database operations
     setupUpdateMock();
     setupDeleteMock();
+
+    // Setup default actor info for activity logging
+    vi.mocked(getActorInfo).mockResolvedValue({
+      actorEmail: 'test@example.com',
+      actorDisplayName: 'Test User',
+    });
   });
 
   describe('validation', () => {
@@ -414,6 +427,141 @@ describe('POST /api/account/handle-drive', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to handle drive');
+    });
+  });
+
+  describe('activity logging boundary', () => {
+    it('should log ownership_transfer with previous and new ownerId on successful transfer', async () => {
+      setupUpdateMock();
+
+      const request = new Request('https://example.com/api/account/handle-drive', {
+        method: 'POST',
+        body: JSON.stringify({
+          driveId: mockDriveId,
+          action: 'transfer',
+          newOwnerId: mockNewOwnerId,
+        }),
+      });
+
+      await POST(request);
+
+      expect(logDriveActivity).toHaveBeenCalledWith(
+        mockUserId,
+        'ownership_transfer',
+        expect.objectContaining({
+          id: mockDriveId,
+          name: 'Test Drive',
+        }),
+        expect.objectContaining({
+          actorEmail: 'test@example.com',
+          previousValues: { ownerId: mockUserId },
+          newValues: { ownerId: mockNewOwnerId },
+        })
+      );
+    });
+
+    it('should call getActorInfo with userId on transfer', async () => {
+      setupUpdateMock();
+
+      const request = new Request('https://example.com/api/account/handle-drive', {
+        method: 'POST',
+        body: JSON.stringify({
+          driveId: mockDriveId,
+          action: 'transfer',
+          newOwnerId: mockNewOwnerId,
+        }),
+      });
+
+      await POST(request);
+
+      expect(getActorInfo).toHaveBeenCalledWith(mockUserId);
+    });
+
+    it('should NOT log activity when authentication fails', async () => {
+      vi.mocked(isAuthError).mockReturnValue(true);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
+
+      const request = new Request('https://example.com/api/account/handle-drive', {
+        method: 'POST',
+        body: JSON.stringify({
+          driveId: mockDriveId,
+          action: 'transfer',
+          newOwnerId: mockNewOwnerId,
+        }),
+      });
+
+      await POST(request);
+
+      expect(logDriveActivity).not.toHaveBeenCalled();
+    });
+
+    it('should NOT log activity when drive not found', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue(undefined);
+
+      const request = new Request('https://example.com/api/account/handle-drive', {
+        method: 'POST',
+        body: JSON.stringify({
+          driveId: mockDriveId,
+          action: 'transfer',
+          newOwnerId: mockNewOwnerId,
+        }),
+      });
+
+      await POST(request);
+
+      expect(logDriveActivity).not.toHaveBeenCalled();
+    });
+
+    it('should NOT log activity when user is not drive owner', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue(
+        mockDrive({ id: mockDriveId, name: 'Test Drive', ownerId: 'different_user' })
+      );
+
+      const request = new Request('https://example.com/api/account/handle-drive', {
+        method: 'POST',
+        body: JSON.stringify({
+          driveId: mockDriveId,
+          action: 'transfer',
+          newOwnerId: mockNewOwnerId,
+        }),
+      });
+
+      await POST(request);
+
+      expect(logDriveActivity).not.toHaveBeenCalled();
+    });
+
+    it('should NOT log activity when new owner is not admin', async () => {
+      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined);
+
+      const request = new Request('https://example.com/api/account/handle-drive', {
+        method: 'POST',
+        body: JSON.stringify({
+          driveId: mockDriveId,
+          action: 'transfer',
+          newOwnerId: mockNewOwnerId,
+        }),
+      });
+
+      await POST(request);
+
+      expect(logDriveActivity).not.toHaveBeenCalled();
+    });
+
+    it('should NOT log activity for delete action', async () => {
+      setupDeleteMock();
+
+      const request = new Request('https://example.com/api/account/handle-drive', {
+        method: 'POST',
+        body: JSON.stringify({
+          driveId: mockDriveId,
+          action: 'delete',
+        }),
+      });
+
+      await POST(request);
+
+      expect(logDriveActivity).not.toHaveBeenCalled();
     });
   });
 });
