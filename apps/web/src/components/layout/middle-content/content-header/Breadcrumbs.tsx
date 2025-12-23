@@ -1,13 +1,14 @@
 "use client";
 
 import { useBreadcrumbs } from "@/hooks/useBreadcrumbs";
-import { usePageStore } from "@/hooks/usePage";
+import { useParams } from "next/navigation";
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import { useMobile } from "@/hooks/useMobile";
 
 export function Breadcrumbs() {
-  const pageId = usePageStore((state) => state.pageId);
+  const params = useParams();
+  const pageId = params.pageId as string | undefined;
   const { breadcrumbs, isLoading } = useBreadcrumbs(pageId || null);
   const isMobile = useMobile();
 

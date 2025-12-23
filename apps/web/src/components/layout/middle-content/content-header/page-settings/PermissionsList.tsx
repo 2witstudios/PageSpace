@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { usePageStore } from '@/hooks/usePage';
+import { useParams } from 'next/navigation';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
@@ -35,7 +35,8 @@ type PermissionsData = {
 };
 
 export function PermissionsList() {
-  const pageId = usePageStore((state) => state.pageId);
+  const params = useParams();
+  const pageId = params.pageId as string | undefined;
   const [data, setData] = useState<PermissionsData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [updatingPermissions, setUpdatingPermissions] = useState<Set<string>>(new Set());

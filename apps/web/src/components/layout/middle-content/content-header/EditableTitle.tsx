@@ -3,7 +3,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useSWRConfig } from 'swr';
 import { findNodeAndParent } from '@/lib/tree/tree-utils';
-import { usePageStore } from '@/hooks/usePage';
 import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
 import { usePageTree } from '@/hooks/usePageTree';
@@ -11,9 +10,9 @@ import { useParams } from 'next/navigation';
 import { patch } from '@/lib/auth/auth-fetch';
 
 export function EditableTitle() {
-  const pageId = usePageStore((state) => state.pageId);
   const { mutate } = useSWRConfig();
   const params = useParams();
+  const pageId = params.pageId as string | undefined;
   const driveId = params.driveId as string;
   const { tree, updateNode, isLoading } = usePageTree(driveId);
   const pageResult = pageId ? findNodeAndParent(tree, pageId) : null;

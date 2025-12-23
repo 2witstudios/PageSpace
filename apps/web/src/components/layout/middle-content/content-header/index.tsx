@@ -11,7 +11,6 @@ import { usePageTree } from '@/hooks/usePageTree';
 import { findNodeAndParent } from '@/lib/tree/tree-utils';
 import { useParams } from 'next/navigation';
 import { useDocument } from '@/hooks/useDocument';
-import { usePageStore } from '@/hooks/usePage';
 import { Button } from '@/components/ui/button';
 import { Download } from 'lucide-react';
 import { isDocumentPage, isFilePage, isSheetPage } from '@pagespace/lib/client-safe';
@@ -24,7 +23,7 @@ interface ContentHeaderProps {
 
 export function ViewHeader({ children }: ContentHeaderProps = {}) {
   const params = useParams();
-  const pageId = usePageStore((state) => state.pageId);
+  const pageId = params.pageId as string | undefined;
   const driveId = params.driveId as string;
   const { tree } = usePageTree(driveId);
   const [isDownloading, setIsDownloading] = useState(false);

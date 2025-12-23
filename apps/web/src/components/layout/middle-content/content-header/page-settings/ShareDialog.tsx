@@ -1,7 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import { usePageStore } from '@/hooks/usePage';
 import { usePageTree } from '@/hooks/usePageTree';
 import { findNodeAndParent } from '@/lib/tree/tree-utils';
 import { useParams } from 'next/navigation';
@@ -37,8 +36,8 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 export function ShareDialog() {
-  const pageId = usePageStore((state) => state.pageId);
   const params = useParams();
+  const pageId = params.pageId as string | undefined;
   const driveId = params.driveId as string;
   const { tree } = usePageTree(driveId);
   const pageResult = pageId ? findNodeAndParent(tree, pageId) : null;
