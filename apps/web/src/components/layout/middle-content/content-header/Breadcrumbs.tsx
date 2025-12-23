@@ -32,12 +32,15 @@ export function Breadcrumbs({ pageId: propPageId }: { pageId?: string | null } =
           {'drive' in crumb && crumb.drive ? (
             <Link
               href={`/dashboard/${crumb.drive.id}/${crumb.id}`}
-              className="hover:underline"
+              className="hover:underline truncate max-w-[120px] sm:max-w-[200px]"
+              title={crumb.title}
             >
               {crumb.title}
             </Link>
           ) : (
-            <span>{crumb.title}</span>
+            <span className="truncate max-w-[120px] sm:max-w-[200px]" title={crumb.title}>
+              {crumb.title}
+            </span>
           )}
         </div>
       ))}
