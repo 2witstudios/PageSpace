@@ -1,10 +1,16 @@
 import { NextResponse } from 'next/server';
+import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
-import { previewAiUndo, executeAiUndo, type UndoMode } from '@/services/api';
+import { previewAiUndo, executeAiUndo } from '@/services/api';
+
+// Request body schema for POST /undo
+const undoBodySchema = z.object({
+  mode: z.enum(['messages_only', 'messages_and_changes']),
+});
 
 const AUTH_OPTIONS_READ = { allow: ['jwt', 'mcp'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
@@ -91,15 +97,16 @@ export async function POST(
 
     const { messageId } = await context.params;
     const body = await request.json();
-    const mode: UndoMode = body.mode;
 
-    // Validate mode
-    if (!mode || !['messages_only', 'messages_and_changes'].includes(mode)) {
+    // Validate request body with Zod
+    const parseResult = undoBodySchema.safeParse(body);
+    if (!parseResult.success) {
       return NextResponse.json(
         { error: 'Invalid mode. Must be "messages_only" or "messages_and_changes"' },
         { status: 400 }
       );
     }
+    const { mode } = parseResult.data;
 
     // Get the message to check permissions
     const message = await chatMessageRepository.getMessageById(messageId);
