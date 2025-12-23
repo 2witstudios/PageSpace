@@ -161,7 +161,7 @@ export async function POST(
         {
           ...result,
           success: false,
-          message: 'Some operations could not be completed',
+          message: 'Undo failed. No changes were applied.',
         },
         { status: 500 }
       );

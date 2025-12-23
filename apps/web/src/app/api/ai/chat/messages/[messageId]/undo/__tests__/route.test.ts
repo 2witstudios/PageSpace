@@ -346,32 +346,8 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
     });
   });
 
-  // ============================================
-  // Partial failure
-  // ============================================
-
-  describe('partial failure', () => {
-    // Note: The current service implementation uses an all-or-nothing transaction,
-    // so partial success (some ops succeed, some fail) may not occur in practice.
-    // These tests validate the route handler's defensive handling of service results.
-    it('returns 207 when some operations completed', async () => {
-      (executeAiUndo as Mock).mockResolvedValue({
-        success: false,
-        messagesDeleted: 3,
-        activitiesRolledBack: 1,
-        errors: ['Failed to rollback activity_2'],
-      });
-
-      const response = await POST(createPostRequest({ mode: 'messages_and_changes' }), { params: mockParams });
-      const body = await response.json();
-
-      expect(response.status).toBe(207);
-      expect(body.success).toBe(false);
-      expect(body.messagesDeleted).toBe(3);
-      expect(body.errors).toContain('Failed to rollback activity_2');
-    });
-
-    it('returns 500 when no operations completed', async () => {
+  describe('failure', () => {
+    it('returns 500 when operations fail', async () => {
       (executeAiUndo as Mock).mockResolvedValue({
         success: false,
         messagesDeleted: 0,
@@ -384,6 +360,7 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
 
       expect(response.status).toBe(500);
       expect(body.success).toBe(false);
+      expect(body.message).toBe('Undo failed. No changes were applied.');
     });
   });
 });
