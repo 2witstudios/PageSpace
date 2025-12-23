@@ -131,8 +131,11 @@ export interface ActivityLogInput {
   newValues?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 
-  // Rollback support
+  // Rollback support - denormalized source info for audit trail preservation
   rollbackFromActivityId?: string;
+  rollbackSourceOperation?: ActivityOperation;
+  rollbackSourceTimestamp?: Date;
+  rollbackSourceTitle?: string;
 }
 
 /**
@@ -164,6 +167,9 @@ export async function logActivity(input: ActivityLogInput): Promise<void> {
       newValues: input.newValues,
       metadata: input.metadata,
       rollbackFromActivityId: input.rollbackFromActivityId,
+      rollbackSourceOperation: input.rollbackSourceOperation,
+      rollbackSourceTimestamp: input.rollbackSourceTimestamp,
+      rollbackSourceTitle: input.rollbackSourceTitle,
       isArchived: false,
     });
   } catch (error) {
@@ -655,6 +661,10 @@ export function logRollbackActivity(
     contentSnapshot?: string;
     /** Format of the content being restored */
     contentFormat?: 'text' | 'html' | 'json' | 'tiptap';
+    /** Source activity snapshot - denormalized for audit trail preservation */
+    rollbackSourceOperation?: ActivityOperation;
+    rollbackSourceTimestamp?: Date;
+    rollbackSourceTitle?: string;
     /** Additional context */
     metadata?: Record<string, unknown>;
   }
@@ -670,15 +680,17 @@ export function logRollbackActivity(
     driveId: resource.driveId,
     pageId: resource.pageId,
     contentSnapshot: options?.contentSnapshot,
+    contentFormat: options?.contentFormat,
     // previousValues = state before rollback (what we're replacing)
     previousValues: options?.replacedValues,
     // newValues = state after rollback (what we restored to)
     newValues: options?.restoredValues,
-    metadata: {
-      ...options?.metadata,
-      rollbackFromActivityId,
-      contentFormat: options?.contentFormat,
-    },
+    // Rollback tracking - top-level fields for proper DB storage
+    rollbackFromActivityId,
+    rollbackSourceOperation: options?.rollbackSourceOperation,
+    rollbackSourceTimestamp: options?.rollbackSourceTimestamp,
+    rollbackSourceTitle: options?.rollbackSourceTitle,
+    metadata: options?.metadata,
   }).catch(() => {
     // Silent fail - already logged in logActivity
   });
