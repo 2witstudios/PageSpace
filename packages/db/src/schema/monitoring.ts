@@ -450,12 +450,15 @@ export const activityLogs = pgTable('activity_logs', {
   driveId: text('driveId').references(() => drives.id, { onDelete: 'set null' }),
   pageId: text('pageId').references(() => pages.id, { onDelete: 'set null' }),
 
-  // Content snapshot for rollback support
+  // Content snapshot for rollback support - unbounded text
+  // TODO: Consider compression or external storage for very large content
   contentSnapshot: text('contentSnapshot'),
   contentFormat: contentFormatEnum('contentFormat'), // For proper content parsing during rollback
 
-  // Rollback tracking - denormalized source info for audit trail preservation (survives retention deletion)
-  rollbackFromActivityId: text('rollbackFromActivityId'), // Links rollback operation to the source activity
+  // Rollback tracking - denormalized source info for audit trail preservation
+  // Note: rollbackFromActivityId intentionally has no FK constraint to allow rollback
+  // provenance to survive source activity deletion (retention policies, compliance)
+  rollbackFromActivityId: text('rollbackFromActivityId'),
   rollbackSourceOperation: activityOperationEnum('rollbackSourceOperation'), // Snapshot of source activity operation
   rollbackSourceTimestamp: timestamp('rollbackSourceTimestamp', { mode: 'date' }), // Snapshot of source activity timestamp
   rollbackSourceTitle: text('rollbackSourceTitle'), // Snapshot of source resource title

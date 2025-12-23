@@ -27,6 +27,7 @@ export interface AiUndoPreview {
   conversationId: string;
   pageId: string;
   driveId: string | null;
+  createdAt: Date; // Message creation timestamp for undo cutoff
   messagesAffected: number;
   activitiesAffected: {
     id: string;
@@ -159,6 +160,7 @@ export async function previewAiUndo(
       conversationId,
       pageId,
       driveId,
+      createdAt,
       messagesAffected,
       activitiesAffected,
       warnings,
@@ -196,17 +198,7 @@ export async function executeAiUndo(
       };
     }
 
-    const { conversationId, pageId, driveId } = preview;
-    const message = await getMessage(messageId);
-    if (!message) {
-      return {
-        success: false,
-        messagesDeleted: 0,
-        activitiesRolledBack: 0,
-        errors: ['Message not found'],
-      };
-    }
-
+    const { conversationId, pageId, driveId, createdAt } = preview;
     const rolledBackActivityIds: string[] = [];
 
     // Execute all operations in a single transaction for atomicity
@@ -247,7 +239,7 @@ export async function executeAiUndo(
         .where(
           and(
             eq(chatMessages.conversationId, conversationId),
-            gte(chatMessages.createdAt, message.createdAt),
+            gte(chatMessages.createdAt, createdAt),
             eq(chatMessages.isActive, true)
           )
         );
