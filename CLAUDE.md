@@ -142,10 +142,15 @@ useEffect(() => {
   return () => useEditingStore.getState().endStreaming(id);
 }, [status, id]);
 
-// For SWR protection:
-const isAnyActive = useEditingStore(state => state.isAnyActive());
+// For SWR protection (CRITICAL: must allow initial fetch):
+import { useRef } from 'react';
+import { isEditingActive } from '@/stores/useEditingStore';
+
+const hasLoadedRef = useRef(false);
 useSWR(key, fetcher, {
-  isPaused: () => isAnyActive,
+  // Only pause AFTER initial load - never block the first fetch
+  isPaused: () => hasLoadedRef.current && isEditingActive(),
+  onSuccess: () => { hasLoadedRef.current = true; },
   refreshInterval: 300000, // 5 minutes
   revalidateOnFocus: false,
 });

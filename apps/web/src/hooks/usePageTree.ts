@@ -1,5 +1,5 @@
 import useSWR, { useSWRConfig } from 'swr';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { mergeChildren } from '@/lib/tree/tree-utils';
 import { Page } from '@pagespace/lib/client';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -48,12 +48,19 @@ const fetcher = async (url: string) => {
 };
 
 export function usePageTree(driveId?: string, trashView?: boolean) {
+  // Track if initial data has been loaded to avoid blocking first fetch
+  const hasLoadedRef = useRef(false);
+
   const swrKey = driveId ? (trashView ? `/api/drives/${encodeURIComponent(driveId)}/trash` : `/api/drives/${encodeURIComponent(driveId)}/pages`) : null;
   const { data, error, mutate } = useSWR<TreePage[]>(
     swrKey,
     fetcher,
     {
-      isPaused: isEditingActive,
+      // Only pause revalidation after initial load - never block the first fetch
+      isPaused: () => hasLoadedRef.current && isEditingActive(),
+      onSuccess: () => {
+        hasLoadedRef.current = true;
+      },
     }
   );
   const { cache } = useSWRConfig();
