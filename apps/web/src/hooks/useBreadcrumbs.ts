@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useRef, useEffect } from 'react';
 import useSWR from 'swr';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { isEditingActive } from '@/stores/useEditingStore';
@@ -24,6 +24,11 @@ export function useBreadcrumbs(pageId: string | null) {
   // Track if initial data has been loaded to avoid blocking first fetch
   const hasLoadedRef = useRef(false);
 
+  // Reset loaded status when pageId changes to ensure fresh pages can load even during editing
+  useEffect(() => {
+    hasLoadedRef.current = false;
+  }, [pageId]);
+
   const { data, error } = useSWR<BreadcrumbItem[]>(
     pageId ? `/api/pages/${pageId}/breadcrumbs` : null,
     fetcher,
@@ -38,7 +43,8 @@ export function useBreadcrumbs(pageId: string | null) {
 
   return {
     breadcrumbs: data,
-    isLoading: !error && !data,
+    // Not loading if we have data, have an error, or don't even have a pageId to fetch
+    isLoading: !error && !data && !!pageId,
     isError: error,
   };
 }
