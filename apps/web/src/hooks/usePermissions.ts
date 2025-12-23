@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import useSWR from 'swr';
 import { useAuth } from './useAuth';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -35,6 +35,14 @@ export function usePermissions(pageId?: string | null, driveOwnerId?: string): U
   const [isOwner, setIsOwner] = useState(false);
   const isAnyActive = useEditingStore((state) => state.isAnyActive());
 
+  // Track if initial data has been loaded to avoid blocking first fetch
+  const hasLoadedRef = useRef(false);
+
+  // Reset loaded status when pageId changes to ensure fresh pages can load even during editing
+  useEffect(() => {
+    hasLoadedRef.current = false;
+  }, [pageId]);
+
   // Check if user is drive owner
   useEffect(() => {
     if (user?.id && driveOwnerId) {
@@ -56,7 +64,11 @@ export function usePermissions(pageId?: string | null, driveOwnerId?: string): U
       return response.json();
     },
     {
-      isPaused: () => isAnyActive,
+      // Only pause revalidation after initial load - never block the first fetch
+      isPaused: () => hasLoadedRef.current && isAnyActive,
+      onSuccess: () => {
+        hasLoadedRef.current = true;
+      },
       revalidateOnFocus: false,
       dedupingInterval: 60000, // Cache for 1 minute
     }

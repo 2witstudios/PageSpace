@@ -3,6 +3,7 @@ import {
   Bot,
   FileText,
   FolderOpen,
+  History,
   Move,
   Pencil,
   Plus,
@@ -25,6 +26,7 @@ export const operationConfig: Record<string, OperationConfig> = {
   permission_update: { icon: Shield, label: 'Permission Updated', variant: 'secondary' },
   permission_revoke: { icon: Shield, label: 'Permission Revoked', variant: 'destructive' },
   agent_config_update: { icon: Settings, label: 'Agent Updated', variant: 'secondary' },
+  rollback: { icon: History, label: 'Rolled Back', variant: 'outline' },
 };
 
 export const resourceTypeIcons: Record<string, typeof FileText> = {

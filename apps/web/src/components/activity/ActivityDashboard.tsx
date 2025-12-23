@@ -7,10 +7,11 @@ import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Skeleton } from '@/components/ui/skeleton';
 import { toast } from 'sonner';
-import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import { ActivityFilterBar } from './ActivityFilterBar';
 import { ActivityTimeline } from './ActivityTimeline';
 import type { ActivityLog, ActivityFilters, Drive, Pagination } from './types';
+import type { RollbackContext } from './ActivityItem';
 
 interface ActivityDashboardProps {
   context: 'user' | 'drive';
@@ -205,6 +206,29 @@ export function ActivityDashboard({ context, driveId: initialDriveId, driveName 
     }
   };
 
+  // Map component context to rollback API context
+  const rollbackContext: RollbackContext = context === 'user' ? 'user_dashboard' : 'drive';
+
+  const handleRollback = useCallback(async (activityId: string) => {
+    try {
+      const response = await post<Response>(`/api/activities/${activityId}/rollback`, {
+        context: rollbackContext,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Rollback failed');
+      }
+
+      toast.success('Successfully restored to previous version');
+      // Refresh the activity list
+      fetchActivities();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to rollback';
+      toast.error(message);
+    }
+  }, [rollbackContext, fetchActivities]);
+
   // Loading skeleton
   if (loading && activities.length === 0) {
     return (
@@ -300,6 +324,8 @@ export function ActivityDashboard({ context, driveId: initialDriveId, driveName 
             ? 'Choose a drive from the dropdown above'
             : 'Activity will appear here as you and your team make changes'
           }
+          context={rollbackContext}
+          onRollback={handleRollback}
         />
       </div>
     </div>

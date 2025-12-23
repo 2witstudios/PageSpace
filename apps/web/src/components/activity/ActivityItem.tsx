@@ -1,18 +1,35 @@
 'use client';
 
+import { useState } from 'react';
 import { formatDistanceToNow, format } from 'date-fns';
-import { Bot, FileText } from 'lucide-react';
+import { Bot, FileText, History, MoreVertical } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { RollbackConfirmDialog } from '@/components/version-history/RollbackConfirmDialog';
+import { useToast } from '@/hooks/useToast';
 import { operationConfig, resourceTypeIcons, defaultOperationConfig } from './constants';
 import { getInitials } from './utils';
 import type { ActivityLog } from './types';
 
+export type RollbackContext = 'page' | 'drive' | 'user_dashboard';
+
 interface ActivityItemProps {
   activity: ActivityLog;
+  context?: RollbackContext;
+  onRollback?: (activityId: string) => Promise<void>;
 }
 
-export function ActivityItem({ activity }: ActivityItemProps) {
+export function ActivityItem({ activity, context, onRollback }: ActivityItemProps) {
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [previewWarnings, setPreviewWarnings] = useState<string[]>([]);
+  const { toast } = useToast();
   const opConfig = operationConfig[activity.operation] || defaultOperationConfig;
   const OpIcon = opConfig.icon;
   const ResourceIcon = resourceTypeIcons[activity.resourceType] || FileText;
@@ -20,8 +37,38 @@ export function ActivityItem({ activity }: ActivityItemProps) {
   const actorName = activity.user?.name || activity.actorDisplayName || activity.actorEmail;
   const actorImage = activity.user?.image;
 
+  const canRestore = context && onRollback;
+
+  const handleRestoreClick = async () => {
+    if (!context) return;
+
+    try {
+      const response = await fetch(`/api/activities/${activity.id}?context=${context}`);
+      if (!response.ok) {
+        throw new Error('Failed to load preview');
+      }
+      const data = await response.json();
+      setPreviewWarnings(data.warnings || []);
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: error instanceof Error ? error.message : 'Failed to load rollback preview',
+        variant: 'destructive',
+      });
+      setPreviewWarnings([]);
+    }
+    setShowConfirm(true);
+  };
+
+  const handleConfirmRollback = async () => {
+    if (onRollback) {
+      await onRollback(activity.id);
+    }
+  };
+
   return (
-    <div className="flex items-start gap-4 py-4 border-b last:border-b-0">
+    <>
+    <div className="flex items-start gap-4 py-4 border-b last:border-b-0 group">
       {/* Avatar */}
       <Avatar className="h-10 w-10 shrink-0">
         <AvatarImage src={actorImage || undefined} alt={actorName} />
@@ -60,13 +107,47 @@ export function ActivityItem({ activity }: ActivityItemProps) {
         )}
       </div>
 
-      {/* Timestamp */}
-      <div className="text-xs text-muted-foreground shrink-0 text-right">
-        <div>{format(new Date(activity.timestamp), 'h:mm a')}</div>
-        <div className="text-muted-foreground/60">
-          {formatDistanceToNow(new Date(activity.timestamp), { addSuffix: true })}
+      {/* Timestamp and Actions */}
+      <div className="flex items-start gap-2">
+        <div className="text-xs text-muted-foreground shrink-0 text-right">
+          <div>{format(new Date(activity.timestamp), 'h:mm a')}</div>
+          <div className="text-muted-foreground/60">
+            {formatDistanceToNow(new Date(activity.timestamp), { addSuffix: true })}
+          </div>
         </div>
+
+        {canRestore && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
+              >
+                <MoreVertical className="h-4 w-4" />
+                <span className="sr-only">Actions</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={handleRestoreClick}>
+                <History className="h-4 w-4 mr-2" />
+                Restore this version
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
     </div>
+
+    <RollbackConfirmDialog
+      open={showConfirm}
+      onOpenChange={setShowConfirm}
+      resourceTitle={activity.resourceTitle}
+      operation={opConfig.label}
+      timestamp={activity.timestamp}
+      warnings={previewWarnings}
+      onConfirm={handleConfirmRollback}
+    />
+    </>
   );
 }

@@ -20,6 +20,8 @@ import CanvasPageView from './page-views/canvas/CanvasPageView';
 import GlobalAssistantView from './page-views/dashboard/GlobalAssistantView';
 import { memo, useState, useEffect } from 'react';
 import { cn } from '@/lib/utils';
+import { usePageStore } from '@/hooks/usePage';
+import { useGlobalDriveSocket } from '@/hooks/useGlobalDriveSocket';
 
 // Memoized page content component to prevent unnecessary re-renders
 const PageContent = memo(({ pageId }: { pageId: string | null }) => {
@@ -58,7 +60,7 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
       </div>
     );
   }
-  
+
   const { node: page } = pageResult;
 
   // Dynamic component selection using centralized config
@@ -72,7 +74,7 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
     SheetView,
     TaskListView,
   };
-  
+
   const componentName = getPageTypeComponent(page.type);
   const ViewComponent = componentMap[componentName as keyof typeof componentMap];
 
@@ -109,14 +111,14 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
 PageContent.displayName = 'PageContent';
 
 // Optimized header component
-const OptimizedViewHeader = memo(() => {
+const OptimizedViewHeader = memo(({ pageId }: { pageId: string | null }) => {
   const params = useParams();
   const pathname = usePathname();
 
   // Only show header when we have a page or are on special routes
-  const shouldShowHeader = params.pageId ||
-                          pathname.endsWith('/settings') ||
-                          pathname.endsWith('/settings/mcp');
+  const shouldShowHeader = pageId ||
+    pathname.endsWith('/settings') ||
+    pathname.endsWith('/settings/mcp');
 
   if (!shouldShowHeader) {
     return null;
@@ -124,7 +126,7 @@ const OptimizedViewHeader = memo(() => {
 
   return (
     <div className="transition-opacity duration-150">
-      <ViewHeader />
+      <ViewHeader pageId={pageId} />
     </div>
   );
 });
@@ -140,6 +142,16 @@ export default function CenterPanel() {
   const isSettingsRoute = pathname.endsWith('/settings') || pathname.endsWith('/settings/mcp');
   const showGlobalAssistant = !activePageId && !isSettingsRoute;
   const showPageContent = activePageId || isSettingsRoute;
+
+  const setPageId = usePageStore(state => state.setPageId);
+
+  // Sync activePageId to store for components that rely on usePageStore
+  useEffect(() => {
+    setPageId(activePageId);
+  }, [activePageId, setPageId]);
+
+  // Initialize global drive socket listener for real-time updates
+  useGlobalDriveSocket();
 
   // Track if GlobalAssistantView has ever been rendered (lazy mount, then persist)
   // This ensures we don't mount it until the user visits dashboard, but once mounted it stays
@@ -169,7 +181,7 @@ export default function CenterPanel() {
       {/* PageContent - renders when viewing a page or settings */}
       {showPageContent && (
         <div className="h-full flex flex-col z-10">
-          <OptimizedViewHeader />
+          <OptimizedViewHeader pageId={activePageId} />
           <div className="flex-1 min-h-0 relative overflow-hidden">
             <CustomScrollArea className="h-full">
               <PageContent pageId={activePageId} />

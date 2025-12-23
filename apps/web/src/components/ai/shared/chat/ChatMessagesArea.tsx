@@ -3,12 +3,13 @@
  * Used by both Agent engine and Global Assistant engine
  */
 
-import React, { useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
+import React, { useRef, useEffect, forwardRef, useImperativeHandle, useState, useCallback } from 'react';
 import { UIMessage } from 'ai';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Loader2 } from 'lucide-react';
 import { MessageRenderer } from './MessageRenderer';
 import { StreamingIndicator } from './StreamingIndicator';
+import { UndoAiChangesDialog } from './UndoAiChangesDialog';
 
 interface ChatMessagesAreaProps {
   /** Messages to display */
@@ -31,6 +32,8 @@ interface ChatMessagesAreaProps {
   lastUserMessageId?: string;
   /** Whether user has read-only access */
   isReadOnly?: boolean;
+  /** Callback when undo completes successfully (to refresh messages) */
+  onUndoSuccess?: () => void;
 }
 
 export interface ChatMessagesAreaRef {
@@ -54,11 +57,27 @@ export const ChatMessagesArea = forwardRef<ChatMessagesAreaRef, ChatMessagesArea
       lastAssistantMessageId,
       lastUserMessageId,
       isReadOnly = false,
+      onUndoSuccess,
     },
     ref
   ) => {
     const scrollAreaRef = useRef<HTMLDivElement>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const [undoDialogMessageId, setUndoDialogMessageId] = useState<string | null>(null);
+
+    // Handler for undo from here button
+    const handleUndoFromHere = useCallback((messageId: string) => {
+      setUndoDialogMessageId(messageId);
+    }, []);
+
+    const handleUndoDialogClose = useCallback((open: boolean) => {
+      if (!open) setUndoDialogMessageId(null);
+    }, []);
+
+    const handleUndoDialogSuccess = useCallback(() => {
+      setUndoDialogMessageId(null);
+      onUndoSuccess?.();
+    }, [onUndoSuccess]);
 
     // Scroll to bottom function
     const scrollToBottom = () => {
@@ -123,6 +142,7 @@ export const ChatMessagesArea = forwardRef<ChatMessagesAreaRef, ChatMessagesArea
                     onEdit={!isReadOnly ? onEdit : undefined}
                     onDelete={!isReadOnly ? onDelete : undefined}
                     onRetry={!isReadOnly ? onRetry : undefined}
+                    onUndoFromHere={!isReadOnly ? handleUndoFromHere : undefined}
                     isLastAssistantMessage={message.id === lastAssistantMessageId}
                     isLastUserMessage={message.id === lastUserMessageId}
                     isStreaming={isStreaming && message.id === lastAssistantMessageId && message.role === 'assistant'}
@@ -139,6 +159,13 @@ export const ChatMessagesArea = forwardRef<ChatMessagesAreaRef, ChatMessagesArea
             </div>
           </div>
         </ScrollArea>
+
+        <UndoAiChangesDialog
+          open={!!undoDialogMessageId}
+          onOpenChange={handleUndoDialogClose}
+          messageId={undoDialogMessageId}
+          onSuccess={handleUndoDialogSuccess}
+        />
       </div>
     );
   }

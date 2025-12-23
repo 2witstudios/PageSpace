@@ -36,8 +36,9 @@ import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
 
-export function ShareDialog() {
-  const pageId = usePageStore((state) => state.pageId);
+export function ShareDialog({ pageId: propPageId }: { pageId?: string | null } = {}) {
+  const storePageId = usePageStore((state) => state.pageId);
+  const pageId = propPageId !== undefined ? propPageId : storePageId;
   const params = useParams();
   const driveId = params.driveId as string;
   const { tree } = usePageTree(driveId);
@@ -54,7 +55,7 @@ export function ShareDialog() {
   });
   // Add a key to force re-render of PermissionsList
   const [permissionsVersion, setPermissionsVersion] = useState(0);
-  
+
   // Check user permissions
   const { permissions: userPermissions } = usePermissions(pageId);
   const canShare = userPermissions?.canShare || false;
@@ -63,7 +64,7 @@ export function ShareDialog() {
 
   const handlePermissionChange = (permission: string, checked: boolean) => {
     const newPerms = { ...permissions };
-    
+
     if (permission === 'canView' && !checked) {
       // If removing view, remove all other permissions
       newPerms.canView = false;
@@ -77,7 +78,7 @@ export function ShareDialog() {
     } else {
       newPerms[permission as keyof typeof permissions] = checked;
     }
-    
+
     setPermissions(newPerms);
   };
 
@@ -163,94 +164,94 @@ export function ShareDialog() {
             </AlertDescription>
           </Alert>
         ) : (
-        <Tabs defaultValue="share" className="mt-4">
-          <TabsList>
-            <TabsTrigger value="share">
-              <Users className="mr-2 h-4 w-4" />
-              Share
-            </TabsTrigger>
-            <TabsTrigger value="permissions">
-              <UserCog className="mr-2 h-4 w-4" />
-              Permissions
-            </TabsTrigger>
-          </TabsList>
-          <TabsContent value="share" className="mt-4 space-y-4">
-            <div className="flex space-x-2">
-              <Input
-                type="email"
-                placeholder="Add people by email..."
-                className="flex-1"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                disabled={isSubmitting || !canShare}
-              />
-            </div>
-            
-            {/* Permission Checkboxes */}
-            <div className="border rounded-lg p-4 space-y-3">
-              <h4 className="text-sm font-medium mb-2">Permissions</h4>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="flex items-center space-x-2">
-                  <Checkbox 
-                    id="canView"
-                    checked={permissions.canView}
-                    onCheckedChange={(checked) => handlePermissionChange('canView', !!checked)}
-                  />
-                  <Label htmlFor="canView" className="text-sm">
-                    View
-                    <span className="text-xs text-gray-500 block">Can view this page</span>
-                  </Label>
-                </div>
-                
-                <div className="flex items-center space-x-2">
-                  <Checkbox 
-                    id="canEdit"
-                    checked={permissions.canEdit}
-                    disabled={!permissions.canView}
-                    onCheckedChange={(checked) => handlePermissionChange('canEdit', !!checked)}
-                  />
-                  <Label htmlFor="canEdit" className="text-sm">
-                    Edit
-                    <span className="text-xs text-gray-500 block">Can edit content</span>
-                  </Label>
-                </div>
-                
-                <div className="flex items-center space-x-2">
-                  <Checkbox 
-                    id="canShare"
-                    checked={permissions.canShare}
-                    disabled={!permissions.canView}
-                    onCheckedChange={(checked) => handlePermissionChange('canShare', !!checked)}
-                  />
-                  <Label htmlFor="canShare" className="text-sm">
-                    Share
-                    <span className="text-xs text-gray-500 block">Can share with others</span>
-                  </Label>
-                </div>
-                
-                <div className="flex items-center space-x-2">
-                  <Checkbox 
-                    id="canDelete"
-                    checked={permissions.canDelete}
-                    disabled={!permissions.canView}
-                    onCheckedChange={(checked) => handlePermissionChange('canDelete', !!checked)}
-                  />
-                  <Label htmlFor="canDelete" className="text-sm">
-                    Delete
-                    <span className="text-xs text-gray-500 block">Can delete this page</span>
-                  </Label>
+          <Tabs defaultValue="share" className="mt-4">
+            <TabsList>
+              <TabsTrigger value="share">
+                <Users className="mr-2 h-4 w-4" />
+                Share
+              </TabsTrigger>
+              <TabsTrigger value="permissions">
+                <UserCog className="mr-2 h-4 w-4" />
+                Permissions
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value="share" className="mt-4 space-y-4">
+              <div className="flex space-x-2">
+                <Input
+                  type="email"
+                  placeholder="Add people by email..."
+                  className="flex-1"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  disabled={isSubmitting || !canShare}
+                />
+              </div>
+
+              {/* Permission Checkboxes */}
+              <div className="border rounded-lg p-4 space-y-3">
+                <h4 className="text-sm font-medium mb-2">Permissions</h4>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="flex items-center space-x-2">
+                    <Checkbox
+                      id="canView"
+                      checked={permissions.canView}
+                      onCheckedChange={(checked) => handlePermissionChange('canView', !!checked)}
+                    />
+                    <Label htmlFor="canView" className="text-sm">
+                      View
+                      <span className="text-xs text-gray-500 block">Can view this page</span>
+                    </Label>
+                  </div>
+
+                  <div className="flex items-center space-x-2">
+                    <Checkbox
+                      id="canEdit"
+                      checked={permissions.canEdit}
+                      disabled={!permissions.canView}
+                      onCheckedChange={(checked) => handlePermissionChange('canEdit', !!checked)}
+                    />
+                    <Label htmlFor="canEdit" className="text-sm">
+                      Edit
+                      <span className="text-xs text-gray-500 block">Can edit content</span>
+                    </Label>
+                  </div>
+
+                  <div className="flex items-center space-x-2">
+                    <Checkbox
+                      id="canShare"
+                      checked={permissions.canShare}
+                      disabled={!permissions.canView}
+                      onCheckedChange={(checked) => handlePermissionChange('canShare', !!checked)}
+                    />
+                    <Label htmlFor="canShare" className="text-sm">
+                      Share
+                      <span className="text-xs text-gray-500 block">Can share with others</span>
+                    </Label>
+                  </div>
+
+                  <div className="flex items-center space-x-2">
+                    <Checkbox
+                      id="canDelete"
+                      checked={permissions.canDelete}
+                      disabled={!permissions.canView}
+                      onCheckedChange={(checked) => handlePermissionChange('canDelete', !!checked)}
+                    />
+                    <Label htmlFor="canDelete" className="text-sm">
+                      Delete
+                      <span className="text-xs text-gray-500 block">Can delete this page</span>
+                    </Label>
+                  </div>
                 </div>
               </div>
-            </div>
-            
-            <Button onClick={handleInvite} disabled={isSubmitting} className="w-full">
-              {isSubmitting ? 'Granting Access...' : 'Grant Access'}
-            </Button>
-          </TabsContent>
-          <TabsContent value="permissions" className="mt-4">
-            <PermissionsList key={permissionsVersion} />
-          </TabsContent>
-        </Tabs>
+
+              <Button onClick={handleInvite} disabled={isSubmitting} className="w-full">
+                {isSubmitting ? 'Granting Access...' : 'Grant Access'}
+              </Button>
+            </TabsContent>
+            <TabsContent value="permissions" className="mt-4">
+              <PermissionsList key={permissionsVersion} />
+            </TabsContent>
+          </Tabs>
         )}
       </DialogContent>
     </Dialog>

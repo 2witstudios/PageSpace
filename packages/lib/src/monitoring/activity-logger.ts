@@ -81,7 +81,12 @@ export type ActivityOperation =
   // Role operations (Tier 1)
   | 'role_reorder'
   // Drive ownership operations (Tier 1)
-  | 'ownership_transfer';
+  | 'ownership_transfer'
+  // Version history operations
+  | 'rollback'
+  // AI conversation undo operations
+  | 'conversation_undo'
+  | 'conversation_undo_with_changes';
 
 export type ActivityResourceType =
   | 'page'
@@ -95,7 +100,9 @@ export type ActivityResourceType =
   | 'token'
   | 'device'
   // Message resource (Tier 1)
-  | 'message';
+  | 'message'
+  // AI conversation resource
+  | 'conversation';
 
 export interface ActivityLogInput {
   userId: string;
@@ -118,10 +125,17 @@ export interface ActivityLogInput {
 
   // Content & change tracking
   contentSnapshot?: string;
+  contentFormat?: 'text' | 'html' | 'json' | 'tiptap';
   updatedFields?: string[];
   previousValues?: Record<string, unknown>;
   newValues?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
+
+  // Rollback support - denormalized source info for audit trail preservation
+  rollbackFromActivityId?: string;
+  rollbackSourceOperation?: ActivityOperation;
+  rollbackSourceTimestamp?: Date;
+  rollbackSourceTitle?: string;
 }
 
 /**
@@ -147,10 +161,15 @@ export async function logActivity(input: ActivityLogInput): Promise<void> {
       aiModel: input.aiModel,
       aiConversationId: input.aiConversationId,
       contentSnapshot: input.contentSnapshot,
+      contentFormat: input.contentFormat,
       updatedFields: input.updatedFields,
       previousValues: input.previousValues,
       newValues: input.newValues,
       metadata: input.metadata,
+      rollbackFromActivityId: input.rollbackFromActivityId,
+      rollbackSourceOperation: input.rollbackSourceOperation,
+      rollbackSourceTimestamp: input.rollbackSourceTimestamp,
+      rollbackSourceTitle: input.rollbackSourceTitle,
       isArchived: false,
     });
   } catch (error) {
@@ -611,6 +630,112 @@ export function logMessageActivity(
     aiConversationId: options?.aiConversationId,
     metadata: {
       conversationType: message.conversationType,
+    },
+  }).catch(() => {
+    // Silent fail - already logged in logActivity
+  });
+}
+
+/**
+ * Convenience wrapper for rollback operations.
+ * Logs when a user restores a resource to a previous state.
+ * Fire-and-forget - call without await.
+ */
+export function logRollbackActivity(
+  userId: string,
+  rollbackFromActivityId: string,
+  resource: {
+    resourceType: ActivityResourceType;
+    resourceId: string;
+    resourceTitle?: string;
+    driveId: string | null;
+    pageId?: string;
+  },
+  actorInfo: ActorInfo,
+  options?: {
+    /** Values that were restored (from the original activity's previousValues) */
+    restoredValues?: Record<string, unknown>;
+    /** Values that were replaced (current state before rollback) */
+    replacedValues?: Record<string, unknown>;
+    /** Content snapshot if rolling back content */
+    contentSnapshot?: string;
+    /** Format of the content being restored */
+    contentFormat?: 'text' | 'html' | 'json' | 'tiptap';
+    /** Source activity snapshot - denormalized for audit trail preservation */
+    rollbackSourceOperation?: ActivityOperation;
+    rollbackSourceTimestamp?: Date;
+    rollbackSourceTitle?: string;
+    /** Additional context */
+    metadata?: Record<string, unknown>;
+  }
+): void {
+  logActivity({
+    userId,
+    actorEmail: actorInfo.actorEmail,
+    actorDisplayName: actorInfo.actorDisplayName,
+    operation: 'rollback',
+    resourceType: resource.resourceType,
+    resourceId: resource.resourceId,
+    resourceTitle: resource.resourceTitle,
+    driveId: resource.driveId,
+    pageId: resource.pageId,
+    contentSnapshot: options?.contentSnapshot,
+    contentFormat: options?.contentFormat,
+    // previousValues = state before rollback (what we're replacing)
+    previousValues: options?.replacedValues,
+    // newValues = state after rollback (what we restored to)
+    newValues: options?.restoredValues,
+    // Rollback tracking - top-level fields for proper DB storage
+    rollbackFromActivityId,
+    rollbackSourceOperation: options?.rollbackSourceOperation,
+    rollbackSourceTimestamp: options?.rollbackSourceTimestamp,
+    rollbackSourceTitle: options?.rollbackSourceTitle,
+    metadata: options?.metadata,
+  }).catch(() => {
+    // Silent fail - already logged in logActivity
+  });
+}
+
+/**
+ * Convenience wrapper for AI conversation undo operations.
+ * Logs when a user undoes an AI conversation from a specific message point.
+ * Fire-and-forget - call without await.
+ */
+export function logConversationUndo(
+  userId: string,
+  conversationId: string,
+  messageId: string, // The message we're undoing from
+  actorInfo: ActorInfo,
+  options: {
+    mode: 'messages_only' | 'messages_and_changes';
+    messagesDeleted: number;
+    activitiesRolledBack: number;
+    rolledBackActivityIds?: string[]; // For potential re-undo
+    pageId?: string;
+    driveId?: string | null;
+  }
+): void {
+  const operation: ActivityOperation =
+    options.mode === 'messages_only' ? 'conversation_undo' : 'conversation_undo_with_changes';
+
+  logActivity({
+    userId,
+    actorEmail: actorInfo.actorEmail,
+    actorDisplayName: actorInfo.actorDisplayName,
+    operation,
+    resourceType: 'conversation',
+    resourceId: conversationId,
+    driveId: options.driveId ?? null,
+    pageId: options.pageId,
+    previousValues: {
+      messagesWereActive: true,
+    },
+    metadata: {
+      messageId,
+      messagesDeleted: options.messagesDeleted,
+      activitiesRolledBack: options.activitiesRolledBack,
+      rolledBackActivityIds: options.rolledBackActivityIds,
+      mode: options.mode,
     },
   }).catch(() => {
     // Silent fail - already logged in logActivity

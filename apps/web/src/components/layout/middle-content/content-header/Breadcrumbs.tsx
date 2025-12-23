@@ -6,8 +6,9 @@ import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import { useMobile } from "@/hooks/useMobile";
 
-export function Breadcrumbs() {
-  const pageId = usePageStore((state) => state.pageId);
+export function Breadcrumbs({ pageId: propPageId }: { pageId?: string | null } = {}) {
+  const storePageId = usePageStore((state) => state.pageId);
+  const pageId = propPageId !== undefined ? propPageId : storePageId;
   const { breadcrumbs, isLoading } = useBreadcrumbs(pageId || null);
   const isMobile = useMobile();
 
@@ -31,12 +32,15 @@ export function Breadcrumbs() {
           {'drive' in crumb && crumb.drive ? (
             <Link
               href={`/dashboard/${crumb.drive.id}/${crumb.id}`}
-              className="hover:underline"
+              className="hover:underline truncate max-w-[120px] sm:max-w-[200px]"
+              title={crumb.title}
             >
               {crumb.title}
             </Link>
           ) : (
-            <span>{crumb.title}</span>
+            <span className="truncate max-w-[120px] sm:max-w-[200px]" title={crumb.title}>
+              {crumb.title}
+            </span>
           )}
         </div>
       ))}

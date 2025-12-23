@@ -18,6 +18,7 @@ export { CompactTodoListMessage } from './CompactTodoListMessage';
 export { MessageActionButtons } from './MessageActionButtons';
 export { MessageEditor } from './MessageEditor';
 export { DeleteMessageDialog } from './DeleteMessageDialog';
+export { UndoAiChangesDialog } from './UndoAiChangesDialog';
 
 // Tool call rendering
 export * from './tool-calls';

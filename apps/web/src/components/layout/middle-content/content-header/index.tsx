@@ -20,11 +20,13 @@ import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 interface ContentHeaderProps {
   children?: React.ReactNode;
+  pageId?: string | null;
 }
 
-export function ViewHeader({ children }: ContentHeaderProps = {}) {
+export function ViewHeader({ children, pageId: propPageId }: ContentHeaderProps = {}) {
   const params = useParams();
-  const pageId = usePageStore((state) => state.pageId);
+  const storePageId = usePageStore((state) => state.pageId);
+  const pageId = propPageId !== undefined ? propPageId : storePageId;
   const driveId = params.driveId as string;
   const { tree } = usePageTree(driveId);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -90,10 +92,10 @@ export function ViewHeader({ children }: ContentHeaderProps = {}) {
 
   return (
     <div className="flex flex-col gap-2 p-4 border-b border-[var(--separator)]">
-      <Breadcrumbs />
+      <Breadcrumbs pageId={pageId} />
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <EditableTitle />
+          <EditableTitle pageId={pageId} />
           {(pageIsDocument || pageIsSheet) && (
             <SaveStatusIndicator isDirty={document?.isDirty || false} isSaving={isSaving} />
           )}
@@ -121,7 +123,7 @@ export function ViewHeader({ children }: ContentHeaderProps = {}) {
               {isDownloading ? 'Downloading...' : 'Download'}
             </Button>
           )}
-          <ShareDialog />
+          <ShareDialog pageId={pageId} />
           {children}
         </div>
       </div>

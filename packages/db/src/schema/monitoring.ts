@@ -12,9 +12,10 @@ import {
   index,
   real,
   uuid,
-  pgEnum
+  pgEnum,
+  check
 } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
 import { drives, pages } from './core';
@@ -22,6 +23,7 @@ import { drives, pages } from './core';
 // Enums
 export const logLevelEnum = pgEnum('log_level', ['trace', 'debug', 'info', 'warn', 'error', 'fatal']);
 export const httpMethodEnum = pgEnum('http_method', ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']);
+export const subscriptionTierEnum = pgEnum('subscription_tier', ['free', 'pro', 'business', 'founder']);
 
 /**
  * System logs - structured application logs
@@ -387,8 +389,15 @@ export const activityOperationEnum = pgEnum('activity_operation', [
   // Role operations (Tier 1)
   'role_reorder',
   // Drive ownership operations (Tier 1)
-  'ownership_transfer'
+  'ownership_transfer',
+  // Version history operations
+  'rollback',
+  // AI conversation undo operations
+  'conversation_undo',
+  'conversation_undo_with_changes'
 ]);
+
+export const contentFormatEnum = pgEnum('content_format', ['text', 'html', 'json', 'tiptap']);
 
 export const activityResourceEnum = pgEnum('activity_resource', [
   'page',
@@ -403,7 +412,9 @@ export const activityResourceEnum = pgEnum('activity_resource', [
   'token',
   'device',
   // Message resource (Tier 1)
-  'message'
+  'message',
+  // AI conversation resource
+  'conversation'
 ]);
 
 /**
@@ -439,8 +450,18 @@ export const activityLogs = pgTable('activity_logs', {
   driveId: text('driveId').references(() => drives.id, { onDelete: 'set null' }),
   pageId: text('pageId').references(() => pages.id, { onDelete: 'set null' }),
 
-  // Content snapshot for future rollback support
+  // Content snapshot for rollback support - unbounded text
+  // TODO: Consider compression or external storage for very large content
   contentSnapshot: text('contentSnapshot'),
+  contentFormat: contentFormatEnum('contentFormat'), // For proper content parsing during rollback
+
+  // Rollback tracking - denormalized source info for audit trail preservation
+  // Note: rollbackFromActivityId intentionally has no FK constraint to allow rollback
+  // provenance to survive source activity deletion (retention policies, compliance)
+  rollbackFromActivityId: text('rollbackFromActivityId'),
+  rollbackSourceOperation: activityOperationEnum('rollbackSourceOperation'), // Snapshot of source activity operation
+  rollbackSourceTimestamp: timestamp('rollbackSourceTimestamp', { mode: 'date' }), // Snapshot of source activity timestamp
+  rollbackSourceTitle: text('rollbackSourceTitle'), // Snapshot of source resource title
 
   // Change details
   updatedFields: jsonb('updatedFields').$type<string[]>(),
@@ -456,6 +477,7 @@ export const activityLogs = pgTable('activity_logs', {
   driveTimestampIdx: index('idx_activity_logs_drive_timestamp').on(table.driveId, table.timestamp),
   pageTimestampIdx: index('idx_activity_logs_page_timestamp').on(table.pageId, table.timestamp),
   archivedIdx: index('idx_activity_logs_archived').on(table.isArchived),
+  rollbackFromActivityIdIdx: index('idx_activity_logs_rollback_from').on(table.rollbackFromActivityId),
 }));
 
 /**
@@ -474,4 +496,18 @@ export const activityLogsRelations = relations(activityLogs, ({ one }) => ({
     fields: [activityLogs.pageId],
     references: [pages.id],
   }),
+}));
+
+/**
+ * Retention policies - plan-based version history retention limits
+ * Determines how long activity logs are accessible for rollback
+ */
+export const retentionPolicies = pgTable('retention_policies', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  subscriptionTier: subscriptionTierEnum('subscriptionTier').notNull().unique(),
+  retentionDays: integer('retentionDays').notNull(), // -1 = unlimited
+  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
+}, (table) => ({
+  validRetentionDays: check('valid_retention_days', sql`${table.retentionDays} >= -1`),
 }));

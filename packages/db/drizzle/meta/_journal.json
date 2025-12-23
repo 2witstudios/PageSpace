@@ -176,6 +176,41 @@
       "when": 1766426065093,
       "tag": "0024_nebulous_forge",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1766435628447,
+      "tag": "0025_icy_wallflower",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1766441305120,
+      "tag": "0026_nervous_carnage",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1766455090150,
+      "tag": "0027_fix_retention_updated_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1766466000000,
+      "tag": "0028_version_history_review_fixes",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1766458226327,
+      "tag": "0029_brave_guardsmen",
+      "breakpoints": true
     }
   ]
 }
