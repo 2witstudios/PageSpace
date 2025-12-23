@@ -24,62 +24,111 @@ This is confusing for non-technical users who expect to see their documents rend
 
 ---
 
+## Design Decisions
+
+Based on review:
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| **View toggle** | Yes - Code/Rich toggle | Match document page UX |
+| **Preview size** | Fixed ~816×400px (print page width) | Hard truncate, no expand |
+| **Component reuse** | Reuse `RichEditor` + `MonacoEditor` | No new lightweight components |
+| **Lazy loading** | Yes - `React.lazy()` + Suspense | TipTap/Monaco are expensive |
+| **Diff granularity** | Character-level | Better for typo fixes in rich text |
+
+---
+
 ## Component Architecture
 
 ```
 apps/web/src/components/ai/shared/chat/tool-calls/
 ├── ToolCallRenderer.tsx          # Main orchestrator (existing)
 ├── CompactToolCallRenderer.tsx   # Sidebar version (existing)
-├── DocumentRenderer.tsx          # Code/text display (existing)
+├── DocumentRenderer.tsx          # Code/text display (existing, keep for non-documents)
 ├── FileTreeRenderer.tsx          # Page hierarchy (existing)
 ├── TaskRenderer.tsx              # Task management (existing)
 │
-├── previews/                     # NEW: Rich text preview components
-│   ├── RichTextPreview.tsx       # Lightweight read-only TipTap renderer
-│   ├── RichTextDiff.tsx          # Side-by-side or inline diff viewer
-│   ├── CreatePagePreview.tsx     # create_page tool renderer
-│   ├── ReadPagePreview.tsx       # read_page tool renderer
-│   ├── ReplaceContentPreview.tsx # replace_lines tool renderer
-│   └── PageLink.tsx              # Clickable page navigation component
+├── previews/                     # NEW: Document preview components
+│   ├── DocumentPreviewContainer.tsx  # Wrapper with view toggle + lazy loading
+│   ├── RichTextDiff.tsx              # Side-by-side diff with char-level highlighting
+│   ├── CreatePagePreview.tsx         # create_page tool renderer
+│   ├── ReadPagePreview.tsx           # read_page tool renderer
+│   ├── ReplaceContentPreview.tsx     # replace_lines tool renderer
+│   └── PageLink.tsx                  # Clickable page navigation component
 ```
 
 ---
 
 ## Component Specifications
 
-### 1. RichTextPreview
+### 1. DocumentPreviewContainer
 
-A lightweight, read-only TipTap editor for rendering HTML content in tool previews.
+The main wrapper that handles view toggle and lazy loading of editors.
 
 ```typescript
-interface RichTextPreviewProps {
+interface DocumentPreviewContainerProps {
   content: string;           // HTML content
-  maxHeight?: number;        // Optional height limit with fade/expand
+  title: string;
+  pageId?: string;
+  driveId?: string;
+  showNavigation?: boolean;  // Show "Open Page" link
   className?: string;
 }
 ```
 
-**Key differences from RichEditor:**
-- No editing capabilities (menus, placeholders, formatting)
-- Minimal TipTap extensions (StarterKit only)
-- Optimized for inline display (no character count, no callbacks)
-- Optional height truncation with "Show more" expansion
-- Preserves TipTap's prose styling for consistency
+**Key features:**
+- **View toggle**: Rich/Code buttons matching document page toolbar
+- **Lazy loading**: Uses `React.lazy()` to defer RichEditor/MonacoEditor loading
+- **Fixed dimensions**: 816px width (US Letter), 400px max height with hard truncate
+- **Loading skeleton**: Shows placeholder while editors load
 
 **Implementation approach:**
 ```tsx
-const RichTextPreview: React.FC<RichTextPreviewProps> = ({ content, maxHeight = 200 }) => {
-  const editor = useEditor({
-    extensions: [StarterKit, Markdown],
-    content,
-    editable: false,
-    immediatelyRender: false,
-  });
+const LazyRichEditor = React.lazy(() => import('@/components/editors/RichEditor'));
+const LazyMonacoEditor = React.lazy(() => import('@/components/editors/MonacoEditor'));
+
+const DocumentPreviewContainer: React.FC<DocumentPreviewContainerProps> = ({
+  content,
+  title,
+  pageId,
+  driveId,
+  showNavigation = true
+}) => {
+  const [viewMode, setViewMode] = useState<'rich' | 'code'>('rich');
 
   return (
-    <div className={cn("prose prose-sm max-w-none", maxHeight && "max-h-[200px] overflow-hidden")}>
-      <EditorContent editor={editor} />
-      {/* Optional: Fade gradient and "Show more" button if truncated */}
+    <div className="rounded-md border bg-card overflow-hidden" style={{ maxWidth: 816 }}>
+      {/* Header with title and view toggle */}
+      <div className="flex items-center justify-between px-3 py-2 bg-muted/40 border-b">
+        <div className="flex items-center gap-2">
+          <FileText className="h-4 w-4" />
+          <span className="font-medium text-sm truncate">{title}</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <Button size="sm" variant={viewMode === 'rich' ? 'secondary' : 'ghost'}
+                  onClick={() => setViewMode('rich')}>Rich</Button>
+          <Button size="sm" variant={viewMode === 'code' ? 'secondary' : 'ghost'}
+                  onClick={() => setViewMode('code')}>Code</Button>
+        </div>
+      </div>
+
+      {/* Content area with lazy-loaded editor */}
+      <div className="h-[400px] overflow-hidden">
+        <Suspense fallback={<PreviewSkeleton />}>
+          {viewMode === 'rich' ? (
+            <LazyRichEditor value={content} readOnly onChange={() => {}} onEditorChange={() => {}} />
+          ) : (
+            <LazyMonacoEditor value={content} readOnly language="html" />
+          )}
+        </Suspense>
+      </div>
+
+      {/* Footer with navigation */}
+      {showNavigation && pageId && driveId && (
+        <div className="px-3 py-2 border-t">
+          <PageLink pageId={pageId} driveId={driveId} title={title} />
+        </div>
+      )}
     </div>
   );
 };
@@ -87,14 +136,16 @@ const RichTextPreview: React.FC<RichTextPreviewProps> = ({ content, maxHeight = 
 
 ### 2. RichTextDiff
 
-Visual diff viewer for rich text content changes.
+Visual diff viewer for rich text content changes with **character-level** highlighting.
 
 ```typescript
 interface RichTextDiffProps {
   before: string;            // Original HTML content
   after: string;             // Modified HTML content
-  mode?: 'side-by-side' | 'inline' | 'unified';
-  highlightChanges?: boolean;
+  mode?: 'side-by-side' | 'inline';
+  title?: string;
+  pageId?: string;
+  driveId?: string;
 }
 ```
 
@@ -102,35 +153,57 @@ interface RichTextDiffProps {
 
 | Mode | Description | Use Case |
 |------|-------------|----------|
-| `side-by-side` | Two columns: before (red) / after (green) | Larger changes |
-| `inline` | Single view with strikethrough/highlight | Small edits |
-| `unified` | Git-style unified diff | Technical users |
+| `side-by-side` | Two columns with char-level highlights | Default, clear comparison |
+| `inline` | Single view with `<del>`/`<ins>` markers | Compact, small changes |
 
-**Implementation approach:**
-1. Parse HTML to text for diff computation
-2. Use `diff` library (or similar) to compute changes
-3. Render both versions with change highlighting
-4. For inline mode: use `<del>` and `<ins>` tags
+**Character-level diff approach:**
+1. Extract plain text from HTML (strip tags, preserve structure)
+2. Use `diff-match-patch` or `jsdiff` library for character-level diffing
+3. Map diff results back to highlight spans in rich text view
+4. Highlight deleted chars in red, added chars in green
 
 ```tsx
-const RichTextDiff: React.FC<RichTextDiffProps> = ({ before, after, mode = 'side-by-side' }) => {
+const RichTextDiff: React.FC<RichTextDiffProps> = ({ before, after, mode = 'side-by-side', title }) => {
+  // Compute character-level diff
+  const diffs = useMemo(() => diffChars(stripHtml(before), stripHtml(after)), [before, after]);
+
+  // For side-by-side: render both with lazy-loaded editors
   if (mode === 'side-by-side') {
     return (
-      <div className="grid grid-cols-2 gap-4">
-        <div className="border-l-2 border-red-500 pl-2">
-          <div className="text-xs text-muted-foreground mb-1">Before</div>
-          <RichTextPreview content={before} />
+      <div className="rounded-md border bg-card overflow-hidden" style={{ maxWidth: 816 }}>
+        <div className="flex items-center gap-2 px-3 py-2 bg-muted/40 border-b">
+          <GitCompare className="h-4 w-4" />
+          <span className="font-medium text-sm">{title || 'Content Changes'}</span>
         </div>
-        <div className="border-l-2 border-green-500 pl-2">
-          <div className="text-xs text-muted-foreground mb-1">After</div>
-          <RichTextPreview content={after} />
+        <div className="grid grid-cols-2 divide-x h-[400px]">
+          <div className="overflow-hidden">
+            <div className="text-xs text-muted-foreground px-2 py-1 bg-red-50 dark:bg-red-950/30 border-b">
+              Before
+            </div>
+            <Suspense fallback={<PreviewSkeleton />}>
+              <LazyRichEditor value={before} readOnly onChange={() => {}} onEditorChange={() => {}} />
+            </Suspense>
+          </div>
+          <div className="overflow-hidden">
+            <div className="text-xs text-muted-foreground px-2 py-1 bg-green-50 dark:bg-green-950/30 border-b">
+              After
+            </div>
+            <Suspense fallback={<PreviewSkeleton />}>
+              <LazyRichEditor value={after} readOnly onChange={() => {}} onEditorChange={() => {}} />
+            </Suspense>
+          </div>
         </div>
       </div>
     );
   }
-  // ... other modes
+
+  // Inline mode: single view with strikethrough/highlight
+  // ... inline implementation
 };
 ```
+
+**Diff highlighting in Monaco (code view):**
+For code view, Monaco has built-in diff support via `MonacoDiffEditor` which can be used as an alternative.
 
 ### 3. PageLink
 
@@ -451,12 +524,15 @@ For `CompactToolCallRenderer.tsx` (sidebar):
 
 ---
 
-## Open Questions
+## Resolved Design Questions
 
-1. **Content size limits**: Should we limit preview content to first N characters/lines?
-2. **Lazy loading**: Should TipTap editor be lazily loaded for performance?
-3. **Raw view toggle**: Should users be able to switch to raw HTML/code view?
-4. **Diff granularity**: Line-level diff vs. character-level diff for replace operations?
+| Question | Decision |
+|----------|----------|
+| Content size limits | Fixed 816×400px container with hard truncate (no expand) |
+| Lazy loading | Yes - `React.lazy()` with Suspense for RichEditor/Monaco |
+| Raw view toggle | Yes - Rich/Code toggle matching document page toolbar |
+| Diff granularity | Character-level for better typo/small edit visibility |
+| Component reuse | Reuse existing RichEditor + MonacoEditor (no new editors) |
 
 ---
 
