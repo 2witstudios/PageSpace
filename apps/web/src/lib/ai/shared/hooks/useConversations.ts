@@ -3,7 +3,7 @@
  * Used by both Agent engine and Global Assistant engine
  */
 
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 import useSWR, { mutate } from 'swr';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
@@ -69,6 +69,9 @@ export function useConversations({
   // Determine API endpoints based on mode
   const isAgentMode = Boolean(agentId);
 
+  // Track if initial data has been loaded to avoid blocking first fetch
+  const hasLoadedRef = useRef(false);
+
   // SWR key for conversations list
   const swrKey = useMemo(() => {
     if (!enabled) return null;
@@ -86,7 +89,11 @@ export function useConversations({
       return response.json();
     },
     {
-      isPaused: isEditingActive,
+      // Only pause revalidation after initial load - never block the first fetch
+      isPaused: () => hasLoadedRef.current && isEditingActive(),
+      onSuccess: () => {
+        hasLoadedRef.current = true;
+      },
       revalidateOnFocus: false,
       revalidateOnReconnect: false,
       dedupingInterval: 5000,
