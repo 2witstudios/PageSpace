@@ -395,6 +395,8 @@ export const activityOperationEnum = pgEnum('activity_operation', [
   'conversation_undo_with_changes'
 ]);
 
+export const contentFormatEnum = pgEnum('content_format', ['text', 'html', 'json', 'tiptap']);
+
 export const activityResourceEnum = pgEnum('activity_resource', [
   'page',
   'drive',
@@ -448,10 +450,13 @@ export const activityLogs = pgTable('activity_logs', {
 
   // Content snapshot for rollback support
   contentSnapshot: text('contentSnapshot'),
-  contentFormat: text('contentFormat'), // 'text' | 'html' | 'json' | 'tiptap' - for proper content parsing during rollback
+  contentFormat: contentFormatEnum('contentFormat'), // For proper content parsing during rollback
 
-  // Rollback tracking
-  rollbackFromActivityId: text('rollbackFromActivityId'), // Links rollback operation to the source activity that was restored
+  // Rollback tracking - denormalized source info for audit trail preservation (survives retention deletion)
+  rollbackFromActivityId: text('rollbackFromActivityId'), // Links rollback operation to the source activity
+  rollbackSourceOperation: activityOperationEnum('rollbackSourceOperation'), // Snapshot of source activity operation
+  rollbackSourceTimestamp: timestamp('rollbackSourceTimestamp', { mode: 'date' }), // Snapshot of source activity timestamp
+  rollbackSourceTitle: text('rollbackSourceTitle'), // Snapshot of source resource title
 
   // Change details
   updatedFields: jsonb('updatedFields').$type<string[]>(),
@@ -497,5 +502,5 @@ export const retentionPolicies = pgTable('retention_policies', {
   subscriptionTier: text('subscriptionTier').notNull().unique(), // 'free' | 'pro' | 'business' | 'founder'
   retentionDays: integer('retentionDays').notNull(), // -1 = unlimited
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
-  updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
+  updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
 });
