@@ -10,8 +10,9 @@ import { usePageTree } from '@/hooks/usePageTree';
 import { useParams } from 'next/navigation';
 import { patch } from '@/lib/auth/auth-fetch';
 
-export function EditableTitle() {
-  const pageId = usePageStore((state) => state.pageId);
+export function EditableTitle({ pageId: propPageId }: { pageId?: string | null } = {}) {
+  const storePageId = usePageStore((state) => state.pageId);
+  const pageId = propPageId !== undefined ? propPageId : storePageId;
   const { mutate } = useSWRConfig();
   const params = useParams();
   const driveId = params.driveId as string;
