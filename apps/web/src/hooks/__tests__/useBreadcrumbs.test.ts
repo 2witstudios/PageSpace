@@ -172,12 +172,12 @@ describe('useBreadcrumbs', () => {
       expect(result.current.breadcrumbs).toBeUndefined();
     });
 
-    it('given null pageId, should return isLoading=true (no data returned)', () => {
+    it('given null pageId, should return isLoading=false (nothing to load)', () => {
       const { result } = renderHook(() => useBreadcrumbs(null));
 
-      // With null key, SWR returns undefined data and no error
-      // isLoading = !error && !data = true
-      expect(result.current.isLoading).toBe(true);
+      // With null pageId, we're not loading - there's nothing to fetch
+      // isLoading = !error && !data && !!pageId = true && true && false = false
+      expect(result.current.isLoading).toBe(false);
       expect(result.current.breadcrumbs).toBeUndefined();
     });
   });

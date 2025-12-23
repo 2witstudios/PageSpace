@@ -53,6 +53,7 @@ describe('rollback-permissions', () => {
   describe('isRollbackableOperation', () => {
     describe('rollbackable operations', () => {
       const rollbackableOps = [
+        'create',
         'update',
         'delete',
         'trash',
@@ -78,7 +79,6 @@ describe('rollback-permissions', () => {
 
     describe('non-rollbackable operations', () => {
       const nonRollbackableOps = [
-        'create',
         'signup',
         'login',
         'logout',
@@ -158,7 +158,7 @@ describe('rollback-permissions', () => {
 
     it('returns false when operation is not rollbackable', () => {
       const activity = {
-        operation: 'create',
+        operation: 'signup',
         previousValues: { title: 'Title' },
         contentSnapshot: null,
       };
@@ -193,7 +193,7 @@ describe('rollback-permissions', () => {
 
   describe('canUserRollback', () => {
     describe('non-rollbackable operations rejection', () => {
-      const nonRollbackableOps = ['create', 'signup', 'login', 'logout'];
+      const nonRollbackableOps = ['signup', 'login', 'logout'];
 
       it.each(nonRollbackableOps)(
         'denies rollback for %s operation regardless of context',

@@ -156,15 +156,14 @@ export async function POST(
       errorCount: result.errors.length,
     });
 
-    if (!result.success && result.errors.length > 0) {
-      // Partial success or failure
+    if (!result.success) {
       return NextResponse.json(
         {
           ...result,
           success: false,
-          message: 'Some operations could not be completed',
+          message: 'Undo failed. No changes were applied.',
         },
-        { status: result.messagesDeleted > 0 || result.activitiesRolledBack > 0 ? 207 : 500 }
+        { status: 500 }
       );
     }
 
