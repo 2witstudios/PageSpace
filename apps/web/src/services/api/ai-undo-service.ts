@@ -7,7 +7,7 @@
  * 2. messages_and_changes - Soft-delete messages AND rollback all tool call changes
  */
 
-import { db, chatMessages, activityLogs, eq, and, gte, desc } from '@pagespace/db';
+import { db, chatMessages, messages, activityLogs, eq, and, gte, desc } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import {
   logConversationUndo,
@@ -25,8 +25,9 @@ import {
 export interface AiUndoPreview {
   messageId: string;
   conversationId: string;
-  pageId: string;
+  pageId: string | null;
   driveId: string | null;
+  source: MessageSource;
   createdAt: Date; // Message creation timestamp for undo cutoff
   messagesAffected: number;
   activitiesAffected: {
@@ -57,13 +58,60 @@ export interface AiUndoResult {
 }
 
 /**
- * Get a message by ID with its conversation info
+ * Source table for the message
  */
-async function getMessage(messageId: string) {
-  const message = await db.query.chatMessages.findFirst({
+export type MessageSource = 'page_chat' | 'global_chat';
+
+/**
+ * Normalized message object for undo operations
+ */
+interface AiMessage {
+  id: string;
+  conversationId: string;
+  pageId: string | null;
+  createdAt: Date;
+  isActive: boolean;
+  source: MessageSource;
+}
+
+/**
+ * Get a message by ID with its conversation info
+ * Tries both chat_messages (page chats) and messages (global chats)
+ */
+async function getMessage(messageId: string): Promise<AiMessage | null> {
+  // Try page chat messages first
+  const pageMessage = await db.query.chatMessages.findFirst({
     where: eq(chatMessages.id, messageId),
   });
-  return message;
+
+  if (pageMessage) {
+    return {
+      id: pageMessage.id,
+      conversationId: pageMessage.conversationId,
+      pageId: pageMessage.pageId,
+      createdAt: pageMessage.createdAt,
+      isActive: pageMessage.isActive,
+      source: 'page_chat',
+    };
+  }
+
+  // Try global assistant messages
+  const globalMessage = await db.query.messages.findFirst({
+    where: eq(messages.id, messageId),
+  });
+
+  if (globalMessage) {
+    return {
+      id: globalMessage.id,
+      conversationId: globalMessage.conversationId,
+      pageId: null, // Global messages don't have a pageId directly
+      createdAt: globalMessage.createdAt,
+      isActive: globalMessage.isActive,
+      source: 'global_chat',
+    };
+  }
+
+  return null;
 }
 
 /**
@@ -92,18 +140,21 @@ export async function previewAiUndo(
       return null;
     }
 
-    const { conversationId, pageId, createdAt } = message;
-    const driveId = await getPageDriveId(pageId);
+    const { conversationId, pageId, createdAt, source } = message;
+    const driveId = pageId ? await getPageDriveId(pageId) : null;
 
     // Count messages that will be affected (from this message forward in the conversation)
+    // Use the correct table based on source
+    const table = source === 'page_chat' ? chatMessages : messages;
+
     const affectedMessages = await db
-      .select({ id: chatMessages.id })
-      .from(chatMessages)
+      .select({ id: table.id })
+      .from(table)
       .where(
         and(
-          eq(chatMessages.conversationId, conversationId),
-          gte(chatMessages.createdAt, createdAt),
-          eq(chatMessages.isActive, true)
+          eq(table.conversationId, conversationId),
+          gte(table.createdAt, createdAt),
+          eq(table.isActive, true)
         )
       );
 
@@ -160,6 +211,7 @@ export async function previewAiUndo(
       conversationId,
       pageId,
       driveId,
+      source,
       createdAt,
       messagesAffected,
       activitiesAffected,
@@ -233,14 +285,16 @@ export async function executeAiUndo(
 
       // Only reached if all rollbacks succeed
       // Soft-delete messages in the same transaction
+      const table = preview.source === 'page_chat' ? chatMessages : messages;
+
       await tx
-        .update(chatMessages)
+        .update(table)
         .set({ isActive: false })
         .where(
           and(
-            eq(chatMessages.conversationId, conversationId),
-            gte(chatMessages.createdAt, createdAt),
-            eq(chatMessages.isActive, true)
+            eq(table.conversationId, conversationId),
+            gte(table.createdAt, createdAt),
+            eq(table.isActive, true)
           )
         );
     });
@@ -255,8 +309,8 @@ export async function executeAiUndo(
       messagesDeleted,
       activitiesRolledBack,
       rolledBackActivityIds: rolledBackActivityIds.length > 0 ? rolledBackActivityIds : undefined,
-      pageId,
-      driveId,
+      pageId: pageId ?? undefined,
+      driveId: driveId ?? undefined,
     });
 
     loggers.api.info('[AiUndoService] Undo completed', {
