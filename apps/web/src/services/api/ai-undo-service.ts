@@ -210,39 +210,36 @@ export async function executeAiUndo(
     const rolledBackActivityIds: string[] = [];
 
     // Execute all operations in a single transaction for atomicity
-    // If any rollback fails or message deletion fails, everything is rolled back
+    // All-or-nothing: if any rollback fails, entire transaction is aborted
     await db.transaction(async (tx) => {
       // If mode includes changes, rollback activities in reverse chronological order
       if (mode === 'messages_and_changes') {
         for (const activity of preview.activitiesAffected) {
           if (!activity.canRollback) {
-            errors.push(`Skipped: ${activity.operation} on ${activity.resourceTitle || activity.resourceType} - ${activity.reason}`);
-            continue;
+            // Non-rollbackable items abort the entire transaction
+            throw new Error(`Cannot undo ${activity.operation} on ${activity.resourceTitle || activity.resourceType}: ${activity.reason}`);
           }
 
-          try {
-            // Determine context based on resource type
-            // Note: All activities here are AI-generated (filtered by query), so we use
-            // 'ai_tool' context for pages to match preview logic and permission checks
-            let context: RollbackContext = 'ai_tool';
-            if (activity.resourceType === 'drive') {
-              context = 'drive';
-            }
-
-            // Pass transaction to executeRollback for atomicity
-            const result = await executeRollback(activity.id, userId, context, tx);
-            if (result.success) {
-              activitiesRolledBack++;
-              rolledBackActivityIds.push(activity.id);
-            } else {
-              errors.push(`Failed to undo ${activity.operation} on ${activity.resourceTitle || activity.resourceType}: ${result.message}`);
-            }
-          } catch (error) {
-            errors.push(`Error undoing ${activity.operation}: ${error instanceof Error ? error.message : String(error)}`);
+          // Determine context based on resource type
+          // Note: All activities here are AI-generated (filtered by query), so we use
+          // 'ai_tool' context for pages to match preview logic and permission checks
+          let context: RollbackContext = 'ai_tool';
+          if (activity.resourceType === 'drive') {
+            context = 'drive';
           }
+
+          // Pass transaction to executeRollback for atomicity
+          // Any failure aborts entire transaction
+          const result = await executeRollback(activity.id, userId, context, tx);
+          if (!result.success) {
+            throw new Error(`Failed to undo ${activity.operation} on ${activity.resourceTitle || activity.resourceType}: ${result.message}`);
+          }
+          activitiesRolledBack++;
+          rolledBackActivityIds.push(activity.id);
         }
       }
 
+      // Only reached if all rollbacks succeed
       // Soft-delete messages in the same transaction
       await tx
         .update(chatMessages)

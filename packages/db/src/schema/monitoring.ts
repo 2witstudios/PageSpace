@@ -12,9 +12,10 @@ import {
   index,
   real,
   uuid,
-  pgEnum
+  pgEnum,
+  check
 } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
 import { drives, pages } from './core';
@@ -503,4 +504,6 @@ export const retentionPolicies = pgTable('retention_policies', {
   retentionDays: integer('retentionDays').notNull(), // -1 = unlimited
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
-});
+}, (table) => ({
+  validRetentionDays: check('valid_retention_days', sql`${table.retentionDays} >= -1`),
+}));
