@@ -36,6 +36,8 @@ import {
   logAgentConfigActivity,
   logMessageActivity,
   logRoleActivity,
+  logRollbackActivity,
+  logConversationUndo,
   type ActivityLogInput,
 } from '../activity-logger';
 
@@ -490,6 +492,277 @@ describe('activity logger compliance', () => {
       // Assert - for reorder, resourceId is the driveId since it affects multiple roles
       expect(capturedInsertValues).toMatchObject({
         resourceId: 'drive-1',
+      });
+    });
+  });
+
+  describe('logRollbackActivity convenience wrapper', () => {
+    it('should log rollback operation with source activity reference', async () => {
+      // Arrange & Act
+      logRollbackActivity(
+        'user-123',
+        'source-activity-456',
+        {
+          resourceType: 'page',
+          resourceId: 'page-1',
+          resourceTitle: 'Test Page',
+          driveId: 'drive-1',
+          pageId: 'page-1',
+        },
+        { actorEmail: 'john@example.com', actorDisplayName: 'John Doe' }
+      );
+
+      // Wait for async execution
+      await vi.waitFor(() => {
+        expect(capturedInsertValues).not.toBeNull();
+      });
+
+      // Assert
+      expect(capturedInsertValues).toMatchObject({
+        operation: 'rollback',
+        resourceType: 'page',
+        resourceId: 'page-1',
+        resourceTitle: 'Test Page',
+        driveId: 'drive-1',
+        pageId: 'page-1',
+        actorEmail: 'john@example.com',
+        actorDisplayName: 'John Doe',
+        rollbackFromActivityId: 'source-activity-456',
+      });
+    });
+
+    it('should include restored and replaced values', async () => {
+      // Arrange & Act
+      logRollbackActivity(
+        'user-123',
+        'source-activity-456',
+        {
+          resourceType: 'page',
+          resourceId: 'page-1',
+          driveId: 'drive-1',
+        },
+        { actorEmail: 'john@example.com' },
+        {
+          restoredValues: { title: 'Old Title' },
+          replacedValues: { title: 'New Title' },
+        }
+      );
+
+      // Wait for async execution
+      await vi.waitFor(() => {
+        expect(capturedInsertValues).not.toBeNull();
+      });
+
+      // Assert - previousValues = what we're replacing, newValues = what we restored
+      expect(capturedInsertValues).toMatchObject({
+        previousValues: { title: 'New Title' },
+        newValues: { title: 'Old Title' },
+      });
+    });
+
+    it('should include source activity snapshot for audit trail preservation', async () => {
+      // Arrange & Act
+      const sourceTimestamp = new Date('2024-01-10T10:00:00Z');
+
+      logRollbackActivity(
+        'user-123',
+        'source-activity-456',
+        {
+          resourceType: 'page',
+          resourceId: 'page-1',
+          driveId: 'drive-1',
+        },
+        { actorEmail: 'john@example.com' },
+        {
+          rollbackSourceOperation: 'update',
+          rollbackSourceTimestamp: sourceTimestamp,
+          rollbackSourceTitle: 'Original Page Title',
+        }
+      );
+
+      // Wait for async execution
+      await vi.waitFor(() => {
+        expect(capturedInsertValues).not.toBeNull();
+      });
+
+      // Assert - denormalized source info survives retention policy deletion
+      expect(capturedInsertValues).toMatchObject({
+        rollbackFromActivityId: 'source-activity-456',
+        rollbackSourceOperation: 'update',
+        rollbackSourceTimestamp: sourceTimestamp,
+        rollbackSourceTitle: 'Original Page Title',
+      });
+    });
+
+    it('should include content snapshot when rolling back content', async () => {
+      // Arrange & Act
+      logRollbackActivity(
+        'user-123',
+        'source-activity-456',
+        {
+          resourceType: 'page',
+          resourceId: 'page-1',
+          driveId: 'drive-1',
+        },
+        { actorEmail: 'john@example.com' },
+        {
+          contentSnapshot: '<p>Restored content</p>',
+          contentFormat: 'tiptap',
+        }
+      );
+
+      // Wait for async execution
+      await vi.waitFor(() => {
+        expect(capturedInsertValues).not.toBeNull();
+      });
+
+      // Assert
+      expect(capturedInsertValues).toMatchObject({
+        contentSnapshot: '<p>Restored content</p>',
+        contentFormat: 'tiptap',
+      });
+    });
+  });
+
+  describe('logConversationUndo convenience wrapper', () => {
+    it('should log conversation_undo for messages_only mode', async () => {
+      // Arrange & Act
+      logConversationUndo(
+        'user-123',
+        'conv-456',
+        'msg-789',
+        { actorEmail: 'john@example.com', actorDisplayName: 'John Doe' },
+        {
+          mode: 'messages_only',
+          messagesDeleted: 5,
+          activitiesRolledBack: 0,
+          pageId: 'page-1',
+          driveId: 'drive-1',
+        }
+      );
+
+      // Wait for async execution
+      await vi.waitFor(() => {
+        expect(capturedInsertValues).not.toBeNull();
+      });
+
+      // Assert
+      expect(capturedInsertValues).toMatchObject({
+        operation: 'conversation_undo',
+        resourceType: 'conversation',
+        resourceId: 'conv-456',
+        actorEmail: 'john@example.com',
+        actorDisplayName: 'John Doe',
+        pageId: 'page-1',
+        driveId: 'drive-1',
+      });
+    });
+
+    it('should log conversation_undo_with_changes for messages_and_changes mode', async () => {
+      // Arrange & Act
+      logConversationUndo(
+        'user-123',
+        'conv-456',
+        'msg-789',
+        { actorEmail: 'john@example.com' },
+        {
+          mode: 'messages_and_changes',
+          messagesDeleted: 3,
+          activitiesRolledBack: 2,
+          rolledBackActivityIds: ['act-1', 'act-2'],
+        }
+      );
+
+      // Wait for async execution
+      await vi.waitFor(() => {
+        expect(capturedInsertValues).not.toBeNull();
+      });
+
+      // Assert
+      expect(capturedInsertValues).toMatchObject({
+        operation: 'conversation_undo_with_changes',
+        resourceType: 'conversation',
+      });
+    });
+
+    it('should include undo metadata with counts and IDs', async () => {
+      // Arrange & Act
+      logConversationUndo(
+        'user-123',
+        'conv-456',
+        'msg-789',
+        { actorEmail: 'john@example.com' },
+        {
+          mode: 'messages_and_changes',
+          messagesDeleted: 3,
+          activitiesRolledBack: 2,
+          rolledBackActivityIds: ['act-1', 'act-2'],
+        }
+      );
+
+      // Wait for async execution
+      await vi.waitFor(() => {
+        expect(capturedInsertValues).not.toBeNull();
+      });
+
+      // Assert - metadata contains undo details
+      expect(capturedInsertValues?.metadata).toMatchObject({
+        messageId: 'msg-789',
+        messagesDeleted: 3,
+        activitiesRolledBack: 2,
+        rolledBackActivityIds: ['act-1', 'act-2'],
+        mode: 'messages_and_changes',
+      });
+    });
+
+    it('should include previousValues indicating messages were active', async () => {
+      // Arrange & Act
+      logConversationUndo(
+        'user-123',
+        'conv-456',
+        'msg-789',
+        { actorEmail: 'john@example.com' },
+        {
+          mode: 'messages_only',
+          messagesDeleted: 1,
+          activitiesRolledBack: 0,
+        }
+      );
+
+      // Wait for async execution
+      await vi.waitFor(() => {
+        expect(capturedInsertValues).not.toBeNull();
+      });
+
+      // Assert - previousValues tracks that messages were active before undo
+      expect(capturedInsertValues).toMatchObject({
+        previousValues: { messagesWereActive: true },
+      });
+    });
+
+    it('should handle null driveId for global assistant conversations', async () => {
+      // Arrange & Act
+      logConversationUndo(
+        'user-123',
+        'conv-456',
+        'msg-789',
+        { actorEmail: 'john@example.com' },
+        {
+          mode: 'messages_only',
+          messagesDeleted: 1,
+          activitiesRolledBack: 0,
+          driveId: null,
+        }
+      );
+
+      // Wait for async execution
+      await vi.waitFor(() => {
+        expect(capturedInsertValues).not.toBeNull();
+      });
+
+      // Assert
+      expect(capturedInsertValues).toMatchObject({
+        driveId: null,
       });
     });
   });
