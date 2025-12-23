@@ -296,10 +296,13 @@ export const pageReadTools = {
 
         return {
           success: true,
+          pageId: page.id,
+          driveId: page.driveId,
           title: page.title,
           type: page.type,
           isTaskLinked,
           content: numberedContent,
+          htmlContent: page.content, // Raw HTML for rich text preview
           lineCount: lines.length,
           summary: `Read "${page.title}" (${lines.length} lines, ${page.type.toLowerCase()})${isTaskLinked ? ' - linked to task' : ''}`,
           stats: {

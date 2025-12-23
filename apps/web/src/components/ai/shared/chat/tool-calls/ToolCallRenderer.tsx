@@ -11,6 +11,7 @@ import { PageAgentConversationRenderer } from '@/components/ai/page-agents';
 import { FileTreeRenderer } from './FileTreeRenderer';
 import { DocumentRenderer } from './DocumentRenderer';
 import { TaskRenderer } from './TaskRenderer';
+import { ReadPagePreview } from './previews';
 
 
 
@@ -178,15 +179,32 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
           return <FileTreeRenderer tree={result.tree} />;
         }
 
-        if (toolName === 'read_page' && result.content) {
-          return (
-            <DocumentRenderer
-              title={result.title || result.path || 'Document'}
-              content={result.content}
-              language={inferLanguage(result.path)}
-              description={result.lineCount !== undefined ? `${result.lineCount} lines` : undefined}
-            />
-          );
+        if (toolName === 'read_page' && result.success) {
+          // Use rich text preview for DOCUMENT types
+          if (result.type === 'DOCUMENT' && result.htmlContent && result.pageId && result.driveId) {
+            return (
+              <ReadPagePreview
+                title={result.title || 'Document'}
+                pageId={result.pageId}
+                driveId={result.driveId}
+                content={result.htmlContent}
+                pageType={result.type}
+                isTaskLinked={result.isTaskLinked}
+                stats={result.stats}
+              />
+            );
+          }
+          // Fallback to code view for non-document types (FILE, SHEET, etc.)
+          if (result.content) {
+            return (
+              <DocumentRenderer
+                title={result.title || result.path || 'Document'}
+                content={result.content}
+                language={inferLanguage(result.path)}
+                description={result.lineCount !== undefined ? `${result.lineCount} lines` : undefined}
+              />
+            );
+          }
         }
 
         if (toolName === 'replace_lines' && result.content) {
