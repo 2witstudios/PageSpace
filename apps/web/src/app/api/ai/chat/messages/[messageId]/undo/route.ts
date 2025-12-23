@@ -156,7 +156,7 @@ export async function POST(
       errorCount: result.errors.length,
     });
 
-    if (!result.success && result.errors.length > 0) {
+    if (!result.success) {
       return NextResponse.json(
         {
           ...result,

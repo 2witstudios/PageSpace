@@ -100,18 +100,25 @@ describe('usePermissions', () => {
       // Arrange: No active editing/streaming
       vi.mocked(useEditingStore).mockReturnValue(false); // isAnyActive returns false
 
-      vi.mocked(useSWR).mockReturnValue({
-        data: undefined,
-        error: undefined,
-        isLoading: false,
-        mutate: vi.fn(),
-        isValidating: false,
-      } as SWRResponse);
+      // Mock SWR and trigger onSuccess to set hasLoadedRef.current = true
+      vi.mocked(useSWR).mockImplementation((key, fetcher, config) => {
+        // Trigger onSuccess to simulate initial load completed
+        if (config?.onSuccess) {
+          config.onSuccess({ canView: true, canEdit: true, canShare: true, canDelete: true }, key as string, {} as never);
+        }
+        return {
+          data: { canView: true, canEdit: true, canShare: true, canDelete: true },
+          error: undefined,
+          isLoading: false,
+          mutate: vi.fn(),
+          isValidating: false,
+        } as SWRResponse;
+      });
 
       // Act: Render hook
       renderHook(() => usePermissions('page-123'));
 
-      // Assert: SWR isPaused returns false
+      // Assert: SWR isPaused returns false (hasLoadedRef.current=true && isAnyActive=false => false)
       const swrCall = vi.mocked(useSWR).mock.calls[0];
       const swrConfig = swrCall[2] as { isPaused?: () => boolean };
 

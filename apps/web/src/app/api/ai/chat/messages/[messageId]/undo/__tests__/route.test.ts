@@ -362,5 +362,21 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
       expect(body.success).toBe(false);
       expect(body.message).toBe('Undo failed. No changes were applied.');
     });
+
+    it('returns 500 when operations fail with empty errors array', async () => {
+      (executeAiUndo as Mock).mockResolvedValue({
+        success: false,
+        messagesDeleted: 0,
+        activitiesRolledBack: 0,
+        errors: [],
+      });
+
+      const response = await POST(createPostRequest({ mode: 'messages_only' }), { params: mockParams });
+      const body = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(body.success).toBe(false);
+      expect(body.message).toBe('Undo failed. No changes were applied.');
+    });
   });
 });
