@@ -157,14 +157,13 @@ export async function POST(
     });
 
     if (!result.success && result.errors.length > 0) {
-      // Partial success or failure
       return NextResponse.json(
         {
           ...result,
           success: false,
           message: 'Some operations could not be completed',
         },
-        { status: result.messagesDeleted > 0 || result.activitiesRolledBack > 0 ? 207 : 500 }
+        { status: 500 }
       );
     }
 

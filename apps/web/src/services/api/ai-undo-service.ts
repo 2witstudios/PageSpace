@@ -360,8 +360,8 @@ export async function executeAiUndo(
 
     return {
       success: false,
-      messagesDeleted,
-      activitiesRolledBack,
+      messagesDeleted: 0,
+      activitiesRolledBack: 0,
       errors: [...errors, error instanceof Error ? error.message : 'Unknown error'],
     };
   }
