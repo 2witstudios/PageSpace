@@ -260,7 +260,13 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
       const response = await POST(createPostRequest({ mode: 'messages_only' }), { params: mockParams });
 
       expect(response.status).toBe(200);
-      expect(executeAiUndo).toHaveBeenCalledWith(mockMessageId, mockUserId, 'messages_only');
+      // Route passes preview to avoid redundant computation
+      expect(executeAiUndo).toHaveBeenCalledWith(
+        mockMessageId,
+        mockUserId,
+        'messages_only',
+        expect.objectContaining({ source: 'page_chat', pageId: mockPageId })
+      );
     });
 
     it('accepts messages_and_changes mode', async () => {
@@ -274,7 +280,13 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
       const response = await POST(createPostRequest({ mode: 'messages_and_changes' }), { params: mockParams });
 
       expect(response.status).toBe(200);
-      expect(executeAiUndo).toHaveBeenCalledWith(mockMessageId, mockUserId, 'messages_and_changes');
+      // Route passes preview to avoid redundant computation
+      expect(executeAiUndo).toHaveBeenCalledWith(
+        mockMessageId,
+        mockUserId,
+        'messages_and_changes',
+        expect.objectContaining({ source: 'page_chat', pageId: mockPageId })
+      );
     });
   });
 
@@ -339,6 +351,9 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
   // ============================================
 
   describe('partial failure', () => {
+    // Note: The current service implementation uses an all-or-nothing transaction,
+    // so partial success (some ops succeed, some fail) may not occur in practice.
+    // These tests validate the route handler's defensive handling of service results.
     it('returns 207 when some operations completed', async () => {
       (executeAiUndo as Mock).mockResolvedValue({
         success: false,

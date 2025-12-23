@@ -162,14 +162,23 @@ export async function previewAiUndo(
 
     // Find the message immediately preceding this one in the same conversation
     // to include any tool calls that happened before this message was created
-    const precedingMessage = await db.query[source === 'page_chat' ? 'chatMessages' : 'messages'].findFirst({
-      where: and(
-        eq(table.conversationId, conversationId),
-        lt(table.createdAt, createdAt),
-        eq(table.isActive, true)
-      ),
-      orderBy: desc(table.createdAt),
-    });
+    const precedingMessage = source === 'page_chat'
+      ? await db.query.chatMessages.findFirst({
+          where: and(
+            eq(chatMessages.conversationId, conversationId),
+            lt(chatMessages.createdAt, createdAt),
+            eq(chatMessages.isActive, true)
+          ),
+          orderBy: desc(chatMessages.createdAt),
+        })
+      : await db.query.messages.findFirst({
+          where: and(
+            eq(messages.conversationId, conversationId),
+            lt(messages.createdAt, createdAt),
+            eq(messages.isActive, true)
+          ),
+          orderBy: desc(messages.createdAt),
+        });
 
     // Use preceding message's timestamp (if it exists) to catch all activities in this turn
     // If no preceding message, we still start from createdAt but tool calls might be missed
@@ -194,13 +203,9 @@ export async function previewAiUndo(
     const warnings: string[] = [];
 
     for (const activity of activities) {
-      // Determine context based on resource type
-      let context: RollbackContext = 'page';
-      if (activity.resourceType === 'drive') {
-        context = 'drive';
-      } else if (activity.isAiGenerated) {
-        context = 'ai_tool';
-      }
+      // Activities are already filtered for isAiGenerated=true by the query above,
+      // so we use 'ai_tool' context for pages and 'drive' context for drives
+      const context: RollbackContext = activity.resourceType === 'drive' ? 'drive' : 'ai_tool';
 
       const preview = await previewRollback(activity.id, userId, context);
 
@@ -244,19 +249,21 @@ export async function previewAiUndo(
 
 /**
  * Execute an undo operation
+ * @param existingPreview - Optional pre-computed preview to avoid redundant database queries
  */
 export async function executeAiUndo(
   messageId: string,
   userId: string,
-  mode: UndoMode
+  mode: UndoMode,
+  existingPreview?: AiUndoPreview
 ): Promise<AiUndoResult> {
   const errors: string[] = [];
   let activitiesRolledBack = 0;
   let messagesDeleted = 0;
 
   try {
-    // Get the message and preview
-    const preview = await previewAiUndo(messageId, userId);
+    // Use existing preview if provided, otherwise compute it
+    const preview = existingPreview ?? await previewAiUndo(messageId, userId);
     if (!preview) {
       return {
         success: false,

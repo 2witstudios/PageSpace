@@ -5,7 +5,7 @@ import { canUserEditPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
-import { previewAiUndo, executeAiUndo } from '@/services/api';
+import { previewAiUndo, executeAiUndo, type AiUndoPreview } from '@/services/api';
 
 // Request body schema for POST /undo
 const undoBodySchema = z.object({
@@ -14,6 +14,50 @@ const undoBodySchema = z.object({
 
 const AUTH_OPTIONS_READ = { allow: ['jwt', 'mcp'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
+
+/**
+ * Check undo permissions based on preview source
+ * Returns a NextResponse if permission denied, null if allowed
+ */
+async function checkUndoPermissions(
+  userId: string,
+  messageId: string,
+  preview: AiUndoPreview,
+  operationType: 'preview' | 'execution'
+): Promise<NextResponse | null> {
+  if (preview.source === 'page_chat') {
+    if (!preview.pageId) {
+      return NextResponse.json({ error: 'Page ID missing for page chat' }, { status: 500 });
+    }
+    const canEdit = await canUserEditPage(userId, preview.pageId);
+    if (!canEdit) {
+      loggers.api.warn(`Undo ${operationType} permission denied`, {
+        userId: maskIdentifier(userId),
+        messageId: maskIdentifier(messageId),
+        pageId: maskIdentifier(preview.pageId)
+      });
+      return NextResponse.json(
+        { error: 'You do not have permission to undo messages in this chat' },
+        { status: 403 }
+      );
+    }
+  } else {
+    // Global Assistant chat - verify conversation ownership
+    const conversation = await globalConversationRepository.getConversationById(userId, preview.conversationId);
+    if (!conversation) {
+      loggers.api.warn(`Undo ${operationType} permission denied (Global)`, {
+        userId: maskIdentifier(userId),
+        messageId: maskIdentifier(messageId),
+        conversationId: maskIdentifier(preview.conversationId)
+      });
+      return NextResponse.json(
+        { error: 'You do not have permission to undo messages in this chat' },
+        { status: 403 }
+      );
+    }
+  }
+  return null;
+}
 
 /**
  * GET - Preview what will be undone
@@ -38,38 +82,9 @@ export async function GET(
       return NextResponse.json({ error: 'Message not found or preview failed' }, { status: 404 });
     }
 
-    // Check permissions based on source
-    if (preview.source === 'page_chat') {
-      if (!preview.pageId) {
-        return NextResponse.json({ error: 'Page ID missing for page chat' }, { status: 500 });
-      }
-      const canEdit = await canUserEditPage(userId, preview.pageId);
-      if (!canEdit) {
-        loggers.api.warn('Undo preview permission denied', {
-          userId: maskIdentifier(userId),
-          messageId: maskIdentifier(messageId),
-          pageId: maskIdentifier(preview.pageId)
-        });
-        return NextResponse.json(
-          { error: 'You do not have permission to undo messages in this chat' },
-          { status: 403 }
-        );
-      }
-    } else {
-      // Global Assistant chat - verify conversation ownership
-      const conversation = await globalConversationRepository.getConversationById(userId, preview.conversationId);
-      if (!conversation) {
-        loggers.api.warn('Undo preview permission denied (Global)', {
-          userId: maskIdentifier(userId),
-          messageId: maskIdentifier(messageId),
-          conversationId: maskIdentifier(preview.conversationId)
-        });
-        return NextResponse.json(
-          { error: 'You do not have permission to undo messages in this chat' },
-          { status: 403 }
-        );
-      }
-    }
+    // Check permissions
+    const permissionError = await checkUndoPermissions(userId, messageId, preview, 'preview');
+    if (permissionError) return permissionError;
 
     loggers.api.info('Undo preview generated', {
       userId: maskIdentifier(userId),
@@ -124,41 +139,12 @@ export async function POST(
       return NextResponse.json({ error: 'Message not found or preview failed' }, { status: 404 });
     }
 
-    // Check permissions based on source
-    if (preview.source === 'page_chat') {
-      if (!preview.pageId) {
-        return NextResponse.json({ error: 'Page ID missing for page chat' }, { status: 500 });
-      }
-      const canEdit = await canUserEditPage(userId, preview.pageId);
-      if (!canEdit) {
-        loggers.api.warn('Undo execution permission denied', {
-          userId: maskIdentifier(userId),
-          messageId: maskIdentifier(messageId),
-          pageId: maskIdentifier(preview.pageId)
-        });
-        return NextResponse.json(
-          { error: 'You do not have permission to undo messages in this chat' },
-          { status: 403 }
-        );
-      }
-    } else {
-      // Global Assistant chat - verify conversation ownership
-      const conversation = await globalConversationRepository.getConversationById(userId, preview.conversationId);
-      if (!conversation) {
-        loggers.api.warn('Undo execution permission denied (Global)', {
-          userId: maskIdentifier(userId),
-          messageId: maskIdentifier(messageId),
-          conversationId: maskIdentifier(preview.conversationId)
-        });
-        return NextResponse.json(
-          { error: 'You do not have permission to undo messages in this chat' },
-          { status: 403 }
-        );
-      }
-    }
+    // Check permissions
+    const permissionError = await checkUndoPermissions(userId, messageId, preview, 'execution');
+    if (permissionError) return permissionError;
 
-    // Execute undo
-    const result = await executeAiUndo(messageId, userId, mode);
+    // Execute undo, passing preview to avoid redundant computation
+    const result = await executeAiUndo(messageId, userId, mode, preview);
 
     loggers.api.info('Undo executed', {
       userId: maskIdentifier(userId),
