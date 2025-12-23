@@ -31,11 +31,16 @@ function logPageActivityAsync(
   action: ActivityOperation,
   page: { id: string; title: string; driveId: string; content?: string },
   context: ToolExecutionContext,
-  metadata?: Record<string, unknown>
+  options?: {
+    metadata?: Record<string, unknown>;
+    previousValues?: Record<string, unknown>;
+    newValues?: Record<string, unknown>;
+    updatedFields?: string[];
+  }
 ) {
   // Build metadata with agent chain context (Tier 1)
   const chainMetadata = {
-    ...metadata,
+    ...options?.metadata,
     ...(context.parentAgentId && { parentAgentId: context.parentAgentId }),
     ...(context.parentConversationId && { parentConversationId: context.parentConversationId }),
     ...(context.agentChain?.length && { agentChain: context.agentChain }),
@@ -51,6 +56,9 @@ function logPageActivityAsync(
         aiModel: context.aiModel ?? 'unknown',
         aiConversationId: context.conversationId,
         metadata: chainMetadata,
+        previousValues: options?.previousValues,
+        newValues: options?.newValues,
+        updatedFields: options?.updatedFields,
       });
     })
     .catch(err => {
@@ -62,6 +70,9 @@ function logPageActivityAsync(
         aiModel: context.aiModel ?? 'unknown',
         aiConversationId: context.conversationId,
         metadata: chainMetadata,
+        previousValues: options?.previousValues,
+        newValues: options?.newValues,
+        updatedFields: options?.updatedFields,
       });
     });
 }
@@ -326,14 +337,20 @@ export const pageWriteTools = {
         );
 
         // Log activity for AI-generated content update (fire-and-forget)
+        // Store original content in contentSnapshot for rollback support
         logPageActivityAsync(userId, 'update', {
           id: page.id,
           title: page.title,
           driveId: page.driveId,
-          content: newContent,
+          content: page.content, // Original content before change - used for rollback
         }, context as ToolExecutionContext, {
-          linesChanged: endLine - startLine + 1,
-          changeType: isDeletion ? 'deletion' : 'replacement',
+          metadata: {
+            linesChanged: endLine - startLine + 1,
+            changeType: isDeletion ? 'deletion' : 'replacement',
+          },
+          previousValues: { content: page.content },
+          newValues: { content: newContent },
+          updatedFields: ['content'],
         });
 
         return {
@@ -443,7 +460,9 @@ export const pageWriteTools = {
           id: newPage.id,
           title: newPage.title,
           driveId: drive.id,
-        }, context as ToolExecutionContext, { pageType: newPage.type, parentId });
+        }, context as ToolExecutionContext, {
+          metadata: { pageType: newPage.type, parentId },
+        });
 
         // Build response
         const nextSteps: string[] = [];
@@ -530,7 +549,11 @@ export const pageWriteTools = {
           id: renamedPage.id,
           title: renamedPage.title,
           driveId: page.driveId,
-        }, context as ToolExecutionContext, { updatedFields: ['title'] });
+        }, context as ToolExecutionContext, {
+          previousValues: { title: page.title }, // Original title for rollback
+          newValues: { title: renamedPage.title },
+          updatedFields: ['title'],
+        });
 
         return {
           success: true,
@@ -587,7 +610,10 @@ export const pageWriteTools = {
             id: page.id,
             title: page.title,
             driveId: page.driveId,
-          }, context as ToolExecutionContext, { withChildren, childrenCount });
+          }, context as ToolExecutionContext, {
+            metadata: { withChildren, childrenCount },
+            previousValues: { isTrashed: false }, // For rollback - restore from trash
+          });
 
           return {
             success: true,
@@ -658,7 +684,9 @@ export const pageWriteTools = {
             id: page.id,
             title: page.title,
             driveId: page.driveId,
-          }, context as ToolExecutionContext);
+          }, context as ToolExecutionContext, {
+            previousValues: { isTrashed: true }, // For rollback - trash again
+          });
 
           return {
             success: true,
@@ -764,7 +792,12 @@ export const pageWriteTools = {
           id: movedPage.id,
           title: movedPage.title,
           driveId: page.driveId,
-        }, context as ToolExecutionContext, { newParentId, position });
+        }, context as ToolExecutionContext, {
+          metadata: { newParentId, position },
+          previousValues: { parentId: page.parentId, position: page.position }, // Original location for rollback
+          newValues: { parentId: newParentId ?? null, position },
+          updatedFields: ['parentId', 'position'],
+        });
 
         return {
           success: true,
@@ -862,12 +895,18 @@ export const pageWriteTools = {
         );
 
         // Log activity for AI-generated sheet edit (fire-and-forget)
+        // Store original content in contentSnapshot for rollback support
         logPageActivityAsync(userId, 'update', {
           id: page.id,
           title: page.title,
           driveId: page.driveId,
-          content: newContent,
-        }, context as ToolExecutionContext, { cellsUpdated: cells.length });
+          content: page.content, // Original content before change - used for rollback
+        }, context as ToolExecutionContext, {
+          metadata: { cellsUpdated: cells.length },
+          previousValues: { content: page.content },
+          newValues: { content: newContent },
+          updatedFields: ['content'],
+        });
 
         // Summarize changes for response
         const formulaCount = cells.filter(c => c.value.trim().startsWith('=')).length;

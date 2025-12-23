@@ -78,22 +78,13 @@ export const UndoAiChangesDialog: React.FC<UndoAiChangesDialogProps> = ({
     setError(null);
 
     try {
-      const res = await post<Response>(`/api/ai/chat/messages/${messageId}/undo`, { mode });
-
-      if (!res.ok) {
-        let errorMessage = 'Failed to undo changes';
-        try {
-          const data = await res.json();
-          errorMessage = data.error || errorMessage;
-        } catch {
-          // Response wasn't JSON, use default message
-        }
-        throw new Error(errorMessage);
-      }
+      // post() returns parsed JSON and throws on errors
+      await post(`/api/ai/chat/messages/${messageId}/undo`, { mode });
 
       onOpenChange(false);
       onSuccess?.();
     } catch (err) {
+      // post() extracts error messages from json.error or json.message
       setError(err instanceof Error ? err.message : 'Failed to undo changes');
     } finally {
       setExecuting(false);

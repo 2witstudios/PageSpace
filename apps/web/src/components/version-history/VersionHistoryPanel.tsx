@@ -131,12 +131,7 @@ export function VersionHistoryPanel({
 
   const handleRollback = async (activityId: string) => {
     try {
-      const response = await post<Response>(`/api/activities/${activityId}/rollback`, { context });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Rollback failed');
-      }
+      await post(`/api/activities/${activityId}/rollback`, { context });
 
       toast({
         title: 'Success',
@@ -151,7 +146,6 @@ export function VersionHistoryPanel({
         description: error instanceof Error ? error.message : 'Failed to rollback',
         variant: 'destructive',
       });
-      // Don't re-throw - error is handled via toast notification
     }
   };
 
