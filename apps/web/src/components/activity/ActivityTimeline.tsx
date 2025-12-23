@@ -2,7 +2,7 @@
 
 import { Activity, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { ActivityItem } from './ActivityItem';
+import { ActivityItem, type RollbackContext } from './ActivityItem';
 import { groupActivitiesByDate } from './utils';
 import type { ActivityLog, Pagination } from './types';
 
@@ -14,6 +14,8 @@ interface ActivityTimelineProps {
   onLoadMore: () => void;
   emptyMessage?: string;
   emptyDescription?: string;
+  context?: RollbackContext;
+  onRollback?: (activityId: string) => Promise<void>;
 }
 
 export function ActivityTimeline({
@@ -24,6 +26,8 @@ export function ActivityTimeline({
   onLoadMore,
   emptyMessage = 'No activity found',
   emptyDescription = 'Activity will appear here',
+  context,
+  onRollback,
 }: ActivityTimelineProps) {
   const groupedActivities = groupActivitiesByDate(activities);
 
@@ -54,7 +58,12 @@ export function ActivityTimeline({
           </h3>
           <div className="space-y-0">
             {groupActivities.map((activity) => (
-              <ActivityItem key={activity.id} activity={activity} />
+              <ActivityItem
+                key={activity.id}
+                activity={activity}
+                context={context}
+                onRollback={onRollback}
+              />
             ))}
           </div>
         </div>

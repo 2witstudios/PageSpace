@@ -1,11 +1,18 @@
 "use client";
 
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { useParams, usePathname } from 'next/navigation';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import {
   Activity,
   Search,
@@ -17,9 +24,13 @@ import {
   Bot,
   FolderPlus,
   Settings,
+  History,
+  MoreVertical,
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
-import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
+import { RollbackConfirmDialog } from '@/components/version-history/RollbackConfirmDialog';
+import { useToast } from '@/hooks/useToast';
 
 // Exported for unit testing
 export interface ActivityUser {
@@ -138,11 +149,17 @@ const operationLabels: Record<string, string> = {
 export default function SidebarActivityTab() {
   const params = useParams();
   const pathname = usePathname();
+  const { toast } = useToast();
 
   const [activities, setActivities] = useState<ActivityItem[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Rollback state
+  const [selectedActivityForRollback, setSelectedActivityForRollback] = useState<ActivityItem | null>(null);
+  const [showRollbackConfirm, setShowRollbackConfirm] = useState(false);
+  const [rollbackWarnings, setRollbackWarnings] = useState<string[]>([]);
 
   // Determine context and IDs from route params
   const driveId = params.driveId as string | undefined;
@@ -153,6 +170,13 @@ export default function SidebarActivityTab() {
     if (pageId) return 'page';
     if (driveId) return 'drive';
     return 'user'; // Dashboard view
+  }, [driveId, pageId]);
+
+  // Map to rollback API context
+  const rollbackContext = useMemo(() => {
+    if (pageId) return 'page';
+    if (driveId) return 'drive';
+    return 'user_dashboard';
   }, [driveId, pageId]);
 
   // Context-aware header text
@@ -168,37 +192,89 @@ export default function SidebarActivityTab() {
   }, [context]);
 
   // Load activities
-  useEffect(() => {
-    const loadActivities = async () => {
-      setLoading(true);
-      setError(null);
+  const loadActivities = useCallback(async () => {
+    setLoading(true);
+    setError(null);
 
-      try {
-        const queryParams = new URLSearchParams({ context });
-        if (driveId) queryParams.set('driveId', driveId);
-        if (pageId) queryParams.set('pageId', pageId);
+    try {
+      const queryParams = new URLSearchParams({ context });
+      if (driveId) queryParams.set('driveId', driveId);
+      if (pageId) queryParams.set('pageId', pageId);
 
-        const response = await fetchWithAuth(`/api/activities?${queryParams}`);
+      const response = await fetchWithAuth(`/api/activities?${queryParams}`);
 
-        if (response.ok) {
-          const data: ActivityResponse = await response.json();
-          setActivities(data.activities);
-        } else {
-          const errorData = await response.json().catch(() => ({}));
-          setError(errorData.error || 'Failed to load activity');
-          setActivities([]);
-        }
-      } catch (err) {
-        console.error('Failed to load activities:', err);
-        setError('Failed to load activity');
+      if (response.ok) {
+        const data: ActivityResponse = await response.json();
+        setActivities(data.activities);
+      } else {
+        const errorData = await response.json().catch(() => ({}));
+        setError(errorData.error || 'Failed to load activity');
         setActivities([]);
-      } finally {
-        setLoading(false);
       }
-    };
+    } catch (err) {
+      console.error('Failed to load activities:', err);
+      setError('Failed to load activity');
+      setActivities([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [context, driveId, pageId]);
 
+  useEffect(() => {
     loadActivities();
-  }, [context, driveId, pageId, pathname]);
+  }, [loadActivities, pathname]);
+
+  // Handle restore click - fetch preview and show confirm dialog
+  const handleRestoreClick = useCallback(async (activity: ActivityItem) => {
+    setSelectedActivityForRollback(activity);
+
+    try {
+      const response = await fetch(`/api/activities/${activity.id}?context=${rollbackContext}`);
+      if (!response.ok) {
+        throw new Error('Failed to load preview');
+      }
+      const data = await response.json();
+      setRollbackWarnings(data.warnings || []);
+    } catch (err) {
+      toast({
+        title: 'Error',
+        description: err instanceof Error ? err.message : 'Failed to load rollback preview',
+        variant: 'destructive',
+      });
+      setRollbackWarnings([]);
+    }
+    setShowRollbackConfirm(true);
+  }, [rollbackContext, toast]);
+
+  // Handle confirmed rollback
+  const handleConfirmRollback = useCallback(async () => {
+    if (!selectedActivityForRollback) return;
+
+    try {
+      const response = await post<Response>(`/api/activities/${selectedActivityForRollback.id}/rollback`, {
+        context: rollbackContext,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Rollback failed');
+      }
+
+      toast({
+        title: 'Success',
+        description: 'Successfully restored to previous version',
+      });
+
+      // Refresh the activity list
+      loadActivities();
+    } catch (err) {
+      toast({
+        title: 'Error',
+        description: err instanceof Error ? err.message : 'Failed to rollback',
+        variant: 'destructive',
+      });
+    }
+  }, [selectedActivityForRollback, rollbackContext, toast, loadActivities]);
 
   // Filter activities based on search query
   const filteredActivities = useMemo(() => {
@@ -270,7 +346,7 @@ export default function SidebarActivityTab() {
             {filteredActivities.map((activity) => (
               <div
                 key={activity.id}
-                className="py-2.5 px-3 hover:bg-accent/30 transition-colors"
+                className="py-2.5 px-3 hover:bg-accent/30 transition-colors group"
               >
                 <div className="flex items-start gap-2">
                   {/* User avatar or AI indicator */}
@@ -332,6 +408,26 @@ export default function SidebarActivityTab() {
                       )}
                     </div>
                   </div>
+
+                  {/* Rollback action */}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+                      >
+                        <MoreVertical className="h-3 w-3" />
+                        <span className="sr-only">Actions</span>
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={() => handleRestoreClick(activity)}>
+                        <History className="h-4 w-4 mr-2" />
+                        Restore this version
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
               </div>
             ))}
@@ -345,6 +441,17 @@ export default function SidebarActivityTab() {
           {activities.length} {activities.length === 1 ? 'event' : 'events'}
         </div>
       </div>
+
+      {/* Rollback Confirmation Dialog */}
+      <RollbackConfirmDialog
+        open={showRollbackConfirm}
+        onOpenChange={setShowRollbackConfirm}
+        resourceTitle={selectedActivityForRollback?.resourceTitle ?? null}
+        operation={operationLabels[selectedActivityForRollback?.operation ?? ''] || selectedActivityForRollback?.operation || ''}
+        timestamp={selectedActivityForRollback?.timestamp || new Date().toISOString()}
+        warnings={rollbackWarnings}
+        onConfirm={handleConfirmRollback}
+      />
     </div>
   );
 }
