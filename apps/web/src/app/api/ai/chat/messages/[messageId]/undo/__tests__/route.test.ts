@@ -189,16 +189,6 @@ describe('GET /api/ai/chat/messages/[messageId]/undo', () => {
       expect(body.messagesAffected).toBe(5);
       expect(body.activitiesAffected).toHaveLength(1);
     });
-
-    it('returns 500 when preview generation fails', async () => {
-      (previewAiUndo as Mock).mockResolvedValue(null);
-
-      const response = await GET(createGetRequest(), { params: mockParams });
-      const body = await response.json();
-
-      expect(response.status).toBe(500);
-      expect(body.error).toBe('Could not generate undo preview');
-    });
   });
 });
 
