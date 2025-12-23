@@ -23,6 +23,7 @@ import { drives, pages } from './core';
 // Enums
 export const logLevelEnum = pgEnum('log_level', ['trace', 'debug', 'info', 'warn', 'error', 'fatal']);
 export const httpMethodEnum = pgEnum('http_method', ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']);
+export const subscriptionTierEnum = pgEnum('subscription_tier', ['free', 'pro', 'business', 'founder']);
 
 /**
  * System logs - structured application logs
@@ -500,7 +501,7 @@ export const activityLogsRelations = relations(activityLogs, ({ one }) => ({
  */
 export const retentionPolicies = pgTable('retention_policies', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
-  subscriptionTier: text('subscriptionTier').notNull().unique(), // 'free' | 'pro' | 'business' | 'founder'
+  subscriptionTier: subscriptionTierEnum('subscriptionTier').notNull().unique(),
   retentionDays: integer('retentionDays').notNull(), // -1 = unlimited
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
