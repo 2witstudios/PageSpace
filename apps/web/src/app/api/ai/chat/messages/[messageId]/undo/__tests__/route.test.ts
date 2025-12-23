@@ -87,13 +87,6 @@ const createPostRequest = (body: object) => {
 
 const mockParams = Promise.resolve({ messageId: mockMessageId });
 
-const mockMessage = {
-  id: mockMessageId,
-  pageId: mockPageId,
-  conversationId: 'conv_123',
-  content: 'Test message',
-};
-
 describe('GET /api/ai/chat/messages/[messageId]/undo', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -262,7 +255,6 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
 
     it('returns 400 when mode is missing', async () => {
       const response = await POST(createPostRequest({}), { params: mockParams });
-      const body = await response.json();
 
       expect(response.status).toBe(400);
     });
