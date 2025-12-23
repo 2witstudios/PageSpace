@@ -18,6 +18,7 @@ import {
   logRollbackActivity,
   getActorInfo,
   type ActivityResourceType,
+  type ActivityOperation,
 } from '@pagespace/lib/monitoring';
 import { loggers } from '@pagespace/lib/server';
 
@@ -281,11 +282,13 @@ export async function previewRollback(
 
 /**
  * Execute a rollback operation
+ * @param tx - Optional transaction to use for all database operations (for atomicity)
  */
 export async function executeRollback(
   activityId: string,
   userId: string,
-  context: RollbackContext
+  context: RollbackContext,
+  tx?: typeof db
 ): Promise<RollbackResult> {
   const preview = await previewRollback(activityId, userId, context);
 
@@ -299,6 +302,7 @@ export async function executeRollback(
 
   const activity = preview.activity;
   const warnings: string[] = [...preview.warnings];
+  const database = tx ?? db;
 
   try {
     // Get actor info for logging
@@ -309,31 +313,31 @@ export async function executeRollback(
 
     switch (activity.resourceType) {
       case 'page':
-        restoredValues = await rollbackPageChange(activity, preview.currentValues);
+        restoredValues = await rollbackPageChange(activity, preview.currentValues, database);
         break;
 
       case 'drive':
-        restoredValues = await rollbackDriveChange(activity, preview.currentValues);
+        restoredValues = await rollbackDriveChange(activity, preview.currentValues, database);
         break;
 
       case 'permission':
-        restoredValues = await rollbackPermissionChange(activity);
+        restoredValues = await rollbackPermissionChange(activity, database);
         break;
 
       case 'agent':
-        restoredValues = await rollbackAgentConfigChange(activity, preview.currentValues);
+        restoredValues = await rollbackAgentConfigChange(activity, preview.currentValues, database);
         break;
 
       case 'member':
-        restoredValues = await rollbackMemberChange(activity);
+        restoredValues = await rollbackMemberChange(activity, database);
         break;
 
       case 'role':
-        restoredValues = await rollbackRoleChange(activity);
+        restoredValues = await rollbackRoleChange(activity, database);
         break;
 
       case 'message':
-        restoredValues = await rollbackMessageChange(activity);
+        restoredValues = await rollbackMessageChange(activity, database);
         break;
 
       default:
@@ -344,7 +348,7 @@ export async function executeRollback(
         };
     }
 
-    // Log the rollback activity
+    // Log the rollback activity with source snapshot for audit trail preservation
     logRollbackActivity(
       userId,
       activityId,
@@ -360,6 +364,10 @@ export async function executeRollback(
         restoredValues,
         replacedValues: preview.currentValues ?? undefined,
         contentSnapshot: activity.contentSnapshot ?? undefined,
+        // Source activity snapshot - survives retention policy deletion
+        rollbackSourceOperation: activity.operation as ActivityOperation,
+        rollbackSourceTimestamp: activity.timestamp,
+        rollbackSourceTitle: activity.resourceTitle ?? undefined,
       }
     );
 
@@ -389,7 +397,8 @@ export async function executeRollback(
  */
 async function rollbackPageChange(
   activity: ActivityLogForRollback,
-  _currentValues: Record<string, unknown> | null
+  _currentValues: Record<string, unknown> | null,
+  database: typeof db
 ): Promise<Record<string, unknown>> {
   if (!activity.pageId) {
     throw new Error('Page ID not found in activity');
@@ -420,7 +429,7 @@ async function rollbackPageChange(
   }
 
   // Update the page
-  await db
+  await database
     .update(pages)
     .set({
       ...updateData,
@@ -436,7 +445,8 @@ async function rollbackPageChange(
  */
 async function rollbackDriveChange(
   activity: ActivityLogForRollback,
-  _currentValues: Record<string, unknown> | null
+  _currentValues: Record<string, unknown> | null,
+  database: typeof db
 ): Promise<Record<string, unknown>> {
   if (!activity.driveId) {
     throw new Error('Drive ID not found in activity');
@@ -461,7 +471,7 @@ async function rollbackDriveChange(
   }
 
   // Update the drive
-  await db
+  await database
     .update(drives)
     .set({
       ...updateData,
@@ -476,7 +486,8 @@ async function rollbackDriveChange(
  * Rollback a permission change
  */
 async function rollbackPermissionChange(
-  activity: ActivityLogForRollback
+  activity: ActivityLogForRollback,
+  database: typeof db
 ): Promise<Record<string, unknown>> {
   const metadata = activity.metadata as { permissionId?: string; targetUserId?: string } | null;
   const previousValues = activity.previousValues || {};
@@ -493,7 +504,7 @@ async function rollbackPermissionChange(
   switch (activity.operation) {
     case 'permission_grant': {
       // A permission was granted - rollback by deleting it
-      await db
+      await database
         .delete(pagePermissions)
         .where(
           and(
@@ -523,7 +534,7 @@ async function rollbackPermissionChange(
         note: previousValues.note as string | null,
       };
 
-      await db.insert(pagePermissions).values(permissionData);
+      await database.insert(pagePermissions).values(permissionData);
 
       loggers.api.info('[RollbackService] Re-created revoked permission', {
         pageId: activity.pageId,
@@ -548,7 +559,7 @@ async function rollbackPermissionChange(
         throw new Error('No permission values to restore');
       }
 
-      await db
+      await database
         .update(pagePermissions)
         .set(updateData)
         .where(
@@ -577,7 +588,8 @@ async function rollbackPermissionChange(
  */
 async function rollbackAgentConfigChange(
   activity: ActivityLogForRollback,
-  _currentValues: Record<string, unknown> | null
+  _currentValues: Record<string, unknown> | null,
+  database: typeof db
 ): Promise<Record<string, unknown>> {
   // Agent configs are stored in pages table
   if (!activity.pageId) {
@@ -608,7 +620,7 @@ async function rollbackAgentConfigChange(
     throw new Error('No agent config values to restore');
   }
 
-  await db
+  await database
     .update(pages)
     .set({
       ...updateData,
@@ -623,7 +635,8 @@ async function rollbackAgentConfigChange(
  * Rollback a member change
  */
 async function rollbackMemberChange(
-  activity: ActivityLogForRollback
+  activity: ActivityLogForRollback,
+  database: typeof db
 ): Promise<Record<string, unknown>> {
   const metadata = activity.metadata as { memberId?: string; targetUserId?: string } | null;
   const previousValues = activity.previousValues || {};
@@ -643,7 +656,7 @@ async function rollbackMemberChange(
 
   if (wasAdded && !wasRemoved) {
     // Member was added - rollback by removing them
-    await db
+    await database
       .delete(driveMembers)
       .where(
         and(
@@ -672,7 +685,7 @@ async function rollbackMemberChange(
       acceptedAt: previousValues.acceptedAt ? new Date(previousValues.acceptedAt as string) : new Date(),
     };
 
-    await db.insert(driveMembers).values(memberData);
+    await database.insert(driveMembers).values(memberData);
 
     loggers.api.info('[RollbackService] Re-added removed member', {
       driveId: activity.driveId,
@@ -697,7 +710,7 @@ async function rollbackMemberChange(
     throw new Error('No member values to restore');
   }
 
-  await db
+  await database
     .update(driveMembers)
     .set(updateData)
     .where(
@@ -720,7 +733,8 @@ async function rollbackMemberChange(
  * Rollback a role change
  */
 async function rollbackRoleChange(
-  activity: ActivityLogForRollback
+  activity: ActivityLogForRollback,
+  database: typeof db
 ): Promise<Record<string, unknown>> {
   const metadata = activity.metadata as { roleId?: string } | null;
   const previousValues = activity.previousValues || {};
@@ -740,7 +754,7 @@ async function rollbackRoleChange(
 
   if (wasCreated) {
     // Role was created - rollback by deleting it
-    await db
+    await database
       .delete(driveRoles)
       .where(eq(driveRoles.id, roleId));
 
@@ -766,7 +780,7 @@ async function rollbackRoleChange(
       updatedAt: new Date(),
     };
 
-    await db.insert(driveRoles).values(roleData);
+    await database.insert(driveRoles).values(roleData);
 
     loggers.api.info('[RollbackService] Re-created deleted role', {
       driveId: activity.driveId,
@@ -793,7 +807,7 @@ async function rollbackRoleChange(
 
   updateData.updatedAt = new Date();
 
-  await db
+  await database
     .update(driveRoles)
     .set(updateData)
     .where(eq(driveRoles.id, roleId));
@@ -811,7 +825,8 @@ async function rollbackRoleChange(
  * Rollback a message change (edit or delete)
  */
 async function rollbackMessageChange(
-  activity: ActivityLogForRollback
+  activity: ActivityLogForRollback,
+  database: typeof db
 ): Promise<Record<string, unknown>> {
   const previousValues = activity.previousValues || {};
   const messageId = activity.resourceId;
@@ -828,7 +843,7 @@ async function rollbackMessageChange(
         throw new Error('No previous content found for message rollback');
       }
 
-      await db
+      await database
         .update(chatMessages)
         .set({
           content: previousContent,
@@ -846,7 +861,7 @@ async function rollbackMessageChange(
 
     case 'message_delete': {
       // Undelete - set isActive = true
-      await db
+      await database
         .update(chatMessages)
         .set({ isActive: true })
         .where(eq(chatMessages.id, messageId));
