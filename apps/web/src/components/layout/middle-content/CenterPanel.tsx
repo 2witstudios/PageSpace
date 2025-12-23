@@ -112,7 +112,6 @@ PageContent.displayName = 'PageContent';
 
 // Optimized header component
 const OptimizedViewHeader = memo(({ pageId }: { pageId: string | null }) => {
-  const params = useParams();
   const pathname = usePathname();
 
   // Only show header when we have a page or are on special routes
