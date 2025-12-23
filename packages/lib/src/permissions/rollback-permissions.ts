@@ -55,7 +55,7 @@ export async function canUserRollback(
   context: RollbackContext
 ): Promise<RollbackPermissionResult> {
   // Can't rollback operations that don't have previousValues to restore
-  const nonRollbackableOperations = ['create', 'signup', 'login', 'logout'];
+  const nonRollbackableOperations = ['signup', 'login', 'logout'];
   if (nonRollbackableOperations.includes(activity.operation)) {
     return {
       canRollback: false,
@@ -166,6 +166,7 @@ export function isRollbackableResourceType(resourceType: ActivityResourceType): 
  */
 export function isRollbackableOperation(operation: string): boolean {
   const rollbackableOperations = [
+    'create',
     'update',
     'delete',
     'trash',

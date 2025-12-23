@@ -7,7 +7,7 @@
  * 2. messages_and_changes - Soft-delete messages AND rollback all tool call changes
  */
 
-import { db, chatMessages, messages, activityLogs, eq, and, gte, desc } from '@pagespace/db';
+import { db, chatMessages, messages, activityLogs, eq, and, gte, lt, desc } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import {
   logConversationUndo,
@@ -160,6 +160,22 @@ export async function previewAiUndo(
 
     const messagesAffected = affectedMessages.length;
 
+    // Find the message immediately preceding this one in the same conversation
+    // to include any tool calls that happened before this message was created
+    const precedingMessage = await db.query[source === 'page_chat' ? 'chatMessages' : 'messages'].findFirst({
+      where: and(
+        eq(table.conversationId, conversationId),
+        lt(table.createdAt, createdAt),
+        eq(table.isActive, true)
+      ),
+      orderBy: desc(table.createdAt),
+    });
+
+    // Use preceding message's timestamp (if it exists) to catch all activities in this turn
+    // If no preceding message, we still start from createdAt but tool calls might be missed
+    // in the first turn, but usually there's a user message first.
+    const activityStartTime = precedingMessage ? precedingMessage.createdAt : createdAt;
+
     // Get activity logs for AI-generated changes in this conversation from this point forward
     const activities = await db
       .select()
@@ -168,7 +184,7 @@ export async function previewAiUndo(
         and(
           eq(activityLogs.aiConversationId, conversationId),
           eq(activityLogs.isAiGenerated, true),
-          gte(activityLogs.timestamp, createdAt)
+          gte(activityLogs.timestamp, activityStartTime)
         )
       )
       .orderBy(desc(activityLogs.timestamp));

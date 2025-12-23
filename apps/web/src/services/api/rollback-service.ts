@@ -5,7 +5,7 @@
  * Allows users to restore resources to previous states based on activity logs.
  */
 
-import { db, activityLogs, pages, drives, driveMembers, driveRoles, pagePermissions, users, chatMessages, eq, and, desc, gte, lte, count } from '@pagespace/db';
+import { db, activityLogs, pages, drives, driveMembers, driveRoles, pagePermissions, users, chatMessages, messages, eq, and, desc, gte, lte, count } from '@pagespace/db';
 import {
   canUserRollback,
   isRollbackableOperation,
@@ -404,6 +404,20 @@ async function rollbackPageChange(
     throw new Error('Page ID not found in activity');
   }
 
+  // Handle create operation by trashing the page
+  if (activity.operation === 'create') {
+    await database
+      .update(pages)
+      .set({
+        isTrashed: true,
+        trashedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(pages.id, activity.pageId));
+
+    return { trashed: true, pageId: activity.pageId };
+  }
+
   const previousValues = activity.previousValues || {};
   const updateData: Record<string, unknown> = {};
 
@@ -420,7 +434,7 @@ async function rollbackPageChange(
   }
 
   // If we have a content snapshot and content was changed, use it
-  if (activity.contentSnapshot && activity.operation === 'update') {
+  if (activity.contentSnapshot && (activity.operation === 'update' || activity.operation === 'create')) {
     updateData.content = activity.contentSnapshot;
   }
 
@@ -452,6 +466,20 @@ async function rollbackDriveChange(
     throw new Error('Drive ID not found in activity');
   }
 
+  // Handle create operation by trashing the drive
+  if (activity.operation === 'create') {
+    await database
+      .update(drives)
+      .set({
+        isTrashed: true,
+        trashedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(drives.id, activity.driveId));
+
+    return { trashed: true, driveId: activity.driveId };
+  }
+
   const previousValues = activity.previousValues || {};
   const updateData: Record<string, unknown> = {};
 
@@ -477,7 +505,7 @@ async function rollbackDriveChange(
       ...updateData,
       updatedAt: new Date(),
     })
-    .where(eq(drives.id, activity.driveId));
+    .where(eq(drives.id, activity.driveId!));
 
   return updateData;
 }
@@ -831,11 +859,30 @@ async function rollbackMessageChange(
   const previousValues = activity.previousValues || {};
   const messageId = activity.resourceId;
 
-  if (!messageId) {
-    throw new Error('Message ID not found in activity');
-  }
+  const metadata = activity.metadata as Record<string, unknown> | null;
+  const conversationType = metadata?.conversationType as string | undefined;
+
+  // Determine which table to update based on pageId or conversationType
+  // If pageId exists, it's a page chat. If not, it's likely a global chat.
+  const isGlobal = !activity.pageId || conversationType === 'global';
+  const table = isGlobal ? messages : chatMessages;
 
   switch (activity.operation) {
+    case 'create': {
+      // Deactivate message created during turn
+      await database
+        .update(table)
+        .set({ isActive: false })
+        .where(eq(table.id, messageId));
+
+      loggers.api.info(`[RollbackService] Deactivated message that was created (${isGlobal ? 'global' : 'page'})`, {
+        messageId,
+        pageId: activity.pageId,
+      });
+
+      return { deactivated: true, isActive: false };
+    }
+
     case 'message_update': {
       // Restore previous content, clear editedAt
       const previousContent = previousValues.content as string;
@@ -844,14 +891,14 @@ async function rollbackMessageChange(
       }
 
       await database
-        .update(chatMessages)
+        .update(table)
         .set({
           content: previousContent,
           editedAt: null,
         })
-        .where(eq(chatMessages.id, messageId));
+        .where(eq(table.id, messageId));
 
-      loggers.api.info('[RollbackService] Restored previous message content', {
+      loggers.api.info(`[RollbackService] Restored previous message content (${isGlobal ? 'global' : 'page'})`, {
         messageId,
         pageId: activity.pageId,
       });
@@ -862,11 +909,11 @@ async function rollbackMessageChange(
     case 'message_delete': {
       // Undelete - set isActive = true
       await database
-        .update(chatMessages)
+        .update(table)
         .set({ isActive: true })
-        .where(eq(chatMessages.id, messageId));
+        .where(eq(table.id, messageId));
 
-      loggers.api.info('[RollbackService] Restored deleted message', {
+      loggers.api.info(`[RollbackService] Restored deleted message (${isGlobal ? 'global' : 'page'})`, {
         messageId,
         pageId: activity.pageId,
       });
