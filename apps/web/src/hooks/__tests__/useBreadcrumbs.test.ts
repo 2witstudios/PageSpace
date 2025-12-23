@@ -25,17 +25,17 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: vi.fn(),
 }));
 
-// Mock SWR to control its behavior - compute isLoading like the actual hook
+// Mock SWR to control its behavior - simulate actual SWR isLoading behavior
 vi.mock('swr', () => ({
   default: vi.fn((key) => {
     if (!key) {
-      // Null key: SWR returns undefined data, so isLoading = !error && !data = true
-      return { data: undefined, error: undefined, isLoading: true, mutate: mockMutate };
+      // Null key: SWR doesn't fetch, so isLoading is false (no request in flight)
+      return { data: undefined, error: undefined, isLoading: false, mutate: mockMutate };
     }
     return {
       data: mockSWRState.data,
       error: mockSWRState.error,
-      // Compute isLoading like the actual hook: !error && !data
+      // SWR's isLoading is true only when there's no data AND no error (request in flight)
       isLoading: !mockSWRState.error && !mockSWRState.data,
       mutate: mockMutate,
     };
@@ -172,12 +172,11 @@ describe('useBreadcrumbs', () => {
       expect(result.current.breadcrumbs).toBeUndefined();
     });
 
-    it('given null pageId, should return isLoading=true (no data returned)', () => {
+    it('given null pageId, should return isLoading=false (no fetch needed)', () => {
       const { result } = renderHook(() => useBreadcrumbs(null));
 
-      // With null key, SWR returns undefined data and no error
-      // isLoading = !error && !data = true
-      expect(result.current.isLoading).toBe(true);
+      // With null key, SWR doesn't fetch so isLoading is false
+      expect(result.current.isLoading).toBe(false);
       expect(result.current.breadcrumbs).toBeUndefined();
     });
   });

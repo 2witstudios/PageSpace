@@ -24,7 +24,7 @@ export function useBreadcrumbs(pageId: string | null) {
   // Track if initial data has been loaded to avoid blocking first fetch
   const hasLoadedRef = useRef(false);
 
-  const { data, error } = useSWR<BreadcrumbItem[]>(
+  const { data, error, isLoading } = useSWR<BreadcrumbItem[]>(
     pageId ? `/api/pages/${pageId}/breadcrumbs` : null,
     fetcher,
     {
@@ -38,7 +38,7 @@ export function useBreadcrumbs(pageId: string | null) {
 
   return {
     breadcrumbs: data,
-    isLoading: !error && !data,
+    isLoading,
     isError: error,
   };
 }
