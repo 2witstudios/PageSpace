@@ -209,43 +209,41 @@ export async function executeAiUndo(
 
     const rolledBackActivityIds: string[] = [];
 
-    // If mode includes changes, rollback activities in reverse chronological order
-    if (mode === 'messages_and_changes') {
-      for (const activity of preview.activitiesAffected) {
-        if (!activity.canRollback) {
-          errors.push(`Skipped: ${activity.operation} on ${activity.resourceTitle || activity.resourceType} - ${activity.reason}`);
-          continue;
-        }
+    // Execute all operations in a single transaction for atomicity
+    // If any rollback fails or message deletion fails, everything is rolled back
+    await db.transaction(async (tx) => {
+      // If mode includes changes, rollback activities in reverse chronological order
+      if (mode === 'messages_and_changes') {
+        for (const activity of preview.activitiesAffected) {
+          if (!activity.canRollback) {
+            errors.push(`Skipped: ${activity.operation} on ${activity.resourceTitle || activity.resourceType} - ${activity.reason}`);
+            continue;
+          }
 
-        try {
-          // Determine context based on resource type
-          let context: RollbackContext;
-          switch (activity.resourceType) {
-            case 'drive':
+          try {
+            // Determine context based on resource type
+            // Note: All activities here are AI-generated (filtered by query), so we use
+            // 'ai_tool' context for pages to match preview logic and permission checks
+            let context: RollbackContext = 'ai_tool';
+            if (activity.resourceType === 'drive') {
               context = 'drive';
-              break;
-            case 'page':
-              context = 'page';
-              break;
-            default:
-              context = 'ai_tool';
-          }
+            }
 
-          const result = await executeRollback(activity.id, userId, context);
-          if (result.success) {
-            activitiesRolledBack++;
-            rolledBackActivityIds.push(activity.id);
-          } else {
-            errors.push(`Failed to undo ${activity.operation} on ${activity.resourceTitle || activity.resourceType}: ${result.message}`);
+            // Pass transaction to executeRollback for atomicity
+            const result = await executeRollback(activity.id, userId, context, tx);
+            if (result.success) {
+              activitiesRolledBack++;
+              rolledBackActivityIds.push(activity.id);
+            } else {
+              errors.push(`Failed to undo ${activity.operation} on ${activity.resourceTitle || activity.resourceType}: ${result.message}`);
+            }
+          } catch (error) {
+            errors.push(`Error undoing ${activity.operation}: ${error instanceof Error ? error.message : String(error)}`);
           }
-        } catch (error) {
-          errors.push(`Error undoing ${activity.operation}: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
-    }
 
-    // Soft-delete messages in a transaction to ensure atomicity
-    await db.transaction(async (tx) => {
+      // Soft-delete messages in the same transaction
       await tx
         .update(chatMessages)
         .set({ isActive: false })
