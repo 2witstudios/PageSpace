@@ -251,14 +251,9 @@ export default function SidebarActivityTab() {
     if (!selectedActivityForRollback) return;
 
     try {
-      const response = await post<Response>(`/api/activities/${selectedActivityForRollback.id}/rollback`, {
+      await post(`/api/activities/${selectedActivityForRollback.id}/rollback`, {
         context: rollbackContext,
       });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Rollback failed');
-      }
 
       toast({
         title: 'Success',

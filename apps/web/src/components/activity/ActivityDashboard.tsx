@@ -211,14 +211,9 @@ export function ActivityDashboard({ context, driveId: initialDriveId, driveName 
 
   const handleRollback = useCallback(async (activityId: string) => {
     try {
-      const response = await post<Response>(`/api/activities/${activityId}/rollback`, {
+      await post(`/api/activities/${activityId}/rollback`, {
         context: rollbackContext,
       });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Rollback failed');
-      }
 
       toast.success('Successfully restored to previous version');
       // Refresh the activity list
