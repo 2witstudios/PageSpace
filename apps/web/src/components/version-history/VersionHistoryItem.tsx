@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { formatDistanceToNow, format } from 'date-fns';
+import { createClientLogger } from '@/lib/logging/client-logger';
 import { Bot, FileText, History, MoreVertical } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
@@ -17,6 +18,8 @@ import { getInitials } from '@/components/activity/utils';
 import { RollbackConfirmDialog } from './RollbackConfirmDialog';
 import { useToast } from '@/hooks/useToast';
 import type { ActivityLog } from '@/components/activity/types';
+
+const logger = createClientLogger({ namespace: 'rollback', component: 'VersionHistoryItem' });
 
 interface VersionHistoryItemProps {
   activity: ActivityLog & { canRollback?: boolean };
@@ -41,15 +44,34 @@ export function VersionHistoryItem({
   const actorImage = activity.user?.image;
 
   const handleRestoreClick = async () => {
+    logger.debug('[Rollback:Preview] User clicked restore version', {
+      activityId: activity.id,
+      operation: activity.operation,
+      resourceType: activity.resourceType,
+      context,
+    });
+
     // Fetch preview to get warnings
     try {
       const response = await fetch(`/api/activities/${activity.id}?context=${context}`);
       if (!response.ok) {
+        logger.debug('[Rollback:Preview] Preview fetch failed', {
+          activityId: activity.id,
+          status: response.status,
+        });
         throw new Error('Failed to load preview');
       }
       const data = await response.json();
+      logger.debug('[Rollback:Preview] Preview loaded', {
+        activityId: activity.id,
+        warningsCount: data.warnings?.length || 0,
+      });
       setPreviewWarnings(data.warnings || []);
     } catch (error) {
+      logger.debug('[Rollback:Preview] Preview error', {
+        activityId: activity.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
       toast({
         title: 'Error',
         description: error instanceof Error ? error.message : 'Failed to load rollback preview',
@@ -61,6 +83,9 @@ export function VersionHistoryItem({
   };
 
   const handleConfirmRollback = async () => {
+    logger.debug('[Rollback:Execute] User confirmed rollback via dialog', {
+      activityId: activity.id,
+    });
     if (onRollback) {
       await onRollback(activity.id);
     }

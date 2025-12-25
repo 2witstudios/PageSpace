@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { AlertTriangle, History, Loader2 } from 'lucide-react';
+import { createClientLogger } from '@/lib/logging/client-logger';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -13,6 +14,8 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
+
+const logger = createClientLogger({ namespace: 'rollback', component: 'RollbackConfirmDialog' });
 
 interface RollbackConfirmDialogProps {
   open: boolean;
@@ -36,12 +39,21 @@ export function RollbackConfirmDialog({
   const [isLoading, setIsLoading] = useState(false);
 
   const handleConfirm = async () => {
+    logger.debug('[Rollback:Dialog] User clicked confirm', {
+      resourceTitle,
+      operation,
+      warningsCount: warnings.length,
+    });
+
     setIsLoading(true);
     try {
       await onConfirm();
+      logger.debug('[Rollback:Dialog] Rollback confirmed and completed successfully');
       onOpenChange(false);
     } catch (error) {
-      console.error('Rollback failed:', error);
+      logger.debug('[Rollback:Dialog] Rollback failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
     } finally {
       setIsLoading(false);
     }

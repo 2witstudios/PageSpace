@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { History, Loader2, Filter, RefreshCw } from 'lucide-react';
+import { createClientLogger } from '@/lib/logging/client-logger';
 import { Button } from '@/components/ui/button';
 import {
   Sheet,
@@ -24,6 +25,8 @@ import { VersionHistoryItem } from './VersionHistoryItem';
 import { useToast } from '@/hooks/useToast';
 import { post } from '@/lib/auth/auth-fetch';
 import type { ActivityLog } from '@/components/activity/types';
+
+const logger = createClientLogger({ namespace: 'rollback', component: 'VersionHistoryPanel' });
 
 interface VersionHistoryPanelProps {
   open: boolean;
@@ -70,6 +73,16 @@ export function VersionHistoryPanel({
   const fetchVersions = useCallback(async (reset = false) => {
     if (!pageId && !driveId) return;
 
+    logger.debug('[History:Fetch] Starting fetch', {
+      context,
+      pageId,
+      driveId,
+      reset,
+      offset: reset ? 0 : offset,
+      showAiOnly,
+      operationFilter,
+    });
+
     setLoading(true);
     const currentOffset = reset ? 0 : offset;
 
@@ -92,10 +105,21 @@ export function VersionHistoryPanel({
 
       const response = await fetch(endpoint);
       if (!response.ok) {
+        logger.debug('[History:Fetch] Fetch failed with status', {
+          status: response.status,
+          statusText: response.statusText,
+        });
         throw new Error('Failed to fetch version history');
       }
 
       const data: VersionHistoryResponse = await response.json();
+
+      logger.debug('[History:Fetch] Fetch successful', {
+        versionsCount: data.versions.length,
+        total: data.pagination.total,
+        hasMore: data.pagination.hasMore,
+        retentionDays: data.retentionDays,
+      });
 
       if (reset) {
         setVersions(data.versions);
@@ -107,7 +131,10 @@ export function VersionHistoryPanel({
 
       setHasMore(data.pagination.hasMore);
       setRetentionDays(data.retentionDays);
-    } catch {
+    } catch (error) {
+      logger.debug('[History:Fetch] Fetch error', {
+        error: error instanceof Error ? error.message : String(error),
+      });
       toast({
         title: 'Error',
         description: 'Failed to load version history',
@@ -116,7 +143,7 @@ export function VersionHistoryPanel({
     } finally {
       setLoading(false);
     }
-  }, [pageId, driveId, offset, showAiOnly, operationFilter, toast]);
+  }, [pageId, driveId, offset, showAiOnly, operationFilter, context, toast]);
 
   // Keep a ref to the latest fetchVersions to avoid stale closure issues
   const fetchVersionsRef = useRef(fetchVersions);
@@ -125,13 +152,28 @@ export function VersionHistoryPanel({
   // Fetch on open or filter change
   useEffect(() => {
     if (open) {
+      logger.debug('[History:Panel] Panel opened, triggering fetch', {
+        pageId,
+        driveId,
+        showAiOnly,
+        operationFilter,
+      });
       fetchVersionsRef.current(true);
     }
-  }, [open, showAiOnly, operationFilter]);
+  }, [open, showAiOnly, operationFilter, pageId, driveId]);
 
   const handleRollback = async (activityId: string) => {
+    logger.debug('[Rollback:Execute] User initiated rollback from history panel', {
+      activityId,
+      context,
+    });
+
     try {
       await post(`/api/activities/${activityId}/rollback`, { context });
+
+      logger.debug('[Rollback:Execute] Rollback completed successfully', {
+        activityId,
+      });
 
       toast({
         title: 'Success',
@@ -141,6 +183,11 @@ export function VersionHistoryPanel({
       // Refresh the list
       fetchVersions(true);
     } catch (error) {
+      logger.debug('[Rollback:Execute] Rollback failed', {
+        activityId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+
       toast({
         title: 'Error',
         description: error instanceof Error ? error.message : 'Failed to rollback',
@@ -151,6 +198,10 @@ export function VersionHistoryPanel({
 
   const handleLoadMore = () => {
     if (!loading && hasMore) {
+      logger.debug('[History:Fetch] Loading more versions', {
+        currentCount: versions.length,
+        offset,
+      });
       fetchVersions(false);
     }
   };

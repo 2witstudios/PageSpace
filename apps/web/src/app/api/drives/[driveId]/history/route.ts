@@ -4,6 +4,8 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib';
 import { getDriveVersionHistory, getUserRetentionDays } from '@/services/api';
 import { isActivityEligibleForRollback } from '@pagespace/lib/permissions';
+import { loggers } from '@pagespace/lib/server';
+import { maskIdentifier } from '@/lib/logging/mask';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: false };
 
@@ -36,9 +38,15 @@ export async function GET(
   const userId = auth.userId;
   const { searchParams } = new URL(request.url);
 
+  loggers.api.debug('[History:Route] GET drive history request', {
+    driveId: maskIdentifier(driveId),
+    userId: maskIdentifier(userId),
+  });
+
   // Check if user is drive owner or admin
   const isAdmin = await isDriveOwnerOrAdmin(userId, driveId);
   if (!isAdmin) {
+    loggers.api.debug('[History:Route] Permission denied - not drive admin');
     return NextResponse.json(
       { error: 'Unauthorized - only drive owners and admins can view drive history' },
       { status: 403 }
@@ -95,6 +103,12 @@ export async function GET(
     ...activity,
     canRollback: isActivityEligibleForRollback(activity),
   }));
+
+  loggers.api.debug('[History:Route] Returning drive history', {
+    versionsCount: versionsWithRollback.length,
+    total,
+    retentionDays,
+  });
 
   return NextResponse.json({
     versions: versionsWithRollback,

@@ -7,6 +7,7 @@
 
 import { canUserEditPage, isDriveOwnerOrAdmin } from './permissions';
 import type { ActivityResourceType } from '../monitoring/activity-logger';
+import { browserLoggers } from '../logging/logger-browser';
 
 /**
  * Context in which the rollback is being requested.
@@ -54,9 +55,20 @@ export async function canUserRollback(
   activity: ActivityForPermissionCheck,
   context: RollbackContext
 ): Promise<RollbackPermissionResult> {
+  browserLoggers.permissions.debug('[Rollback:Permission] Checking rollback permission', {
+    userId,
+    activityId: activity.id,
+    context,
+    operation: activity.operation,
+    resourceType: activity.resourceType,
+  });
+
   // Can't rollback operations that don't have previousValues to restore
   const nonRollbackableOperations = ['signup', 'login', 'logout'];
   if (nonRollbackableOperations.includes(activity.operation)) {
+    browserLoggers.permissions.debug('[Rollback:Permission] Operation not rollbackable', {
+      operation: activity.operation,
+    });
     return {
       canRollback: false,
       reason: `Cannot rollback '${activity.operation}' operations`,
@@ -65,6 +77,7 @@ export async function canUserRollback(
 
   // Can't rollback if already a rollback operation (would create infinite chain)
   if (activity.operation === 'rollback') {
+    browserLoggers.permissions.debug('[Rollback:Permission] Cannot rollback a rollback');
     return {
       canRollback: false,
       reason: 'Cannot rollback a rollback operation',
@@ -73,6 +86,10 @@ export async function canUserRollback(
 
   switch (context) {
     case 'ai_tool': {
+      browserLoggers.permissions.debug('[Rollback:Permission] AI tool context check', {
+        isOwnActivity: activity.userId === userId,
+        isAiGenerated: activity.isAiGenerated,
+      });
       // Only user's own AI-generated changes
       if (activity.userId !== userId) {
         return {
@@ -86,10 +103,14 @@ export async function canUserRollback(
           reason: 'Only AI-generated changes can be rolled back in this context',
         };
       }
+      browserLoggers.permissions.debug('[Rollback:Permission] AI tool check passed');
       return { canRollback: true };
     }
 
     case 'drive': {
+      browserLoggers.permissions.debug('[Rollback:Permission] Drive context check', {
+        driveId: activity.driveId,
+      });
       // Drive admin can rollback anyone's changes in the drive
       if (!activity.driveId) {
         return {
@@ -98,6 +119,9 @@ export async function canUserRollback(
         };
       }
       const isDriveAdmin = await isDriveOwnerOrAdmin(userId, activity.driveId);
+      browserLoggers.permissions.debug('[Rollback:Permission] Drive admin check result', {
+        isDriveAdmin,
+      });
       if (!isDriveAdmin) {
         return {
           canRollback: false,
@@ -108,6 +132,9 @@ export async function canUserRollback(
     }
 
     case 'user_dashboard': {
+      browserLoggers.permissions.debug('[Rollback:Permission] User dashboard context check', {
+        isOwnActivity: activity.userId === userId,
+      });
       // User can rollback all their own changes
       if (activity.userId !== userId) {
         return {
@@ -119,6 +146,9 @@ export async function canUserRollback(
     }
 
     case 'page': {
+      browserLoggers.permissions.debug('[Rollback:Permission] Page context check', {
+        pageId: activity.pageId,
+      });
       // Anyone with edit permission can rollback changes to that page
       if (!activity.pageId) {
         return {
@@ -127,6 +157,9 @@ export async function canUserRollback(
         };
       }
       const canEdit = await canUserEditPage(userId, activity.pageId);
+      browserLoggers.permissions.debug('[Rollback:Permission] Page edit check result', {
+        canEdit,
+      });
       if (!canEdit) {
         return {
           canRollback: false,
@@ -137,6 +170,7 @@ export async function canUserRollback(
     }
 
     default: {
+      browserLoggers.permissions.debug('[Rollback:Permission] Unknown context', { context });
       return {
         canRollback: false,
         reason: 'Unknown rollback context',

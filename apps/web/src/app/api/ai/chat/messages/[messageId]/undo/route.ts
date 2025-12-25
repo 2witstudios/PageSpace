@@ -75,6 +75,11 @@ export async function GET(
 
     const { messageId } = await context.params;
 
+    loggers.api.debug('[AiUndo:Route] GET request received', {
+      messageId: maskIdentifier(messageId),
+      userId: maskIdentifier(userId),
+    });
+
     // Get preview first to determine source and pageId/conversationId
     const preview = await previewAiUndo(messageId, userId);
 
@@ -83,9 +88,14 @@ export async function GET(
     }
 
     // Check permissions
+    loggers.api.debug('[AiUndo:Route] Checking permissions', {
+      source: preview.source,
+      pageId: preview.pageId ? maskIdentifier(preview.pageId) : null,
+    });
     const permissionError = await checkUndoPermissions(userId, messageId, preview, 'preview');
     if (permissionError) return permissionError;
 
+    loggers.api.debug('[AiUndo:Route] Permission check passed');
     loggers.api.info('Undo preview generated', {
       userId: maskIdentifier(userId),
       messageId: maskIdentifier(messageId),
@@ -122,15 +132,23 @@ export async function POST(
     const { messageId } = await context.params;
     const body = await request.json();
 
+    loggers.api.debug('[AiUndo:Route] POST request received', {
+      messageId: maskIdentifier(messageId),
+      userId: maskIdentifier(userId),
+    });
+
     // Validate request body with Zod
     const parseResult = undoBodySchema.safeParse(body);
     if (!parseResult.success) {
+      loggers.api.debug('[AiUndo:Route] Invalid request body');
       return NextResponse.json(
         { error: 'Invalid mode. Must be "messages_only" or "messages_and_changes"' },
         { status: 400 }
       );
     }
     const { mode } = parseResult.data;
+
+    loggers.api.debug('[AiUndo:Route] Validated mode', { mode });
 
     // Get preview first to check permissions
     const preview = await previewAiUndo(messageId, userId);
@@ -142,6 +160,12 @@ export async function POST(
     // Check permissions
     const permissionError = await checkUndoPermissions(userId, messageId, preview, 'execution');
     if (permissionError) return permissionError;
+
+    loggers.api.debug('[AiUndo:Route] Executing undo', {
+      mode,
+      messagesAffected: preview.messagesAffected,
+      activitiesAffected: preview.activitiesAffected.length,
+    });
 
     // Execute undo, passing preview to avoid redundant computation
     const result = await executeAiUndo(messageId, userId, mode, preview);

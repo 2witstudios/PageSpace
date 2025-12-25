@@ -113,6 +113,8 @@ export interface VersionHistoryOptions {
 export async function getActivityById(
   activityId: string
 ): Promise<ActivityLogForRollback | null> {
+  loggers.api.debug('[Rollback:Fetch] Fetching activity by ID', { activityId });
+
   try {
     const result = await db
       .select()
@@ -121,10 +123,19 @@ export async function getActivityById(
       .limit(1);
 
     if (result.length === 0) {
+      loggers.api.debug('[Rollback:Fetch] Activity not found', { activityId });
       return null;
     }
 
     const activity = result[0];
+    loggers.api.debug('[Rollback:Fetch] Activity found', {
+      activityId,
+      operation: activity.operation,
+      resourceType: activity.resourceType,
+      resourceId: activity.resourceId,
+      isAiGenerated: activity.isAiGenerated,
+    });
+
     return {
       id: activity.id,
       timestamp: activity.timestamp,
@@ -163,9 +174,12 @@ export async function previewRollback(
   userId: string,
   context: RollbackContext
 ): Promise<RollbackPreview> {
+  loggers.api.debug('[Rollback:Preview] Starting preview', { activityId, userId, context });
+
   const activity = await getActivityById(activityId);
 
   if (!activity) {
+    loggers.api.debug('[Rollback:Preview] Activity not found', { activityId });
     return {
       activity: null,
       canRollback: false,
@@ -178,7 +192,13 @@ export async function previewRollback(
   }
 
   // Check if operation is rollbackable
-  if (!isRollbackableOperation(activity.operation)) {
+  const isRollbackable = isRollbackableOperation(activity.operation);
+  loggers.api.debug('[Rollback:Preview] Checking operation eligibility', {
+    operation: activity.operation,
+    isRollbackable,
+  });
+
+  if (!isRollbackable) {
     return {
       activity,
       canRollback: false,
@@ -191,7 +211,15 @@ export async function previewRollback(
   }
 
   // Check if previousValues exist
-  if (!activity.previousValues && !activity.contentSnapshot) {
+  const hasPreviousValues = !!activity.previousValues;
+  const hasContentSnapshot = !!activity.contentSnapshot;
+  loggers.api.debug('[Rollback:Preview] Checking previous state availability', {
+    hasPreviousValues,
+    hasContentSnapshot,
+    previousValuesFields: activity.previousValues ? Object.keys(activity.previousValues) : [],
+  });
+
+  if (!hasPreviousValues && !hasContentSnapshot) {
     return {
       activity,
       canRollback: false,
@@ -204,7 +232,19 @@ export async function previewRollback(
   }
 
   // Check permissions
+  loggers.api.debug('[Rollback:Preview] Checking permissions', {
+    userId,
+    context,
+    resourceType: activity.resourceType,
+  });
+
   const permissionCheck = await canUserRollback(userId, activity, context);
+
+  loggers.api.debug('[Rollback:Preview] Permission check result', {
+    canRollback: permissionCheck.canRollback,
+    reason: permissionCheck.reason,
+  });
+
   if (!permissionCheck.canRollback) {
     return {
       activity,
@@ -220,6 +260,11 @@ export async function previewRollback(
   // Get current state and check for conflicts
   const warnings: string[] = [];
   let currentValues: Record<string, unknown> | null = null;
+
+  loggers.api.debug('[Rollback:Preview] Fetching current resource state', {
+    resourceType: activity.resourceType,
+    resourceId: activity.resourceId,
+  });
 
   if (activity.resourceType === 'page' && activity.pageId) {
     const currentPage = await db
@@ -256,6 +301,11 @@ export async function previewRollback(
         }
       );
 
+      loggers.api.debug('[Rollback:Preview] Conflict check', {
+        hasConflict: !newValuesMatch,
+        checkedFields: Object.keys(activity.newValues),
+      });
+
       if (!newValuesMatch) {
         warnings.push(
           'This resource has been modified since this change. Rollback will overwrite those modifications.'
@@ -263,6 +313,12 @@ export async function previewRollback(
       }
     }
   }
+
+  loggers.api.debug('[Rollback:Preview] Preview complete', {
+    canRollback: true,
+    warningsCount: warnings.length,
+    rollbackFieldsCount: activity.previousValues ? Object.keys(activity.previousValues).length : 0,
+  });
 
   return {
     activity,
@@ -290,9 +346,20 @@ export async function executeRollback(
   context: RollbackContext,
   tx?: typeof db
 ): Promise<RollbackResult> {
+  loggers.api.debug('[Rollback:Execute] Starting execution', {
+    activityId,
+    userId,
+    context,
+    usingTransaction: !!tx,
+  });
+
   const preview = await previewRollback(activityId, userId, context);
 
   if (!preview.canRollback || !preview.activity) {
+    loggers.api.debug('[Rollback:Execute] Aborting - preview check failed', {
+      canRollback: preview.canRollback,
+      reason: preview.reason,
+    });
     return {
       success: false,
       message: preview.reason || 'Cannot rollback this activity',
@@ -310,6 +377,12 @@ export async function executeRollback(
 
     // Execute rollback based on resource type
     let restoredValues: Record<string, unknown> = {};
+
+    loggers.api.debug('[Rollback:Execute] Executing handler', {
+      resourceType: activity.resourceType,
+      operation: activity.operation,
+      resourceId: activity.resourceId,
+    });
 
     switch (activity.resourceType) {
       case 'page':
@@ -341,12 +414,20 @@ export async function executeRollback(
         break;
 
       default:
+        loggers.api.debug('[Rollback:Execute] Unsupported resource type', {
+          resourceType: activity.resourceType,
+        });
         return {
           success: false,
           message: `Rollback not supported for resource type: ${activity.resourceType}`,
           warnings,
         };
     }
+
+    loggers.api.debug('[Rollback:Execute] Handler completed', {
+      resourceType: activity.resourceType,
+      restoredFieldsCount: Object.keys(restoredValues).length,
+    });
 
     // Log the rollback activity with source snapshot for audit trail preservation
     logRollbackActivity(
@@ -370,6 +451,12 @@ export async function executeRollback(
         rollbackSourceTitle: activity.resourceTitle ?? undefined,
       }
     );
+
+    loggers.api.debug('[Rollback:Execute] Rollback completed successfully', {
+      activityId,
+      resourceType: activity.resourceType,
+      resourceId: activity.resourceId,
+    });
 
     return {
       success: true,
@@ -400,12 +487,21 @@ async function rollbackPageChange(
   _currentValues: Record<string, unknown> | null,
   database: typeof db
 ): Promise<Record<string, unknown>> {
+  loggers.api.debug('[Rollback:Execute:Page] Starting page rollback', {
+    pageId: activity.pageId,
+    operation: activity.operation,
+    updatedFields: activity.updatedFields,
+  });
+
   if (!activity.pageId) {
     throw new Error('Page ID not found in activity');
   }
 
   // Handle create operation by trashing the page
   if (activity.operation === 'create') {
+    loggers.api.debug('[Rollback:Execute:Page] Trashing created page', {
+      pageId: activity.pageId,
+    });
     await database
       .update(pages)
       .set({
@@ -441,6 +537,11 @@ async function rollbackPageChange(
   if (Object.keys(updateData).length === 0) {
     throw new Error('No values to restore');
   }
+
+  loggers.api.debug('[Rollback:Execute:Page] Applying page update', {
+    pageId: activity.pageId,
+    fieldsToRestore: Object.keys(updateData),
+  });
 
   // Update the page
   await database
@@ -936,6 +1037,14 @@ export async function getPageVersionHistory(
 ): Promise<{ activities: ActivityLogForRollback[]; total: number }> {
   const { limit = 50, offset = 0, startDate, endDate, actorId, operation, includeAiOnly } = options;
 
+  loggers.api.debug('[History:Fetch] Fetching page version history', {
+    pageId,
+    userId,
+    limit,
+    offset,
+    hasFilters: !!(startDate || endDate || actorId || operation || includeAiOnly),
+  });
+
   try {
     const conditions = [eq(activityLogs.pageId, pageId)];
 
@@ -968,6 +1077,12 @@ export async function getPageVersionHistory(
         .from(activityLogs)
         .where(and(...conditions)),
     ]);
+
+    loggers.api.debug('[History:Fetch] Page history query complete', {
+      pageId,
+      activitiesCount: activities.length,
+      total: countResult[0]?.value ?? 0,
+    });
 
     return {
       activities: activities.map((a) => ({
@@ -1012,6 +1127,14 @@ export async function getDriveVersionHistory(
 ): Promise<{ activities: ActivityLogForRollback[]; total: number }> {
   const { limit = 50, offset = 0, startDate, endDate, actorId, operation, resourceType } = options;
 
+  loggers.api.debug('[History:Fetch] Fetching drive version history', {
+    driveId,
+    userId,
+    limit,
+    offset,
+    hasFilters: !!(startDate || endDate || actorId || operation || resourceType),
+  });
+
   try {
     const conditions = [eq(activityLogs.driveId, driveId)];
 
@@ -1044,6 +1167,12 @@ export async function getDriveVersionHistory(
         .from(activityLogs)
         .where(and(...conditions)),
     ]);
+
+    loggers.api.debug('[History:Fetch] Drive history query complete', {
+      driveId,
+      activitiesCount: activities.length,
+      total: countResult[0]?.value ?? 0,
+    });
 
     return {
       activities: activities.map((a) => ({

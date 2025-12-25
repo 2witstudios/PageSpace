@@ -4,6 +4,8 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib';
 import { getPageVersionHistory, getUserRetentionDays } from '@/services/api';
 import { isActivityEligibleForRollback } from '@pagespace/lib/permissions';
+import { loggers } from '@pagespace/lib/server';
+import { maskIdentifier } from '@/lib/logging/mask';
 
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: false };
 
@@ -35,9 +37,15 @@ export async function GET(
   const userId = auth.userId;
   const { searchParams } = new URL(request.url);
 
+  loggers.api.debug('[History:Route] GET page history request', {
+    pageId: maskIdentifier(pageId),
+    userId: maskIdentifier(userId),
+  });
+
   // Check permission to view the page
   const canView = await canUserViewPage(userId, pageId);
   if (!canView) {
+    loggers.api.debug('[History:Route] Permission denied');
     return NextResponse.json(
       { error: 'Unauthorized - you do not have access to this page' },
       { status: 403 }
@@ -94,6 +102,12 @@ export async function GET(
     ...activity,
     canRollback: isActivityEligibleForRollback(activity),
   }));
+
+  loggers.api.debug('[History:Route] Returning page history', {
+    versionsCount: versionsWithRollback.length,
+    total,
+    retentionDays,
+  });
 
   return NextResponse.json({
     versions: versionsWithRollback,
