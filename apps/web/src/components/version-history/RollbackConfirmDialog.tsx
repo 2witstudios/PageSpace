@@ -24,7 +24,10 @@ interface RollbackConfirmDialogProps {
   operation: string;
   timestamp: string;
   warnings: string[];
-  onConfirm: () => Promise<void>;
+  /** True if the resource was modified since this activity */
+  hasConflict?: boolean;
+  /** Called with force=true when user clicks Force Restore for conflicts */
+  onConfirm: (force?: boolean) => Promise<void>;
 }
 
 export function RollbackConfirmDialog({
@@ -34,20 +37,23 @@ export function RollbackConfirmDialog({
   operation,
   timestamp,
   warnings,
+  hasConflict = false,
   onConfirm,
 }: RollbackConfirmDialogProps) {
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleConfirm = async () => {
+  const handleConfirm = async (force?: boolean) => {
     logger.debug('[Rollback:Dialog] User clicked confirm', {
       resourceTitle,
       operation,
       warningsCount: warnings.length,
+      hasConflict,
+      force,
     });
 
     setIsLoading(true);
     try {
-      await onConfirm();
+      await onConfirm(force);
       logger.debug('[Rollback:Dialog] Rollback confirmed and completed successfully');
       onOpenChange(false);
     } catch (error) {
@@ -99,23 +105,43 @@ export function RollbackConfirmDialog({
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel disabled={isLoading}>Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            onClick={handleConfirm}
-            disabled={isLoading}
-            className="gap-2"
-          >
-            {isLoading ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Restoring...
-              </>
-            ) : (
-              <>
-                <History className="h-4 w-4" />
-                Restore Version
-              </>
-            )}
-          </AlertDialogAction>
+          {hasConflict ? (
+            <AlertDialogAction
+              onClick={() => handleConfirm(true)}
+              disabled={isLoading}
+              className="gap-2 bg-yellow-600 hover:bg-yellow-700"
+            >
+              {isLoading ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Forcing restore...
+                </>
+              ) : (
+                <>
+                  <AlertTriangle className="h-4 w-4" />
+                  Force Restore
+                </>
+              )}
+            </AlertDialogAction>
+          ) : (
+            <AlertDialogAction
+              onClick={() => handleConfirm(false)}
+              disabled={isLoading}
+              className="gap-2"
+            >
+              {isLoading ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Restoring...
+                </>
+              ) : (
+                <>
+                  <History className="h-4 w-4" />
+                  Restore Version
+                </>
+              )}
+            </AlertDialogAction>
+          )}
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

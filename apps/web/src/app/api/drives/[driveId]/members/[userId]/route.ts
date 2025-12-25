@@ -10,7 +10,7 @@ import {
 } from '@pagespace/lib/server';
 import { createDriveNotification } from '@pagespace/lib';
 import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
-import { getActorInfo, logMemberActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { getActorInfo, logMemberActivity, logPermissionActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { db, driveMembers, pagePermissions, pages, eq, and, inArray } from '@pagespace/db';
 
 const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
@@ -209,16 +209,61 @@ export async function DELETE(
       return NextResponse.json({ error: 'Member not found' }, { status: 404 });
     }
 
+    // Get actor info for logging
+    const actorInfo = await getActorInfo(currentUserId);
+
     // Remove member and their permissions in a transaction
+    // Fix 12: Log permissions BEFORE deletion for rollback support
     await db.transaction(async (tx) => {
       // Get all pages in this drive
-      const drivePages = await tx.select({ id: pages.id })
+      const drivePages = await tx.select({ id: pages.id, title: pages.title })
         .from(pages)
         .where(eq(pages.driveId, driveId));
 
       // Delete all pagePermissions for this user on these pages
       if (drivePages.length > 0) {
         const pageIds = drivePages.map(p => p.id);
+
+        // Query existing permissions BEFORE deletion for rollback audit trail
+        const existingPermissions = await tx.select({
+          pageId: pagePermissions.pageId,
+          canView: pagePermissions.canView,
+          canEdit: pagePermissions.canEdit,
+          canShare: pagePermissions.canShare,
+          canDelete: pagePermissions.canDelete,
+          grantedBy: pagePermissions.grantedBy,
+          note: pagePermissions.note,
+        })
+          .from(pagePermissions)
+          .where(and(
+            inArray(pagePermissions.pageId, pageIds),
+            eq(pagePermissions.userId, targetUserId)
+          ));
+
+        // Log each permission revocation with previousValues (fire-and-forget)
+        const pageTitleMap = new Map(drivePages.map(p => [p.id, p.title]));
+        for (const perm of existingPermissions) {
+          logPermissionActivity(currentUserId, 'permission_revoke', {
+            pageId: perm.pageId,
+            driveId,
+            targetUserId,
+            pageTitle: pageTitleMap.get(perm.pageId) ?? undefined,
+          }, {
+            actorEmail: actorInfo.actorEmail,
+            actorDisplayName: actorInfo.actorDisplayName,
+            previousValues: {
+              canView: perm.canView,
+              canEdit: perm.canEdit,
+              canShare: perm.canShare,
+              canDelete: perm.canDelete,
+              grantedBy: perm.grantedBy,
+              note: perm.note,
+            },
+            reason: 'member_removal',
+          });
+        }
+
+        // Delete the permissions
         await tx.delete(pagePermissions)
           .where(and(
             inArray(pagePermissions.pageId, pageIds),
@@ -235,7 +280,6 @@ export async function DELETE(
     });
 
     // Log member removal for audit trail (fire-and-forget)
-    const actorInfo = await getActorInfo(currentUserId);
     logMemberActivity(currentUserId, 'member_remove', {
       driveId,
       driveName: access.drive.name,

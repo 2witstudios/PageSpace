@@ -164,14 +164,15 @@ export function VersionHistoryPanel({
     }
   }, [open, showAiOnly, operationFilter, pageId, driveId]);
 
-  const handleRollback = async (activityId: string) => {
+  const handleRollback = async (activityId: string, force?: boolean) => {
     logger.debug('[Rollback:Execute] User initiated rollback from history panel', {
       activityId,
       context,
+      force,
     });
 
     try {
-      await post(`/api/activities/${activityId}/rollback`, { context });
+      await post(`/api/activities/${activityId}/rollback`, { context, force });
 
       logger.debug('[Rollback:Execute] Rollback completed successfully', {
         activityId,

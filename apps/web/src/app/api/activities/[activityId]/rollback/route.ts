@@ -6,6 +6,7 @@ import type { RollbackContext } from '@pagespace/lib/permissions';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { broadcastPageEvent, createPageEventPayload, broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
+import { db, activityLogs, eq, and } from '@pagespace/db';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -81,9 +82,35 @@ export async function POST(
     });
   }
 
-  // Execute the rollback
-  loggers.api.debug('[Rollback:Route] Executing rollback');
-  const result = await executeRollback(activityId, userId, rollbackContext as RollbackContext, { force });
+  // Fix 10: Idempotency check - prevent duplicate rollbacks
+  const existingRollback = await db
+    .select({ id: activityLogs.id })
+    .from(activityLogs)
+    .where(
+      and(
+        eq(activityLogs.operation, 'rollback'),
+        eq(activityLogs.resourceId, activityId)
+      )
+    )
+    .limit(1);
+
+  if (existingRollback.length > 0) {
+    loggers.api.debug('[Rollback:Route] Already rolled back', {
+      existingRollbackId: existingRollback[0].id,
+    });
+    return NextResponse.json({
+      success: true,
+      message: 'Already rolled back',
+      rollbackActivityId: existingRollback[0].id,
+      warnings: [],
+    });
+  }
+
+  // Fix 9: Execute rollback within transaction for atomicity
+  loggers.api.debug('[Rollback:Route] Executing rollback in transaction');
+  const result = await db.transaction(async (tx) => {
+    return executeRollback(activityId, userId, rollbackContext as RollbackContext, { tx, force });
+  });
 
   if (!result.success) {
     loggers.api.debug('[Rollback:Route] Rollback failed', {

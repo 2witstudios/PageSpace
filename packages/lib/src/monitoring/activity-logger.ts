@@ -250,6 +250,17 @@ export function logPermissionActivity(
   options?: {
     actorEmail?: string;
     actorDisplayName?: string;
+    /** Previous permission values (for revoke/update - enables rollback) */
+    previousValues?: {
+      canView?: boolean;
+      canEdit?: boolean;
+      canShare?: boolean;
+      canDelete?: boolean;
+      grantedBy?: string | null;
+      note?: string | null;
+    };
+    /** Reason for revocation (e.g., 'member_removal') */
+    reason?: string;
   }
 ): void {
   logActivity({
@@ -262,9 +273,12 @@ export function logPermissionActivity(
     resourceTitle: data.pageTitle,
     driveId: data.driveId,
     pageId: data.pageId,
+    previousValues: options?.previousValues,
+    newValues: data.permissions,
     metadata: {
       targetUserId: data.targetUserId,
       permissions: data.permissions,
+      reason: options?.reason,
     },
   }).catch(() => {
     // Silent fail - already logged in logActivity
