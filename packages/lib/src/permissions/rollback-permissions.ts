@@ -191,14 +191,24 @@ export function isRollbackableOperation(operation: string): boolean {
  * Check if an activity is structurally eligible for rollback.
  * This checks the operation type and whether the activity has data to restore from.
  * Note: This does NOT check user permissions - use canUserRollback() for that.
+ *
+ * Special case: 'create' operations don't need previousValues because rolling back
+ * a create means trashing the created resource (not restoring previous state).
  */
 export function isActivityEligibleForRollback(activity: {
   operation: string;
   previousValues: unknown | null;
   contentSnapshot: string | null;
 }): boolean {
-  return (
-    isRollbackableOperation(activity.operation) &&
-    (activity.previousValues !== null || activity.contentSnapshot !== null)
-  );
+  if (!isRollbackableOperation(activity.operation)) {
+    return false;
+  }
+
+  // 'create' operations don't need previousValues - rollback just trashes the resource
+  if (activity.operation === 'create') {
+    return true;
+  }
+
+  // Other operations need previousValues or contentSnapshot to restore from
+  return activity.previousValues !== null || activity.contentSnapshot !== null;
 }

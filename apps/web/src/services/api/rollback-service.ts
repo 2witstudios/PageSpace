@@ -190,8 +190,9 @@ export async function previewRollback(
     };
   }
 
-  // Check if previousValues exist
-  if (!activity.previousValues && !activity.contentSnapshot) {
+  // Check if previousValues exist (not required for 'create' operations - we just trash the resource)
+  // For 'create' operations, rollback means trashing what was created, not restoring previous state
+  if (activity.operation !== 'create' && !activity.previousValues && !activity.contentSnapshot) {
     return {
       activity,
       canRollback: false,

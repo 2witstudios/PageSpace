@@ -166,7 +166,7 @@ describe('rollback-permissions', () => {
       expect(isActivityEligibleForRollback(activity)).toBe(false);
     });
 
-    it('returns false when no previousValues or contentSnapshot', () => {
+    it('returns false when no previousValues or contentSnapshot for non-create operations', () => {
       const activity = {
         operation: 'update',
         previousValues: null,
@@ -174,6 +174,17 @@ describe('rollback-permissions', () => {
       };
 
       expect(isActivityEligibleForRollback(activity)).toBe(false);
+    });
+
+    it('returns true for create operations even without previousValues', () => {
+      // 'create' operations don't need previousValues - rollback just trashes the resource
+      const activity = {
+        operation: 'create',
+        previousValues: null,
+        contentSnapshot: null,
+      };
+
+      expect(isActivityEligibleForRollback(activity)).toBe(true);
     });
 
     it('returns false for rollback operations (prevents infinite chain)', () => {

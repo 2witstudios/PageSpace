@@ -243,8 +243,9 @@ describe('rollback-service', () => {
       expect(result.reason).toContain("Cannot rollback 'create'");
     });
 
-    it('returns canRollback=false when no previous values available', async () => {
+    it('returns canRollback=false when no previous values available for non-create operations', async () => {
       const mockActivity = createMockActivity({
+        operation: 'update', // non-create operation
         previousValues: null,
         contentSnapshot: null,
       });
@@ -261,6 +262,42 @@ describe('rollback-service', () => {
 
       expect(result.canRollback).toBe(false);
       expect(result.reason).toBe('No previous state available to restore');
+    });
+
+    it('allows create operations even without previousValues (rollback = trash)', async () => {
+      // For 'create' operations, rollback means trashing the created resource
+      // So previousValues is not required
+      const mockActivity = createMockActivity({
+        operation: 'create',
+        previousValues: null,
+        contentSnapshot: null,
+      });
+      const mockCurrentPage = {
+        title: 'Created Page',
+        content: '',
+        parentId: null,
+        position: 0,
+      };
+
+      let selectCallCount = 0;
+      (db.select as Mock).mockImplementation(() => ({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockImplementation(() => {
+              selectCallCount++;
+              if (selectCallCount === 1) return Promise.resolve([mockActivity]);
+              return Promise.resolve([mockCurrentPage]);
+            }),
+          }),
+        }),
+      }));
+      (isRollbackableOperation as Mock).mockReturnValue(true);
+      (canUserRollback as Mock).mockResolvedValue({ canRollback: true });
+
+      const result = await previewRollback(mockActivityId, mockUserId, 'page');
+
+      expect(result.canRollback).toBe(true);
+      expect(result.activity).not.toBeNull();
     });
 
     it('returns canRollback=false when user lacks permission', async () => {
