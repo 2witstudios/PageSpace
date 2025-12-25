@@ -19,7 +19,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   // Also match /dashboard/[driveId]/activity pattern
   const isFullPageRoute = FULL_PAGE_ROUTES.some(route =>
     pathname?.startsWith(route)
-  ) || pathname?.match(/^\/dashboard\/[^/]+\/activity/);
+  ) || pathname?.match(/^\/dashboard\/[^/]+\/(activity|trash)/);
 
   if (isFullPageRoute) {
     return <Layout>{children}</Layout>;
