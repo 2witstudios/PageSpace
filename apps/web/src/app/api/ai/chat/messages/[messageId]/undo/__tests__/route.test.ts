@@ -279,7 +279,12 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
         mockMessageId,
         mockUserId,
         'messages_only',
-        expect.objectContaining({ source: 'page_chat', pageId: mockPageId })
+        expect.objectContaining({
+          source: 'page_chat',
+          pageId: mockPageId,
+          messagesAffected: 0,
+          activitiesAffected: [],
+        })
       );
     });
 
@@ -299,7 +304,12 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
         mockMessageId,
         mockUserId,
         'messages_and_changes',
-        expect.objectContaining({ source: 'page_chat', pageId: mockPageId })
+        expect.objectContaining({
+          source: 'page_chat',
+          pageId: mockPageId,
+          messagesAffected: 0,
+          activitiesAffected: [],
+        })
       );
     });
   });
