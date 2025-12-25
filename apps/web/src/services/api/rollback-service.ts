@@ -80,6 +80,8 @@ export interface RollbackPreview {
   rollbackToValues: Record<string, unknown> | null;
   warnings: string[];
   affectedResources: { type: string; id: string; title: string }[];
+  /** True if the resource was modified since this activity - rollback blocked unless force=true */
+  hasConflict?: boolean;
 }
 
 /**
@@ -172,9 +174,11 @@ export async function getActivityById(
 export async function previewRollback(
   activityId: string,
   userId: string,
-  context: RollbackContext
+  context: RollbackContext,
+  options?: { force?: boolean }
 ): Promise<RollbackPreview> {
-  loggers.api.debug('[Rollback:Preview] Starting preview', { activityId, userId, context });
+  const force = options?.force ?? false;
+  loggers.api.debug('[Rollback:Preview] Starting preview', { activityId, userId, context, force });
 
   const activity = await getActivityById(activityId);
 
@@ -305,11 +309,32 @@ export async function previewRollback(
       loggers.api.debug('[Rollback:Preview] Conflict check', {
         hasConflict: !newValuesMatch,
         checkedFields: Object.keys(activity.newValues),
+        force,
       });
 
       if (!newValuesMatch) {
+        // Block rollback unless force=true (prevents accidental data loss)
+        if (!force) {
+          return {
+            activity,
+            canRollback: false,
+            reason: 'Resource has been modified since this change. Use force=true to override.',
+            currentValues,
+            rollbackToValues: activity.previousValues,
+            warnings: [],
+            affectedResources: [
+              {
+                type: activity.resourceType,
+                id: activity.resourceId,
+                title: activity.resourceTitle || 'Untitled',
+              },
+            ],
+            hasConflict: true,
+          };
+        }
+        // Force=true: proceed with warning
         warnings.push(
-          'This resource has been modified since this change. Rollback will overwrite those modifications.'
+          'This resource has been modified since this change. Recent changes will be overwritten.'
         );
       }
     }
@@ -334,27 +359,31 @@ export async function previewRollback(
         title: activity.resourceTitle || 'Untitled',
       },
     ],
+    hasConflict: false,
   };
 }
 
 /**
  * Execute a rollback operation
- * @param tx - Optional transaction to use for all database operations (for atomicity)
+ * @param options.tx - Optional transaction to use for all database operations (for atomicity)
+ * @param options.force - Skip conflict check if resource was modified since activity
  */
 export async function executeRollback(
   activityId: string,
   userId: string,
   context: RollbackContext,
-  tx?: typeof db
+  options?: { tx?: typeof db; force?: boolean }
 ): Promise<RollbackResult> {
+  const { tx, force } = options ?? {};
   loggers.api.debug('[Rollback:Execute] Starting execution', {
     activityId,
     userId,
     context,
     usingTransaction: !!tx,
+    force,
   });
 
-  const preview = await previewRollback(activityId, userId, context);
+  const preview = await previewRollback(activityId, userId, context, { force });
 
   if (!preview.canRollback || !preview.activity) {
     loggers.api.debug('[Rollback:Execute] Aborting - preview check failed', {
@@ -587,8 +616,23 @@ async function rollbackDriveChange(
     throw new Error('Drive ID not found in activity');
   }
 
-  // Handle create operation by trashing the drive
+  // Handle create operation by trashing the drive and all its pages
   if (activity.operation === 'create') {
+    loggers.api.debug('[Rollback:Execute:Drive] Trashing created drive and pages', {
+      driveId: activity.driveId,
+    });
+
+    // First, trash all pages in the drive to prevent orphans
+    await database
+      .update(pages)
+      .set({
+        isTrashed: true,
+        trashedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(pages.driveId, activity.driveId));
+
+    // Then trash the drive itself
     await database
       .update(drives)
       .set({
@@ -598,7 +642,7 @@ async function rollbackDriveChange(
       })
       .where(eq(drives.id, activity.driveId));
 
-    return { trashed: true, driveId: activity.driveId };
+    return { trashed: true, driveId: activity.driveId, pagesTrashed: true };
   }
 
   const previousValues = activity.previousValues || {};
@@ -903,6 +947,13 @@ async function rollbackRoleChange(
 
   if (wasCreated) {
     // Role was created - rollback by deleting it
+    // First, capture which members had this role for audit trail
+    const affectedMembers = await database
+      .select({ userId: driveMembers.userId })
+      .from(driveMembers)
+      .where(eq(driveMembers.customRoleId, roleId));
+
+    // Delete the role (FK constraint will set customRoleId to null for affected members)
     await database
       .delete(driveRoles)
       .where(eq(driveRoles.id, roleId));
@@ -910,9 +961,14 @@ async function rollbackRoleChange(
     loggers.api.info('[RollbackService] Deleted role that was created', {
       driveId: activity.driveId,
       roleId,
+      affectedMemberCount: affectedMembers.length,
     });
 
-    return { deleted: true, roleId };
+    return {
+      deleted: true,
+      roleId,
+      affectedMemberUserIds: affectedMembers.map(m => m.userId),
+    };
   }
 
   if (wasDeleted) {

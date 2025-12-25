@@ -6,6 +6,7 @@ import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { previewAiUndo, executeAiUndo, type AiUndoPreview } from '@/services/api';
+import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 
 // Request body schema for POST /undo
 const undoBodySchema = z.object({
@@ -189,6 +190,27 @@ export async function POST(
         },
         { status: 500 }
       );
+    }
+
+    // Broadcast real-time updates for affected pages
+    if (mode === 'messages_and_changes') {
+      const broadcastedPages = new Set<string>();
+      for (const activity of preview.activitiesAffected) {
+        if (activity.resourceType === 'page' && activity.pageId && activity.driveId) {
+          // Deduplicate broadcasts for same page
+          if (!broadcastedPages.has(activity.pageId)) {
+            broadcastedPages.add(activity.pageId);
+            await broadcastPageEvent(
+              createPageEventPayload(activity.driveId, activity.pageId, 'updated', {
+                title: activity.resourceTitle ?? undefined,
+              })
+            );
+          }
+        }
+      }
+      loggers.api.debug('[AiUndo:Route] Broadcasts sent', {
+        pageCount: broadcastedPages.size,
+      });
     }
 
     return NextResponse.json({

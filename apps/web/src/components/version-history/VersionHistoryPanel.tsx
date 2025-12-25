@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useSWRConfig } from 'swr';
 import { History, Loader2, Filter, RefreshCw } from 'lucide-react';
 import { createClientLogger } from '@/lib/logging/client-logger';
 import { Button } from '@/components/ui/button';
@@ -66,6 +67,7 @@ export function VersionHistoryPanel({
   const [showAiOnly, setShowAiOnly] = useState(false);
   const [operationFilter, setOperationFilter] = useState<string>('all');
   const { toast } = useToast();
+  const { mutate } = useSWRConfig();
 
   const context = pageId ? 'page' : driveId ? 'drive' : 'user_dashboard';
   const limit = 20;
@@ -180,7 +182,15 @@ export function VersionHistoryPanel({
         description: 'Successfully restored to previous version',
       });
 
-      // Refresh the list
+      // Invalidate SWR caches for affected resources
+      if (pageId) {
+        mutate(`/api/pages/${pageId}`);  // Invalidate page data
+      }
+      if (driveId) {
+        mutate(`/api/drives/${driveId}/pages`);  // Invalidate page tree
+      }
+
+      // Refresh the version history list
       fetchVersions(true);
     } catch (error) {
       logger.debug('[Rollback:Execute] Rollback failed', {

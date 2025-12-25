@@ -36,6 +36,8 @@ export interface AiUndoPreview {
     resourceType: string;
     resourceId: string;
     resourceTitle: string | null;
+    pageId?: string | null;
+    driveId?: string | null;
     canRollback: boolean;
     reason?: string;
   }[];
@@ -270,6 +272,8 @@ export async function previewAiUndo(
         resourceType: activity.resourceType,
         resourceId: activity.resourceId,
         resourceTitle: activity.resourceTitle,
+        pageId: activity.pageId,
+        driveId: activity.driveId,
         canRollback: preview.canRollback,
         reason: preview.reason,
       });
@@ -391,7 +395,8 @@ export async function executeAiUndo(
 
           // Pass transaction to executeRollback for atomicity
           // Any failure aborts entire transaction
-          const result = await executeRollback(activity.id, userId, context, tx);
+          // Use force=true since user is explicitly undoing AI changes
+          const result = await executeRollback(activity.id, userId, context, { tx, force: true });
           if (!result.success) {
             loggers.api.debug('[AiUndo:Execute] Activity rollback failed - aborting', {
               activityId: activity.id,
