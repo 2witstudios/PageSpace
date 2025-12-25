@@ -43,7 +43,7 @@ export const UndoAiChangesDialog: React.FC<UndoAiChangesDialogProps> = ({
   // Fetch preview when dialog opens
   useEffect(() => {
     if (open && messageId) {
-      logger.debug('[Undo:Preview] Dialog opened, fetching preview', { messageId });
+      logger.debug('[AiUndo:Preview] Dialog opened, fetching preview', { messageId });
       setLoading(true);
       setError(null);
       setPreview(null);
@@ -64,7 +64,7 @@ export const UndoAiChangesDialog: React.FC<UndoAiChangesDialogProps> = ({
           return res.json();
         })
         .then((data: AiUndoPreview) => {
-          logger.debug('[Undo:Preview] Preview loaded', {
+          logger.debug('[AiUndo:Preview] Preview loaded', {
             messagesAffected: data.messagesAffected,
             activitiesCount: data.activitiesAffected.length,
             warningsCount: data.warnings.length,
@@ -72,7 +72,7 @@ export const UndoAiChangesDialog: React.FC<UndoAiChangesDialogProps> = ({
           setPreview(data);
         })
         .catch((err) => {
-          logger.debug('[Undo:Preview] Preview fetch failed', {
+          logger.debug('[AiUndo:Preview] Preview fetch failed', {
             error: err instanceof Error ? err.message : String(err),
           });
           setError(err instanceof Error ? err.message : 'Failed to load preview');
@@ -86,7 +86,7 @@ export const UndoAiChangesDialog: React.FC<UndoAiChangesDialogProps> = ({
   const handleConfirm = async () => {
     if (!messageId) return;
 
-    logger.debug('[Undo:Execute] User confirmed undo', { messageId, mode });
+    logger.debug('[AiUndo:Execute] User confirmed undo', { messageId, mode });
     setExecuting(true);
     setError(null);
 
@@ -94,11 +94,11 @@ export const UndoAiChangesDialog: React.FC<UndoAiChangesDialogProps> = ({
       // post() returns parsed JSON and throws on errors
       await post(`/api/ai/chat/messages/${messageId}/undo`, { mode });
 
-      logger.debug('[Undo:Execute] Undo completed successfully', { mode });
+      logger.debug('[AiUndo:Execute] Undo completed successfully', { mode });
       onOpenChange(false);
       onSuccess?.();
     } catch (err) {
-      logger.debug('[Undo:Execute] Undo failed', {
+      logger.debug('[AiUndo:Execute] Undo failed', {
         error: err instanceof Error ? err.message : String(err),
       });
       // post() extracts error messages from json.error or json.message

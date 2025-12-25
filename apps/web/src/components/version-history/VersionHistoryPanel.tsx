@@ -145,7 +145,10 @@ export function VersionHistoryPanel({
     } finally {
       setLoading(false);
     }
-  }, [pageId, driveId, offset, showAiOnly, operationFilter, context, toast]);
+  // Fix 18: Removed offset from dependencies to prevent potential infinite loop
+  // (fetchVersions updates offset state, which would trigger re-render)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageId, driveId, showAiOnly, operationFilter, context, toast]);
 
   // Keep a ref to the latest fetchVersions to avoid stale closure issues
   const fetchVersionsRef = useRef(fetchVersions);
@@ -186,9 +189,11 @@ export function VersionHistoryPanel({
       // Invalidate SWR caches for affected resources
       if (pageId) {
         mutate(`/api/pages/${pageId}`);  // Invalidate page data
+        mutate(`/api/pages/${pageId}/history`);  // Fix 17: Invalidate history cache
       }
       if (driveId) {
         mutate(`/api/drives/${driveId}/pages`);  // Invalidate page tree
+        mutate(`/api/drives/${driveId}/history`);  // Fix 17: Invalidate history cache
       }
 
       // Refresh the version history list

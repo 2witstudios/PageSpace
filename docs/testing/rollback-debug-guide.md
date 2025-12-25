@@ -19,7 +19,7 @@ This guide is for debugging rollback and undo features using Claude Chrome exten
    ```
 
 3. **Verify connection**:
-   ```
+   ```text
    /chrome
    ```
 
@@ -29,9 +29,8 @@ This guide is for debugging rollback and undo features using Claude Chrome exten
 
 | Feature | Prefix | Location |
 |---------|--------|----------|
-| AI Undo Preview | `[AiUndo:Preview]` | Backend |
-| AI Undo Execute | `[AiUndo:Execute]` | Backend |
-| Undo Dialog | `[Undo:Preview]`, `[Undo:Execute]` | Frontend |
+| AI Undo Preview | `[AiUndo:Preview]` | Both |
+| AI Undo Execute | `[AiUndo:Execute]` | Both |
 | Rollback Preview | `[Rollback:Preview]` | Both |
 | Rollback Execute | `[Rollback:Execute]` | Both |
 | Rollback Permission | `[Rollback:Permission]` | Backend |
@@ -73,7 +72,7 @@ This guide is for debugging rollback and undo features using Claude Chrome exten
 3. Click page menu (three dots) -> "Version History"
 
 **Claude Chrome Commands:**
-```
+```text
 Navigate to localhost:3000 and login if needed.
 
 Then open a drive, open a page, and click on the page menu to open
@@ -84,14 +83,14 @@ and [History:Fetch]. Report the full log sequence.
 ```
 
 **Expected Console Logs:**
-```
+```text
 [History:Panel] Panel opened, triggering fetch {pageId, driveId, showAiOnly, operationFilter}
 [History:Fetch] Starting fetch {context, pageId, driveId, reset, offset, showAiOnly, operationFilter}
 [History:Fetch] Fetch successful {versionsCount, total, hasMore, retentionDays}
 ```
 
 **Expected Terminal Logs:**
-```
+```text
 [History:Route] GET page history request {pageId, userId}
 [History:Fetch] Page history query complete {pageId, activitiesCount, total}
 [History:Route] Returning page history {versionsCount, total, retentionDays}
@@ -107,7 +106,7 @@ and [History:Fetch]. Report the full log sequence.
 3. Change operation filter dropdown
 
 **Claude Chrome Commands:**
-```
+```text
 With the Version History panel open, toggle the "AI only" switch
 and watch the console for new [History:Fetch] logs.
 
@@ -116,7 +115,7 @@ another fetch cycle in the logs.
 ```
 
 **Expected Console Logs:**
-```
+```text
 [History:Panel] Panel opened, triggering fetch {showAiOnly: true, operationFilter: 'all'}
 [History:Fetch] Starting fetch {showAiOnly: true}
 [History:Fetch] Fetch successful {versionsCount: N}
@@ -133,7 +132,7 @@ another fetch cycle in the logs.
 4. Confirm in dialog
 
 **Claude Chrome Commands:**
-```
+```text
 In the Version History panel, find an activity that has a restore
 option (hover to see the menu). Click the three-dot menu and select
 "Restore this version".
@@ -146,7 +145,7 @@ Report the full sequence of logs from both console and terminal.
 ```
 
 **Expected Console Logs:**
-```
+```text
 [Rollback:Preview] User clicked restore version {activityId, operation, resourceType, context}
 [Rollback:Preview] Preview loaded {activityId, warningsCount}
 [Rollback:Dialog] User clicked confirm {resourceTitle, operation, warningsCount}
@@ -157,7 +156,7 @@ Report the full sequence of logs from both console and terminal.
 ```
 
 **Expected Terminal Logs:**
-```
+```text
 [Rollback:Route] POST request received {activityId, userId}
 [Rollback:Preview] Starting preview {activityId, userId, context}
 [Rollback:Preview] Activity found {operation, resourceType, hasSnapshotData}
@@ -181,27 +180,27 @@ Report the full sequence of logs from both console and terminal.
 5. Click "Undo"
 
 **Claude Chrome Commands:**
-```
+```text
 Navigate to a page that has AI chat enabled. Send a simple question
 to the AI like "What is this page about?".
 
 After the AI responds, click "Undo from here" on that message.
 Select "Revert conversation only" and click Undo.
 
-Check console for [Undo:Preview] and [Undo:Execute] logs and
+Check console for [AiUndo:Preview] and [AiUndo:Execute] logs and
 report the full sequence.
 ```
 
 **Expected Console Logs:**
-```
-[Undo:Preview] Dialog opened, fetching preview {messageId}
-[Undo:Preview] Preview loaded successfully {messageId, affectedMessages, rollbackableActivities}
-[Undo:Execute] User confirmed undo {messageId, mode: 'messages_only'}
-[Undo:Execute] Undo completed successfully {messageId}
+```text
+[AiUndo:Preview] Dialog opened, fetching preview {messageId}
+[AiUndo:Preview] Preview loaded successfully {messageId, affectedMessages, rollbackableActivities}
+[AiUndo:Execute] User confirmed undo {messageId, mode: 'messages_only'}
+[AiUndo:Execute] Undo completed successfully {messageId}
 ```
 
 **Expected Terminal Logs:**
-```
+```text
 [AiUndo:Route] GET request received {messageId, userId}
 [AiUndo:Preview] Starting preview {messageId, userId}
 [AiUndo:Preview] Found message {role, createdAt}
@@ -226,7 +225,7 @@ report the full sequence.
 6. Click "Undo"
 
 **Claude Chrome Commands:**
-```
+```text
 Navigate to a page with AI chat. Ask the AI to make a visible change
 like "Add a heading that says Test at the top of this page".
 
@@ -235,20 +234,20 @@ on that AI message.
 
 Select "Revert conversation + all changes" and click Undo.
 
-Check console for [Undo:] logs and terminal for [AiUndo:] logs.
+Check console for [AiUndo:] logs and terminal for [AiUndo:] logs.
 Report if the page content was reverted along with the messages.
 ```
 
 **Expected Console Logs:**
-```
-[Undo:Preview] Dialog opened, fetching preview {messageId}
-[Undo:Preview] Preview loaded successfully {messageId, affectedMessages, rollbackableActivities: 1+}
-[Undo:Execute] User confirmed undo {messageId, mode: 'messages_and_changes'}
-[Undo:Execute] Undo completed successfully {messageId}
+```text
+[AiUndo:Preview] Dialog opened, fetching preview {messageId}
+[AiUndo:Preview] Preview loaded successfully {messageId, affectedMessages, rollbackableActivities: 1+}
+[AiUndo:Execute] User confirmed undo {messageId, mode: 'messages_and_changes'}
+[AiUndo:Execute] Undo completed successfully {messageId}
 ```
 
 **Expected Terminal Logs:**
-```
+```text
 [AiUndo:Preview] Checking activities for rollback eligibility {activitiesCount}
 [AiUndo:Preview] Activity eligible for rollback {activityId, operation}
 [AiUndo:Execute] Starting execution {messageId, mode: 'messages_and_changes'}
@@ -268,7 +267,7 @@ Report if the page content was reverted along with the messages.
 4. Test both undo modes
 
 **Claude Chrome Commands:**
-```
+```text
 Open the Global Assistant chat (should be accessible from the sidebar
 or header, not the page-level AI).
 
@@ -277,7 +276,7 @@ Ask it to do something like "Search for pages containing the word test".
 After it responds, try clicking "Undo from here" on a message.
 Check if the undo UI appears and test both modes.
 
-Report any [Undo:] logs in console and [AiUndo:] logs in terminal.
+Report any [AiUndo:] logs in console and [AiUndo:] logs in terminal.
 ```
 
 ---
@@ -289,7 +288,7 @@ Report any [Undo:] logs in console and [AiUndo:] logs in terminal.
 2. Look for activities without restore option (login, view, etc.)
 
 **Claude Chrome Commands:**
-```
+```text
 Open the Version History panel and look for activities that don't
 have a "Restore this version" option when you hover over them.
 
@@ -300,7 +299,7 @@ why certain activities are not rollbackable.
 ```
 
 **Expected Terminal Logs:**
-```
+```text
 [Rollback:Permission] Checking rollback permission {userId, activityId, context}
 [Rollback:Permission] No snapshot data available {activityId}
 [Rollback:Permission] Permission denied {canRollback: false, reason: 'no_snapshot'}
@@ -315,7 +314,7 @@ why certain activities are not rollbackable.
 2. Open Version History at drive level
 
 **Claude Chrome Commands:**
-```
+```text
 Navigate to a drive's settings or activity page where you can see
 drive-level version history (not page-specific).
 
@@ -326,7 +325,7 @@ Try a rollback from this context and verify the context is 'drive'.
 ```
 
 **Expected Console Logs:**
-```
+```text
 [History:Panel] Panel opened, triggering fetch {driveId: 'xxx', pageId: undefined}
 [History:Fetch] Starting fetch {context: 'drive', driveId: 'xxx'}
 ```
@@ -338,7 +337,7 @@ Try a rollback from this context and verify the context is 'drive'.
 ### If History Doesn't Load
 
 Check for:
-```
+```text
 [History:Fetch] Fetch failed with status {status, statusText}
 [History:Fetch] Fetch error {error}
 ```
@@ -351,7 +350,7 @@ Common causes:
 ### If Rollback Fails
 
 Check for:
-```
+```text
 [Rollback:Preview] Preview fetch failed {activityId, status}
 [Rollback:Execute] Rollback failed {activityId, error}
 [Rollback:Dialog] Rollback failed {error}
@@ -365,9 +364,9 @@ Common causes:
 ### If Undo Fails
 
 Check for:
-```
-[Undo:Preview] Preview failed {messageId, error}
-[Undo:Execute] Undo failed {messageId, error}
+```text
+[AiUndo:Preview] Preview failed {messageId, error}
+[AiUndo:Execute] Undo failed {messageId, error}
 ```
 
 Common causes:

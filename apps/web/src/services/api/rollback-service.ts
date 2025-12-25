@@ -298,6 +298,10 @@ export async function previewRollback(
     };
 
     // Check if state has changed since the activity
+    // Note: JSON.stringify comparison works reliably for flat primitive values
+    // (strings, numbers, booleans, null). For nested objects or Date instances,
+    // comparison may behave unexpectedly. Current activity logs only store flat
+    // values in previousValues/newValues, so this is safe for existing use cases.
     if (activity.newValues) {
       const newValuesMatch = Object.entries(activity.newValues).every(
         ([key, value]) => {

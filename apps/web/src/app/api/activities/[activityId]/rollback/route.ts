@@ -5,7 +5,7 @@ import { executeRollback, previewRollback, getActivityById } from '@/services/ap
 import type { RollbackContext } from '@pagespace/lib/permissions';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
-import { broadcastPageEvent, createPageEventPayload, broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
+import { broadcastPageEvent, createPageEventPayload, broadcastDriveEvent, createDriveEventPayload, broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
 import { db, activityLogs, eq, and } from '@pagespace/db';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
@@ -83,13 +83,14 @@ export async function POST(
   }
 
   // Fix 10: Idempotency check - prevent duplicate rollbacks
+  // Fix 14: Use rollbackFromActivityId (the specific activity rolled back), not resourceId
   const existingRollback = await db
     .select({ id: activityLogs.id })
     .from(activityLogs)
     .where(
       and(
         eq(activityLogs.operation, 'rollback'),
-        eq(activityLogs.resourceId, activityId)
+        eq(activityLogs.rollbackFromActivityId, activityId)
       )
     )
     .limit(1);
@@ -136,6 +137,28 @@ export async function POST(
         })
       );
     } else if (activity.resourceType === 'drive' && activity.driveId) {
+      await broadcastDriveEvent(
+        createDriveEventPayload(activity.driveId, 'updated', {
+          name: activity.resourceTitle ?? undefined,
+        })
+      );
+    } else if (activity.resourceType === 'member' && activity.driveId) {
+      // Fix 16: Broadcast member updates on rollback
+      // Determine the appropriate event based on the original operation being rolled back
+      const targetUserId = (activity.metadata as Record<string, unknown>)?.targetUserId as string | undefined;
+      if (targetUserId) {
+        // Rolling back member_add → member was removed, rolling back member_remove → member was added
+        const memberOperation = activity.operation === 'member_add' ? 'member_removed'
+          : activity.operation === 'member_remove' ? 'member_added'
+          : 'member_role_changed';
+        await broadcastDriveMemberEvent(
+          createDriveMemberEventPayload(activity.driveId, targetUserId, memberOperation, {
+            driveName: activity.resourceTitle ?? undefined,
+          })
+        );
+      }
+    } else if (activity.resourceType === 'role' && activity.driveId) {
+      // Fix 16: Role changes affect all drive members - broadcast drive update
       await broadcastDriveEvent(
         createDriveEventPayload(activity.driveId, 'updated', {
           name: activity.resourceTitle ?? undefined,
