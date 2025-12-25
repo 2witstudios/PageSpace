@@ -3,7 +3,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { mergeChildren } from '@/lib/tree/tree-utils';
 import { Page } from '@pagespace/lib/client';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { isEditingActive, useEditingStore } from '@/stores/useEditingStore';
+import { useEditingStore } from '@/stores/useEditingStore';
 
 type User = {
   id: string;
@@ -62,7 +62,8 @@ export function usePageTree(driveId?: string, trashView?: boolean) {
     fetcher,
     {
       // Only pause revalidation after initial load - never block the first fetch
-      isPaused: () => hasLoadedRef.current && isEditingActive(),
+      // Use isAnyEditing() to allow tree updates during AI streaming (not just isEditingActive/isAnyActive)
+      isPaused: () => hasLoadedRef.current && useEditingStore.getState().isAnyEditing(),
       onSuccess: () => {
         hasLoadedRef.current = true;
       },
