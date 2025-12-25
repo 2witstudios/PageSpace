@@ -36,6 +36,8 @@ export interface AiUndoPreview {
     resourceType: string;
     resourceId: string;
     resourceTitle: string | null;
+    pageId?: string | null;
+    driveId?: string | null;
     canRollback: boolean;
     reason?: string;
   }[];
@@ -79,12 +81,20 @@ interface AiMessage {
  * Tries both chat_messages (page chats) and messages (global chats)
  */
 async function getMessage(messageId: string): Promise<AiMessage | null> {
+  loggers.api.debug('[AiUndo:Preview] Looking up message', { messageId });
+
   // Try page chat messages first
   const pageMessage = await db.query.chatMessages.findFirst({
     where: eq(chatMessages.id, messageId),
   });
 
   if (pageMessage) {
+    loggers.api.debug('[AiUndo:Preview] Message found in page_chat', {
+      messageId,
+      conversationId: pageMessage.conversationId,
+      pageId: pageMessage.pageId,
+      isActive: pageMessage.isActive,
+    });
     return {
       id: pageMessage.id,
       conversationId: pageMessage.conversationId,
@@ -101,6 +111,11 @@ async function getMessage(messageId: string): Promise<AiMessage | null> {
   });
 
   if (globalMessage) {
+    loggers.api.debug('[AiUndo:Preview] Message found in global_chat', {
+      messageId,
+      conversationId: globalMessage.conversationId,
+      isActive: globalMessage.isActive,
+    });
     return {
       id: globalMessage.id,
       conversationId: globalMessage.conversationId,
@@ -111,6 +126,7 @@ async function getMessage(messageId: string): Promise<AiMessage | null> {
     };
   }
 
+  loggers.api.debug('[AiUndo:Preview] Message not found in any table', { messageId });
   return null;
 }
 
@@ -132,6 +148,8 @@ export async function previewAiUndo(
   messageId: string,
   userId: string
 ): Promise<AiUndoPreview | null> {
+  loggers.api.debug('[AiUndo:Preview] Starting preview', { messageId, userId });
+
   try {
     // Get the message
     const message = await getMessage(messageId);
@@ -141,7 +159,15 @@ export async function previewAiUndo(
     }
 
     const { conversationId, pageId, createdAt, source } = message;
+    loggers.api.debug('[AiUndo:Preview] Message context resolved', {
+      conversationId,
+      pageId,
+      source,
+      createdAt: createdAt.toISOString(),
+    });
+
     const driveId = pageId ? await getPageDriveId(pageId) : null;
+    loggers.api.debug('[AiUndo:Preview] Drive context resolved', { driveId });
 
     // Count messages that will be affected (from this message forward in the conversation)
     // Use the correct table based on source
@@ -159,6 +185,10 @@ export async function previewAiUndo(
       );
 
     const messagesAffected = affectedMessages.length;
+    loggers.api.debug('[AiUndo:Preview] Counted affected messages', {
+      messagesAffected,
+      conversationId,
+    });
 
     // Find the message immediately preceding this one in the same conversation
     // to include any tool calls that happened before this message was created
@@ -184,8 +214,16 @@ export async function previewAiUndo(
     // If no preceding message, we still start from createdAt but tool calls might be missed
     // in the first turn, but usually there's a user message first.
     const activityStartTime = precedingMessage ? precedingMessage.createdAt : createdAt;
+    loggers.api.debug('[AiUndo:Preview] Activity time window resolved', {
+      hasPrecedingMessage: !!precedingMessage,
+      activityStartTime: activityStartTime.toISOString(),
+    });
 
     // Get activity logs for AI-generated changes in this conversation from this point forward
+    loggers.api.debug('[AiUndo:Preview] Querying AI-generated activities', {
+      conversationId,
+      fromTimestamp: activityStartTime.toISOString(),
+    });
     const activities = await db
       .select()
       .from(activityLogs)
@@ -198,6 +236,10 @@ export async function previewAiUndo(
       )
       .orderBy(desc(activityLogs.timestamp));
 
+    loggers.api.debug('[AiUndo:Preview] Found AI activities', {
+      activitiesCount: activities.length,
+    });
+
     // Check rollback eligibility for each activity
     const activitiesAffected: AiUndoPreview['activitiesAffected'] = [];
     const warnings: string[] = [];
@@ -207,7 +249,24 @@ export async function previewAiUndo(
       // so we use 'ai_tool' context for pages and 'drive' context for drives
       const context: RollbackContext = activity.resourceType === 'drive' ? 'drive' : 'ai_tool';
 
-      const preview = await previewRollback(activity.id, userId, context);
+      loggers.api.debug('[AiUndo:Preview] Checking activity eligibility', {
+        activityId: activity.id,
+        operation: activity.operation,
+        resourceType: activity.resourceType,
+        resourceTitle: activity.resourceTitle,
+        context,
+      });
+
+      // Use force=true for AI undo since user is explicitly undoing AI changes
+      // This allows activities with conflicts to be marked as rollbackable (with warnings)
+      const preview = await previewRollback(activity.id, userId, context, { force: true });
+
+      loggers.api.debug('[AiUndo:Preview] Activity eligibility result', {
+        activityId: activity.id,
+        canRollback: preview.canRollback,
+        reason: preview.reason,
+        warningsCount: preview.warnings.length,
+      });
 
       activitiesAffected.push({
         id: activity.id,
@@ -215,6 +274,8 @@ export async function previewAiUndo(
         resourceType: activity.resourceType,
         resourceId: activity.resourceId,
         resourceTitle: activity.resourceTitle,
+        pageId: activity.pageId,
+        driveId: activity.driveId,
         canRollback: preview.canRollback,
         reason: preview.reason,
       });
@@ -226,6 +287,13 @@ export async function previewAiUndo(
         warnings.push(...preview.warnings);
       }
     }
+
+    loggers.api.debug('[AiUndo:Preview] Preview complete', {
+      messagesAffected,
+      activitiesTotal: activitiesAffected.length,
+      activitiesRollbackable: activitiesAffected.filter(a => a.canRollback).length,
+      warningsCount: warnings.length,
+    });
 
     return {
       messageId,
@@ -257,6 +325,13 @@ export async function executeAiUndo(
   mode: UndoMode,
   existingPreview?: AiUndoPreview
 ): Promise<AiUndoResult> {
+  loggers.api.debug('[AiUndo:Execute] Starting execution', {
+    messageId,
+    userId,
+    mode,
+    hasExistingPreview: !!existingPreview,
+  });
+
   const errors: string[] = [];
   let activitiesRolledBack = 0;
   let messagesDeleted = 0;
@@ -265,6 +340,7 @@ export async function executeAiUndo(
     // Use existing preview if provided, otherwise compute it
     const preview = existingPreview ?? await previewAiUndo(messageId, userId);
     if (!preview) {
+      loggers.api.debug('[AiUndo:Execute] Aborting - preview not available');
       return {
         success: false,
         messagesDeleted: 0,
@@ -276,13 +352,30 @@ export async function executeAiUndo(
     const { conversationId, pageId, driveId, createdAt } = preview;
     const rolledBackActivityIds: string[] = [];
 
+    loggers.api.debug('[AiUndo:Execute] Preview resolved', {
+      conversationId,
+      messagesAffected: preview.messagesAffected,
+      activitiesAffected: preview.activitiesAffected.length,
+      source: preview.source,
+    });
+
     // Execute all operations in a single transaction for atomicity
     // All-or-nothing: if any rollback fails, entire transaction is aborted
+    loggers.api.debug('[AiUndo:Execute] Starting transaction');
+
     await db.transaction(async (tx) => {
       // If mode includes changes, rollback activities in reverse chronological order
       if (mode === 'messages_and_changes') {
+        loggers.api.debug('[AiUndo:Execute] Rolling back activities', {
+          activitiesToRollback: preview.activitiesAffected.length,
+        });
+
         for (const activity of preview.activitiesAffected) {
           if (!activity.canRollback) {
+            loggers.api.debug('[AiUndo:Execute] Activity not rollbackable - aborting', {
+              activityId: activity.id,
+              reason: activity.reason,
+            });
             // Non-rollbackable items abort the entire transaction
             throw new Error(`Cannot undo ${activity.operation} on ${activity.resourceTitle || activity.resourceType}: ${activity.reason}`);
           }
@@ -295,12 +388,29 @@ export async function executeAiUndo(
             context = 'drive';
           }
 
+          loggers.api.debug('[AiUndo:Execute] Rolling back activity', {
+            activityId: activity.id,
+            operation: activity.operation,
+            resourceType: activity.resourceType,
+            context,
+          });
+
           // Pass transaction to executeRollback for atomicity
           // Any failure aborts entire transaction
-          const result = await executeRollback(activity.id, userId, context, tx);
+          // Use force=true since user is explicitly undoing AI changes
+          const result = await executeRollback(activity.id, userId, context, { tx, force: true });
           if (!result.success) {
+            loggers.api.debug('[AiUndo:Execute] Activity rollback failed - aborting', {
+              activityId: activity.id,
+              message: result.message,
+            });
             throw new Error(`Failed to undo ${activity.operation} on ${activity.resourceTitle || activity.resourceType}: ${result.message}`);
           }
+
+          loggers.api.debug('[AiUndo:Execute] Activity rollback succeeded', {
+            activityId: activity.id,
+          });
+
           activitiesRolledBack++;
           rolledBackActivityIds.push(activity.id);
         }
@@ -309,6 +419,12 @@ export async function executeAiUndo(
       // Only reached if all rollbacks succeed
       // Soft-delete messages in the same transaction
       const table = preview.source === 'page_chat' ? chatMessages : messages;
+
+      loggers.api.debug('[AiUndo:Execute] Soft-deleting messages', {
+        table: preview.source,
+        conversationId,
+        fromTimestamp: createdAt.toISOString(),
+      });
 
       await tx
         .update(table)
@@ -320,10 +436,17 @@ export async function executeAiUndo(
             eq(table.isActive, true)
           )
         );
+
+      loggers.api.debug('[AiUndo:Execute] Transaction committing');
     });
 
     // Get count of deleted messages (Drizzle doesn't return count directly, use preview)
     messagesDeleted = preview.messagesAffected;
+
+    loggers.api.debug('[AiUndo:Execute] Transaction committed successfully', {
+      messagesDeleted,
+      activitiesRolledBack,
+    });
 
     // Log the undo operation
     const actorInfo = await getActorInfo(userId);

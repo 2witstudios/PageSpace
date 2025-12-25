@@ -51,10 +51,32 @@ vi.mock('@pagespace/lib/server', () => ({
   },
 }));
 
+// Mock database for capturing current page state
+vi.mock('@pagespace/db', () => ({
+  db: {
+    select: vi.fn().mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          limit: vi.fn().mockResolvedValue([{ parentId: null, position: 0 }]),
+        }),
+      }),
+    }),
+  },
+  pages: { id: 'id', parentId: 'parentId', position: 'position' },
+  eq: vi.fn(),
+}));
+
+// Mock activity logger
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+  getActorInfo: vi.fn().mockResolvedValue({ actorName: 'Test User', actorEmail: 'test@example.com' }),
+  logPageActivity: vi.fn(),
+}));
+
 import { pageReorderService } from '@/services/api';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { pageTreeCache } from '@pagespace/lib/server';
+import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 // Test helpers
 const mockUserId = 'user_123';
@@ -334,7 +356,15 @@ describe('PATCH /api/pages/reorder', () => {
           parentId: 'parent_456',
         })
       );
-      expect(broadcastPageEvent).toHaveBeenCalled();
+      // Verify broadcast receives the payload from createPageEventPayload
+      expect(broadcastPageEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          driveId: mockDriveId,
+          pageId: mockPageId,
+          type: 'moved',
+          parentId: 'parent_456',
+        })
+      );
     });
 
     it('invalidates page tree cache for the drive', async () => {
@@ -347,7 +377,39 @@ describe('PATCH /api/pages/reorder', () => {
       expect(pageTreeCache.invalidateDriveTree).toHaveBeenCalledWith(mockDriveId);
     });
 
-    it('does NOT broadcast or invalidate cache on service failure', async () => {
+    it('logs page move activity with correct parameters', async () => {
+      await PATCH(createRequest({
+        pageId: mockPageId,
+        newParentId: 'parent_456',
+        newPosition: 5,
+      }));
+
+      expect(getActorInfo).toHaveBeenCalledWith(mockUserId);
+      expect(logPageActivity).toHaveBeenCalledWith(
+        mockUserId,
+        'move',
+        expect.objectContaining({
+          id: mockPageId,
+          title: 'Test Page',
+          driveId: mockDriveId,
+        }),
+        expect.objectContaining({
+          actorName: 'Test User',
+          actorEmail: 'test@example.com',
+          updatedFields: ['parentId', 'position'],
+          previousValues: expect.objectContaining({
+            parentId: null,
+            position: 0,
+          }),
+          newValues: expect.objectContaining({
+            parentId: 'parent_456',
+            position: 5,
+          }),
+        })
+      );
+    });
+
+    it('does NOT broadcast, invalidate cache, or log activity on service failure', async () => {
       (pageReorderService.reorderPage as Mock).mockResolvedValue({
         success: false,
         error: 'Page not found.',
@@ -362,6 +424,8 @@ describe('PATCH /api/pages/reorder', () => {
 
       expect(broadcastPageEvent).not.toHaveBeenCalled();
       expect(pageTreeCache.invalidateDriveTree).not.toHaveBeenCalled();
+      expect(getActorInfo).not.toHaveBeenCalled();
+      expect(logPageActivity).not.toHaveBeenCalled();
     });
   });
 });

@@ -104,6 +104,7 @@ vi.mock('@pagespace/lib/server', () => ({
       info: vi.fn(),
       error: vi.fn(),
       warn: vi.fn(),
+      debug: vi.fn(),
     },
   },
 }));
@@ -286,9 +287,10 @@ describe('rollback-service', () => {
 
     it('returns canRollback=true with preview data when eligible', async () => {
       const mockActivity = createMockActivity();
+      // Current page state must match activity.newValues to avoid conflict detection
       const mockCurrentPage = {
-        title: 'Current Title',
-        content: '<p>Current content</p>',
+        title: 'New Title',  // Matches activity.newValues.title
+        content: '<p>New content</p>',  // Matches activity.newValues.content
         parentId: null,
         position: 0,
       };
@@ -318,7 +320,7 @@ describe('rollback-service', () => {
       expect(result.rollbackToValues).toEqual(mockActivity.previousValues);
     });
 
-    it('includes warning when resource has been modified since activity', async () => {
+    it('returns hasConflict=true when resource has been modified since activity', async () => {
       const mockActivity = createMockActivity({
         newValues: { title: 'Original New Title' },
       });
@@ -345,11 +347,47 @@ describe('rollback-service', () => {
       (isRollbackableOperation as Mock).mockReturnValue(true);
       (canUserRollback as Mock).mockResolvedValue({ canRollback: true });
 
+      // Without force=true, conflict detection blocks rollback
       const result = await previewRollback(mockActivityId, mockUserId, 'page');
+
+      expect(result.canRollback).toBe(false);
+      expect(result.hasConflict).toBe(true);
+      expect(result.reason).toContain('Resource has been modified since this change');
+    });
+
+    it('includes warning when force=true and resource has been modified', async () => {
+      const mockActivity = createMockActivity({
+        newValues: { title: 'Original New Title' },
+      });
+      const mockCurrentPage = {
+        title: 'Modified Title', // Different from activity's newValues
+        content: '<p>New content</p>',
+        parentId: null,
+        position: 0,
+      };
+
+      let callCount = 0;
+      (db.select as Mock).mockImplementation(() => ({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockImplementation(() => {
+              callCount++;
+              if (callCount === 1) return Promise.resolve([mockActivity]);
+              return Promise.resolve([mockCurrentPage]);
+            }),
+          }),
+        }),
+      }));
+
+      (isRollbackableOperation as Mock).mockReturnValue(true);
+      (canUserRollback as Mock).mockResolvedValue({ canRollback: true });
+
+      // With force=true, rollback proceeds with warning
+      const result = await previewRollback(mockActivityId, mockUserId, 'page', { force: true });
 
       expect(result.canRollback).toBe(true);
       expect(result.warnings).toContain(
-        'This resource has been modified since this change. Rollback will overwrite those modifications.'
+        'This resource has been modified since this change. Recent changes will be overwritten.'
       );
     });
 
@@ -402,11 +440,13 @@ describe('rollback-service', () => {
     it('executes page rollback and logs activity', async () => {
       const mockActivity = createMockActivity({
         previousValues: { title: 'Old Title' },
+        newValues: { title: 'New Title' },  // Explicit newValues
         updatedFields: ['title'],
       });
+      // Current page must match activity.newValues to avoid conflict detection
       const mockCurrentPage = {
-        title: 'Current Title',
-        content: '<p>Content</p>',
+        title: 'New Title',  // Matches activity.newValues.title
+        content: '<p>New content</p>',  // Matches default activity.newValues.content
         parentId: null,
         position: 0,
       };
@@ -462,11 +502,13 @@ describe('rollback-service', () => {
         operation: 'update',
         contentSnapshot: '<p>Snapshot content</p>',
         previousValues: {},
-        updatedFields: null,
+        newValues: { content: '<p>Current</p>' },  // Only content changed
+        updatedFields: ['content'],
       });
+      // Current page must match activity.newValues to avoid conflict detection
       const mockCurrentPage = {
-        title: 'Title',
-        content: '<p>Current</p>',
+        title: 'New Title',  // Matches default
+        content: '<p>Current</p>',  // Matches activity.newValues.content
         parentId: null,
         position: 0,
       };
@@ -506,7 +548,13 @@ describe('rollback-service', () => {
 
     it('returns failure with error message on database error', async () => {
       const mockActivity = createMockActivity();
-      const mockCurrentPage = { title: 'Title', content: '', parentId: null, position: 0 };
+      // Current page must match activity.newValues to pass conflict detection
+      const mockCurrentPage = {
+        title: 'New Title',  // Matches activity.newValues.title
+        content: '<p>New content</p>',  // Matches activity.newValues.content
+        parentId: null,
+        position: 0,
+      };
 
       let selectCallCount = 0;
       (db.select as Mock).mockImplementation(() => ({
@@ -541,10 +589,16 @@ describe('rollback-service', () => {
     it('returns failure when no values to restore', async () => {
       const mockActivity = createMockActivity({
         previousValues: {},
+        newValues: null,  // No newValues means no conflict check
         updatedFields: [],
         contentSnapshot: null,
       });
-      const mockCurrentPage = { title: 'Title', content: '', parentId: null, position: 0 };
+      const mockCurrentPage = {
+        title: 'Title',
+        content: '',
+        parentId: null,
+        position: 0,
+      };
 
       let selectCallCount = 0;
       (db.select as Mock).mockImplementation(() => ({

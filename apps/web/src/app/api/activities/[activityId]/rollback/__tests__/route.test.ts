@@ -17,6 +17,7 @@ import type { WebAuthResult, AuthError } from '../../../../../../lib/auth';
 vi.mock('../../../../../../services/api', () => ({
   executeRollback: vi.fn(),
   previewRollback: vi.fn(),
+  getActivityById: vi.fn(),
 }));
 
 // Mock auth
@@ -25,8 +26,50 @@ vi.mock('../../../../../../lib/auth', () => ({
   isAuthError: vi.fn((result) => 'error' in result),
 }));
 
+// Mock database for idempotency check
+vi.mock('@pagespace/db', () => ({
+  db: {
+    select: vi.fn().mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          limit: vi.fn().mockResolvedValue([]), // No existing rollback by default
+        }),
+      }),
+    }),
+    transaction: vi.fn((callback: (tx: object) => Promise<unknown>) => callback({})),
+  },
+  activityLogs: { id: 'id', operation: 'operation', rollbackFromActivityId: 'rollbackFromActivityId' },
+  eq: vi.fn(),
+  and: vi.fn(),
+}));
+
+// Mock loggers
+vi.mock('@pagespace/lib/server', () => ({
+  loggers: {
+    api: {
+      debug: vi.fn(),
+    },
+  },
+}));
+
+// Mock websocket broadcasts
+vi.mock('../../../../../../lib/websocket', () => ({
+  broadcastPageEvent: vi.fn(),
+  createPageEventPayload: vi.fn(),
+  broadcastDriveEvent: vi.fn(),
+  createDriveEventPayload: vi.fn(),
+  broadcastDriveMemberEvent: vi.fn(),
+  createDriveMemberEventPayload: vi.fn(),
+}));
+
+// Mock mask utility
+vi.mock('../../../../../../lib/logging/mask', () => ({
+  maskIdentifier: vi.fn((id: string) => `***${id.slice(-4)}`),
+}));
+
 import { executeRollback, previewRollback } from '../../../../../../services/api';
 import { authenticateRequestWithOptions } from '../../../../../../lib/auth';
+import { db } from '@pagespace/db';
 
 // Test helpers
 const mockUserId = 'user_123';
@@ -261,11 +304,85 @@ describe('POST /api/activities/[activityId]/rollback', () => {
 
       await POST(createRequest({ context: 'drive' }), { params: mockParams });
 
+      // Route now wraps executeRollback in transaction and passes options
       expect(executeRollback).toHaveBeenCalledWith(
         mockActivityId,
         mockUserId,
-        'drive'
+        'drive',
+        expect.objectContaining({ tx: expect.any(Object), force: false })
       );
+    });
+  });
+
+  // ============================================
+  // Idempotency
+  // ============================================
+
+  describe('idempotency', () => {
+    const existingRollbackId = 'existing_rollback_456';
+
+    // Helper to mock db.select chain to return existing rollback
+    const mockExistingRollback = () => {
+      vi.mocked(db.select).mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([{ id: existingRollbackId }]),
+          }),
+        }),
+      } as ReturnType<typeof db.select>);
+    };
+
+    // Helper to reset db mock to default (no existing rollback)
+    const resetDbMock = () => {
+      vi.mocked(db.select).mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([]),
+          }),
+        }),
+      } as ReturnType<typeof db.select>);
+    };
+
+    afterEach(() => {
+      resetDbMock();
+    });
+
+    it('returns existing rollback when activity was already rolled back', async () => {
+      mockExistingRollback();
+
+      const response = await POST(createRequest({ context: 'page' }), { params: mockParams });
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.message).toBe('Already rolled back');
+      expect(body.rollbackActivityId).toBe(existingRollbackId);
+      expect(body.warnings).toEqual([]);
+      expect(executeRollback).not.toHaveBeenCalled();
+    });
+
+    it('prevents duplicate rollbacks on double-click (both requests return same result)', async () => {
+      mockExistingRollback();
+
+      // Simulate double-click: two requests in quick succession
+      const [response1, response2] = await Promise.all([
+        POST(createRequest({ context: 'page' }), { params: mockParams }),
+        POST(createRequest({ context: 'page' }), { params: mockParams }),
+      ]);
+
+      const body1 = await response1.json();
+      const body2 = await response2.json();
+
+      // Both should return the same existing rollback
+      expect(response1.status).toBe(200);
+      expect(response2.status).toBe(200);
+      expect(body1.rollbackActivityId).toBe(existingRollbackId);
+      expect(body2.rollbackActivityId).toBe(existingRollbackId);
+      expect(body1.message).toBe('Already rolled back');
+      expect(body2.message).toBe('Already rolled back');
+
+      // executeRollback should never be called since both see existing rollback
+      expect(executeRollback).not.toHaveBeenCalled();
     });
   });
 });

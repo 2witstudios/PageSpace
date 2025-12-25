@@ -1,7 +1,9 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useSWRConfig } from 'swr';
 import { History, Loader2, Filter, RefreshCw } from 'lucide-react';
+import { createClientLogger } from '@/lib/logging/client-logger';
 import { Button } from '@/components/ui/button';
 import {
   Sheet,
@@ -24,6 +26,8 @@ import { VersionHistoryItem } from './VersionHistoryItem';
 import { useToast } from '@/hooks/useToast';
 import { post } from '@/lib/auth/auth-fetch';
 import type { ActivityLog } from '@/components/activity/types';
+
+const logger = createClientLogger({ namespace: 'rollback', component: 'VersionHistoryPanel' });
 
 interface VersionHistoryPanelProps {
   open: boolean;
@@ -63,12 +67,23 @@ export function VersionHistoryPanel({
   const [showAiOnly, setShowAiOnly] = useState(false);
   const [operationFilter, setOperationFilter] = useState<string>('all');
   const { toast } = useToast();
+  const { mutate } = useSWRConfig();
 
   const context = pageId ? 'page' : driveId ? 'drive' : 'user_dashboard';
   const limit = 20;
 
   const fetchVersions = useCallback(async (reset = false) => {
     if (!pageId && !driveId) return;
+
+    logger.debug('[History:Fetch] Starting fetch', {
+      context,
+      pageId,
+      driveId,
+      reset,
+      offset: reset ? 0 : offset,
+      showAiOnly,
+      operationFilter,
+    });
 
     setLoading(true);
     const currentOffset = reset ? 0 : offset;
@@ -92,10 +107,21 @@ export function VersionHistoryPanel({
 
       const response = await fetch(endpoint);
       if (!response.ok) {
+        logger.debug('[History:Fetch] Fetch failed with status', {
+          status: response.status,
+          statusText: response.statusText,
+        });
         throw new Error('Failed to fetch version history');
       }
 
       const data: VersionHistoryResponse = await response.json();
+
+      logger.debug('[History:Fetch] Fetch successful', {
+        versionsCount: data.versions.length,
+        total: data.pagination.total,
+        hasMore: data.pagination.hasMore,
+        retentionDays: data.retentionDays,
+      });
 
       if (reset) {
         setVersions(data.versions);
@@ -107,7 +133,10 @@ export function VersionHistoryPanel({
 
       setHasMore(data.pagination.hasMore);
       setRetentionDays(data.retentionDays);
-    } catch {
+    } catch (error) {
+      logger.debug('[History:Fetch] Fetch error', {
+        error: error instanceof Error ? error.message : String(error),
+      });
       toast({
         title: 'Error',
         description: 'Failed to load version history',
@@ -116,7 +145,10 @@ export function VersionHistoryPanel({
     } finally {
       setLoading(false);
     }
-  }, [pageId, driveId, offset, showAiOnly, operationFilter, toast]);
+  // Fix 18: Removed offset from dependencies to prevent potential infinite loop
+  // (fetchVersions updates offset state, which would trigger re-render)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageId, driveId, showAiOnly, operationFilter, context, toast]);
 
   // Keep a ref to the latest fetchVersions to avoid stale closure issues
   const fetchVersionsRef = useRef(fetchVersions);
@@ -125,22 +157,53 @@ export function VersionHistoryPanel({
   // Fetch on open or filter change
   useEffect(() => {
     if (open) {
+      logger.debug('[History:Panel] Panel opened, triggering fetch', {
+        pageId,
+        driveId,
+        showAiOnly,
+        operationFilter,
+      });
       fetchVersionsRef.current(true);
     }
-  }, [open, showAiOnly, operationFilter]);
+  }, [open, showAiOnly, operationFilter, pageId, driveId]);
 
-  const handleRollback = async (activityId: string) => {
+  const handleRollback = async (activityId: string, force?: boolean) => {
+    logger.debug('[Rollback:Execute] User initiated rollback from history panel', {
+      activityId,
+      context,
+      force,
+    });
+
     try {
-      await post(`/api/activities/${activityId}/rollback`, { context });
+      await post(`/api/activities/${activityId}/rollback`, { context, force });
+
+      logger.debug('[Rollback:Execute] Rollback completed successfully', {
+        activityId,
+      });
 
       toast({
         title: 'Success',
         description: 'Successfully restored to previous version',
       });
 
-      // Refresh the list
+      // Invalidate SWR caches for affected resources
+      if (pageId) {
+        mutate(`/api/pages/${pageId}`);  // Invalidate page data
+        mutate(`/api/pages/${pageId}/history`);  // Fix 17: Invalidate history cache
+      }
+      if (driveId) {
+        mutate(`/api/drives/${driveId}/pages`);  // Invalidate page tree
+        mutate(`/api/drives/${driveId}/history`);  // Fix 17: Invalidate history cache
+      }
+
+      // Refresh the version history list
       fetchVersions(true);
     } catch (error) {
+      logger.debug('[Rollback:Execute] Rollback failed', {
+        activityId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+
       toast({
         title: 'Error',
         description: error instanceof Error ? error.message : 'Failed to rollback',
@@ -151,6 +214,10 @@ export function VersionHistoryPanel({
 
   const handleLoadMore = () => {
     if (!loading && hasMore) {
+      logger.debug('[History:Fetch] Loading more versions', {
+        currentCount: versions.length,
+        offset,
+      });
       fetchVersions(false);
     }
   };

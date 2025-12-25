@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { formatDistanceToNow, format } from 'date-fns';
+import { createClientLogger } from '@/lib/logging/client-logger';
 import { Bot, FileText, History, MoreVertical } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
@@ -18,10 +19,12 @@ import { RollbackConfirmDialog } from './RollbackConfirmDialog';
 import { useToast } from '@/hooks/useToast';
 import type { ActivityLog } from '@/components/activity/types';
 
+const logger = createClientLogger({ namespace: 'rollback', component: 'VersionHistoryItem' });
+
 interface VersionHistoryItemProps {
   activity: ActivityLog & { canRollback?: boolean };
   context: 'page' | 'drive' | 'ai_tool' | 'user_dashboard';
-  onRollback?: (activityId: string) => Promise<void>;
+  onRollback?: (activityId: string, force?: boolean) => Promise<void>;
 }
 
 export function VersionHistoryItem({
@@ -31,6 +34,7 @@ export function VersionHistoryItem({
 }: VersionHistoryItemProps) {
   const [showConfirm, setShowConfirm] = useState(false);
   const [previewWarnings, setPreviewWarnings] = useState<string[]>([]);
+  const [hasConflict, setHasConflict] = useState(false);
   const { toast } = useToast();
 
   const opConfig = operationConfig[activity.operation] || defaultOperationConfig;
@@ -41,28 +45,67 @@ export function VersionHistoryItem({
   const actorImage = activity.user?.image;
 
   const handleRestoreClick = async () => {
-    // Fetch preview to get warnings
+    logger.debug('[Rollback:Preview] User clicked restore version', {
+      activityId: activity.id,
+      operation: activity.operation,
+      resourceType: activity.resourceType,
+      context,
+    });
+
+    // Fetch preview using dry run to get warnings and conflict status
     try {
-      const response = await fetch(`/api/activities/${activity.id}?context=${context}`);
+      const response = await fetch(`/api/activities/${activity.id}/rollback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ context, dryRun: true }),
+      });
       if (!response.ok) {
+        logger.debug('[Rollback:Preview] Preview fetch failed', {
+          activityId: activity.id,
+          status: response.status,
+        });
         throw new Error('Failed to load preview');
       }
       const data = await response.json();
+      logger.debug('[Rollback:Preview] Preview loaded', {
+        activityId: activity.id,
+        warningsCount: data.warnings?.length || 0,
+        hasConflict: data.hasConflict || false,
+        canRollback: data.canRollback,
+      });
       setPreviewWarnings(data.warnings || []);
+      setHasConflict(data.hasConflict || false);
+
+      // If not rollbackable due to conflict, add explanation to warnings
+      if (!data.canRollback && data.hasConflict) {
+        setPreviewWarnings([
+          'This resource has been modified since this change. Recent changes will be overwritten.',
+          ...(data.warnings || []),
+        ]);
+      }
     } catch (error) {
+      logger.debug('[Rollback:Preview] Preview error', {
+        activityId: activity.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
       toast({
         title: 'Error',
         description: error instanceof Error ? error.message : 'Failed to load rollback preview',
         variant: 'destructive',
       });
       setPreviewWarnings([]);
+      setHasConflict(false);
     }
     setShowConfirm(true);
   };
 
-  const handleConfirmRollback = async () => {
+  const handleConfirmRollback = async (force?: boolean) => {
+    logger.debug('[Rollback:Execute] User confirmed rollback via dialog', {
+      activityId: activity.id,
+      force,
+    });
     if (onRollback) {
-      await onRollback(activity.id);
+      await onRollback(activity.id, force);
     }
   };
 
@@ -148,6 +191,7 @@ export function VersionHistoryItem({
         operation={opConfig.label}
         timestamp={activity.timestamp}
         warnings={previewWarnings}
+        hasConflict={hasConflict}
         onConfirm={handleConfirmRollback}
       />
     </>
