@@ -231,6 +231,10 @@ export function isActivityEligibleForRollback(activity: {
   previousValues: unknown | null;
   contentSnapshot: string | null;
 }): boolean {
+  // 'create' operations don't need previousValues - rollback means trash/delete
+  if (activity.operation === 'create') {
+    return isRollbackableOperation(activity.operation);
+  }
   return (
     isRollbackableOperation(activity.operation) &&
     (activity.previousValues !== null || activity.contentSnapshot !== null)

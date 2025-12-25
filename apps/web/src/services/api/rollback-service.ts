@@ -219,7 +219,8 @@ export async function previewRollback(
     previousValuesFields: activity.previousValues ? Object.keys(activity.previousValues) : [],
   });
 
-  if (!hasPreviousValues && !hasContentSnapshot) {
+  // For 'create' operations, rollback means trashing - no previous state needed
+  if (activity.operation !== 'create' && !hasPreviousValues && !hasContentSnapshot) {
     return {
       activity,
       canRollback: false,
@@ -502,6 +503,25 @@ async function rollbackPageChange(
     loggers.api.debug('[Rollback:Execute:Page] Trashing created page', {
       pageId: activity.pageId,
     });
+
+    // Get the page's parent (grandparent of any children)
+    const [page] = await database
+      .select({ parentId: pages.parentId })
+      .from(pages)
+      .where(eq(pages.id, activity.pageId));
+
+    // Orphan any children to the grandparent (matches pageService.trashPage behavior)
+    // This prevents broken tree with children pointing to trashed parent
+    await database
+      .update(pages)
+      .set({
+        parentId: page?.parentId ?? null,
+        originalParentId: activity.pageId, // Store for potential restore
+        updatedAt: new Date(),
+      })
+      .where(eq(pages.parentId, activity.pageId));
+
+    // Now trash the created page
     await database
       .update(pages)
       .set({
