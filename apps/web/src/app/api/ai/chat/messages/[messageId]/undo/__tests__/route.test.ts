@@ -40,8 +40,20 @@ vi.mock('@pagespace/lib/server', () => ({
       info: vi.fn(),
       error: vi.fn(),
       warn: vi.fn(),
+      debug: vi.fn(),
     },
   },
+}));
+
+// Mock websocket broadcasts
+vi.mock('@/lib/websocket', () => ({
+  broadcastPageEvent: vi.fn(),
+  createPageEventPayload: vi.fn((driveId, pageId, type, data) => ({
+    driveId,
+    pageId,
+    type,
+    ...data,
+  })),
 }));
 
 // Mock logging mask
@@ -200,6 +212,8 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
       source: 'page_chat',
       pageId: mockPageId,
       conversationId: 'conv_123',
+      messagesAffected: 0,
+      activitiesAffected: [],
     });
     (canUserEditPage as Mock).mockResolvedValue(true);
     (globalConversationRepository.getConversationById as Mock).mockResolvedValue({ id: 'conv_123' });

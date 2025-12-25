@@ -51,6 +51,27 @@ vi.mock('@pagespace/lib/server', () => ({
   },
 }));
 
+// Mock database for capturing current page state
+vi.mock('@pagespace/db', () => ({
+  db: {
+    select: vi.fn().mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          limit: vi.fn().mockResolvedValue([{ parentId: null, position: 0 }]),
+        }),
+      }),
+    }),
+  },
+  pages: { id: 'id', parentId: 'parentId', position: 'position' },
+  eq: vi.fn(),
+}));
+
+// Mock activity logger
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+  getActorInfo: vi.fn().mockResolvedValue({ actorName: 'Test User', actorEmail: 'test@example.com' }),
+  logPageActivity: vi.fn(),
+}));
+
 import { pageReorderService } from '@/services/api';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';

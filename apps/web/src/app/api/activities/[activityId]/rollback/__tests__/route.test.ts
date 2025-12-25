@@ -69,6 +69,7 @@ vi.mock('../../../../../../lib/logging/mask', () => ({
 
 import { executeRollback, previewRollback } from '../../../../../../services/api';
 import { authenticateRequestWithOptions } from '../../../../../../lib/auth';
+import { db } from '@pagespace/db';
 
 // Test helpers
 const mockUserId = 'user_123';
@@ -310,6 +311,78 @@ describe('POST /api/activities/[activityId]/rollback', () => {
         'drive',
         expect.objectContaining({ tx: expect.any(Object), force: false })
       );
+    });
+  });
+
+  // ============================================
+  // Idempotency
+  // ============================================
+
+  describe('idempotency', () => {
+    const existingRollbackId = 'existing_rollback_456';
+
+    // Helper to mock db.select chain to return existing rollback
+    const mockExistingRollback = () => {
+      vi.mocked(db.select).mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([{ id: existingRollbackId }]),
+          }),
+        }),
+      } as ReturnType<typeof db.select>);
+    };
+
+    // Helper to reset db mock to default (no existing rollback)
+    const resetDbMock = () => {
+      vi.mocked(db.select).mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([]),
+          }),
+        }),
+      } as ReturnType<typeof db.select>);
+    };
+
+    afterEach(() => {
+      resetDbMock();
+    });
+
+    it('returns existing rollback when activity was already rolled back', async () => {
+      mockExistingRollback();
+
+      const response = await POST(createRequest({ context: 'page' }), { params: mockParams });
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.message).toBe('Already rolled back');
+      expect(body.rollbackActivityId).toBe(existingRollbackId);
+      expect(body.warnings).toEqual([]);
+      expect(executeRollback).not.toHaveBeenCalled();
+    });
+
+    it('prevents duplicate rollbacks on double-click (both requests return same result)', async () => {
+      mockExistingRollback();
+
+      // Simulate double-click: two requests in quick succession
+      const [response1, response2] = await Promise.all([
+        POST(createRequest({ context: 'page' }), { params: mockParams }),
+        POST(createRequest({ context: 'page' }), { params: mockParams }),
+      ]);
+
+      const body1 = await response1.json();
+      const body2 = await response2.json();
+
+      // Both should return the same existing rollback
+      expect(response1.status).toBe(200);
+      expect(response2.status).toBe(200);
+      expect(body1.rollbackActivityId).toBe(existingRollbackId);
+      expect(body2.rollbackActivityId).toBe(existingRollbackId);
+      expect(body1.message).toBe('Already rolled back');
+      expect(body2.message).toBe('Already rolled back');
+
+      // executeRollback should never be called since both see existing rollback
+      expect(executeRollback).not.toHaveBeenCalled();
     });
   });
 });
