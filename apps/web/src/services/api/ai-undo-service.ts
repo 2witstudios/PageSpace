@@ -257,7 +257,9 @@ export async function previewAiUndo(
         context,
       });
 
-      const preview = await previewRollback(activity.id, userId, context);
+      // Use force=true for AI undo since user is explicitly undoing AI changes
+      // This allows activities with conflicts to be marked as rollbackable (with warnings)
+      const preview = await previewRollback(activity.id, userId, context, { force: true });
 
       loggers.api.debug('[AiUndo:Preview] Activity eligibility result', {
         activityId: activity.id,
