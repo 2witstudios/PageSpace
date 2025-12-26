@@ -58,6 +58,8 @@ export interface ChatLayoutProps {
   lastUserMessageId?: string;
   /** Whether user has read-only access */
   isReadOnly?: boolean;
+  /** Callback when undo completes successfully (to refresh messages) */
+  onUndoSuccess?: () => void;
 
   /** Render custom input - receives InputCard and current state */
   renderInput?: (props: {
@@ -135,6 +137,7 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
       lastAssistantMessageId,
       lastUserMessageId,
       isReadOnly = false,
+      onUndoSuccess,
       renderInput,
       mcpRunningServers = 0,
       mcpServerNames = [],
@@ -243,6 +246,7 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
                 lastAssistantMessageId={lastAssistantMessageId}
                 lastUserMessageId={lastUserMessageId}
                 isReadOnly={isReadOnly}
+                onUndoSuccess={onUndoSuccess}
               />
             </motion.div>
           )}

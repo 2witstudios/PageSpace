@@ -22,6 +22,7 @@ interface CompactTextBlockProps {
   onEdit?: () => void;
   onDelete?: () => void;
   onRetry?: () => void;
+  onUndoFromHere?: () => void;
   isEditing?: boolean;
   onSaveEdit?: (newContent: string) => Promise<void>;
   onCancelEdit?: () => void;
@@ -42,6 +43,7 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
   onEdit,
   onDelete,
   onRetry,
+  onUndoFromHere,
   isEditing,
   onSaveEdit,
   onCancelEdit,
@@ -91,6 +93,7 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
                   onEdit={onEdit}
                   onDelete={onDelete}
                   onRetry={onRetry}
+                  onUndoFromHere={onUndoFromHere}
                   compact
                 />
               )}
@@ -109,6 +112,7 @@ interface CompactMessageRendererProps {
   onEdit?: (messageId: string, newContent: string) => Promise<void>;
   onDelete?: (messageId: string) => Promise<void>;
   onRetry?: (messageId: string) => void;
+  onUndoFromHere?: (messageId: string) => void;
   onTaskUpdate?: (taskId: string, newStatus: 'pending' | 'in_progress' | 'completed' | 'blocked') => void;
   isLastAssistantMessage?: boolean;
   isLastUserMessage?: boolean;
@@ -125,6 +129,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
   onEdit,
   onDelete,
   onRetry,
+  onUndoFromHere,
   onTaskUpdate,
   isLastAssistantMessage = false,
   isLastUserMessage = false,
@@ -326,6 +331,8 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
   // ============================================
   // Render standard messages
   // ============================================
+  const hasToolCalls = groupedParts.some(g => isProcessedToolPart(g));
+
   return (
     <>
       <div key={message.id} className="mb-1" style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 80px' }}>
@@ -344,6 +351,11 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
                 onEdit={onEdit ? () => setIsEditing(true) : undefined}
                 onDelete={onDelete ? () => setShowDeleteDialog(true) : undefined}
                 onRetry={canRetry ? handleRetry : undefined}
+                onUndoFromHere={
+                  message.role === 'assistant' && hasToolCalls && onUndoFromHere
+                    ? () => onUndoFromHere(message.id)
+                    : undefined
+                }
                 isEditing={isEditing}
                 onSaveEdit={handleSaveEdit}
                 onCancelEdit={() => setIsEditing(false)}

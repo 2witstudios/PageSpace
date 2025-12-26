@@ -7,6 +7,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Loader2, Plus } from 'lucide-react';
 import { ProviderModelSelector } from '@/components/ai/chat/input/ProviderModelSelector';
 import { CompactMessageRenderer, AISelector, AiUsageMonitor, TasksDropdown } from '@/components/ai/shared';
+import { UndoAiChangesDialog } from '@/components/ai/shared/chat';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth, patch, del } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
@@ -132,6 +133,7 @@ const SidebarChatTab: React.FC = () => {
   const [input, setInput] = useState<string>('');
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
+  const [undoDialogMessageId, setUndoDialogMessageId] = useState<string | null>(null);
 
   // Get web search and write mode from store
   const webSearchEnabled = useAssistantSettingsStore((state) => state.webSearchEnabled);
@@ -499,6 +501,32 @@ const SidebarChatTab: React.FC = () => {
     }
   }, [selectedAgent, contextStopStreaming, dashboardStopStreaming, stop]);
 
+  const handleUndoFromHere = useCallback((messageId: string) => {
+    setUndoDialogMessageId(messageId);
+  }, []);
+
+  const handleUndoSuccess = useCallback(async () => {
+    setUndoDialogMessageId(null);
+    if (!currentConversationId) return;
+    try {
+      const url = selectedAgent
+        ? `/api/ai/page-agents/${selectedAgent.id}/conversations/${currentConversationId}/messages`
+        : `/api/ai/global/${currentConversationId}/messages`;
+      const res = await fetchWithAuth(url);
+      if (res.ok) {
+        const data = await res.json();
+        if (selectedAgent) {
+          setMessages(data.messages);
+        } else {
+          setGlobalMessages(data.messages);
+          setGlobalContextMessages(data.messages);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to refresh messages after undo:', error);
+    }
+  }, [currentConversationId, selectedAgent, setMessages, setGlobalMessages, setGlobalContextMessages]);
+
   // ============================================
   // Computed Values for Rendering
   // ============================================
@@ -594,6 +622,7 @@ const SidebarChatTab: React.FC = () => {
                   onEdit={handleEdit}
                   onDelete={handleDelete}
                   onRetry={handleRetry}
+                  onUndoFromHere={handleUndoFromHere}
                   isLastAssistantMessage={message.id === lastAssistantMessageId}
                   isLastUserMessage={message.id === lastUserMessageId}
                   isStreaming={displayIsStreaming && message.id === lastAssistantMessageId && message.role === 'assistant'}
@@ -665,6 +694,13 @@ const SidebarChatTab: React.FC = () => {
           variant="sidebar"
         />
       </div>
+
+      <UndoAiChangesDialog
+        open={!!undoDialogMessageId}
+        onOpenChange={(open) => !open && setUndoDialogMessageId(null)}
+        messageId={undoDialogMessageId}
+        onSuccess={handleUndoSuccess}
+      />
     </div>
   );
 };

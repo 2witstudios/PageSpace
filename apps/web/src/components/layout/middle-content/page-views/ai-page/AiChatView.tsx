@@ -304,6 +304,21 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     mcpToolSchemas,
   ]);
 
+  const handleUndoSuccess = useCallback(async () => {
+    if (!currentConversationId) return;
+    try {
+      const res = await fetchWithAuth(
+        `/api/ai/page-agents/${page.id}/conversations/${currentConversationId}/messages`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setMessages(data.messages);
+      }
+    } catch (error) {
+      console.error('Failed to refresh messages after undo:', error);
+    }
+  }, [currentConversationId, page.id, setMessages]);
+
   // ============================================
   // RENDER
   // ============================================
@@ -417,6 +432,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             lastAssistantMessageId={lastAssistantMessageId}
             lastUserMessageId={lastUserMessageId}
             isReadOnly={isReadOnly}
+            onUndoSuccess={handleUndoSuccess}
             mcpRunningServers={runningServers}
             mcpServerNames={runningServerNames}
             mcpEnabledCount={enabledServerCount}

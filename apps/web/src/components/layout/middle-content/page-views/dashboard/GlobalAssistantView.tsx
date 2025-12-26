@@ -39,7 +39,7 @@
  * sidebar subscribes to activeTab in dashboard context, ensuring reactive updates.
  */
 
-import React, { useEffect, useState, useRef, useMemo } from 'react';
+import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
 import { usePathname } from 'next/navigation';
@@ -303,6 +303,35 @@ const GlobalAssistantView: React.FC = () => {
       regenerate,
     });
 
+  const handleUndoSuccess = useCallback(async () => {
+    if (!currentConversationId) return;
+    try {
+      const url = selectedAgent
+        ? `/api/ai/page-agents/${selectedAgent.id}/conversations/${currentConversationId}/messages`
+        : `/api/ai/global/${currentConversationId}/messages`;
+      const res = await fetchWithAuth(url);
+      if (res.ok) {
+        const data = await res.json();
+        if (selectedAgent) {
+          setAgentMessages(data.messages);
+          setAgentStoreMessages(data.messages);
+        } else {
+          setGlobalMessages(data.messages);
+          setGlobalLocalMessages(data.messages);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to refresh messages after undo:', error);
+    }
+  }, [
+    currentConversationId,
+    selectedAgent,
+    setAgentMessages,
+    setAgentStoreMessages,
+    setGlobalMessages,
+    setGlobalLocalMessages,
+  ]);
+
   // ============================================
   // GLOBAL MODE SYNC EFFECTS
   // ============================================
@@ -565,6 +594,7 @@ const GlobalAssistantView: React.FC = () => {
         onRetry={handleRetry}
         lastAssistantMessageId={lastAssistantMessageId}
         lastUserMessageId={lastUserMessageId}
+        onUndoSuccess={handleUndoSuccess}
         mcpRunningServers={runningServers}
         mcpServerNames={runningServerNames}
         mcpEnabledCount={enabledServerCount}
