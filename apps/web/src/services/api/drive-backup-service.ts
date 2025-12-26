@@ -270,8 +270,7 @@ export async function createDriveBackup(
       .where(eq(files.driveId, driveId));
 
     if (driveFiles.length > 0) {
-      await tx.insert(driveBackupFiles).values(
-        driveFiles.map((file) => ({
+      const backupFileRows = driveFiles.map((file) => ({
           backupId: backup.id,
           fileId: file.id,
           storagePath: file.storagePath,
@@ -279,8 +278,13 @@ export async function createDriveBackup(
           sizeBytes: file.sizeBytes,
           mimeType: file.mimeType,
           checksumVersion: file.checksumVersion,
-        }))
-      );
+        }));
+      const backupFileBatchSize = 250;
+      for (let i = 0; i < backupFileRows.length; i += backupFileBatchSize) {
+        await tx.insert(driveBackupFiles).values(
+          backupFileRows.slice(i, i + backupFileBatchSize)
+        );
+      }
     }
 
     await tx

@@ -5,6 +5,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createServiceToken } from '@pagespace/lib/auth-utils';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
+import { canUserEditPage } from '@pagespace/lib/permissions';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -28,6 +29,11 @@ export async function POST(
 
     if (!page) {
       return NextResponse.json({ error: 'Page not found' }, { status: 404 });
+    }
+
+    const canEdit = await canUserEditPage(userId, pageId);
+    if (!canEdit) {
+      return NextResponse.json({ error: 'Insufficient permissions to reprocess this page' }, { status: 403 });
     }
 
     // Reset status to pending with deterministic logging

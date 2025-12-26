@@ -44,6 +44,7 @@ export async function syncMentions(
   tx: TransactionType | DatabaseType
 ): Promise<void> {
   const mentionedPageIds = findMentionNodes(content);
+  const mentionedPageIdSet = new Set(mentionedPageIds);
 
   const existingMentionsQuery = await tx
     .select({ targetPageId: mentions.targetPageId })
@@ -52,7 +53,7 @@ export async function syncMentions(
   const existingMentionIds = new Set(existingMentionsQuery.map(m => m.targetPageId));
 
   const toCreate = mentionedPageIds.filter(id => !existingMentionIds.has(id));
-  const toDelete = Array.from(existingMentionIds).filter(id => !mentionedPageIds.includes(id));
+  const toDelete = Array.from(existingMentionIds).filter(id => !mentionedPageIdSet.has(id));
 
   if (toCreate.length > 0) {
     await tx.insert(mentions).values(toCreate.map(targetPageId => ({

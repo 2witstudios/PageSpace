@@ -9,7 +9,9 @@ import {
   pgEnum,
   index,
   primaryKey,
+  check,
 } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 import { relations } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { pages, drives } from './core';
@@ -61,6 +63,7 @@ export const pageVersions = pgTable('page_versions', {
   pageCreatedAtIdx: index('page_versions_page_created_at_idx').on(table.pageId, table.createdAt),
   driveCreatedAtIdx: index('page_versions_drive_created_at_idx').on(table.driveId, table.createdAt),
   pinnedIdx: index('page_versions_pinned_idx').on(table.isPinned),
+  changeGroupPair: check('page_versions_change_group_pair', sql`(${table.changeGroupId} IS NULL) = (${table.changeGroupType} IS NULL)`),
 }));
 
 export const driveBackups = pgTable('drive_backups', {
@@ -83,6 +86,7 @@ export const driveBackups = pgTable('drive_backups', {
 }, (table) => ({
   driveCreatedAtIdx: index('drive_backups_drive_created_at_idx').on(table.driveId, table.createdAt),
   statusIdx: index('drive_backups_status_idx').on(table.status),
+  changeGroupPair: check('drive_backups_change_group_pair', sql`(${table.changeGroupId} IS NULL) = (${table.changeGroupType} IS NULL)`),
 }));
 
 export const driveBackupPages = pgTable('drive_backup_pages', {

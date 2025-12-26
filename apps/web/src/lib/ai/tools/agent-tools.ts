@@ -139,7 +139,9 @@ export const agentTools = {
           },
         });
 
-        const updatedAgent = { ...agent, ...updateData };
+        const refreshedAgent = await agentRepository.findById(agent.id);
+        const updatedAgent = refreshedAgent ?? { ...agent, ...updateData };
+        const enabledToolsList = updatedAgent.enabledTools ?? [];
 
         // Broadcast update event
         await broadcastPageEvent(
@@ -157,11 +159,11 @@ export const agentTools = {
           summary: `Updated agent configuration${systemPrompt ? ' with new system prompt' : ''}${enabledTools ? ` and ${enabledTools.length} tools` : ''}`,
           updatedFields,
           agentConfig: {
-            hasSystemPrompt: !!updateData.systemPrompt || (systemPrompt === undefined && !!agent.systemPrompt),
-            enabledToolsCount: enabledTools?.length || 0,
-            enabledTools: enabledTools || updatedAgent.enabledTools || [],
-            aiProvider: aiProvider ?? updatedAgent.aiProvider ?? null,
-            aiModel: aiModel ?? updatedAgent.aiModel ?? null
+            hasSystemPrompt: Boolean(updatedAgent.systemPrompt),
+            enabledToolsCount: enabledToolsList.length,
+            enabledTools: enabledToolsList,
+            aiProvider: updatedAgent.aiProvider ?? null,
+            aiModel: updatedAgent.aiModel ?? null,
           },
           nextSteps: [
             'Test the agent to ensure the new configuration works as expected',

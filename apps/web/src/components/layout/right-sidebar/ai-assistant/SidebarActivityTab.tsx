@@ -199,12 +199,9 @@ export default function SidebarActivityTab() {
 
   const getOperationLabel = useCallback((activity: ActivityItem) => {
     const metadata = activity.metadata;
-    const redoFromActivityId = typeof metadata === 'object'
-      && metadata !== null
-      && 'redoFromActivityId' in metadata
-      && typeof (metadata as { redoFromActivityId?: unknown }).redoFromActivityId === 'string'
-      ? (metadata as { redoFromActivityId: string }).redoFromActivityId
-      : null;
+    const redoFromActivityId = typeof metadata === 'object' && metadata !== null
+      ? (metadata as { redoFromActivityId?: string }).redoFromActivityId
+      : undefined;
 
     if (activity.operation === 'rollback' && redoFromActivityId) {
       return 'Redo rollback';
@@ -254,15 +251,10 @@ export default function SidebarActivityTab() {
       const endpoint = nextAction === 'redo'
         ? `/api/activities/${activity.id}/redo`
         : `/api/activities/${activity.id}/rollback`;
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ context: rollbackContext, dryRun: true }),
+      const data = await post<{ preview: ActivityActionPreview | null }>(endpoint, {
+        context: rollbackContext,
+        dryRun: true,
       });
-      if (!response.ok) {
-        throw new Error('Failed to load preview');
-      }
-      const data = await response.json();
       setPreview(data.preview ?? null);
     } catch (err) {
       toast({
@@ -298,7 +290,7 @@ export default function SidebarActivityTab() {
       const endpoint = action === 'redo'
         ? `/api/activities/${selectedActivityForRollback.id}/redo`
         : `/api/activities/${selectedActivityForRollback.id}/rollback`;
-      const result = await post(endpoint, {
+      const result = await post<ActivityActionResult>(endpoint, {
         context: rollbackContext,
         force,
       });
@@ -311,7 +303,7 @@ export default function SidebarActivityTab() {
       // Refresh the activity list
       loadActivities();
 
-      return result as ActivityActionResult;
+      return result;
     } catch (err) {
       toast({
         title: 'Error',

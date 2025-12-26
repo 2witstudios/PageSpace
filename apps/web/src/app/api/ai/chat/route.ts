@@ -1239,7 +1239,7 @@ export async function PATCH(request: Request) {
       );
     }
 
-    const { pageId, provider, model } = body;
+    const { pageId, provider, model, expectedRevision } = body;
 
     // Validate pageId (should be a CUID)
     if (!pageId || typeof pageId !== 'string' || pageId.length < 10 || pageId.length > 30) {
@@ -1319,10 +1319,11 @@ export async function PATCH(request: Request) {
           aiModel: sanitizedModel,
         },
         updatedFields: ['aiProvider', 'aiModel'],
+        expectedRevision: typeof expectedRevision === 'number' ? expectedRevision : undefined,
         context: {
           userId: auth.userId,
           actorEmail: actorInfo.actorEmail,
-          actorDisplayName: actorInfo.actorDisplayName ?? undefined,
+          actorDisplayName: actorInfo.actorDisplayName,
           resourceType: 'agent',
         },
       });

@@ -86,48 +86,58 @@ export async function POST(
 
   const activity = await getActivityById(activityId);
   if (activity) {
-    if (activity.resourceType === 'page' && activity.pageId && activity.driveId) {
-      await broadcastPageEvent(
-        createPageEventPayload(activity.driveId, activity.pageId, 'updated', {
-          title: activity.resourceTitle ?? undefined,
-        })
-      );
-      await broadcastPageEvent(
-        createPageEventPayload(activity.driveId, activity.pageId, 'content-updated', {
-          title: activity.resourceTitle ?? undefined,
-        })
-      );
-    } else if (activity.resourceType === 'drive' && activity.driveId) {
-      await broadcastDriveEvent(
-        createDriveEventPayload(activity.driveId, 'updated', {
-          name: activity.resourceTitle ?? undefined,
-        })
-      );
-    } else if (activity.resourceType === 'member' && activity.driveId) {
-      const metadata = activity.metadata;
-      const targetUserId = typeof metadata === 'object'
-        && metadata !== null
-        && 'targetUserId' in metadata
-        && typeof (metadata as { targetUserId?: unknown }).targetUserId === 'string'
-        ? (metadata as { targetUserId: string }).targetUserId
-        : undefined;
-      const sourceOperation = activity.rollbackSourceOperation;
-      if (targetUserId && sourceOperation) {
-        const memberOperation = sourceOperation === 'member_add' ? 'member_added'
-          : sourceOperation === 'member_remove' ? 'member_removed'
-          : 'member_role_changed';
-        await broadcastDriveMemberEvent(
-          createDriveMemberEventPayload(activity.driveId, targetUserId, memberOperation, {
-            driveName: activity.resourceTitle ?? undefined,
+    try {
+      if (activity.resourceType === 'page' && activity.pageId && activity.driveId) {
+        await broadcastPageEvent(
+          createPageEventPayload(activity.driveId, activity.pageId, 'updated', {
+            title: activity.resourceTitle ?? undefined,
+          })
+        );
+        await broadcastPageEvent(
+          createPageEventPayload(activity.driveId, activity.pageId, 'content-updated', {
+            title: activity.resourceTitle ?? undefined,
+          })
+        );
+      } else if (activity.resourceType === 'drive' && activity.driveId) {
+        await broadcastDriveEvent(
+          createDriveEventPayload(activity.driveId, 'updated', {
+            name: activity.resourceTitle ?? undefined,
+          })
+        );
+      } else if (activity.resourceType === 'member' && activity.driveId) {
+        const metadata = activity.metadata;
+        const targetUserId = typeof metadata === 'object'
+          && metadata !== null
+          && 'targetUserId' in metadata
+          && typeof (metadata as { targetUserId?: unknown }).targetUserId === 'string'
+          ? (metadata as { targetUserId: string }).targetUserId
+          : undefined;
+        const sourceOperation = activity.rollbackSourceOperation;
+        if (targetUserId && sourceOperation) {
+          const memberOperation = sourceOperation === 'member_add' ? 'member_added'
+            : sourceOperation === 'member_remove' ? 'member_removed'
+            : 'member_role_changed';
+          await broadcastDriveMemberEvent(
+            createDriveMemberEventPayload(activity.driveId, targetUserId, memberOperation, {
+              driveName: activity.resourceTitle ?? undefined,
+            })
+          );
+        }
+      } else if (activity.resourceType === 'role' && activity.driveId) {
+        await broadcastDriveEvent(
+          createDriveEventPayload(activity.driveId, 'updated', {
+            name: activity.resourceTitle ?? undefined,
           })
         );
       }
-    } else if (activity.resourceType === 'role' && activity.driveId) {
-      await broadcastDriveEvent(
-        createDriveEventPayload(activity.driveId, 'updated', {
-          name: activity.resourceTitle ?? undefined,
-        })
-      );
+    } catch (error) {
+      loggers.api.warn('[Redo:Route] Broadcast failed', {
+        activityId: maskIdentifier(activityId),
+        resourceType: activity.resourceType,
+        driveId: activity.driveId ? maskIdentifier(activity.driveId) : undefined,
+        pageId: activity.pageId ? maskIdentifier(activity.pageId) : undefined,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

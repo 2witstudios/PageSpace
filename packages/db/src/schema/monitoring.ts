@@ -490,6 +490,7 @@ export const activityLogs = pgTable('activity_logs', {
 }, (table) => ({
   contentSizeLimit: check('activity_logs_content_size_limit', sql`${table.contentSize} IS NULL OR ${table.contentSize} <= 1048576`),
   streamPair: check('activity_logs_stream_pair', sql`(${table.streamId} IS NULL) = (${table.streamSeq} IS NULL)`),
+  changeGroupPair: check('activity_logs_change_group_pair', sql`(${table.changeGroupId} IS NULL) = (${table.changeGroupType} IS NULL)`),
   timestampIdx: index('idx_activity_logs_timestamp').on(table.timestamp),
   userTimestampIdx: index('idx_activity_logs_user_timestamp').on(table.userId, table.timestamp),
   driveTimestampIdx: index('idx_activity_logs_drive_timestamp').on(table.driveId, table.timestamp),

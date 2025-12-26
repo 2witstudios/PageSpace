@@ -78,6 +78,9 @@ export const agentRepository = {
     return {
       ...agent,
       enabledTools: agent.enabledTools as string[] | null,
+      visibleToGlobalAssistant: agent.visibleToGlobalAssistant ?? true,
+      includeDrivePrompt: agent.includeDrivePrompt ?? false,
+      includePageTree: agent.includePageTree ?? false,
     };
   },
 

@@ -122,7 +122,7 @@ export const pageReorderService = {
           position: newPosition,
         },
         updatedFields: ['parentId', 'position'],
-        expectedRevision: typeof pageInfo.revision === 'number' ? pageInfo.revision : undefined,
+        expectedRevision: pageInfo.revision,
         context: {
           userId,
           actorEmail: actorInfo.actorEmail,

@@ -215,3 +215,10 @@ CREATE INDEX IF NOT EXISTS "idx_activity_logs_change_group" ON "activity_logs" U
 ALTER TABLE "activity_logs" ADD CONSTRAINT "activity_logs_content_size_limit" CHECK ("contentSize" IS NULL OR "contentSize" <= 1048576);
 --> statement-breakpoint
 ALTER TABLE "activity_logs" ADD CONSTRAINT "activity_logs_stream_pair" CHECK (("streamId" IS NULL) = ("streamSeq" IS NULL));
+
+--> statement-breakpoint
+ALTER TABLE "activity_logs" ADD CONSTRAINT "activity_logs_change_group_pair" CHECK (("changeGroupId" IS NULL) = ("changeGroupType" IS NULL));
+--> statement-breakpoint
+ALTER TABLE "page_versions" ADD CONSTRAINT "page_versions_change_group_pair" CHECK (("changeGroupId" IS NULL) = ("changeGroupType" IS NULL));
+--> statement-breakpoint
+ALTER TABLE "drive_backups" ADD CONSTRAINT "drive_backups_change_group_pair" CHECK (("changeGroupId" IS NULL) = ("changeGroupType" IS NULL));
