@@ -151,20 +151,24 @@ const MAX_CONTENT_SNAPSHOT_SIZE = 1024 * 1024; // 1MB
 export async function logActivity(input: ActivityLogInput): Promise<void> {
   try {
     // Handle content snapshot size limit to prevent database bloat
+    // Use local variables to avoid mutating the caller's input object
     let contentSnapshot = input.contentSnapshot;
+    let metadata = input.metadata;
+
     if (contentSnapshot && contentSnapshot.length > MAX_CONTENT_SNAPSHOT_SIZE) {
+      const originalSnapshotSize = contentSnapshot.length; // Capture before clearing
       console.warn('[ActivityLogger] Content snapshot too large, skipping snapshot', {
         resourceId: input.resourceId,
         resourceType: input.resourceType,
-        snapshotSize: contentSnapshot.length,
+        snapshotSize: originalSnapshotSize,
         maxSize: MAX_CONTENT_SNAPSHOT_SIZE,
       });
       // Skip the snapshot but add metadata to indicate it was too large
       contentSnapshot = undefined;
-      input.metadata = {
+      metadata = {
         ...input.metadata,
         contentSnapshotSkipped: true,
-        originalSnapshotSize: input.contentSnapshot?.length,
+        originalSnapshotSize,
       };
     }
 
@@ -189,7 +193,7 @@ export async function logActivity(input: ActivityLogInput): Promise<void> {
       updatedFields: input.updatedFields,
       previousValues: input.previousValues,
       newValues: input.newValues,
-      metadata: input.metadata,
+      metadata,
       rollbackFromActivityId: input.rollbackFromActivityId,
       rollbackSourceOperation: input.rollbackSourceOperation,
       rollbackSourceTimestamp: input.rollbackSourceTimestamp,

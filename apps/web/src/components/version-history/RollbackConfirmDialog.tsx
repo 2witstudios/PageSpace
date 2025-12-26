@@ -32,10 +32,6 @@ interface RollbackConfirmDialogProps {
   canRollback?: boolean;
   /** Reason why rollback is not allowed */
   reason?: string | null;
-  /** Whether to use force for conflict override (controlled by parent) */
-  useForce?: boolean;
-  /** Callback when user toggles force option */
-  onForceChange?: (force: boolean) => void;
 }
 
 export function RollbackConfirmDialog({
