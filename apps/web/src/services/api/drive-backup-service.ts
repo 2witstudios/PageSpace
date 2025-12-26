@@ -22,6 +22,8 @@ import { detectPageContentFormat } from '@pagespace/lib/content';
 
 export type DriveBackupSource = 'manual' | 'scheduled' | 'pre_restore' | 'system';
 
+type DriveBackupPageInsert = typeof driveBackupPages.$inferInsert;
+
 export interface CreateDriveBackupInput {
   label?: string;
   reason?: string;
@@ -136,6 +138,7 @@ export async function createDriveBackup(
       ? drivePages
       : drivePages.filter((page) => !page.isTrashed);
 
+    const backupPageRows: DriveBackupPageInsert[] = [];
     for (const page of pagesToBackup) {
       const content = page.content ?? '';
       const contentFormat = detectPageContentFormat(content);
@@ -174,7 +177,7 @@ export async function createDriveBackup(
         metadata: { backupId: backup.id },
       }, { tx });
 
-      await tx.insert(driveBackupPages).values({
+      backupPageRows.push({
         backupId: backup.id,
         pageId: page.id,
         pageVersionId: version.id,
@@ -186,6 +189,13 @@ export async function createDriveBackup(
         isTrashed: page.isTrashed,
         trashedAt: page.trashedAt,
       });
+    }
+
+    const backupPageBatchSize = 250;
+    for (let i = 0; i < backupPageRows.length; i += backupPageBatchSize) {
+      await tx.insert(driveBackupPages).values(
+        backupPageRows.slice(i, i + backupPageBatchSize)
+      );
     }
 
     const pageIds = pagesToBackup.map((page) => page.id);
@@ -265,7 +275,8 @@ export async function createDriveBackup(
           backupId: backup.id,
           fileId: file.id,
           storagePath: file.storagePath,
-          sizeBytes: Number(file.sizeBytes),
+          // sizeBytes is already numeric due to bigint mode mapping.
+          sizeBytes: file.sizeBytes,
           mimeType: file.mimeType,
           checksumVersion: file.checksumVersion,
         }))

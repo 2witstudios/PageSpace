@@ -348,23 +348,37 @@ export async function POST(request: Request) {
     // Update page's AI provider/model if changed
     if (selectedProvider && selectedModel && chatId) {
       if (selectedProvider !== page.aiProvider || selectedModel !== page.aiModel) {
-        const actorInfo = await getActorInfo(userId);
-        await applyPageMutation({
-          pageId: chatId,
-          operation: 'agent_config_update',
-          updates: {
-            aiProvider: selectedProvider,
-            aiModel: selectedModel,
-          },
-          updatedFields: ['aiProvider', 'aiModel'],
-          expectedRevision: typeof page.revision === 'number' ? page.revision : undefined,
-          context: {
-            userId,
-            actorEmail: actorInfo.actorEmail,
-            actorDisplayName: actorInfo.actorDisplayName ?? undefined,
-            resourceType: 'agent',
-          },
-        });
+        try {
+          const actorInfo = await getActorInfo(userId);
+          await applyPageMutation({
+            pageId: chatId,
+            operation: 'agent_config_update',
+            updates: {
+              aiProvider: selectedProvider,
+              aiModel: selectedModel,
+            },
+            updatedFields: ['aiProvider', 'aiModel'],
+            expectedRevision: typeof page.revision === 'number' ? page.revision : undefined,
+            context: {
+              userId,
+              actorEmail: actorInfo.actorEmail,
+              actorDisplayName: actorInfo.actorDisplayName,
+              resourceType: 'agent',
+            },
+          });
+        } catch (error) {
+          if (error instanceof PageRevisionMismatchError) {
+            return NextResponse.json(
+              {
+                error: error.message,
+                currentRevision: error.currentRevision,
+                expectedRevision: error.expectedRevision,
+              },
+              { status: error.expectedRevision === undefined ? 428 : 409 }
+            );
+          }
+          throw error;
+        }
       }
     }
 

@@ -79,7 +79,7 @@ export async function POST(
 
   if (!result.success) {
     return NextResponse.json(
-      { error: result.message, warnings: result.warnings, result },
+      { error: result.message, warnings: result.warnings },
       { status: 400 }
     );
   }
@@ -104,7 +104,13 @@ export async function POST(
         })
       );
     } else if (activity.resourceType === 'member' && activity.driveId) {
-      const targetUserId = (activity.metadata as Record<string, unknown>)?.targetUserId as string | undefined;
+      const metadata = activity.metadata;
+      const targetUserId = typeof metadata === 'object'
+        && metadata !== null
+        && 'targetUserId' in metadata
+        && typeof (metadata as { targetUserId?: unknown }).targetUserId === 'string'
+        ? (metadata as { targetUserId: string }).targetUserId
+        : undefined;
       const sourceOperation = activity.rollbackSourceOperation;
       if (targetUserId && sourceOperation) {
         const memberOperation = sourceOperation === 'member_add' ? 'member_added'

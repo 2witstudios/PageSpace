@@ -70,6 +70,10 @@ export const pageReorderService = {
       driveId = pageInfo.driveId;
       pageTitle = pageInfo.title;
 
+      if (!pageInfo.ownerId || !driveId) {
+        return { success: false, error: 'Drive not found for page.', status: 404 };
+      }
+
       // Check authorization: user must be owner or admin
       const isOwner = pageInfo.ownerId === userId;
       let isAdmin = false;
@@ -122,7 +126,7 @@ export const pageReorderService = {
         context: {
           userId,
           actorEmail: actorInfo.actorEmail,
-          actorDisplayName: actorInfo.actorDisplayName ?? undefined,
+          actorDisplayName: actorInfo.actorDisplayName,
         },
       });
 

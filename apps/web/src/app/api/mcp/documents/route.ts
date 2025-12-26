@@ -368,6 +368,11 @@ export async function POST(req: NextRequest) {
         // Serialize back to TOML format
         const newContent = serializeSheetContent(updatedSheet, { pageId });
 
+        // Summarize changes for response and metadata
+        const formulaCount = cells.filter(c => c.value.trim().startsWith('=')).length;
+        const valueCount = cells.filter(c => c.value.trim() !== '' && !c.value.trim().startsWith('=')).length;
+        const clearCount = cells.filter(c => c.value.trim() === '').length;
+
         const actorInfo = await getActorInfo(userId);
         await applyPageMutation({
           pageId,
@@ -378,7 +383,7 @@ export async function POST(req: NextRequest) {
           context: {
             userId,
             actorEmail: actorInfo.actorEmail,
-            actorDisplayName: actorInfo.actorDisplayName ?? undefined,
+            actorDisplayName: actorInfo.actorDisplayName,
             metadata: {
               source: 'mcp',
               mcpOperation: 'edit-cells',
@@ -400,11 +405,6 @@ export async function POST(req: NextRequest) {
             })
           );
         }
-
-        // Summarize changes for response
-        const formulaCount = cells.filter(c => c.value.trim().startsWith('=')).length;
-        const valueCount = cells.filter(c => c.value.trim() !== '' && !c.value.trim().startsWith('=')).length;
-        const clearCount = cells.filter(c => c.value.trim() === '').length;
 
         return NextResponse.json({
           pageId,

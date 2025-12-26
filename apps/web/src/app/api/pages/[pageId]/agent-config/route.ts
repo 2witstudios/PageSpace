@@ -188,6 +188,7 @@ export async function PATCH(
     }
 
     // Only update if there are changes
+    let responsePage = page;
     if (Object.keys(updateData).length > 0) {
       try {
         const actorInfo = await getActorInfo(userId);
@@ -200,7 +201,7 @@ export async function PATCH(
           context: {
             userId,
             actorEmail: actorInfo.actorEmail,
-            actorDisplayName: actorInfo.actorDisplayName ?? undefined,
+            actorDisplayName: actorInfo.actorDisplayName,
             resourceType: 'agent',
           },
         });
@@ -216,6 +217,15 @@ export async function PATCH(
           );
         }
         throw error;
+      }
+
+      const [updatedPage] = await db
+        .select()
+        .from(pages)
+        .where(eq(pages.id, pageId))
+        .limit(1);
+      if (updatedPage) {
+        responsePage = updatedPage;
       }
 
       // Invalidate agent awareness cache if this is an AI_CHAT page and
@@ -235,15 +245,15 @@ export async function PATCH(
     return NextResponse.json({
       success: true,
       message: 'Agent configuration updated successfully',
-      systemPrompt: updateData.systemPrompt,
-      enabledTools: updateData.enabledTools,
-      aiProvider: updateData.aiProvider,
-      aiModel: updateData.aiModel,
-      includeDrivePrompt: updateData.includeDrivePrompt,
-      agentDefinition: updateData.agentDefinition,
-      visibleToGlobalAssistant: updateData.visibleToGlobalAssistant,
-      includePageTree: updateData.includePageTree,
-      pageTreeScope: updateData.pageTreeScope,
+      systemPrompt: responsePage.systemPrompt || '',
+      enabledTools: responsePage.enabledTools as string[] || [],
+      aiProvider: responsePage.aiProvider || '',
+      aiModel: responsePage.aiModel || '',
+      includeDrivePrompt: responsePage.includeDrivePrompt ?? false,
+      agentDefinition: responsePage.agentDefinition || '',
+      visibleToGlobalAssistant: responsePage.visibleToGlobalAssistant ?? true,
+      includePageTree: responsePage.includePageTree ?? false,
+      pageTreeScope: responsePage.pageTreeScope ?? 'children',
     });
   } catch (error) {
     loggers.api.error('Error updating page agent configuration:', error as Error);

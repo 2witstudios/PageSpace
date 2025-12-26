@@ -26,10 +26,19 @@ export async function GET(request: Request, { params }: { params: Promise<{ driv
     const { searchParams } = new URL(request.url);
     const limit = searchParams.get('limit');
     const offset = searchParams.get('offset');
+    const parsedLimit = limit !== null ? Number.parseInt(limit, 10) : undefined;
+    const parsedOffset = offset !== null ? Number.parseInt(offset, 10) : undefined;
+
+    if (limit !== null && (Number.isNaN(parsedLimit) || parsedLimit < 0)) {
+      return NextResponse.json({ error: 'Invalid limit parameter' }, { status: 400 });
+    }
+    if (offset !== null && (Number.isNaN(parsedOffset) || parsedOffset < 0)) {
+      return NextResponse.json({ error: 'Invalid offset parameter' }, { status: 400 });
+    }
 
     const result = await listDriveBackups(driveId, auth.userId, {
-      limit: limit ? Number(limit) : undefined,
-      offset: offset ? Number(offset) : undefined,
+      limit: parsedLimit,
+      offset: parsedOffset,
     });
 
     if (!result.success) {

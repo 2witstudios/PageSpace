@@ -9,16 +9,25 @@ function findMentionNodes(content: unknown): string[] {
   const ids: string[] = [];
   const contentStr = Array.isArray(content) ? content.join('\n') : String(content);
 
-  try {
-    const $ = cheerio.load(contentStr);
-    $('a[data-page-id]').each((_, element) => {
-      const pageId = $(element).attr('data-page-id');
-      if (pageId) {
-        ids.push(pageId);
-      }
-    });
-  } catch (error) {
-    loggers.api.error('Error parsing HTML content for mentions:', error as Error);
+  const shouldParseHtml = contentStr.includes('<') && contentStr.includes('data-page-id');
+
+  let parseFailed = false;
+  if (shouldParseHtml) {
+    try {
+      const $ = cheerio.load(contentStr);
+      $('a[data-page-id]').each((_, element) => {
+        const pageId = $(element).attr('data-page-id');
+        if (pageId) {
+          ids.push(pageId);
+        }
+      });
+    } catch (error) {
+      loggers.api.error('Error parsing HTML content for mentions:', error as Error);
+      parseFailed = true;
+    }
+  }
+
+  if (!shouldParseHtml || parseFailed) {
     const regex = /@\[.*?\]\((.*?)\)/g;
     let match;
     while ((match = regex.exec(contentStr)) !== null) {
@@ -26,7 +35,7 @@ function findMentionNodes(content: unknown): string[] {
     }
   }
 
-  return ids;
+  return Array.from(new Set(ids));
 }
 
 export async function syncMentions(

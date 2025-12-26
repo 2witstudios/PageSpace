@@ -160,8 +160,8 @@ export const agentTools = {
             hasSystemPrompt: !!updateData.systemPrompt || (systemPrompt === undefined && !!agent.systemPrompt),
             enabledToolsCount: enabledTools?.length || 0,
             enabledTools: enabledTools || updatedAgent.enabledTools || [],
-            aiProvider: aiProvider || updatedAgent.aiProvider || 'default',
-            aiModel: aiModel || updatedAgent.aiModel || 'default'
+            aiProvider: aiProvider ?? updatedAgent.aiProvider ?? null,
+            aiModel: aiModel ?? updatedAgent.aiModel ?? null
           },
           nextSteps: [
             'Test the agent to ensure the new configuration works as expected',

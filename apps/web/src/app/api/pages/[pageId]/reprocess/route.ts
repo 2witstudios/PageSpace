@@ -44,7 +44,7 @@ export async function POST(
       context: {
         userId,
         actorEmail: actorInfo.actorEmail,
-        actorDisplayName: actorInfo.actorDisplayName ?? undefined,
+        actorDisplayName: actorInfo.actorDisplayName,
         metadata: { source: 'reprocess' },
       },
       source: 'system',

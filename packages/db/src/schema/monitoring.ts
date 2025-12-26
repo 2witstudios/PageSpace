@@ -488,14 +488,16 @@ export const activityLogs = pgTable('activity_logs', {
   // Retention management
   isArchived: boolean('isArchived').default(false).notNull(),
 }, (table) => ({
+  contentSizeLimit: check('activity_logs_content_size_limit', sql`${table.contentSize} IS NULL OR ${table.contentSize} <= 1048576`),
+  streamPair: check('activity_logs_stream_pair', sql`(${table.streamId} IS NULL) = (${table.streamSeq} IS NULL)`),
   timestampIdx: index('idx_activity_logs_timestamp').on(table.timestamp),
   userTimestampIdx: index('idx_activity_logs_user_timestamp').on(table.userId, table.timestamp),
   driveTimestampIdx: index('idx_activity_logs_drive_timestamp').on(table.driveId, table.timestamp),
   pageTimestampIdx: index('idx_activity_logs_page_timestamp').on(table.pageId, table.timestamp),
   archivedIdx: index('idx_activity_logs_archived').on(table.isArchived),
   rollbackFromActivityIdIdx: index('idx_activity_logs_rollback_from').on(table.rollbackFromActivityId),
-  streamIdx: index('idx_activity_logs_stream').on(table.streamId, table.streamSeq),
-  changeGroupIdx: index('idx_activity_logs_change_group').on(table.changeGroupId),
+  streamIdx: index('idx_activity_logs_stream').on(table.streamId, table.streamSeq).where(sql`${table.streamId} IS NOT NULL`),
+  changeGroupIdx: index('idx_activity_logs_change_group').on(table.changeGroupId).where(sql`${table.changeGroupId} IS NOT NULL`),
 }));
 
 /**

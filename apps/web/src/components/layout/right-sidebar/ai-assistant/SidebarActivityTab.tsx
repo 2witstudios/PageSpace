@@ -197,6 +197,21 @@ export default function SidebarActivityTab() {
     }
   }, [context]);
 
+  const getOperationLabel = useCallback((activity: ActivityItem) => {
+    const metadata = activity.metadata;
+    const redoFromActivityId = typeof metadata === 'object'
+      && metadata !== null
+      && 'redoFromActivityId' in metadata
+      && typeof (metadata as { redoFromActivityId?: unknown }).redoFromActivityId === 'string'
+      ? (metadata as { redoFromActivityId: string }).redoFromActivityId
+      : null;
+
+    if (activity.operation === 'rollback' && redoFromActivityId) {
+      return 'Redo rollback';
+    }
+    return operationLabels[activity.operation] || activity.operation;
+  }, []);
+
   // Load activities
   const loadActivities = useCallback(async () => {
     setLoading(true);
@@ -410,13 +425,7 @@ export default function SidebarActivityTab() {
                         <Activity className="h-3 w-3" />
                       )}
                       <span>
-                      {(() => {
-                        const metadata = activity.metadata as { redoFromActivityId?: string } | null;
-                        if (activity.operation === 'rollback' && metadata?.redoFromActivityId) {
-                          return 'Redo rollback';
-                        }
-                        return operationLabels[activity.operation] || activity.operation;
-                      })()}
+                        {getOperationLabel(activity)}
                       </span>
                       {activity.resourceTitle && (
                         <>

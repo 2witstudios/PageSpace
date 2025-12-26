@@ -2,9 +2,10 @@ import { db, pageVersions } from '@pagespace/db';
 import { detectPageContentFormat, type PageContentFormat } from '../content/page-content-format';
 import { writePageContent } from './page-content-store';
 import { hashObject } from '../utils/hash-utils';
+import type { ChangeGroupType } from '../monitoring/change-group';
 
 export type PageVersionSource = 'manual' | 'auto' | 'pre_ai' | 'pre_restore' | 'restore' | 'system';
-export type ChangeGroupType = 'user' | 'ai' | 'automation' | 'system';
+export type { ChangeGroupType };
 
 export interface PageStateInput {
   title: string | null;

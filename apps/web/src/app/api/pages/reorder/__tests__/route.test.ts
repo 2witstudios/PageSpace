@@ -66,8 +66,6 @@ vi.mock('@pagespace/db', () => ({
   eq: vi.fn(),
 }));
 
-// Mock activity logger
-
 import { pageReorderService } from '@/services/api';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';

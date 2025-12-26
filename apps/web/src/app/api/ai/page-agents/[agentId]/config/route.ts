@@ -116,13 +116,13 @@ export async function PUT(
       await applyPageMutation({
         pageId: agentId,
         operation: 'agent_config_update',
-        updates: updateData,
+        updates: updateData as Record<string, unknown>,
         updatedFields,
         expectedRevision: typeof expectedRevision === 'number' ? expectedRevision : undefined,
         context: {
           userId,
           actorEmail: actorInfo.actorEmail,
-          actorDisplayName: actorInfo.actorDisplayName ?? undefined,
+          actorDisplayName: actorInfo.actorDisplayName,
           resourceType: 'agent',
         },
       });

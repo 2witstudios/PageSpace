@@ -3,6 +3,7 @@ import {
   text,
   timestamp,
   integer,
+  real,
   jsonb,
   boolean,
   pgEnum,
@@ -94,7 +95,7 @@ export const driveBackupPages = pgTable('drive_backup_pages', {
   type: text('type'),
   parentId: text('parentId'),
   originalParentId: text('originalParentId'),
-  position: integer('position'),
+  position: real('position'),
   isTrashed: boolean('isTrashed').default(false).notNull(),
   trashedAt: timestamp('trashedAt', { mode: 'date' }),
 }, (table) => ({

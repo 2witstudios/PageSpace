@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 
 function stableStringify(value: unknown): string {
+  // Treat null and undefined the same to avoid hash churn for optional fields.
   if (value === null || value === undefined) {
     return 'null';
   }
