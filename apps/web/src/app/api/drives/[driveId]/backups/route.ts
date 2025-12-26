@@ -12,7 +12,7 @@ const createBackupSchema = z.object({
   reason: z.string().optional(),
   source: z.enum(['manual', 'scheduled', 'pre_restore', 'system']).optional(),
   includeTrashed: z.boolean().optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 export async function GET(request: Request, { params }: { params: Promise<{ driveId: string }> }) {
