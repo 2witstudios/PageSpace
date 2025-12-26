@@ -3,27 +3,67 @@
 **Date**: December 2025
 **Auditor**: Claude Code Security Review
 **Scope**: Full codebase security assessment
+**Version**: 2.0 (Extended Audit)
 
 ---
 
 ## Executive Summary
 
-PageSpace demonstrates a **strong security posture** overall with proper implementation of authentication, authorization, CSRF protection, and input validation. However, several issues were identified ranging from **critical** to **low** severity.
+PageSpace demonstrates a **strong security posture** overall with proper implementation of authentication, authorization, CSRF protection, and input validation. However, a deep security audit identified several issues ranging from **critical** to **low** severity that require attention.
 
 ### Summary of Findings
 
 | Severity | Count | Description |
 |----------|-------|-------------|
-| Critical | 1 | Insecure fallback JWT secret |
-| High | 1 | Inconsistent password requirements |
-| Medium | 2 | CSP allows unsafe-eval, potential XSS vectors |
-| Low | 2 | Minor configuration issues |
+| Critical | 2 | Open redirect in OAuth, insecure fallback JWT secret |
+| High | 2 | SSRF in Ollama/LMStudio endpoints, inconsistent password policy |
+| Medium | 3 | CSP unsafe-eval, innerHTML usage, non-timing-safe cron comparison |
+| Low | 3 | bcrypt inconsistency, legacy OAuth state handling, MCP child processes |
 
 ---
 
 ## Critical Findings
 
-### 1. Insecure Fallback JWT Secret in Notification Service
+### 1. Open Redirect Vulnerability in Google OAuth Callback
+
+**Severity**: CRITICAL
+**Location**: `apps/web/src/app/api/auth/google/callback/route.ts:90-92`
+
+**Issue**:
+```typescript
+} catch {
+  // Legacy fallback: state might be just a return URL string
+  returnUrl = stateParam;
+}
+```
+
+Then on line 307:
+```typescript
+const redirectUrl = new URL(returnUrl, baseUrl);
+```
+
+**Attack Vector**: If an attacker crafts a malicious OAuth URL with a state parameter that:
+1. Is not valid JSON (causing JSON.parse to throw)
+2. Contains an absolute URL like `https://evil.com/phish`
+
+The victim, after successful Google authentication, will be redirected to the attacker's site. The `new URL(returnUrl, baseUrl)` constructor ignores `baseUrl` when `returnUrl` is an absolute URL.
+
+**Impact**:
+- Phishing attacks with trusted domain OAuth flow
+- Session token theft if attacker site mimics login page
+- Reputation damage
+
+**Recommendation**:
+```typescript
+// Validate returnUrl is a relative path, not absolute URL
+if (returnUrl.startsWith('/') && !returnUrl.startsWith('//')) {
+  // Safe relative URL
+} else {
+  returnUrl = '/dashboard'; // Fallback to safe default
+}
+```
+
+### 2. Insecure Fallback JWT Secret in Notification Service
 
 **Severity**: CRITICAL
 **Location**: `packages/lib/src/services/notification-email-service.ts:41`
@@ -44,7 +84,65 @@ const secret = new TextEncoder().encode(process.env.JWT_SECRET || 'your_jwt_secr
 
 ## High Severity Findings
 
-### 2. Inconsistent Password Policy
+### 3. Server-Side Request Forgery (SSRF) in Ollama/LMStudio Endpoints
+
+**Severity**: HIGH
+**Locations**:
+- `apps/web/src/app/api/ai/ollama/models/route.ts:29`
+- `apps/web/src/lib/ai/core/ai-utils.ts:538-592` (createOllamaSettings)
+- `apps/web/src/lib/ai/core/ai-utils.ts:638-693` (createLMStudioSettings)
+
+**Issue**:
+```typescript
+const ollamaResponse = await fetch(`${ollamaSettings.baseUrl}/api/tags`, {...});
+```
+
+Users can configure `baseUrl` to **any URL** including:
+- `http://127.0.0.1:8080` - Local services
+- `http://169.254.169.254` - AWS/GCP/Azure metadata endpoints
+- `http://internal-service:3000` - Internal Docker/K8s services
+- `file:///etc/passwd` - Local file access (if fetch supports it)
+
+**Impact**:
+- Cloud credential theft via metadata endpoints
+- Internal network scanning and service enumeration
+- Access to internal-only APIs
+- Potential data exfiltration
+
+**Recommendation**:
+```typescript
+function isAllowedUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+
+    // Block dangerous protocols
+    if (!['http:', 'https:'].includes(parsed.protocol)) return false;
+
+    // Block private IP ranges
+    const hostname = parsed.hostname.toLowerCase();
+    if (hostname === 'localhost' || hostname === '127.0.0.1') return true; // Allow localhost for local dev
+
+    // Block cloud metadata endpoints
+    if (hostname === '169.254.169.254') return false;
+    if (hostname.endsWith('.internal')) return false;
+
+    // Block private ranges (10.x, 172.16-31.x, 192.168.x)
+    const ipMatch = hostname.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+    if (ipMatch) {
+      const [, a, b] = ipMatch.map(Number);
+      if (a === 10) return false;
+      if (a === 172 && b >= 16 && b <= 31) return false;
+      if (a === 192 && b === 168) return false;
+    }
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+```
+
+### 4. Inconsistent Password Policy
 
 **Severity**: HIGH
 **Locations**:
@@ -65,7 +163,7 @@ const secret = new TextEncoder().encode(process.env.JWT_SECRET || 'your_jwt_secr
 
 ## Medium Severity Findings
 
-### 3. Content Security Policy Allows unsafe-eval
+### 5. Content Security Policy Allows unsafe-eval
 
 **Severity**: MEDIUM
 **Location**: `apps/web/middleware.ts:148-154`
@@ -82,7 +180,7 @@ const secret = new TextEncoder().encode(process.env.JWT_SECRET || 'your_jwt_secr
 - Consider stricter CSP for non-editor pages
 - Evaluate alternatives if TipTap/Monaco can work without eval
 
-### 4. innerHTML Usage Without Sanitization in Some Components
+### 6. innerHTML Usage Without Sanitization in Some Components
 
 **Severity**: MEDIUM
 **Locations**:
@@ -97,11 +195,34 @@ const secret = new TextEncoder().encode(process.env.JWT_SECRET || 'your_jwt_secr
 - Review PaginationExtension.ts for potential XSS if headerLeft/headerRight contain user content
 - Consider adding sanitization for edge cases
 
+### 7. Non-Timing-Safe Secret Comparison in Cron Endpoint
+
+**Severity**: MEDIUM
+**Location**: `apps/web/src/app/api/cron/cleanup-tokens/route.ts:42`
+
+**Issue**:
+```typescript
+if (authHeader !== `Bearer ${expectedAuth}`) {
+```
+
+Uses regular string comparison (`!==`) instead of timing-safe comparison. While the cron secret is typically long and random, this could theoretically allow timing-based attacks to guess the secret character by character.
+
+**Recommendation**:
+```typescript
+import { timingSafeEqual } from 'crypto';
+
+const expectedHeader = `Bearer ${expectedAuth}`;
+if (authHeader.length !== expectedHeader.length ||
+    !timingSafeEqual(Buffer.from(authHeader), Buffer.from(expectedHeader))) {
+  // Unauthorized
+}
+```
+
 ---
 
 ## Low Severity Findings
 
-### 5. bcrypt Salt Rounds Inconsistency
+### 8. bcrypt Salt Rounds Inconsistency
 
 **Severity**: LOW
 **Locations**:
@@ -111,7 +232,24 @@ const secret = new TextEncoder().encode(process.env.JWT_SECRET || 'your_jwt_secr
 
 **Recommendation**: Standardize on 12 rounds across all bcrypt operations for consistency.
 
-### 6. MCP Desktop Spawns Child Processes
+### 9. Legacy OAuth State Format Still Supported
+
+**Severity**: LOW
+**Location**: `apps/web/src/app/api/auth/google/callback/route.ts:84-88`
+
+**Issue**: The OAuth callback still accepts unsigned state parameters for backward compatibility:
+```typescript
+} else {
+  // Legacy format: unsigned state (backward compatibility)
+  platform = stateWithSignature.platform || 'web';
+  deviceId = stateWithSignature.deviceId;
+  returnUrl = stateWithSignature.returnUrl || '/dashboard';
+}
+```
+
+**Recommendation**: Set a deprecation timeline and remove legacy support after migration.
+
+### 10. MCP Desktop Spawns Child Processes
 
 **Severity**: LOW (Expected behavior for desktop app)
 **Location**: `apps/desktop/src/main/mcp-manager.ts:298`
@@ -142,6 +280,7 @@ The following security measures are well-implemented:
 - Drive ownership and admin role inheritance
 - Page-level permission checks (canView, canEdit, canShare, canDelete)
 - Permission cache invalidation
+- WebSocket connections verify permissions before joining rooms
 
 ### CSRF Protection
 - HMAC-SHA256 signed CSRF tokens
@@ -164,6 +303,7 @@ The following security measures are well-implemented:
 
 ### Rate Limiting
 - Login/signup rate limiting per IP and email
+- Google OAuth rate limiting
 - Configurable limits via environment
 - Redis + memory cache for rate limit state
 
@@ -174,32 +314,50 @@ The following security measures are well-implemented:
 - Permissions-Policy restrictions
 - HSTS in production
 
+### Realtime Security
+- Socket.IO authentication middleware validates JWT
+- Token version validation prevents use of revoked tokens
+- Room access checks permissions before joining
+- Broadcast endpoint uses HMAC signature verification with timing-safe comparison
+
 ### Encryption
 - AES-256-GCM for sensitive data
 - Scrypt key derivation
 - Unique salt and IV per operation
 
+### Webhook Security
+- Stripe webhooks use signature verification
+- Idempotency via event ID tracking
+
 ---
 
 ## Recommendations Summary
 
-### Immediate (Critical/High)
-1. Remove fallback JWT secret in notification-email-service.ts
-2. Apply consistent password policy across signup and password change
+### Immediate (Critical)
+1. **Fix Open Redirect in OAuth** - Validate returnUrl is relative path only
+2. **Remove fallback JWT secret** in notification-email-service.ts
+
+### Urgent (High)
+3. **Add SSRF protection** to Ollama/LMStudio URL configuration
+4. **Apply consistent password policy** across signup and password change
 
 ### Short-term (Medium)
-3. Review innerHTML usage in PaginationExtension.ts
-4. Document CSP trade-offs for TipTap/Monaco
+5. **Use timing-safe comparison** for cron endpoint secrets
+6. Review innerHTML usage in PaginationExtension.ts
+7. Document CSP trade-offs for TipTap/Monaco
 
 ### Long-term (Low)
-5. Standardize bcrypt salt rounds to 12
-6. Consider adding MCP server trust verification
+8. Standardize bcrypt salt rounds to 12
+9. Remove legacy unsigned OAuth state support
+10. Consider adding MCP server trust verification
 
 ---
 
 ## Testing Recommendations
 
 1. Add security-focused integration tests for:
+   - Open redirect attempts in OAuth flow
+   - SSRF attempts via Ollama/LMStudio URLs
    - Token forgery attempts
    - CSRF bypass attempts
    - Authorization boundary testing
@@ -209,8 +367,22 @@ The following security measures are well-implemented:
 
 3. Implement security regression tests for fixed vulnerabilities
 
+4. Add URL validation test cases for:
+   - Private IP ranges
+   - Cloud metadata endpoints
+   - File:// protocol
+   - Protocol-relative URLs (//)
+
 ---
 
 ## Conclusion
 
-PageSpace has a robust security architecture with proper defense-in-depth. The critical issue with the fallback JWT secret should be addressed immediately. The inconsistent password policy is a high-priority fix. The remaining findings are lower priority but should be addressed to maintain the overall security posture.
+PageSpace has a robust security architecture with proper defense-in-depth. The **open redirect vulnerability in OAuth** and **SSRF in local LLM endpoints** should be addressed immediately as they present the highest risk. The inconsistent password policy and fallback JWT secret are also high priorities.
+
+The codebase demonstrates good security practices overall including:
+- Proper CSRF protection
+- Timing-safe comparisons where it matters most
+- Comprehensive permission checks
+- Strong authentication mechanisms
+
+The remaining findings are lower priority but should be addressed to maintain the overall security posture.
