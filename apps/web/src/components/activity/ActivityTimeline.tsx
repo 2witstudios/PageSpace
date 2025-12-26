@@ -15,7 +15,7 @@ interface ActivityTimelineProps {
   emptyMessage?: string;
   emptyDescription?: string;
   context?: RollbackContext;
-  onRollback?: (activityId: string) => Promise<void>;
+  onRollback?: (activityId: string, force?: boolean) => Promise<void>;
 }
 
 export function ActivityTimeline({

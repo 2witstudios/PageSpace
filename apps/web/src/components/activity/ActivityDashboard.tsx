@@ -209,10 +209,11 @@ export function ActivityDashboard({ context, driveId: initialDriveId, driveName 
   // Map component context to rollback API context
   const rollbackContext: RollbackContext = context === 'user' ? 'user_dashboard' : 'drive';
 
-  const handleRollback = useCallback(async (activityId: string) => {
+  const handleRollback = useCallback(async (activityId: string, force?: boolean) => {
     try {
       await post(`/api/activities/${activityId}/rollback`, {
         context: rollbackContext,
+        force,
       });
 
       toast.success('Successfully restored to previous version');

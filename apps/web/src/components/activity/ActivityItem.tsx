@@ -23,7 +23,7 @@ export type RollbackContext = 'page' | 'drive' | 'user_dashboard';
 interface ActivityItemProps {
   activity: ActivityLog;
   context?: RollbackContext;
-  onRollback?: (activityId: string) => Promise<void>;
+  onRollback?: (activityId: string, force?: boolean) => Promise<void>;
 }
 
 export function ActivityItem({ activity, context, onRollback }: ActivityItemProps) {
@@ -32,7 +32,6 @@ export function ActivityItem({ activity, context, onRollback }: ActivityItemProp
   const [canRollback, setCanRollback] = useState(true);
   const [hasConflict, setHasConflict] = useState(false);
   const [rollbackReason, setRollbackReason] = useState<string | null>(null);
-  const [useForce, setUseForce] = useState(false);
   const { toast } = useToast();
   const opConfig = operationConfig[activity.operation] || defaultOperationConfig;
   const OpIcon = opConfig.icon;
@@ -56,7 +55,6 @@ export function ActivityItem({ activity, context, onRollback }: ActivityItemProp
       setCanRollback(data.canRollback !== false);
       setHasConflict(data.hasConflict === true);
       setRollbackReason(data.reason || null);
-      setUseForce(false); // Reset force option
     } catch (error) {
       toast({
         title: 'Error',
@@ -71,16 +69,9 @@ export function ActivityItem({ activity, context, onRollback }: ActivityItemProp
     setShowConfirm(true);
   };
 
-  const handleConfirmRollback = async () => {
+  const handleConfirmRollback = async (force?: boolean) => {
     if (onRollback) {
-      // If there's a conflict and user chose to force, pass force option
-      if (hasConflict && useForce) {
-        // The parent component's onRollback should handle force option
-        // For now, we'll call it - the parent can be updated to accept force
-        await onRollback(activity.id);
-      } else {
-        await onRollback(activity.id);
-      }
+      await onRollback(activity.id, force);
     }
   };
 
@@ -168,8 +159,6 @@ export function ActivityItem({ activity, context, onRollback }: ActivityItemProp
       canRollback={canRollback}
       hasConflict={hasConflict}
       reason={rollbackReason}
-      useForce={useForce}
-      onForceChange={setUseForce}
     />
     </>
   );
