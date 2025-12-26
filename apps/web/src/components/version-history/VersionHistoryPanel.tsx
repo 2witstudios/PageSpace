@@ -25,6 +25,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { VersionHistoryItem } from './VersionHistoryItem';
 import { useToast } from '@/hooks/useToast';
 import { post } from '@/lib/auth/auth-fetch';
+import type { ActivityActionResult } from '@/types/activity-actions';
 import type { ActivityLog } from '@/components/activity/types';
 
 const logger = createClientLogger({ namespace: 'rollback', component: 'VersionHistoryPanel' });
@@ -175,7 +176,7 @@ export function VersionHistoryPanel({
     });
 
     try {
-      const result = await post(`/api/activities/${activityId}/rollback`, { context, force });
+      const result = await post<ActivityActionResult>(`/api/activities/${activityId}/rollback`, { context, force });
 
       logger.debug('[Rollback:Execute] Rollback completed successfully', {
         activityId,
@@ -222,7 +223,7 @@ export function VersionHistoryPanel({
     });
 
     try {
-      const result = await post(`/api/activities/${activityId}/redo`, { context, force });
+      const result = await post<ActivityActionResult>(`/api/activities/${activityId}/redo`, { context, force });
 
       toast({
         title: 'Success',

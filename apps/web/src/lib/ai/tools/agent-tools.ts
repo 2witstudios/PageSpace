@@ -109,6 +109,7 @@ export const agentTools = {
           throw new Error('No valid fields provided for update');
         }
 
+        const updatePayload: Record<string, unknown> = { ...updateData };
         const ctx = context as ToolExecutionContext;
         // Build chain metadata (Tier 1)
         const chainMetadata = {
@@ -123,7 +124,7 @@ export const agentTools = {
         await applyPageMutation({
           pageId: agent.id,
           operation: 'agent_config_update',
-          updates: updateData,
+          updates: updatePayload,
           updatedFields,
           expectedRevision: typeof agent.revision === 'number' ? agent.revision : undefined,
           context: {

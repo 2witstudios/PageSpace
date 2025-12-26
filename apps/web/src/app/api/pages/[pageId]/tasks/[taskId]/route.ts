@@ -188,7 +188,7 @@ export async function PATCH(
   ];
 
   // If title changed and task has a linked page, broadcast page update
-  if (linkedPageUpdated && taskListPage) {
+  if (linkedPageUpdated && taskListPage && existingTask.pageId) {
     broadcasts.push(
       broadcastPageEvent(
         createPageEventPayload(taskListPage.driveId, existingTask.pageId, 'updated', {

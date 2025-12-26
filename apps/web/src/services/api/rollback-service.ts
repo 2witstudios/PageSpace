@@ -774,7 +774,6 @@ async function previewActivityAction(
 
     currentValues = {
       name: currentDrive[0].name,
-      description: currentDrive[0].description,
       isTrashed: currentDrive[0].isTrashed,
       drivePrompt: currentDrive[0].drivePrompt,
       ownerId: currentDrive[0].ownerId,

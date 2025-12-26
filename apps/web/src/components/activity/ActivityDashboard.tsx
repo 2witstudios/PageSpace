@@ -12,6 +12,7 @@ import { ActivityFilterBar } from './ActivityFilterBar';
 import { ActivityTimeline } from './ActivityTimeline';
 import type { ActivityLog, ActivityFilters, Drive, Pagination } from './types';
 import type { RollbackContext } from './ActivityItem';
+import type { ActivityActionResult } from '@/types/activity-actions';
 
 interface ActivityDashboardProps {
   context: 'user' | 'drive';
@@ -211,7 +212,7 @@ export function ActivityDashboard({ context, driveId: initialDriveId, driveName 
 
   const handleRollback = useCallback(async (activityId: string, force: boolean) => {
     try {
-      const result = await post(`/api/activities/${activityId}/rollback`, {
+      const result = await post<ActivityActionResult>(`/api/activities/${activityId}/rollback`, {
         context: rollbackContext,
         force,
       });
@@ -229,7 +230,7 @@ export function ActivityDashboard({ context, driveId: initialDriveId, driveName 
 
   const handleRedo = useCallback(async (activityId: string, force: boolean) => {
     try {
-      const result = await post(`/api/activities/${activityId}/redo`, {
+      const result = await post<ActivityActionResult>(`/api/activities/${activityId}/redo`, {
         context: rollbackContext,
         force,
       });
