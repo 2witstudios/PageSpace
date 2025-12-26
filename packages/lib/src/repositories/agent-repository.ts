@@ -23,6 +23,8 @@ export interface AgentRecord {
   includeDrivePrompt: boolean;
   includePageTree: boolean;
   pageTreeScope: 'children' | 'drive' | null;
+  revision: number;
+  stateHash?: string | null;
 }
 
 export interface AgentConfigUpdate {

@@ -31,6 +31,7 @@ import { formatDistanceToNow } from 'date-fns';
 import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import { RollbackConfirmDialog } from '@/components/version-history/RollbackConfirmDialog';
 import { useToast } from '@/hooks/useToast';
+import type { ActivityAction, ActivityActionPreview, ActivityActionResult } from '@/types/activity-actions';
 
 // Exported for unit testing
 export interface ActivityUser {
@@ -51,6 +52,8 @@ export interface ActivityItem {
   isAiGenerated: boolean;
   aiProvider: string | null;
   aiModel: string | null;
+  metadata: Record<string, unknown> | null;
+  rollbackSourceOperation: string | null;
   // User relation - null when user has been deleted (FK set null)
   user: ActivityUser | null;
   // Denormalized actor info - preserved for audit trail when user is deleted
@@ -121,6 +124,7 @@ const operationIcons: Record<string, React.ReactNode> = {
   permission_update: <Share2 className="h-3 w-3" />,
   permission_revoke: <Share2 className="h-3 w-3" />,
   agent_config_update: <Settings className="h-3 w-3" />,
+  rollback: <History className="h-3 w-3" />,
 };
 
 // Human-readable operation labels
@@ -136,6 +140,7 @@ const operationLabels: Record<string, string> = {
   permission_update: 'Updated sharing',
   permission_revoke: 'Revoked access',
   agent_config_update: 'Configured agent',
+  rollback: 'Rolled back',
 };
 
 /**
@@ -159,7 +164,8 @@ export default function SidebarActivityTab() {
   // Rollback state
   const [selectedActivityForRollback, setSelectedActivityForRollback] = useState<ActivityItem | null>(null);
   const [showRollbackConfirm, setShowRollbackConfirm] = useState(false);
-  const [rollbackWarnings, setRollbackWarnings] = useState<string[]>([]);
+  const [preview, setPreview] = useState<ActivityActionPreview | null>(null);
+  const [action, setAction] = useState<ActivityAction>('rollback');
 
   // Determine context and IDs from route params
   const driveId = params.driveId as string | undefined;
@@ -225,51 +231,81 @@ export default function SidebarActivityTab() {
   }, [loadActivities, pathname]);
 
   // Handle restore click - fetch preview and show confirm dialog
-  const handleRestoreClick = useCallback(async (activity: ActivityItem) => {
+  const handleActionClick = useCallback(async (activity: ActivityItem, nextAction: ActivityAction) => {
     setSelectedActivityForRollback(activity);
+    setAction(nextAction);
 
     try {
-      const response = await fetch(`/api/activities/${activity.id}?context=${rollbackContext}`);
+      const endpoint = nextAction === 'redo'
+        ? `/api/activities/${activity.id}/redo`
+        : `/api/activities/${activity.id}/rollback`;
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ context: rollbackContext, dryRun: true }),
+      });
       if (!response.ok) {
         throw new Error('Failed to load preview');
       }
       const data = await response.json();
-      setRollbackWarnings(data.warnings || []);
+      setPreview(data.preview ?? null);
     } catch (err) {
       toast({
         title: 'Error',
         description: err instanceof Error ? err.message : 'Failed to load rollback preview',
         variant: 'destructive',
       });
-      setRollbackWarnings([]);
+      setPreview({
+        action: nextAction,
+        canExecute: false,
+        reason: 'Preview unavailable. Please try again.',
+        warnings: [],
+        hasConflict: false,
+        conflictFields: [],
+        requiresForce: false,
+        isNoOp: false,
+        currentValues: null,
+        targetValues: null,
+        changes: [],
+        affectedResources: [],
+      });
     }
     setShowRollbackConfirm(true);
   }, [rollbackContext, toast]);
 
   // Handle confirmed rollback
-  const handleConfirmRollback = useCallback(async () => {
-    if (!selectedActivityForRollback) return;
+  const handleConfirmAction = useCallback(async (force: boolean): Promise<ActivityActionResult> => {
+    if (!selectedActivityForRollback) {
+      throw new Error('No activity selected');
+    }
 
     try {
-      await post(`/api/activities/${selectedActivityForRollback.id}/rollback`, {
+      const endpoint = action === 'redo'
+        ? `/api/activities/${selectedActivityForRollback.id}/redo`
+        : `/api/activities/${selectedActivityForRollback.id}/rollback`;
+      const result = await post(endpoint, {
         context: rollbackContext,
+        force,
       });
 
       toast({
         title: 'Success',
-        description: 'Successfully restored to previous version',
+        description: result.message || 'Action completed',
       });
 
       // Refresh the activity list
       loadActivities();
+
+      return result as ActivityActionResult;
     } catch (err) {
       toast({
         title: 'Error',
         description: err instanceof Error ? err.message : 'Failed to rollback',
         variant: 'destructive',
       });
+      throw err;
     }
-  }, [selectedActivityForRollback, rollbackContext, toast, loadActivities]);
+  }, [selectedActivityForRollback, rollbackContext, toast, loadActivities, action]);
 
   // Filter activities based on search query
   const filteredActivities = useMemo(() => {
@@ -374,7 +410,13 @@ export default function SidebarActivityTab() {
                         <Activity className="h-3 w-3" />
                       )}
                       <span>
-                        {operationLabels[activity.operation] || activity.operation}
+                      {(() => {
+                        const metadata = activity.metadata as { redoFromActivityId?: string } | null;
+                        if (activity.operation === 'rollback' && metadata?.redoFromActivityId) {
+                          return 'Redo rollback';
+                        }
+                        return operationLabels[activity.operation] || activity.operation;
+                      })()}
                       </span>
                       {activity.resourceTitle && (
                         <>
@@ -417,10 +459,16 @@ export default function SidebarActivityTab() {
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => handleRestoreClick(activity)}>
+                      <DropdownMenuItem onClick={() => handleActionClick(activity, 'rollback')}>
                         <History className="h-4 w-4 mr-2" />
-                        Restore this version
+                        Undo this change
                       </DropdownMenuItem>
+                      {activity.operation === 'rollback' && (
+                        <DropdownMenuItem onClick={() => handleActionClick(activity, 'redo')}>
+                          <History className="h-4 w-4 mr-2" />
+                          Redo rollback
+                        </DropdownMenuItem>
+                      )}
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>
@@ -442,10 +490,14 @@ export default function SidebarActivityTab() {
         open={showRollbackConfirm}
         onOpenChange={setShowRollbackConfirm}
         resourceTitle={selectedActivityForRollback?.resourceTitle ?? null}
-        operation={operationLabels[selectedActivityForRollback?.operation ?? ''] || selectedActivityForRollback?.operation || ''}
+        operation={(() => {
+          const op = selectedActivityForRollback?.rollbackSourceOperation ?? selectedActivityForRollback?.operation ?? '';
+          return operationLabels[op] || op;
+        })()}
         timestamp={selectedActivityForRollback?.timestamp || new Date().toISOString()}
-        warnings={rollbackWarnings}
-        onConfirm={handleConfirmRollback}
+        preview={preview}
+        action={action}
+        onConfirm={handleConfirmAction}
       />
     </div>
   );

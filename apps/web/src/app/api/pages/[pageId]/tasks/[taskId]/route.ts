@@ -4,6 +4,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/server';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { applyPageMutation } from '@/services/api/page-mutation-service';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -104,6 +105,9 @@ export async function PATCH(
     columns: { driveId: true },
   });
 
+  const actorInfo = await getActorInfo(userId);
+  let linkedPageUpdated = false;
+
   // Update task and sync title to linked page if needed
   const [updatedTask] = await db.transaction(async (tx) => {
     // Update the task
@@ -114,9 +118,33 @@ export async function PATCH(
 
     // If title changed and task has a linked page, update the page title too
     if (updates.title && existingTask.pageId) {
-      await tx.update(pages)
-        .set({ title: updates.title, updatedAt: new Date() })
-        .where(eq(pages.id, existingTask.pageId));
+      const [linkedPage] = await tx
+        .select({ revision: pages.revision })
+        .from(pages)
+        .where(eq(pages.id, existingTask.pageId))
+        .limit(1);
+
+      if (linkedPage) {
+        await applyPageMutation({
+          pageId: existingTask.pageId,
+          operation: 'update',
+          updates: { title: updates.title },
+          updatedFields: ['title'],
+          expectedRevision: linkedPage.revision,
+          context: {
+            userId,
+            actorEmail: actorInfo.actorEmail,
+            actorDisplayName: actorInfo.actorDisplayName ?? undefined,
+            metadata: {
+              taskId,
+              taskListId: taskList.id,
+              taskListPageId: pageId,
+            },
+          },
+          tx,
+        });
+        linkedPageUpdated = true;
+      }
     }
 
     return [task];
@@ -160,7 +188,7 @@ export async function PATCH(
   ];
 
   // If title changed and task has a linked page, broadcast page update
-  if (updates.title && existingTask.pageId && taskListPage) {
+  if (linkedPageUpdated && taskListPage) {
     broadcasts.push(
       broadcastPageEvent(
         createPageEventPayload(taskListPage.driveId, existingTask.pageId, 'updated', {
@@ -171,24 +199,6 @@ export async function PATCH(
   }
 
   await Promise.all(broadcasts);
-
-  // Log task update for compliance (fire-and-forget)
-  if (existingTask.pageId && taskListPage) {
-    const actorInfo = await getActorInfo(userId);
-    logPageActivity(userId, 'update', {
-      id: existingTask.pageId,
-      title: updatedTask.title,
-      driveId: taskListPage.driveId,
-    }, {
-      ...actorInfo,
-      updatedFields: Object.keys(updates),
-      metadata: {
-        taskId,
-        taskListId: taskList.id,
-        taskListPageId: pageId,
-      },
-    });
-  }
 
   return NextResponse.json(taskWithRelations);
 }
@@ -280,9 +290,32 @@ export async function DELETE(
   }
 
   // Task has a linked page - trash the page (task remains but is filtered out)
-  await db.update(pages)
-    .set({ isTrashed: true, trashedAt: new Date() })
-    .where(eq(pages.id, linkedPageId));
+  const actorInfo = await getActorInfo(userId);
+  const [linkedPage] = await db
+    .select({ revision: pages.revision })
+    .from(pages)
+    .where(eq(pages.id, linkedPageId))
+    .limit(1);
+
+  if (linkedPage) {
+    await applyPageMutation({
+      pageId: linkedPageId,
+      operation: 'trash',
+      updates: { isTrashed: true, trashedAt: new Date() },
+      updatedFields: ['isTrashed', 'trashedAt'],
+      expectedRevision: linkedPage.revision,
+      context: {
+        userId,
+        actorEmail: actorInfo.actorEmail,
+        actorDisplayName: actorInfo.actorDisplayName ?? undefined,
+        metadata: {
+          taskId,
+          taskListId: taskList.id,
+          taskListPageId: pageId,
+        },
+      },
+    });
+  }
 
   // Broadcast events
   const broadcasts: Promise<void>[] = [
@@ -297,7 +330,7 @@ export async function DELETE(
   ];
 
   // Broadcast page trashed event for sidebar update
-  if (taskListPage) {
+  if (linkedPage && taskListPage) {
     broadcasts.push(
       broadcastPageEvent(
         createPageEventPayload(taskListPage.driveId, linkedPageId, 'trashed', {
@@ -309,23 +342,6 @@ export async function DELETE(
   }
 
   await Promise.all(broadcasts);
-
-  // Log task deletion (via page trash) for compliance (fire-and-forget)
-  if (taskListPage) {
-    const actorInfo = await getActorInfo(userId);
-    logPageActivity(userId, 'trash', {
-      id: linkedPageId,
-      title: existingTask.title,
-      driveId: taskListPage.driveId,
-    }, {
-      ...actorInfo,
-      metadata: {
-        taskId,
-        taskListId: taskList.id,
-        taskListPageId: pageId,
-      },
-    });
-  }
 
   return NextResponse.json({ success: true });
 }

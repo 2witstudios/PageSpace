@@ -51,7 +51,11 @@ export async function POST(
     logDriveActivity(auth.userId, 'restore', {
       id: driveId,
       name: drive.name,
-    }, actorInfo);
+    }, {
+      ...actorInfo,
+      previousValues: { isTrashed: true },
+      newValues: { isTrashed: false },
+    });
 
     return NextResponse.json({ success: true });
   } catch (error) {

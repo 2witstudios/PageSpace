@@ -15,10 +15,16 @@ import {
   logPageActivity,
   logDriveActivity,
   getActorInfo,
+  detectPageContentFormat,
+  hashWithPrefix,
+  computePageStateHash,
+  createPageVersion,
   pageRepository,
   driveRepository,
   type ActivityOperation,
 } from '@pagespace/lib/server';
+import { createChangeGroupId } from '@pagespace/lib/monitoring';
+import { applyPageMutation, type PageMutationContext } from '@/services/api/page-mutation-service';
 import { broadcastPageEvent, createPageEventPayload, broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { type ToolExecutionContext } from '../core';
 import { maskIdentifier } from '@/lib/logging/mask';
@@ -36,6 +42,15 @@ function logPageActivityAsync(
     previousValues?: Record<string, unknown>;
     newValues?: Record<string, unknown>;
     updatedFields?: string[];
+    contentRef?: string;
+    contentSize?: number;
+    contentFormat?: 'text' | 'html' | 'json' | 'tiptap';
+    streamId?: string;
+    streamSeq?: number;
+    changeGroupId?: string;
+    changeGroupType?: 'user' | 'ai' | 'automation' | 'system';
+    stateHashBefore?: string;
+    stateHashAfter?: string;
   }
 ) {
   // Build metadata with agent chain context (Tier 1)
@@ -59,6 +74,15 @@ function logPageActivityAsync(
         previousValues: options?.previousValues,
         newValues: options?.newValues,
         updatedFields: options?.updatedFields,
+        contentRef: options?.contentRef,
+        contentSize: options?.contentSize,
+        contentFormat: options?.contentFormat,
+        streamId: options?.streamId,
+        streamSeq: options?.streamSeq,
+        changeGroupId: options?.changeGroupId,
+        changeGroupType: options?.changeGroupType,
+        stateHashBefore: options?.stateHashBefore,
+        stateHashAfter: options?.stateHashAfter,
       });
     })
     .catch(err => {
@@ -73,8 +97,59 @@ function logPageActivityAsync(
         previousValues: options?.previousValues,
         newValues: options?.newValues,
         updatedFields: options?.updatedFields,
+        contentRef: options?.contentRef,
+        contentSize: options?.contentSize,
+        contentFormat: options?.contentFormat,
+        streamId: options?.streamId,
+        streamSeq: options?.streamSeq,
+        changeGroupId: options?.changeGroupId,
+        changeGroupType: options?.changeGroupType,
+        stateHashBefore: options?.stateHashBefore,
+        stateHashAfter: options?.stateHashAfter,
       });
     });
+}
+
+async function buildAiMutationContext(
+  context: ToolExecutionContext,
+  options?: {
+    metadata?: Record<string, unknown>;
+    changeGroupId?: string;
+    resourceType?: PageMutationContext['resourceType'];
+  }
+): Promise<PageMutationContext> {
+  const chainMetadata = {
+    ...options?.metadata,
+    ...(context.parentAgentId && { parentAgentId: context.parentAgentId }),
+    ...(context.parentConversationId && { parentConversationId: context.parentConversationId }),
+    ...(context.agentChain?.length && { agentChain: context.agentChain }),
+    ...(context.requestOrigin && { requestOrigin: context.requestOrigin }),
+  };
+
+  let actorEmail = 'unknown@system';
+  let actorDisplayName: string | undefined;
+
+  try {
+    const actorInfo = await getActorInfo(context.userId);
+    actorEmail = actorInfo.actorEmail;
+    actorDisplayName = actorInfo.actorDisplayName ?? undefined;
+  } catch (error) {
+    pageWriteLogger.warn('Failed to get actor info for mutation context', { error });
+  }
+
+  return {
+    userId: context.userId,
+    actorEmail,
+    actorDisplayName,
+    isAiGenerated: true,
+    aiProvider: context.aiProvider ?? 'unknown',
+    aiModel: context.aiModel ?? 'unknown',
+    aiConversationId: context.conversationId,
+    metadata: Object.keys(chainMetadata).length > 0 ? chainMetadata : undefined,
+    changeGroupId: options?.changeGroupId,
+    changeGroupType: 'ai',
+    resourceType: options?.resourceType,
+  };
 }
 
 // Helper: Non-blocking drive activity logging with AI context (fire-and-forget)
@@ -82,10 +157,16 @@ function logDriveActivityAsync(
   userId: string,
   action: 'create' | 'update' | 'delete' | 'restore' | 'trash' | 'ownership_transfer',
   drive: { id: string; name: string },
-  context: ToolExecutionContext
+  context: ToolExecutionContext,
+  options?: {
+    metadata?: Record<string, unknown>;
+    previousValues?: Record<string, unknown>;
+    newValues?: Record<string, unknown>;
+  }
 ) {
   // Build metadata with agent chain context (Tier 1)
   const chainMetadata = {
+    ...options?.metadata,
     ...(context.parentAgentId && { parentAgentId: context.parentAgentId }),
     ...(context.parentConversationId && { parentConversationId: context.parentConversationId }),
     ...(context.agentChain?.length && { agentChain: context.agentChain }),
@@ -101,6 +182,8 @@ function logDriveActivityAsync(
         aiModel: context.aiModel ?? 'unknown',
         aiConversationId: context.conversationId,
         metadata: Object.keys(chainMetadata).length > 0 ? chainMetadata : undefined,
+        previousValues: options?.previousValues,
+        newValues: options?.newValues,
       });
     })
     .catch(err => {
@@ -111,6 +194,8 @@ function logDriveActivityAsync(
         aiModel: context.aiModel ?? 'unknown',
         aiConversationId: context.conversationId,
         metadata: Object.keys(chainMetadata).length > 0 ? chainMetadata : undefined,
+        previousValues: options?.previousValues,
+        newValues: options?.newValues,
       });
     });
 }
@@ -119,7 +204,8 @@ function logDriveActivityAsync(
 async function trashPage(
   userId: string,
   pageId: string,
-  withChildren: boolean
+  withChildren: boolean,
+  context: ToolExecutionContext
 ): Promise<{ page: { id: string; title: string; type: string; driveId: string; parentId: string | null }; childrenCount: number }> {
   // Use repository seam for page lookup
   const page = await pageRepository.findById(pageId);
@@ -142,17 +228,42 @@ async function trashPage(
 
   let childrenCount = 0;
 
+  const changeGroupId = createChangeGroupId();
+  const baseContext = await buildAiMutationContext(context, {
+    metadata: { trashChildren: withChildren },
+    changeGroupId,
+  });
+
   if (withChildren) {
     // Use repository seam for recursive child lookup
     const childPageIds = await pageRepository.getChildIds(page.driveId, page.id);
     childrenCount = childPageIds.length;
     const allPageIds = [page.id, ...childPageIds];
 
-    // Use repository seam for batch trash
-    await pageRepository.trashMany(page.driveId, allPageIds);
+    for (const targetId of allPageIds) {
+      const targetPage = targetId === page.id ? page : await pageRepository.findById(targetId);
+      if (!targetPage) {
+        continue;
+      }
+
+      await applyPageMutation({
+        pageId: targetPage.id,
+        operation: 'trash',
+        updates: { isTrashed: true, trashedAt: new Date() },
+        updatedFields: ['isTrashed', 'trashedAt'],
+        expectedRevision: typeof targetPage.revision === 'number' ? targetPage.revision : undefined,
+        context: baseContext,
+      });
+    }
   } else {
-    // Use repository seam for single page trash
-    await pageRepository.trash(page.id);
+    await applyPageMutation({
+      pageId: page.id,
+      operation: 'trash',
+      updates: { isTrashed: true, trashedAt: new Date() },
+      updatedFields: ['isTrashed', 'trashedAt'],
+      expectedRevision: typeof page.revision === 'number' ? page.revision : undefined,
+      context: baseContext,
+    });
   }
 
   await broadcastPageEvent(
@@ -194,7 +305,8 @@ async function trashDrive(
 // Helper: Restore a page from trash
 async function restorePage(
   userId: string,
-  pageId: string
+  pageId: string,
+  context: ToolExecutionContext
 ): Promise<{ id: string; title: string; type: string; driveId: string; parentId: string | null }> {
   // Use repository seam for trashed page lookup
   const trashedPage = await pageRepository.findTrashedById(pageId);
@@ -208,14 +320,27 @@ async function restorePage(
     throw new Error('Insufficient permissions to restore this page');
   }
 
-  // Use repository seam for page restore
-  const restoredPage = await pageRepository.restore(trashedPage.id);
+  const mutationContext = await buildAiMutationContext(context, {
+    metadata: { restoreSource: 'trash' },
+  });
+
+  await applyPageMutation({
+    pageId: trashedPage.id,
+    operation: 'restore',
+    updates: { isTrashed: false, trashedAt: null },
+    updatedFields: ['isTrashed', 'trashedAt'],
+    expectedRevision: typeof trashedPage.revision === 'number' ? trashedPage.revision : undefined,
+    context: mutationContext,
+  });
 
   await broadcastPageEvent(
-    createPageEventPayload(trashedPage.driveId, restoredPage.id, 'restored', { title: restoredPage.title, parentId: restoredPage.parentId })
+    createPageEventPayload(trashedPage.driveId, trashedPage.id, 'restored', {
+      title: trashedPage.title,
+      parentId: trashedPage.parentId,
+    })
   );
 
-  return { id: restoredPage.id, title: restoredPage.title, type: restoredPage.type, driveId: trashedPage.driveId, parentId: restoredPage.parentId };
+  return { id: trashedPage.id, title: trashedPage.title, type: trashedPage.type, driveId: trashedPage.driveId, parentId: trashedPage.parentId };
 }
 
 // Helper: Restore a drive from trash
@@ -326,8 +451,21 @@ export const pageWriteTools = {
 
         const newContent = newLines.join('\n');
 
-        // Update the page content via repository seam
-        await pageRepository.update(page.id, { content: newContent });
+        const mutationContext = await buildAiMutationContext(context as ToolExecutionContext, {
+          metadata: {
+            linesChanged: endLine - startLine + 1,
+            changeType: isDeletion ? 'deletion' : 'replacement',
+          },
+        });
+
+        await applyPageMutation({
+          pageId: page.id,
+          operation: 'update',
+          updates: { content: newContent },
+          updatedFields: ['content'],
+          expectedRevision: typeof page.revision === 'number' ? page.revision : undefined,
+          context: mutationContext,
+        });
 
         // Broadcast content update event
         await broadcastPageEvent(
@@ -335,23 +473,6 @@ export const pageWriteTools = {
             title: page.title
           })
         );
-
-        // Log activity for AI-generated content update (fire-and-forget)
-        // Store original content in contentSnapshot for rollback support
-        logPageActivityAsync(userId, 'update', {
-          id: page.id,
-          title: page.title,
-          driveId: page.driveId,
-          content: page.content, // Original content before change - used for rollback
-        }, context as ToolExecutionContext, {
-          metadata: {
-            linesChanged: endLine - startLine + 1,
-            changeType: isDeletion ? 'deletion' : 'replacement',
-          },
-          previousValues: { content: page.content },
-          newValues: { content: newContent },
-          updatedFields: ['content'],
-        });
 
         return {
           success: true,
@@ -435,15 +556,46 @@ export const pageWriteTools = {
         // Get next position via repository seam
         const nextPosition = await pageRepository.getNextPosition(drive.id, parentId || null);
 
+        const initialContent = '';
+        const contentFormat = detectPageContentFormat(initialContent);
+        const contentRef = hashWithPrefix(contentFormat, initialContent);
+        const stateHash = computePageStateHash({
+          title,
+          contentRef,
+          parentId: parentId || null,
+          position: nextPosition,
+          isTrashed: false,
+          type,
+          driveId: drive.id,
+        });
+        const changeGroupId = createChangeGroupId();
+
         // Create the page via repository seam
         const newPage = await pageRepository.create({
           title,
           type,
-          content: '',
+          content: initialContent,
           position: nextPosition,
           driveId: drive.id,
           parentId: parentId || null,
           isTrashed: false,
+          revision: 0,
+          stateHash,
+          updatedAt: new Date(),
+        });
+
+        await createPageVersion({
+          pageId: newPage.id,
+          driveId: drive.id,
+          createdBy: userId,
+          source: 'system',
+          content: initialContent,
+          contentFormat,
+          pageRevision: 0,
+          stateHash,
+          changeGroupId,
+          changeGroupType: 'ai',
+          metadata: { source: 'ai_tool' },
         });
 
         // Broadcast page creation event
@@ -462,6 +614,14 @@ export const pageWriteTools = {
           driveId: drive.id,
         }, context as ToolExecutionContext, {
           metadata: { pageType: newPage.type, parentId },
+          contentRef,
+          contentSize: Buffer.byteLength(initialContent, 'utf8'),
+          contentFormat,
+          streamId: newPage.id,
+          streamSeq: 0,
+          changeGroupId,
+          changeGroupType: 'ai',
+          stateHashAfter: stateHash,
         });
 
         // Build response
@@ -533,38 +693,34 @@ export const pageWriteTools = {
           throw new Error('Insufficient permissions to rename this page');
         }
 
-        // Update the page title via repository seam
-        const renamedPage = await pageRepository.update(page.id, { title });
+        const mutationContext = await buildAiMutationContext(context as ToolExecutionContext);
+        await applyPageMutation({
+          pageId: page.id,
+          operation: 'update',
+          updates: { title },
+          updatedFields: ['title'],
+          expectedRevision: typeof page.revision === 'number' ? page.revision : undefined,
+          context: mutationContext,
+        });
 
         // Broadcast page update event for title change
         await broadcastPageEvent(
-          createPageEventPayload(page.driveId, renamedPage.id, 'updated', {
-            title: renamedPage.title,
-            parentId: renamedPage.parentId
+          createPageEventPayload(page.driveId, page.id, 'updated', {
+            title,
+            parentId: page.parentId
           })
         );
 
-        // Log activity for AI-generated rename (fire-and-forget)
-        logPageActivityAsync(userId, 'update', {
-          id: renamedPage.id,
-          title: renamedPage.title,
-          driveId: page.driveId,
-        }, context as ToolExecutionContext, {
-          previousValues: { title: page.title }, // Original title for rollback
-          newValues: { title: renamedPage.title },
-          updatedFields: ['title'],
-        });
-
         return {
           success: true,
-          id: renamedPage.id,
-          title: renamedPage.title,
-          type: renamedPage.type,
-          message: `Successfully renamed page from "${currentTitle}" to "${renamedPage.title}"`,
-          summary: `Renamed page to "${renamedPage.title}"`,
+          id: page.id,
+          title,
+          type: page.type,
+          message: `Successfully renamed page from "${currentTitle}" to "${title}"`,
+          summary: `Renamed page to "${title}"`,
           stats: {
-            pageType: renamedPage.type,
-            newTitle: renamedPage.title
+            pageType: page.type,
+            newTitle: title
           },
           nextSteps: [
             'Update any references to this page in other documents',
@@ -603,17 +759,7 @@ export const pageWriteTools = {
 
       try {
         if (type === 'page') {
-          const { page, childrenCount } = await trashPage(userId, id, withChildren);
-
-          // Log activity for AI-generated trash operation (fire-and-forget)
-          logPageActivityAsync(userId, 'trash', {
-            id: page.id,
-            title: page.title,
-            driveId: page.driveId,
-          }, context as ToolExecutionContext, {
-            metadata: { withChildren, childrenCount },
-            previousValues: { isTrashed: false }, // For rollback - restore from trash
-          });
+          const { page, childrenCount } = await trashPage(userId, id, withChildren, context as ToolExecutionContext);
 
           return {
             success: true,
@@ -636,7 +782,10 @@ export const pageWriteTools = {
           logDriveActivityAsync(userId, 'trash', {
             id: drive.id,
             name: drive.name,
-          }, context as ToolExecutionContext);
+          }, context as ToolExecutionContext, {
+            previousValues: { isTrashed: false },
+            newValues: { isTrashed: true },
+          });
 
           return {
             success: true,
@@ -677,16 +826,7 @@ export const pageWriteTools = {
 
       try {
         if (type === 'page') {
-          const page = await restorePage(userId, id);
-
-          // Log activity for AI-generated restore operation (fire-and-forget)
-          logPageActivityAsync(userId, 'restore', {
-            id: page.id,
-            title: page.title,
-            driveId: page.driveId,
-          }, context as ToolExecutionContext, {
-            previousValues: { isTrashed: true }, // For rollback - trash again
-          });
+          const page = await restorePage(userId, id, context as ToolExecutionContext);
 
           return {
             success: true,
@@ -703,7 +843,10 @@ export const pageWriteTools = {
           logDriveActivityAsync(userId, 'restore', {
             id: drive.id,
             name: drive.name,
-          }, context as ToolExecutionContext);
+          }, context as ToolExecutionContext, {
+            previousValues: { isTrashed: true },
+            newValues: { isTrashed: false },
+          });
 
           return {
             success: true,
@@ -773,41 +916,39 @@ export const pageWriteTools = {
           }
         }
 
-        // Update the page's parent and position via repository seam
-        const movedPage = await pageRepository.update(page.id, {
-          parentId: newParentId ?? null,
-          position: position,
+        const mutationContext = await buildAiMutationContext(context as ToolExecutionContext, {
+          metadata: { newParentId, position },
+        });
+
+        await applyPageMutation({
+          pageId: page.id,
+          operation: 'move',
+          updates: {
+            parentId: newParentId ?? null,
+            position: position,
+          },
+          updatedFields: ['parentId', 'position'],
+          expectedRevision: typeof page.revision === 'number' ? page.revision : undefined,
+          context: mutationContext,
         });
 
         // Broadcast page move event
         await broadcastPageEvent(
-          createPageEventPayload(page.driveId, movedPage.id, 'moved', {
+          createPageEventPayload(page.driveId, page.id, 'moved', {
             parentId: newParentId,
-            title: movedPage.title
+            title: page.title
           })
         );
-
-        // Log activity for AI-generated move operation (fire-and-forget)
-        logPageActivityAsync(userId, 'move', {
-          id: movedPage.id,
-          title: movedPage.title,
-          driveId: page.driveId,
-        }, context as ToolExecutionContext, {
-          metadata: { newParentId, position },
-          previousValues: { parentId: page.parentId, position: page.position }, // Original location for rollback
-          newValues: { parentId: newParentId ?? null, position },
-          updatedFields: ['parentId', 'position'],
-        });
 
         return {
           success: true,
           position,
-          id: movedPage.id,
-          title: movedPage.title,
-          type: movedPage.type,
+          id: page.id,
+          title: page.title,
+          type: page.type,
           message: newParentId
-            ? `Successfully moved "${movedPage.title}" to "${newParentTitle ?? 'parent folder'}" at position ${position}`
-            : `Successfully moved "${movedPage.title}" to root at position ${position}`,
+            ? `Successfully moved "${page.title}" to "${newParentTitle ?? 'parent folder'}" at position ${position}`
+            : `Successfully moved "${page.title}" to root at position ${position}`,
         };
       } catch (error) {
         pageWriteLogger.error('Failed to move page', error instanceof Error ? error : undefined, {
@@ -884,8 +1025,20 @@ export const pageWriteTools = {
         // Serialize back to TOML format
         const newContent = serializeSheetContent(updatedSheet, { pageId: page.id });
 
-        // Update the page content via repository seam
-        await pageRepository.update(page.id, { content: newContent });
+        const mutationContext = await buildAiMutationContext(context as ToolExecutionContext, {
+          metadata: {
+            cellsUpdated: cells.length,
+          },
+        });
+
+        await applyPageMutation({
+          pageId: page.id,
+          operation: 'update',
+          updates: { content: newContent },
+          updatedFields: ['content'],
+          expectedRevision: typeof page.revision === 'number' ? page.revision : undefined,
+          context: mutationContext,
+        });
 
         // Broadcast content update event
         await broadcastPageEvent(
@@ -893,20 +1046,6 @@ export const pageWriteTools = {
             title: page.title
           })
         );
-
-        // Log activity for AI-generated sheet edit (fire-and-forget)
-        // Store original content in contentSnapshot for rollback support
-        logPageActivityAsync(userId, 'update', {
-          id: page.id,
-          title: page.title,
-          driveId: page.driveId,
-          content: page.content, // Original content before change - used for rollback
-        }, context as ToolExecutionContext, {
-          metadata: { cellsUpdated: cells.length },
-          previousValues: { content: page.content },
-          newValues: { content: newContent },
-          updatedFields: ['content'],
-        });
 
         // Summarize changes for response
         const formulaCount = cells.filter(c => c.value.trim().startsWith('=')).length;

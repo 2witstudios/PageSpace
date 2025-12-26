@@ -1,11 +1,18 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { executeRollback, previewRollback, getActivityById } from '@/services/api';
+import { executeRedo, previewRedo, getActivityById } from '@/services/api';
 import type { RollbackContext } from '@pagespace/lib/permissions';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
-import { broadcastPageEvent, createPageEventPayload, broadcastDriveEvent, createDriveEventPayload, broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
+import {
+  broadcastPageEvent,
+  createPageEventPayload,
+  broadcastDriveEvent,
+  createDriveEventPayload,
+  broadcastDriveMemberEvent,
+  createDriveMemberEventPayload,
+} from '@/lib/websocket';
 import { db } from '@pagespace/db';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
@@ -13,14 +20,14 @@ const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 const bodySchema = z.object({
   context: z.enum(['page', 'drive', 'ai_tool', 'user_dashboard']),
   dryRun: z.boolean().optional().default(false),
-  /** Force rollback even if resource was modified since this activity (may lose recent changes) */
+  /** Force redo even if resource was modified since the rollback */
   force: z.boolean().optional().default(false),
 });
 
 /**
- * POST /api/activities/[activityId]/rollback
+ * POST /api/activities/[activityId]/redo
  *
- * Execute a rollback to restore state from a specific activity log
+ * Execute a redo to undo a rollback
  */
 export async function POST(
   request: Request,
@@ -34,17 +41,16 @@ export async function POST(
   const { activityId } = await context.params;
   const userId = auth.userId;
 
-  loggers.api.debug('[Rollback:Route] POST request received', {
+  loggers.api.debug('[Redo:Route] POST request received', {
     activityId: maskIdentifier(activityId),
     userId: maskIdentifier(userId),
   });
 
-  // Parse request body
   let body;
   try {
     body = await request.json();
   } catch {
-    loggers.api.debug('[Rollback:Route] Invalid JSON body');
+    loggers.api.debug('[Redo:Route] Invalid JSON body');
     return NextResponse.json(
       { error: 'Invalid JSON body' },
       { status: 400 }
@@ -53,7 +59,7 @@ export async function POST(
 
   const parseResult = bodySchema.safeParse(body);
   if (!parseResult.success) {
-    loggers.api.debug('[Rollback:Route] Body validation failed');
+    loggers.api.debug('[Redo:Route] Body validation failed');
     return NextResponse.json(
       { error: parseResult.error.issues.map(i => i.message).join('. ') },
       { status: 400 }
@@ -62,46 +68,22 @@ export async function POST(
 
   const { context: rollbackContext, dryRun, force } = parseResult.data;
 
-  loggers.api.debug('[Rollback:Route] Request validated', {
-    context: rollbackContext,
-    dryRun,
-    force,
-  });
-
-  // If dry run, just return the preview
   if (dryRun) {
-    loggers.api.debug('[Rollback:Route] Dry run - fetching preview');
-    const preview = await previewRollback(activityId, userId, rollbackContext as RollbackContext, { force });
-    loggers.api.debug('[Rollback:Route] Dry run complete', {
-      canExecute: preview.canExecute,
-      hasConflict: preview.hasConflict,
-    });
-    return NextResponse.json({
-      preview,
-    });
+    const preview = await previewRedo(activityId, userId, rollbackContext as RollbackContext, { force });
+    return NextResponse.json({ preview });
   }
 
-  // Fix 9: Execute rollback within transaction for atomicity
-  loggers.api.debug('[Rollback:Route] Executing rollback in transaction');
   const result = await db.transaction(async (tx) => {
-    return executeRollback(activityId, userId, rollbackContext as RollbackContext, { tx, force });
+    return executeRedo(activityId, userId, rollbackContext as RollbackContext, { tx, force });
   });
 
   if (!result.success) {
-    loggers.api.debug('[Rollback:Route] Rollback failed', {
-      message: result.message,
-    });
     return NextResponse.json(
       { error: result.message, warnings: result.warnings, result },
       { status: 400 }
     );
   }
 
-  loggers.api.debug('[Rollback:Route] Rollback succeeded', {
-    rollbackActivityId: result.rollbackActivityId,
-  });
-
-  // Broadcast real-time updates for affected resources
   const activity = await getActivityById(activityId);
   if (activity) {
     if (activity.resourceType === 'page' && activity.pageId && activity.driveId) {
@@ -122,13 +104,11 @@ export async function POST(
         })
       );
     } else if (activity.resourceType === 'member' && activity.driveId) {
-      // Fix 16: Broadcast member updates on rollback
-      // Determine the appropriate event based on the original operation being rolled back
       const targetUserId = (activity.metadata as Record<string, unknown>)?.targetUserId as string | undefined;
-      if (targetUserId) {
-        // Rolling back member_add → member was removed, rolling back member_remove → member was added
-        const memberOperation = activity.operation === 'member_add' ? 'member_removed'
-          : activity.operation === 'member_remove' ? 'member_added'
+      const sourceOperation = activity.rollbackSourceOperation;
+      if (targetUserId && sourceOperation) {
+        const memberOperation = sourceOperation === 'member_add' ? 'member_added'
+          : sourceOperation === 'member_remove' ? 'member_removed'
           : 'member_role_changed';
         await broadcastDriveMemberEvent(
           createDriveMemberEventPayload(activity.driveId, targetUserId, memberOperation, {
@@ -137,16 +117,12 @@ export async function POST(
         );
       }
     } else if (activity.resourceType === 'role' && activity.driveId) {
-      // Fix 16: Role changes affect all drive members - broadcast drive update
       await broadcastDriveEvent(
         createDriveEventPayload(activity.driveId, 'updated', {
           name: activity.resourceTitle ?? undefined,
         })
       );
     }
-    loggers.api.debug('[Rollback:Route] Broadcast sent', {
-      resourceType: activity.resourceType,
-    });
   }
 
   return NextResponse.json({

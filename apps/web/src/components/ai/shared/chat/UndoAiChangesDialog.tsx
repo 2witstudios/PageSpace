@@ -15,6 +15,7 @@ import {
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
+import { Switch } from '@/components/ui/switch';
 import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import type { AiUndoPreview, UndoMode } from '@/services/api';
 import { createClientLogger } from '@/lib/logging/client-logger';
@@ -39,6 +40,7 @@ export const UndoAiChangesDialog: React.FC<UndoAiChangesDialogProps> = ({
   const [executing, setExecuting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<UndoMode>('messages_only');
+  const [force, setForce] = useState(false);
 
   // Fetch preview when dialog opens
   useEffect(() => {
@@ -48,6 +50,7 @@ export const UndoAiChangesDialog: React.FC<UndoAiChangesDialogProps> = ({
       setError(null);
       setPreview(null);
       setMode('messages_only');
+      setForce(false);
 
       fetchWithAuth(`/api/ai/chat/messages/${messageId}/undo`)
         .then(async (res) => {
@@ -92,7 +95,7 @@ export const UndoAiChangesDialog: React.FC<UndoAiChangesDialogProps> = ({
 
     try {
       // post() returns parsed JSON and throws on errors
-      await post(`/api/ai/chat/messages/${messageId}/undo`, { mode });
+      await post(`/api/ai/chat/messages/${messageId}/undo`, { mode, force });
 
       logger.debug('[AiUndo:Execute] Undo completed successfully', { mode });
       onOpenChange(false);
@@ -108,7 +111,9 @@ export const UndoAiChangesDialog: React.FC<UndoAiChangesDialogProps> = ({
     }
   };
 
-  const canRollbackCount = preview?.activitiesAffected.filter(a => a.canRollback).length ?? 0;
+  const requiresForce = preview?.activitiesAffected.some(a => a.preview.requiresForce) ?? false;
+  const canRollbackCount = preview?.activitiesAffected.filter(a => a.preview.canExecute || (force && a.preview.requiresForce)).length ?? 0;
+  const conflictedActivities = preview?.activitiesAffected.filter(a => a.preview.hasConflict) ?? [];
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
@@ -183,6 +188,19 @@ export const UndoAiChangesDialog: React.FC<UndoAiChangesDialogProps> = ({
                     </div>
                   </RadioGroup>
 
+                  {requiresForce && (
+                    <div className="flex items-center justify-between rounded-md border p-3">
+                      <Label htmlFor="force-undo" className="text-sm">
+                        Force undo (overwrite newer changes)
+                      </Label>
+                      <Switch
+                        id="force-undo"
+                        checked={force}
+                        onCheckedChange={setForce}
+                      />
+                    </div>
+                  )}
+
                   {/* Warnings */}
                   {preview.warnings.length > 0 && (
                     <div className="rounded-md border border-yellow-200 bg-yellow-50 p-3 dark:border-yellow-800 dark:bg-yellow-900/20">
@@ -203,17 +221,38 @@ export const UndoAiChangesDialog: React.FC<UndoAiChangesDialogProps> = ({
                     </div>
                   )}
 
+                  {conflictedActivities.length > 0 && (
+                    <div className="rounded-md border border-yellow-200 bg-yellow-50 p-3 dark:border-yellow-800 dark:bg-yellow-900/20">
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-500 mt-0.5 shrink-0" />
+                        <div className="text-sm text-yellow-800 dark:text-yellow-200">
+                          <p className="font-medium mb-1">Conflicts detected</p>
+                          <ul className="list-disc list-inside space-y-0.5 text-xs">
+                            {conflictedActivities.slice(0, 3).map((activity) => (
+                              <li key={activity.id}>
+                                {activity.resourceTitle || activity.resourceType}: {activity.preview.conflictFields.join(', ')}
+                              </li>
+                            ))}
+                            {conflictedActivities.length > 3 && (
+                              <li>...and {conflictedActivities.length - 3} more</li>
+                            )}
+                          </ul>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Activities list (collapsed) */}
                   {mode === 'messages_and_changes' && canRollbackCount > 0 && (
                     <div className="text-xs text-muted-foreground border-t pt-3">
                       <p className="font-medium mb-1">Changes to be undone:</p>
                       <div className="flex flex-wrap gap-1">
                         {preview.activitiesAffected
-                          .filter(a => a.canRollback)
+                          .filter(a => a.preview.canExecute || (force && a.preview.requiresForce))
                           .slice(0, 5)
                           .map((activity) => (
                             <Badge key={activity.id} variant="secondary" className="text-xs">
-                              {activity.operation} {activity.resourceTitle || activity.resourceType}
+                              {activity.preview.changes[0]?.label || `${activity.operation} ${activity.resourceTitle || activity.resourceType}`}
                             </Badge>
                           ))}
                         {canRollbackCount > 5 && (
@@ -236,7 +275,7 @@ export const UndoAiChangesDialog: React.FC<UndoAiChangesDialogProps> = ({
               e.preventDefault();
               handleConfirm();
             }}
-            disabled={executing || loading || !preview}
+            disabled={executing || loading || !preview || (mode === 'messages_and_changes' && canRollbackCount === 0)}
             className="gap-2"
           >
             {executing ? (

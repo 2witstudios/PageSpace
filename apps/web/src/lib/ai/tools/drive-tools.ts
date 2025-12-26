@@ -265,6 +265,8 @@ export const driveTools = {
           name: updatedDrive.name,
         }, {
           ...aiContext,
+          previousValues: { name: drive.name },
+          newValues: { name: updatedDrive.name },
           metadata: {
             ...aiContext.metadata,
             oldName: drive.name,

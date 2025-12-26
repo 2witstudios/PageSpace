@@ -167,7 +167,7 @@ export function VersionHistoryPanel({
     }
   }, [open, showAiOnly, operationFilter, pageId, driveId]);
 
-  const handleRollback = async (activityId: string, force?: boolean) => {
+  const handleRollback = async (activityId: string, force: boolean) => {
     logger.debug('[Rollback:Execute] User initiated rollback from history panel', {
       activityId,
       context,
@@ -175,7 +175,7 @@ export function VersionHistoryPanel({
     });
 
     try {
-      await post(`/api/activities/${activityId}/rollback`, { context, force });
+      const result = await post(`/api/activities/${activityId}/rollback`, { context, force });
 
       logger.debug('[Rollback:Execute] Rollback completed successfully', {
         activityId,
@@ -183,7 +183,7 @@ export function VersionHistoryPanel({
 
       toast({
         title: 'Success',
-        description: 'Successfully restored to previous version',
+        description: result.message || 'Change undone',
       });
 
       // Invalidate SWR caches for affected resources
@@ -198,6 +198,7 @@ export function VersionHistoryPanel({
 
       // Refresh the version history list
       fetchVersions(true);
+      return result;
     } catch (error) {
       logger.debug('[Rollback:Execute] Rollback failed', {
         activityId,
@@ -209,6 +210,48 @@ export function VersionHistoryPanel({
         description: error instanceof Error ? error.message : 'Failed to rollback',
         variant: 'destructive',
       });
+      throw error;
+    }
+  };
+
+  const handleRedo = async (activityId: string, force: boolean) => {
+    logger.debug('[Rollback:Execute] User initiated redo from history panel', {
+      activityId,
+      context,
+      force,
+    });
+
+    try {
+      const result = await post(`/api/activities/${activityId}/redo`, { context, force });
+
+      toast({
+        title: 'Success',
+        description: result.message || 'Rollback has been undone',
+      });
+
+      if (pageId) {
+        mutate(`/api/pages/${pageId}`);
+        mutate(`/api/pages/${pageId}/history`);
+      }
+      if (driveId) {
+        mutate(`/api/drives/${driveId}/pages`);
+        mutate(`/api/drives/${driveId}/history`);
+      }
+
+      fetchVersions(true);
+      return result;
+    } catch (error) {
+      logger.debug('[Rollback:Execute] Redo failed', {
+        activityId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+
+      toast({
+        title: 'Error',
+        description: error instanceof Error ? error.message : 'Failed to redo rollback',
+        variant: 'destructive',
+      });
+      throw error;
     }
   };
 
@@ -302,6 +345,7 @@ export function VersionHistoryPanel({
                   activity={version}
                   context={context}
                   onRollback={version.canRollback ? handleRollback : undefined}
+                  onRedo={handleRedo}
                 />
               ))}
 

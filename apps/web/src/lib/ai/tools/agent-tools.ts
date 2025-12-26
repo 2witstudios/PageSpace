@@ -2,7 +2,6 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import {
   canUserEditPage,
-  logAgentConfigActivity,
   getActorInfo,
   loggers,
   agentRepository,
@@ -10,6 +9,7 @@ import {
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { type ToolExecutionContext, pageSpaceTools } from '../core';
+import { applyPageMutation } from '@/services/api/page-mutation-service';
 
 const agentLogger = loggers.ai.child({ module: 'agent-tools' });
 
@@ -63,7 +63,6 @@ export const agentTools = {
 
         // Build update data with proper typing
         interface AgentUpdateData {
-          updatedAt: Date;
           systemPrompt?: string | null;
           enabledTools?: string[] | null;
           aiProvider?: string | null;
@@ -75,9 +74,7 @@ export const agentTools = {
           pageTreeScope?: 'children' | 'drive';
         }
 
-        const updateData: AgentUpdateData = {
-          updatedAt: new Date(),
-        };
+        const updateData: AgentUpdateData = {};
 
         if (systemPrompt !== undefined) {
           updateData.systemPrompt = systemPrompt || null;
@@ -107,19 +104,12 @@ export const agentTools = {
           updateData.pageTreeScope = pageTreeScope;
         }
 
-        // Update the agent configuration via repository seam
-        await agentRepository.updateConfig(agent.id, updateData);
+        const updatedFields = Object.keys(updateData);
+        if (updatedFields.length === 0) {
+          throw new Error('No valid fields provided for update');
+        }
 
-        // Broadcast update event
-        await broadcastPageEvent(
-          createPageEventPayload(agent.driveId, agent.id, 'updated', {
-            title: agent.title
-          })
-        );
-
-        // Log activity for AI-generated agent config update
         const ctx = context as ToolExecutionContext;
-        const actorInfo = await getActorInfo(userId);
         // Build chain metadata (Tier 1)
         const chainMetadata = {
           ...(ctx?.parentAgentId && { parentAgentId: ctx.parentAgentId }),
@@ -127,33 +117,51 @@ export const agentTools = {
           ...(ctx?.agentChain?.length && { agentChain: ctx.agentChain }),
           ...(ctx?.requestOrigin && { requestOrigin: ctx.requestOrigin }),
         };
-        logAgentConfigActivity(userId, {
-          id: agent.id,
-          name: agent.title,
-          driveId: agent.driveId,
-        }, {
-          updatedFields: Object.keys(updateData).filter(key => key !== 'updatedAt'),
-          isAiGenerated: true,
-          aiProvider: ctx?.aiProvider,
-          aiModel: ctx?.aiModel,
-          aiConversationId: ctx?.conversationId,
-          metadata: Object.keys(chainMetadata).length > 0 ? chainMetadata : undefined,
-        }, actorInfo);
+
+        // Update the agent configuration with deterministic logging
+        const actorInfo = await getActorInfo(userId);
+        await applyPageMutation({
+          pageId: agent.id,
+          operation: 'agent_config_update',
+          updates: updateData,
+          updatedFields,
+          expectedRevision: typeof agent.revision === 'number' ? agent.revision : undefined,
+          context: {
+            userId,
+            actorEmail: actorInfo.actorEmail,
+            actorDisplayName: actorInfo.actorDisplayName ?? undefined,
+            isAiGenerated: true,
+            aiProvider: ctx?.aiProvider,
+            aiModel: ctx?.aiModel,
+            aiConversationId: ctx?.conversationId,
+            metadata: Object.keys(chainMetadata).length > 0 ? chainMetadata : undefined,
+            resourceType: 'agent',
+          },
+        });
+
+        const updatedAgent = { ...agent, ...updateData };
+
+        // Broadcast update event
+        await broadcastPageEvent(
+          createPageEventPayload(updatedAgent.driveId, updatedAgent.id, 'updated', {
+            title: updatedAgent.title
+          })
+        );
 
         return {
           success: true,
           path: agentPath,
-          id: agent.id,
-          title: agent.title,
-          message: `Successfully updated AI agent "${agent.title}" configuration`,
+          id: updatedAgent.id,
+          title: updatedAgent.title,
+          message: `Successfully updated AI agent "${updatedAgent.title}" configuration`,
           summary: `Updated agent configuration${systemPrompt ? ' with new system prompt' : ''}${enabledTools ? ` and ${enabledTools.length} tools` : ''}`,
-          updatedFields: Object.keys(updateData).filter(key => key !== 'updatedAt'),
+          updatedFields,
           agentConfig: {
             hasSystemPrompt: !!updateData.systemPrompt || (systemPrompt === undefined && !!agent.systemPrompt),
             enabledToolsCount: enabledTools?.length || 0,
-            enabledTools: enabledTools || agent.enabledTools || [],
-            aiProvider: aiProvider || agent.aiProvider || 'default',
-            aiModel: aiModel || agent.aiModel || 'default'
+            enabledTools: enabledTools || updatedAgent.enabledTools || [],
+            aiProvider: aiProvider || updatedAgent.aiProvider || 'default',
+            aiModel: aiModel || updatedAgent.aiModel || 'default'
           },
           nextSteps: [
             'Test the agent to ensure the new configuration works as expected',

@@ -18,33 +18,42 @@ import { getInitials } from '@/components/activity/utils';
 import { RollbackConfirmDialog } from './RollbackConfirmDialog';
 import { useToast } from '@/hooks/useToast';
 import type { ActivityLog } from '@/components/activity/types';
+import type { ActivityAction, ActivityActionPreview, ActivityActionResult } from '@/types/activity-actions';
 
 const logger = createClientLogger({ namespace: 'rollback', component: 'VersionHistoryItem' });
 
 interface VersionHistoryItemProps {
   activity: ActivityLog & { canRollback?: boolean };
   context: 'page' | 'drive' | 'ai_tool' | 'user_dashboard';
-  onRollback?: (activityId: string, force?: boolean) => Promise<void>;
+  onRollback?: (activityId: string, force: boolean) => Promise<ActivityActionResult>;
+  onRedo?: (activityId: string, force: boolean) => Promise<ActivityActionResult>;
 }
 
 export function VersionHistoryItem({
   activity,
   context,
   onRollback,
+  onRedo,
 }: VersionHistoryItemProps) {
   const [showConfirm, setShowConfirm] = useState(false);
-  const [previewWarnings, setPreviewWarnings] = useState<string[]>([]);
-  const [hasConflict, setHasConflict] = useState(false);
+  const [preview, setPreview] = useState<ActivityActionPreview | null>(null);
+  const [action, setAction] = useState<ActivityAction>('rollback');
   const { toast } = useToast();
 
+  const metadata = activity.metadata as { redoFromActivityId?: string } | null;
+  const isRedoEntry = activity.operation === 'rollback' && !!metadata?.redoFromActivityId;
+  const displayOperation = activity.operation === 'rollback'
+    ? activity.rollbackSourceOperation || activity.operation
+    : activity.operation;
   const opConfig = operationConfig[activity.operation] || defaultOperationConfig;
+  const dialogOperation = operationConfig[displayOperation]?.label || displayOperation;
   const OpIcon = opConfig.icon;
   const ResourceIcon = resourceTypeIcons[activity.resourceType] || FileText;
 
   const actorName = activity.user?.name || activity.actorDisplayName || activity.actorEmail;
   const actorImage = activity.user?.image;
 
-  const handleRestoreClick = async () => {
+  const handleActionClick = async (nextAction: ActivityAction) => {
     logger.debug('[Rollback:Preview] User clicked restore version', {
       activityId: activity.id,
       operation: activity.operation,
@@ -52,9 +61,14 @@ export function VersionHistoryItem({
       context,
     });
 
+    setAction(nextAction);
+
     // Fetch preview using dry run to get warnings and conflict status
     try {
-      const response = await fetch(`/api/activities/${activity.id}/rollback`, {
+      const endpoint = nextAction === 'redo'
+        ? `/api/activities/${activity.id}/redo`
+        : `/api/activities/${activity.id}/rollback`;
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ context, dryRun: true }),
@@ -69,20 +83,11 @@ export function VersionHistoryItem({
       const data = await response.json();
       logger.debug('[Rollback:Preview] Preview loaded', {
         activityId: activity.id,
-        warningsCount: data.warnings?.length || 0,
-        hasConflict: data.hasConflict || false,
-        canRollback: data.canRollback,
+        warningsCount: data.preview?.warnings?.length || 0,
+        hasConflict: data.preview?.hasConflict || false,
+        canExecute: data.preview?.canExecute,
       });
-      setPreviewWarnings(data.warnings || []);
-      setHasConflict(data.hasConflict || false);
-
-      // If not rollbackable due to conflict, add explanation to warnings
-      if (!data.canRollback && data.hasConflict) {
-        setPreviewWarnings([
-          'This resource has been modified since this change. Recent changes will be overwritten.',
-          ...(data.warnings || []),
-        ]);
-      }
+      setPreview(data.preview ?? null);
     } catch (error) {
       logger.debug('[Rollback:Preview] Preview error', {
         activityId: activity.id,
@@ -93,23 +98,44 @@ export function VersionHistoryItem({
         description: error instanceof Error ? error.message : 'Failed to load rollback preview',
         variant: 'destructive',
       });
-      setPreviewWarnings([]);
-      setHasConflict(false);
+      setPreview({
+        action: nextAction,
+        canExecute: false,
+        reason: 'Preview unavailable. Please try again.',
+        warnings: [],
+        hasConflict: false,
+        conflictFields: [],
+        requiresForce: false,
+        isNoOp: false,
+        currentValues: null,
+        targetValues: null,
+        changes: [],
+        affectedResources: [],
+      });
     }
     setShowConfirm(true);
   };
 
-  const handleConfirmRollback = async (force?: boolean) => {
+  const handleConfirm = async (force: boolean) => {
     logger.debug('[Rollback:Execute] User confirmed rollback via dialog', {
       activityId: activity.id,
       force,
+      action,
     });
-    if (onRollback) {
-      await onRollback(activity.id, force);
+    if (action === 'redo') {
+      if (!onRedo) {
+        throw new Error('Redo is not available');
+      }
+      return onRedo(activity.id, force);
     }
+    if (!onRollback) {
+      throw new Error('Rollback is not available');
+    }
+    return onRollback(activity.id, force);
   };
 
   const canRestore = activity.canRollback !== false && onRollback;
+  const canRedo = !!onRedo && activity.operation === 'rollback';
 
   return (
     <>
@@ -126,7 +152,7 @@ export function VersionHistoryItem({
             <span className="font-medium text-sm">{actorName}</span>
             <Badge variant={opConfig.variant} className="text-xs">
               <OpIcon className="h-3 w-3 mr-1" />
-              {opConfig.label}
+              {isRedoEntry ? 'Redo rollback' : opConfig.label}
             </Badge>
             {activity.isAiGenerated && (
               <Badge variant="outline" className="text-xs gap-1">
@@ -161,7 +187,7 @@ export function VersionHistoryItem({
             </div>
           </div>
 
-          {canRestore && (
+          {(canRestore || canRedo) && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -174,10 +200,18 @@ export function VersionHistoryItem({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={handleRestoreClick}>
-                  <History className="h-4 w-4 mr-2" />
-                  Restore this version
-                </DropdownMenuItem>
+                {canRestore && (
+                  <DropdownMenuItem onClick={() => handleActionClick('rollback')}>
+                    <History className="h-4 w-4 mr-2" />
+                    Undo this change
+                  </DropdownMenuItem>
+                )}
+                {canRedo && (
+                  <DropdownMenuItem onClick={() => handleActionClick('redo')}>
+                    <History className="h-4 w-4 mr-2" />
+                    Redo rollback
+                  </DropdownMenuItem>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
           )}
@@ -188,11 +222,11 @@ export function VersionHistoryItem({
         open={showConfirm}
         onOpenChange={setShowConfirm}
         resourceTitle={activity.resourceTitle}
-        operation={opConfig.label}
+        operation={dialogOperation}
         timestamp={activity.timestamp}
-        warnings={previewWarnings}
-        hasConflict={hasConflict}
-        onConfirm={handleConfirmRollback}
+        preview={preview}
+        action={action}
+        onConfirm={handleConfirm}
       />
     </>
   );

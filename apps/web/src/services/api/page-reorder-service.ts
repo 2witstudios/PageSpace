@@ -1,5 +1,7 @@
 import { db, pages, drives, driveMembers, eq, and } from '@pagespace/db';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
+import { getActorInfo } from '@pagespace/lib/server';
+import { applyPageMutation } from './page-mutation-service';
 
 /**
  * Result types for page reorder operations
@@ -48,72 +50,80 @@ export const pageReorderService = {
     let pageTitle: string | null = null;
 
     try {
-      await db.transaction(async (tx) => {
-        // Get the page and its drive info
-        const [pageInfo] = await tx
-          .select({
-            driveId: pages.driveId,
-            title: pages.title,
-            ownerId: drives.ownerId,
-          })
-          .from(pages)
-          .leftJoin(drives, eq(pages.driveId, drives.id))
-          .where(eq(pages.id, pageId))
+      // Get the page and its drive info
+      const [pageInfo] = await db
+        .select({
+          driveId: pages.driveId,
+          title: pages.title,
+          ownerId: drives.ownerId,
+          revision: pages.revision,
+        })
+        .from(pages)
+        .leftJoin(drives, eq(pages.driveId, drives.id))
+        .where(eq(pages.id, pageId))
+        .limit(1);
+
+      if (!pageInfo) {
+        return { success: false, error: 'Page not found.', status: 404 };
+      }
+
+      driveId = pageInfo.driveId;
+      pageTitle = pageInfo.title;
+
+      // Check authorization: user must be owner or admin
+      const isOwner = pageInfo.ownerId === userId;
+      let isAdmin = false;
+
+      if (!isOwner && driveId) {
+        const adminMembership = await db
+          .select()
+          .from(driveMembers)
+          .where(and(
+            eq(driveMembers.driveId, driveId),
+            eq(driveMembers.userId, userId),
+            eq(driveMembers.role, 'ADMIN')
+          ))
           .limit(1);
 
-        if (!pageInfo) {
-          throw { message: 'Page not found.', status: 404 };
+        isAdmin = adminMembership.length > 0;
+      }
+
+      if (!isOwner && !isAdmin) {
+        return { success: false, error: 'Only drive owners and admins can reorder pages.', status: 403 };
+      }
+
+      // Validate parent page if specified
+      if (newParentId) {
+        const [parentPage] = await db
+          .select({ driveId: pages.driveId })
+          .from(pages)
+          .where(eq(pages.id, newParentId))
+          .limit(1);
+
+        if (!parentPage) {
+          return { success: false, error: 'Parent page not found.', status: 404 };
         }
 
-        driveId = pageInfo.driveId;
-        pageTitle = pageInfo.title;
-
-        // Check authorization: user must be owner or admin
-        const isOwner = pageInfo.ownerId === userId;
-        let isAdmin = false;
-
-        if (!isOwner && driveId) {
-          const adminMembership = await tx.select()
-            .from(driveMembers)
-            .where(and(
-              eq(driveMembers.driveId, driveId),
-              eq(driveMembers.userId, userId),
-              eq(driveMembers.role, 'ADMIN')
-            ))
-            .limit(1);
-
-          isAdmin = adminMembership.length > 0;
+        if (parentPage.driveId !== driveId) {
+          return { success: false, error: 'Cannot move pages between different drives.', status: 400 };
         }
+      }
 
-        if (!isOwner && !isAdmin) {
-          throw { message: 'Only drive owners and admins can reorder pages.', status: 403 };
-        }
-
-        // Validate parent page if specified
-        if (newParentId) {
-          const [parentPage] = await tx
-            .select({ driveId: pages.driveId })
-            .from(pages)
-            .where(eq(pages.id, newParentId))
-            .limit(1);
-
-          if (!parentPage) {
-            throw { message: 'Parent page not found.', status: 404 };
-          }
-
-          if (parentPage.driveId !== driveId) {
-            throw { message: 'Cannot move pages between different drives.', status: 400 };
-          }
-        }
-
-        // Execute the update
-        await tx
-          .update(pages)
-          .set({
-            parentId: newParentId,
-            position: newPosition,
-          })
-          .where(eq(pages.id, pageId));
+      const actorInfo = await getActorInfo(userId);
+      await applyPageMutation({
+        pageId,
+        operation: 'move',
+        updates: {
+          parentId: newParentId,
+          position: newPosition,
+        },
+        updatedFields: ['parentId', 'position'],
+        expectedRevision: typeof pageInfo.revision === 'number' ? pageInfo.revision : undefined,
+        context: {
+          userId,
+          actorEmail: actorInfo.actorEmail,
+          actorDisplayName: actorInfo.actorDisplayName ?? undefined,
+        },
       });
 
       return {

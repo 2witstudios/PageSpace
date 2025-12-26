@@ -21,6 +21,7 @@ import {
   previewAiUndo,
   executeAiUndo,
 } from '../ai-undo-service';
+import type { ActivityActionPreview } from '../../types/activity-actions';
 
 // Mock the database
 vi.mock('@pagespace/db', () => {
@@ -90,6 +91,22 @@ const mockMessageId = 'msg_123';
 const mockConversationId = 'conv_123';
 const mockPageId = 'page_123';
 const mockDriveId = 'drive_123';
+
+const createMockPreview = (overrides: Partial<ActivityActionPreview> = {}): ActivityActionPreview => ({
+  action: 'rollback',
+  canExecute: true,
+  reason: undefined,
+  warnings: [],
+  hasConflict: false,
+  conflictFields: [],
+  requiresForce: false,
+  isNoOp: false,
+  currentValues: null,
+  targetValues: null,
+  changes: [],
+  affectedResources: [],
+  ...overrides,
+});
 
 const createMockMessage = (overrides = {}) => ({
   id: mockMessageId,
@@ -201,15 +218,15 @@ describe('ai-undo-service', () => {
 
       // Mock preview for each activity
       (previewRollback as Mock)
-        .mockResolvedValueOnce({ canRollback: true, warnings: [] })
-        .mockResolvedValueOnce({ canRollback: false, reason: 'Cannot rollback create', warnings: [] });
+        .mockResolvedValueOnce(createMockPreview({ canExecute: true }))
+        .mockResolvedValueOnce(createMockPreview({ canExecute: false, reason: 'Cannot rollback create' }));
 
       const result = await previewAiUndo(mockMessageId, mockUserId);
 
       expect(result!.activitiesAffected).toHaveLength(2);
-      expect(result!.activitiesAffected[0].canRollback).toBe(true);
-      expect(result!.activitiesAffected[1].canRollback).toBe(false);
-      expect(result!.activitiesAffected[1].reason).toBe('Cannot rollback create');
+      expect(result!.activitiesAffected[0].preview.canExecute).toBe(true);
+      expect(result!.activitiesAffected[1].preview.canExecute).toBe(false);
+      expect(result!.activitiesAffected[1].preview.reason).toBe('Cannot rollback create');
     });
 
     it('includes warnings for non-rollbackable activities', async () => {
@@ -236,11 +253,12 @@ describe('ai-undo-service', () => {
         }),
       }));
 
-      (previewRollback as Mock).mockResolvedValue({
-        canRollback: false,
-        reason: "Cannot rollback 'create' operations",
-        warnings: [],
-      });
+      (previewRollback as Mock).mockResolvedValue(
+        createMockPreview({
+          canExecute: false,
+          reason: "Cannot rollback 'create' operations",
+        })
+      );
 
       const result = await previewAiUndo(mockMessageId, mockUserId);
 
@@ -397,7 +415,7 @@ describe('ai-undo-service', () => {
         }),
       }));
 
-      (previewRollback as Mock).mockResolvedValue({ canRollback: true, warnings: [] });
+      (previewRollback as Mock).mockResolvedValue(createMockPreview({ canExecute: true }));
       (executeRollback as Mock).mockResolvedValue({ success: true });
 
       (db.transaction as Mock).mockImplementation(async (callback) => {
@@ -443,7 +461,7 @@ describe('ai-undo-service', () => {
         }),
       }));
 
-      (previewRollback as Mock).mockResolvedValue({ canRollback: true, warnings: [] });
+      (previewRollback as Mock).mockResolvedValue(createMockPreview({ canExecute: true }));
       (executeRollback as Mock)
         .mockResolvedValueOnce({ success: true })
         .mockResolvedValueOnce({ success: false, message: 'Rollback failed' });
@@ -494,11 +512,12 @@ describe('ai-undo-service', () => {
         }),
       }));
 
-      (previewRollback as Mock).mockResolvedValue({
-        canRollback: false,
-        reason: "Cannot rollback 'create' operations",
-        warnings: [],
-      });
+      (previewRollback as Mock).mockResolvedValue(
+        createMockPreview({
+          canExecute: false,
+          reason: "Cannot rollback 'create' operations",
+        })
+      );
 
       (db.transaction as Mock).mockImplementation(async (callback) => {
         const tx = {};
@@ -537,7 +556,7 @@ describe('ai-undo-service', () => {
         }),
       }));
 
-      (previewRollback as Mock).mockResolvedValue({ canRollback: true, warnings: [] });
+      (previewRollback as Mock).mockResolvedValue(createMockPreview({ canExecute: true }));
       (executeRollback as Mock).mockResolvedValue({ success: true });
 
       (db.transaction as Mock).mockImplementation(async (callback) => {

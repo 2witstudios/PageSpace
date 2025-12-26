@@ -18,6 +18,7 @@ import {
   previewRollback,
   type RollbackContext,
 } from './rollback-service';
+import type { ActivityActionPreview } from '@/types/activity-actions';
 
 /**
  * Preview of what will be undone
@@ -38,8 +39,7 @@ export interface AiUndoPreview {
     resourceTitle: string | null;
     pageId?: string | null;
     driveId?: string | null;
-    canRollback: boolean;
-    reason?: string;
+    preview: ActivityActionPreview;
   }[];
   warnings: string[];
 }
@@ -257,13 +257,11 @@ export async function previewAiUndo(
         context,
       });
 
-      // Use force=true for AI undo since user is explicitly undoing AI changes
-      // This allows activities with conflicts to be marked as rollbackable (with warnings)
-      const preview = await previewRollback(activity.id, userId, context, { force: true });
+      const preview = await previewRollback(activity.id, userId, context);
 
       loggers.api.debug('[AiUndo:Preview] Activity eligibility result', {
         activityId: activity.id,
-        canRollback: preview.canRollback,
+        canExecute: preview.canExecute,
         reason: preview.reason,
         warningsCount: preview.warnings.length,
       });
@@ -276,12 +274,11 @@ export async function previewAiUndo(
         resourceTitle: activity.resourceTitle,
         pageId: activity.pageId,
         driveId: activity.driveId,
-        canRollback: preview.canRollback,
-        reason: preview.reason,
+        preview,
       });
 
       // Collect warnings
-      if (!preview.canRollback && preview.reason) {
+      if (!preview.canExecute && preview.reason) {
         warnings.push(`Cannot undo ${activity.operation} on ${activity.resourceTitle || activity.resourceType}: ${preview.reason}`);
       } else if (preview.warnings.length > 0) {
         warnings.push(...preview.warnings);
@@ -291,7 +288,7 @@ export async function previewAiUndo(
     loggers.api.debug('[AiUndo:Preview] Preview complete', {
       messagesAffected,
       activitiesTotal: activitiesAffected.length,
-      activitiesRollbackable: activitiesAffected.filter(a => a.canRollback).length,
+      activitiesRollbackable: activitiesAffected.filter(a => a.preview.canExecute).length,
       warningsCount: warnings.length,
     });
 
@@ -323,7 +320,8 @@ export async function executeAiUndo(
   messageId: string,
   userId: string,
   mode: UndoMode,
-  existingPreview?: AiUndoPreview
+  existingPreview?: AiUndoPreview,
+  options?: { force?: boolean }
 ): Promise<AiUndoResult> {
   loggers.api.debug('[AiUndo:Execute] Starting execution', {
     messageId,
@@ -332,6 +330,7 @@ export async function executeAiUndo(
     hasExistingPreview: !!existingPreview,
   });
 
+  const force = options?.force ?? false;
   const errors: string[] = [];
   let activitiesRolledBack = 0;
   let messagesDeleted = 0;
@@ -396,13 +395,16 @@ export async function executeAiUndo(
         });
 
         for (const activity of preview.activitiesAffected) {
-          if (!activity.canRollback) {
+          const activityPreview = activity.preview;
+          if (!activityPreview.canExecute) {
             loggers.api.debug('[AiUndo:Execute] Activity not rollbackable - aborting', {
               activityId: activity.id,
-              reason: activity.reason,
+              reason: activityPreview.reason,
             });
-            // Non-rollbackable items abort the entire transaction
-            throw new Error(`Cannot undo ${activity.operation} on ${activity.resourceTitle || activity.resourceType}: ${activity.reason}`);
+            if (!force || !activityPreview.requiresForce) {
+              // Non-rollbackable items abort the entire transaction
+              throw new Error(`Cannot undo ${activity.operation} on ${activity.resourceTitle || activity.resourceType}: ${activityPreview.reason}`);
+            }
           }
 
           // Determine context based on resource type
@@ -422,8 +424,7 @@ export async function executeAiUndo(
 
           // Pass transaction to executeRollback for atomicity
           // Any failure aborts entire transaction
-          // Use force=true since user is explicitly undoing AI changes
-          const result = await executeRollback(activity.id, userId, context, { tx, force: true });
+          const result = await executeRollback(activity.id, userId, context, { tx, force });
           if (!result.success) {
             loggers.api.debug('[AiUndo:Execute] Activity rollback failed - aborting', {
               activityId: activity.id,

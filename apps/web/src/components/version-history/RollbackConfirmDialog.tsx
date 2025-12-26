@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { AlertTriangle, History, Loader2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { AlertTriangle, History, Loader2, RotateCcw } from 'lucide-react';
 import { createClientLogger } from '@/lib/logging/client-logger';
 import {
   AlertDialog,
@@ -14,6 +14,9 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
+import type { ActivityActionPreview, ActivityActionResult, ActivityAction } from '@/types/activity-actions';
 
 const logger = createClientLogger({ namespace: 'rollback', component: 'RollbackConfirmDialog' });
 
@@ -23,15 +26,9 @@ interface RollbackConfirmDialogProps {
   resourceTitle: string | null;
   operation: string;
   timestamp: string;
-  warnings: string[];
-  /** True if the resource was modified since this activity */
-  hasConflict?: boolean;
-  /** Called with force=true when user clicks Force Restore for conflicts */
-  onConfirm: (force?: boolean) => Promise<void>;
-  /** Whether the rollback is allowed (false = show error) */
-  canRollback?: boolean;
-  /** Reason why rollback is not allowed */
-  reason?: string | null;
+  action: ActivityAction;
+  preview: ActivityActionPreview | null;
+  onConfirm: (force: boolean) => Promise<ActivityActionResult>;
 }
 
 export function RollbackConfirmDialog({
@@ -40,75 +37,113 @@ export function RollbackConfirmDialog({
   resourceTitle,
   operation,
   timestamp,
-  warnings,
-  hasConflict = false,
   onConfirm,
-  canRollback = true,
-  reason = null,
+  preview,
+  action,
 }: RollbackConfirmDialogProps) {
   const [isLoading, setIsLoading] = useState(false);
+  const [force, setForce] = useState(false);
+  const [result, setResult] = useState<ActivityActionResult | null>(null);
 
-  const handleConfirm = async (force?: boolean) => {
+  useEffect(() => {
+    if (!open) {
+      setIsLoading(false);
+      setForce(false);
+      setResult(null);
+    }
+  }, [open]);
+
+  const handleConfirm = async () => {
     logger.debug('[Rollback:Dialog] User clicked confirm', {
       resourceTitle,
       operation,
-      warningsCount: warnings.length,
-      hasConflict,
       force,
     });
 
     setIsLoading(true);
     try {
-      await onConfirm(force);
-      logger.debug('[Rollback:Dialog] Rollback confirmed and completed successfully');
-      onOpenChange(false);
+      const actionResult = await onConfirm(force);
+      setResult(actionResult);
+      logger.debug('[Rollback:Dialog] Action completed', { status: actionResult.status });
     } catch (error) {
       logger.debug('[Rollback:Dialog] Rollback failed', {
         error: error instanceof Error ? error.message : String(error),
+      });
+      setResult({
+        action,
+        status: 'failed',
+        message: error instanceof Error ? error.message : 'Action failed',
+        warnings: [],
+        changesApplied: preview?.changes ?? [],
       });
     } finally {
       setIsLoading(false);
     }
   };
 
+  const canProceed = !!preview
+    && !preview.isNoOp
+    && (preview.canExecute || (preview.requiresForce && force));
+
+  const titleText = action === 'redo' ? 'Redo rollback' : 'Undo change';
+  const actionLabel = action === 'redo' ? 'Redo' : 'Undo';
+
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent>
+      <AlertDialogContent className="max-w-lg">
         <AlertDialogHeader>
           <AlertDialogTitle className="flex items-center gap-2">
-            <History className="h-5 w-5" />
-            Restore Previous Version
+            {action === 'redo' ? <RotateCcw className="h-5 w-5" /> : <History className="h-5 w-5" />}
+            {titleText}
           </AlertDialogTitle>
           <AlertDialogDescription className="space-y-3">
             <p>
-              You are about to restore{' '}
-              <strong>{resourceTitle || 'this resource'}</strong> to the state
-              before the <Badge variant="secondary">{operation}</Badge> operation
-              on {new Date(timestamp).toLocaleDateString()}.
+              {action === 'redo' ? (
+                <>
+                  You are about to reapply{' '}
+                  <Badge variant="secondary">{operation}</Badge> on{' '}
+                  <strong>{resourceTitle || 'this resource'}</strong> from{' '}
+                  {new Date(timestamp).toLocaleDateString()}.
+                </>
+              ) : (
+                <>
+                  You are about to undo{' '}
+                  <Badge variant="secondary">{operation}</Badge> on{' '}
+                  <strong>{resourceTitle || 'this resource'}</strong> from{' '}
+                  {new Date(timestamp).toLocaleDateString()}.
+                </>
+              )}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              This only affects this specific change. Other updates stay as-is.
             </p>
 
-            {/* Show error message if rollback is not allowed */}
-            {!canRollback && reason && (
+            {!preview && (
+              <div className="flex items-center justify-center py-6">
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              </div>
+            )}
+
+            {preview && !preview.canExecute && preview.reason && !preview.requiresForce && (
               <div className="rounded-md border border-red-200 bg-red-50 p-3 dark:border-red-800 dark:bg-red-900/20">
                 <div className="flex items-start gap-2">
                   <AlertTriangle className="h-4 w-4 text-red-600 dark:text-red-500 mt-0.5" />
                   <div className="text-sm text-red-800 dark:text-red-200">
-                    <p className="font-medium">Cannot Restore</p>
-                    <p className="mt-1">{reason}</p>
+                    <p className="font-medium">Cannot {actionLabel}</p>
+                    <p className="mt-1">{preview.reason}</p>
                   </div>
                 </div>
               </div>
             )}
 
-            {/* Show warnings if rollback is allowed but has warnings */}
-            {canRollback && warnings.length > 0 && (
+            {preview && preview.warnings.length > 0 && (
               <div className="rounded-md border border-yellow-200 bg-yellow-50 p-3 dark:border-yellow-800 dark:bg-yellow-900/20">
                 <div className="flex items-start gap-2">
                   <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-500 mt-0.5" />
                   <div className="text-sm text-yellow-800 dark:text-yellow-200">
                     <p className="font-medium">Warning</p>
                     <ul className="list-disc list-inside mt-1 space-y-1">
-                      {warnings.map((warning, idx) => (
+                      {preview.warnings.map((warning, idx) => (
                         <li key={idx}>{warning}</li>
                       ))}
                     </ul>
@@ -117,56 +152,94 @@ export function RollbackConfirmDialog({
               </div>
             )}
 
-            {canRollback && (
-              <p className="text-sm text-muted-foreground">
-                This action will create a new version in the history. You can always
-                restore to any previous version later.
-              </p>
+            {preview && preview.changes.length > 0 && (
+              <div className="rounded-md border p-3">
+                <p className="text-sm font-medium">Changes to apply</p>
+                <div className="mt-2 space-y-2">
+                  {preview.changes.map((change) => (
+                    <div key={change.id} className="rounded-md bg-muted/50 p-2 text-xs">
+                      <div className="font-medium">{change.label}</div>
+                      {change.description && (
+                        <div className="text-muted-foreground">{change.description}</div>
+                      )}
+                      {change.fields && change.fields.length > 0 && (
+                        <div className="mt-1 text-muted-foreground">
+                          Fields: {change.fields.join(', ')}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {preview && preview.hasConflict && preview.conflictFields.length > 0 && (
+              <div className="rounded-md border border-yellow-200 bg-yellow-50 p-3 dark:border-yellow-800 dark:bg-yellow-900/20">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-500 mt-0.5" />
+                  <div className="text-sm text-yellow-800 dark:text-yellow-200">
+                    <p className="font-medium">Conflicts detected</p>
+                    <p className="mt-1">
+                      The current version has changed since this activity. Conflicting fields:
+                    </p>
+                    <p className="mt-1 text-xs">{preview.conflictFields.join(', ')}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {preview && preview.requiresForce && (
+              <div className="flex items-center justify-between rounded-md border p-3">
+                <Label htmlFor="force-restore" className="text-sm">
+                  Force {actionLabel.toLowerCase()} (overwrite newer changes)
+                </Label>
+                <Switch
+                  id="force-restore"
+                  checked={force}
+                  onCheckedChange={setForce}
+                />
+              </div>
+            )}
+
+            {result && (
+              <div className="rounded-md border p-3 text-sm">
+                <p className="font-medium">
+                  {result.status === 'success'
+                    ? 'Action completed'
+                    : result.status === 'no_op'
+                    ? 'No changes needed'
+                    : 'Action failed'}
+                </p>
+                <p className="mt-1 text-muted-foreground">{result.message}</p>
+              </div>
             )}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel disabled={isLoading}>
-            {canRollback ? 'Cancel' : 'Close'}
+            {result ? 'Close' : 'Cancel'}
           </AlertDialogCancel>
-          {canRollback && (
-            hasConflict ? (
-              <AlertDialogAction
-                onClick={() => handleConfirm(true)}
-                disabled={isLoading}
-                className="gap-2 bg-yellow-600 hover:bg-yellow-700"
-              >
-                {isLoading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Forcing restore...
-                  </>
-                ) : (
-                  <>
-                    <AlertTriangle className="h-4 w-4" />
-                    Force Restore
-                  </>
-                )}
-              </AlertDialogAction>
-            ) : (
-              <AlertDialogAction
-                onClick={() => handleConfirm(false)}
-                disabled={isLoading}
-                className="gap-2"
-              >
-                {isLoading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Restoring...
-                  </>
-                ) : (
-                  <>
-                    <History className="h-4 w-4" />
-                    Restore Version
-                  </>
-                )}
-              </AlertDialogAction>
-            )
+          {!result && (
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                handleConfirm();
+              }}
+              disabled={isLoading || !canProceed}
+              className="gap-2"
+            >
+              {isLoading ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  {actionLabel}ing...
+                </>
+              ) : (
+                <>
+                  {action === 'redo' ? <RotateCcw className="h-4 w-4" /> : <History className="h-4 w-4" />}
+                  {actionLabel}
+                </>
+              )}
+            </AlertDialogAction>
           )}
         </AlertDialogFooter>
       </AlertDialogContent>

@@ -7,10 +7,19 @@ export * from './content';
 export * from './permissions/permissions-cached';
 export * from './auth/rate-limit-utils';
 export * from './utils/utils';
+export * from './utils/hash-utils';
 export * from './utils/enums';
 export * from './types';
 export * from './file-processing';
 export * from './services/subscription-utils';
+export * from './services/page-content-store';
+export {
+  computePageStateHash,
+  createPageVersion,
+  type PageVersionSource,
+  type PageStateInput,
+  type CreatePageVersionInput,
+} from './services/page-version-service';
 export * from './sheets';
 
 // Drive service

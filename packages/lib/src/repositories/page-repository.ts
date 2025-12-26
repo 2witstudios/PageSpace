@@ -29,6 +29,8 @@ export interface PageRecord {
   position: number;
   isTrashed: boolean;
   trashedAt: Date | null;
+  revision: number;
+  stateHash: string | null;
   mimeType?: string | null;
   // Agent-specific fields
   systemPrompt?: string | null;
@@ -50,6 +52,9 @@ export interface CreatePageInput {
   parentId: string | null;
   position: number;
   isTrashed?: boolean;
+  revision?: number;
+  stateHash?: string | null;
+  updatedAt?: Date;
 }
 
 export interface UpdatePageInput {
@@ -172,6 +177,9 @@ export const pageRepository = {
         parentId: data.parentId,
         position: data.position,
         isTrashed: data.isTrashed ?? false,
+        revision: data.revision ?? 0,
+        stateHash: data.stateHash ?? null,
+        updatedAt: data.updatedAt ?? new Date(),
       })
       .returning({ id: pages.id, title: pages.title, type: pages.type });
 

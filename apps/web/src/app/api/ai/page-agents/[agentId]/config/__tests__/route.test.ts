@@ -15,7 +15,6 @@ import type { PageOperation } from '@/lib/websocket';
 vi.mock('@/lib/repositories/page-agent-repository', () => ({
   pageAgentRepository: {
     getAgentById: vi.fn(),
-    updateAgentConfig: vi.fn(),
   },
 }));
 
@@ -66,10 +65,29 @@ vi.mock('@/lib/ai/core', () => ({
   },
 }));
 
+vi.mock('@/services/api/page-mutation-service', () => ({
+  applyPageMutation: vi.fn(),
+  PageRevisionMismatchError: class PageRevisionMismatchError extends Error {
+    currentRevision: number;
+    expectedRevision?: number;
+
+    constructor(message: string, currentRevision: number, expectedRevision?: number) {
+      super(message);
+      this.currentRevision = currentRevision;
+      this.expectedRevision = expectedRevision;
+    }
+  },
+}));
+
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+  getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' }),
+}));
+
 import { pageAgentRepository } from '@/lib/repositories/page-agent-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserEditPage, agentAwarenessCache } from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { applyPageMutation } from '@/services/api/page-mutation-service';
 
 // Test fixtures
 const mockUserId = 'user_123';
@@ -138,11 +156,16 @@ describe('PUT /api/ai/page-agents/[agentId]/config', () => {
     vi.mocked(pageAgentRepository.getAgentById).mockResolvedValue(mockAgent());
 
     // Default: update succeeds
-    vi.mocked(pageAgentRepository.updateAgentConfig).mockResolvedValue({
-      id: mockAgentId,
-      title: 'Test Agent',
-      type: 'AI_CHAT',
+    vi.mocked(applyPageMutation).mockResolvedValue({
+      pageId: mockAgentId,
       driveId: mockDriveId,
+      nextRevision: 1,
+      stateHashBefore: 'state_before',
+      stateHashAfter: 'state_after',
+      contentRefBefore: null,
+      contentRefAfter: null,
+      contentFormatBefore: 'html',
+      contentFormatAfter: 'html',
     });
   });
 
@@ -173,7 +196,7 @@ describe('PUT /api/ai/page-agents/[agentId]/config', () => {
       expect(response.status).toBe(404);
       expect(body.error).toContain('not found');
       // Verify no update was attempted
-      expect(pageAgentRepository.updateAgentConfig).not.toHaveBeenCalled();
+      expect(applyPageMutation).not.toHaveBeenCalled();
     });
   });
 
@@ -232,7 +255,7 @@ describe('PUT /api/ai/page-agents/[agentId]/config', () => {
       expect(response.status).toBe(403);
       expect(body.error).toContain('Insufficient permissions');
       // Verify no update was attempted
-      expect(pageAgentRepository.updateAgentConfig).not.toHaveBeenCalled();
+      expect(applyPageMutation).not.toHaveBeenCalled();
     });
   });
 
@@ -249,7 +272,7 @@ describe('PUT /api/ai/page-agents/[agentId]/config', () => {
       expect(body.updatedFields).toContain('systemPrompt');
     });
 
-    it('should pass correct data to repository', async () => {
+    it('should pass correct data to mutation service', async () => {
       const request = createRequest(mockAgentId, {
         systemPrompt: 'New prompt',
         enabledTools: ['read_page', 'list_pages'],
@@ -260,13 +283,17 @@ describe('PUT /api/ai/page-agents/[agentId]/config', () => {
 
       await PUT(request, context);
 
-      expect(pageAgentRepository.updateAgentConfig).toHaveBeenCalledWith(
-        mockAgentId,
+      expect(applyPageMutation).toHaveBeenCalledWith(
         expect.objectContaining({
-          systemPrompt: 'New prompt',
-          enabledTools: ['read_page', 'list_pages'],
-          aiProvider: 'google',
-          aiModel: 'gemini-pro',
+          pageId: mockAgentId,
+          operation: 'agent_config_update',
+          updates: expect.objectContaining({
+            systemPrompt: 'New prompt',
+            enabledTools: ['read_page', 'list_pages'],
+            aiProvider: 'google',
+            aiModel: 'gemini-pro',
+          }),
+          updatedFields: expect.arrayContaining(['systemPrompt', 'enabledTools', 'aiProvider', 'aiModel']),
         })
       );
     });
@@ -373,10 +400,8 @@ describe('PUT /api/ai/page-agents/[agentId]/config', () => {
   });
 
   describe('error handling', () => {
-    it('should return 500 when repository throws', async () => {
-      vi.mocked(pageAgentRepository.updateAgentConfig).mockRejectedValue(
-        new Error('Database error')
-      );
+    it('should return 500 when mutation throws', async () => {
+      vi.mocked(applyPageMutation).mockRejectedValue(new Error('Database error'));
 
       const request = createRequest(mockAgentId, { systemPrompt: 'New prompt' });
       const context = createContext(mockAgentId);

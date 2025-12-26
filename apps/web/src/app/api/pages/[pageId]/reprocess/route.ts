@@ -3,6 +3,8 @@ import { db, pages, eq } from '@pagespace/db';
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createServiceToken } from '@pagespace/lib/auth-utils';
+import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
+import { applyPageMutation } from '@/services/api/page-mutation-service';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -18,13 +20,35 @@ export async function POST(
   const { pageId } = await context.params;
   
   try {
-    // Reset status to pending
-    await db.update(pages)
-      .set({ 
+    const [page] = await db
+      .select({ revision: pages.revision })
+      .from(pages)
+      .where(eq(pages.id, pageId))
+      .limit(1);
+
+    if (!page) {
+      return NextResponse.json({ error: 'Page not found' }, { status: 404 });
+    }
+
+    // Reset status to pending with deterministic logging
+    const actorInfo = await getActorInfo(userId);
+    await applyPageMutation({
+      pageId,
+      operation: 'update',
+      updates: {
         processingStatus: 'pending',
-        processingError: null
-      })
-      .where(eq(pages.id, pageId));
+        processingError: null,
+      },
+      updatedFields: ['processingStatus', 'processingError'],
+      expectedRevision: page.revision,
+      context: {
+        userId,
+        actorEmail: actorInfo.actorEmail,
+        actorDisplayName: actorInfo.actorDisplayName ?? undefined,
+        metadata: { source: 'reprocess' },
+      },
+      source: 'system',
+    });
     
     // Create service JWT token for processor authentication
     const serviceToken = await createServiceToken('web', ['files:ingest'], {

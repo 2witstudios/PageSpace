@@ -5,7 +5,7 @@ import { createPermissionNotification } from '@pagespace/lib';
 import { loggers, getActorInfo } from '@pagespace/lib/server';
 import { logPermissionActivity } from '@pagespace/lib';
 import { permissionManagementService } from '@/services/api';
-import { db, pages, eq } from '@pagespace/db';
+import { db, pages, pagePermissions, eq, and } from '@pagespace/db';
 
 const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
@@ -76,6 +76,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     }
 
     // Grant or update permission
+    const existingPermission = await db.query.pagePermissions.findFirst({
+      where: and(
+        eq(pagePermissions.pageId, pageId),
+        eq(pagePermissions.userId, userId)
+      ),
+    });
+
     const result = await permissionManagementService.grantOrUpdatePermission({
       pageId,
       targetUserId: userId,
@@ -103,6 +110,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     });
     if (page?.driveId) {
       const actorInfo = await getActorInfo(currentUserId);
+      const previousValues = existingPermission ? {
+        canView: existingPermission.canView,
+        canEdit: existingPermission.canEdit,
+        canShare: existingPermission.canShare,
+        canDelete: existingPermission.canDelete,
+        grantedBy: existingPermission.grantedBy,
+        note: existingPermission.note,
+      } : undefined;
       logPermissionActivity(
         currentUserId,
         result.isUpdate ? 'permission_update' : 'permission_grant',
@@ -113,7 +128,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
           permissions: { canView, canEdit, canShare, canDelete },
           pageTitle: page.title ?? undefined,
         },
-        actorInfo
+        {
+          ...actorInfo,
+          previousValues: result.isUpdate ? previousValues : undefined,
+        }
       );
     }
 
@@ -144,6 +162,13 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
     }
 
     // Revoke permission
+    const existingPermission = await db.query.pagePermissions.findFirst({
+      where: and(
+        eq(pagePermissions.pageId, pageId),
+        eq(pagePermissions.userId, userId)
+      ),
+    });
+
     const result = await permissionManagementService.revokePermission({
       pageId,
       targetUserId: userId,
@@ -169,12 +194,23 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
     });
     if (page?.driveId) {
       const actorInfo = await getActorInfo(currentUserId);
+      const previousValues = existingPermission ? {
+        canView: existingPermission.canView,
+        canEdit: existingPermission.canEdit,
+        canShare: existingPermission.canShare,
+        canDelete: existingPermission.canDelete,
+        grantedBy: existingPermission.grantedBy,
+        note: existingPermission.note,
+      } : undefined;
       logPermissionActivity(currentUserId, 'permission_revoke', {
         pageId,
         driveId: page.driveId,
         targetUserId: userId,
         pageTitle: page.title ?? undefined,
-      }, actorInfo);
+      }, {
+        ...actorInfo,
+        previousValues,
+      });
     }
 
     return NextResponse.json({ success: true });

@@ -9,6 +9,7 @@ export * from './schema/conversations';
 export * from './schema/notifications';
 export * from './schema/email-notifications';
 export * from './schema/monitoring';
+export * from './schema/versioning';
 export * from './schema/social';
 export * from './schema/subscriptions';
 export * from './schema/contact';
@@ -26,6 +27,7 @@ import * as conversations from './schema/conversations';
 import * as notifications from './schema/notifications';
 import * as emailNotifications from './schema/email-notifications';
 import * as monitoring from './schema/monitoring';
+import * as versioning from './schema/versioning';
 import * as social from './schema/social';
 import * as subscriptions from './schema/subscriptions';
 import * as contact from './schema/contact';
@@ -44,6 +46,7 @@ export const schema = {
   ...notifications,
   ...emailNotifications,
   ...monitoring,
+  ...versioning,
   ...social,
   ...subscriptions,
   ...contact,
