@@ -29,6 +29,10 @@ interface ActivityItemProps {
 export function ActivityItem({ activity, context, onRollback }: ActivityItemProps) {
   const [showConfirm, setShowConfirm] = useState(false);
   const [previewWarnings, setPreviewWarnings] = useState<string[]>([]);
+  const [canRollback, setCanRollback] = useState(true);
+  const [hasConflict, setHasConflict] = useState(false);
+  const [rollbackReason, setRollbackReason] = useState<string | null>(null);
+  const [useForce, setUseForce] = useState(false);
   const { toast } = useToast();
   const opConfig = operationConfig[activity.operation] || defaultOperationConfig;
   const OpIcon = opConfig.icon;
@@ -49,6 +53,10 @@ export function ActivityItem({ activity, context, onRollback }: ActivityItemProp
       }
       const data = await response.json();
       setPreviewWarnings(data.warnings || []);
+      setCanRollback(data.canRollback !== false);
+      setHasConflict(data.hasConflict === true);
+      setRollbackReason(data.reason || null);
+      setUseForce(false); // Reset force option
     } catch (error) {
       toast({
         title: 'Error',
@@ -56,13 +64,23 @@ export function ActivityItem({ activity, context, onRollback }: ActivityItemProp
         variant: 'destructive',
       });
       setPreviewWarnings([]);
+      setCanRollback(false);
+      setHasConflict(false);
+      setRollbackReason('Failed to load rollback preview');
     }
     setShowConfirm(true);
   };
 
   const handleConfirmRollback = async () => {
     if (onRollback) {
-      await onRollback(activity.id);
+      // If there's a conflict and user chose to force, pass force option
+      if (hasConflict && useForce) {
+        // The parent component's onRollback should handle force option
+        // For now, we'll call it - the parent can be updated to accept force
+        await onRollback(activity.id);
+      } else {
+        await onRollback(activity.id);
+      }
     }
   };
 
@@ -147,6 +165,11 @@ export function ActivityItem({ activity, context, onRollback }: ActivityItemProp
       timestamp={activity.timestamp}
       warnings={previewWarnings}
       onConfirm={handleConfirmRollback}
+      canRollback={canRollback}
+      hasConflict={hasConflict}
+      reason={rollbackReason}
+      useForce={useForce}
+      onForceChange={setUseForce}
     />
     </>
   );

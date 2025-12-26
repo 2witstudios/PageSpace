@@ -28,6 +28,14 @@ interface RollbackConfirmDialogProps {
   hasConflict?: boolean;
   /** Called with force=true when user clicks Force Restore for conflicts */
   onConfirm: (force?: boolean) => Promise<void>;
+  /** Whether the rollback is allowed (false = show error) */
+  canRollback?: boolean;
+  /** Reason why rollback is not allowed */
+  reason?: string | null;
+  /** Whether to use force for conflict override (controlled by parent) */
+  useForce?: boolean;
+  /** Callback when user toggles force option */
+  onForceChange?: (force: boolean) => void;
 }
 
 export function RollbackConfirmDialog({
@@ -39,6 +47,8 @@ export function RollbackConfirmDialog({
   warnings,
   hasConflict = false,
   onConfirm,
+  canRollback = true,
+  reason = null,
 }: RollbackConfirmDialogProps) {
   const [isLoading, setIsLoading] = useState(false);
 
@@ -81,7 +91,21 @@ export function RollbackConfirmDialog({
               on {new Date(timestamp).toLocaleDateString()}.
             </p>
 
-            {warnings.length > 0 && (
+            {/* Show error message if rollback is not allowed */}
+            {!canRollback && reason && (
+              <div className="rounded-md border border-red-200 bg-red-50 p-3 dark:border-red-800 dark:bg-red-900/20">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="h-4 w-4 text-red-600 dark:text-red-500 mt-0.5" />
+                  <div className="text-sm text-red-800 dark:text-red-200">
+                    <p className="font-medium">Cannot Restore</p>
+                    <p className="mt-1">{reason}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Show warnings if rollback is allowed but has warnings */}
+            {canRollback && warnings.length > 0 && (
               <div className="rounded-md border border-yellow-200 bg-yellow-50 p-3 dark:border-yellow-800 dark:bg-yellow-900/20">
                 <div className="flex items-start gap-2">
                   <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-500 mt-0.5" />
@@ -97,50 +121,56 @@ export function RollbackConfirmDialog({
               </div>
             )}
 
-            <p className="text-sm text-muted-foreground">
-              This action will create a new version in the history. You can always
-              restore to any previous version later.
-            </p>
+            {canRollback && (
+              <p className="text-sm text-muted-foreground">
+                This action will create a new version in the history. You can always
+                restore to any previous version later.
+              </p>
+            )}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={isLoading}>Cancel</AlertDialogCancel>
-          {hasConflict ? (
-            <AlertDialogAction
-              onClick={() => handleConfirm(true)}
-              disabled={isLoading}
-              className="gap-2 bg-yellow-600 hover:bg-yellow-700"
-            >
-              {isLoading ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Forcing restore...
-                </>
-              ) : (
-                <>
-                  <AlertTriangle className="h-4 w-4" />
-                  Force Restore
-                </>
-              )}
-            </AlertDialogAction>
-          ) : (
-            <AlertDialogAction
-              onClick={() => handleConfirm(false)}
-              disabled={isLoading}
-              className="gap-2"
-            >
-              {isLoading ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Restoring...
-                </>
-              ) : (
-                <>
-                  <History className="h-4 w-4" />
-                  Restore Version
-                </>
-              )}
-            </AlertDialogAction>
+          <AlertDialogCancel disabled={isLoading}>
+            {canRollback ? 'Cancel' : 'Close'}
+          </AlertDialogCancel>
+          {canRollback && (
+            hasConflict ? (
+              <AlertDialogAction
+                onClick={() => handleConfirm(true)}
+                disabled={isLoading}
+                className="gap-2 bg-yellow-600 hover:bg-yellow-700"
+              >
+                {isLoading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Forcing restore...
+                  </>
+                ) : (
+                  <>
+                    <AlertTriangle className="h-4 w-4" />
+                    Force Restore
+                  </>
+                )}
+              </AlertDialogAction>
+            ) : (
+              <AlertDialogAction
+                onClick={() => handleConfirm(false)}
+                disabled={isLoading}
+                className="gap-2"
+              >
+                {isLoading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Restoring...
+                  </>
+                ) : (
+                  <>
+                    <History className="h-4 w-4" />
+                    Restore Version
+                  </>
+                )}
+              </AlertDialogAction>
+            )
           )}
         </AlertDialogFooter>
       </AlertDialogContent>

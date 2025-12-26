@@ -337,6 +337,31 @@ export async function executeAiUndo(
   let messagesDeleted = 0;
 
   try {
+    // Idempotency check: if message is already inactive, return success
+    // This prevents duplicate rollbacks on network retries or double-clicks
+    const message = await getMessage(messageId);
+    if (!message) {
+      loggers.api.debug('[AiUndo:Execute] Aborting - message not found');
+      return {
+        success: false,
+        messagesDeleted: 0,
+        activitiesRolledBack: 0,
+        errors: ['Message not found'],
+      };
+    }
+
+    if (!message.isActive) {
+      loggers.api.debug('[AiUndo:Execute] Idempotent return - message already inactive', {
+        messageId,
+      });
+      return {
+        success: true,
+        messagesDeleted: 0,
+        activitiesRolledBack: 0,
+        errors: [],
+      };
+    }
+
     // Use existing preview if provided, otherwise compute it
     const preview = existingPreview ?? await previewAiUndo(messageId, userId);
     if (!preview) {
@@ -418,22 +443,38 @@ export async function executeAiUndo(
 
       // Only reached if all rollbacks succeed
       // Soft-delete messages in the same transaction
-      const table = preview.source === 'page_chat' ? chatMessages : messages;
-
+      // Note: Update BOTH tables to handle edge cases where a conversation
+      // might have messages in both tables (e.g., migration scenarios)
       loggers.api.debug('[AiUndo:Execute] Soft-deleting messages', {
-        table: preview.source,
+        source: preview.source,
         conversationId,
         fromTimestamp: createdAt.toISOString(),
       });
 
+      // Update primary table first (based on source)
+      const primaryTable = preview.source === 'page_chat' ? chatMessages : messages;
       await tx
-        .update(table)
+        .update(primaryTable)
         .set({ isActive: false })
         .where(
           and(
-            eq(table.conversationId, conversationId),
-            gte(table.createdAt, createdAt),
-            eq(table.isActive, true)
+            eq(primaryTable.conversationId, conversationId),
+            gte(primaryTable.createdAt, createdAt),
+            eq(primaryTable.isActive, true)
+          )
+        );
+
+      // Also update secondary table to catch any orphaned messages
+      // This handles edge cases where conversationId exists in both tables
+      const secondaryTable = preview.source === 'page_chat' ? messages : chatMessages;
+      await tx
+        .update(secondaryTable)
+        .set({ isActive: false })
+        .where(
+          and(
+            eq(secondaryTable.conversationId, conversationId),
+            gte(secondaryTable.createdAt, createdAt),
+            eq(secondaryTable.isActive, true)
           )
         );
 

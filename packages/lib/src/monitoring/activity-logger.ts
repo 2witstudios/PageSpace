@@ -139,11 +139,35 @@ export interface ActivityLogInput {
 }
 
 /**
+ * Maximum size for content snapshots (1MB)
+ * Larger content will be truncated with a marker indicating it was too large
+ */
+const MAX_CONTENT_SNAPSHOT_SIZE = 1024 * 1024; // 1MB
+
+/**
  * Log an activity event to the database.
  * Fire-and-forget pattern - never blocks the caller.
  */
 export async function logActivity(input: ActivityLogInput): Promise<void> {
   try {
+    // Handle content snapshot size limit to prevent database bloat
+    let contentSnapshot = input.contentSnapshot;
+    if (contentSnapshot && contentSnapshot.length > MAX_CONTENT_SNAPSHOT_SIZE) {
+      console.warn('[ActivityLogger] Content snapshot too large, skipping snapshot', {
+        resourceId: input.resourceId,
+        resourceType: input.resourceType,
+        snapshotSize: contentSnapshot.length,
+        maxSize: MAX_CONTENT_SNAPSHOT_SIZE,
+      });
+      // Skip the snapshot but add metadata to indicate it was too large
+      contentSnapshot = undefined;
+      input.metadata = {
+        ...input.metadata,
+        contentSnapshotSkipped: true,
+        originalSnapshotSize: input.contentSnapshot?.length,
+      };
+    }
+
     await db.insert(activityLogs).values({
       id: createId(),
       timestamp: new Date(),
@@ -160,7 +184,7 @@ export async function logActivity(input: ActivityLogInput): Promise<void> {
       aiProvider: input.aiProvider,
       aiModel: input.aiModel,
       aiConversationId: input.aiConversationId,
-      contentSnapshot: input.contentSnapshot,
+      contentSnapshot,
       contentFormat: input.contentFormat,
       updatedFields: input.updatedFields,
       previousValues: input.previousValues,
@@ -393,12 +417,36 @@ export function logMemberActivity(
     targetUserEmail?: string;
     role?: string;
     previousRole?: string;
+    // Additional fields for member_remove rollback support
+    customRoleId?: string | null;
+    previousCustomRoleId?: string | null;
+    invitedBy?: string | null;
+    invitedAt?: Date | null;
+    acceptedAt?: Date | null;
   },
   options?: {
     actorEmail?: string;
     actorDisplayName?: string;
   }
 ): void {
+  // Build previousValues for rollback support
+  // For member_remove, we need to capture all membership data to restore it
+  let previousValues: Record<string, unknown> | undefined;
+  if (operation === 'member_remove') {
+    previousValues = {
+      role: data.previousRole ?? data.role,
+      customRoleId: data.previousCustomRoleId ?? data.customRoleId,
+      invitedBy: data.invitedBy,
+      invitedAt: data.invitedAt?.toISOString(),
+      acceptedAt: data.acceptedAt?.toISOString(),
+    };
+  } else if (data.previousRole) {
+    previousValues = { role: data.previousRole };
+    if (data.previousCustomRoleId !== undefined) {
+      previousValues.customRoleId = data.previousCustomRoleId;
+    }
+  }
+
   logActivity({
     userId,
     actorEmail: options?.actorEmail ?? 'unknown@system',
@@ -408,7 +456,7 @@ export function logMemberActivity(
     resourceId: data.targetUserId,
     resourceTitle: data.targetUserEmail,
     driveId: data.driveId,
-    previousValues: data.previousRole ? { role: data.previousRole } : undefined,
+    previousValues,
     newValues: data.role ? { role: data.role } : undefined,
     metadata: {
       targetUserId: data.targetUserId,

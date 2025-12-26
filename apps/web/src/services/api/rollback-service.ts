@@ -271,6 +271,57 @@ export async function previewRollback(
     resourceId: activity.resourceId,
   });
 
+  // Helper for deep value comparison that handles dates, nulls, and primitives correctly
+  const deepEqual = (a: unknown, b: unknown): boolean => {
+    // Handle null/undefined
+    if (a === b) return true;
+    if (a == null || b == null) return a === b;
+
+    // Handle Date objects
+    if (a instanceof Date && b instanceof Date) {
+      return a.getTime() === b.getTime();
+    }
+    if (a instanceof Date || b instanceof Date) {
+      // One is Date, other isn't - compare as ISO strings
+      const aStr = a instanceof Date ? a.toISOString() : String(a);
+      const bStr = b instanceof Date ? b.toISOString() : String(b);
+      return aStr === bStr;
+    }
+
+    // Handle arrays
+    if (Array.isArray(a) && Array.isArray(b)) {
+      if (a.length !== b.length) return false;
+      return a.every((item, i) => deepEqual(item, b[i]));
+    }
+    if (Array.isArray(a) || Array.isArray(b)) return false;
+
+    // Handle objects
+    if (typeof a === 'object' && typeof b === 'object') {
+      const keysA = Object.keys(a as object);
+      const keysB = Object.keys(b as object);
+      if (keysA.length !== keysB.length) return false;
+      return keysA.every(key =>
+        Object.prototype.hasOwnProperty.call(b, key) &&
+        deepEqual((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key])
+      );
+    }
+
+    // Handle primitives
+    return a === b;
+  };
+
+  // Helper to check for conflicts in newValues
+  const checkConflict = (
+    newVals: Record<string, unknown> | null,
+    currentVals: Record<string, unknown>
+  ): boolean => {
+    if (!newVals) return false;
+    return !Object.entries(newVals).every(([key, value]) => {
+      const currentVal = currentVals[key];
+      return deepEqual(currentVal, value);
+    });
+  };
+
   if (activity.resourceType === 'page' && activity.pageId) {
     const currentPage = await db
       .select()
@@ -290,6 +341,39 @@ export async function previewRollback(
       };
     }
 
+    // Check if parent drive still exists and is not trashed
+    if (activity.driveId) {
+      const parentDrive = await db
+        .select({ id: drives.id, isTrashed: drives.isTrashed })
+        .from(drives)
+        .where(eq(drives.id, activity.driveId))
+        .limit(1);
+
+      if (parentDrive.length === 0) {
+        return {
+          activity,
+          canRollback: false,
+          reason: 'Parent drive has been deleted',
+          currentValues: null,
+          rollbackToValues: null,
+          warnings: [],
+          affectedResources: [],
+        };
+      }
+
+      if (parentDrive[0].isTrashed) {
+        return {
+          activity,
+          canRollback: false,
+          reason: 'Parent drive is in trash. Restore the drive first.',
+          currentValues: null,
+          rollbackToValues: null,
+          warnings: [],
+          affectedResources: [],
+        };
+      }
+    }
+
     currentValues = {
       title: currentPage[0].title,
       content: currentPage[0].content,
@@ -298,48 +382,334 @@ export async function previewRollback(
     };
 
     // Check if state has changed since the activity
-    // Note: JSON.stringify comparison works reliably for flat primitive values
-    // (strings, numbers, booleans, null). For nested objects or Date instances,
-    // comparison may behave unexpectedly. Current activity logs only store flat
-    // values in previousValues/newValues, so this is safe for existing use cases.
-    if (activity.newValues) {
-      const newValuesMatch = Object.entries(activity.newValues).every(
-        ([key, value]) => {
-          const currentVal = currentValues?.[key];
-          return JSON.stringify(currentVal) === JSON.stringify(value);
-        }
-      );
-
+    if (checkConflict(activity.newValues, currentValues)) {
       loggers.api.debug('[Rollback:Preview] Conflict check', {
-        hasConflict: !newValuesMatch,
-        checkedFields: Object.keys(activity.newValues),
+        hasConflict: true,
+        checkedFields: Object.keys(activity.newValues || {}),
         force,
       });
 
-      if (!newValuesMatch) {
-        // Block rollback unless force=true (prevents accidental data loss)
-        if (!force) {
-          return {
-            activity,
-            canRollback: false,
-            reason: 'Resource has been modified since this change. Use force=true to override.',
-            currentValues,
-            rollbackToValues: activity.previousValues,
-            warnings: [],
-            affectedResources: [
-              {
-                type: activity.resourceType,
-                id: activity.resourceId,
-                title: activity.resourceTitle || 'Untitled',
-              },
-            ],
+      if (!force) {
+        return {
+          activity,
+          canRollback: false,
+          reason: 'Resource has been modified since this change. Use force=true to override.',
+          currentValues,
+          rollbackToValues: activity.previousValues,
+          warnings: [],
+          affectedResources: [
+            {
+              type: activity.resourceType,
+              id: activity.resourceId,
+              title: activity.resourceTitle || 'Untitled',
+            },
+          ],
+          hasConflict: true,
+        };
+      }
+      warnings.push(
+        'This resource has been modified since this change. Recent changes will be overwritten.'
+      );
+    }
+  } else if (activity.resourceType === 'drive' && activity.driveId) {
+    // Conflict detection for drives
+    const currentDrive = await db
+      .select()
+      .from(drives)
+      .where(eq(drives.id, activity.driveId))
+      .limit(1);
+
+    if (currentDrive.length === 0) {
+      return {
+        activity,
+        canRollback: false,
+        reason: 'Drive no longer exists',
+        currentValues: null,
+        rollbackToValues: null,
+        warnings: [],
+        affectedResources: [],
+      };
+    }
+
+    // Check if drive is already trashed (for create rollbacks that trash the drive)
+    if (activity.operation === 'create' && currentDrive[0].isTrashed) {
+      return {
+        activity,
+        canRollback: false,
+        reason: 'Drive is already in trash',
+        currentValues: null,
+        rollbackToValues: null,
+        warnings: [],
+        affectedResources: [],
+      };
+    }
+
+    currentValues = {
+      name: currentDrive[0].name,
+      description: currentDrive[0].description,
+      isTrashed: currentDrive[0].isTrashed,
+    };
+
+    if (checkConflict(activity.newValues, currentValues)) {
+      loggers.api.debug('[Rollback:Preview] Drive conflict check', {
+        hasConflict: true,
+        checkedFields: Object.keys(activity.newValues || {}),
+        force,
+      });
+
+      if (!force) {
+        return {
+          activity,
+          canRollback: false,
+          reason: 'Drive has been modified since this change. Use force=true to override.',
+          currentValues,
+          rollbackToValues: activity.previousValues,
+          warnings: [],
+          affectedResources: [
+            {
+              type: activity.resourceType,
+              id: activity.resourceId,
+              title: activity.resourceTitle || 'Untitled',
+            },
+          ],
+          hasConflict: true,
+        };
+      }
+      warnings.push(
+        'This drive has been modified since this change. Recent changes will be overwritten.'
+      );
+    }
+  } else if (activity.resourceType === 'member' && activity.driveId) {
+    // Conflict detection for members
+    const metadata = activity.metadata as { targetUserId?: string } | null;
+    const targetUserId = metadata?.targetUserId || (activity.previousValues?.userId as string);
+
+    if (targetUserId) {
+      const currentMember = await db
+        .select()
+        .from(driveMembers)
+        .where(and(
+          eq(driveMembers.driveId, activity.driveId),
+          eq(driveMembers.userId, targetUserId)
+        ))
+        .limit(1);
+
+      // For member_add rollback, member should still exist
+      if (activity.operation === 'member_add' && currentMember.length === 0) {
+        return {
+          activity,
+          canRollback: false,
+          reason: 'Member has already been removed',
+          currentValues: null,
+          rollbackToValues: null,
+          warnings: [],
+          affectedResources: [],
+        };
+      }
+
+      // For member_remove rollback, member should NOT exist (to re-add them)
+      if (activity.operation === 'member_remove' && currentMember.length > 0) {
+        return {
+          activity,
+          canRollback: false,
+          reason: 'Member has already been re-added to the drive',
+          currentValues: null,
+          rollbackToValues: null,
+          warnings: [],
+          affectedResources: [],
+        };
+      }
+
+      // For role changes, check if role has been changed again
+      if (currentMember.length > 0 && activity.operation === 'member_role_change') {
+        currentValues = {
+          role: currentMember[0].role,
+          customRoleId: currentMember[0].customRoleId,
+        };
+
+        if (checkConflict(activity.newValues, currentValues)) {
+          loggers.api.debug('[Rollback:Preview] Member conflict check', {
             hasConflict: true,
-          };
+            force,
+          });
+
+          if (!force) {
+            return {
+              activity,
+              canRollback: false,
+              reason: 'Member role has been changed since this update. Use force=true to override.',
+              currentValues,
+              rollbackToValues: activity.previousValues,
+              warnings: [],
+              affectedResources: [
+                {
+                  type: activity.resourceType,
+                  id: activity.resourceId,
+                  title: activity.resourceTitle || 'Member',
+                },
+              ],
+              hasConflict: true,
+            };
+          }
+          warnings.push(
+            'This member\'s role has been changed since this update. Recent changes will be overwritten.'
+          );
         }
-        // Force=true: proceed with warning
-        warnings.push(
-          'This resource has been modified since this change. Recent changes will be overwritten.'
-        );
+      }
+    }
+  } else if (activity.resourceType === 'permission' && activity.pageId) {
+    // Conflict detection for page permissions
+    const metadata = activity.metadata as { targetUserId?: string } | null;
+    const targetUserId = metadata?.targetUserId || (activity.previousValues?.userId as string);
+
+    if (targetUserId) {
+      const currentPermission = await db
+        .select()
+        .from(pagePermissions)
+        .where(and(
+          eq(pagePermissions.pageId, activity.pageId),
+          eq(pagePermissions.userId, targetUserId)
+        ))
+        .limit(1);
+
+      // For permission_grant rollback, permission should still exist
+      if (activity.operation === 'permission_grant' && currentPermission.length === 0) {
+        return {
+          activity,
+          canRollback: false,
+          reason: 'Permission has already been revoked',
+          currentValues: null,
+          rollbackToValues: null,
+          warnings: [],
+          affectedResources: [],
+        };
+      }
+
+      // For permission_revoke rollback, permission should NOT exist
+      if (activity.operation === 'permission_revoke' && currentPermission.length > 0) {
+        return {
+          activity,
+          canRollback: false,
+          reason: 'Permission has already been re-granted',
+          currentValues: null,
+          rollbackToValues: null,
+          warnings: [],
+          affectedResources: [],
+        };
+      }
+
+      // For permission updates, check if permissions have changed
+      if (currentPermission.length > 0 && activity.operation === 'permission_update') {
+        currentValues = {
+          canView: currentPermission[0].canView,
+          canEdit: currentPermission[0].canEdit,
+          canShare: currentPermission[0].canShare,
+          canDelete: currentPermission[0].canDelete,
+        };
+
+        if (checkConflict(activity.newValues, currentValues)) {
+          loggers.api.debug('[Rollback:Preview] Permission conflict check', {
+            hasConflict: true,
+            force,
+          });
+
+          if (!force) {
+            return {
+              activity,
+              canRollback: false,
+              reason: 'Permissions have been changed since this update. Use force=true to override.',
+              currentValues,
+              rollbackToValues: activity.previousValues,
+              warnings: [],
+              affectedResources: [
+                {
+                  type: activity.resourceType,
+                  id: activity.resourceId,
+                  title: activity.resourceTitle || 'Permission',
+                },
+              ],
+              hasConflict: true,
+            };
+          }
+          warnings.push(
+            'These permissions have been changed since this update. Recent changes will be overwritten.'
+          );
+        }
+      }
+    }
+  } else if (activity.resourceType === 'role' && activity.driveId) {
+    // Conflict detection for drive roles
+    const roleId = activity.resourceId;
+
+    if (roleId) {
+      const currentRole = await db
+        .select()
+        .from(driveRoles)
+        .where(eq(driveRoles.id, roleId))
+        .limit(1);
+
+      // For role create rollback (delete), role should still exist
+      if (activity.operation === 'create' && currentRole.length === 0) {
+        return {
+          activity,
+          canRollback: false,
+          reason: 'Role has already been deleted',
+          currentValues: null,
+          rollbackToValues: null,
+          warnings: [],
+          affectedResources: [],
+        };
+      }
+
+      // For role delete rollback (re-create), role should NOT exist
+      if (activity.operation === 'delete' && currentRole.length > 0) {
+        return {
+          activity,
+          canRollback: false,
+          reason: 'Role already exists with this ID',
+          currentValues: null,
+          rollbackToValues: null,
+          warnings: [],
+          affectedResources: [],
+        };
+      }
+
+      // For role updates, check if role has changed
+      if (currentRole.length > 0 && activity.operation === 'update') {
+        currentValues = {
+          name: currentRole[0].name,
+          description: currentRole[0].description,
+          color: currentRole[0].color,
+        };
+
+        if (checkConflict(activity.newValues, currentValues)) {
+          loggers.api.debug('[Rollback:Preview] Role conflict check', {
+            hasConflict: true,
+            force,
+          });
+
+          if (!force) {
+            return {
+              activity,
+              canRollback: false,
+              reason: 'Role has been modified since this update. Use force=true to override.',
+              currentValues,
+              rollbackToValues: activity.previousValues,
+              warnings: [],
+              affectedResources: [
+                {
+                  type: activity.resourceType,
+                  id: activity.resourceId,
+                  title: activity.resourceTitle || 'Role',
+                },
+              ],
+              hasConflict: true,
+            };
+          }
+          warnings.push(
+            'This role has been modified since this update. Recent changes will be overwritten.'
+          );
+        }
       }
     }
   }
@@ -446,6 +816,19 @@ export async function executeRollback(
       case 'message':
         restoredValues = await rollbackMessageChange(activity, database);
         break;
+
+      case 'conversation':
+        // Conversation undo activities are logged for audit trail but cannot be rolled back
+        // because they represent the undo operation itself, not a data change
+        loggers.api.debug('[Rollback:Execute] Conversation undo cannot be rolled back', {
+          activityId: activity.id,
+          operation: activity.operation,
+        });
+        return {
+          success: false,
+          message: 'Conversation undo operations cannot be rolled back. The affected messages remain soft-deleted and can be restored individually if needed.',
+          warnings,
+        };
 
       default:
         loggers.api.debug('[Rollback:Execute] Unsupported resource type', {
@@ -604,6 +987,29 @@ async function rollbackPageChange(
       updatedAt: new Date(),
     })
     .where(eq(pages.id, activity.pageId));
+
+  // If we're restoring a trashed page (isTrashed: false), also restore orphaned children
+  // When pages are trashed, children are orphaned to grandparent with originalParentId set
+  // Now that the parent is restored, re-parent those children back to their original parent
+  if (updateData.isTrashed === false && activity.pageId) {
+    const restoredChildren = await database
+      .update(pages)
+      .set({
+        parentId: activity.pageId,
+        originalParentId: null, // Clear the original parent reference since it's now restored
+        updatedAt: new Date(),
+      })
+      .where(eq(pages.originalParentId, activity.pageId))
+      .returning({ id: pages.id });
+
+    if (restoredChildren.length > 0) {
+      loggers.api.debug('[Rollback:Execute:Page] Restored orphaned children', {
+        parentPageId: activity.pageId,
+        childrenRestored: restoredChildren.length,
+        childIds: restoredChildren.map(c => c.id),
+      });
+    }
+  }
 
   return updateData;
 }
@@ -848,8 +1254,9 @@ async function rollbackMemberChange(
   }
 
   // Determine if this was an add, remove, or role change based on operation and context
-  const wasAdded = activity.operation === 'create' || !previousValues.role;
-  const wasRemoved = activity.operation === 'delete' || activity.operation === 'trash';
+  // Note: member_add and member_remove are the actual operation names from logMemberActivity
+  const wasAdded = activity.operation === 'create' || activity.operation === 'member_add' || !previousValues.role;
+  const wasRemoved = activity.operation === 'delete' || activity.operation === 'trash' || activity.operation === 'member_remove';
 
   if (wasAdded && !wasRemoved) {
     // Member was added - rollback by removing them
