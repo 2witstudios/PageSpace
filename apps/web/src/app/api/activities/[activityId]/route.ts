@@ -14,7 +14,7 @@ const querySchema = z.object({
 /**
  * GET /api/activities/[activityId]
  *
- * Fetch a single activity log with rollback eligibility
+ * Fetch a single activity log with rollback preview
  */
 export async function GET(
   request: Request,
@@ -82,8 +82,6 @@ export async function GET(
 
   return NextResponse.json({
     activity,
-    canRollback: preview.canRollback,
-    rollbackReason: preview.reason,
-    warnings: preview.warnings,
+    preview,
   });
 }

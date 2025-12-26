@@ -111,6 +111,17 @@ export async function PATCH(
     const updatedFields = Object.keys(validatedBody).filter(
       (key) => validatedBody[key as keyof typeof validatedBody] !== undefined
     );
+    const previousValues: Record<string, unknown> = {};
+    const newValues: Record<string, unknown> = {};
+    if (validatedBody.name !== undefined) {
+      previousValues.name = drive.name;
+      newValues.name = updatedDrive?.name ?? drive.name;
+    }
+    if (validatedBody.drivePrompt !== undefined) {
+      previousValues.drivePrompt = drive.drivePrompt;
+      newValues.drivePrompt = updatedDrive?.drivePrompt ?? drive.drivePrompt;
+    }
+
     logDriveActivity(userId, 'update', {
       id: driveId,
       name: updatedDrive?.name ?? drive.name,
@@ -121,6 +132,8 @@ export async function PATCH(
         previousName: drive.name,
         newName: validatedBody.name,
       },
+      previousValues: Object.keys(previousValues).length > 0 ? previousValues : undefined,
+      newValues: Object.keys(newValues).length > 0 ? newValues : undefined,
     });
 
     return NextResponse.json(updatedDrive);
@@ -183,7 +196,11 @@ export async function DELETE(
     logDriveActivity(userId, 'trash', {
       id: driveId,
       name: drive.name,
-    }, actorInfo);
+    }, {
+      ...actorInfo,
+      previousValues: { isTrashed: drive.isTrashed },
+      newValues: { isTrashed: true },
+    });
 
     return NextResponse.json({ success: true });
   } catch (error) {

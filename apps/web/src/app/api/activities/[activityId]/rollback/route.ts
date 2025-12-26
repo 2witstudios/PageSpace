@@ -6,7 +6,7 @@ import type { RollbackContext } from '@pagespace/lib/permissions';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { broadcastPageEvent, createPageEventPayload, broadcastDriveEvent, createDriveEventPayload, broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
-import { db, activityLogs, eq, and } from '@pagespace/db';
+import { db } from '@pagespace/db';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -73,37 +73,11 @@ export async function POST(
     loggers.api.debug('[Rollback:Route] Dry run - fetching preview');
     const preview = await previewRollback(activityId, userId, rollbackContext as RollbackContext, { force });
     loggers.api.debug('[Rollback:Route] Dry run complete', {
-      canRollback: preview.canRollback,
+      canExecute: preview.canExecute,
       hasConflict: preview.hasConflict,
     });
     return NextResponse.json({
-      dryRun: true,
-      ...preview,
-    });
-  }
-
-  // Fix 10: Idempotency check - prevent duplicate rollbacks
-  // Fix 14: Use rollbackFromActivityId (the specific activity rolled back), not resourceId
-  const existingRollback = await db
-    .select({ id: activityLogs.id })
-    .from(activityLogs)
-    .where(
-      and(
-        eq(activityLogs.operation, 'rollback'),
-        eq(activityLogs.rollbackFromActivityId, activityId)
-      )
-    )
-    .limit(1);
-
-  if (existingRollback.length > 0) {
-    loggers.api.debug('[Rollback:Route] Already rolled back', {
-      existingRollbackId: existingRollback[0].id,
-    });
-    return NextResponse.json({
-      success: true,
-      message: 'Already rolled back',
-      rollbackActivityId: existingRollback[0].id,
-      warnings: [],
+      preview,
     });
   }
 
@@ -118,7 +92,7 @@ export async function POST(
       message: result.message,
     });
     return NextResponse.json(
-      { error: result.message, warnings: result.warnings },
+      { error: result.message, warnings: result.warnings, result },
       { status: 400 }
     );
   }
@@ -133,6 +107,11 @@ export async function POST(
     if (activity.resourceType === 'page' && activity.pageId && activity.driveId) {
       await broadcastPageEvent(
         createPageEventPayload(activity.driveId, activity.pageId, 'updated', {
+          title: activity.resourceTitle ?? undefined,
+        })
+      );
+      await broadcastPageEvent(
+        createPageEventPayload(activity.driveId, activity.pageId, 'content-updated', {
           title: activity.resourceTitle ?? undefined,
         })
       );
@@ -171,10 +150,6 @@ export async function POST(
   }
 
   return NextResponse.json({
-    success: true,
-    rollbackActivityId: result.rollbackActivityId,
-    restoredValues: result.restoredValues,
-    message: result.message,
-    warnings: result.warnings,
+    ...result,
   });
 }

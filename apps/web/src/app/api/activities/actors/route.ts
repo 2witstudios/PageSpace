@@ -88,17 +88,19 @@ export async function GET(request: Request) {
     }
 
     // Get distinct users who have activity in this context
+    // Use LEFT JOIN to include activities from deleted users (userId becomes NULL)
+    // Fallback to actorDisplayName/actorEmail for deleted users
     const actors = await db
       .selectDistinct({
         id: users.id,
-        name: users.name,
-        email: users.email,
+        name: sql<string>`COALESCE(${users.name}, ${activityLogs.actorDisplayName})`.as('name'),
+        email: sql<string>`COALESCE(${users.email}, ${activityLogs.actorEmail})`.as('email'),
         image: users.image,
       })
       .from(activityLogs)
-      .innerJoin(users, eq(activityLogs.userId, users.id))
+      .leftJoin(users, eq(activityLogs.userId, users.id))
       .where(whereCondition)
-      .orderBy(sql`COALESCE(${users.name}, ${users.email})`);
+      .orderBy(sql`COALESCE(${users.name}, ${activityLogs.actorDisplayName}, ${users.email}, ${activityLogs.actorEmail})`);
 
     return NextResponse.json({ actors });
   } catch (error) {

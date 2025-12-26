@@ -17,6 +17,11 @@
       "default": "./dist/index.js",
       "browser": "./dist/client-safe.js"
     },
+    "./content": {
+      "types": "./dist/content/index.d.ts",
+      "import": "./dist/content/index.js",
+      "require": "./dist/content/index.js"
+    },
     "./server": {
       "types": "./dist/server.d.ts",
       "import": "./dist/server.js",
@@ -182,6 +187,9 @@
     "*": {
       "server": [
         "./dist/server.d.ts"
+      ],
+      "content": [
+        "./dist/content/index.d.ts"
       ],
       "client": [
         "./dist/client.d.ts"

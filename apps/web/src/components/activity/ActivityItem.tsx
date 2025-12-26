@@ -17,20 +17,29 @@ import { useToast } from '@/hooks/useToast';
 import { operationConfig, resourceTypeIcons, defaultOperationConfig } from './constants';
 import { getInitials } from './utils';
 import type { ActivityLog } from './types';
+import type { ActivityAction, ActivityActionPreview, ActivityActionResult } from '@/types/activity-actions';
 
 export type RollbackContext = 'page' | 'drive' | 'user_dashboard';
 
 interface ActivityItemProps {
   activity: ActivityLog;
   context?: RollbackContext;
-  onRollback?: (activityId: string) => Promise<void>;
+  onRollback?: (activityId: string, force: boolean) => Promise<ActivityActionResult>;
+  onRedo?: (activityId: string, force: boolean) => Promise<ActivityActionResult>;
 }
 
-export function ActivityItem({ activity, context, onRollback }: ActivityItemProps) {
+export function ActivityItem({ activity, context, onRollback, onRedo }: ActivityItemProps) {
   const [showConfirm, setShowConfirm] = useState(false);
-  const [previewWarnings, setPreviewWarnings] = useState<string[]>([]);
+  const [preview, setPreview] = useState<ActivityActionPreview | null>(null);
+  const [action, setAction] = useState<ActivityAction>('rollback');
   const { toast } = useToast();
+  const metadata = activity.metadata as { redoFromActivityId?: string } | null;
+  const isRedoEntry = activity.operation === 'rollback' && !!metadata?.redoFromActivityId;
+  const displayOperation = activity.operation === 'rollback'
+    ? activity.rollbackSourceOperation || activity.operation
+    : activity.operation;
   const opConfig = operationConfig[activity.operation] || defaultOperationConfig;
+  const dialogOperation = operationConfig[displayOperation]?.label || displayOperation;
   const OpIcon = opConfig.icon;
   const ResourceIcon = resourceTypeIcons[activity.resourceType] || FileText;
 
@@ -38,32 +47,61 @@ export function ActivityItem({ activity, context, onRollback }: ActivityItemProp
   const actorImage = activity.user?.image;
 
   const canRestore = context && onRollback;
+  const canRedo = context && onRedo && activity.operation === 'rollback';
 
-  const handleRestoreClick = async () => {
+  const handleActionClick = async (nextAction: ActivityAction) => {
     if (!context) return;
 
+    setAction(nextAction);
     try {
-      const response = await fetch(`/api/activities/${activity.id}?context=${context}`);
+      const endpoint = nextAction === 'redo'
+        ? `/api/activities/${activity.id}/redo`
+        : `/api/activities/${activity.id}/rollback`;
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ context, dryRun: true }),
+      });
       if (!response.ok) {
         throw new Error('Failed to load preview');
       }
       const data = await response.json();
-      setPreviewWarnings(data.warnings || []);
+      setPreview(data.preview ?? null);
     } catch (error) {
       toast({
         title: 'Error',
         description: error instanceof Error ? error.message : 'Failed to load rollback preview',
         variant: 'destructive',
       });
-      setPreviewWarnings([]);
+      setPreview({
+        action: nextAction,
+        canExecute: false,
+        reason: 'Preview unavailable. Please try again.',
+        warnings: [],
+        hasConflict: false,
+        conflictFields: [],
+        requiresForce: false,
+        isNoOp: false,
+        currentValues: null,
+        targetValues: null,
+        changes: [],
+        affectedResources: [],
+      });
     }
     setShowConfirm(true);
   };
 
-  const handleConfirmRollback = async () => {
-    if (onRollback) {
-      await onRollback(activity.id);
+  const handleConfirm = async (force: boolean) => {
+    if (action === 'redo') {
+      if (!onRedo) {
+        throw new Error('Redo is not available');
+      }
+      return onRedo(activity.id, force);
     }
+    if (!onRollback) {
+      throw new Error('Rollback is not available');
+    }
+    return onRollback(activity.id, force);
   };
 
   return (
@@ -81,7 +119,7 @@ export function ActivityItem({ activity, context, onRollback }: ActivityItemProp
           <span className="font-medium text-sm">{actorName}</span>
           <Badge variant={opConfig.variant} className="text-xs">
             <OpIcon className="h-3 w-3 mr-1" />
-            {opConfig.label}
+            {isRedoEntry ? 'Redo rollback' : opConfig.label}
           </Badge>
           {activity.isAiGenerated && (
             <Badge variant="outline" className="text-xs gap-1">
@@ -116,7 +154,7 @@ export function ActivityItem({ activity, context, onRollback }: ActivityItemProp
           </div>
         </div>
 
-        {canRestore && (
+        {(canRestore || canRedo) && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -129,10 +167,18 @@ export function ActivityItem({ activity, context, onRollback }: ActivityItemProp
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={handleRestoreClick}>
-                <History className="h-4 w-4 mr-2" />
-                Restore this version
-              </DropdownMenuItem>
+              {canRestore && (
+                <DropdownMenuItem onClick={() => handleActionClick('rollback')}>
+                  <History className="h-4 w-4 mr-2" />
+                  Undo this change
+                </DropdownMenuItem>
+              )}
+              {canRedo && (
+                <DropdownMenuItem onClick={() => handleActionClick('redo')}>
+                  <History className="h-4 w-4 mr-2" />
+                  Redo rollback
+                </DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         )}
@@ -143,10 +189,11 @@ export function ActivityItem({ activity, context, onRollback }: ActivityItemProp
       open={showConfirm}
       onOpenChange={setShowConfirm}
       resourceTitle={activity.resourceTitle}
-      operation={opConfig.label}
+      operation={dialogOperation}
       timestamp={activity.timestamp}
-      warnings={previewWarnings}
-      onConfirm={handleConfirmRollback}
+      preview={preview}
+      action={action}
+      onConfirm={handleConfirm}
     />
     </>
   );

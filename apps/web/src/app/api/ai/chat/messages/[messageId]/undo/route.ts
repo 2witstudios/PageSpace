@@ -11,6 +11,7 @@ import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 // Request body schema for POST /undo
 const undoBodySchema = z.object({
   mode: z.enum(['messages_only', 'messages_and_changes']),
+  force: z.boolean().optional().default(false),
 });
 
 const AUTH_OPTIONS_READ = { allow: ['jwt', 'mcp'] as const };
@@ -147,7 +148,7 @@ export async function POST(
         { status: 400 }
       );
     }
-    const { mode } = parseResult.data;
+    const { mode, force } = parseResult.data;
 
     loggers.api.debug('[AiUndo:Route] Validated mode', { mode });
 
@@ -169,7 +170,7 @@ export async function POST(
     });
 
     // Execute undo, passing preview to avoid redundant computation
-    const result = await executeAiUndo(messageId, userId, mode, preview);
+    const result = await executeAiUndo(messageId, userId, mode, preview, { force });
 
     loggers.api.info('Undo executed', {
       userId: maskIdentifier(userId),
@@ -202,6 +203,11 @@ export async function POST(
             broadcastedPages.add(activity.pageId);
             await broadcastPageEvent(
               createPageEventPayload(activity.driveId, activity.pageId, 'updated', {
+                title: activity.resourceTitle ?? undefined,
+              })
+            );
+            await broadcastPageEvent(
+              createPageEventPayload(activity.driveId, activity.pageId, 'content-updated', {
                 title: activity.resourceTitle ?? undefined,
               })
             );

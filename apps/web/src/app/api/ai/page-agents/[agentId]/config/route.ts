@@ -7,7 +7,8 @@ import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { pageSpaceTools } from '@/lib/ai/core';
 import { loggers } from '@pagespace/lib/server';
 import { pageAgentRepository, type AgentConfigUpdate } from '@/lib/repositories/page-agent-repository';
-import { getActorInfo, logAgentConfigActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
+import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 
 /**
  * PUT /api/ai/page-agents/{agentId}/config
@@ -24,7 +25,15 @@ export async function PUT(
 
     const { agentId } = await context.params;
     const body = await request.json();
-    const { systemPrompt, enabledTools, aiProvider, aiModel, agentDefinition, visibleToGlobalAssistant } = body;
+    const {
+      systemPrompt,
+      enabledTools,
+      aiProvider,
+      aiModel,
+      agentDefinition,
+      visibleToGlobalAssistant,
+      expectedRevision,
+    } = body;
 
     // Get the agent page
     const agent = await pageAgentRepository.getAgentById(agentId);
@@ -101,8 +110,36 @@ export async function PUT(
       );
     }
 
-    // Update the agent
-    const updatedAgent = await pageAgentRepository.updateAgentConfig(agentId, updateData);
+    let updatedAgent = agent;
+    try {
+      const actorInfo = await getActorInfo(userId);
+      await applyPageMutation({
+        pageId: agentId,
+        operation: 'agent_config_update',
+        updates: updateData as Record<string, unknown>,
+        updatedFields,
+        expectedRevision: typeof expectedRevision === 'number' ? expectedRevision : undefined,
+        context: {
+          userId,
+          actorEmail: actorInfo.actorEmail,
+          actorDisplayName: actorInfo.actorDisplayName,
+          resourceType: 'agent',
+        },
+      });
+      updatedAgent = { ...agent, ...updateData };
+    } catch (error) {
+      if (error instanceof PageRevisionMismatchError) {
+        return NextResponse.json(
+          {
+            error: error.message,
+            currentRevision: error.currentRevision,
+            expectedRevision: error.expectedRevision,
+          },
+          { status: error.expectedRevision === undefined ? 428 : 409 }
+        );
+      }
+      throw error;
+    }
 
     // Broadcast agent update event
     await broadcastPageEvent(
@@ -117,31 +154,6 @@ export async function PUT(
     if (updatedFields.includes('agentDefinition') || updatedFields.includes('visibleToGlobalAssistant')) {
       await agentAwarenessCache.invalidateDriveAgents(updatedAgent.driveId);
     }
-
-    // Log activity for audit trail
-    const actorInfo = await getActorInfo(userId);
-    const previousValues: Record<string, unknown> = {};
-    const newValues: Record<string, unknown> = {};
-
-    // Capture previous and new values for changed fields
-    for (const field of updatedFields) {
-      if (field in agent) {
-        previousValues[field] = agent[field as keyof typeof agent];
-      }
-      if (field in updateData) {
-        newValues[field] = updateData[field as keyof typeof updateData];
-      }
-    }
-
-    logAgentConfigActivity(userId, {
-      id: agentId,
-      name: updatedAgent.title ?? undefined,
-      driveId: updatedAgent.driveId,
-    }, {
-      updatedFields,
-      previousValues,
-      newValues,
-    }, actorInfo);
 
     loggers.api.info('AI agent configuration updated', {
       agentId: updatedAgent.id,

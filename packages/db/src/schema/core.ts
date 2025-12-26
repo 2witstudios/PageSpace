@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, jsonb, real, boolean, pgEnum, primaryKey, index } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, jsonb, real, boolean, pgEnum, primaryKey, index, integer } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { users } from './auth';
 import { createId } from '@paralleldrive/cuid2';
@@ -54,6 +54,8 @@ export const pages = pgTable('pages', {
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
   trashedAt: timestamp('trashedAt', { mode: 'date' }),
+  revision: integer('revision').default(0).notNull(),
+  stateHash: text('stateHash'),
   driveId: text('driveId').notNull().references(() => drives.id, { onDelete: 'cascade' }),
   parentId: text('parentId'),
   originalParentId: text('originalParentId'),

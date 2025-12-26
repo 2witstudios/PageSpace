@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
 import { NextResponse } from 'next/server';
 import { POST } from '../route';
 import type { WebAuthResult, AuthError } from '../../../../../../lib/auth';
+import type { ActivityActionPreview } from '../../../../../../types/activity-actions';
 
 // Mock service boundary
 vi.mock('../../../../../../services/api', () => ({
@@ -69,11 +70,26 @@ vi.mock('../../../../../../lib/logging/mask', () => ({
 
 import { executeRollback, previewRollback } from '../../../../../../services/api';
 import { authenticateRequestWithOptions } from '../../../../../../lib/auth';
-import { db } from '@pagespace/db';
 
 // Test helpers
 const mockUserId = 'user_123';
 const mockActivityId = 'activity_123';
+
+const createMockPreview = (overrides: Partial<ActivityActionPreview> = {}): ActivityActionPreview => ({
+  action: 'rollback',
+  canExecute: true,
+  reason: undefined,
+  warnings: [],
+  hasConflict: false,
+  conflictFields: [],
+  requiresForce: false,
+  isNoOp: false,
+  currentValues: null,
+  targetValues: null,
+  changes: [],
+  affectedResources: [],
+  ...overrides,
+});
 
 const mockWebAuth = (userId: string): WebAuthResult => ({
   userId,
@@ -195,14 +211,20 @@ describe('POST /api/activities/[activityId]/rollback', () => {
 
   describe('dry run', () => {
     it('returns preview when dryRun is true', async () => {
-      const mockPreview = {
-        activity: { id: mockActivityId },
-        canRollback: true,
+      const mockPreview = createMockPreview({
+        canExecute: true,
         currentValues: { title: 'Current' },
-        rollbackToValues: { title: 'Previous' },
-        warnings: [],
+        targetValues: { title: 'Previous' },
+        changes: [
+          {
+            id: mockActivityId,
+            label: 'Undo Update',
+            description: 'Test Page',
+            fields: ['title'],
+          },
+        ],
         affectedResources: [{ type: 'page', id: 'page_123', title: 'Test Page' }],
-      };
+      });
 
       (previewRollback as Mock).mockResolvedValue(mockPreview);
 
@@ -213,22 +235,17 @@ describe('POST /api/activities/[activityId]/rollback', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.dryRun).toBe(true);
-      expect(body.canRollback).toBe(true);
-      expect(body.rollbackToValues).toEqual({ title: 'Previous' });
+      expect(body.preview).toEqual(mockPreview);
       expect(executeRollback).not.toHaveBeenCalled();
     });
 
     it('returns preview failure reason when cannot rollback', async () => {
-      (previewRollback as Mock).mockResolvedValue({
-        activity: null,
-        canRollback: false,
-        reason: 'Activity not found',
-        currentValues: null,
-        rollbackToValues: null,
-        warnings: [],
-        affectedResources: [],
-      });
+      (previewRollback as Mock).mockResolvedValue(
+        createMockPreview({
+          canExecute: false,
+          reason: 'Activity not found',
+        })
+      );
 
       const response = await POST(
         createRequest({ context: 'page', dryRun: true }),
@@ -237,9 +254,8 @@ describe('POST /api/activities/[activityId]/rollback', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.dryRun).toBe(true);
-      expect(body.canRollback).toBe(false);
-      expect(body.reason).toBe('Activity not found');
+      expect(body.preview.canExecute).toBe(false);
+      expect(body.preview.reason).toBe('Activity not found');
     });
   });
 
@@ -253,7 +269,7 @@ describe('POST /api/activities/[activityId]/rollback', () => {
         success: true,
         rollbackActivityId: 'rollback_activity_123',
         restoredValues: { title: 'Previous Title' },
-        message: 'Successfully restored to previous state',
+        message: 'Change undone',
         warnings: [],
       });
 
@@ -262,7 +278,7 @@ describe('POST /api/activities/[activityId]/rollback', () => {
 
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
-      expect(body.message).toBe('Successfully restored to previous state');
+      expect(body.message).toBe('Change undone');
       expect(body.restoredValues).toEqual({ title: 'Previous Title' });
     });
 
@@ -314,75 +330,4 @@ describe('POST /api/activities/[activityId]/rollback', () => {
     });
   });
 
-  // ============================================
-  // Idempotency
-  // ============================================
-
-  describe('idempotency', () => {
-    const existingRollbackId = 'existing_rollback_456';
-
-    // Helper to mock db.select chain to return existing rollback
-    const mockExistingRollback = () => {
-      vi.mocked(db.select).mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            limit: vi.fn().mockResolvedValue([{ id: existingRollbackId }]),
-          }),
-        }),
-      } as ReturnType<typeof db.select>);
-    };
-
-    // Helper to reset db mock to default (no existing rollback)
-    const resetDbMock = () => {
-      vi.mocked(db.select).mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            limit: vi.fn().mockResolvedValue([]),
-          }),
-        }),
-      } as ReturnType<typeof db.select>);
-    };
-
-    afterEach(() => {
-      resetDbMock();
-    });
-
-    it('returns existing rollback when activity was already rolled back', async () => {
-      mockExistingRollback();
-
-      const response = await POST(createRequest({ context: 'page' }), { params: mockParams });
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.success).toBe(true);
-      expect(body.message).toBe('Already rolled back');
-      expect(body.rollbackActivityId).toBe(existingRollbackId);
-      expect(body.warnings).toEqual([]);
-      expect(executeRollback).not.toHaveBeenCalled();
-    });
-
-    it('prevents duplicate rollbacks on double-click (both requests return same result)', async () => {
-      mockExistingRollback();
-
-      // Simulate double-click: two requests in quick succession
-      const [response1, response2] = await Promise.all([
-        POST(createRequest({ context: 'page' }), { params: mockParams }),
-        POST(createRequest({ context: 'page' }), { params: mockParams }),
-      ]);
-
-      const body1 = await response1.json();
-      const body2 = await response2.json();
-
-      // Both should return the same existing rollback
-      expect(response1.status).toBe(200);
-      expect(response2.status).toBe(200);
-      expect(body1.rollbackActivityId).toBe(existingRollbackId);
-      expect(body2.rollbackActivityId).toBe(existingRollbackId);
-      expect(body1.message).toBe('Already rolled back');
-      expect(body2.message).toBe('Already rolled back');
-
-      // executeRollback should never be called since both see existing rollback
-      expect(executeRollback).not.toHaveBeenCalled();
-    });
-  });
 });

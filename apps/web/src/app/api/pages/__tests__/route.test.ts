@@ -94,6 +94,8 @@ const mockPage: PageData = {
   position: 1,
   createdAt: new Date(),
   updatedAt: new Date(),
+  revision: 0,
+  stateHash: null,
   isTrashed: false,
   trashedAt: null,
   aiProvider: null,

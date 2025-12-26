@@ -2,14 +2,37 @@ import { NextResponse } from 'next/server';
 import { pages, db, and, eq } from '@pagespace/db';
 import { loggers, pageTreeCache, getActorInfo } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
-import { logPageActivity } from '@pagespace/lib';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { applyPageMutation } from '@/services/api/page-mutation-service';
+import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring';
 
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 
-async function recursivelyRestore(pageId: string, tx: typeof db) {
-  await tx.update(pages).set({ isTrashed: false, trashedAt: null }).where(eq(pages.id, pageId));
+async function recursivelyRestore(
+  pageId: string,
+  tx: typeof db,
+  context: { userId: string; actorEmail: string; actorDisplayName?: string; changeGroupId: string; changeGroupType: 'user' | 'ai' | 'automation' | 'system' }
+) {
+  const [pageRecord] = await tx
+    .select({ revision: pages.revision })
+    .from(pages)
+    .where(eq(pages.id, pageId))
+    .limit(1);
+
+  if (!pageRecord) {
+    return;
+  }
+
+  await applyPageMutation({
+    pageId,
+    operation: 'restore',
+    updates: { isTrashed: false, trashedAt: null },
+    updatedFields: ['isTrashed', 'trashedAt'],
+    expectedRevision: pageRecord.revision,
+    context,
+    tx,
+  });
 
   const children = await tx
     .select({ id: pages.id })
@@ -17,19 +40,24 @@ async function recursivelyRestore(pageId: string, tx: typeof db) {
     .where(and(eq(pages.parentId, pageId), eq(pages.isTrashed, true)));
 
   for (const child of children) {
-    await recursivelyRestore(child.id, tx);
+    await recursivelyRestore(child.id, tx, context);
   }
 
   const orphanedChildren = await tx
-    .select({ id: pages.id })
+    .select({ id: pages.id, revision: pages.revision })
     .from(pages)
     .where(eq(pages.originalParentId, pageId));
 
   for (const child of orphanedChildren) {
-    await tx
-      .update(pages)
-      .set({ parentId: pageId, originalParentId: null })
-      .where(eq(pages.id, child.id));
+    await applyPageMutation({
+      pageId: child.id,
+      operation: 'move',
+      updates: { parentId: pageId, originalParentId: null },
+      updatedFields: ['parentId', 'originalParentId'],
+      expectedRevision: child.revision,
+      context,
+      tx,
+    });
   }
 }
 
@@ -54,8 +82,18 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       return NextResponse.json({ error: 'Page is not in trash' }, { status: 400 });
     }
 
+    const actorInfo = await getActorInfo(auth.userId);
+    const changeGroupId = createChangeGroupId();
+    const changeGroupType = inferChangeGroupType({ isAiGenerated: false });
+
     await db.transaction(async (tx) => {
-      await recursivelyRestore(pageId, tx);
+      await recursivelyRestore(pageId, tx, {
+        userId: auth.userId,
+        actorEmail: actorInfo.actorEmail,
+        actorDisplayName: actorInfo.actorDisplayName ?? undefined,
+        changeGroupId,
+        changeGroupType,
+      });
     });
 
     if (page.drive?.id) {
@@ -75,16 +113,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       pageTitle: page.title,
       pageType: page.type,
     });
-
-    // Log to activity audit trail with actor info
-    if (page.drive?.id) {
-      const actorInfo = await getActorInfo(auth.userId);
-      logPageActivity(auth.userId, 'restore', {
-        id: pageId,
-        title: page.title ?? undefined,
-        driveId: page.drive.id,
-      }, actorInfo);
-    }
 
     return NextResponse.json({ message: 'Page restored successfully.' });
   } catch (error) {

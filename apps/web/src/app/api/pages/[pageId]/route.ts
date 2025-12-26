@@ -1,9 +1,8 @@
 import { NextResponse } from 'next/server';
 import { z } from "zod/v4";
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { loggers, agentAwarenessCache, pageTreeCache, getActorInfo } from '@pagespace/lib/server';
+import { loggers, agentAwarenessCache, pageTreeCache } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
-import { logPageActivity } from '@pagespace/lib';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/api-utils';
 import { pageService } from '@/services/api';
@@ -40,6 +39,7 @@ const patchSchema = z.object({
   aiModel: z.string().optional(),
   parentId: z.string().nullable().optional(),
   isPaginated: z.boolean().optional(),
+  expectedRevision: z.number().int().min(0).optional(),
 });
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
@@ -53,11 +53,19 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
   try {
     const body = await req.json();
     const safeBody = patchSchema.parse(body);
+    const { expectedRevision, ...updates } = safeBody;
 
-    const result = await pageService.updatePage(pageId, userId, safeBody);
+    const result = await pageService.updatePage(pageId, userId, updates, { expectedRevision });
 
     if (!result.success) {
-      return NextResponse.json({ error: result.error }, { status: result.status });
+      return NextResponse.json(
+        {
+          error: result.error,
+          currentRevision: result.currentRevision,
+          expectedRevision: result.expectedRevision,
+        },
+        { status: result.status }
+      );
     }
 
     // Side effects: broadcast and cache invalidation
@@ -101,18 +109,6 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
       updatedFields: result.updatedFields,
       hasContentUpdate: !!safeBody.content,
       hasTitleUpdate: !!safeBody.title
-    });
-
-    // Log to activity audit trail with actor info
-    const actorInfo = await getActorInfo(userId);
-    logPageActivity(userId, 'update', {
-      id: pageId,
-      title: result.page.title ?? undefined,
-      driveId: result.driveId,
-      content: safeBody.content, // Snapshot for rollback
-    }, {
-      ...actorInfo,
-      updatedFields: result.updatedFields,
     });
 
     return jsonResponse(result.page);
@@ -176,17 +172,6 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
       trashChildren: trashChildren,
       pageTitle: result.pageTitle,
       pageType: result.pageType
-    });
-
-    // Log to activity audit trail with actor info
-    const actorInfo = await getActorInfo(userId);
-    logPageActivity(userId, 'trash', {
-      id: pageId,
-      title: result.pageTitle ?? undefined,
-      driveId: result.driveId,
-    }, {
-      ...actorInfo,
-      metadata: { trashChildren, pageType: result.pageType },
     });
 
     return NextResponse.json({ message: 'Page moved to trash successfully.' });

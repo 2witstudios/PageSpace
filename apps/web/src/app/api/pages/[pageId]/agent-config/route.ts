@@ -4,7 +4,8 @@ import { canUserEditPage, agentAwarenessCache } from '@pagespace/lib/server';
 import { db, pages, drives, eq } from '@pagespace/db';
 import { pageSpaceTools } from '@/lib/ai/core';
 import { loggers } from '@pagespace/lib/server';
-import { getActorInfo, logAgentConfigActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
+import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 
 const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
@@ -100,7 +101,18 @@ export async function PATCH(
 
     const { pageId } = await context.params;
     const body = await request.json();
-    const { systemPrompt, enabledTools, aiProvider, aiModel, includeDrivePrompt, agentDefinition, visibleToGlobalAssistant, includePageTree, pageTreeScope } = body;
+    const {
+      systemPrompt,
+      enabledTools,
+      aiProvider,
+      aiModel,
+      includeDrivePrompt,
+      agentDefinition,
+      visibleToGlobalAssistant,
+      includePageTree,
+      pageTreeScope,
+      expectedRevision,
+    } = body;
 
     // Check if user has permission to edit this page
     const canEdit = await canUserEditPage(userId, pageId);
@@ -176,14 +188,45 @@ export async function PATCH(
     }
 
     // Only update if there are changes
+    let responsePage = page;
     if (Object.keys(updateData).length > 0) {
-      await db
-        .update(pages)
-        .set({
-          ...updateData,
-          updatedAt: new Date(),
-        })
-        .where(eq(pages.id, pageId));
+      try {
+        const actorInfo = await getActorInfo(userId);
+        await applyPageMutation({
+          pageId,
+          operation: 'agent_config_update',
+          updates: updateData,
+          updatedFields: Object.keys(updateData),
+          expectedRevision: typeof expectedRevision === 'number' ? expectedRevision : undefined,
+          context: {
+            userId,
+            actorEmail: actorInfo.actorEmail,
+            actorDisplayName: actorInfo.actorDisplayName,
+            resourceType: 'agent',
+          },
+        });
+      } catch (error) {
+        if (error instanceof PageRevisionMismatchError) {
+          return NextResponse.json(
+            {
+              error: error.message,
+              currentRevision: error.currentRevision,
+              expectedRevision: error.expectedRevision,
+            },
+            { status: error.expectedRevision === undefined ? 428 : 409 }
+          );
+        }
+        throw error;
+      }
+
+      const [updatedPage] = await db
+        .select()
+        .from(pages)
+        .where(eq(pages.id, pageId))
+        .limit(1);
+      if (updatedPage) {
+        responsePage = updatedPage;
+      }
 
       // Invalidate agent awareness cache if this is an AI_CHAT page and
       // visibility or definition changed
@@ -192,47 +235,25 @@ export async function PATCH(
         await agentAwarenessCache.invalidateDriveAgents(page.driveId);
       }
 
-      // Log activity for audit trail
-      const actorInfo = await getActorInfo(userId);
-      const updatedFields = Object.keys(updateData);
-      const previousValues: Record<string, unknown> = {};
-      const newValues: Record<string, unknown> = {};
-
-      // Capture previous and new values for changed fields
-      for (const field of updatedFields) {
-        previousValues[field] = page[field as keyof typeof page];
-        newValues[field] = updateData[field as keyof typeof updateData];
-      }
-
-      logAgentConfigActivity(userId, {
-        id: pageId,
-        name: page.title ?? undefined,
-        driveId: page.driveId,
-      }, {
-        updatedFields,
-        previousValues,
-        newValues,
-      }, actorInfo);
-
       loggers.api.info('Page agent configuration updated', {
         pageId,
         userId,
-        updatedFields,
+        updatedFields: Object.keys(updateData),
       });
     }
 
     return NextResponse.json({
       success: true,
       message: 'Agent configuration updated successfully',
-      systemPrompt: updateData.systemPrompt,
-      enabledTools: updateData.enabledTools,
-      aiProvider: updateData.aiProvider,
-      aiModel: updateData.aiModel,
-      includeDrivePrompt: updateData.includeDrivePrompt,
-      agentDefinition: updateData.agentDefinition,
-      visibleToGlobalAssistant: updateData.visibleToGlobalAssistant,
-      includePageTree: updateData.includePageTree,
-      pageTreeScope: updateData.pageTreeScope,
+      systemPrompt: responsePage.systemPrompt || '',
+      enabledTools: responsePage.enabledTools as string[] || [],
+      aiProvider: responsePage.aiProvider || '',
+      aiModel: responsePage.aiModel || '',
+      includeDrivePrompt: responsePage.includeDrivePrompt ?? false,
+      agentDefinition: responsePage.agentDefinition || '',
+      visibleToGlobalAssistant: responsePage.visibleToGlobalAssistant ?? true,
+      includePageTree: responsePage.includePageTree ?? false,
+      pageTreeScope: responsePage.pageTreeScope ?? 'children',
     });
   } catch (error) {
     loggers.api.error('Error updating page agent configuration:', error as Error);

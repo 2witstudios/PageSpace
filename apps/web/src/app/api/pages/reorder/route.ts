@@ -4,8 +4,6 @@ import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers, pageTreeCache } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { pageReorderService } from '@/services/api';
-import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { db, pages, eq } from '@pagespace/db';
 
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 
@@ -34,17 +32,6 @@ export async function PATCH(request: Request) {
       );
     }
 
-    // Capture current state for rollback support
-    const [currentPage] = await db
-      .select({ parentId: pages.parentId, position: pages.position })
-      .from(pages)
-      .where(eq(pages.id, pageId))
-      .limit(1);
-
-    if (!currentPage) {
-      return NextResponse.json({ error: 'Page not found' }, { status: 404 });
-    }
-
     // Execute the reorder operation
     const result = await pageReorderService.reorderPage({
       pageId,
@@ -66,25 +53,6 @@ export async function PATCH(request: Request) {
     );
 
     await pageTreeCache.invalidateDriveTree(result.driveId);
-
-    // Log activity for audit trail (page moves affect tree structure)
-    const actorInfo = await getActorInfo(auth.userId);
-    logPageActivity(auth.userId, 'move', {
-      id: pageId,
-      title: result.pageTitle ?? undefined,
-      driveId: result.driveId,
-    }, {
-      ...actorInfo,
-      updatedFields: ['parentId', 'position'],
-      previousValues: {
-        parentId: currentPage.parentId,
-        position: currentPage.position,
-      },
-      newValues: {
-        parentId: newParentId,
-        position: newPosition,
-      },
-    });
 
     return NextResponse.json({ message: 'Page reordered successfully' });
   } catch (error) {

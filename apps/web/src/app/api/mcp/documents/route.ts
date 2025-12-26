@@ -6,7 +6,8 @@ import prettier from 'prettier';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateMCPRequest, isAuthError } from '@/lib/auth';
-import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
+import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 
 // Get the current page ID for the user
 async function getCurrentPageId(userId: string): Promise<string | null> {
@@ -177,11 +178,24 @@ export async function POST(req: NextRequest) {
         
         const newContent = await formatHtml(newLines.join('\n'));
         
-        // Update the page
-        await db.update(pages).set({
-          content: newContent,
-          updatedAt: new Date(),
-        }).where(eq(pages.id, pageId));
+        const actorInfo = await getActorInfo(userId);
+        await applyPageMutation({
+          pageId,
+          operation: 'update',
+          updates: { content: newContent },
+          updatedFields: ['content'],
+          expectedRevision: typeof page.revision === 'number' ? page.revision : undefined,
+          context: {
+            userId,
+            actorEmail: actorInfo.actorEmail,
+            actorDisplayName: actorInfo.actorDisplayName ?? undefined,
+            metadata: {
+              source: 'mcp',
+              mcpOperation: 'replace',
+              affectedLines: `${startLine}-${actualEndLine}`,
+            },
+          },
+        });
         
         // Broadcast content update event
         const driveId = await getDriveIdFromPage(pageId);
@@ -192,23 +206,6 @@ export async function POST(req: NextRequest) {
               parentId: page.parentId
             })
           );
-        }
-
-        // Log MCP document operation for compliance (fire-and-forget)
-        if (driveId) {
-          const actorInfo = await getActorInfo(userId);
-          logPageActivity(userId, 'update', {
-            id: pageId,
-            title: page.title,
-            driveId,
-          }, {
-            ...actorInfo,
-            metadata: {
-              source: 'mcp',
-              mcpOperation: 'replace',
-              affectedLines: `${startLine}-${actualEndLine}`,
-            },
-          });
         }
 
         const numberedLines = getNumberedLines(newContent);
@@ -237,11 +234,25 @@ export async function POST(req: NextRequest) {
 
         const newContent = await formatHtml(newLines.join('\n'));
 
-        // Update the page
-        await db.update(pages).set({
-          content: newContent,
-          updatedAt: new Date(),
-        }).where(eq(pages.id, pageId));
+        const actorInfo = await getActorInfo(userId);
+        await applyPageMutation({
+          pageId,
+          operation: 'update',
+          updates: { content: newContent },
+          updatedFields: ['content'],
+          expectedRevision: typeof page.revision === 'number' ? page.revision : undefined,
+          context: {
+            userId,
+            actorEmail: actorInfo.actorEmail,
+            actorDisplayName: actorInfo.actorDisplayName ?? undefined,
+            metadata: {
+              source: 'mcp',
+              mcpOperation: 'insert',
+              insertedAt: startLine,
+              linesInserted: content.split('\n').length,
+            },
+          },
+        });
 
         // Broadcast content update event
         const driveId = await getDriveIdFromPage(pageId);
@@ -252,24 +263,6 @@ export async function POST(req: NextRequest) {
               parentId: page.parentId
             })
           );
-        }
-
-        // Log MCP document operation for compliance (fire-and-forget)
-        if (driveId) {
-          const actorInfo = await getActorInfo(userId);
-          logPageActivity(userId, 'update', {
-            id: pageId,
-            title: page.title,
-            driveId,
-          }, {
-            ...actorInfo,
-            metadata: {
-              source: 'mcp',
-              mcpOperation: 'insert',
-              insertedAt: startLine,
-              linesInserted: content.split('\n').length,
-            },
-          });
         }
 
         const numberedLines = getNumberedLines(newContent);
@@ -302,11 +295,24 @@ export async function POST(req: NextRequest) {
 
         const newContent = await formatHtml(newLines.join('\n'));
 
-        // Update the page
-        await db.update(pages).set({
-          content: newContent,
-          updatedAt: new Date(),
-        }).where(eq(pages.id, pageId));
+        const actorInfo = await getActorInfo(userId);
+        await applyPageMutation({
+          pageId,
+          operation: 'update',
+          updates: { content: newContent },
+          updatedFields: ['content'],
+          expectedRevision: typeof page.revision === 'number' ? page.revision : undefined,
+          context: {
+            userId,
+            actorEmail: actorInfo.actorEmail,
+            actorDisplayName: actorInfo.actorDisplayName ?? undefined,
+            metadata: {
+              source: 'mcp',
+              mcpOperation: 'delete',
+              deletedLines: `${startLine}-${actualEndLine}`,
+            },
+          },
+        });
 
         // Broadcast content update event
         const driveId = await getDriveIdFromPage(pageId);
@@ -317,23 +323,6 @@ export async function POST(req: NextRequest) {
               parentId: page.parentId
             })
           );
-        }
-
-        // Log MCP document operation for compliance (fire-and-forget)
-        if (driveId) {
-          const actorInfo = await getActorInfo(userId);
-          logPageActivity(userId, 'update', {
-            id: pageId,
-            title: page.title,
-            driveId,
-          }, {
-            ...actorInfo,
-            metadata: {
-              source: 'mcp',
-              mcpOperation: 'delete',
-              deletedLines: `${startLine}-${actualEndLine}`,
-            },
-          });
         }
 
         const numberedLines = getNumberedLines(newContent);
@@ -379,11 +368,32 @@ export async function POST(req: NextRequest) {
         // Serialize back to TOML format
         const newContent = serializeSheetContent(updatedSheet, { pageId });
 
-        // Update the page
-        await db.update(pages).set({
-          content: newContent,
-          updatedAt: new Date(),
-        }).where(eq(pages.id, pageId));
+        // Summarize changes for response and metadata
+        const formulaCount = cells.filter(c => c.value.trim().startsWith('=')).length;
+        const valueCount = cells.filter(c => c.value.trim() !== '' && !c.value.trim().startsWith('=')).length;
+        const clearCount = cells.filter(c => c.value.trim() === '').length;
+
+        const actorInfo = await getActorInfo(userId);
+        await applyPageMutation({
+          pageId,
+          operation: 'update',
+          updates: { content: newContent },
+          updatedFields: ['content'],
+          expectedRevision: typeof page.revision === 'number' ? page.revision : undefined,
+          context: {
+            userId,
+            actorEmail: actorInfo.actorEmail,
+            actorDisplayName: actorInfo.actorDisplayName,
+            metadata: {
+              source: 'mcp',
+              mcpOperation: 'edit-cells',
+              cellsUpdated: cells.length,
+              valuesSet: valueCount,
+              formulasSet: formulaCount,
+              cellsCleared: clearCount,
+            },
+          },
+        });
 
         // Broadcast content update event
         const driveId = await getDriveIdFromPage(pageId);
@@ -394,31 +404,6 @@ export async function POST(req: NextRequest) {
               parentId: page.parentId
             })
           );
-        }
-
-        // Summarize changes for response
-        const formulaCount = cells.filter(c => c.value.trim().startsWith('=')).length;
-        const valueCount = cells.filter(c => c.value.trim() !== '' && !c.value.trim().startsWith('=')).length;
-        const clearCount = cells.filter(c => c.value.trim() === '').length;
-
-        // Log MCP document operation for compliance (fire-and-forget)
-        if (driveId) {
-          const actorInfo = await getActorInfo(userId);
-          logPageActivity(userId, 'update', {
-            id: pageId,
-            title: page.title,
-            driveId,
-          }, {
-            ...actorInfo,
-            metadata: {
-              source: 'mcp',
-              mcpOperation: 'edit-cells',
-              cellsUpdated: cells.length,
-              valuesSet: valueCount,
-              formulasSet: formulaCount,
-              cellsCleared: clearCount,
-            },
-          });
         }
 
         return NextResponse.json({
@@ -447,6 +432,16 @@ export async function POST(req: NextRequest) {
     }
   } catch (error) {
     loggers.api.error('Error in MCP document operation:', error as Error);
+    if (error instanceof PageRevisionMismatchError) {
+      return NextResponse.json(
+        {
+          error: error.message,
+          currentRevision: error.currentRevision,
+          expectedRevision: error.expectedRevision,
+        },
+        { status: error.expectedRevision === undefined ? 428 : 409 }
+      );
+    }
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: error.issues }, { status: 400 });
     }

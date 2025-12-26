@@ -100,6 +100,8 @@ const mockPage: PageWithDetails = {
   position: 0,
   createdAt: new Date(),
   updatedAt: new Date(),
+  revision: 0,
+  stateHash: null,
   isTrashed: false,
   trashedAt: null,
   aiProvider: null,
@@ -284,7 +286,8 @@ describe('PATCH /api/pages/[pageId]', () => {
         expect.objectContaining({
           title: 'Updated Title',
           content: '<p>New content</p>',
-        })
+        }),
+        expect.objectContaining({ expectedRevision: undefined })
       );
     });
   });

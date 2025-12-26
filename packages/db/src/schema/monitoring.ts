@@ -398,6 +398,12 @@ export const activityOperationEnum = pgEnum('activity_operation', [
 ]);
 
 export const contentFormatEnum = pgEnum('content_format', ['text', 'html', 'json', 'tiptap']);
+export const activityChangeGroupTypeEnum = pgEnum('activity_change_group_type', [
+  'user',
+  'ai',
+  'automation',
+  'system',
+]);
 
 export const activityResourceEnum = pgEnum('activity_resource', [
   'page',
@@ -454,6 +460,8 @@ export const activityLogs = pgTable('activity_logs', {
   // TODO: Consider compression or external storage for very large content
   contentSnapshot: text('contentSnapshot'),
   contentFormat: contentFormatEnum('contentFormat'), // For proper content parsing during rollback
+  contentRef: text('contentRef'), // Content-addressed snapshot ref (preferred for large content)
+  contentSize: integer('contentSize'),
 
   // Rollback tracking - denormalized source info for audit trail preservation
   // Note: rollbackFromActivityId intentionally has no FK constraint to allow rollback
@@ -469,15 +477,28 @@ export const activityLogs = pgTable('activity_logs', {
   newValues: jsonb('newValues').$type<Record<string, unknown>>(),
   metadata: jsonb('metadata').$type<Record<string, unknown>>(),
 
+  // Deterministic event stream fields (optional for non-page resources)
+  streamId: text('streamId'),
+  streamSeq: integer('streamSeq'),
+  changeGroupId: text('changeGroupId'),
+  changeGroupType: activityChangeGroupTypeEnum('changeGroupType'),
+  stateHashBefore: text('stateHashBefore'),
+  stateHashAfter: text('stateHashAfter'),
+
   // Retention management
   isArchived: boolean('isArchived').default(false).notNull(),
 }, (table) => ({
+  contentSizeLimit: check('activity_logs_content_size_limit', sql`${table.contentSize} IS NULL OR ${table.contentSize} <= 1048576`),
+  streamPair: check('activity_logs_stream_pair', sql`(${table.streamId} IS NULL) = (${table.streamSeq} IS NULL)`),
+  changeGroupPair: check('activity_logs_change_group_pair', sql`(${table.changeGroupId} IS NULL) = (${table.changeGroupType} IS NULL)`),
   timestampIdx: index('idx_activity_logs_timestamp').on(table.timestamp),
   userTimestampIdx: index('idx_activity_logs_user_timestamp').on(table.userId, table.timestamp),
   driveTimestampIdx: index('idx_activity_logs_drive_timestamp').on(table.driveId, table.timestamp),
   pageTimestampIdx: index('idx_activity_logs_page_timestamp').on(table.pageId, table.timestamp),
   archivedIdx: index('idx_activity_logs_archived').on(table.isArchived),
   rollbackFromActivityIdIdx: index('idx_activity_logs_rollback_from').on(table.rollbackFromActivityId),
+  streamIdx: index('idx_activity_logs_stream').on(table.streamId, table.streamSeq).where(sql`${table.streamId} IS NOT NULL`),
+  changeGroupIdx: index('idx_activity_logs_change_group').on(table.changeGroupId).where(sql`${table.changeGroupId} IS NOT NULL`),
 }));
 
 /**

@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { ActivityItem, type RollbackContext } from './ActivityItem';
 import { groupActivitiesByDate } from './utils';
 import type { ActivityLog, Pagination } from './types';
+import type { ActivityActionResult } from '@/types/activity-actions';
 
 interface ActivityTimelineProps {
   activities: ActivityLog[];
@@ -15,7 +16,8 @@ interface ActivityTimelineProps {
   emptyMessage?: string;
   emptyDescription?: string;
   context?: RollbackContext;
-  onRollback?: (activityId: string) => Promise<void>;
+  onRollback?: (activityId: string, force: boolean) => Promise<ActivityActionResult>;
+  onRedo?: (activityId: string, force: boolean) => Promise<ActivityActionResult>;
 }
 
 export function ActivityTimeline({
@@ -28,6 +30,7 @@ export function ActivityTimeline({
   emptyDescription = 'Activity will appear here',
   context,
   onRollback,
+  onRedo,
 }: ActivityTimelineProps) {
   const groupedActivities = groupActivitiesByDate(activities);
 
@@ -63,6 +66,7 @@ export function ActivityTimeline({
                 activity={activity}
                 context={context}
                 onRollback={onRollback}
+                onRedo={onRedo}
               />
             ))}
           </div>
