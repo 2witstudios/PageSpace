@@ -141,7 +141,10 @@ export const agentTools = {
         });
 
         const refreshedAgent = await agentRepository.findById(agent.id);
-        const updatedAgent = refreshedAgent ?? { ...agent, ...updateData };
+        if (!refreshedAgent) {
+          throw new Error(`Agent "${agent.title}" was deleted during the update operation`);
+        }
+        const updatedAgent = { ...refreshedAgent, ...updateData };
         const enabledToolsList = updatedAgent.enabledTools ?? [];
 
         // Broadcast update event

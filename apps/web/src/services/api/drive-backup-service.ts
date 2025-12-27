@@ -138,8 +138,8 @@ export async function createDriveBackup(
       ? drivePages
       : drivePages.filter((page) => !page.isTrashed);
 
-    const backupPageRows: DriveBackupPageInsert[] = [];
-    for (const page of pagesToBackup) {
+    // Prepare page data for version creation
+    const pageVersionData = pagesToBackup.map((page) => {
       const content = page.content ?? '';
       const contentFormat = detectPageContentFormat(content);
       const contentRef = hashWithPrefix(contentFormat, content);
@@ -162,32 +162,47 @@ export async function createDriveBackup(
         includePageTree: page.includePageTree,
         pageTreeScope: page.pageTreeScope,
       });
+      return { page, content, contentFormat, stateHash };
+    });
 
-      const version = await createPageVersion({
-        pageId: page.id,
-        driveId: page.driveId,
-        createdBy: userId,
-        source: 'system',
-        content,
-        contentFormat,
-        pageRevision: page.revision,
-        stateHash,
-        changeGroupId,
-        changeGroupType,
-        metadata: { backupId: backup.id },
-      }, { tx });
+    // Create page versions in batches for better performance
+    const versionBatchSize = 50;
+    const backupPageRows: DriveBackupPageInsert[] = [];
 
-      backupPageRows.push({
-        backupId: backup.id,
-        pageId: page.id,
-        pageVersionId: version.id,
-        title: page.title,
-        type: page.type,
-        parentId: page.parentId,
-        originalParentId: page.originalParentId,
-        position: page.position,
-        isTrashed: page.isTrashed,
-        trashedAt: page.trashedAt,
+    for (let i = 0; i < pageVersionData.length; i += versionBatchSize) {
+      const batch = pageVersionData.slice(i, i + versionBatchSize);
+      const versionPromises = batch.map(({ page, content, contentFormat, stateHash }) =>
+        createPageVersion({
+          pageId: page.id,
+          driveId: page.driveId,
+          createdBy: userId,
+          source: 'system',
+          content,
+          contentFormat,
+          pageRevision: page.revision,
+          stateHash,
+          changeGroupId,
+          changeGroupType,
+          metadata: { backupId: backup.id },
+        }, { tx })
+      );
+
+      const versions = await Promise.all(versionPromises);
+
+      versions.forEach((version, idx) => {
+        const { page } = batch[idx];
+        backupPageRows.push({
+          backupId: backup.id,
+          pageId: page.id,
+          pageVersionId: version.id,
+          title: page.title,
+          type: page.type,
+          parentId: page.parentId,
+          originalParentId: page.originalParentId,
+          position: page.position,
+          isTrashed: page.isTrashed,
+          trashedAt: page.trashedAt,
+        });
       });
     }
 

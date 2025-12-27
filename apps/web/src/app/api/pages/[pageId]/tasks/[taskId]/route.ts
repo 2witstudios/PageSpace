@@ -4,7 +4,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/server';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { applyPageMutation } from '@/services/api/page-mutation-service';
+import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -109,46 +109,61 @@ export async function PATCH(
   let linkedPageUpdated = false;
 
   // Update task and sync title to linked page if needed
-  const [updatedTask] = await db.transaction(async (tx) => {
-    // Update the task
-    const [task] = await tx.update(taskItems)
-      .set(updates)
-      .where(eq(taskItems.id, taskId))
-      .returning();
+  let updatedTask;
+  try {
+    [updatedTask] = await db.transaction(async (tx) => {
+      // Update the task
+      const [task] = await tx.update(taskItems)
+        .set(updates)
+        .where(eq(taskItems.id, taskId))
+        .returning();
 
-    // If title changed and task has a linked page, update the page title too
-    if (updates.title && existingTask.pageId) {
-      const [linkedPage] = await tx
-        .select({ revision: pages.revision })
-        .from(pages)
-        .where(eq(pages.id, existingTask.pageId))
-        .limit(1);
+      // If title changed and task has a linked page, update the page title too
+      if (updates.title && existingTask.pageId) {
+        const [linkedPage] = await tx
+          .select({ revision: pages.revision })
+          .from(pages)
+          .where(eq(pages.id, existingTask.pageId))
+          .limit(1);
 
-      if (linkedPage) {
-        await applyPageMutation({
-          pageId: existingTask.pageId,
-          operation: 'update',
-          updates: { title: updates.title },
-          updatedFields: ['title'],
-          expectedRevision: linkedPage.revision,
-          context: {
-            userId,
-            actorEmail: actorInfo.actorEmail,
-            actorDisplayName: actorInfo.actorDisplayName ?? undefined,
-            metadata: {
-              taskId,
-              taskListId: taskList.id,
-              taskListPageId: pageId,
+        if (linkedPage) {
+          await applyPageMutation({
+            pageId: existingTask.pageId,
+            operation: 'update',
+            updates: { title: updates.title },
+            updatedFields: ['title'],
+            expectedRevision: linkedPage.revision,
+            context: {
+              userId,
+              actorEmail: actorInfo.actorEmail,
+              actorDisplayName: actorInfo.actorDisplayName ?? undefined,
+              metadata: {
+                taskId,
+                taskListId: taskList.id,
+                taskListPageId: pageId,
+              },
             },
-          },
-          tx,
-        });
-        linkedPageUpdated = true;
+            tx,
+          });
+          linkedPageUpdated = true;
+        }
       }
-    }
 
-    return [task];
-  });
+      return [task];
+    });
+  } catch (error) {
+    if (error instanceof PageRevisionMismatchError) {
+      return NextResponse.json(
+        {
+          error: error.message,
+          currentRevision: error.currentRevision,
+          expectedRevision: error.expectedRevision,
+        },
+        { status: error.expectedRevision === undefined ? 428 : 409 }
+      );
+    }
+    throw error;
+  }
 
   // Fetch with relations
   const taskWithRelations = await db.query.taskItems.findFirst({
@@ -298,23 +313,37 @@ export async function DELETE(
     .limit(1);
 
   if (linkedPage) {
-    await applyPageMutation({
-      pageId: linkedPageId,
-      operation: 'trash',
-      updates: { isTrashed: true, trashedAt: new Date() },
-      updatedFields: ['isTrashed', 'trashedAt'],
-      expectedRevision: linkedPage.revision,
-      context: {
-        userId,
-        actorEmail: actorInfo.actorEmail,
-        actorDisplayName: actorInfo.actorDisplayName ?? undefined,
-        metadata: {
-          taskId,
-          taskListId: taskList.id,
-          taskListPageId: pageId,
+    try {
+      await applyPageMutation({
+        pageId: linkedPageId,
+        operation: 'trash',
+        updates: { isTrashed: true, trashedAt: new Date() },
+        updatedFields: ['isTrashed', 'trashedAt'],
+        expectedRevision: linkedPage.revision,
+        context: {
+          userId,
+          actorEmail: actorInfo.actorEmail,
+          actorDisplayName: actorInfo.actorDisplayName ?? undefined,
+          metadata: {
+            taskId,
+            taskListId: taskList.id,
+            taskListPageId: pageId,
+          },
         },
-      },
-    });
+      });
+    } catch (error) {
+      if (error instanceof PageRevisionMismatchError) {
+        return NextResponse.json(
+          {
+            error: error.message,
+            currentRevision: error.currentRevision,
+            expectedRevision: error.expectedRevision,
+          },
+          { status: error.expectedRevision === undefined ? 428 : 409 }
+        );
+      }
+      throw error;
+    }
   }
 
   // Broadcast events

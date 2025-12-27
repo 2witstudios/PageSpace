@@ -168,7 +168,7 @@ export function VersionHistoryPanel({
     }
   }, [open, showAiOnly, operationFilter, pageId, driveId]);
 
-  const handleRollback = async (activityId: string, force: boolean) => {
+  const handleRollback = useCallback(async (activityId: string, force: boolean) => {
     logger.debug('[Rollback:Execute] User initiated rollback from history panel', {
       activityId,
       context,
@@ -213,9 +213,9 @@ export function VersionHistoryPanel({
       });
       throw error;
     }
-  };
+  }, [context, pageId, driveId, toast, mutate, fetchVersions]);
 
-  const handleRedo = async (activityId: string, force: boolean) => {
+  const handleRedo = useCallback(async (activityId: string, force: boolean) => {
     logger.debug('[Rollback:Execute] User initiated redo from history panel', {
       activityId,
       context,
@@ -254,7 +254,7 @@ export function VersionHistoryPanel({
       });
       throw error;
     }
-  };
+  }, [context, pageId, driveId, toast, mutate, fetchVersions]);
 
   const handleLoadMore = () => {
     if (!loading && hasMore) {

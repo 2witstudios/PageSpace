@@ -33,10 +33,10 @@ export const pages = pgTable('pages', {
   aiModel: text('aiModel'),
   systemPrompt: text('systemPrompt'),
   enabledTools: jsonb('enabledTools'),
-  includeDrivePrompt: boolean('includeDrivePrompt').default(false), // Whether to include drive prompt for AI_CHAT pages
+  includeDrivePrompt: boolean('includeDrivePrompt').default(false).notNull(), // Whether to include drive prompt for AI_CHAT pages
   agentDefinition: text('agentDefinition'), // Tool-like description of what this agent does (for AI_CHAT pages)
-  visibleToGlobalAssistant: boolean('visibleToGlobalAssistant').default(true), // Whether this agent appears in global assistant's system prompt
-  includePageTree: boolean('includePageTree').default(false), // Whether to include page tree in AI context
+  visibleToGlobalAssistant: boolean('visibleToGlobalAssistant').default(true).notNull(), // Whether this agent appears in global assistant's system prompt
+  includePageTree: boolean('includePageTree').default(false).notNull(), // Whether to include page tree in AI context
   pageTreeScope: text('pageTreeScope', { enum: ['children', 'drive'] }).default('children'), // Scope of page tree to include
   // File-specific fields
   fileSize: real('fileSize'),

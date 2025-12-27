@@ -196,6 +196,9 @@ export interface AgentConfigUpdate {
   aiModel?: string | null;
   agentDefinition?: string | null;
   visibleToGlobalAssistant?: boolean;
+  includeDrivePrompt?: boolean;
+  includePageTree?: boolean;
+  pageTreeScope?: 'children' | 'drive';
 }
 
 export interface UpdatedAgent {

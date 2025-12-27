@@ -218,6 +218,13 @@
       "when": 1766767958473,
       "tag": "0030_careful_cobalt_man",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1766869142427,
+      "tag": "0031_useful_lifeguard",
+      "breakpoints": true
     }
   ]
 }

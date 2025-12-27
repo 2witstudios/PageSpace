@@ -375,6 +375,54 @@ describe('agent-tools', () => {
       );
     });
 
+    it('throws error when agent is deleted during mutation', async () => {
+      // Arrange
+      const mockAgent = {
+        id: 'agent-1',
+        title: 'My Agent',
+        type: 'AI_CHAT',
+        driveId: 'drive-1',
+        systemPrompt: null,
+        enabledTools: null,
+        aiProvider: null,
+        aiModel: null,
+        agentDefinition: null,
+        visibleToGlobalAssistant: false,
+        includeDrivePrompt: false,
+        includePageTree: false,
+        pageTreeScope: null,
+        revision: 1,
+      };
+      // First call returns the agent, second call (after mutation) returns null
+      mockAgentRepository.findById
+        .mockResolvedValueOnce(mockAgent)
+        .mockResolvedValueOnce(null);
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const context = {
+        toolCallId: '1',
+        messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      // Act & Assert
+      await expect(
+        agentTools.update_agent_config.execute!(
+          {
+            agentPath: '/drive/agent',
+            agentId: 'agent-1',
+            systemPrompt: 'New prompt',
+          },
+          context
+        )
+      ).rejects.toThrow('Agent "My Agent" was deleted during the update operation');
+
+      // Verify mutation was called before the error
+      expect(applyPageMutation).toHaveBeenCalled();
+      // Verify broadcast was NOT called since the operation failed
+      expect(mockBroadcastPageEvent).not.toHaveBeenCalled();
+    });
+
     it('handles repository errors gracefully', async () => {
       // Arrange
       mockAgentRepository.findById.mockRejectedValue(new Error('Database connection failed'));
