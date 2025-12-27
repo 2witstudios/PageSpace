@@ -1,0 +1,35 @@
+{
+  "name": "mobile",
+  "version": "1.0.0",
+  "description": "PageSpace Mobile - Native mobile app for PageSpace",
+  "homepage": "https://pagespace.ai",
+  "license": "CC-BY-NC-SA-4.0",
+  "author": {
+    "name": "PageSpace",
+    "email": "support@pagespace.ai"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "echo 'No build needed - loads remote URL'",
+    "sync": "cap sync",
+    "sync:ios": "cap sync ios",
+    "sync:android": "cap sync android",
+    "open:ios": "cap open ios",
+    "open:android": "cap open android",
+    "run:ios": "cap run ios",
+    "run:android": "cap run android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.0.0",
+    "@capacitor/app": "^7.0.0",
+    "@capacitor/core": "^7.0.0",
+    "@capacitor/ios": "^7.0.0",
+    "@capacitor/keyboard": "^7.0.0",
+    "@capacitor/preferences": "^7.0.0",
+    "@capacitor/status-bar": "^7.0.0",
+    "@aparajita/capacitor-secure-storage": "^6.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.0.0"
+  }
+}
