@@ -243,6 +243,20 @@ export async function previewAiUndo(
     // Check rollback eligibility for each activity
     const activitiesAffected: AiUndoPreview['activitiesAffected'] = [];
     const warnings: string[] = [];
+    const fallbackPreview = (reason: string): ActivityActionPreview => ({
+      action: 'rollback',
+      canExecute: false,
+      reason,
+      warnings: [],
+      hasConflict: false,
+      conflictFields: [],
+      requiresForce: false,
+      isNoOp: false,
+      currentValues: null,
+      targetValues: null,
+      changes: [],
+      affectedResources: [],
+    });
 
     for (const activity of activities) {
       // Activities are already filtered for isAiGenerated=true by the query above,
@@ -257,7 +271,17 @@ export async function previewAiUndo(
         context,
       });
 
-      const preview = await previewRollback(activity.id, userId, context);
+      let preview: ActivityActionPreview;
+      try {
+        preview = await previewRollback(activity.id, userId, context);
+        if (!preview) {
+          preview = fallbackPreview('Preview failed');
+          warnings.push(`Could not preview undo for activity ${activity.id}`);
+        }
+      } catch (error) {
+        preview = fallbackPreview('Preview failed');
+        warnings.push(`Failed to preview ${activity.operation} on ${activity.resourceTitle || activity.resourceType}: ${error instanceof Error ? error.message : String(error)}`);
+      }
 
       loggers.api.debug('[AiUndo:Preview] Activity eligibility result', {
         activityId: activity.id,
@@ -336,16 +360,31 @@ export async function executeAiUndo(
   let messagesDeleted = 0;
 
   try {
+    let message: AiMessage | null;
+    try {
+      message = await getMessage(messageId);
+    } catch (error) {
+      loggers.api.error('[AiUndoService] Error fetching message', {
+        messageId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        success: false,
+        messagesDeleted: 0,
+        activitiesRolledBack: 0,
+        errors: ['Message not found or preview failed'],
+      };
+    }
+
     // Idempotency check: if message is already inactive, return success
     // This prevents duplicate rollbacks on network retries or double-clicks
-    const message = await getMessage(messageId);
     if (!message) {
       loggers.api.debug('[AiUndo:Execute] Aborting - message not found');
       return {
         success: false,
         messagesDeleted: 0,
         activitiesRolledBack: 0,
-        errors: ['Message not found'],
+        errors: ['Message not found or preview failed'],
       };
     }
 

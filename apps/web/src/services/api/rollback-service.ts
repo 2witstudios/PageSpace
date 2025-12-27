@@ -247,6 +247,7 @@ function isNoOpChange(
   currentValues: Record<string, unknown> | null
 ): boolean {
   if (!targetValues || !currentValues) return false;
+  if (Object.keys(targetValues).length === 0) return false;
   return Object.entries(targetValues).every(([key, value]) =>
     deepEqual(currentValues[key], value)
   );
@@ -648,7 +649,7 @@ async function previewActivityAction(
     return basePreview({
       reason: action === 'redo'
         ? 'No rollback state available to reapply'
-        : 'No previous state available to restore',
+        : 'No values to restore',
     });
   }
 

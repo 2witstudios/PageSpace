@@ -45,6 +45,7 @@ vi.mock('@pagespace/db', () => {
   return {
     db: mockDb,
     chatMessages: { id: 'id', conversationId: 'conversationId', createdAt: 'createdAt', isActive: 'isActive' },
+    messages: { id: 'id', conversationId: 'conversationId', createdAt: 'createdAt', isActive: 'isActive' },
     activityLogs: { id: 'id', aiConversationId: 'aiConversationId', isAiGenerated: 'isAiGenerated', timestamp: 'timestamp' },
     eq: vi.fn((a, b) => ({ field: a, value: b })),
     and: vi.fn((...args) => args),

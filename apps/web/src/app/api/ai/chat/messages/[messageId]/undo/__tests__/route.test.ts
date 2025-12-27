@@ -316,7 +316,8 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
           pageId: mockPageId,
           messagesAffected: 0,
           activitiesAffected: [],
-        })
+        }),
+        expect.objectContaining({ force: false })
       );
     });
 
@@ -341,7 +342,8 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
           pageId: mockPageId,
           messagesAffected: 0,
           activitiesAffected: [],
-        })
+        }),
+        expect.objectContaining({ force: false })
       );
     });
   });

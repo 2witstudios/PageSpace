@@ -298,7 +298,7 @@ describe('rollback-service', () => {
       const result = await previewRollback(mockActivityId, mockUserId, 'page');
 
       expect(result.canExecute).toBe(false);
-      expect(result.reason).toBe('No previous state available to restore');
+      expect(result.reason).toBe('No values to restore');
     });
 
     it('returns canExecute=false when user lacks permission', async () => {
@@ -495,10 +495,13 @@ describe('rollback-service', () => {
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockImplementation(() => {
               selectCallCount++;
-              if (selectCallCount === 1 || selectCallCount === 3) {
+              if (selectCallCount === 1 || selectCallCount === 4) {
                 return Promise.resolve([mockActivity]);
               }
-              return Promise.resolve([mockCurrentPage]);
+              if (selectCallCount === 2) {
+                return Promise.resolve([mockCurrentPage]);
+              }
+              return Promise.resolve([{ id: mockDriveId, isTrashed: false }]);
             }),
           }),
         }),
@@ -559,10 +562,13 @@ describe('rollback-service', () => {
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockImplementation(() => {
               selectCallCount++;
-              if (selectCallCount === 1 || selectCallCount === 3) {
+              if (selectCallCount === 1 || selectCallCount === 4) {
                 return Promise.resolve([mockActivity]);
               }
-              return Promise.resolve([mockCurrentPage]);
+              if (selectCallCount === 2) {
+                return Promise.resolve([mockCurrentPage]);
+              }
+              return Promise.resolve([{ id: mockDriveId, isTrashed: false }]);
             }),
           }),
         }),
@@ -604,10 +610,13 @@ describe('rollback-service', () => {
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockImplementation(() => {
               selectCallCount++;
-              if (selectCallCount === 1 || selectCallCount === 3) {
+              if (selectCallCount === 1 || selectCallCount === 4) {
                 return Promise.resolve([mockActivity]);
               }
-              return Promise.resolve([mockCurrentPage]);
+              if (selectCallCount === 2) {
+                return Promise.resolve([mockCurrentPage]);
+              }
+              return Promise.resolve([{ id: mockDriveId, isTrashed: false }]);
             }),
           }),
         }),
@@ -650,10 +659,13 @@ describe('rollback-service', () => {
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockImplementation(() => {
               selectCallCount++;
-              if (selectCallCount === 1 || selectCallCount === 3) {
+              if (selectCallCount === 1 || selectCallCount === 4) {
                 return Promise.resolve([mockActivity]);
               }
-              return Promise.resolve([mockCurrentPage]);
+              if (selectCallCount === 2) {
+                return Promise.resolve([mockCurrentPage]);
+              }
+              return Promise.resolve([{ id: mockDriveId, isTrashed: false }]);
             }),
           }),
         }),
@@ -681,7 +693,6 @@ describe('rollback-service', () => {
         previousValues: {},
         metadata: { targetUserId: 'target_user' },
       });
-      const mockCurrentPage = { title: 'Title', content: '', parentId: null, position: 0 };
 
       let selectCallCount = 0;
       (db.select as Mock).mockImplementation(() => ({
@@ -692,7 +703,16 @@ describe('rollback-service', () => {
               if (selectCallCount === 1 || selectCallCount === 3) {
                 return Promise.resolve([mockActivity]);
               }
-              return Promise.resolve([mockCurrentPage]);
+              return Promise.resolve([{
+                userId: 'target_user',
+                canView: true,
+                canEdit: true,
+                canShare: false,
+                canDelete: false,
+                note: null,
+                expiresAt: null,
+                grantedBy: 'granter_123',
+              }]);
             }),
           }),
         }),
@@ -727,7 +747,6 @@ describe('rollback-service', () => {
         },
         metadata: { targetUserId: 'target_user' },
       });
-      const mockCurrentPage = { title: 'Title', content: '', parentId: null, position: 0 };
 
       let selectCallCount = 0;
       (db.select as Mock).mockImplementation(() => ({
@@ -738,7 +757,7 @@ describe('rollback-service', () => {
               if (selectCallCount === 1 || selectCallCount === 3) {
                 return Promise.resolve([mockActivity]);
               }
-              return Promise.resolve([mockCurrentPage]);
+              return Promise.resolve([]);
             }),
           }),
         }),
