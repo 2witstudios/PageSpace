@@ -114,6 +114,7 @@ export async function createDriveBackup(
   const changeGroupType = inferChangeGroupType({ isAiGenerated: false });
 
   return db.transaction(async (tx) => {
+    // Create backup record first to get the ID
     const [backup] = await tx
       .insert(driveBackups)
       .values({
@@ -129,7 +130,8 @@ export async function createDriveBackup(
       })
       .returning({ id: driveBackups.id });
 
-    const drivePages = await tx
+    try {
+      const drivePages = await tx
       .select()
       .from(pages)
       .where(eq(pages.driveId, driveId));
@@ -310,17 +312,30 @@ export async function createDriveBackup(
       })
       .where(eq(driveBackups.id, backup.id));
 
-    return {
-      success: true,
-      backupId: backup.id,
-      status: 'ready',
-      counts: {
-        pages: pagesToBackup.length,
-        permissions: permissionCount,
-        members: members.length,
-        roles: roles.length,
-        files: driveFiles.length,
-      },
-    };
+      return {
+        success: true,
+        backupId: backup.id,
+        status: 'ready' as const,
+        counts: {
+          pages: pagesToBackup.length,
+          permissions: permissionCount,
+          members: members.length,
+          roles: roles.length,
+          files: driveFiles.length,
+        },
+      };
+    } catch (error) {
+      // Mark backup as failed before rethrowing
+      await tx
+        .update(driveBackups)
+        .set({
+          status: 'failed',
+          failedAt: new Date(),
+          failureReason: error instanceof Error ? error.message : 'Unknown error',
+        })
+        .where(eq(driveBackups.id, backup.id));
+
+      throw error;
+    }
   });
 }

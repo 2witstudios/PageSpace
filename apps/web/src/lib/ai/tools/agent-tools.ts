@@ -144,7 +144,8 @@ export const agentTools = {
         if (!refreshedAgent) {
           throw new Error(`Agent "${agent.title}" was deleted during the update operation`);
         }
-        const updatedAgent = { ...refreshedAgent, ...updateData };
+        // refreshedAgent already contains the persisted updates from applyPageMutation
+        const updatedAgent = refreshedAgent;
         const enabledToolsList = updatedAgent.enabledTools ?? [];
 
         // Broadcast update event

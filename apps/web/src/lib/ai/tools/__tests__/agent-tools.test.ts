@@ -20,7 +20,6 @@ vi.mock('@pagespace/lib/server', () => ({
   },
   agentRepository: {
     findById: vi.fn(),
-    updateConfig: vi.fn(),
   },
 }));
 
@@ -205,7 +204,16 @@ describe('agent-tools', () => {
         pageTreeScope: null,
         revision: 2,
       };
-      mockAgentRepository.findById.mockResolvedValue(mockAgent);
+      const updatedMockAgent = {
+        ...mockAgent,
+        systemPrompt: 'New system prompt',
+        enabledTools: ['list_drives', 'list_pages'],
+        revision: 3,
+      };
+      // First call returns original, second call (after mutation) returns updated
+      mockAgentRepository.findById
+        .mockResolvedValueOnce(mockAgent)
+        .mockResolvedValueOnce(updatedMockAgent);
       mockCanUserEditPage.mockResolvedValue(true);
 
       const context = {
@@ -236,14 +244,16 @@ describe('agent-tools', () => {
         },
       });
 
-      // Assert - verify mutation was called with correct data
+      // Assert - verify mutation was called with correct data including updatedFields
       expect(applyPageMutation).toHaveBeenCalledWith(
         expect.objectContaining({
           pageId: 'agent-1',
+          operation: 'agent_config_update',
           updates: expect.objectContaining({
             systemPrompt: 'New system prompt',
             enabledTools: ['list_drives', 'list_pages'],
           }),
+          updatedFields: expect.arrayContaining(['systemPrompt', 'enabledTools']),
         })
       );
 
@@ -269,7 +279,16 @@ describe('agent-tools', () => {
         pageTreeScope: null,
         revision: 3,
       };
-      mockAgentRepository.findById.mockResolvedValue(mockAgent);
+      const updatedMockAgent = {
+        ...mockAgent,
+        aiProvider: 'google',
+        aiModel: 'gemini-pro',
+        revision: 4,
+      };
+      // First call returns original, second call (after mutation) returns updated
+      mockAgentRepository.findById
+        .mockResolvedValueOnce(mockAgent)
+        .mockResolvedValueOnce(updatedMockAgent);
       mockCanUserEditPage.mockResolvedValue(true);
 
       const context = {
