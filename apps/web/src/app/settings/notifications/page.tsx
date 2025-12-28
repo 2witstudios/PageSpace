@@ -8,9 +8,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
-import { Bell, Mail, Loader2, ArrowLeft } from 'lucide-react';
+import { Bell, Mail, Loader2, ArrowLeft, Info } from 'lucide-react';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 const fetcher = async (url: string) => {
@@ -201,14 +202,14 @@ export default function NotificationsSettingsPage() {
 
   if (authLoading || isLoading) {
     return (
-      <div className="container max-w-4xl mx-auto py-10 flex items-center justify-center min-h-[400px]">
+      <div className="container max-w-4xl mx-auto py-10 px-10 flex items-center justify-center min-h-[400px]">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
       </div>
     );
   }
 
   return (
-    <div className="container max-w-4xl mx-auto py-10 space-y-8">
+    <div className="container max-w-4xl mx-auto py-10 px-10 space-y-8">
       <div>
         <Button
           variant="ghost"
@@ -284,14 +285,13 @@ export default function NotificationsSettingsPage() {
         </CardContent>
       </Card>
 
-      <Card className="bg-blue-50/50 border-blue-200">
-        <CardContent className="pt-6">
-          <p className="text-sm text-blue-900">
-            <strong>Note:</strong> Turning off email notifications won&apos;t affect in-app notifications.
-            You&apos;ll still see all notifications when you&apos;re signed in to PageSpace.
-          </p>
-        </CardContent>
-      </Card>
+      <Alert>
+        <Info className="h-4 w-4" />
+        <AlertDescription>
+          <strong>Note:</strong> Turning off email notifications won&apos;t affect in-app notifications.
+          You&apos;ll still see all notifications when you&apos;re signed in to PageSpace.
+        </AlertDescription>
+      </Alert>
     </div>
   );
 }
