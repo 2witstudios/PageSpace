@@ -89,14 +89,12 @@ function getChangeDescription(activity: ActivityLogForRollback): string {
 }
 
 function buildChangeSummary(
-  action: ActivityAction,
+  _action: ActivityAction,
   activity: ActivityLogForRollback,
   targetValues: Record<string, unknown> | null
 ): ActivityChangeSummary[] {
-  const operation = action === 'redo'
-    ? activity.rollbackSourceOperation ?? activity.operation
-    : activity.operation;
-  const label = `${action === 'redo' ? 'Redo' : 'Undo'} ${getOperationSummaryLabel(operation)}`;
+  const operation = activity.operation;
+  const label = `Undo ${getOperationSummaryLabel(operation)}`;
   const fields = activity.updatedFields?.length
     ? activity.updatedFields
     : targetValues
@@ -157,7 +155,6 @@ function buildRollbackTargetValues(
 }
 
 function buildActionTargetValues(
-  action: ActivityAction,
   activity: ActivityLogForRollback,
   contentSnapshot?: string | null
 ): Record<string, unknown> | null {
@@ -170,7 +167,6 @@ function buildActionTargetValues(
 }
 
 function getEffectiveOperation(
-  _action: ActivityAction,
   activity: ActivityLogForRollback
 ): ActivityOperation | null {
   // When the target is a rollback activity, use the original operation type
@@ -193,6 +189,13 @@ const ROLLBACK_ALLOW_MISSING_TARGET = new Set<ActivityOperation>([
   'member_add',
   'message_delete',
 ]);
+
+/**
+ * Check if this activity represents rolling back a previous rollback (effectively redo)
+ */
+function isRollingBackRollback(activity: ActivityLogForRollback): boolean {
+  return activity.operation === 'rollback';
+}
 
 // Helper for deep value comparison that handles dates, nulls, and primitives correctly
 function deepEqual(a: unknown, b: unknown): boolean {
@@ -572,10 +575,10 @@ async function previewActivityAction(
   loggers.api.debug('[Rollback:Preview] Starting preview', { action, activityId, userId, context, force });
 
   const activity = await getActivityById(activityId);
-  const resolvedContentSnapshot = activity && action === 'rollback'
+  const resolvedContentSnapshot = activity
     ? await resolveActivityContentSnapshot(activity)
     : null;
-  const targetValues = activity ? buildActionTargetValues(action, activity, resolvedContentSnapshot) : null;
+  const targetValues = activity ? buildActionTargetValues(activity, resolvedContentSnapshot) : null;
   const changes = activity ? buildChangeSummary(action, activity, targetValues) : [];
   const affectedResources = activity
     ? [
@@ -609,12 +612,12 @@ async function previewActivityAction(
   }
 
   // When rolling back a rollback activity, we need the source operation to know what handler to use
-  const isRollingBackRollback = activity.operation === 'rollback';
+  const rollingBackRollback = isRollingBackRollback(activity);
 
-  const effectiveOperation = getEffectiveOperation(action, activity);
+  const effectiveOperation = getEffectiveOperation(activity);
   if (!effectiveOperation) {
     return basePreview({
-      reason: isRollingBackRollback
+      reason: rollingBackRollback
         ? 'Rollback source operation not available'
         : 'Operation not available',
     });
@@ -636,14 +639,14 @@ async function previewActivityAction(
 
   const hasTargetValues = !!targetValues && Object.keys(targetValues).length > 0;
   // Content snapshots are only relevant for regular rollbacks, not rollback of rollbacks
-  const hasContentSnapshot = !isRollingBackRollback && !!resolvedContentSnapshot;
+  const hasContentSnapshot = !rollingBackRollback && !!resolvedContentSnapshot;
   // When rolling back a rollback, use the redo allow list since we're restoring forward
-  const allowMissingTarget = isRollingBackRollback
+  const allowMissingTarget = rollingBackRollback
     ? REDO_ALLOW_MISSING_TARGET.has(effectiveOperation)
     : ROLLBACK_ALLOW_MISSING_TARGET.has(effectiveOperation);
   loggers.api.debug('[Rollback:Preview] Checking previous state availability', {
     action,
-    isRollingBackRollback,
+    rollingBackRollback,
     hasTargetValues,
     hasContentSnapshot,
     allowMissingTarget,
@@ -653,7 +656,7 @@ async function previewActivityAction(
   // For 'create' operations, rollback means trashing - no previous state needed
   if (effectiveOperation !== 'create' && !hasTargetValues && !hasContentSnapshot && !allowMissingTarget) {
     return basePreview({
-      reason: isRollingBackRollback
+      reason: rollingBackRollback
         ? 'No rollback state available to reapply'
         : 'No values to restore',
     });
@@ -845,16 +848,9 @@ async function previewActivityAction(
       }
 
       if (effectiveOperation === 'member_add') {
-        if (action === 'rollback' && currentMember.length === 0) {
+        if (currentMember.length === 0) {
           return basePreview({
             reason: 'Member has already been removed',
-            currentValues,
-            isNoOp: true,
-          });
-        }
-        if (action === 'redo' && currentMember.length > 0) {
-          return basePreview({
-            reason: 'Member is already in the drive',
             currentValues,
             isNoOp: true,
           });
@@ -862,16 +858,9 @@ async function previewActivityAction(
       }
 
       if (effectiveOperation === 'member_remove') {
-        if (action === 'rollback' && currentMember.length > 0) {
+        if (currentMember.length > 0) {
           return basePreview({
             reason: 'Member has already been re-added to the drive',
-            currentValues,
-            isNoOp: true,
-          });
-        }
-        if (action === 'redo' && currentMember.length === 0) {
-          return basePreview({
-            reason: 'Member has already been removed',
             currentValues,
             isNoOp: true,
           });
@@ -936,16 +925,9 @@ async function previewActivityAction(
       }
 
       if (effectiveOperation === 'permission_grant') {
-        if (action === 'rollback' && currentPermission.length === 0) {
+        if (currentPermission.length === 0) {
           return basePreview({
             reason: 'Permission has already been revoked',
-            currentValues,
-            isNoOp: true,
-          });
-        }
-        if (action === 'redo' && currentPermission.length > 0) {
-          return basePreview({
-            reason: 'Permission is already granted',
             currentValues,
             isNoOp: true,
           });
@@ -953,16 +935,9 @@ async function previewActivityAction(
       }
 
       if (effectiveOperation === 'permission_revoke') {
-        if (action === 'rollback' && currentPermission.length > 0) {
+        if (currentPermission.length > 0) {
           return basePreview({
             reason: 'Permission has already been re-granted',
-            currentValues,
-            isNoOp: true,
-          });
-        }
-        if (action === 'redo' && currentPermission.length === 0) {
-          return basePreview({
-            reason: 'Permission has already been revoked',
             currentValues,
             isNoOp: true,
           });
@@ -1055,16 +1030,9 @@ async function previewActivityAction(
       }
 
       if (effectiveOperation === 'create') {
-        if (action === 'rollback' && currentRole.length === 0) {
+        if (currentRole.length === 0) {
           return basePreview({
             reason: 'Role has already been deleted',
-            currentValues,
-            isNoOp: true,
-          });
-        }
-        if (action === 'redo' && currentRole.length > 0) {
-          return basePreview({
-            reason: 'Role already exists',
             currentValues,
             isNoOp: true,
           });
@@ -1072,16 +1040,9 @@ async function previewActivityAction(
       }
 
       if (effectiveOperation === 'delete') {
-        if (action === 'rollback' && currentRole.length > 0) {
+        if (currentRole.length > 0) {
           return basePreview({
             reason: 'Role already exists with this ID',
-            currentValues,
-            isNoOp: true,
-          });
-        }
-        if (action === 'redo' && currentRole.length === 0) {
-          return basePreview({
-            reason: 'Role has already been deleted',
             currentValues,
             isNoOp: true,
           });
@@ -1249,18 +1210,6 @@ export async function previewRollback(
 }
 
 /**
- * Preview what a redo (undo rollback) would do
- */
-export async function previewRedo(
-  activityId: string,
-  userId: string,
-  context: RollbackContext,
-  options?: { force?: boolean }
-): Promise<RollbackPreview> {
-  return previewActivityAction('redo', activityId, userId, context, options);
-}
-
-/**
  * Execute a rollback operation
  * @param options.tx - Optional transaction to use for all database operations (for atomicity)
  * @param options.force - Skip conflict check if resource was modified since activity
@@ -1316,10 +1265,20 @@ export async function executeRollback(
   const changeGroupType = inferChangeGroupType({ isAiGenerated: false });
 
   // When rolling back a rollback, use the original source operation for metadata
-  const isRollingBackRollback = activity.operation === 'rollback';
-  const effectiveSourceOperation = isRollingBackRollback
-    ? (activity.rollbackSourceOperation as ActivityOperation)
-    : (activity.operation as ActivityOperation);
+  const rollingBackRollback = isRollingBackRollback(activity);
+  if (rollingBackRollback && !activity.rollbackSourceOperation) {
+    return {
+      success: false,
+      action: 'rollback',
+      status: 'failed',
+      message: 'Rollback source operation not available for this activity',
+      warnings: preview.warnings,
+      changesApplied: preview.changes,
+    };
+  }
+  const effectiveSourceOperation = rollingBackRollback
+    ? activity.rollbackSourceOperation as ActivityOperation
+    : activity.operation as ActivityOperation;
 
   const pageUpdateContext: PageUpdateContext = {
     userId,
@@ -1346,7 +1305,7 @@ export async function executeRollback(
       resourceType: activity.resourceType,
       operation: activity.operation,
       effectiveSourceOperation,
-      isRollingBackRollback,
+      rollingBackRollback,
       resourceId: activity.resourceId,
     });
 
@@ -1354,7 +1313,7 @@ export async function executeRollback(
     // Otherwise use regular rollback handlers
     switch (activity.resourceType) {
       case 'page': {
-        const result = isRollingBackRollback
+        const result = rollingBackRollback
           ? await redoPageChange(activity, preview.targetValues, effectiveSourceOperation, database, pageUpdateContext)
           : await rollbackPageChange(activity, preview.currentValues, database, pageUpdateContext);
         restoredValues = result.restoredValues;
@@ -1363,19 +1322,19 @@ export async function executeRollback(
       }
 
       case 'drive':
-        restoredValues = isRollingBackRollback
+        restoredValues = rollingBackRollback
           ? await redoDriveChange(activity, preview.targetValues, effectiveSourceOperation, database, pageUpdateContext)
           : await rollbackDriveChange(activity, preview.currentValues, database, pageUpdateContext);
         break;
 
       case 'permission':
-        restoredValues = isRollingBackRollback
+        restoredValues = rollingBackRollback
           ? await redoPermissionChange(activity, preview.targetValues, effectiveSourceOperation, database)
           : await rollbackPermissionChange(activity, database);
         break;
 
       case 'agent': {
-        const result = isRollingBackRollback
+        const result = rollingBackRollback
           ? await redoAgentConfigChange(activity, preview.targetValues, database, pageUpdateContext)
           : await rollbackAgentConfigChange(activity, preview.currentValues, database, pageUpdateContext);
         restoredValues = result.restoredValues;
@@ -1384,19 +1343,19 @@ export async function executeRollback(
       }
 
       case 'member':
-        restoredValues = isRollingBackRollback
+        restoredValues = rollingBackRollback
           ? await redoMemberChange(activity, preview.targetValues, effectiveSourceOperation, database)
           : await rollbackMemberChange(activity, database);
         break;
 
       case 'role':
-        restoredValues = isRollingBackRollback
+        restoredValues = rollingBackRollback
           ? await redoRoleChange(activity, preview.targetValues, effectiveSourceOperation, database)
           : await rollbackRoleChange(activity, database);
         break;
 
       case 'message':
-        restoredValues = isRollingBackRollback
+        restoredValues = rollingBackRollback
           ? await redoMessageChange(activity, preview.targetValues, effectiveSourceOperation, database)
           : await rollbackMessageChange(activity, database);
         break;
@@ -1447,7 +1406,7 @@ export async function executeRollback(
       // Source activity snapshot - survives retention policy deletion
       // Use effectiveSourceOperation so "rollback of rollback" logs the original operation
       rollbackSourceOperation: effectiveSourceOperation,
-      rollbackSourceTimestamp: isRollingBackRollback
+      rollbackSourceTimestamp: rollingBackRollback
         ? (activity.rollbackSourceTimestamp ?? activity.timestamp)
         : activity.timestamp,
       rollbackSourceTitle: activity.resourceTitle ?? undefined,
@@ -1507,223 +1466,6 @@ export async function executeRollback(
       action: 'rollback',
       status: 'failed',
       message: error instanceof Error ? error.message : 'Failed to execute rollback',
-      warnings,
-      changesApplied: preview.changes,
-    };
-  }
-}
-
-/**
- * Execute a redo operation (undo a rollback)
- * @param options.tx - Optional transaction to use for all database operations (for atomicity)
- * @param options.force - Skip conflict check if resource was modified since rollback
- */
-export async function executeRedo(
-  activityId: string,
-  userId: string,
-  context: RollbackContext,
-  options?: { tx?: typeof db; force?: boolean }
-): Promise<RollbackResult> {
-  const { tx, force } = options ?? {};
-  loggers.api.debug('[Rollback:ExecuteRedo] Starting execution', {
-    activityId,
-    userId,
-    context,
-    usingTransaction: !!tx,
-    force,
-  });
-
-  const preview = await previewRedo(activityId, userId, context, { force });
-
-  if (!preview.canExecute) {
-    loggers.api.debug('[Rollback:ExecuteRedo] Aborting - preview check failed', {
-      canExecute: preview.canExecute,
-      reason: preview.reason,
-      isNoOp: preview.isNoOp,
-    });
-    return {
-      success: preview.isNoOp,
-      action: 'redo',
-      status: preview.isNoOp ? 'no_op' : 'failed',
-      message: preview.reason || 'Cannot redo this rollback',
-      warnings: preview.warnings,
-      changesApplied: preview.changes,
-    };
-  }
-
-  const activity = await getActivityById(activityId);
-  if (!activity) {
-    return {
-      success: false,
-      action: 'redo',
-      status: 'failed',
-      message: 'Activity not found',
-      warnings: preview.warnings,
-      changesApplied: preview.changes,
-    };
-  }
-
-  if (activity.operation !== 'rollback') {
-    return {
-      success: false,
-      action: 'redo',
-      status: 'failed',
-      message: 'Only rollback activities can be redone',
-      warnings: preview.warnings,
-      changesApplied: preview.changes,
-    };
-  }
-
-  const sourceOperation = activity.rollbackSourceOperation as ActivityOperation | null;
-  if (!sourceOperation) {
-    return {
-      success: false,
-      action: 'redo',
-      status: 'failed',
-      message: 'Rollback source operation not available',
-      warnings: preview.warnings,
-      changesApplied: preview.changes,
-    };
-  }
-
-  const warnings: string[] = [...preview.warnings];
-  const database = tx ?? db;
-  const changeGroupId = createChangeGroupId();
-  const changeGroupType = inferChangeGroupType({ isAiGenerated: false });
-  const pageUpdateContext: PageUpdateContext = {
-    userId,
-    changeGroupId,
-    changeGroupType,
-    source: 'restore',
-    metadata: {
-      action: 'redo',
-      redoFromActivityId: activityId,
-      rollbackFromActivityId: activity.rollbackFromActivityId ?? undefined,
-      rollbackSourceOperation: sourceOperation,
-    },
-  };
-
-  try {
-    const actorInfo = await getActorInfo(userId);
-    let restoredValues: Record<string, unknown> = {};
-    let pageMutationMeta: PageMutationMeta | undefined;
-
-    loggers.api.debug('[Rollback:ExecuteRedo] Executing handler', {
-      resourceType: activity.resourceType,
-      sourceOperation,
-      resourceId: activity.resourceId,
-    });
-
-    switch (activity.resourceType) {
-      case 'page': {
-        const result = await redoPageChange(activity, preview.targetValues, sourceOperation, database, pageUpdateContext);
-        restoredValues = result.restoredValues;
-        pageMutationMeta = result.pageMutationMeta;
-        break;
-      }
-
-      case 'drive':
-        restoredValues = await redoDriveChange(activity, preview.targetValues, sourceOperation, database, pageUpdateContext);
-        break;
-
-      case 'permission':
-        restoredValues = await redoPermissionChange(activity, preview.targetValues, sourceOperation, database);
-        break;
-
-      case 'agent': {
-        const result = await redoAgentConfigChange(activity, preview.targetValues, database, pageUpdateContext);
-        restoredValues = result.restoredValues;
-        pageMutationMeta = result.pageMutationMeta;
-        break;
-      }
-
-      case 'member':
-        restoredValues = await redoMemberChange(activity, preview.targetValues, sourceOperation, database);
-        break;
-
-      case 'role':
-        restoredValues = await redoRoleChange(activity, preview.targetValues, sourceOperation, database);
-        break;
-
-      case 'message':
-        restoredValues = await redoMessageChange(activity, preview.targetValues, sourceOperation, database);
-        break;
-
-      default:
-        loggers.api.debug('[Rollback:ExecuteRedo] Unsupported resource type', {
-          resourceType: activity.resourceType,
-        });
-        return {
-          success: false,
-          action: 'redo',
-          status: 'failed',
-          message: `Redo not supported for resource type: ${activity.resourceType}`,
-          warnings,
-          changesApplied: preview.changes,
-        };
-    }
-
-    const logOptions: Parameters<typeof logRollbackActivity>[4] = {
-      restoredValues,
-      replacedValues: preview.currentValues ?? undefined,
-      rollbackSourceOperation: sourceOperation,
-      rollbackSourceTimestamp: activity.rollbackSourceTimestamp ?? undefined,
-      rollbackSourceTitle: activity.rollbackSourceTitle ?? undefined,
-      metadata: {
-        redoFromActivityId: activity.id,
-        rollbackFromActivityId: activity.rollbackFromActivityId ?? undefined,
-        sourceMetadata: activity.metadata ?? undefined,
-      },
-      changeGroupId,
-      changeGroupType,
-      tx,
-    };
-
-    if (pageMutationMeta) {
-      logOptions.streamId = activity.pageId ?? activity.resourceId;
-      logOptions.streamSeq = pageMutationMeta.nextRevision;
-      logOptions.stateHashBefore = pageMutationMeta.stateHashBefore;
-      logOptions.stateHashAfter = pageMutationMeta.stateHashAfter;
-      logOptions.contentRef = pageMutationMeta.contentRefAfter ?? undefined;
-      logOptions.contentSize = pageMutationMeta.contentSizeAfter ?? undefined;
-      logOptions.contentFormat = pageMutationMeta.contentFormatAfter ?? undefined;
-    }
-
-    await logRollbackActivity(
-      userId,
-      activity.id,
-      {
-        resourceType: activity.resourceType,
-        resourceId: activity.resourceId,
-        resourceTitle: activity.resourceTitle ?? undefined,
-        driveId: activity.driveId,
-        pageId: activity.pageId ?? undefined,
-      },
-      actorInfo,
-      logOptions
-    );
-
-    return {
-      success: true,
-      action: 'redo',
-      status: 'success',
-      restoredValues,
-      message: 'Rollback has been undone',
-      warnings,
-      changesApplied: preview.changes,
-    };
-  } catch (error) {
-    loggers.api.error('[RollbackService] Error executing redo', {
-      activityId,
-      userId,
-      error: error instanceof Error ? error.message : String(error),
-    });
-
-    return {
-      success: false,
-      action: 'redo',
-      status: 'failed',
-      message: error instanceof Error ? error.message : 'Failed to execute redo',
       warnings,
       changesApplied: preview.changes,
     };
