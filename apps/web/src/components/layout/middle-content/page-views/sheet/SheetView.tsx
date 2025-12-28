@@ -902,56 +902,6 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     []
   );
 
-  const handleCellTouchEnd = useCallback(
-    (row: number, column: number, event: React.TouchEvent) => {
-      // Clear long press timer
-      if (longPressTimerRef.current) {
-        clearTimeout(longPressTimerRef.current);
-        longPressTimerRef.current = null;
-      }
-
-      // Check if this was a tap (quick touch without much movement)
-      if (touchStartRef.current) {
-        const touchDuration = Date.now() - touchStartRef.current.time;
-        const touch = event.changedTouches[0];
-        const dx = Math.abs(touch.clientX - touchStartRef.current.x);
-        const dy = Math.abs(touch.clientY - touchStartRef.current.y);
-
-        // If it was a quick tap without much movement, select the cell
-        if (touchDuration < 300 && dx < 10 && dy < 10) {
-          event.preventDefault();
-          handleCellSelect(row, column);
-        }
-      }
-
-      touchStartRef.current = null;
-    },
-    [handleCellSelect]
-  );
-
-  // Double tap detection for mobile editing
-  const lastTapRef = useRef<{ row: number; column: number; time: number } | null>(null);
-  const handleCellDoubleTap = useCallback(
-    (row: number, column: number) => {
-      const now = Date.now();
-      if (
-        lastTapRef.current &&
-        lastTapRef.current.row === row &&
-        lastTapRef.current.column === column &&
-        now - lastTapRef.current.time < 300
-      ) {
-        // Double tap detected - start editing
-        if (!isReadOnly) {
-          startCellEdit(row, column);
-        }
-        lastTapRef.current = null;
-      } else {
-        lastTapRef.current = { row, column, time: now };
-      }
-    },
-    [isReadOnly, startCellEdit]
-  );
-
   // Close mobile action sheet
   const closeMobileActionSheet = useCallback(() => {
     setMobileActionSheet({ show: false, cell: null });
@@ -1224,6 +1174,55 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       });
     },
     [sheet, editingCell]
+  );
+
+  // Double tap detection ref for mobile editing
+  const lastTapRef = useRef<{ row: number; column: number; time: number } | null>(null);
+
+  // Touch end handler - defined after handleCellSelect to avoid forward reference
+  const handleCellTouchEnd = useCallback(
+    (row: number, column: number, event: React.TouchEvent) => {
+      // Clear long press timer
+      if (longPressTimerRef.current) {
+        clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = null;
+      }
+
+      // Check if this was a tap (quick touch without much movement)
+      if (touchStartRef.current) {
+        const touchDuration = Date.now() - touchStartRef.current.time;
+        const touch = event.changedTouches[0];
+        const dx = Math.abs(touch.clientX - touchStartRef.current.x);
+        const dy = Math.abs(touch.clientY - touchStartRef.current.y);
+
+        // If it was a quick tap without much movement
+        if (touchDuration < 300 && dx < 10 && dy < 10) {
+          event.preventDefault();
+
+          // Check for double tap (must be on same cell within 300ms)
+          const now = Date.now();
+          if (
+            lastTapRef.current &&
+            lastTapRef.current.row === row &&
+            lastTapRef.current.column === column &&
+            now - lastTapRef.current.time < 300
+          ) {
+            // Double tap detected - start editing
+            if (!isReadOnly) {
+              startCellEdit(row, column);
+            }
+            lastTapRef.current = null;
+          } else {
+            // Single tap - select cell and record for potential double tap
+            handleCellSelect(row, column);
+            lastTapRef.current = { row, column, time: now };
+          }
+        }
+      }
+
+      touchStartRef.current = null;
+    },
+    [handleCellSelect, isReadOnly, startCellEdit]
   );
 
   const handleGridKeyDown = useCallback(
@@ -1730,10 +1729,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
                       )}
                       onMouseDown={(e) => handleCellMouseDown(rowIndex, columnIndex, e)}
                       onMouseEnter={() => handleCellMouseEnter(rowIndex, columnIndex)}
-                      onClick={() => {
-                        handleCellSelect(rowIndex, columnIndex);
-                        handleCellDoubleTap(rowIndex, columnIndex);
-                      }}
+                      onClick={() => handleCellSelect(rowIndex, columnIndex)}
                       onContextMenu={(e) => handleCellRightClick(rowIndex, columnIndex, e)}
                       onDoubleClick={() => {
                         if (!isReadOnly) {
