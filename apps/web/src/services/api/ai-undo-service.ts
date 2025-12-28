@@ -434,6 +434,10 @@ export async function executeAiUndo(
     await db.transaction(async (tx) => {
       // If mode includes changes, rollback activities in reverse chronological order
       if (mode === 'messages_and_changes') {
+        // Collect all activity IDs for undo group context - allows conflict detection
+        // to ignore "internal" conflicts from other activities in the same undo batch
+        const undoGroupActivityIds = preview.activitiesAffected.map(a => a.id);
+
         loggers.api.debug('[AiUndo:Execute] Rolling back activities', {
           activitiesToRollback: preview.activitiesAffected.length,
         });
@@ -468,7 +472,7 @@ export async function executeAiUndo(
 
           // Pass transaction to executeRollback for atomicity
           // Any failure aborts entire transaction
-          const result = await executeRollback(activity.id, userId, context, { tx, force });
+          const result = await executeRollback(activity.id, userId, context, { tx, force, undoGroupActivityIds });
           if (!result.success) {
             loggers.api.debug('[AiUndo:Execute] Activity rollback failed - aborting', {
               activityId: activity.id,

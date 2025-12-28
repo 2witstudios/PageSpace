@@ -1452,9 +1452,9 @@ export async function executeRollback(
   activityId: string,
   userId: string,
   context: RollbackContext,
-  options?: { tx?: typeof db; force?: boolean }
+  options?: { tx?: typeof db; force?: boolean; undoGroupActivityIds?: string[] }
 ): Promise<RollbackResult> {
-  const { tx, force } = options ?? {};
+  const { tx, force, undoGroupActivityIds } = options ?? {};
   loggers.api.debug('[Rollback:Execute] Starting execution', {
     activityId,
     userId,
@@ -1463,7 +1463,7 @@ export async function executeRollback(
     force,
   });
 
-  const preview = await previewRollback(activityId, userId, context, { force });
+  const preview = await previewRollback(activityId, userId, context, { force, undoGroupActivityIds });
 
   if (!preview.canExecute) {
     loggers.api.debug('[Rollback:Execute] Aborting - preview check failed', {
