@@ -749,31 +749,51 @@ async function previewActivityAction(
       }
     }
 
-    conflictFields = getConflictFields(activity.newValues, currentValues);
+    // For 'create' operations, skip conflict check - we're just trashing the page
+    // For AI undo (undoGroupActivityIds provided), skip conflict check since all
+    // changes are from the same conversation by definition - no "external" conflicts
+    if (effectiveOperation !== 'create' && undoGroupActivityIds.length === 0) {
+      conflictFields = getConflictFields(activity.newValues, currentValues);
 
-    // If there's a conflict but we have undo group context, check if the modifications
-    // came from other activities in the same undo group (internal conflict vs external)
-    if (conflictFields.length > 0 && undoGroupActivityIds.length > 0) {
-      const externalModifications = await db
-        .select({ id: activityLogs.id })
-        .from(activityLogs)
-        .where(
-          and(
-            eq(activityLogs.resourceId, activity.resourceId),
-            eq(activityLogs.resourceType, 'page'),
-            gt(activityLogs.timestamp, activity.timestamp),
-            not(inArray(activityLogs.id, undoGroupActivityIds))
-          )
-        )
-        .limit(1);
-
-      if (externalModifications.length === 0) {
-        // All modifications came from activities in the undo group - not a real conflict
-        loggers.api.debug('[Rollback:Preview] Page conflict is internal to undo group, ignoring', {
+      // If there's a conflict but we have undo group context, check if the modifications
+      // came from other activities in the same undo group (internal conflict vs external)
+      if (conflictFields.length > 0) {
+        loggers.api.debug('[Rollback:Preview] Page conflict detected', {
           activityId: activity.id,
+          resourceId: activity.resourceId,
+          timestamp: activity.timestamp?.toISOString(),
           conflictFields,
+          undoGroupSize: undoGroupActivityIds.length,
         });
-        conflictFields = [];
+
+        if (undoGroupActivityIds.length > 0) {
+          const externalModifications = await db
+            .select({ id: activityLogs.id })
+            .from(activityLogs)
+            .where(
+              and(
+                eq(activityLogs.resourceId, activity.resourceId),
+                eq(activityLogs.resourceType, 'page'),
+                gt(activityLogs.timestamp, activity.timestamp),
+                not(inArray(activityLogs.id, undoGroupActivityIds))
+              )
+            )
+            .limit(1);
+
+          loggers.api.debug('[Rollback:Preview] External modifications check', {
+            activityId: activity.id,
+            externalModificationsFound: externalModifications.length,
+          });
+
+          if (externalModifications.length === 0) {
+            // All modifications came from activities in the undo group - not a real conflict
+            loggers.api.debug('[Rollback:Preview] Page conflict is internal to undo group, ignoring', {
+              activityId: activity.id,
+              conflictFields,
+            });
+            conflictFields = [];
+          }
+        }
       }
     }
 
