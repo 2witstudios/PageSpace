@@ -258,6 +258,11 @@ export async function previewAiUndo(
       affectedResources: [],
     });
 
+    // Collect all activity IDs upfront so we can pass them as the undo group context
+    // This allows conflict detection to ignore "internal" conflicts from activities
+    // that are part of the same undo operation
+    const undoGroupActivityIds = activities.map(a => a.id);
+
     for (const activity of activities) {
       // Activities are already filtered for isAiGenerated=true by the query above,
       // so we use 'ai_tool' context for pages and 'drive' context for drives
@@ -273,7 +278,7 @@ export async function previewAiUndo(
 
       let preview: ActivityActionPreview;
       try {
-        preview = await previewRollback(activity.id, userId, context);
+        preview = await previewRollback(activity.id, userId, context, { undoGroupActivityIds });
         if (!preview) {
           preview = fallbackPreview('Preview failed');
           warnings.push(`Could not preview undo for activity ${activity.id}`);
