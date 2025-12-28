@@ -258,6 +258,11 @@ export async function previewAiUndo(
       affectedResources: [],
     });
 
+    // Collect all activity IDs upfront so we can pass them as the undo group context
+    // This allows conflict detection to ignore "internal" conflicts from activities
+    // that are part of the same undo operation
+    const undoGroupActivityIds = activities.map(a => a.id);
+
     for (const activity of activities) {
       // Activities are already filtered for isAiGenerated=true by the query above,
       // so we use 'ai_tool' context for pages and 'drive' context for drives
@@ -273,7 +278,7 @@ export async function previewAiUndo(
 
       let preview: ActivityActionPreview;
       try {
-        preview = await previewRollback(activity.id, userId, context);
+        preview = await previewRollback(activity.id, userId, context, { undoGroupActivityIds });
         if (!preview) {
           preview = fallbackPreview('Preview failed');
           warnings.push(`Could not preview undo for activity ${activity.id}`);
@@ -429,6 +434,10 @@ export async function executeAiUndo(
     await db.transaction(async (tx) => {
       // If mode includes changes, rollback activities in reverse chronological order
       if (mode === 'messages_and_changes') {
+        // Collect all activity IDs for undo group context - allows conflict detection
+        // to ignore "internal" conflicts from other activities in the same undo batch
+        const undoGroupActivityIds = preview.activitiesAffected.map(a => a.id);
+
         loggers.api.debug('[AiUndo:Execute] Rolling back activities', {
           activitiesToRollback: preview.activitiesAffected.length,
         });
@@ -463,7 +472,7 @@ export async function executeAiUndo(
 
           // Pass transaction to executeRollback for atomicity
           // Any failure aborts entire transaction
-          const result = await executeRollback(activity.id, userId, context, { tx, force });
+          const result = await executeRollback(activity.id, userId, context, { tx, force, undoGroupActivityIds });
           if (!result.success) {
             loggers.api.debug('[AiUndo:Execute] Activity rollback failed - aborting', {
               activityId: activity.id,

@@ -5,7 +5,7 @@
  * Allows users to restore resources to previous states based on activity logs.
  */
 
-import { db, activityLogs, pages, drives, driveMembers, driveRoles, pagePermissions, users, chatMessages, messages, eq, and, desc, gte, lte, count, asc } from '@pagespace/db';
+import { db, activityLogs, pages, drives, driveMembers, driveRoles, pagePermissions, users, chatMessages, messages, eq, and, desc, gte, gt, lte, count, asc, not, inArray } from '@pagespace/db';
 import type { ActivityAction, ActivityActionPreview, ActivityActionResult, ActivityChangeSummary } from '@/types/activity-actions';
 import {
   canUserRollback,
@@ -568,9 +568,10 @@ async function previewActivityAction(
   activityId: string,
   userId: string,
   context: RollbackContext,
-  options?: { force?: boolean }
+  options?: { force?: boolean; undoGroupActivityIds?: string[] }
 ): Promise<ActivityActionPreview> {
   const force = options?.force ?? false;
+  const undoGroupActivityIds = options?.undoGroupActivityIds ?? [];
   loggers.api.debug('[Rollback:Preview] Starting preview', { action, activityId, userId, context, force });
 
   const activity = await getActivityById(activityId);
@@ -748,6 +749,33 @@ async function previewActivityAction(
     }
 
     conflictFields = getConflictFields(activity.newValues, currentValues);
+
+    // If there's a conflict but we have undo group context, check if the modifications
+    // came from other activities in the same undo group (internal conflict vs external)
+    if (conflictFields.length > 0 && undoGroupActivityIds.length > 0) {
+      const externalModifications = await db
+        .select({ id: activityLogs.id })
+        .from(activityLogs)
+        .where(
+          and(
+            eq(activityLogs.resourceId, activity.resourceId),
+            eq(activityLogs.resourceType, 'page'),
+            gt(activityLogs.timestamp, activity.timestamp),
+            not(inArray(activityLogs.id, undoGroupActivityIds))
+          )
+        )
+        .limit(1);
+
+      if (externalModifications.length === 0) {
+        // All modifications came from activities in the undo group - not a real conflict
+        loggers.api.debug('[Rollback:Preview] Page conflict is internal to undo group, ignoring', {
+          activityId: activity.id,
+          conflictFields,
+        });
+        conflictFields = [];
+      }
+    }
+
     if (conflictFields.length > 0) {
       hasConflict = true;
       requiresForce = true;
@@ -801,6 +829,33 @@ async function previewActivityAction(
     }
 
     conflictFields = getConflictFields(activity.newValues, currentValues);
+
+    // If there's a conflict but we have undo group context, check if the modifications
+    // came from other activities in the same undo group (internal conflict vs external)
+    if (conflictFields.length > 0 && undoGroupActivityIds.length > 0) {
+      const externalModifications = await db
+        .select({ id: activityLogs.id })
+        .from(activityLogs)
+        .where(
+          and(
+            eq(activityLogs.resourceId, activity.resourceId),
+            eq(activityLogs.resourceType, 'drive'),
+            gt(activityLogs.timestamp, activity.timestamp),
+            not(inArray(activityLogs.id, undoGroupActivityIds))
+          )
+        )
+        .limit(1);
+
+      if (externalModifications.length === 0) {
+        // All modifications came from activities in the undo group - not a real conflict
+        loggers.api.debug('[Rollback:Preview] Drive conflict is internal to undo group, ignoring', {
+          activityId: activity.id,
+          conflictFields,
+        });
+        conflictFields = [];
+      }
+    }
+
     if (conflictFields.length > 0) {
       hasConflict = true;
       requiresForce = true;
@@ -899,6 +954,33 @@ async function previewActivityAction(
 
       if (currentMember.length > 0 && effectiveOperation === 'member_role_change') {
         conflictFields = getConflictFields(activity.newValues, currentValues);
+
+        // If there's a conflict but we have undo group context, check if the modifications
+        // came from other activities in the same undo group (internal conflict vs external)
+        if (conflictFields.length > 0 && undoGroupActivityIds.length > 0) {
+          const externalModifications = await db
+            .select({ id: activityLogs.id })
+            .from(activityLogs)
+            .where(
+              and(
+                eq(activityLogs.resourceId, activity.resourceId),
+                eq(activityLogs.resourceType, 'member'),
+                gt(activityLogs.timestamp, activity.timestamp),
+                not(inArray(activityLogs.id, undoGroupActivityIds))
+              )
+            )
+            .limit(1);
+
+          if (externalModifications.length === 0) {
+            // All modifications came from activities in the undo group - not a real conflict
+            loggers.api.debug('[Rollback:Preview] Member conflict is internal to undo group, ignoring', {
+              activityId: activity.id,
+              conflictFields,
+            });
+            conflictFields = [];
+          }
+        }
+
         if (conflictFields.length > 0) {
           hasConflict = true;
           requiresForce = true;
@@ -1000,6 +1082,33 @@ async function previewActivityAction(
 
       if (currentPermission.length > 0 && effectiveOperation === 'permission_update') {
         conflictFields = getConflictFields(activity.newValues, currentValues);
+
+        // If there's a conflict but we have undo group context, check if the modifications
+        // came from other activities in the same undo group (internal conflict vs external)
+        if (conflictFields.length > 0 && undoGroupActivityIds.length > 0) {
+          const externalModifications = await db
+            .select({ id: activityLogs.id })
+            .from(activityLogs)
+            .where(
+              and(
+                eq(activityLogs.resourceId, activity.resourceId),
+                eq(activityLogs.resourceType, 'permission'),
+                gt(activityLogs.timestamp, activity.timestamp),
+                not(inArray(activityLogs.id, undoGroupActivityIds))
+              )
+            )
+            .limit(1);
+
+          if (externalModifications.length === 0) {
+            // All modifications came from activities in the undo group - not a real conflict
+            loggers.api.debug('[Rollback:Preview] Permission conflict is internal to undo group, ignoring', {
+              activityId: activity.id,
+              conflictFields,
+            });
+            conflictFields = [];
+          }
+        }
+
         if (conflictFields.length > 0) {
           hasConflict = true;
           requiresForce = true;
@@ -1175,6 +1284,33 @@ async function previewActivityAction(
     };
 
     conflictFields = getConflictFields(activity.newValues, currentValues);
+
+    // If there's a conflict but we have undo group context, check if the modifications
+    // came from other activities in the same undo group (internal conflict vs external)
+    if (conflictFields.length > 0 && undoGroupActivityIds.length > 0) {
+      const externalModifications = await db
+        .select({ id: activityLogs.id })
+        .from(activityLogs)
+        .where(
+          and(
+            eq(activityLogs.resourceId, activity.resourceId),
+            eq(activityLogs.resourceType, 'agent'),
+            gt(activityLogs.timestamp, activity.timestamp),
+            not(inArray(activityLogs.id, undoGroupActivityIds))
+          )
+        )
+        .limit(1);
+
+      if (externalModifications.length === 0) {
+        // All modifications came from activities in the undo group - not a real conflict
+        loggers.api.debug('[Rollback:Preview] Agent conflict is internal to undo group, ignoring', {
+          activityId: activity.id,
+          conflictFields,
+        });
+        conflictFields = [];
+      }
+    }
+
     if (conflictFields.length > 0) {
       hasConflict = true;
       requiresForce = true;
@@ -1218,6 +1354,33 @@ async function previewActivityAction(
     };
 
     conflictFields = getConflictFields(activity.newValues, currentValues);
+
+    // If there's a conflict but we have undo group context, check if the modifications
+    // came from other activities in the same undo group (internal conflict vs external)
+    if (conflictFields.length > 0 && undoGroupActivityIds.length > 0) {
+      const externalModifications = await db
+        .select({ id: activityLogs.id })
+        .from(activityLogs)
+        .where(
+          and(
+            eq(activityLogs.resourceId, activity.resourceId),
+            eq(activityLogs.resourceType, 'message'),
+            gt(activityLogs.timestamp, activity.timestamp),
+            not(inArray(activityLogs.id, undoGroupActivityIds))
+          )
+        )
+        .limit(1);
+
+      if (externalModifications.length === 0) {
+        // All modifications came from activities in the undo group - not a real conflict
+        loggers.api.debug('[Rollback:Preview] Message conflict is internal to undo group, ignoring', {
+          activityId: activity.id,
+          conflictFields,
+        });
+        conflictFields = [];
+      }
+    }
+
     if (conflictFields.length > 0) {
       hasConflict = true;
       requiresForce = true;
@@ -1275,7 +1438,7 @@ export async function previewRollback(
   activityId: string,
   userId: string,
   context: RollbackContext,
-  options?: { force?: boolean }
+  options?: { force?: boolean; undoGroupActivityIds?: string[] }
 ): Promise<RollbackPreview> {
   return previewActivityAction('rollback', activityId, userId, context, options);
 }
@@ -1289,9 +1452,9 @@ export async function executeRollback(
   activityId: string,
   userId: string,
   context: RollbackContext,
-  options?: { tx?: typeof db; force?: boolean }
+  options?: { tx?: typeof db; force?: boolean; undoGroupActivityIds?: string[] }
 ): Promise<RollbackResult> {
-  const { tx, force } = options ?? {};
+  const { tx, force, undoGroupActivityIds } = options ?? {};
   loggers.api.debug('[Rollback:Execute] Starting execution', {
     activityId,
     userId,
@@ -1300,7 +1463,7 @@ export async function executeRollback(
     force,
   });
 
-  const preview = await previewRollback(activityId, userId, context, { force });
+  const preview = await previewRollback(activityId, userId, context, { force, undoGroupActivityIds });
 
   if (!preview.canExecute) {
     loggers.api.debug('[Rollback:Execute] Aborting - preview check failed', {
