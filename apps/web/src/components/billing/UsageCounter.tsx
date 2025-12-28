@@ -49,11 +49,18 @@ export function UsageCounter() {
   // Check if any editing or streaming is active (state-based)
   const isAnyActive = useEditingStore(state => state.isAnyActive());
 
-  // Get current AI provider/model selection
+  // Get current AI provider/model selection and ensure settings are loaded
   const currentProvider = useAssistantSettingsStore(state => state.currentProvider);
   const currentModel = useAssistantSettingsStore(state => state.currentModel);
+  const loadSettings = useAssistantSettingsStore(state => state.loadSettings);
+
+  // Load assistant settings on mount if not already loaded
+  useEffect(() => {
+    loadSettings();
+  }, [loadSettings]);
 
   // Determine which quota type to show based on selected model
+  // Only show quota when provider is explicitly 'pagespace' (not null/unloaded)
   const isPageSpaceProvider = currentProvider === 'pagespace';
   const isStandardModel = currentModel === PAGESPACE_STANDARD_MODEL;
   const isProModel = currentModel === PAGESPACE_PRO_MODEL;
@@ -119,68 +126,77 @@ export function UsageCounter() {
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, [mutate]);
 
-  // Don't show quota for non-PageSpace providers (they use their own API keys)
-  if (!isPageSpaceProvider) {
-    return null;
-  }
-
-  if (error) {
-    return (
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <AlertCircle className="h-4 w-4" />
-        <span className="hidden md:inline">Usage unavailable</span>
-      </div>
-    );
-  }
-
-  if (!usage) {
-    return (
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <div className="h-4 w-4 animate-pulse bg-muted rounded" />
-        <span className="hidden md:inline">Loading...</span>
-      </div>
-    );
-  }
-
   // Show Pro quota when Pro model is selected (and user has access)
-  const showProQuota = isProModel && isPaid && usage.pro.limit > 0;
+  const showProQuota = isPageSpaceProvider && isProModel && isPaid && usage && usage.pro.limit > 0;
   // Show Standard quota when Standard model is selected
-  const showStandardQuota = isStandardModel;
+  const showStandardQuota = isPageSpaceProvider && isStandardModel && usage;
+
+  // Render quota display section (only for PageSpace models with loaded usage data)
+  const renderQuotaDisplay = () => {
+    // Show error state
+    if (error) {
+      return (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <AlertCircle className="h-4 w-4" />
+          <span className="hidden md:inline">Usage unavailable</span>
+        </div>
+      );
+    }
+
+    // Show loading state only for PageSpace provider
+    if (isPageSpaceProvider && !usage) {
+      return (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <div className="h-4 w-4 animate-pulse bg-muted rounded" />
+          <span className="hidden md:inline">Loading...</span>
+        </div>
+      );
+    }
+
+    // Show quota badges for PageSpace models
+    if (showStandardQuota || showProQuota) {
+      return (
+        <div className="flex items-center gap-3 text-sm">
+          {/* Standard Usage - only when Standard model selected */}
+          {showStandardQuota && (
+            <div className="flex items-center gap-1.5">
+              <span className="hidden lg:inline text-muted-foreground text-xs">Standard:</span>
+              <Badge
+                variant={isNearStandardLimit ? "destructive" : "secondary"}
+                className="text-xs font-medium"
+              >
+                {usage.standard.current}/{usage.standard.limit}
+              </Badge>
+              <span className="hidden lg:inline text-muted-foreground text-xs">Today</span>
+            </div>
+          )}
+
+          {/* Pro AI Usage - only when Pro model selected */}
+          {showProQuota && (
+            <div className="flex items-center gap-1.5">
+              <span className="hidden lg:inline text-muted-foreground text-xs">Pro AI:</span>
+              <Badge
+                variant={isNearProLimit ? "destructive" : "secondary"}
+                className="text-xs font-medium"
+              >
+                {usage.pro.current}/{usage.pro.limit}
+              </Badge>
+              <span className="hidden lg:inline text-muted-foreground text-xs">Today</span>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    return null;
+  };
 
   return (
     <div className="flex flex-wrap items-center gap-3">
-      {/* Usage Display - show only the relevant quota for selected model */}
-      <div className="flex items-center gap-3 text-sm">
-        {/* Standard Usage - only when Standard model selected */}
-        {showStandardQuota && (
-          <div className="flex items-center gap-1.5">
-            <span className="hidden lg:inline text-muted-foreground text-xs">Standard:</span>
-            <Badge
-              variant={isNearStandardLimit ? "destructive" : "secondary"}
-              className="text-xs font-medium"
-            >
-              {usage.standard.current}/{usage.standard.limit}
-            </Badge>
-            <span className="hidden lg:inline text-muted-foreground text-xs">Today</span>
-          </div>
-        )}
+      {/* Quota display - conditional based on provider/model */}
+      {renderQuotaDisplay()}
 
-        {/* Pro AI Usage - only when Pro model selected */}
-        {showProQuota && (
-          <div className="flex items-center gap-1.5">
-            <span className="hidden lg:inline text-muted-foreground text-xs">Pro AI:</span>
-            <Badge
-              variant={isNearProLimit ? "destructive" : "secondary"}
-              className="text-xs font-medium"
-            >
-              {usage.pro.current}/{usage.pro.limit}
-            </Badge>
-            <span className="hidden lg:inline text-muted-foreground text-xs">Today</span>
-          </div>
-        )}
-      </div>
-
-      {/* Action Button */}
+      {/* Action Button - always visible for billing navigation */}
       <Button
         variant={isPaid ? "ghost" : "default"}
         size="sm"
