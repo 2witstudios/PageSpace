@@ -1,4 +1,4 @@
-export type ActivityAction = 'rollback' | 'redo';
+export type ActivityAction = 'rollback';
 
 export interface ActivityChangeSummary {
   id: string;

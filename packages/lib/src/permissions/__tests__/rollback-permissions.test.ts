@@ -70,6 +70,7 @@ describe('rollback-permissions', () => {
         'message_update',
         'message_delete',
         'ownership_transfer',
+        'rollback', // Rollback activities can themselves be rolled back (undo the undo)
       ];
 
       it.each(rollbackableOps)('returns true for %s operation', (operation) => {
@@ -91,7 +92,6 @@ describe('rollback-permissions', () => {
         'account_delete',
         'profile_update',
         'avatar_update',
-        'rollback', // Cannot rollback a rollback
         'conversation_undo',
         'conversation_undo_with_changes',
         'restore',
@@ -176,14 +176,14 @@ describe('rollback-permissions', () => {
       expect(isActivityEligibleForRollback(activity)).toBe(false);
     });
 
-    it('returns false for rollback operations (prevents infinite chain)', () => {
+    it('returns true for rollback operations (can undo a rollback)', () => {
       const activity = {
         operation: 'rollback',
         previousValues: { title: 'Old Title' },
         contentSnapshot: null,
       };
 
-      expect(isActivityEligibleForRollback(activity)).toBe(false);
+      expect(isActivityEligibleForRollback(activity)).toBe(true);
     });
   });
 
@@ -208,13 +208,13 @@ describe('rollback-permissions', () => {
       );
     });
 
-    it('denies rollback of rollback operations (prevents infinite chain)', async () => {
+    it('allows rollback of rollback operations (undo the undo)', async () => {
+      (canUserEditPage as Mock).mockResolvedValue(true);
       const activity = createActivity({ operation: 'rollback' });
 
       const result = await canUserRollback(mockUserId, activity, 'page');
 
-      expect(result.canRollback).toBe(false);
-      expect(result.reason).toBe('Cannot rollback a rollback operation');
+      expect(result.canRollback).toBe(true);
     });
 
     describe('ai_tool context', () => {

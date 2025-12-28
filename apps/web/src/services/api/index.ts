@@ -44,9 +44,7 @@ export type {
 export {
   getActivityById,
   previewRollback,
-  previewRedo,
   executeRollback,
-  executeRedo,
   getPageVersionHistory,
   getDriveVersionHistory,
   getUserRetentionDays,

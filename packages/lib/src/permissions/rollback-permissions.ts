@@ -75,15 +75,6 @@ export async function canUserRollback(
     };
   }
 
-  // Can't rollback if already a rollback operation (would create infinite chain)
-  if (activity.operation === 'rollback') {
-    browserLoggers.permissions.debug('[Rollback:Permission] Cannot rollback a rollback');
-    return {
-      canRollback: false,
-      reason: 'Cannot rollback a rollback operation',
-    };
-  }
-
   switch (context) {
     case 'ai_tool': {
       browserLoggers.permissions.debug('[Rollback:Permission] AI tool context check', {
@@ -217,6 +208,7 @@ export function isRollbackableOperation(operation: string): boolean {
     'message_update',
     'message_delete',
     'ownership_transfer',
+    'rollback', // Rollback activities can themselves be rolled back (undo the undo)
   ];
   return rollbackableOperations.includes(operation);
 }

@@ -32,7 +32,7 @@ import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import { RollbackConfirmDialog } from '@/components/version-history/RollbackConfirmDialog';
 import { RollbackToPointDialog, type RollbackToPointContext } from '@/components/activity/RollbackToPointDialog';
 import { useToast } from '@/hooks/useToast';
-import type { ActivityAction, ActivityActionPreview, ActivityActionResult } from '@/types/activity-actions';
+import type { ActivityActionPreview, ActivityActionResult } from '@/types/activity-actions';
 
 // Exported for unit testing
 export interface ActivityUser {
@@ -168,7 +168,6 @@ export default function SidebarActivityTab() {
   const [showRollbackToPoint, setShowRollbackToPoint] = useState(false);
   const [selectedActivityForRollbackToPoint, setSelectedActivityForRollbackToPoint] = useState<ActivityItem | null>(null);
   const [preview, setPreview] = useState<ActivityActionPreview | null>(null);
-  const [action, setAction] = useState<ActivityAction>('rollback');
 
   // Determine context and IDs from route params
   const driveId = params.driveId as string | undefined;
@@ -201,14 +200,6 @@ export default function SidebarActivityTab() {
   }, [context]);
 
   const getOperationLabel = useCallback((activity: ActivityItem) => {
-    const metadata = activity.metadata;
-    const redoFromActivityId = typeof metadata === 'object' && metadata !== null
-      ? (metadata as { redoFromActivityId?: string }).redoFromActivityId
-      : undefined;
-
-    if (activity.operation === 'rollback' && redoFromActivityId) {
-      return 'Redo rollback';
-    }
     return operationLabels[activity.operation] || activity.operation;
   }, []);
 
@@ -245,16 +236,13 @@ export default function SidebarActivityTab() {
     loadActivities();
   }, [loadActivities, pathname]);
 
-  // Handle restore click - fetch preview and show confirm dialog
-  const handleActionClick = useCallback(async (activity: ActivityItem, nextAction: ActivityAction) => {
+  // Handle undo click - fetch preview and show confirm dialog
+  const handleActionClick = useCallback(async (activity: ActivityItem) => {
     setSelectedActivityForRollback(activity);
-    setAction(nextAction);
 
     try {
-      const endpoint = nextAction === 'redo'
-        ? `/api/activities/${activity.id}/redo`
-        : `/api/activities/${activity.id}/rollback`;
-      const data = await post<{ preview: ActivityActionPreview | null }>(endpoint, {
+      // All undo operations go through /rollback - server handles rollback-of-rollback
+      const data = await post<{ preview: ActivityActionPreview | null }>(`/api/activities/${activity.id}/rollback`, {
         context: rollbackContext,
         dryRun: true,
       });
@@ -266,7 +254,7 @@ export default function SidebarActivityTab() {
         variant: 'destructive',
       });
       setPreview({
-        action: nextAction,
+        action: 'rollback',
         canExecute: false,
         reason: 'Preview unavailable. Please try again.',
         warnings: [],
@@ -290,10 +278,7 @@ export default function SidebarActivityTab() {
     }
 
     try {
-      const endpoint = action === 'redo'
-        ? `/api/activities/${selectedActivityForRollback.id}/redo`
-        : `/api/activities/${selectedActivityForRollback.id}/rollback`;
-      const result = await post<ActivityActionResult>(endpoint, {
+      const result = await post<ActivityActionResult>(`/api/activities/${selectedActivityForRollback.id}/rollback`, {
         context: rollbackContext,
         force,
       });
@@ -315,7 +300,7 @@ export default function SidebarActivityTab() {
       });
       throw err;
     }
-  }, [selectedActivityForRollback, rollbackContext, toast, loadActivities, action]);
+  }, [selectedActivityForRollback, rollbackContext, toast, loadActivities]);
 
   // Filter activities based on search query
   const filteredActivities = useMemo(() => {
@@ -463,16 +448,10 @@ export default function SidebarActivityTab() {
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => handleActionClick(activity, 'rollback')}>
+                      <DropdownMenuItem onClick={() => handleActionClick(activity)}>
                         <History className="h-4 w-4 mr-2" />
                         Undo this change
                       </DropdownMenuItem>
-                      {activity.operation === 'rollback' && (
-                        <DropdownMenuItem onClick={() => handleActionClick(activity, 'redo')}>
-                          <History className="h-4 w-4 mr-2" />
-                          Redo rollback
-                        </DropdownMenuItem>
-                      )}
                       <DropdownMenuItem onClick={() => {
                         setSelectedActivityForRollbackToPoint(activity);
                         setShowRollbackToPoint(true);
@@ -507,7 +486,6 @@ export default function SidebarActivityTab() {
         })()}
         timestamp={selectedActivityForRollback?.timestamp || new Date().toISOString()}
         preview={preview}
-        action={action}
         onConfirm={handleConfirmAction}
       />
 
