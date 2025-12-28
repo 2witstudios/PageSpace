@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Crown, Home, PanelLeft, PanelRight, Search } from "lucide-react";
+import { Home, PanelLeft, PanelRight, Search } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import NotificationBell from "@/components/notifications/NotificationBell";
@@ -69,15 +69,7 @@ export default function TopBar({ onToggleLeftPanel, onToggleRightPanel }: TopBar
         </div>
 
         <div className="flex flex-shrink-0 items-center gap-2">
-          <div className="hidden lg:flex">
-            <UsageCounter />
-          </div>
-
-          <Button variant="ghost" size="icon" className="lg:hidden" asChild aria-label="Open billing settings">
-            <Link href="/settings/billing">
-              <Crown className="h-5 w-5" />
-            </Link>
-          </Button>
+          <UsageCounter />
 
           <VerifyEmailButton />
 
