@@ -524,20 +524,20 @@ const GlobalAssistantView: React.FC = () => {
           <Button
             variant="ghost"
             size="icon"
-            onClick={handleOpenActivity}
-            className="h-8 w-8"
-            title="Open Activity"
-          >
-            <Activity className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
             onClick={handleOpenHistory}
             className="h-8 w-8"
             title="View History"
           >
             <History className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={handleOpenActivity}
+            className="h-8 w-8"
+            title="Open Activity"
+          >
+            <Activity className="h-4 w-4" />
           </Button>
           <Button
             variant="outline"
