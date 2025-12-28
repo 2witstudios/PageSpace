@@ -33,6 +33,8 @@ export interface Page {
   isTrashed: boolean;
   createdAt: string; // ISO8601 date string from API
   updatedAt: string; // ISO8601 date string from API
+  revision?: number;
+  stateHash?: string | null;
   trashedAt: string | null; // ISO8601 date string from API
   driveId: string;
   parentId: string | null;

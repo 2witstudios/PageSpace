@@ -17,6 +17,10 @@ vi.mock('@pagespace/lib/server', () => ({
   logPageActivity: vi.fn(),
   logDriveActivity: vi.fn(),
   getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' }),
+  detectPageContentFormat: vi.fn(() => 'text'),
+  hashWithPrefix: vi.fn(() => 'content-ref'),
+  computePageStateHash: vi.fn(() => 'state-hash'),
+  createPageVersion: vi.fn().mockResolvedValue({ id: 'version-1', contentRef: 'content-ref', contentSize: 0 }),
   PageType: {
     FOLDER: 'FOLDER',
     DOCUMENT: 'DOCUMENT',
@@ -66,6 +70,10 @@ vi.mock('@pagespace/lib/server', () => ({
   },
 }));
 
+vi.mock('@/services/api/page-mutation-service', () => ({
+  applyPageMutation: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock('@/lib/websocket', () => ({
   broadcastPageEvent: vi.fn(),
   createPageEventPayload: vi.fn(),
@@ -78,14 +86,14 @@ vi.mock('@/lib/logging/mask', () => ({
 }));
 
 import { pageWriteTools } from '../page-write-tools';
-import { canUserEditPage, pageRepository, driveRepository, logPageActivity, logDriveActivity } from '@pagespace/lib/server';
+import { canUserEditPage, pageRepository, driveRepository } from '@pagespace/lib/server';
+import { applyPageMutation } from '@/services/api/page-mutation-service';
 import type { ToolExecutionContext } from '../../core';
 
 const mockCanUserEditPage = vi.mocked(canUserEditPage);
 const mockPageRepo = vi.mocked(pageRepository);
 const mockDriveRepo = vi.mocked(driveRepository);
-const mockLogPageActivity = vi.mocked(logPageActivity);
-const _mockLogDriveActivity = vi.mocked(logDriveActivity);
+const mockApplyPageMutation = vi.mocked(applyPageMutation);
 
 describe('page-write-tools', () => {
   beforeEach(() => {
@@ -233,12 +241,15 @@ describe('page-write-tools', () => {
 
       // Verify repository interactions with correct payloads
       expect(mockCanUserEditPage).toHaveBeenCalledWith('user-123', 'page-1');
-      expect(mockPageRepo.update).toHaveBeenCalledWith('page-1', {
-        content: 'Line 1\nNew Line 2\nLine 3',
-      });
+      expect(mockApplyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pageId: 'page-1',
+          updates: { content: 'Line 1\nNew Line 2\nLine 3' },
+          updatedFields: ['content'],
+        })
+      );
 
-      // Verify activity logging was called (fire-and-forget)
-      expect(mockLogPageActivity).toHaveBeenCalled();
+      // Activity logging is handled by mutation logging.
     });
   });
 
@@ -312,18 +323,19 @@ describe('page-write-tools', () => {
       expect(success.title).toBe('New Page');
 
       // Verify repository was called with correct payload
-      expect(mockPageRepo.create).toHaveBeenCalledWith({
-        title: 'New Page',
-        type: 'DOCUMENT',
-        content: '',
-        position: 1,
-        driveId: 'drive-1',
-        parentId: null,
-        isTrashed: false,
-      });
+      expect(mockPageRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: 'New Page',
+          type: 'DOCUMENT',
+          content: '',
+          position: 1,
+          driveId: 'drive-1',
+          parentId: null,
+          isTrashed: false,
+        })
+      );
 
-      // Verify activity logging was called (fire-and-forget)
-      expect(mockLogPageActivity).toHaveBeenCalled();
+      // Activity logging is handled by mutation logging.
     });
   });
 
@@ -381,10 +393,15 @@ describe('page-write-tools', () => {
       const success = result as { success: boolean; title: string };
       expect(success.success).toBe(true);
       expect(success.title).toBe('New Title');
-      expect(mockPageRepo.update).toHaveBeenCalledWith('page-1', { title: 'New Title' });
+      expect(mockApplyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pageId: 'page-1',
+          updates: { title: 'New Title' },
+          updatedFields: ['title'],
+        })
+      );
 
-      // Verify activity logging was called (fire-and-forget)
-      expect(mockLogPageActivity).toHaveBeenCalled();
+      // Activity logging is handled by mutation logging.
     });
   });
 

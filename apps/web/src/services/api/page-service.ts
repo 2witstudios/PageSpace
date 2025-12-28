@@ -1,5 +1,15 @@
-import { db, pages, drives, users, mentions, chatMessages, eq, and, desc, inArray, isNull } from '@pagespace/db';
-import { canUserViewPage, canUserEditPage, canUserDeletePage } from '@pagespace/lib/server';
+import { db, pages, drives, users, chatMessages, eq, and, desc, isNull } from '@pagespace/db';
+import {
+  canUserViewPage,
+  canUserEditPage,
+  canUserDeletePage,
+  getActorInfo,
+  detectPageContentFormat,
+  hashWithPrefix,
+  computePageStateHash,
+  createPageVersion,
+  type PageVersionSource,
+} from '@pagespace/lib/server';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
 import {
   validatePageCreation,
@@ -9,9 +19,9 @@ import {
   isAIChatPage,
   isDriveOwnerOrAdmin,
 } from '@pagespace/lib';
+import { createChangeGroupId, inferChangeGroupType, logActivityWithTx } from '@pagespace/lib/monitoring';
 import { createId } from '@paralleldrive/cuid2';
-import * as cheerio from 'cheerio';
-import { loggers } from '@pagespace/lib/server';
+import { applyPageMutation, PageRevisionMismatchError, type PageMutationContext } from './page-mutation-service';
 
 /**
  * Helper to convert DB page result to PageData type
@@ -26,6 +36,8 @@ function toPageData(dbPage: {
   position: number;
   createdAt: Date;
   updatedAt: Date;
+  revision: number;
+  stateHash: string | null;
   isTrashed: boolean;
   trashedAt: Date | null;
   aiProvider: string | null;
@@ -44,6 +56,8 @@ function toPageData(dbPage: {
     position: dbPage.position,
     createdAt: dbPage.createdAt,
     updatedAt: dbPage.updatedAt,
+    revision: dbPage.revision,
+    stateHash: dbPage.stateHash,
     isTrashed: dbPage.isTrashed,
     trashedAt: dbPage.trashedAt,
     aiProvider: dbPage.aiProvider,
@@ -127,6 +141,8 @@ export interface PageData {
   position: number;
   createdAt: Date;
   updatedAt: Date;
+  revision: number;
+  stateHash: string | null;
   isTrashed: boolean;
   trashedAt: Date | null;
   aiProvider: string | null;
@@ -173,6 +189,8 @@ export interface UpdatePageError {
   success: false;
   error: string;
   status: number;
+  currentRevision?: number;
+  expectedRevision?: number;
 }
 
 export type UpdatePageResult = UpdatePageSuccess | UpdatePageError;
@@ -224,6 +242,11 @@ export interface CreatePageParams {
   aiModel?: string;
 }
 
+export interface CreatePageOptions {
+  context?: Omit<PageMutationContext, 'userId'>;
+  source?: PageVersionSource;
+}
+
 /**
  * Update page input parameters
  */
@@ -236,74 +259,48 @@ export interface UpdatePageParams {
   isPaginated?: boolean;
 }
 
-/**
- * Find mention nodes in content (HTML)
- */
-function findMentionNodes(content: unknown): string[] {
-  const ids: string[] = [];
-  const contentStr = Array.isArray(content) ? content.join('\n') : String(content);
-
-  try {
-    const $ = cheerio.load(contentStr);
-    $('a[data-page-id]').each((_, element) => {
-      const pageId = $(element).attr('data-page-id');
-      if (pageId) {
-        ids.push(pageId);
-      }
-    });
-  } catch (error) {
-    loggers.api.error('Error parsing HTML content for mentions:', error as Error);
-    const regex = /@\[.*?\]\((.*?)\)/g;
-    let match;
-    while ((match = regex.exec(contentStr)) !== null) {
-      ids.push(match[1]);
-    }
-  }
-
-  return ids;
+export interface UpdatePageOptions {
+  expectedRevision?: number;
+  context?: Omit<PageMutationContext, 'userId'>;
+  source?: PageVersionSource;
 }
 
 type TransactionType = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type DatabaseType = typeof db;
 
 /**
- * Sync mentions based on content
- */
-async function syncMentions(sourcePageId: string, content: unknown, tx: TransactionType | DatabaseType) {
-  const mentionedPageIds = findMentionNodes(content);
-
-  const existingMentionsQuery = await tx.select({ targetPageId: mentions.targetPageId }).from(mentions).where(eq(mentions.sourcePageId, sourcePageId));
-  const existingMentionIds = new Set(existingMentionsQuery.map(m => m.targetPageId));
-
-  const toCreate = mentionedPageIds.filter(id => !existingMentionIds.has(id));
-  const toDelete = Array.from(existingMentionIds).filter(id => !mentionedPageIds.includes(id));
-
-  if (toCreate.length > 0) {
-    await tx.insert(mentions).values(toCreate.map(targetPageId => ({
-      sourcePageId,
-      targetPageId,
-    })));
-  }
-
-  if (toDelete.length > 0) {
-    await tx.delete(mentions).where(and(
-      eq(mentions.sourcePageId, sourcePageId),
-      inArray(mentions.targetPageId, toDelete)
-    ));
-  }
-}
-
-/**
  * Recursively trash a page and all its children
  */
-async function recursivelyTrash(pageId: string, tx: TransactionType | DatabaseType) {
+async function recursivelyTrash(
+  pageId: string,
+  tx: TransactionType | DatabaseType,
+  context: PageMutationContext
+) {
   const children = await tx.select({ id: pages.id }).from(pages).where(eq(pages.parentId, pageId));
 
   for (const child of children) {
-    await recursivelyTrash(child.id, tx);
+    await recursivelyTrash(child.id, tx, context);
   }
 
-  await tx.update(pages).set({ isTrashed: true, trashedAt: new Date() }).where(eq(pages.id, pageId));
+  const [pageRecord] = await tx
+    .select({ revision: pages.revision })
+    .from(pages)
+    .where(eq(pages.id, pageId))
+    .limit(1);
+
+  if (!pageRecord) {
+    return;
+  }
+
+  await applyPageMutation({
+    pageId,
+    operation: 'trash',
+    updates: { isTrashed: true, trashedAt: new Date() },
+    updatedFields: ['isTrashed', 'trashedAt'],
+    expectedRevision: pageRecord.revision,
+    context,
+    tx,
+  });
 }
 
 /**
@@ -393,7 +390,12 @@ export const pageService = {
   /**
    * Update a page
    */
-  async updatePage(pageId: string, userId: string, updates: UpdatePageParams): Promise<UpdatePageResult> {
+  async updatePage(
+    pageId: string,
+    userId: string,
+    updates: UpdatePageParams,
+    options?: UpdatePageOptions
+  ): Promise<UpdatePageResult> {
     // Check authorization
     const canEdit = await canUserEditPage(userId, pageId);
     if (!canEdit) {
@@ -410,18 +412,57 @@ export const pageService = {
 
     // Sanitize content
     const processedUpdates = { ...updates };
-    if (processedUpdates.content) {
+    if (processedUpdates.content !== undefined) {
       processedUpdates.content = sanitizeEmptyContent(processedUpdates.content);
     }
 
-    // Update in transaction
-    await db.transaction(async (tx) => {
-      await tx.update(pages).set({ ...processedUpdates }).where(eq(pages.id, pageId));
+    const updatedFields = Object.keys(processedUpdates);
 
-      if (processedUpdates.content) {
-        await syncMentions(pageId, processedUpdates.content, tx);
+    if (updatedFields.length > 0) {
+      try {
+        const actorInfo = options?.context?.actorEmail
+          ? {
+              actorEmail: options.context.actorEmail,
+              actorDisplayName: options.context.actorDisplayName ?? undefined,
+            }
+          : await getActorInfo(userId);
+
+        const mutationContext: PageMutationContext = {
+          userId,
+          actorEmail: options?.context?.actorEmail ?? actorInfo.actorEmail,
+          actorDisplayName: options?.context?.actorDisplayName ?? actorInfo.actorDisplayName,
+          isAiGenerated: options?.context?.isAiGenerated,
+          aiProvider: options?.context?.aiProvider,
+          aiModel: options?.context?.aiModel,
+          aiConversationId: options?.context?.aiConversationId,
+          changeGroupId: options?.context?.changeGroupId,
+          changeGroupType: options?.context?.changeGroupType,
+          metadata: options?.context?.metadata,
+          resourceType: options?.context?.resourceType,
+        };
+
+        await applyPageMutation({
+          pageId,
+          operation: 'update',
+          updates: processedUpdates,
+          updatedFields,
+          expectedRevision: options?.expectedRevision,
+          context: mutationContext,
+          source: options?.source,
+        });
+      } catch (error) {
+        if (error instanceof PageRevisionMismatchError) {
+          return {
+            success: false,
+            error: error.message,
+            status: error.expectedRevision === undefined ? 428 : 409,
+            currentRevision: error.currentRevision,
+            expectedRevision: error.expectedRevision,
+          };
+        }
+        throw error;
       }
-    });
+    }
 
     // Refetch the page with details
     const [updatedPage, children, messages] = await Promise.all([
@@ -451,7 +492,7 @@ export const pageService = {
         messages: messages as unknown as MessageWithUser[],
       },
       driveId: updatedPage.driveId,
-      updatedFields: Object.keys(updates),
+      updatedFields,
       isAIChatPage: updatedPage.type === 'AI_CHAT',
     };
   },
@@ -480,17 +521,51 @@ export const pageService = {
       return { success: false, error: 'Page not found', status: 404 };
     }
 
+    const actorInfo = await getActorInfo(userId);
+    const changeGroupId = createChangeGroupId();
+    const changeGroupType = inferChangeGroupType({ isAiGenerated: false });
+    const mutationContext: PageMutationContext = {
+      userId,
+      actorEmail: actorInfo.actorEmail,
+      actorDisplayName: actorInfo.actorDisplayName ?? undefined,
+      changeGroupId,
+      changeGroupType,
+      metadata: { trashChildren: options.trashChildren },
+    };
+
     await db.transaction(async (tx) => {
       if (options.trashChildren) {
-        await recursivelyTrash(pageId, tx);
+        await recursivelyTrash(pageId, tx, mutationContext);
       } else {
-        // Move children to grandparent (use pageInfo.parentId which we already fetched)
-        await tx.update(pages).set({
-          parentId: pageInfo.parentId,
-          originalParentId: pageId
-        }).where(eq(pages.parentId, pageId));
+        const children = await tx
+          .select({ id: pages.id, revision: pages.revision })
+          .from(pages)
+          .where(eq(pages.parentId, pageId));
 
-        await tx.update(pages).set({ isTrashed: true, trashedAt: new Date() }).where(eq(pages.id, pageId));
+        for (const child of children) {
+          await applyPageMutation({
+            pageId: child.id,
+            operation: 'move',
+            updates: {
+              parentId: pageInfo.parentId,
+              originalParentId: pageId,
+            },
+            updatedFields: ['parentId', 'originalParentId'],
+            expectedRevision: child.revision,
+            context: mutationContext,
+            tx,
+          });
+        }
+
+        await applyPageMutation({
+          pageId,
+          operation: 'trash',
+          updates: { isTrashed: true, trashedAt: new Date() },
+          updatedFields: ['isTrashed', 'trashedAt'],
+          expectedRevision: pageInfo.revision,
+          context: mutationContext,
+          tx,
+        });
       }
     });
 
@@ -507,7 +582,7 @@ export const pageService = {
   /**
    * Create a new page
    */
-  async createPage(userId: string, params: CreatePageParams): Promise<CreatePageResult> {
+  async createPage(userId: string, params: CreatePageParams, options?: CreatePageOptions): Promise<CreatePageResult> {
     // Validate required fields
     if (!params.title || !params.type || !params.driveId) {
       return { success: false, error: 'Missing required fields', status: 400 };
@@ -580,6 +655,16 @@ export const pageService = {
       }
     }
 
+    const actorInfo = options?.context?.actorEmail
+      ? {
+          actorEmail: options.context.actorEmail,
+          actorDisplayName: options.context.actorDisplayName ?? undefined,
+        }
+      : await getActorInfo(userId);
+    const changeGroupId = options?.context?.changeGroupId ?? createChangeGroupId();
+    const changeGroupType = options?.context?.changeGroupType
+      ?? inferChangeGroupType({ isAiGenerated: options?.context?.isAiGenerated });
+
     // Create page in transaction
     const newPage = await db.transaction(async (tx) => {
       interface PageInsertData {
@@ -591,6 +676,8 @@ export const pageService = {
         content: string;
         position: number;
         updatedAt: Date;
+        revision: number;
+        stateHash: string;
         aiProvider?: string | null;
         aiModel?: string | null;
         systemPrompt?: string | null;
@@ -606,6 +693,8 @@ export const pageService = {
         content: params.content || getDefaultContent(params.type as PageTypeEnum),
         position: newPosition,
         updatedAt: new Date(),
+        revision: 0,
+        stateHash: '',
       };
 
       if (isAIChatPage(params.type as PageTypeEnum)) {
@@ -620,7 +709,64 @@ export const pageService = {
         }
       }
 
+      const contentFormat = detectPageContentFormat(pageData.content);
+      const contentRef = hashWithPrefix(contentFormat, pageData.content);
+      const stateHash = computePageStateHash({
+        title: pageData.title,
+        contentRef,
+        parentId: pageData.parentId,
+        position: pageData.position,
+        isTrashed: false,
+        type: pageData.type,
+        driveId: pageData.driveId,
+        aiProvider: pageData.aiProvider,
+        aiModel: pageData.aiModel,
+        systemPrompt: pageData.systemPrompt,
+        enabledTools: pageData.enabledTools,
+      });
+      pageData.stateHash = stateHash;
+
       const [page] = await tx.insert(pages).values(pageData).returning();
+
+      await logActivityWithTx({
+        userId,
+        actorEmail: actorInfo.actorEmail,
+        actorDisplayName: actorInfo.actorDisplayName,
+        operation: 'create',
+        resourceType: options?.context?.resourceType ?? 'page',
+        resourceId: page.id,
+        resourceTitle: page.title ?? undefined,
+        driveId: page.driveId,
+        pageId: page.id,
+        isAiGenerated: options?.context?.isAiGenerated,
+        aiProvider: options?.context?.aiProvider,
+        aiModel: options?.context?.aiModel,
+        aiConversationId: options?.context?.aiConversationId,
+        metadata: options?.context?.metadata,
+        contentRef,
+        contentSize: Buffer.byteLength(pageData.content, 'utf8'),
+        contentFormat,
+        streamId: page.id,
+        streamSeq: 0,
+        changeGroupId,
+        changeGroupType,
+        stateHashAfter: stateHash,
+      }, tx);
+
+      await createPageVersion({
+        pageId: page.id,
+        driveId: page.driveId,
+        createdBy: userId,
+        source: options?.source ?? 'system',
+        content: pageData.content,
+        contentFormat,
+        pageRevision: 0,
+        stateHash,
+        changeGroupId,
+        changeGroupType,
+        metadata: options?.context?.metadata,
+      }, { tx });
+
       return page;
     });
 

@@ -44,7 +44,9 @@ export type {
 export {
   getActivityById,
   previewRollback,
+  previewRedo,
   executeRollback,
+  executeRedo,
   getPageVersionHistory,
   getDriveVersionHistory,
   getUserRetentionDays,
@@ -65,3 +67,14 @@ export type {
   UndoMode,
   AiUndoResult,
 } from './ai-undo-service';
+
+export {
+  createDriveBackup,
+  listDriveBackups,
+} from './drive-backup-service';
+export type {
+  CreateDriveBackupInput,
+  CreateDriveBackupResult,
+  DriveBackupSummary,
+  DriveBackupSource,
+} from './drive-backup-service';

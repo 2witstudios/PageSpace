@@ -126,10 +126,20 @@ export interface ActivityLogInput {
   // Content & change tracking
   contentSnapshot?: string;
   contentFormat?: 'text' | 'html' | 'json' | 'tiptap';
+  contentRef?: string;
+  contentSize?: number;
   updatedFields?: string[];
   previousValues?: Record<string, unknown>;
   newValues?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
+
+  // Deterministic stream metadata
+  streamId?: string;
+  streamSeq?: number;
+  changeGroupId?: string;
+  changeGroupType?: 'user' | 'ai' | 'automation' | 'system';
+  stateHashBefore?: string;
+  stateHashAfter?: string;
 
   // Rollback support - denormalized source info for audit trail preservation
   rollbackFromActivityId?: string;
@@ -139,43 +149,93 @@ export interface ActivityLogInput {
 }
 
 /**
+ * Maximum size for content snapshots (1MB)
+ * Larger content will be truncated with a marker indicating it was too large
+ */
+const MAX_CONTENT_SNAPSHOT_SIZE = 1024 * 1024; // 1MB
+
+function prepareActivityInsert(input: ActivityLogInput) {
+  let contentSnapshot = input.contentSnapshot;
+  let metadata = input.metadata;
+
+  if (contentSnapshot && contentSnapshot.length > MAX_CONTENT_SNAPSHOT_SIZE) {
+    const originalSnapshotSize = contentSnapshot.length;
+    console.warn('[ActivityLogger] Content snapshot too large, skipping snapshot', {
+      resourceId: input.resourceId,
+      resourceType: input.resourceType,
+      snapshotSize: originalSnapshotSize,
+      maxSize: MAX_CONTENT_SNAPSHOT_SIZE,
+    });
+    contentSnapshot = undefined;
+    metadata = {
+      ...input.metadata,
+      contentSnapshotSkipped: true,
+      originalSnapshotSize,
+    };
+  }
+
+  return {
+    id: createId(),
+    timestamp: new Date(),
+    userId: input.userId,
+    actorEmail: input.actorEmail,
+    actorDisplayName: input.actorDisplayName,
+    operation: input.operation,
+    resourceType: input.resourceType,
+    resourceId: input.resourceId,
+    resourceTitle: input.resourceTitle,
+    driveId: input.driveId,
+    pageId: input.pageId,
+    isAiGenerated: input.isAiGenerated ?? false,
+    aiProvider: input.aiProvider,
+    aiModel: input.aiModel,
+    aiConversationId: input.aiConversationId,
+    contentSnapshot,
+    contentFormat: input.contentFormat,
+    contentRef: input.contentRef,
+    contentSize: input.contentSize,
+    updatedFields: input.updatedFields,
+    previousValues: input.previousValues,
+    newValues: input.newValues,
+    metadata,
+    streamId: input.streamId,
+    streamSeq: input.streamSeq,
+    changeGroupId: input.changeGroupId,
+    changeGroupType: input.changeGroupType,
+    stateHashBefore: input.stateHashBefore,
+    stateHashAfter: input.stateHashAfter,
+    rollbackFromActivityId: input.rollbackFromActivityId,
+    rollbackSourceOperation: input.rollbackSourceOperation,
+    rollbackSourceTimestamp: input.rollbackSourceTimestamp,
+    rollbackSourceTitle: input.rollbackSourceTitle,
+    isArchived: false,
+  };
+}
+
+/**
  * Log an activity event to the database.
  * Fire-and-forget pattern - never blocks the caller.
  */
 export async function logActivity(input: ActivityLogInput): Promise<void> {
   try {
-    await db.insert(activityLogs).values({
-      id: createId(),
-      timestamp: new Date(),
-      userId: input.userId,
-      actorEmail: input.actorEmail,
-      actorDisplayName: input.actorDisplayName,
-      operation: input.operation,
-      resourceType: input.resourceType,
-      resourceId: input.resourceId,
-      resourceTitle: input.resourceTitle,
-      driveId: input.driveId,
-      pageId: input.pageId,
-      isAiGenerated: input.isAiGenerated ?? false,
-      aiProvider: input.aiProvider,
-      aiModel: input.aiModel,
-      aiConversationId: input.aiConversationId,
-      contentSnapshot: input.contentSnapshot,
-      contentFormat: input.contentFormat,
-      updatedFields: input.updatedFields,
-      previousValues: input.previousValues,
-      newValues: input.newValues,
-      metadata: input.metadata,
-      rollbackFromActivityId: input.rollbackFromActivityId,
-      rollbackSourceOperation: input.rollbackSourceOperation,
-      rollbackSourceTimestamp: input.rollbackSourceTimestamp,
-      rollbackSourceTitle: input.rollbackSourceTitle,
-      isArchived: false,
-    });
+    const values = prepareActivityInsert(input);
+    await db.insert(activityLogs).values(values);
   } catch (error) {
     // Fire and forget - log error but don't throw
     console.error('[ActivityLogger] Failed to log activity:', error);
   }
+}
+
+/**
+ * Log an activity event using an existing transaction.
+ * Intended for deterministic, atomic writes.
+ */
+export async function logActivityWithTx(
+  input: ActivityLogInput,
+  tx: typeof db
+): Promise<void> {
+  const values = prepareActivityInsert(input);
+  await tx.insert(activityLogs).values(values);
 }
 
 /**
@@ -202,6 +262,15 @@ export function logPageActivity(
     previousValues?: Record<string, unknown>;
     newValues?: Record<string, unknown>;
     metadata?: Record<string, unknown>;
+    contentRef?: string;
+    contentSize?: number;
+    contentFormat?: 'text' | 'html' | 'json' | 'tiptap';
+    streamId?: string;
+    streamSeq?: number;
+    changeGroupId?: string;
+    changeGroupType?: 'user' | 'ai' | 'automation' | 'system';
+    stateHashBefore?: string;
+    stateHashAfter?: string;
   }
 ): void {
   logActivity({
@@ -215,6 +284,9 @@ export function logPageActivity(
     driveId: page.driveId,
     pageId: page.id,
     contentSnapshot: page.content,
+    contentFormat: options?.contentFormat,
+    contentRef: options?.contentRef,
+    contentSize: options?.contentSize,
     isAiGenerated: options?.isAiGenerated,
     aiProvider: options?.aiProvider,
     aiModel: options?.aiModel,
@@ -223,6 +295,12 @@ export function logPageActivity(
     previousValues: options?.previousValues,
     newValues: options?.newValues,
     metadata: options?.metadata,
+    streamId: options?.streamId,
+    streamSeq: options?.streamSeq,
+    changeGroupId: options?.changeGroupId,
+    changeGroupType: options?.changeGroupType,
+    stateHashBefore: options?.stateHashBefore,
+    stateHashAfter: options?.stateHashAfter,
   }).catch(() => {
     // Silent fail - already logged in logActivity
   });
@@ -304,9 +382,8 @@ export function logDriveActivity(
     aiModel?: string;
     aiConversationId?: string;
     metadata?: Record<string, unknown>;
-    // For ownership_transfer
-    previousValues?: { ownerId?: string };
-    newValues?: { ownerId?: string };
+    previousValues?: Record<string, unknown>;
+    newValues?: Record<string, unknown>;
   }
 ): void {
   logActivity({
@@ -393,12 +470,36 @@ export function logMemberActivity(
     targetUserEmail?: string;
     role?: string;
     previousRole?: string;
+    // Additional fields for member_remove rollback support
+    customRoleId?: string | null;
+    previousCustomRoleId?: string | null;
+    invitedBy?: string | null;
+    invitedAt?: Date | null;
+    acceptedAt?: Date | null;
   },
   options?: {
     actorEmail?: string;
     actorDisplayName?: string;
   }
 ): void {
+  // Build previousValues for rollback support
+  // For member_remove, we need to capture all membership data to restore it
+  let previousValues: Record<string, unknown> | undefined;
+  if (operation === 'member_remove') {
+    previousValues = {
+      role: data.previousRole ?? data.role,
+      customRoleId: data.previousCustomRoleId ?? data.customRoleId,
+      invitedBy: data.invitedBy,
+      invitedAt: data.invitedAt?.toISOString(),
+      acceptedAt: data.acceptedAt?.toISOString(),
+    };
+  } else if (data.previousRole) {
+    previousValues = { role: data.previousRole };
+    if (data.previousCustomRoleId !== undefined) {
+      previousValues.customRoleId = data.previousCustomRoleId;
+    }
+  }
+
   logActivity({
     userId,
     actorEmail: options?.actorEmail ?? 'unknown@system',
@@ -408,7 +509,7 @@ export function logMemberActivity(
     resourceId: data.targetUserId,
     resourceTitle: data.targetUserEmail,
     driveId: data.driveId,
-    previousValues: data.previousRole ? { role: data.previousRole } : undefined,
+    previousValues,
     newValues: data.role ? { role: data.role } : undefined,
     metadata: {
       targetUserId: data.targetUserId,
@@ -653,9 +754,9 @@ export function logMessageActivity(
 /**
  * Convenience wrapper for rollback operations.
  * Logs when a user restores a resource to a previous state.
- * Fire-and-forget - call without await.
+ * Await when using a transaction; otherwise fire-and-forget is fine.
  */
-export function logRollbackActivity(
+export async function logRollbackActivity(
   userId: string,
   rollbackFromActivityId: string,
   resource: {
@@ -675,15 +776,28 @@ export function logRollbackActivity(
     contentSnapshot?: string;
     /** Format of the content being restored */
     contentFormat?: 'text' | 'html' | 'json' | 'tiptap';
+    /** Content reference for deterministic snapshots */
+    contentRef?: string;
+    /** Content size in bytes */
+    contentSize?: number;
     /** Source activity snapshot - denormalized for audit trail preservation */
     rollbackSourceOperation?: ActivityOperation;
     rollbackSourceTimestamp?: Date;
     rollbackSourceTitle?: string;
+    /** Stream and change-group metadata for deterministic replay */
+    streamId?: string;
+    streamSeq?: number;
+    changeGroupId?: string;
+    changeGroupType?: 'user' | 'ai' | 'automation' | 'system';
+    stateHashBefore?: string;
+    stateHashAfter?: string;
     /** Additional context */
     metadata?: Record<string, unknown>;
+    /** Optional transaction for atomic logging */
+    tx?: typeof db;
   }
-): void {
-  logActivity({
+): Promise<void> {
+  const payload: ActivityLogInput = {
     userId,
     actorEmail: actorInfo.actorEmail,
     actorDisplayName: actorInfo.actorDisplayName,
@@ -695,6 +809,8 @@ export function logRollbackActivity(
     pageId: resource.pageId,
     contentSnapshot: options?.contentSnapshot,
     contentFormat: options?.contentFormat,
+    contentRef: options?.contentRef,
+    contentSize: options?.contentSize,
     // previousValues = state before rollback (what we're replacing)
     previousValues: options?.replacedValues,
     // newValues = state after rollback (what we restored to)
@@ -705,7 +821,20 @@ export function logRollbackActivity(
     rollbackSourceTimestamp: options?.rollbackSourceTimestamp,
     rollbackSourceTitle: options?.rollbackSourceTitle,
     metadata: options?.metadata,
-  }).catch(() => {
+    streamId: options?.streamId,
+    streamSeq: options?.streamSeq,
+    changeGroupId: options?.changeGroupId,
+    changeGroupType: options?.changeGroupType,
+    stateHashBefore: options?.stateHashBefore,
+    stateHashAfter: options?.stateHashAfter,
+  };
+
+  if (options?.tx) {
+    await logActivityWithTx(payload, options.tx);
+    return;
+  }
+
+  logActivity(payload).catch(() => {
     // Silent fail - already logged in logActivity
   });
 }

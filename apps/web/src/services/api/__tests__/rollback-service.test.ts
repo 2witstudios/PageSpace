@@ -47,7 +47,8 @@ vi.mock('@pagespace/db', () => {
   // Chain mock for update().set().where()
   const updateChain = {
     set: vi.fn().mockReturnThis(),
-    where: vi.fn().mockResolvedValue(undefined),
+    where: vi.fn().mockReturnThis(),
+    returning: vi.fn().mockResolvedValue([{ id: 'page_123' }]),
   };
   mockDb.update.mockReturnValue(updateChain);
 
@@ -95,6 +96,8 @@ vi.mock('@pagespace/lib/monitoring', () => ({
     actorEmail: 'test@example.com',
     actorDisplayName: 'Test User',
   }),
+  createChangeGroupId: vi.fn(() => 'change-group-1'),
+  inferChangeGroupType: vi.fn(() => 'user'),
 }));
 
 // Mock loggers
@@ -107,6 +110,18 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+  readPageContent: vi.fn(),
+  computePageStateHash: vi.fn(() => 'state-hash'),
+  hashWithPrefix: vi.fn(() => 'content-ref'),
+  createPageVersion: vi.fn().mockResolvedValue({
+    id: 'version-123',
+    contentRef: 'content-ref',
+    contentSize: 42,
+  }),
+}));
+
+vi.mock('@/services/api/page-mention-service', () => ({
+  syncMentions: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { db } from '@pagespace/db';
@@ -135,10 +150,23 @@ const createMockActivity = (overrides: Partial<ActivityLogForRollback> = {}): Ac
   aiProvider: null,
   aiModel: null,
   contentSnapshot: null,
+  contentRef: null,
+  contentFormat: null,
+  contentSize: null,
   updatedFields: ['title', 'content'],
   previousValues: { title: 'Old Title', content: '<p>Old content</p>' },
   newValues: { title: 'New Title', content: '<p>New content</p>' },
   metadata: null,
+  streamId: null,
+  streamSeq: null,
+  changeGroupId: null,
+  changeGroupType: null,
+  stateHashBefore: null,
+  stateHashAfter: null,
+  rollbackFromActivityId: null,
+  rollbackSourceOperation: null,
+  rollbackSourceTimestamp: null,
+  rollbackSourceTitle: null,
   ...overrides,
 });
 
@@ -183,10 +211,19 @@ describe('rollback-service', () => {
         aiProvider: null,
         aiModel: null,
         contentSnapshot: '<p>Old content</p>',
+        contentRef: null,
+        contentFormat: null,
+        contentSize: null,
         updatedFields: ['content'],
         previousValues: { content: '<p>Old</p>' },
         newValues: { content: '<p>New</p>' },
         metadata: null,
+        streamId: null,
+        streamSeq: null,
+        changeGroupId: null,
+        changeGroupType: null,
+        stateHashBefore: null,
+        stateHashAfter: null,
       };
 
       (db.select as Mock).mockReturnValue({
@@ -211,7 +248,7 @@ describe('rollback-service', () => {
   // ============================================
 
   describe('previewRollback', () => {
-    it('returns canRollback=false when activity not found', async () => {
+    it('returns canExecute=false when activity not found', async () => {
       (db.select as Mock).mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
@@ -222,12 +259,12 @@ describe('rollback-service', () => {
 
       const result = await previewRollback('nonexistent', mockUserId, 'page');
 
-      expect(result.canRollback).toBe(false);
+      expect(result.canExecute).toBe(false);
       expect(result.reason).toBe('Activity not found');
-      expect(result.activity).toBeNull();
+      expect(result.targetValues).toBeNull();
     });
 
-    it('returns canRollback=false for non-rollbackable operations', async () => {
+    it('returns canExecute=false for non-rollbackable operations', async () => {
       const mockActivity = createMockActivity({ operation: 'create' });
       (db.select as Mock).mockReturnValue({
         from: vi.fn().mockReturnValue({
@@ -240,11 +277,11 @@ describe('rollback-service', () => {
 
       const result = await previewRollback(mockActivityId, mockUserId, 'page');
 
-      expect(result.canRollback).toBe(false);
+      expect(result.canExecute).toBe(false);
       expect(result.reason).toContain("Cannot rollback 'create'");
     });
 
-    it('returns canRollback=false when no previous values available', async () => {
+    it('returns canExecute=false when no previous values available', async () => {
       const mockActivity = createMockActivity({
         previousValues: null,
         contentSnapshot: null,
@@ -260,11 +297,11 @@ describe('rollback-service', () => {
 
       const result = await previewRollback(mockActivityId, mockUserId, 'page');
 
-      expect(result.canRollback).toBe(false);
-      expect(result.reason).toBe('No previous state available to restore');
+      expect(result.canExecute).toBe(false);
+      expect(result.reason).toBe('No values to restore');
     });
 
-    it('returns canRollback=false when user lacks permission', async () => {
+    it('returns canExecute=false when user lacks permission', async () => {
       const mockActivity = createMockActivity();
       (db.select as Mock).mockReturnValue({
         from: vi.fn().mockReturnValue({
@@ -281,11 +318,11 @@ describe('rollback-service', () => {
 
       const result = await previewRollback(mockActivityId, mockUserId, 'page');
 
-      expect(result.canRollback).toBe(false);
+      expect(result.canExecute).toBe(false);
       expect(result.reason).toBe('You need edit permission');
     });
 
-    it('returns canRollback=true with preview data when eligible', async () => {
+    it('returns canExecute=true with preview data when eligible', async () => {
       const mockActivity = createMockActivity();
       // Current page state must match activity.newValues to avoid conflict detection
       const mockCurrentPage = {
@@ -315,9 +352,8 @@ describe('rollback-service', () => {
 
       const result = await previewRollback(mockActivityId, mockUserId, 'page');
 
-      expect(result.canRollback).toBe(true);
-      expect(result.activity).not.toBeNull();
-      expect(result.rollbackToValues).toEqual(mockActivity.previousValues);
+      expect(result.canExecute).toBe(true);
+      expect(result.targetValues).toEqual(mockActivity.previousValues);
     });
 
     it('returns hasConflict=true when resource has been modified since activity', async () => {
@@ -350,8 +386,9 @@ describe('rollback-service', () => {
       // Without force=true, conflict detection blocks rollback
       const result = await previewRollback(mockActivityId, mockUserId, 'page');
 
-      expect(result.canRollback).toBe(false);
+      expect(result.canExecute).toBe(false);
       expect(result.hasConflict).toBe(true);
+      expect(result.requiresForce).toBe(true);
       expect(result.reason).toContain('Resource has been modified since this change');
     });
 
@@ -385,13 +422,14 @@ describe('rollback-service', () => {
       // With force=true, rollback proceeds with warning
       const result = await previewRollback(mockActivityId, mockUserId, 'page', { force: true });
 
-      expect(result.canRollback).toBe(true);
+      expect(result.canExecute).toBe(true);
+      expect(result.hasConflict).toBe(true);
       expect(result.warnings).toContain(
         'This resource has been modified since this change. Recent changes will be overwritten.'
       );
     });
 
-    it('returns canRollback=false when page no longer exists', async () => {
+    it('returns canExecute=false when page no longer exists', async () => {
       const mockActivity = createMockActivity();
 
       let callCount = 0;
@@ -412,7 +450,7 @@ describe('rollback-service', () => {
 
       const result = await previewRollback(mockActivityId, mockUserId, 'page');
 
-      expect(result.canRollback).toBe(false);
+      expect(result.canExecute).toBe(false);
       expect(result.reason).toBe('Resource no longer exists');
     });
   });
@@ -457,17 +495,22 @@ describe('rollback-service', () => {
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockImplementation(() => {
               selectCallCount++;
-              if (selectCallCount === 1 || selectCallCount === 3) {
+              if (selectCallCount === 1 || selectCallCount === 4) {
                 return Promise.resolve([mockActivity]);
               }
-              return Promise.resolve([mockCurrentPage]);
+              if (selectCallCount === 2) {
+                return Promise.resolve([mockCurrentPage]);
+              }
+              return Promise.resolve([{ id: mockDriveId, isTrashed: false }]);
             }),
           }),
         }),
       }));
 
       const mockUpdateSet = vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue(undefined),
+        where: vi.fn().mockReturnValue({
+          returning: vi.fn().mockResolvedValue([{ id: mockPageId }]),
+        }),
       });
       (db.update as Mock).mockReturnValue({ set: mockUpdateSet });
 
@@ -477,7 +520,7 @@ describe('rollback-service', () => {
       const result = await executeRollback(mockActivityId, mockUserId, 'page');
 
       expect(result.success).toBe(true);
-      expect(result.message).toBe('Successfully restored to previous state');
+      expect(result.message).toBe('Change undone');
       expect(result.restoredValues).toEqual({ title: 'Old Title' });
 
       // Verify audit log was called with correct payload
@@ -519,17 +562,22 @@ describe('rollback-service', () => {
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockImplementation(() => {
               selectCallCount++;
-              if (selectCallCount === 1 || selectCallCount === 3) {
+              if (selectCallCount === 1 || selectCallCount === 4) {
                 return Promise.resolve([mockActivity]);
               }
-              return Promise.resolve([mockCurrentPage]);
+              if (selectCallCount === 2) {
+                return Promise.resolve([mockCurrentPage]);
+              }
+              return Promise.resolve([{ id: mockDriveId, isTrashed: false }]);
             }),
           }),
         }),
       }));
 
       const mockUpdateSet = vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue(undefined),
+        where: vi.fn().mockReturnValue({
+          returning: vi.fn().mockResolvedValue([{ id: mockPageId }]),
+        }),
       });
       (db.update as Mock).mockReturnValue({ set: mockUpdateSet });
 
@@ -562,10 +610,13 @@ describe('rollback-service', () => {
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockImplementation(() => {
               selectCallCount++;
-              if (selectCallCount === 1 || selectCallCount === 3) {
+              if (selectCallCount === 1 || selectCallCount === 4) {
                 return Promise.resolve([mockActivity]);
               }
-              return Promise.resolve([mockCurrentPage]);
+              if (selectCallCount === 2) {
+                return Promise.resolve([mockCurrentPage]);
+              }
+              return Promise.resolve([{ id: mockDriveId, isTrashed: false }]);
             }),
           }),
         }),
@@ -573,7 +624,9 @@ describe('rollback-service', () => {
 
       (db.update as Mock).mockReturnValue({
         set: vi.fn().mockReturnValue({
-          where: vi.fn().mockRejectedValue(new Error('Database connection failed')),
+          where: vi.fn().mockReturnValue({
+            returning: vi.fn().mockRejectedValue(new Error('Database connection failed')),
+          }),
         }),
       });
 
@@ -606,10 +659,13 @@ describe('rollback-service', () => {
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockImplementation(() => {
               selectCallCount++;
-              if (selectCallCount === 1 || selectCallCount === 3) {
+              if (selectCallCount === 1 || selectCallCount === 4) {
                 return Promise.resolve([mockActivity]);
               }
-              return Promise.resolve([mockCurrentPage]);
+              if (selectCallCount === 2) {
+                return Promise.resolve([mockCurrentPage]);
+              }
+              return Promise.resolve([{ id: mockDriveId, isTrashed: false }]);
             }),
           }),
         }),
@@ -637,7 +693,6 @@ describe('rollback-service', () => {
         previousValues: {},
         metadata: { targetUserId: 'target_user' },
       });
-      const mockCurrentPage = { title: 'Title', content: '', parentId: null, position: 0 };
 
       let selectCallCount = 0;
       (db.select as Mock).mockImplementation(() => ({
@@ -648,7 +703,16 @@ describe('rollback-service', () => {
               if (selectCallCount === 1 || selectCallCount === 3) {
                 return Promise.resolve([mockActivity]);
               }
-              return Promise.resolve([mockCurrentPage]);
+              return Promise.resolve([{
+                userId: 'target_user',
+                canView: true,
+                canEdit: true,
+                canShare: false,
+                canDelete: false,
+                note: null,
+                expiresAt: null,
+                grantedBy: 'granter_123',
+              }]);
             }),
           }),
         }),
@@ -683,7 +747,6 @@ describe('rollback-service', () => {
         },
         metadata: { targetUserId: 'target_user' },
       });
-      const mockCurrentPage = { title: 'Title', content: '', parentId: null, position: 0 };
 
       let selectCallCount = 0;
       (db.select as Mock).mockImplementation(() => ({
@@ -694,7 +757,7 @@ describe('rollback-service', () => {
               if (selectCallCount === 1 || selectCallCount === 3) {
                 return Promise.resolve([mockActivity]);
               }
-              return Promise.resolve([mockCurrentPage]);
+              return Promise.resolve([]);
             }),
           }),
         }),

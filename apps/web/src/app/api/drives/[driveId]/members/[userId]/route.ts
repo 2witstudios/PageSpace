@@ -280,11 +280,17 @@ export async function DELETE(
     });
 
     // Log member removal for audit trail (fire-and-forget)
+    // Include full membership data for rollback support
     logMemberActivity(currentUserId, 'member_remove', {
       driveId,
       driveName: access.drive.name,
       targetUserId,
       targetUserEmail: memberData.user?.email,
+      role: memberData.role,
+      customRoleId: memberData.customRole?.id ?? null,
+      invitedBy: memberData.invitedBy,
+      invitedAt: memberData.invitedAt,
+      acceptedAt: memberData.acceptedAt,
     }, actorInfo);
 
     // Broadcast member removal event

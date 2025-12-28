@@ -12,6 +12,7 @@ import { ActivityFilterBar } from './ActivityFilterBar';
 import { ActivityTimeline } from './ActivityTimeline';
 import type { ActivityLog, ActivityFilters, Drive, Pagination } from './types';
 import type { RollbackContext } from './ActivityItem';
+import type { ActivityActionResult } from '@/types/activity-actions';
 
 interface ActivityDashboardProps {
   context: 'user' | 'drive';
@@ -209,18 +210,38 @@ export function ActivityDashboard({ context, driveId: initialDriveId, driveName 
   // Map component context to rollback API context
   const rollbackContext: RollbackContext = context === 'user' ? 'user_dashboard' : 'drive';
 
-  const handleRollback = useCallback(async (activityId: string) => {
+  const handleRollback = useCallback(async (activityId: string, force: boolean) => {
     try {
-      await post(`/api/activities/${activityId}/rollback`, {
+      const result = await post<ActivityActionResult>(`/api/activities/${activityId}/rollback`, {
         context: rollbackContext,
+        force,
       });
 
-      toast.success('Successfully restored to previous version');
+      toast.success(result.message || 'Change undone');
       // Refresh the activity list
       fetchActivities();
+      return result;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to rollback';
       toast.error(message);
+      throw err;
+    }
+  }, [rollbackContext, fetchActivities]);
+
+  const handleRedo = useCallback(async (activityId: string, force: boolean) => {
+    try {
+      const result = await post<ActivityActionResult>(`/api/activities/${activityId}/redo`, {
+        context: rollbackContext,
+        force,
+      });
+
+      toast.success(result.message || 'Rollback has been undone');
+      fetchActivities();
+      return result;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to redo rollback';
+      toast.error(message);
+      throw err;
     }
   }, [rollbackContext, fetchActivities]);
 
@@ -321,6 +342,7 @@ export function ActivityDashboard({ context, driveId: initialDriveId, driveName 
           }
           context={rollbackContext}
           onRollback={handleRollback}
+          onRedo={handleRedo}
         />
       </div>
     </div>

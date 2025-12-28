@@ -5,6 +5,7 @@
  */
 
 import { db, pages, drives, eq, and, desc, isNull } from '@pagespace/db';
+import { applyPageMutation, type PageMutationContext } from '@/services/api/page-mutation-service';
 
 /**
  * Calculate the next position for a page based on sibling positions.
@@ -133,24 +134,45 @@ export const pageAgentRepository = {
    */
   async updateAgentConfig(
     agentId: string,
-    data: AgentConfigUpdate
+    data: AgentConfigUpdate,
+    options: { context: PageMutationContext; expectedRevision?: number }
   ): Promise<UpdatedAgent> {
-    const result = await db
-      .update(pages)
-      .set(data)
-      .where(eq(pages.id, agentId))
-      .returning({
+    const updates = Object.fromEntries(
+      Object.entries(data).filter(([, value]) => value !== undefined)
+    );
+    const updatedFields = Object.keys(updates);
+    if (updatedFields.length === 0) {
+      throw new Error('No agent config fields provided');
+    }
+
+    await applyPageMutation({
+      pageId: agentId,
+      operation: 'agent_config_update',
+      updates,
+      updatedFields,
+      expectedRevision: options.expectedRevision,
+      context: {
+        ...options.context,
+        resourceType: options.context.resourceType ?? 'agent',
+      },
+    });
+
+    const [updated] = await db
+      .select({
         id: pages.id,
         title: pages.title,
         type: pages.type,
         driveId: pages.driveId,
-      });
+      })
+      .from(pages)
+      .where(eq(pages.id, agentId))
+      .limit(1);
 
-    if (result.length === 0) {
+    if (!updated) {
       throw new Error(`Agent not found: ${agentId}`);
     }
 
-    return result[0];
+    return updated;
   },
 };
 
@@ -174,6 +196,9 @@ export interface AgentConfigUpdate {
   aiModel?: string | null;
   agentDefinition?: string | null;
   visibleToGlobalAssistant?: boolean;
+  includeDrivePrompt?: boolean;
+  includePageTree?: boolean;
+  pageTreeScope?: 'children' | 'drive';
 }
 
 export interface UpdatedAgent {

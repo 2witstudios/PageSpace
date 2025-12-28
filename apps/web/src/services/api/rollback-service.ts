@@ -5,7 +5,8 @@
  * Allows users to restore resources to previous states based on activity logs.
  */
 
-import { db, activityLogs, pages, drives, driveMembers, driveRoles, pagePermissions, users, chatMessages, messages, eq, and, desc, gte, lte, count } from '@pagespace/db';
+import { db, activityLogs, pages, drives, driveMembers, driveRoles, pagePermissions, users, chatMessages, messages, eq, and, desc, gte, lte, count, asc } from '@pagespace/db';
+import type { ActivityAction, ActivityActionPreview, ActivityActionResult, ActivityChangeSummary } from '@/types/activity-actions';
 import {
   canUserRollback,
   isRollbackableOperation,
@@ -19,8 +20,20 @@ import {
   getActorInfo,
   type ActivityResourceType,
   type ActivityOperation,
+  createChangeGroupId,
+  inferChangeGroupType,
 } from '@pagespace/lib/monitoring';
-import { loggers } from '@pagespace/lib/server';
+import {
+  loggers,
+  readPageContent,
+  computePageStateHash,
+  hashWithPrefix,
+  createPageVersion,
+  type PageVersionSource,
+  type ChangeGroupType,
+} from '@pagespace/lib/server';
+import { detectPageContentFormat, type PageContentFormat } from '@pagespace/lib/content';
+import { syncMentions } from '@/services/api/page-mention-service';
 
 /**
  * Valid activity operations for filtering
@@ -44,6 +57,365 @@ function isValidOperation(operation: string): boolean {
   return VALID_OPERATIONS.includes(operation as typeof VALID_OPERATIONS[number]);
 }
 
+const OPERATION_SUMMARY_LABELS: Record<string, string> = {
+  create: 'Create',
+  update: 'Update',
+  delete: 'Delete',
+  restore: 'Restore',
+  reorder: 'Reorder',
+  trash: 'Trash',
+  move: 'Move',
+  permission_grant: 'Grant permission',
+  permission_update: 'Update permission',
+  permission_revoke: 'Revoke permission',
+  agent_config_update: 'Update agent',
+  member_add: 'Add member',
+  member_remove: 'Remove member',
+  member_role_change: 'Change member role',
+  role_reorder: 'Reorder roles',
+  ownership_transfer: 'Transfer ownership',
+  message_update: 'Edit message',
+  message_delete: 'Delete message',
+  rollback: 'Rollback',
+};
+
+function getOperationSummaryLabel(operation: string): string {
+  return OPERATION_SUMMARY_LABELS[operation] ?? operation;
+}
+
+function getChangeDescription(activity: ActivityLogForRollback): string {
+  const metadata = activity.metadata as { targetUserEmail?: string } | null;
+  return activity.resourceTitle || metadata?.targetUserEmail || activity.resourceType;
+}
+
+function buildChangeSummary(
+  action: ActivityAction,
+  activity: ActivityLogForRollback,
+  targetValues: Record<string, unknown> | null
+): ActivityChangeSummary[] {
+  const operation = action === 'redo'
+    ? activity.rollbackSourceOperation ?? activity.operation
+    : activity.operation;
+  const label = `${action === 'redo' ? 'Redo' : 'Undo'} ${getOperationSummaryLabel(operation)}`;
+  const fields = activity.updatedFields?.length
+    ? activity.updatedFields
+    : targetValues
+      ? Object.keys(targetValues)
+      : [];
+  return [
+    {
+      id: activity.id,
+      label,
+      description: getChangeDescription(activity),
+      fields: fields.length > 0 ? fields : undefined,
+      resource: {
+        type: activity.resourceType,
+        id: activity.resourceId,
+        title: activity.resourceTitle || activity.resourceType,
+      },
+    },
+  ];
+}
+
+async function resolveActivityContentSnapshot(activity: ActivityLogForRollback): Promise<string | null> {
+  if (activity.contentSnapshot) {
+    return activity.contentSnapshot;
+  }
+
+  if (activity.contentRef) {
+    try {
+      return await readPageContent(activity.contentRef);
+    } catch (error) {
+      loggers.api.warn('[RollbackService] Failed to read content snapshot', {
+        activityId: activity.id,
+        contentRef: activity.contentRef,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function buildRollbackTargetValues(
+  activity: ActivityLogForRollback,
+  contentSnapshot?: string | null
+): Record<string, unknown> | null {
+  const baseValues = activity.previousValues ? { ...activity.previousValues } : null;
+  if (activity.operation === 'create') {
+    return baseValues;
+  }
+  const resolvedContent = contentSnapshot ?? activity.contentSnapshot;
+  if (resolvedContent && (!baseValues || !Object.prototype.hasOwnProperty.call(baseValues, 'content'))) {
+    return {
+      ...(baseValues ?? {}),
+      content: resolvedContent,
+    };
+  }
+  return baseValues;
+}
+
+function buildActionTargetValues(
+  action: ActivityAction,
+  activity: ActivityLogForRollback,
+  contentSnapshot?: string | null
+): Record<string, unknown> | null {
+  if (action === 'redo') {
+    return activity.previousValues ? { ...activity.previousValues } : null;
+  }
+  return buildRollbackTargetValues(activity, contentSnapshot);
+}
+
+function getEffectiveOperation(
+  action: ActivityAction,
+  activity: ActivityLogForRollback
+): ActivityOperation | null {
+  if (action === 'redo') {
+    return (activity.rollbackSourceOperation as ActivityOperation | null) ?? null;
+  }
+  return activity.operation as ActivityOperation;
+}
+
+const REDO_ALLOW_MISSING_TARGET = new Set<ActivityOperation>([
+  'member_remove',
+  'permission_revoke',
+  'delete',
+  'trash',
+]);
+
+const ROLLBACK_ALLOW_MISSING_TARGET = new Set<ActivityOperation>([
+  'permission_grant',
+  'member_add',
+  'message_delete',
+]);
+
+// Helper for deep value comparison that handles dates, nulls, and primitives correctly
+function deepEqual(a: unknown, b: unknown): boolean {
+  // Handle null/undefined
+  if (a === b) return true;
+  if (a == null || b == null) return a === b;
+
+  // Handle Date objects
+  if (a instanceof Date && b instanceof Date) {
+    return a.getTime() === b.getTime();
+  }
+  if (a instanceof Date || b instanceof Date) {
+    const aStr = a instanceof Date ? a.toISOString() : String(a);
+    const bStr = b instanceof Date ? b.toISOString() : String(b);
+    return aStr === bStr;
+  }
+
+  // Handle arrays
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) return false;
+    return a.every((item, i) => deepEqual(item, b[i]));
+  }
+  if (Array.isArray(a) || Array.isArray(b)) return false;
+
+  // Handle objects
+  if (typeof a === 'object' && typeof b === 'object') {
+    const keysA = Object.keys(a as object);
+    const keysB = Object.keys(b as object);
+    if (keysA.length !== keysB.length) return false;
+    return keysA.every(key =>
+      Object.prototype.hasOwnProperty.call(b, key) &&
+      deepEqual((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key])
+    );
+  }
+
+  // Handle primitives
+  return a === b;
+}
+
+function getConflictFields(
+  expectedValues: Record<string, unknown> | null,
+  currentValues: Record<string, unknown> | null
+): string[] {
+  if (!expectedValues || !currentValues) return [];
+  return Object.entries(expectedValues).reduce<string[]>((acc, [key, value]) => {
+    const currentVal = currentValues[key];
+    if (!deepEqual(currentVal, value)) {
+      acc.push(key);
+    }
+    return acc;
+  }, []);
+}
+
+function isNoOpChange(
+  targetValues: Record<string, unknown> | null,
+  currentValues: Record<string, unknown> | null
+): boolean {
+  if (!targetValues || !currentValues) return false;
+  if (Object.keys(targetValues).length === 0) return false;
+  return Object.entries(targetValues).every(([key, value]) =>
+    deepEqual(currentValues[key], value)
+  );
+}
+
+interface PageUpdateWithRevisionOptions {
+  userId?: string | null;
+  changeGroupId?: string;
+  changeGroupType?: ChangeGroupType;
+  source?: PageVersionSource;
+  metadata?: Record<string, unknown>;
+}
+
+interface PageUpdateContext {
+  userId: string;
+  changeGroupId: string;
+  changeGroupType: ChangeGroupType;
+  source: PageVersionSource;
+  metadata?: Record<string, unknown>;
+}
+
+interface PageMutationMeta {
+  pageId: string;
+  nextRevision: number;
+  stateHashBefore: string;
+  stateHashAfter: string;
+  contentRefAfter: string | null;
+  contentSizeAfter: number | null;
+  contentFormatAfter: PageContentFormat;
+}
+
+interface PageChangeResult {
+  restoredValues: Record<string, unknown>;
+  pageMutationMeta: PageMutationMeta;
+}
+
+async function applyPageUpdateWithRevision(
+  database: typeof db,
+  pageId: string,
+  updateData: Record<string, unknown>,
+  options?: PageUpdateWithRevisionOptions
+): Promise<PageMutationMeta> {
+  const [currentPage] = await database
+    .select()
+    .from(pages)
+    .where(eq(pages.id, pageId))
+    .limit(1);
+
+  if (!currentPage) {
+    throw new Error('Page not found');
+  }
+
+  const currentRevision = typeof currentPage.revision === 'number' ? currentPage.revision : 0;
+  const nextRevision = currentRevision + 1;
+
+  const previousContent = currentPage.content ?? '';
+  const nextContent = updateData.content !== undefined
+    ? String(updateData.content)
+    : previousContent;
+  const contentFormatBefore = detectPageContentFormat(previousContent);
+  const contentFormatAfter = detectPageContentFormat(nextContent);
+  const contentRefBefore = hashWithPrefix(contentFormatBefore, previousContent);
+  const contentRefAfter = hashWithPrefix(contentFormatAfter, nextContent);
+
+  const stateHashBefore = computePageStateHash({
+    title: currentPage.title,
+    contentRef: contentRefBefore,
+    parentId: currentPage.parentId,
+    position: currentPage.position,
+    isTrashed: currentPage.isTrashed,
+    type: currentPage.type,
+    driveId: currentPage.driveId,
+    aiProvider: currentPage.aiProvider,
+    aiModel: currentPage.aiModel,
+    systemPrompt: currentPage.systemPrompt,
+    enabledTools: currentPage.enabledTools,
+    isPaginated: currentPage.isPaginated,
+    includeDrivePrompt: currentPage.includeDrivePrompt,
+    agentDefinition: currentPage.agentDefinition,
+    visibleToGlobalAssistant: currentPage.visibleToGlobalAssistant,
+    includePageTree: currentPage.includePageTree,
+    pageTreeScope: currentPage.pageTreeScope,
+  });
+
+  const nextState = {
+    title: updateData.title !== undefined ? String(updateData.title) : currentPage.title,
+    contentRef: contentRefAfter,
+    parentId: updateData.parentId !== undefined ? (updateData.parentId as string | null) : currentPage.parentId,
+    position: updateData.position !== undefined ? Number(updateData.position) : currentPage.position,
+    isTrashed: updateData.isTrashed !== undefined ? Boolean(updateData.isTrashed) : currentPage.isTrashed,
+    type: updateData.type !== undefined ? String(updateData.type) : currentPage.type,
+    driveId: currentPage.driveId,
+    aiProvider: updateData.aiProvider !== undefined
+      ? (updateData.aiProvider === null ? null : String(updateData.aiProvider))
+      : currentPage.aiProvider,
+    aiModel: updateData.aiModel !== undefined
+      ? (updateData.aiModel === null ? null : String(updateData.aiModel))
+      : currentPage.aiModel,
+    systemPrompt: updateData.systemPrompt !== undefined
+      ? (updateData.systemPrompt === null ? null : String(updateData.systemPrompt))
+      : currentPage.systemPrompt,
+    enabledTools: updateData.enabledTools !== undefined ? updateData.enabledTools : currentPage.enabledTools,
+    isPaginated: updateData.isPaginated !== undefined ? Boolean(updateData.isPaginated) : currentPage.isPaginated,
+    includeDrivePrompt: updateData.includeDrivePrompt !== undefined ? Boolean(updateData.includeDrivePrompt) : currentPage.includeDrivePrompt,
+    agentDefinition: updateData.agentDefinition !== undefined
+      ? (updateData.agentDefinition === null ? null : String(updateData.agentDefinition))
+      : currentPage.agentDefinition,
+    visibleToGlobalAssistant: updateData.visibleToGlobalAssistant !== undefined ? Boolean(updateData.visibleToGlobalAssistant) : currentPage.visibleToGlobalAssistant,
+    includePageTree: updateData.includePageTree !== undefined ? Boolean(updateData.includePageTree) : currentPage.includePageTree,
+    pageTreeScope: updateData.pageTreeScope !== undefined
+      ? (updateData.pageTreeScope === null ? null : String(updateData.pageTreeScope))
+      : currentPage.pageTreeScope,
+  };
+
+  const stateHashAfter = computePageStateHash(nextState);
+
+  const [updated] = await database
+    .update(pages)
+    .set({
+      ...updateData,
+      revision: nextRevision,
+      stateHash: stateHashAfter,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(pages.id, pageId),
+        eq(pages.revision, currentRevision)
+      )
+    )
+    .returning({ id: pages.id });
+
+  if (!updated) {
+    throw new Error('Page was modified while applying rollback');
+  }
+
+  if (updateData.content !== undefined) {
+    await syncMentions(pageId, nextContent, database);
+  }
+
+  const changeGroupId = options?.changeGroupId ?? createChangeGroupId();
+  const changeGroupType = options?.changeGroupType ?? inferChangeGroupType({ isAiGenerated: false });
+
+  const version = await createPageVersion({
+    pageId,
+    driveId: currentPage.driveId,
+    createdBy: options?.userId ?? null,
+    source: options?.source ?? 'restore',
+    content: nextContent,
+    contentFormat: contentFormatAfter,
+    pageRevision: nextRevision,
+    stateHash: stateHashAfter,
+    changeGroupId,
+    changeGroupType,
+    metadata: options?.metadata,
+  }, { tx: database });
+
+  return {
+    pageId,
+    nextRevision,
+    stateHashBefore,
+    stateHashAfter,
+    contentRefAfter: version.contentRef ?? contentRefAfter ?? null,
+    contentSizeAfter: version.contentSize ?? null,
+    contentFormatAfter,
+  };
+}
+
 /**
  * Activity log with full details for rollback
  */
@@ -63,36 +435,37 @@ export interface ActivityLogForRollback {
   aiProvider: string | null;
   aiModel: string | null;
   contentSnapshot: string | null;
+  contentRef: string | null;
+  contentFormat: PageContentFormat | null;
+  contentSize: number | null;
   updatedFields: string[] | null;
   previousValues: Record<string, unknown> | null;
   newValues: Record<string, unknown> | null;
   metadata: Record<string, unknown> | null;
+  streamId: string | null;
+  streamSeq: number | null;
+  changeGroupId: string | null;
+  changeGroupType: ChangeGroupType | null;
+  stateHashBefore: string | null;
+  stateHashAfter: string | null;
+  rollbackFromActivityId: string | null;
+  rollbackSourceOperation: ActivityOperation | null;
+  rollbackSourceTimestamp: Date | null;
+  rollbackSourceTitle: string | null;
 }
 
 /**
  * Result of a rollback preview
  */
-export interface RollbackPreview {
-  activity: ActivityLogForRollback | null;
-  canRollback: boolean;
-  reason?: string;
-  currentValues: Record<string, unknown> | null;
-  rollbackToValues: Record<string, unknown> | null;
-  warnings: string[];
-  affectedResources: { type: string; id: string; title: string }[];
-  /** True if the resource was modified since this activity - rollback blocked unless force=true */
-  hasConflict?: boolean;
-}
+export type RollbackPreview = ActivityActionPreview;
 
 /**
  * Result of executing a rollback
  */
-export interface RollbackResult {
+export interface RollbackResult extends ActivityActionResult {
   success: boolean;
   rollbackActivityId?: string;
   restoredValues?: Record<string, unknown>;
-  message: string;
-  warnings: string[];
 }
 
 /**
@@ -154,10 +527,23 @@ export async function getActivityById(
       aiProvider: activity.aiProvider,
       aiModel: activity.aiModel,
       contentSnapshot: activity.contentSnapshot,
+      contentRef: activity.contentRef,
+      contentFormat: activity.contentFormat as PageContentFormat | null,
+      contentSize: activity.contentSize,
       updatedFields: activity.updatedFields as string[] | null,
       previousValues: activity.previousValues as Record<string, unknown> | null,
       newValues: activity.newValues as Record<string, unknown> | null,
       metadata: activity.metadata as Record<string, unknown> | null,
+      streamId: activity.streamId,
+      streamSeq: activity.streamSeq,
+      changeGroupId: activity.changeGroupId,
+      changeGroupType: activity.changeGroupType as ChangeGroupType | null,
+      stateHashBefore: activity.stateHashBefore,
+      stateHashAfter: activity.stateHashAfter,
+      rollbackFromActivityId: activity.rollbackFromActivityId,
+      rollbackSourceOperation: activity.rollbackSourceOperation as ActivityOperation | null,
+      rollbackSourceTimestamp: activity.rollbackSourceTimestamp,
+      rollbackSourceTitle: activity.rollbackSourceTitle,
     };
   } catch (error) {
     loggers.api.error('[RollbackService] Error fetching activity', {
@@ -169,71 +555,102 @@ export async function getActivityById(
 }
 
 /**
- * Preview what a rollback would do
+ * Preview what a rollback or redo would do
  */
-export async function previewRollback(
+async function previewActivityAction(
+  action: ActivityAction,
   activityId: string,
   userId: string,
   context: RollbackContext,
   options?: { force?: boolean }
-): Promise<RollbackPreview> {
+): Promise<ActivityActionPreview> {
   const force = options?.force ?? false;
-  loggers.api.debug('[Rollback:Preview] Starting preview', { activityId, userId, context, force });
+  loggers.api.debug('[Rollback:Preview] Starting preview', { action, activityId, userId, context, force });
 
   const activity = await getActivityById(activityId);
+  const resolvedContentSnapshot = activity && action === 'rollback'
+    ? await resolveActivityContentSnapshot(activity)
+    : null;
+  const targetValues = activity ? buildActionTargetValues(action, activity, resolvedContentSnapshot) : null;
+  const changes = activity ? buildChangeSummary(action, activity, targetValues) : [];
+  const affectedResources = activity
+    ? [
+        {
+          type: activity.resourceType,
+          id: activity.resourceId,
+          title: activity.resourceTitle || 'Untitled',
+        },
+      ]
+    : [];
+
+  const basePreview = (overrides: Partial<ActivityActionPreview>): ActivityActionPreview => ({
+    action,
+    canExecute: false,
+    reason: undefined,
+    warnings: [],
+    hasConflict: false,
+    conflictFields: [],
+    requiresForce: false,
+    isNoOp: false,
+    currentValues: null,
+    targetValues,
+    changes,
+    affectedResources,
+    ...overrides,
+  });
 
   if (!activity) {
     loggers.api.debug('[Rollback:Preview] Activity not found', { activityId });
-    return {
-      activity: null,
-      canRollback: false,
-      reason: 'Activity not found',
-      currentValues: null,
-      rollbackToValues: null,
-      warnings: [],
-      affectedResources: [],
-    };
+    return basePreview({ reason: 'Activity not found' });
+  }
+
+  if (action === 'redo' && activity.operation !== 'rollback') {
+    return basePreview({
+      reason: 'Only rollback activities can be redone',
+    });
+  }
+
+  const effectiveOperation = getEffectiveOperation(action, activity);
+  if (!effectiveOperation) {
+    return basePreview({
+      reason: 'Rollback source operation not available',
+    });
   }
 
   // Check if operation is rollbackable
-  const isRollbackable = isRollbackableOperation(activity.operation);
+  const isRollbackable = isRollbackableOperation(effectiveOperation);
   loggers.api.debug('[Rollback:Preview] Checking operation eligibility', {
-    operation: activity.operation,
+    action,
+    operation: effectiveOperation,
     isRollbackable,
   });
 
   if (!isRollbackable) {
-    return {
-      activity,
-      canRollback: false,
-      reason: `Cannot rollback '${activity.operation}' operations`,
-      currentValues: null,
-      rollbackToValues: null,
-      warnings: [],
-      affectedResources: [],
-    };
+    return basePreview({
+      reason: `Cannot ${action} '${effectiveOperation}' operations`,
+    });
   }
 
-  // Check if previousValues exist
-  const hasPreviousValues = !!activity.previousValues;
-  const hasContentSnapshot = !!activity.contentSnapshot;
+  const hasTargetValues = !!targetValues && Object.keys(targetValues).length > 0;
+  const hasContentSnapshot = action === 'rollback' && !!resolvedContentSnapshot;
+  const allowMissingTarget = action === 'redo'
+    ? REDO_ALLOW_MISSING_TARGET.has(effectiveOperation)
+    : ROLLBACK_ALLOW_MISSING_TARGET.has(effectiveOperation);
   loggers.api.debug('[Rollback:Preview] Checking previous state availability', {
-    hasPreviousValues,
+    action,
+    hasTargetValues,
     hasContentSnapshot,
-    previousValuesFields: activity.previousValues ? Object.keys(activity.previousValues) : [],
+    allowMissingTarget,
+    previousValuesFields: targetValues ? Object.keys(targetValues) : [],
   });
 
   // For 'create' operations, rollback means trashing - no previous state needed
-  if (activity.operation !== 'create' && !hasPreviousValues && !hasContentSnapshot) {
-    return {
-      activity,
-      canRollback: false,
-      reason: 'No previous state available to restore',
-      currentValues: null,
-      rollbackToValues: null,
-      warnings: [],
-      affectedResources: [],
-    };
+  if (effectiveOperation !== 'create' && !hasTargetValues && !hasContentSnapshot && !allowMissingTarget) {
+    return basePreview({
+      reason: action === 'redo'
+        ? 'No rollback state available to reapply'
+        : 'No values to restore',
+    });
   }
 
   // Check permissions
@@ -251,20 +668,17 @@ export async function previewRollback(
   });
 
   if (!permissionCheck.canRollback) {
-    return {
-      activity,
-      canRollback: false,
+    return basePreview({
       reason: permissionCheck.reason,
-      currentValues: null,
-      rollbackToValues: null,
-      warnings: [],
-      affectedResources: [],
-    };
+    });
   }
 
   // Get current state and check for conflicts
   const warnings: string[] = [];
   let currentValues: Record<string, unknown> | null = null;
+  let conflictFields: string[] = [];
+  let hasConflict = false;
+  let requiresForce = false;
 
   loggers.api.debug('[Rollback:Preview] Fetching current resource state', {
     resourceType: activity.resourceType,
@@ -279,15 +693,30 @@ export async function previewRollback(
       .limit(1);
 
     if (currentPage.length === 0) {
-      return {
-        activity,
-        canRollback: false,
+      return basePreview({
         reason: 'Resource no longer exists',
-        currentValues: null,
-        rollbackToValues: null,
-        warnings: [],
-        affectedResources: [],
-      };
+      });
+    }
+
+    // Check if parent drive still exists and is not trashed
+    if (activity.driveId) {
+      const parentDrive = await db
+        .select({ id: drives.id, isTrashed: drives.isTrashed })
+        .from(drives)
+        .where(eq(drives.id, activity.driveId))
+        .limit(1);
+
+      if (parentDrive.length === 0) {
+        return basePreview({
+          reason: 'Parent drive has been deleted',
+        });
+      }
+
+      if (parentDrive[0].isTrashed) {
+        return basePreview({
+          reason: 'Parent drive is in trash. Restore the drive first.',
+        });
+      }
     }
 
     currentValues = {
@@ -295,76 +724,534 @@ export async function previewRollback(
       content: currentPage[0].content,
       parentId: currentPage[0].parentId,
       position: currentPage[0].position,
+      isTrashed: currentPage[0].isTrashed,
     };
 
-    // Check if state has changed since the activity
-    // Note: JSON.stringify comparison works reliably for flat primitive values
-    // (strings, numbers, booleans, null). For nested objects or Date instances,
-    // comparison may behave unexpectedly. Current activity logs only store flat
-    // values in previousValues/newValues, so this is safe for existing use cases.
-    if (activity.newValues) {
-      const newValuesMatch = Object.entries(activity.newValues).every(
-        ([key, value]) => {
-          const currentVal = currentValues?.[key];
-          return JSON.stringify(currentVal) === JSON.stringify(value);
-        }
-      );
+    if (effectiveOperation === 'create') {
+      const isTrashed = currentPage[0].isTrashed;
+      const shouldBeTrashed = action === 'rollback';
+      if (isTrashed === shouldBeTrashed) {
+        return basePreview({
+          reason: shouldBeTrashed ? 'Page is already in trash' : 'Page is already restored',
+          currentValues,
+          isNoOp: true,
+        });
+      }
+    }
 
+    conflictFields = getConflictFields(activity.newValues, currentValues);
+    if (conflictFields.length > 0) {
+      hasConflict = true;
+      requiresForce = true;
       loggers.api.debug('[Rollback:Preview] Conflict check', {
-        hasConflict: !newValuesMatch,
-        checkedFields: Object.keys(activity.newValues),
+        hasConflict: true,
+        checkedFields: conflictFields,
         force,
       });
 
-      if (!newValuesMatch) {
-        // Block rollback unless force=true (prevents accidental data loss)
-        if (!force) {
-          return {
-            activity,
-            canRollback: false,
-            reason: 'Resource has been modified since this change. Use force=true to override.',
-            currentValues,
-            rollbackToValues: activity.previousValues,
-            warnings: [],
-            affectedResources: [
-              {
-                type: activity.resourceType,
-                id: activity.resourceId,
-                title: activity.resourceTitle || 'Untitled',
-              },
-            ],
-            hasConflict: true,
-          };
-        }
-        // Force=true: proceed with warning
-        warnings.push(
-          'This resource has been modified since this change. Recent changes will be overwritten.'
-        );
+      if (!force) {
+        return basePreview({
+          reason: 'Resource has been modified since this change. Use force=true to override.',
+          currentValues,
+          hasConflict,
+          conflictFields,
+          requiresForce,
+        });
       }
+      warnings.push('This resource has been modified since this change. Recent changes will be overwritten.');
+    }
+  } else if (activity.resourceType === 'drive' && activity.driveId) {
+    const currentDrive = await db
+      .select()
+      .from(drives)
+      .where(eq(drives.id, activity.driveId))
+      .limit(1);
+
+    if (currentDrive.length === 0) {
+      return basePreview({
+        reason: 'Drive no longer exists',
+      });
+    }
+
+    currentValues = {
+      name: currentDrive[0].name,
+      isTrashed: currentDrive[0].isTrashed,
+      drivePrompt: currentDrive[0].drivePrompt,
+      ownerId: currentDrive[0].ownerId,
+    };
+
+    if (effectiveOperation === 'create') {
+      const isTrashed = currentDrive[0].isTrashed;
+      const shouldBeTrashed = action === 'rollback';
+      if (isTrashed === shouldBeTrashed) {
+        return basePreview({
+          reason: shouldBeTrashed ? 'Drive is already in trash' : 'Drive is already restored',
+          currentValues,
+          isNoOp: true,
+        });
+      }
+    }
+
+    conflictFields = getConflictFields(activity.newValues, currentValues);
+    if (conflictFields.length > 0) {
+      hasConflict = true;
+      requiresForce = true;
+      loggers.api.debug('[Rollback:Preview] Drive conflict check', {
+        hasConflict: true,
+        checkedFields: conflictFields,
+        force,
+      });
+
+      if (!force) {
+        return basePreview({
+          reason: 'Drive has been modified since this change. Use force=true to override.',
+          currentValues,
+          hasConflict,
+          conflictFields,
+          requiresForce,
+        });
+      }
+      warnings.push('This drive has been modified since this change. Recent changes will be overwritten.');
+    }
+  } else if (activity.resourceType === 'member' && activity.driveId) {
+    const metadata = activity.metadata as { targetUserId?: string } | null;
+    const targetUserId = metadata?.targetUserId || (activity.previousValues?.userId as string);
+
+    if (targetUserId) {
+      const currentMember = await db
+        .select()
+        .from(driveMembers)
+        .where(and(
+          eq(driveMembers.driveId, activity.driveId),
+          eq(driveMembers.userId, targetUserId)
+        ))
+        .limit(1);
+
+      if (currentMember.length > 0) {
+        currentValues = {
+          userId: targetUserId,
+          role: currentMember[0].role,
+          customRoleId: currentMember[0].customRoleId,
+          invitedBy: currentMember[0].invitedBy,
+          invitedAt: currentMember[0].invitedAt,
+          acceptedAt: currentMember[0].acceptedAt,
+        };
+      }
+
+      if (effectiveOperation === 'member_add') {
+        if (action === 'rollback' && currentMember.length === 0) {
+          return basePreview({
+            reason: 'Member has already been removed',
+            currentValues,
+            isNoOp: true,
+          });
+        }
+        if (action === 'redo' && currentMember.length > 0) {
+          return basePreview({
+            reason: 'Member is already in the drive',
+            currentValues,
+            isNoOp: true,
+          });
+        }
+      }
+
+      if (effectiveOperation === 'member_remove') {
+        if (action === 'rollback' && currentMember.length > 0) {
+          return basePreview({
+            reason: 'Member has already been re-added to the drive',
+            currentValues,
+            isNoOp: true,
+          });
+        }
+        if (action === 'redo' && currentMember.length === 0) {
+          return basePreview({
+            reason: 'Member has already been removed',
+            currentValues,
+            isNoOp: true,
+          });
+        }
+      }
+
+      if (effectiveOperation === 'member_role_change' && currentMember.length === 0) {
+        return basePreview({
+          reason: 'Member no longer exists',
+          currentValues,
+        });
+      }
+
+      if (currentMember.length > 0 && effectiveOperation === 'member_role_change') {
+        conflictFields = getConflictFields(activity.newValues, currentValues);
+        if (conflictFields.length > 0) {
+          hasConflict = true;
+          requiresForce = true;
+          loggers.api.debug('[Rollback:Preview] Member conflict check', {
+            hasConflict: true,
+            force,
+          });
+
+          if (!force) {
+            return basePreview({
+              reason: 'Member role has been changed since this update. Use force=true to override.',
+              currentValues,
+              hasConflict,
+              conflictFields,
+              requiresForce,
+            });
+          }
+          warnings.push("This member's role has been changed since this update. Recent changes will be overwritten.");
+        }
+      }
+    }
+  } else if (activity.resourceType === 'permission' && activity.pageId) {
+    const metadata = activity.metadata as { targetUserId?: string } | null;
+    const targetUserId = metadata?.targetUserId || (activity.previousValues?.userId as string);
+
+    if (targetUserId) {
+      const currentPermission = await db
+        .select()
+        .from(pagePermissions)
+        .where(and(
+          eq(pagePermissions.pageId, activity.pageId),
+          eq(pagePermissions.userId, targetUserId)
+        ))
+        .limit(1);
+
+      if (currentPermission.length > 0) {
+        currentValues = {
+          userId: targetUserId,
+          canView: currentPermission[0].canView,
+          canEdit: currentPermission[0].canEdit,
+          canShare: currentPermission[0].canShare,
+          canDelete: currentPermission[0].canDelete,
+          note: currentPermission[0].note,
+          expiresAt: currentPermission[0].expiresAt,
+          grantedBy: currentPermission[0].grantedBy,
+        };
+      }
+
+      if (effectiveOperation === 'permission_grant') {
+        if (action === 'rollback' && currentPermission.length === 0) {
+          return basePreview({
+            reason: 'Permission has already been revoked',
+            currentValues,
+            isNoOp: true,
+          });
+        }
+        if (action === 'redo' && currentPermission.length > 0) {
+          return basePreview({
+            reason: 'Permission is already granted',
+            currentValues,
+            isNoOp: true,
+          });
+        }
+      }
+
+      if (effectiveOperation === 'permission_revoke') {
+        if (action === 'rollback' && currentPermission.length > 0) {
+          return basePreview({
+            reason: 'Permission has already been re-granted',
+            currentValues,
+            isNoOp: true,
+          });
+        }
+        if (action === 'redo' && currentPermission.length === 0) {
+          return basePreview({
+            reason: 'Permission has already been revoked',
+            currentValues,
+            isNoOp: true,
+          });
+        }
+      }
+
+      if (effectiveOperation === 'permission_update' && currentPermission.length === 0) {
+        return basePreview({
+          reason: 'Permission no longer exists',
+          currentValues,
+        });
+      }
+
+      if (currentPermission.length > 0 && effectiveOperation === 'permission_update') {
+        conflictFields = getConflictFields(activity.newValues, currentValues);
+        if (conflictFields.length > 0) {
+          hasConflict = true;
+          requiresForce = true;
+          loggers.api.debug('[Rollback:Preview] Permission conflict check', {
+            hasConflict: true,
+            force,
+          });
+
+          if (!force) {
+            return basePreview({
+              reason: 'Permissions have been changed since this update. Use force=true to override.',
+              currentValues,
+              hasConflict,
+              conflictFields,
+              requiresForce,
+            });
+          }
+          warnings.push('These permissions have been changed since this update. Recent changes will be overwritten.');
+        }
+      }
+    }
+  } else if (activity.resourceType === 'role' && activity.driveId) {
+    const metadata = activity.metadata as { roleId?: string } | null;
+    const roleId = metadata?.roleId || activity.resourceId;
+
+    // Role reorder affects all roles in the drive
+    if (effectiveOperation === 'role_reorder') {
+      // Get current order of roles in this drive
+      const currentRoles = await db
+        .select({ id: driveRoles.id, position: driveRoles.position })
+        .from(driveRoles)
+        .where(eq(driveRoles.driveId, activity.driveId))
+        .orderBy(asc(driveRoles.position));
+
+      currentValues = {
+        order: currentRoles.map(role => role.id),
+      };
+
+      conflictFields = getConflictFields(activity.newValues, currentValues);
+      if (conflictFields.length > 0) {
+        hasConflict = true;
+        requiresForce = true;
+        loggers.api.debug('[Rollback:Preview] Role reorder conflict check', {
+          hasConflict: true,
+          force,
+        });
+
+        if (!force) {
+          return basePreview({
+            reason: 'Roles have been reordered since this change. Use force=true to override.',
+            currentValues,
+            hasConflict,
+            conflictFields,
+            requiresForce,
+          });
+        }
+        warnings.push('Roles have been reordered since this change. Recent changes will be overwritten.');
+      }
+    } else if (roleId) {
+      const currentRole = await db
+        .select()
+        .from(driveRoles)
+        .where(eq(driveRoles.id, roleId))
+        .limit(1);
+
+      if (currentRole.length > 0) {
+        currentValues = {
+          name: currentRole[0].name,
+          description: currentRole[0].description,
+          color: currentRole[0].color,
+          isDefault: currentRole[0].isDefault,
+          permissions: currentRole[0].permissions,
+          position: currentRole[0].position,
+        };
+      }
+
+      if (effectiveOperation === 'create') {
+        if (action === 'rollback' && currentRole.length === 0) {
+          return basePreview({
+            reason: 'Role has already been deleted',
+            currentValues,
+            isNoOp: true,
+          });
+        }
+        if (action === 'redo' && currentRole.length > 0) {
+          return basePreview({
+            reason: 'Role already exists',
+            currentValues,
+            isNoOp: true,
+          });
+        }
+      }
+
+      if (effectiveOperation === 'delete') {
+        if (action === 'rollback' && currentRole.length > 0) {
+          return basePreview({
+            reason: 'Role already exists with this ID',
+            currentValues,
+            isNoOp: true,
+          });
+        }
+        if (action === 'redo' && currentRole.length === 0) {
+          return basePreview({
+            reason: 'Role has already been deleted',
+            currentValues,
+            isNoOp: true,
+          });
+        }
+      }
+
+      if (currentRole.length > 0 && effectiveOperation === 'update') {
+        conflictFields = getConflictFields(activity.newValues, currentValues);
+        if (conflictFields.length > 0) {
+          hasConflict = true;
+          requiresForce = true;
+          loggers.api.debug('[Rollback:Preview] Role conflict check', {
+            hasConflict: true,
+            force,
+          });
+
+          if (!force) {
+            return basePreview({
+              reason: 'Role has been modified since this update. Use force=true to override.',
+              currentValues,
+              hasConflict,
+              conflictFields,
+              requiresForce,
+            });
+          }
+          warnings.push('This role has been modified since this update. Recent changes will be overwritten.');
+        }
+      }
+    }
+  } else if (activity.resourceType === 'agent' && activity.pageId) {
+    const currentAgent = await db
+      .select({
+        systemPrompt: pages.systemPrompt,
+        enabledTools: pages.enabledTools,
+        aiProvider: pages.aiProvider,
+        aiModel: pages.aiModel,
+        includeDrivePrompt: pages.includeDrivePrompt,
+        agentDefinition: pages.agentDefinition,
+        visibleToGlobalAssistant: pages.visibleToGlobalAssistant,
+      })
+      .from(pages)
+      .where(eq(pages.id, activity.pageId))
+      .limit(1);
+
+    if (currentAgent.length === 0) {
+      return basePreview({
+        reason: 'Agent no longer exists',
+      });
+    }
+
+    currentValues = {
+      systemPrompt: currentAgent[0].systemPrompt,
+      enabledTools: currentAgent[0].enabledTools,
+      aiProvider: currentAgent[0].aiProvider,
+      aiModel: currentAgent[0].aiModel,
+      includeDrivePrompt: currentAgent[0].includeDrivePrompt,
+      agentDefinition: currentAgent[0].agentDefinition,
+      visibleToGlobalAssistant: currentAgent[0].visibleToGlobalAssistant,
+    };
+
+    conflictFields = getConflictFields(activity.newValues, currentValues);
+    if (conflictFields.length > 0) {
+      hasConflict = true;
+      requiresForce = true;
+      loggers.api.debug('[Rollback:Preview] Agent conflict check', {
+        hasConflict: true,
+        force,
+      });
+
+      if (!force) {
+        return basePreview({
+          reason: 'Agent settings have been modified since this update. Use force=true to override.',
+          currentValues,
+          hasConflict,
+          conflictFields,
+          requiresForce,
+        });
+      }
+      warnings.push('Agent settings have been modified since this update. Recent changes will be overwritten.');
+    }
+  } else if (activity.resourceType === 'message') {
+    const metadata = activity.metadata as Record<string, unknown> | null;
+    const conversationType = metadata?.conversationType as string | undefined;
+    const isGlobal = !activity.pageId || conversationType === 'global';
+    const table = isGlobal ? messages : chatMessages;
+
+    const currentMessage = await db
+      .select()
+      .from(table)
+      .where(eq(table.id, activity.resourceId))
+      .limit(1);
+
+    if (currentMessage.length === 0) {
+      return basePreview({
+        reason: 'Message no longer exists',
+      });
+    }
+
+    currentValues = {
+      content: currentMessage[0].content,
+      isActive: currentMessage[0].isActive,
+    };
+
+    conflictFields = getConflictFields(activity.newValues, currentValues);
+    if (conflictFields.length > 0) {
+      hasConflict = true;
+      requiresForce = true;
+      loggers.api.debug('[Rollback:Preview] Message conflict check', {
+        hasConflict: true,
+        force,
+      });
+
+      if (!force) {
+        return basePreview({
+          reason: 'Message has been modified since this change. Use force=true to override.',
+          currentValues,
+          hasConflict,
+          conflictFields,
+          requiresForce,
+        });
+      }
+      warnings.push('This message has been modified since this change. Recent changes will be overwritten.');
     }
   }
 
+  const noOp = isNoOpChange(targetValues, currentValues);
+  if (noOp) {
+    return basePreview({
+      reason: 'Already at this version',
+      currentValues,
+      warnings,
+      hasConflict,
+      conflictFields,
+      requiresForce,
+      isNoOp: true,
+    });
+  }
+
   loggers.api.debug('[Rollback:Preview] Preview complete', {
-    canRollback: true,
+    canExecute: true,
     warningsCount: warnings.length,
-    rollbackFieldsCount: activity.previousValues ? Object.keys(activity.previousValues).length : 0,
+    targetFieldsCount: targetValues ? Object.keys(targetValues).length : 0,
   });
 
-  return {
-    activity,
-    canRollback: true,
+  return basePreview({
+    canExecute: true,
     currentValues,
-    rollbackToValues: activity.previousValues,
     warnings,
-    affectedResources: [
-      {
-        type: activity.resourceType,
-        id: activity.resourceId,
-        title: activity.resourceTitle || 'Untitled',
-      },
-    ],
-    hasConflict: false,
-  };
+    hasConflict,
+    conflictFields,
+    requiresForce,
+  });
+}
+
+/**
+ * Preview what a rollback would do
+ */
+export async function previewRollback(
+  activityId: string,
+  userId: string,
+  context: RollbackContext,
+  options?: { force?: boolean }
+): Promise<RollbackPreview> {
+  return previewActivityAction('rollback', activityId, userId, context, options);
+}
+
+/**
+ * Preview what a redo (undo rollback) would do
+ */
+export async function previewRedo(
+  activityId: string,
+  userId: string,
+  context: RollbackContext,
+  options?: { force?: boolean }
+): Promise<RollbackPreview> {
+  return previewActivityAction('redo', activityId, userId, context, options);
 }
 
 /**
@@ -389,21 +1276,50 @@ export async function executeRollback(
 
   const preview = await previewRollback(activityId, userId, context, { force });
 
-  if (!preview.canRollback || !preview.activity) {
+  if (!preview.canExecute) {
     loggers.api.debug('[Rollback:Execute] Aborting - preview check failed', {
-      canRollback: preview.canRollback,
+      canExecute: preview.canExecute,
       reason: preview.reason,
+      isNoOp: preview.isNoOp,
     });
     return {
-      success: false,
+      success: preview.isNoOp,
+      action: 'rollback',
+      status: preview.isNoOp ? 'no_op' : 'failed',
       message: preview.reason || 'Cannot rollback this activity',
-      warnings: [],
+      warnings: preview.warnings,
+      changesApplied: preview.changes,
     };
   }
 
-  const activity = preview.activity;
+  const activity = await getActivityById(activityId);
+  if (!activity) {
+    return {
+      success: false,
+      action: 'rollback',
+      status: 'failed',
+      message: 'Activity not found',
+      warnings: preview.warnings,
+      changesApplied: preview.changes,
+    };
+  }
+
   const warnings: string[] = [...preview.warnings];
   const database = tx ?? db;
+  const changeGroupId = createChangeGroupId();
+  const changeGroupType = inferChangeGroupType({ isAiGenerated: false });
+  const pageUpdateContext: PageUpdateContext = {
+    userId,
+    changeGroupId,
+    changeGroupType,
+    source: 'restore',
+    metadata: {
+      action: 'rollback',
+      rollbackFromActivityId: activityId,
+      rollbackSourceOperation: activity.operation,
+      rollbackSourceTimestamp: activity.timestamp,
+    },
+  };
 
   try {
     // Get actor info for logging
@@ -411,6 +1327,7 @@ export async function executeRollback(
 
     // Execute rollback based on resource type
     let restoredValues: Record<string, unknown> = {};
+    let pageMutationMeta: PageMutationMeta | undefined;
 
     loggers.api.debug('[Rollback:Execute] Executing handler', {
       resourceType: activity.resourceType,
@@ -419,21 +1336,27 @@ export async function executeRollback(
     });
 
     switch (activity.resourceType) {
-      case 'page':
-        restoredValues = await rollbackPageChange(activity, preview.currentValues, database);
+      case 'page': {
+        const result = await rollbackPageChange(activity, preview.currentValues, database, pageUpdateContext);
+        restoredValues = result.restoredValues;
+        pageMutationMeta = result.pageMutationMeta;
         break;
+      }
 
       case 'drive':
-        restoredValues = await rollbackDriveChange(activity, preview.currentValues, database);
+        restoredValues = await rollbackDriveChange(activity, preview.currentValues, database, pageUpdateContext);
         break;
 
       case 'permission':
         restoredValues = await rollbackPermissionChange(activity, database);
         break;
 
-      case 'agent':
-        restoredValues = await rollbackAgentConfigChange(activity, preview.currentValues, database);
+      case 'agent': {
+        const result = await rollbackAgentConfigChange(activity, preview.currentValues, database, pageUpdateContext);
+        restoredValues = result.restoredValues;
+        pageMutationMeta = result.pageMutationMeta;
         break;
+      }
 
       case 'member':
         restoredValues = await rollbackMemberChange(activity, database);
@@ -447,14 +1370,33 @@ export async function executeRollback(
         restoredValues = await rollbackMessageChange(activity, database);
         break;
 
+      case 'conversation':
+        // Conversation undo activities are logged for audit trail but cannot be rolled back
+        // because they represent the undo operation itself, not a data change
+        loggers.api.debug('[Rollback:Execute] Conversation undo cannot be rolled back', {
+          activityId: activity.id,
+          operation: activity.operation,
+        });
+        return {
+          success: false,
+          action: 'rollback',
+          status: 'failed',
+          message: 'Conversation undo operations cannot be rolled back. The affected messages remain soft-deleted and can be restored individually if needed.',
+          warnings,
+          changesApplied: preview.changes,
+        };
+
       default:
         loggers.api.debug('[Rollback:Execute] Unsupported resource type', {
           resourceType: activity.resourceType,
         });
         return {
           success: false,
+          action: 'rollback',
+          status: 'failed',
           message: `Rollback not supported for resource type: ${activity.resourceType}`,
           warnings,
+          changesApplied: preview.changes,
         };
     }
 
@@ -463,8 +1405,34 @@ export async function executeRollback(
       restoredFieldsCount: Object.keys(restoredValues).length,
     });
 
+    const resolvedContentSnapshot = await resolveActivityContentSnapshot(activity);
+
     // Log the rollback activity with source snapshot for audit trail preservation
-    logRollbackActivity(
+    const logOptions: Parameters<typeof logRollbackActivity>[4] = {
+      restoredValues,
+      replacedValues: preview.currentValues ?? undefined,
+      contentSnapshot: resolvedContentSnapshot ?? undefined,
+      contentFormat: pageMutationMeta?.contentFormatAfter ?? activity.contentFormat ?? undefined,
+      // Source activity snapshot - survives retention policy deletion
+      rollbackSourceOperation: activity.operation as ActivityOperation,
+      rollbackSourceTimestamp: activity.timestamp,
+      rollbackSourceTitle: activity.resourceTitle ?? undefined,
+      metadata: activity.metadata ? { sourceMetadata: activity.metadata } : undefined,
+      changeGroupId,
+      changeGroupType,
+      tx,
+    };
+
+    if (pageMutationMeta) {
+      logOptions.streamId = activity.pageId ?? activity.resourceId;
+      logOptions.streamSeq = pageMutationMeta.nextRevision;
+      logOptions.stateHashBefore = pageMutationMeta.stateHashBefore;
+      logOptions.stateHashAfter = pageMutationMeta.stateHashAfter;
+      logOptions.contentRef = pageMutationMeta.contentRefAfter ?? undefined;
+      logOptions.contentSize = pageMutationMeta.contentSizeAfter ?? undefined;
+    }
+
+    await logRollbackActivity(
       userId,
       activityId,
       {
@@ -475,15 +1443,7 @@ export async function executeRollback(
         pageId: activity.pageId ?? undefined,
       },
       actorInfo,
-      {
-        restoredValues,
-        replacedValues: preview.currentValues ?? undefined,
-        contentSnapshot: activity.contentSnapshot ?? undefined,
-        // Source activity snapshot - survives retention policy deletion
-        rollbackSourceOperation: activity.operation as ActivityOperation,
-        rollbackSourceTimestamp: activity.timestamp,
-        rollbackSourceTitle: activity.resourceTitle ?? undefined,
-      }
+      logOptions
     );
 
     loggers.api.debug('[Rollback:Execute] Rollback completed successfully', {
@@ -494,9 +1454,12 @@ export async function executeRollback(
 
     return {
       success: true,
+      action: 'rollback',
+      status: 'success',
       restoredValues,
-      message: 'Successfully restored to previous state',
+      message: 'Change undone',
       warnings,
+      changesApplied: preview.changes,
     };
   } catch (error) {
     loggers.api.error('[RollbackService] Error executing rollback', {
@@ -507,8 +1470,228 @@ export async function executeRollback(
 
     return {
       success: false,
+      action: 'rollback',
+      status: 'failed',
       message: error instanceof Error ? error.message : 'Failed to execute rollback',
       warnings,
+      changesApplied: preview.changes,
+    };
+  }
+}
+
+/**
+ * Execute a redo operation (undo a rollback)
+ * @param options.tx - Optional transaction to use for all database operations (for atomicity)
+ * @param options.force - Skip conflict check if resource was modified since rollback
+ */
+export async function executeRedo(
+  activityId: string,
+  userId: string,
+  context: RollbackContext,
+  options?: { tx?: typeof db; force?: boolean }
+): Promise<RollbackResult> {
+  const { tx, force } = options ?? {};
+  loggers.api.debug('[Rollback:ExecuteRedo] Starting execution', {
+    activityId,
+    userId,
+    context,
+    usingTransaction: !!tx,
+    force,
+  });
+
+  const preview = await previewRedo(activityId, userId, context, { force });
+
+  if (!preview.canExecute) {
+    loggers.api.debug('[Rollback:ExecuteRedo] Aborting - preview check failed', {
+      canExecute: preview.canExecute,
+      reason: preview.reason,
+      isNoOp: preview.isNoOp,
+    });
+    return {
+      success: preview.isNoOp,
+      action: 'redo',
+      status: preview.isNoOp ? 'no_op' : 'failed',
+      message: preview.reason || 'Cannot redo this rollback',
+      warnings: preview.warnings,
+      changesApplied: preview.changes,
+    };
+  }
+
+  const activity = await getActivityById(activityId);
+  if (!activity) {
+    return {
+      success: false,
+      action: 'redo',
+      status: 'failed',
+      message: 'Activity not found',
+      warnings: preview.warnings,
+      changesApplied: preview.changes,
+    };
+  }
+
+  if (activity.operation !== 'rollback') {
+    return {
+      success: false,
+      action: 'redo',
+      status: 'failed',
+      message: 'Only rollback activities can be redone',
+      warnings: preview.warnings,
+      changesApplied: preview.changes,
+    };
+  }
+
+  const sourceOperation = activity.rollbackSourceOperation as ActivityOperation | null;
+  if (!sourceOperation) {
+    return {
+      success: false,
+      action: 'redo',
+      status: 'failed',
+      message: 'Rollback source operation not available',
+      warnings: preview.warnings,
+      changesApplied: preview.changes,
+    };
+  }
+
+  const warnings: string[] = [...preview.warnings];
+  const database = tx ?? db;
+  const changeGroupId = createChangeGroupId();
+  const changeGroupType = inferChangeGroupType({ isAiGenerated: false });
+  const pageUpdateContext: PageUpdateContext = {
+    userId,
+    changeGroupId,
+    changeGroupType,
+    source: 'restore',
+    metadata: {
+      action: 'redo',
+      redoFromActivityId: activityId,
+      rollbackFromActivityId: activity.rollbackFromActivityId ?? undefined,
+      rollbackSourceOperation: sourceOperation,
+    },
+  };
+
+  try {
+    const actorInfo = await getActorInfo(userId);
+    let restoredValues: Record<string, unknown> = {};
+    let pageMutationMeta: PageMutationMeta | undefined;
+
+    loggers.api.debug('[Rollback:ExecuteRedo] Executing handler', {
+      resourceType: activity.resourceType,
+      sourceOperation,
+      resourceId: activity.resourceId,
+    });
+
+    switch (activity.resourceType) {
+      case 'page': {
+        const result = await redoPageChange(activity, preview.targetValues, sourceOperation, database, pageUpdateContext);
+        restoredValues = result.restoredValues;
+        pageMutationMeta = result.pageMutationMeta;
+        break;
+      }
+
+      case 'drive':
+        restoredValues = await redoDriveChange(activity, preview.targetValues, sourceOperation, database, pageUpdateContext);
+        break;
+
+      case 'permission':
+        restoredValues = await redoPermissionChange(activity, preview.targetValues, sourceOperation, database);
+        break;
+
+      case 'agent': {
+        const result = await redoAgentConfigChange(activity, preview.targetValues, database, pageUpdateContext);
+        restoredValues = result.restoredValues;
+        pageMutationMeta = result.pageMutationMeta;
+        break;
+      }
+
+      case 'member':
+        restoredValues = await redoMemberChange(activity, preview.targetValues, sourceOperation, database);
+        break;
+
+      case 'role':
+        restoredValues = await redoRoleChange(activity, preview.targetValues, sourceOperation, database);
+        break;
+
+      case 'message':
+        restoredValues = await redoMessageChange(activity, preview.targetValues, sourceOperation, database);
+        break;
+
+      default:
+        loggers.api.debug('[Rollback:ExecuteRedo] Unsupported resource type', {
+          resourceType: activity.resourceType,
+        });
+        return {
+          success: false,
+          action: 'redo',
+          status: 'failed',
+          message: `Redo not supported for resource type: ${activity.resourceType}`,
+          warnings,
+          changesApplied: preview.changes,
+        };
+    }
+
+    const logOptions: Parameters<typeof logRollbackActivity>[4] = {
+      restoredValues,
+      replacedValues: preview.currentValues ?? undefined,
+      rollbackSourceOperation: sourceOperation,
+      rollbackSourceTimestamp: activity.rollbackSourceTimestamp ?? undefined,
+      rollbackSourceTitle: activity.rollbackSourceTitle ?? undefined,
+      metadata: {
+        redoFromActivityId: activity.id,
+        rollbackFromActivityId: activity.rollbackFromActivityId ?? undefined,
+        sourceMetadata: activity.metadata ?? undefined,
+      },
+      changeGroupId,
+      changeGroupType,
+      tx,
+    };
+
+    if (pageMutationMeta) {
+      logOptions.streamId = activity.pageId ?? activity.resourceId;
+      logOptions.streamSeq = pageMutationMeta.nextRevision;
+      logOptions.stateHashBefore = pageMutationMeta.stateHashBefore;
+      logOptions.stateHashAfter = pageMutationMeta.stateHashAfter;
+      logOptions.contentRef = pageMutationMeta.contentRefAfter ?? undefined;
+      logOptions.contentSize = pageMutationMeta.contentSizeAfter ?? undefined;
+      logOptions.contentFormat = pageMutationMeta.contentFormatAfter ?? undefined;
+    }
+
+    await logRollbackActivity(
+      userId,
+      activity.id,
+      {
+        resourceType: activity.resourceType,
+        resourceId: activity.resourceId,
+        resourceTitle: activity.resourceTitle ?? undefined,
+        driveId: activity.driveId,
+        pageId: activity.pageId ?? undefined,
+      },
+      actorInfo,
+      logOptions
+    );
+
+    return {
+      success: true,
+      action: 'redo',
+      status: 'success',
+      restoredValues,
+      message: 'Rollback has been undone',
+      warnings,
+      changesApplied: preview.changes,
+    };
+  } catch (error) {
+    loggers.api.error('[RollbackService] Error executing redo', {
+      activityId,
+      userId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+
+    return {
+      success: false,
+      action: 'redo',
+      status: 'failed',
+      message: error instanceof Error ? error.message : 'Failed to execute redo',
+      warnings,
+      changesApplied: preview.changes,
     };
   }
 }
@@ -519,8 +1702,9 @@ export async function executeRollback(
 async function rollbackPageChange(
   activity: ActivityLogForRollback,
   _currentValues: Record<string, unknown> | null,
-  database: typeof db
-): Promise<Record<string, unknown>> {
+  database: typeof db,
+  pageUpdateContext: PageUpdateContext
+): Promise<PageChangeResult> {
   loggers.api.debug('[Rollback:Execute:Page] Starting page rollback', {
     pageId: activity.pageId,
     operation: activity.operation,
@@ -530,6 +1714,8 @@ async function rollbackPageChange(
   if (!activity.pageId) {
     throw new Error('Page ID not found in activity');
   }
+
+  const resolvedContentSnapshot = await resolveActivityContentSnapshot(activity);
 
   // Handle create operation by trashing the page
   if (activity.operation === 'create') {
@@ -545,26 +1731,26 @@ async function rollbackPageChange(
 
     // Orphan any children to the grandparent (matches pageService.trashPage behavior)
     // This prevents broken tree with children pointing to trashed parent
-    await database
-      .update(pages)
-      .set({
-        parentId: page?.parentId ?? null,
-        originalParentId: activity.pageId, // Store for potential restore
-        updatedAt: new Date(),
-      })
+    const childPages = await database
+      .select({ id: pages.id })
+      .from(pages)
       .where(eq(pages.parentId, activity.pageId));
 
-    // Now trash the created page
-    await database
-      .update(pages)
-      .set({
-        isTrashed: true,
-        trashedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(eq(pages.id, activity.pageId));
+    const nextParentId = page?.parentId ?? null;
+    for (const child of childPages) {
+      await applyPageUpdateWithRevision(database, child.id, {
+        parentId: nextParentId,
+        originalParentId: activity.pageId,
+      }, pageUpdateContext);
+    }
 
-    return { trashed: true, pageId: activity.pageId };
+    // Now trash the created page
+    const pageMutationMeta = await applyPageUpdateWithRevision(database, activity.pageId, {
+      isTrashed: true,
+      trashedAt: new Date(),
+    }, pageUpdateContext);
+
+    return { restoredValues: { trashed: true, pageId: activity.pageId }, pageMutationMeta };
   }
 
   const previousValues = activity.previousValues || {};
@@ -583,8 +1769,8 @@ async function rollbackPageChange(
   }
 
   // If we have a content snapshot and content was changed, use it
-  if (activity.contentSnapshot && (activity.operation === 'update' || activity.operation === 'create')) {
-    updateData.content = activity.contentSnapshot;
+  if (resolvedContentSnapshot && (activity.operation === 'update' || activity.operation === 'create')) {
+    updateData.content = resolvedContentSnapshot;
   }
 
   if (Object.keys(updateData).length === 0) {
@@ -596,16 +1782,35 @@ async function rollbackPageChange(
     fieldsToRestore: Object.keys(updateData),
   });
 
-  // Update the page
-  await database
-    .update(pages)
-    .set({
-      ...updateData,
-      updatedAt: new Date(),
-    })
-    .where(eq(pages.id, activity.pageId));
+  // Update the page with revision/state hash
+  const pageMutationMeta = await applyPageUpdateWithRevision(database, activity.pageId, updateData, pageUpdateContext);
 
-  return updateData;
+  // If we're restoring a trashed page (isTrashed: false), also restore orphaned children
+  // When pages are trashed, children are orphaned to grandparent with originalParentId set
+  // Now that the parent is restored, re-parent those children back to their original parent
+  if (updateData.isTrashed === false && activity.pageId) {
+    const restoredChildren = await database
+      .select({ id: pages.id })
+      .from(pages)
+      .where(eq(pages.originalParentId, activity.pageId));
+
+    for (const child of restoredChildren) {
+      await applyPageUpdateWithRevision(database, child.id, {
+        parentId: activity.pageId,
+        originalParentId: null,
+      }, pageUpdateContext);
+    }
+
+    if (restoredChildren.length > 0) {
+      loggers.api.debug('[Rollback:Execute:Page] Restored orphaned children', {
+        parentPageId: activity.pageId,
+        childrenRestored: restoredChildren.length,
+        childIds: restoredChildren.map(c => c.id),
+      });
+    }
+  }
+
+  return { restoredValues: updateData, pageMutationMeta };
 }
 
 /**
@@ -614,7 +1819,8 @@ async function rollbackPageChange(
 async function rollbackDriveChange(
   activity: ActivityLogForRollback,
   _currentValues: Record<string, unknown> | null,
-  database: typeof db
+  database: typeof db,
+  pageUpdateContext: PageUpdateContext
 ): Promise<Record<string, unknown>> {
   if (!activity.driveId) {
     throw new Error('Drive ID not found in activity');
@@ -626,15 +1832,19 @@ async function rollbackDriveChange(
       driveId: activity.driveId,
     });
 
-    // First, trash all pages in the drive to prevent orphans
-    await database
-      .update(pages)
-      .set({
-        isTrashed: true,
-        trashedAt: new Date(),
-        updatedAt: new Date(),
-      })
+    const trashedAt = new Date();
+    const drivePages = await database
+      .select({ id: pages.id })
+      .from(pages)
       .where(eq(pages.driveId, activity.driveId));
+
+    // First, trash all pages in the drive to prevent orphans
+    for (const page of drivePages) {
+      await applyPageUpdateWithRevision(database, page.id, {
+        isTrashed: true,
+        trashedAt,
+      }, pageUpdateContext);
+    }
 
     // Then trash the drive itself
     await database
@@ -786,8 +1996,9 @@ async function rollbackPermissionChange(
 async function rollbackAgentConfigChange(
   activity: ActivityLogForRollback,
   _currentValues: Record<string, unknown> | null,
-  database: typeof db
-): Promise<Record<string, unknown>> {
+  database: typeof db,
+  pageUpdateContext: PageUpdateContext
+): Promise<PageChangeResult> {
   // Agent configs are stored in pages table
   if (!activity.pageId) {
     throw new Error('Page ID not found in activity');
@@ -817,15 +2028,9 @@ async function rollbackAgentConfigChange(
     throw new Error('No agent config values to restore');
   }
 
-  await database
-    .update(pages)
-    .set({
-      ...updateData,
-      updatedAt: new Date(),
-    })
-    .where(eq(pages.id, activity.pageId));
+  const pageMutationMeta = await applyPageUpdateWithRevision(database, activity.pageId, updateData, pageUpdateContext);
 
-  return updateData;
+  return { restoredValues: updateData, pageMutationMeta };
 }
 
 /**
@@ -848,8 +2053,9 @@ async function rollbackMemberChange(
   }
 
   // Determine if this was an add, remove, or role change based on operation and context
-  const wasAdded = activity.operation === 'create' || !previousValues.role;
-  const wasRemoved = activity.operation === 'delete' || activity.operation === 'trash';
+  // Note: member_add and member_remove are the actual operation names from logMemberActivity
+  const wasAdded = activity.operation === 'create' || activity.operation === 'member_add' || !previousValues.role;
+  const wasRemoved = activity.operation === 'delete' || activity.operation === 'trash' || activity.operation === 'member_remove';
 
   if (wasAdded && !wasRemoved) {
     // Member was added - rollback by removing them
@@ -938,6 +2144,27 @@ async function rollbackRoleChange(
 
   if (!activity.driveId) {
     throw new Error('Drive ID not found in activity');
+  }
+
+  if (activity.operation === 'role_reorder') {
+    const previousOrder = previousValues.order as string[] | undefined;
+    if (!previousOrder || previousOrder.length === 0) {
+      throw new Error('No previous role order found for rollback');
+    }
+
+    for (const [index, roleId] of previousOrder.entries()) {
+      await database
+        .update(driveRoles)
+        .set({ position: index, updatedAt: new Date() })
+        .where(eq(driveRoles.id, roleId));
+    }
+
+    loggers.api.info('[RollbackService] Restored previous role order', {
+      driveId: activity.driveId,
+      roleCount: previousOrder.length,
+    });
+
+    return { order: previousOrder };
   }
 
   const roleId = activity.resourceId || metadata?.roleId;
@@ -1108,6 +2335,535 @@ async function rollbackMessageChange(
 }
 
 /**
+ * Redo a page change (undo a rollback)
+ */
+async function redoPageChange(
+  activity: ActivityLogForRollback,
+  targetValues: Record<string, unknown> | null,
+  sourceOperation: ActivityOperation,
+  database: typeof db,
+  pageUpdateContext: PageUpdateContext
+): Promise<PageChangeResult> {
+  if (!activity.pageId) {
+    throw new Error('Page ID not found in activity');
+  }
+
+  const updateData: Record<string, unknown> = {};
+
+  if (targetValues && Object.keys(targetValues).length > 0) {
+    Object.assign(updateData, targetValues);
+  } else if (sourceOperation === 'delete' || sourceOperation === 'trash') {
+    updateData.isTrashed = true;
+  } else if (sourceOperation === 'create') {
+    updateData.isTrashed = false;
+  }
+
+  if (Object.keys(updateData).length === 0) {
+    throw new Error('No values to restore');
+  }
+
+  if (updateData.isTrashed === true) {
+    const [page] = await database
+      .select({ parentId: pages.parentId })
+      .from(pages)
+      .where(eq(pages.id, activity.pageId));
+
+    const childPages = await database
+      .select({ id: pages.id })
+      .from(pages)
+      .where(eq(pages.parentId, activity.pageId));
+
+    const nextParentId = page?.parentId ?? null;
+    for (const child of childPages) {
+      await applyPageUpdateWithRevision(database, child.id, {
+        parentId: nextParentId,
+        originalParentId: activity.pageId,
+      }, pageUpdateContext);
+    }
+
+    updateData.trashedAt = new Date();
+  }
+
+  if (updateData.isTrashed === false) {
+    updateData.trashedAt = null;
+  }
+
+  const pageMutationMeta = await applyPageUpdateWithRevision(database, activity.pageId, updateData, pageUpdateContext);
+
+  if (updateData.isTrashed === false) {
+    const restoredChildren = await database
+      .select({ id: pages.id })
+      .from(pages)
+      .where(eq(pages.originalParentId, activity.pageId));
+
+    for (const child of restoredChildren) {
+      await applyPageUpdateWithRevision(database, child.id, {
+        parentId: activity.pageId,
+        originalParentId: null,
+      }, pageUpdateContext);
+    }
+  }
+
+  return { restoredValues: updateData, pageMutationMeta };
+}
+
+/**
+ * Redo a drive change (undo a rollback)
+ */
+async function redoDriveChange(
+  activity: ActivityLogForRollback,
+  targetValues: Record<string, unknown> | null,
+  sourceOperation: ActivityOperation,
+  database: typeof db,
+  pageUpdateContext: PageUpdateContext
+): Promise<Record<string, unknown>> {
+  if (!activity.driveId) {
+    throw new Error('Drive ID not found in activity');
+  }
+
+  const updateData: Record<string, unknown> = {};
+
+  if (targetValues && Object.keys(targetValues).length > 0) {
+    Object.assign(updateData, targetValues);
+  } else if (sourceOperation === 'delete' || sourceOperation === 'trash') {
+    updateData.isTrashed = true;
+  } else if (sourceOperation === 'create') {
+    updateData.isTrashed = false;
+  }
+
+  if (Object.keys(updateData).length === 0) {
+    throw new Error('No values to restore');
+  }
+
+  if (updateData.isTrashed === true) {
+    const trashedAt = new Date();
+    const drivePages = await database
+      .select({ id: pages.id })
+      .from(pages)
+      .where(eq(pages.driveId, activity.driveId));
+
+    for (const page of drivePages) {
+      await applyPageUpdateWithRevision(database, page.id, {
+        isTrashed: true,
+        trashedAt,
+      }, pageUpdateContext);
+    }
+    updateData.trashedAt = trashedAt;
+  }
+
+  if (updateData.isTrashed === false) {
+    const drivePages = await database
+      .select({ id: pages.id })
+      .from(pages)
+      .where(eq(pages.driveId, activity.driveId));
+
+    for (const page of drivePages) {
+      await applyPageUpdateWithRevision(database, page.id, {
+        isTrashed: false,
+        trashedAt: null,
+      }, pageUpdateContext);
+    }
+    updateData.trashedAt = null;
+  }
+
+  await database
+    .update(drives)
+    .set({
+      ...updateData,
+      updatedAt: new Date(),
+    })
+    .where(eq(drives.id, activity.driveId));
+
+  return updateData;
+}
+
+/**
+ * Redo a permission change (undo a rollback)
+ */
+async function redoPermissionChange(
+  activity: ActivityLogForRollback,
+  targetValues: Record<string, unknown> | null,
+  sourceOperation: ActivityOperation,
+  database: typeof db
+): Promise<Record<string, unknown>> {
+  const metadata = activity.metadata as { targetUserId?: string } | null;
+
+  if (!activity.pageId) {
+    throw new Error('Page ID not found in activity');
+  }
+
+  const targetUserId =
+    metadata?.targetUserId ||
+    (targetValues?.userId as string | undefined) ||
+    (activity.newValues?.userId as string | undefined);
+
+  if (!targetUserId) {
+    throw new Error('Target user ID not found in activity');
+  }
+
+  switch (sourceOperation) {
+    case 'permission_grant': {
+      if (!targetValues) {
+        throw new Error('No permission values to apply');
+      }
+
+      const permissionData = {
+        pageId: activity.pageId,
+        userId: targetUserId,
+        canView: (targetValues.canView as boolean) ?? false,
+        canEdit: (targetValues.canEdit as boolean) ?? false,
+        canShare: (targetValues.canShare as boolean) ?? false,
+        canDelete: (targetValues.canDelete as boolean) ?? false,
+        note: (targetValues.note as string) ?? null,
+        expiresAt: (targetValues.expiresAt as Date | null) ?? null,
+        grantedBy: (targetValues.grantedBy as string) ?? null,
+      };
+
+      await database
+        .insert(pagePermissions)
+        .values(permissionData)
+        .onConflictDoUpdate({
+          target: [pagePermissions.pageId, pagePermissions.userId],
+          set: permissionData,
+        });
+
+      return permissionData;
+    }
+
+    case 'permission_update': {
+      if (!targetValues) {
+        throw new Error('No permission values to apply');
+      }
+
+      const updateData: Record<string, unknown> = {};
+      const fields = ['canView', 'canEdit', 'canShare', 'canDelete', 'note', 'expiresAt', 'grantedBy'];
+      for (const field of fields) {
+        if (field in targetValues) {
+          updateData[field] = targetValues[field];
+        }
+      }
+
+      if (Object.keys(updateData).length === 0) {
+        throw new Error('No permission values to apply');
+      }
+
+      await database
+        .update(pagePermissions)
+        .set(updateData)
+        .where(and(
+          eq(pagePermissions.pageId, activity.pageId),
+          eq(pagePermissions.userId, targetUserId)
+        ));
+
+      return updateData;
+    }
+
+    case 'permission_revoke': {
+      await database
+        .delete(pagePermissions)
+        .where(and(
+          eq(pagePermissions.pageId, activity.pageId),
+          eq(pagePermissions.userId, targetUserId)
+        ));
+
+      return { deleted: true, pageId: activity.pageId, userId: targetUserId };
+    }
+
+    default:
+      throw new Error(`Unsupported permission operation: ${sourceOperation}`);
+  }
+}
+
+/**
+ * Redo a member change (undo a rollback)
+ */
+async function redoMemberChange(
+  activity: ActivityLogForRollback,
+  targetValues: Record<string, unknown> | null,
+  sourceOperation: ActivityOperation,
+  database: typeof db
+): Promise<Record<string, unknown>> {
+  const metadata = activity.metadata as { targetUserId?: string } | null;
+
+  if (!activity.driveId) {
+    throw new Error('Drive ID not found in activity');
+  }
+
+  const targetUserId =
+    metadata?.targetUserId ||
+    (targetValues?.userId as string | undefined) ||
+    (activity.newValues?.userId as string | undefined);
+
+  if (!targetUserId) {
+    throw new Error('Target user ID not found in activity');
+  }
+
+  const parseDate = (value: unknown): Date | null => {
+    if (!value) return null;
+    return value instanceof Date ? value : new Date(value as string);
+  };
+
+  switch (sourceOperation) {
+    case 'member_add': {
+      const memberData = {
+        driveId: activity.driveId,
+        userId: targetUserId,
+        role: (targetValues?.role as 'OWNER' | 'ADMIN' | 'MEMBER') || 'MEMBER',
+        customRoleId: (targetValues?.customRoleId as string | null) ?? null,
+        invitedBy: (targetValues?.invitedBy as string | null) ?? null,
+        invitedAt: parseDate(targetValues?.invitedAt) ?? new Date(),
+        acceptedAt: parseDate(targetValues?.acceptedAt),
+      };
+
+      await database
+        .insert(driveMembers)
+        .values(memberData)
+        .onConflictDoUpdate({
+          target: [driveMembers.driveId, driveMembers.userId],
+          set: memberData,
+        });
+
+      return memberData;
+    }
+
+    case 'member_remove': {
+      await database
+        .delete(driveMembers)
+        .where(and(
+          eq(driveMembers.driveId, activity.driveId),
+          eq(driveMembers.userId, targetUserId)
+        ));
+
+      return { deleted: true, driveId: activity.driveId, userId: targetUserId };
+    }
+
+    case 'member_role_change': {
+      if (!targetValues) {
+        throw new Error('No member values to apply');
+      }
+
+      const updateData: Record<string, unknown> = {};
+
+      if ('role' in targetValues) {
+        updateData.role = targetValues.role;
+      }
+      if ('customRoleId' in targetValues) {
+        updateData.customRoleId = targetValues.customRoleId;
+      }
+
+      if (Object.keys(updateData).length === 0) {
+        throw new Error('No member values to apply');
+      }
+
+      await database
+        .update(driveMembers)
+        .set(updateData)
+        .where(and(
+          eq(driveMembers.driveId, activity.driveId),
+          eq(driveMembers.userId, targetUserId)
+        ));
+
+      return updateData;
+    }
+
+    default:
+      throw new Error(`Unsupported member operation: ${sourceOperation}`);
+  }
+}
+
+/**
+ * Redo a role change (undo a rollback)
+ */
+async function redoRoleChange(
+  activity: ActivityLogForRollback,
+  targetValues: Record<string, unknown> | null,
+  sourceOperation: ActivityOperation,
+  database: typeof db
+): Promise<Record<string, unknown>> {
+  const metadata = activity.metadata as { roleId?: string } | null;
+  const roleId = metadata?.roleId || activity.resourceId;
+
+  if (!activity.driveId) {
+    throw new Error('Drive ID not found in activity');
+  }
+
+  if (!roleId) {
+    throw new Error('Role ID not found in activity');
+  }
+
+  if (sourceOperation === 'role_reorder') {
+    const order = (targetValues?.order as string[] | undefined) ?? [];
+    if (order.length === 0) {
+      throw new Error('No role order found to apply');
+    }
+
+    for (const [index, targetRoleId] of order.entries()) {
+      await database
+        .update(driveRoles)
+        .set({ position: index, updatedAt: new Date() })
+        .where(eq(driveRoles.id, targetRoleId));
+    }
+
+    return { order };
+  }
+
+  switch (sourceOperation) {
+    case 'create': {
+      if (!targetValues) {
+        throw new Error('No role values to apply');
+      }
+
+      const roleData = {
+        id: roleId,
+        driveId: activity.driveId,
+        name: (targetValues.name as string) || 'Restored Role',
+        description: (targetValues.description as string | null) ?? null,
+        color: (targetValues.color as string | null) ?? null,
+        isDefault: (targetValues.isDefault as boolean) ?? false,
+        permissions: (targetValues.permissions as Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>) || {},
+        position: (targetValues.position as number) ?? 0,
+        updatedAt: new Date(),
+      };
+
+      await database.insert(driveRoles).values(roleData);
+
+      return roleData;
+    }
+
+    case 'delete': {
+      const affectedMembers = await database
+        .select({ userId: driveMembers.userId })
+        .from(driveMembers)
+        .where(eq(driveMembers.customRoleId, roleId));
+
+      await database
+        .delete(driveRoles)
+        .where(eq(driveRoles.id, roleId));
+
+      return {
+        deleted: true,
+        roleId,
+        affectedMemberUserIds: affectedMembers.map(member => member.userId),
+      };
+    }
+
+    case 'update': {
+      if (!targetValues) {
+        throw new Error('No role values to apply');
+      }
+
+      const updateData: Record<string, unknown> = {};
+      const fields = ['name', 'description', 'color', 'isDefault', 'permissions', 'position'];
+      for (const field of fields) {
+        if (field in targetValues) {
+          updateData[field] = targetValues[field];
+        }
+      }
+
+      if (Object.keys(updateData).length === 0) {
+        throw new Error('No role values to apply');
+      }
+
+      updateData.updatedAt = new Date();
+
+      await database
+        .update(driveRoles)
+        .set(updateData)
+        .where(eq(driveRoles.id, roleId));
+
+      return updateData;
+    }
+
+    default:
+      throw new Error(`Unsupported role operation: ${sourceOperation}`);
+  }
+}
+
+/**
+ * Redo agent config change (undo a rollback)
+ */
+async function redoAgentConfigChange(
+  activity: ActivityLogForRollback,
+  targetValues: Record<string, unknown> | null,
+  database: typeof db,
+  pageUpdateContext: PageUpdateContext
+): Promise<PageChangeResult> {
+  if (!activity.pageId) {
+    throw new Error('Page ID not found in activity');
+  }
+
+  if (!targetValues) {
+    throw new Error('No agent values to apply');
+  }
+
+  const updateData: Record<string, unknown> = {};
+  const fields = ['systemPrompt', 'enabledTools', 'aiProvider', 'aiModel', 'includeDrivePrompt', 'agentDefinition', 'visibleToGlobalAssistant'];
+
+  for (const field of fields) {
+    if (field in targetValues) {
+      updateData[field] = targetValues[field];
+    }
+  }
+
+  if (Object.keys(updateData).length === 0) {
+    throw new Error('No agent values to apply');
+  }
+
+  const pageMutationMeta = await applyPageUpdateWithRevision(database, activity.pageId, updateData, pageUpdateContext);
+
+  return { restoredValues: updateData, pageMutationMeta };
+}
+
+/**
+ * Redo a message change (undo a rollback)
+ */
+async function redoMessageChange(
+  activity: ActivityLogForRollback,
+  targetValues: Record<string, unknown> | null,
+  sourceOperation: ActivityOperation,
+  database: typeof db
+): Promise<Record<string, unknown>> {
+  const metadata = activity.metadata as Record<string, unknown> | null;
+  const conversationType = metadata?.conversationType as string | undefined;
+  const isGlobal = !activity.pageId || conversationType === 'global';
+  const table = isGlobal ? messages : chatMessages;
+
+  const updateData: Record<string, unknown> = {};
+
+  switch (sourceOperation) {
+    case 'message_update': {
+      const content = targetValues?.content as string | undefined;
+      if (!content) {
+        throw new Error('No message content to apply');
+      }
+      updateData.content = content;
+      updateData.editedAt = new Date();
+      break;
+    }
+
+    case 'message_delete': {
+      updateData.isActive = false;
+      break;
+    }
+
+    case 'create': {
+      updateData.isActive = true;
+      break;
+    }
+
+    default:
+      throw new Error(`Unsupported message operation: ${sourceOperation}`);
+  }
+
+  await database
+    .update(table)
+    .set(updateData)
+    .where(eq(table.id, activity.resourceId));
+
+  return updateData;
+}
+
+/**
  * Get version history for a page
  */
 export async function getPageVersionHistory(
@@ -1181,10 +2937,23 @@ export async function getPageVersionHistory(
         aiProvider: a.aiProvider,
         aiModel: a.aiModel,
         contentSnapshot: a.contentSnapshot,
+        contentRef: a.contentRef,
+        contentFormat: a.contentFormat as PageContentFormat | null,
+        contentSize: a.contentSize,
         updatedFields: a.updatedFields as string[] | null,
         previousValues: a.previousValues as Record<string, unknown> | null,
         newValues: a.newValues as Record<string, unknown> | null,
         metadata: a.metadata as Record<string, unknown> | null,
+        streamId: a.streamId,
+        streamSeq: a.streamSeq,
+        changeGroupId: a.changeGroupId,
+        changeGroupType: a.changeGroupType as ChangeGroupType | null,
+        stateHashBefore: a.stateHashBefore,
+        stateHashAfter: a.stateHashAfter,
+        rollbackFromActivityId: a.rollbackFromActivityId,
+        rollbackSourceOperation: a.rollbackSourceOperation as ActivityOperation | null,
+        rollbackSourceTimestamp: a.rollbackSourceTimestamp,
+        rollbackSourceTitle: a.rollbackSourceTitle,
       })),
       total: countResult[0]?.value ?? 0,
     };
@@ -1271,10 +3040,23 @@ export async function getDriveVersionHistory(
         aiProvider: a.aiProvider,
         aiModel: a.aiModel,
         contentSnapshot: a.contentSnapshot,
+        contentRef: a.contentRef,
+        contentFormat: a.contentFormat as PageContentFormat | null,
+        contentSize: a.contentSize,
         updatedFields: a.updatedFields as string[] | null,
         previousValues: a.previousValues as Record<string, unknown> | null,
         newValues: a.newValues as Record<string, unknown> | null,
         metadata: a.metadata as Record<string, unknown> | null,
+        streamId: a.streamId,
+        streamSeq: a.streamSeq,
+        changeGroupId: a.changeGroupId,
+        changeGroupType: a.changeGroupType as ChangeGroupType | null,
+        stateHashBefore: a.stateHashBefore,
+        stateHashAfter: a.stateHashAfter,
+        rollbackFromActivityId: a.rollbackFromActivityId,
+        rollbackSourceOperation: a.rollbackSourceOperation as ActivityOperation | null,
+        rollbackSourceTimestamp: a.rollbackSourceTimestamp,
+        rollbackSourceTitle: a.rollbackSourceTitle,
       })),
       total: countResult[0]?.value ?? 0,
     };

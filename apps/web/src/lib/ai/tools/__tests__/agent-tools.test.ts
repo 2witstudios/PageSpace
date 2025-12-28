@@ -4,7 +4,6 @@ import type { ToolExecutionContext } from '../../core';
 // Mock repository seams - the proper boundary for tests
 vi.mock('@pagespace/lib/server', () => ({
   canUserEditPage: vi.fn(),
-  logAgentConfigActivity: vi.fn(),
   getActorInfo: vi.fn().mockResolvedValue({
     actorEmail: 'test@example.com',
     actorDisplayName: 'Test User',
@@ -21,8 +20,11 @@ vi.mock('@pagespace/lib/server', () => ({
   },
   agentRepository: {
     findById: vi.fn(),
-    updateConfig: vi.fn(),
   },
+}));
+
+vi.mock('@/services/api/page-mutation-service', () => ({
+  applyPageMutation: vi.fn(),
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -45,6 +47,7 @@ vi.mock('../../core', () => ({
 import { agentTools } from '../agent-tools';
 import { canUserEditPage, agentRepository } from '@pagespace/lib/server';
 import { broadcastPageEvent } from '@/lib/websocket';
+import { applyPageMutation } from '@/services/api/page-mutation-service';
 
 const mockAgentRepository = vi.mocked(agentRepository);
 const mockCanUserEditPage = vi.mocked(canUserEditPage);
@@ -115,6 +118,7 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        revision: 1,
       };
       mockAgentRepository.findById.mockResolvedValue(mockAgent);
       mockCanUserEditPage.mockResolvedValue(false);
@@ -135,8 +139,8 @@ describe('agent-tools', () => {
 
       // Verify permission check was called with correct params
       expect(mockCanUserEditPage).toHaveBeenCalledWith('user-123', 'agent-1');
-      // Verify updateConfig was NOT called
-      expect(mockAgentRepository.updateConfig).not.toHaveBeenCalled();
+      // Verify applyPageMutation was NOT called
+      expect(applyPageMutation).not.toHaveBeenCalled();
     });
 
     it('validates enabled tools against available tools', async () => {
@@ -155,6 +159,7 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        revision: 1,
       };
       mockAgentRepository.findById.mockResolvedValue(mockAgent);
       mockCanUserEditPage.mockResolvedValue(true);
@@ -177,8 +182,8 @@ describe('agent-tools', () => {
         )
       ).rejects.toThrow('Invalid tools specified');
 
-      // Verify updateConfig was NOT called due to validation failure
-      expect(mockAgentRepository.updateConfig).not.toHaveBeenCalled();
+      // Verify applyPageMutation was NOT called due to validation failure
+      expect(applyPageMutation).not.toHaveBeenCalled();
     });
 
     it('updates agent configuration with system prompt and tools', async () => {
@@ -197,10 +202,19 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        revision: 2,
       };
-      mockAgentRepository.findById.mockResolvedValue(mockAgent);
+      const updatedMockAgent = {
+        ...mockAgent,
+        systemPrompt: 'New system prompt',
+        enabledTools: ['list_drives', 'list_pages'],
+        revision: 3,
+      };
+      // First call returns original, second call (after mutation) returns updated
+      mockAgentRepository.findById
+        .mockResolvedValueOnce(mockAgent)
+        .mockResolvedValueOnce(updatedMockAgent);
       mockCanUserEditPage.mockResolvedValue(true);
-      mockAgentRepository.updateConfig.mockResolvedValue();
 
       const context = {
         toolCallId: '1',
@@ -230,12 +244,16 @@ describe('agent-tools', () => {
         },
       });
 
-      // Assert - verify repository was called with correct data
-      expect(mockAgentRepository.updateConfig).toHaveBeenCalledWith(
-        'agent-1',
+      // Assert - verify mutation was called with correct data including updatedFields
+      expect(applyPageMutation).toHaveBeenCalledWith(
         expect.objectContaining({
-          systemPrompt: 'New system prompt',
-          enabledTools: ['list_drives', 'list_pages'],
+          pageId: 'agent-1',
+          operation: 'agent_config_update',
+          updates: expect.objectContaining({
+            systemPrompt: 'New system prompt',
+            enabledTools: ['list_drives', 'list_pages'],
+          }),
+          updatedFields: expect.arrayContaining(['systemPrompt', 'enabledTools']),
         })
       );
 
@@ -259,10 +277,19 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        revision: 3,
       };
-      mockAgentRepository.findById.mockResolvedValue(mockAgent);
+      const updatedMockAgent = {
+        ...mockAgent,
+        aiProvider: 'google',
+        aiModel: 'gemini-pro',
+        revision: 4,
+      };
+      // First call returns original, second call (after mutation) returns updated
+      mockAgentRepository.findById
+        .mockResolvedValueOnce(mockAgent)
+        .mockResolvedValueOnce(updatedMockAgent);
       mockCanUserEditPage.mockResolvedValue(true);
-      mockAgentRepository.updateConfig.mockResolvedValue();
 
       const context = {
         toolCallId: '1',
@@ -291,11 +318,13 @@ describe('agent-tools', () => {
       });
 
       // Assert - verify repository received correct update data
-      expect(mockAgentRepository.updateConfig).toHaveBeenCalledWith(
-        'agent-1',
+      expect(applyPageMutation).toHaveBeenCalledWith(
         expect.objectContaining({
-          aiProvider: 'google',
-          aiModel: 'gemini-pro',
+          pageId: 'agent-1',
+          updates: expect.objectContaining({
+            aiProvider: 'google',
+            aiModel: 'gemini-pro',
+          }),
         })
       );
     });
@@ -316,10 +345,10 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        revision: 4,
       };
       mockAgentRepository.findById.mockResolvedValue(mockAgent);
       mockCanUserEditPage.mockResolvedValue(true);
-      mockAgentRepository.updateConfig.mockResolvedValue();
 
       const context = {
         toolCallId: '1',
@@ -352,15 +381,65 @@ describe('agent-tools', () => {
       });
 
       // Verify repository received correct update data
-      expect(mockAgentRepository.updateConfig).toHaveBeenCalledWith(
-        'agent-1',
+      expect(applyPageMutation).toHaveBeenCalledWith(
         expect.objectContaining({
-          visibleToGlobalAssistant: true,
-          includeDrivePrompt: true,
-          includePageTree: true,
-          pageTreeScope: 'drive',
+          pageId: 'agent-1',
+          updates: expect.objectContaining({
+            visibleToGlobalAssistant: true,
+            includeDrivePrompt: true,
+            includePageTree: true,
+            pageTreeScope: 'drive',
+          }),
         })
       );
+    });
+
+    it('throws error when agent is deleted during mutation', async () => {
+      // Arrange
+      const mockAgent = {
+        id: 'agent-1',
+        title: 'My Agent',
+        type: 'AI_CHAT',
+        driveId: 'drive-1',
+        systemPrompt: null,
+        enabledTools: null,
+        aiProvider: null,
+        aiModel: null,
+        agentDefinition: null,
+        visibleToGlobalAssistant: false,
+        includeDrivePrompt: false,
+        includePageTree: false,
+        pageTreeScope: null,
+        revision: 1,
+      };
+      // First call returns the agent, second call (after mutation) returns null
+      mockAgentRepository.findById
+        .mockResolvedValueOnce(mockAgent)
+        .mockResolvedValueOnce(null);
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const context = {
+        toolCallId: '1',
+        messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      // Act & Assert
+      await expect(
+        agentTools.update_agent_config.execute!(
+          {
+            agentPath: '/drive/agent',
+            agentId: 'agent-1',
+            systemPrompt: 'New prompt',
+          },
+          context
+        )
+      ).rejects.toThrow('Agent "My Agent" was deleted during the update operation');
+
+      // Verify mutation was called before the error
+      expect(applyPageMutation).toHaveBeenCalled();
+      // Verify broadcast was NOT called since the operation failed
+      expect(mockBroadcastPageEvent).not.toHaveBeenCalled();
     });
 
     it('handles repository errors gracefully', async () => {

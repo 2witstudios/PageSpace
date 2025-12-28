@@ -27,6 +27,10 @@ export interface ActivityLog {
   previousValues: Record<string, unknown> | null;
   newValues: Record<string, unknown> | null;
   metadata: Record<string, unknown> | null;
+  rollbackFromActivityId: string | null;
+  rollbackSourceOperation: string | null;
+  rollbackSourceTimestamp: string | null;
+  rollbackSourceTitle: string | null;
   user: ActivityUser | null;
 }
 

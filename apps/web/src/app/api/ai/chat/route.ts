@@ -15,7 +15,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 const AUTH_OPTIONS_READ = { allow: ['jwt', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
-import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
+import { canUserViewPage, canUserEditPage, getActorInfo } from '@pagespace/lib/server';
 import {
   createAIProvider,
   updateUserProviderSettings,
@@ -56,6 +56,7 @@ import { trackFeature } from '@pagespace/lib/activity-tracker';
 import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
 import type { MCPTool } from '@/types/mcp';
 import { getMCPBridge } from '@/lib/mcp';
+import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 
 
 // Allow streaming responses up to 5 minutes for complex AI agent interactions
@@ -347,13 +348,37 @@ export async function POST(request: Request) {
     // Update page's AI provider/model if changed
     if (selectedProvider && selectedModel && chatId) {
       if (selectedProvider !== page.aiProvider || selectedModel !== page.aiModel) {
-        await db
-          .update(pages)
-          .set({
-            aiProvider: selectedProvider,
-            aiModel: selectedModel,
-          })
-          .where(eq(pages.id, chatId));
+        try {
+          const actorInfo = await getActorInfo(userId);
+          await applyPageMutation({
+            pageId: chatId,
+            operation: 'agent_config_update',
+            updates: {
+              aiProvider: selectedProvider,
+              aiModel: selectedModel,
+            },
+            updatedFields: ['aiProvider', 'aiModel'],
+            expectedRevision: typeof page.revision === 'number' ? page.revision : undefined,
+            context: {
+              userId,
+              actorEmail: actorInfo.actorEmail,
+              actorDisplayName: actorInfo.actorDisplayName,
+              resourceType: 'agent',
+            },
+          });
+        } catch (error) {
+          if (error instanceof PageRevisionMismatchError) {
+            return NextResponse.json(
+              {
+                error: error.message,
+                currentRevision: error.currentRevision,
+                expectedRevision: error.expectedRevision,
+              },
+              { status: error.expectedRevision === undefined ? 428 : 409 }
+            );
+          }
+          throw error;
+        }
       }
     }
 
@@ -1214,7 +1239,7 @@ export async function PATCH(request: Request) {
       );
     }
 
-    const { pageId, provider, model } = body;
+    const { pageId, provider, model, expectedRevision } = body;
 
     // Validate pageId (should be a CUID)
     if (!pageId || typeof pageId !== 'string' || pageId.length < 10 || pageId.length > 30) {
@@ -1284,13 +1309,37 @@ export async function PATCH(request: Request) {
     }
 
     // Update page settings
-    await db
-      .update(pages)
-      .set({
-        aiProvider: sanitizedProvider,
-        aiModel: sanitizedModel,
-      })
-      .where(eq(pages.id, sanitizedPageId));
+    try {
+      const actorInfo = await getActorInfo(auth.userId);
+      await applyPageMutation({
+        pageId: sanitizedPageId,
+        operation: 'agent_config_update',
+        updates: {
+          aiProvider: sanitizedProvider,
+          aiModel: sanitizedModel,
+        },
+        updatedFields: ['aiProvider', 'aiModel'],
+        expectedRevision: typeof expectedRevision === 'number' ? expectedRevision : undefined,
+        context: {
+          userId: auth.userId,
+          actorEmail: actorInfo.actorEmail,
+          actorDisplayName: actorInfo.actorDisplayName,
+          resourceType: 'agent',
+        },
+      });
+    } catch (error) {
+      if (error instanceof PageRevisionMismatchError) {
+        return NextResponse.json(
+          {
+            error: error.message,
+            currentRevision: error.currentRevision,
+            expectedRevision: error.expectedRevision,
+          },
+          { status: error.expectedRevision === undefined ? 428 : 409 }
+        );
+      }
+      throw error;
+    }
 
     loggers.ai.info('AI Settings PATCH: Page settings updated successfully', {
       userId: auth.userId,

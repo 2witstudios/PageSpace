@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, jsonb, real, boolean, pgEnum, primaryKey, index } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, jsonb, real, boolean, pgEnum, primaryKey, index, integer } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { users } from './auth';
 import { createId } from '@paralleldrive/cuid2';
@@ -33,10 +33,10 @@ export const pages = pgTable('pages', {
   aiModel: text('aiModel'),
   systemPrompt: text('systemPrompt'),
   enabledTools: jsonb('enabledTools'),
-  includeDrivePrompt: boolean('includeDrivePrompt').default(false), // Whether to include drive prompt for AI_CHAT pages
+  includeDrivePrompt: boolean('includeDrivePrompt').default(false).notNull(), // Whether to include drive prompt for AI_CHAT pages
   agentDefinition: text('agentDefinition'), // Tool-like description of what this agent does (for AI_CHAT pages)
-  visibleToGlobalAssistant: boolean('visibleToGlobalAssistant').default(true), // Whether this agent appears in global assistant's system prompt
-  includePageTree: boolean('includePageTree').default(false), // Whether to include page tree in AI context
+  visibleToGlobalAssistant: boolean('visibleToGlobalAssistant').default(true).notNull(), // Whether this agent appears in global assistant's system prompt
+  includePageTree: boolean('includePageTree').default(false).notNull(), // Whether to include page tree in AI context
   pageTreeScope: text('pageTreeScope', { enum: ['children', 'drive'] }).default('children'), // Scope of page tree to include
   // File-specific fields
   fileSize: real('fileSize'),
@@ -54,6 +54,8 @@ export const pages = pgTable('pages', {
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
   trashedAt: timestamp('trashedAt', { mode: 'date' }),
+  revision: integer('revision').default(0).notNull(),
+  stateHash: text('stateHash'),
   driveId: text('driveId').notNull().references(() => drives.id, { onDelete: 'cascade' }),
   parentId: text('parentId'),
   originalParentId: text('originalParentId'),

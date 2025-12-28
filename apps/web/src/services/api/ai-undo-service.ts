@@ -18,6 +18,7 @@ import {
   previewRollback,
   type RollbackContext,
 } from './rollback-service';
+import type { ActivityActionPreview } from '@/types/activity-actions';
 
 /**
  * Preview of what will be undone
@@ -38,8 +39,7 @@ export interface AiUndoPreview {
     resourceTitle: string | null;
     pageId?: string | null;
     driveId?: string | null;
-    canRollback: boolean;
-    reason?: string;
+    preview: ActivityActionPreview;
   }[];
   warnings: string[];
 }
@@ -243,6 +243,20 @@ export async function previewAiUndo(
     // Check rollback eligibility for each activity
     const activitiesAffected: AiUndoPreview['activitiesAffected'] = [];
     const warnings: string[] = [];
+    const fallbackPreview = (reason: string): ActivityActionPreview => ({
+      action: 'rollback',
+      canExecute: false,
+      reason,
+      warnings: [],
+      hasConflict: false,
+      conflictFields: [],
+      requiresForce: false,
+      isNoOp: false,
+      currentValues: null,
+      targetValues: null,
+      changes: [],
+      affectedResources: [],
+    });
 
     for (const activity of activities) {
       // Activities are already filtered for isAiGenerated=true by the query above,
@@ -257,13 +271,21 @@ export async function previewAiUndo(
         context,
       });
 
-      // Use force=true for AI undo since user is explicitly undoing AI changes
-      // This allows activities with conflicts to be marked as rollbackable (with warnings)
-      const preview = await previewRollback(activity.id, userId, context, { force: true });
+      let preview: ActivityActionPreview;
+      try {
+        preview = await previewRollback(activity.id, userId, context);
+        if (!preview) {
+          preview = fallbackPreview('Preview failed');
+          warnings.push(`Could not preview undo for activity ${activity.id}`);
+        }
+      } catch (error) {
+        preview = fallbackPreview('Preview failed');
+        warnings.push(`Failed to preview ${activity.operation} on ${activity.resourceTitle || activity.resourceType}: ${error instanceof Error ? error.message : String(error)}`);
+      }
 
       loggers.api.debug('[AiUndo:Preview] Activity eligibility result', {
         activityId: activity.id,
-        canRollback: preview.canRollback,
+        canExecute: preview.canExecute,
         reason: preview.reason,
         warningsCount: preview.warnings.length,
       });
@@ -276,12 +298,11 @@ export async function previewAiUndo(
         resourceTitle: activity.resourceTitle,
         pageId: activity.pageId,
         driveId: activity.driveId,
-        canRollback: preview.canRollback,
-        reason: preview.reason,
+        preview,
       });
 
       // Collect warnings
-      if (!preview.canRollback && preview.reason) {
+      if (!preview.canExecute && preview.reason) {
         warnings.push(`Cannot undo ${activity.operation} on ${activity.resourceTitle || activity.resourceType}: ${preview.reason}`);
       } else if (preview.warnings.length > 0) {
         warnings.push(...preview.warnings);
@@ -291,7 +312,7 @@ export async function previewAiUndo(
     loggers.api.debug('[AiUndo:Preview] Preview complete', {
       messagesAffected,
       activitiesTotal: activitiesAffected.length,
-      activitiesRollbackable: activitiesAffected.filter(a => a.canRollback).length,
+      activitiesRollbackable: activitiesAffected.filter(a => a.preview.canExecute).length,
       warningsCount: warnings.length,
     });
 
@@ -323,7 +344,8 @@ export async function executeAiUndo(
   messageId: string,
   userId: string,
   mode: UndoMode,
-  existingPreview?: AiUndoPreview
+  existingPreview?: AiUndoPreview,
+  options?: { force?: boolean }
 ): Promise<AiUndoResult> {
   loggers.api.debug('[AiUndo:Execute] Starting execution', {
     messageId,
@@ -332,11 +354,52 @@ export async function executeAiUndo(
     hasExistingPreview: !!existingPreview,
   });
 
+  const force = options?.force ?? false;
   const errors: string[] = [];
   let activitiesRolledBack = 0;
   let messagesDeleted = 0;
 
   try {
+    let message: AiMessage | null;
+    try {
+      message = await getMessage(messageId);
+    } catch (error) {
+      loggers.api.error('[AiUndoService] Error fetching message', {
+        messageId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        success: false,
+        messagesDeleted: 0,
+        activitiesRolledBack: 0,
+        errors: ['Message not found or preview failed'],
+      };
+    }
+
+    // Idempotency check: if message is already inactive, return success
+    // This prevents duplicate rollbacks on network retries or double-clicks
+    if (!message) {
+      loggers.api.debug('[AiUndo:Execute] Aborting - message not found');
+      return {
+        success: false,
+        messagesDeleted: 0,
+        activitiesRolledBack: 0,
+        errors: ['Message not found or preview failed'],
+      };
+    }
+
+    if (!message.isActive) {
+      loggers.api.debug('[AiUndo:Execute] Idempotent return - message already inactive', {
+        messageId,
+      });
+      return {
+        success: true,
+        messagesDeleted: 0,
+        activitiesRolledBack: 0,
+        errors: [],
+      };
+    }
+
     // Use existing preview if provided, otherwise compute it
     const preview = existingPreview ?? await previewAiUndo(messageId, userId);
     if (!preview) {
@@ -371,13 +434,16 @@ export async function executeAiUndo(
         });
 
         for (const activity of preview.activitiesAffected) {
-          if (!activity.canRollback) {
+          const activityPreview = activity.preview;
+          if (!activityPreview.canExecute) {
             loggers.api.debug('[AiUndo:Execute] Activity not rollbackable - aborting', {
               activityId: activity.id,
-              reason: activity.reason,
+              reason: activityPreview.reason,
             });
-            // Non-rollbackable items abort the entire transaction
-            throw new Error(`Cannot undo ${activity.operation} on ${activity.resourceTitle || activity.resourceType}: ${activity.reason}`);
+            if (!force || !activityPreview.requiresForce) {
+              // Non-rollbackable items abort the entire transaction
+              throw new Error(`Cannot undo ${activity.operation} on ${activity.resourceTitle || activity.resourceType}: ${activityPreview.reason}`);
+            }
           }
 
           // Determine context based on resource type
@@ -397,8 +463,7 @@ export async function executeAiUndo(
 
           // Pass transaction to executeRollback for atomicity
           // Any failure aborts entire transaction
-          // Use force=true since user is explicitly undoing AI changes
-          const result = await executeRollback(activity.id, userId, context, { tx, force: true });
+          const result = await executeRollback(activity.id, userId, context, { tx, force });
           if (!result.success) {
             loggers.api.debug('[AiUndo:Execute] Activity rollback failed - aborting', {
               activityId: activity.id,
@@ -418,22 +483,38 @@ export async function executeAiUndo(
 
       // Only reached if all rollbacks succeed
       // Soft-delete messages in the same transaction
-      const table = preview.source === 'page_chat' ? chatMessages : messages;
-
+      // Note: Update BOTH tables to handle edge cases where a conversation
+      // might have messages in both tables (e.g., migration scenarios)
       loggers.api.debug('[AiUndo:Execute] Soft-deleting messages', {
-        table: preview.source,
+        source: preview.source,
         conversationId,
         fromTimestamp: createdAt.toISOString(),
       });
 
+      // Update primary table first (based on source)
+      const primaryTable = preview.source === 'page_chat' ? chatMessages : messages;
       await tx
-        .update(table)
+        .update(primaryTable)
         .set({ isActive: false })
         .where(
           and(
-            eq(table.conversationId, conversationId),
-            gte(table.createdAt, createdAt),
-            eq(table.isActive, true)
+            eq(primaryTable.conversationId, conversationId),
+            gte(primaryTable.createdAt, createdAt),
+            eq(primaryTable.isActive, true)
+          )
+        );
+
+      // Also update secondary table to catch any orphaned messages
+      // This handles edge cases where conversationId exists in both tables
+      const secondaryTable = preview.source === 'page_chat' ? messages : chatMessages;
+      await tx
+        .update(secondaryTable)
+        .set({ isActive: false })
+        .where(
+          and(
+            eq(secondaryTable.conversationId, conversationId),
+            gte(secondaryTable.createdAt, createdAt),
+            eq(secondaryTable.isActive, true)
           )
         );
 

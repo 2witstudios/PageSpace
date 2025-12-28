@@ -58,10 +58,15 @@ vi.mock('@pagespace/db', () => ({
       pages: {
         findFirst: vi.fn().mockResolvedValue({ driveId: 'drive_123', title: 'Test Page' }),
       },
+      pagePermissions: {
+        findFirst: vi.fn().mockResolvedValue(null),
+      },
     },
   },
   pages: { id: 'id' },
+  pagePermissions: { pageId: 'pageId', userId: 'userId' },
   eq: vi.fn(),
+  and: vi.fn(),
 }));
 
 import { permissionManagementService } from '@/services/api';

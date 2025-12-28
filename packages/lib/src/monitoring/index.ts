@@ -5,6 +5,7 @@
 
 export * from './activity-tracker';
 export * from './activity-logger';
+export * from './change-group';
 
 // Export ai-context-calculator (has the primary estimateTokens)
 export * from './ai-context-calculator';

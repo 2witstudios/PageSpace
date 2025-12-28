@@ -61,7 +61,7 @@ vi.mock('@/lib/logging/mask', () => ({
   maskIdentifier: vi.fn((id) => `***${id.slice(-4)}`),
 }));
 
-import { previewAiUndo, executeAiUndo } from '@/services/api';
+import { previewAiUndo, executeAiUndo, type AiUndoPreview } from '@/services/api';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { canUserEditPage } from '@pagespace/lib/server';
@@ -70,6 +70,7 @@ import { canUserEditPage } from '@pagespace/lib/server';
 const mockUserId = 'user_123';
 const mockMessageId = 'msg_123';
 const mockPageId = 'page_123';
+const mockDriveId = 'drive_123';
 
 const mockWebAuth = (userId: string): WebAuthResult => ({
   userId,
@@ -97,17 +98,58 @@ const createPostRequest = (body: object) => {
   });
 };
 
+const createActionPreview = (
+  overrides: Partial<AiUndoPreview['activitiesAffected'][number]['preview']> = {}
+): AiUndoPreview['activitiesAffected'][number]['preview'] => ({
+  action: 'rollback',
+  canExecute: true,
+  reason: undefined,
+  warnings: [],
+  hasConflict: false,
+  conflictFields: [],
+  requiresForce: false,
+  isNoOp: false,
+  currentValues: null,
+  targetValues: null,
+  changes: [],
+  affectedResources: [],
+  ...overrides,
+});
+
+const createAiUndoActivity = (
+  overrides: Partial<AiUndoPreview['activitiesAffected'][number]> = {}
+): AiUndoPreview['activitiesAffected'][number] => ({
+  id: 'act_1',
+  operation: 'update',
+  resourceType: 'page',
+  resourceId: mockPageId,
+  resourceTitle: 'Test Page',
+  pageId: mockPageId,
+  driveId: mockDriveId,
+  preview: createActionPreview(),
+  ...overrides,
+});
+
+const createAiUndoPreview = (overrides: Partial<AiUndoPreview> = {}): AiUndoPreview => ({
+  messageId: mockMessageId,
+  conversationId: 'conv_123',
+  pageId: mockPageId,
+  driveId: mockDriveId,
+  source: 'page_chat',
+  createdAt: new Date('2024-01-15'),
+  messagesAffected: 0,
+  activitiesAffected: [],
+  warnings: [],
+  ...overrides,
+});
+
 const mockParams = Promise.resolve({ messageId: mockMessageId });
 
 describe('GET /api/ai/chat/messages/[messageId]/undo', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (authenticateRequestWithOptions as Mock).mockResolvedValue(mockWebAuth(mockUserId));
-    (previewAiUndo as Mock).mockResolvedValue({
-      source: 'page_chat',
-      pageId: mockPageId,
-      conversationId: 'conv_123',
-    });
+    (previewAiUndo as Mock).mockResolvedValue(createAiUndoPreview());
     (canUserEditPage as Mock).mockResolvedValue(true);
     (globalConversationRepository.getConversationById as Mock).mockResolvedValue({ id: 'conv_123' });
   });
@@ -159,10 +201,12 @@ describe('GET /api/ai/chat/messages/[messageId]/undo', () => {
     });
 
     it('returns 403 when user lacks ownership of global conversation', async () => {
-      (previewAiUndo as Mock).mockResolvedValue({
+      (previewAiUndo as Mock).mockResolvedValue(createAiUndoPreview({
         source: 'global_chat',
         conversationId: 'global_conv_123',
-      });
+        pageId: null,
+        driveId: null,
+      }));
       (globalConversationRepository.getConversationById as Mock).mockResolvedValue(null);
 
       const response = await GET(createGetRequest(), { params: mockParams });
@@ -179,18 +223,12 @@ describe('GET /api/ai/chat/messages/[messageId]/undo', () => {
 
   describe('success', () => {
     it('returns preview data', async () => {
-      const mockPreview = {
-        messageId: mockMessageId,
-        conversationId: 'conv_123',
-        pageId: mockPageId,
-        driveId: 'drive_123',
-        createdAt: new Date('2024-01-15'),
+      const mockPreview = createAiUndoPreview({
         messagesAffected: 5,
         activitiesAffected: [
-          { id: 'act_1', operation: 'update', canRollback: true },
+          createAiUndoActivity({ id: 'act_1' }),
         ],
-        warnings: [],
-      };
+      });
 
       (previewAiUndo as Mock).mockResolvedValue(mockPreview);
 
@@ -208,13 +246,7 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (authenticateRequestWithOptions as Mock).mockResolvedValue(mockWebAuth(mockUserId));
-    (previewAiUndo as Mock).mockResolvedValue({
-      source: 'page_chat',
-      pageId: mockPageId,
-      conversationId: 'conv_123',
-      messagesAffected: 0,
-      activitiesAffected: [],
-    });
+    (previewAiUndo as Mock).mockResolvedValue(createAiUndoPreview());
     (canUserEditPage as Mock).mockResolvedValue(true);
     (globalConversationRepository.getConversationById as Mock).mockResolvedValue({ id: 'conv_123' });
   });
@@ -284,7 +316,8 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
           pageId: mockPageId,
           messagesAffected: 0,
           activitiesAffected: [],
-        })
+        }),
+        expect.objectContaining({ force: false })
       );
     });
 
@@ -309,7 +342,8 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
           pageId: mockPageId,
           messagesAffected: 0,
           activitiesAffected: [],
-        })
+        }),
+        expect.objectContaining({ force: false })
       );
     });
   });
