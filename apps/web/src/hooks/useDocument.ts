@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
+import { createId } from '@paralleldrive/cuid2';
 import { useDocumentManagerStore, DocumentState } from '@/stores/useDocumentManagerStore';
 import { useDirtyStore } from '@/stores/useDirtyStore';
 import { toast } from 'sonner';
@@ -62,6 +63,11 @@ export const useDocumentSaving = (pageId: string) => {
   const markAsSaved = useDocumentManagerStore((state) => state.markAsSaved);
   const socket = useSocket();
 
+  // Generate a stable session ID for this editing session
+  // This groups related edits in the activity log
+  // Resets when user navigates away (component remounts)
+  const [sessionId] = useState(() => createId());
+
   const saveDocument = useCallback(
     async (content: string) => {
       try {
@@ -76,7 +82,8 @@ export const useDocumentSaving = (pageId: string) => {
           headers['X-Socket-ID'] = socket.id;
         }
 
-        await patch(`/api/pages/${pageId}`, { content }, { headers });
+        // Pass changeGroupId to group related edits in activity log
+        await patch(`/api/pages/${pageId}`, { content, changeGroupId: sessionId }, { headers });
 
         // Only mark as saved if NO updates happened since save started
         // This prevents showing "Saved" when user typed during the save
@@ -111,7 +118,7 @@ export const useDocumentSaving = (pageId: string) => {
         throw error;
       }
     },
-    [pageId, markAsSaving, markAsSaved, socket]
+    [pageId, markAsSaving, markAsSaved, socket, sessionId]
   );
 
   return {

@@ -36,6 +36,8 @@ const createActivity = (overrides: Partial<ActivityItem> = {}): ActivityItem => 
   isAiGenerated: false,
   aiProvider: null,
   aiModel: null,
+  aiConversationId: null,
+  changeGroupId: null,
   metadata: null,
   rollbackSourceOperation: null,
   user: null,
