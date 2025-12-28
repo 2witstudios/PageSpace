@@ -192,6 +192,7 @@ export function getContextWindowSize(model: string, provider?: string): number {
 
   // PageSpace (GLM models)
   if (providerLower === 'pagespace' || modelLower.includes('glm')) {
+    if (modelLower.includes('glm-4.7')) return 200_000;
     if (modelLower.includes('glm-4.6')) return 200_000;
     if (modelLower.includes('glm-4.5')) return 128_000;
     return 128_000;

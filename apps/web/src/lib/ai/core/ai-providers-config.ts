@@ -8,7 +8,7 @@ export const AI_PROVIDERS = {
     name: 'PageSpace',
     models: {
       'glm-4.5-air': 'Standard',
-      'glm-4.6': 'Pro (Pro/Business)',
+      'glm-4.7': 'Pro (Pro/Business)',
     },
   },
   openrouter: {
@@ -46,6 +46,7 @@ export const AI_PROVIDERS = {
       'mistralai/devstral-small': 'Devstral Small',
 
       // Chinese/Asian Models (2025)
+      'z-ai/glm-4.7': 'GLM 4.7',
       'z-ai/glm-4.5v': 'GLM 4.5V',
       'z-ai/glm-4.5': 'GLM 4.5',
       'z-ai/glm-4.5-air': 'GLM 4.5 Air',
@@ -262,13 +263,15 @@ export const AI_PROVIDERS = {
   glm: {
     name: 'GLM Coder Plan',
     models: {
-      'glm-4.6': 'GLM-4.6 (Standard)',
+      'glm-4.7': 'GLM-4.7 (Standard)',
+      'glm-4.6': 'GLM-4.6',
       'glm-4.5-air': 'GLM-4.5 Air (Fast)',
     },
   },
   minimax: {
     name: 'MiniMax',
     models: {
+      'MiniMax-M2.1': 'MiniMax M2.1',
       'MiniMax-M2': 'MiniMax M2',
       'MiniMax-M2-Stable': 'MiniMax M2 Stable',
     },

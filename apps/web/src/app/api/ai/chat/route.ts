@@ -410,7 +410,7 @@ export async function POST(request: Request) {
     // RATE LIMIT CHECK: Verify user has remaining quota BEFORE streaming
     // This prevents users from exceeding their daily AI call limits
     if (currentProvider === 'pagespace') {
-      const isProModel = currentModel === 'glm-4.6';
+      const isProModel = currentModel === 'glm-4.7';
       const providerType = isProModel ? 'pro' : 'standard';
 
       loggers.ai.debug('🚦 AI Chat API: Checking rate limit before streaming', {
@@ -850,7 +850,7 @@ export async function POST(request: Request) {
               const isPageSpaceProvider = currentProvider === 'pagespace';
 
               // Determine if this is pro model based on model name
-              const isProModel = currentModel === 'glm-4.6';
+              const isProModel = currentModel === 'glm-4.7';
 
               const maskedUserId = maskIdentifier(userId);
               const maskedMessageId = maskIdentifier(messageId);

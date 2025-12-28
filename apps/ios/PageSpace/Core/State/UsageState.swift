@@ -89,7 +89,7 @@ final class UsageState {
         let usageString: String
 
         if let provider = provider, provider == "pagespace" {
-            if model == "glm-4.6" {
+            if model == "glm-4.7" {
                 // Pro model - show pro usage
                 usageString = "Pro AI \(usage.pro.current)/\(usage.pro.limit)"
             } else {

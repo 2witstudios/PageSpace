@@ -193,8 +193,12 @@ struct AiConversationUsageApiResponse: Codable {
             return 200_000
 
         case "pagespace":
+            // GLM 4.7 has 200K context (released Dec 2025)
+            if model.contains("glm-4.7") {
+                return 200_000
+            }
             // GLM 4.6 has 200K context (released Sept 2025)
-            if model.contains("glm-4.6") {
+            else if model.contains("glm-4.6") {
                 return 200_000
             }
             // GLM 4.5 and 4.5-air have 128K context

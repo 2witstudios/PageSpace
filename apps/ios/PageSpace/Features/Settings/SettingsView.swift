@@ -176,7 +176,7 @@ struct AISettingsView: View {
 
                         // Show upgrade notice if viewing PageSpace provider without Pro/Business
                         if selectedProvider == "pagespace" &&
-                           !hasModelAccess(provider: "pagespace", model: "glm-4.6", userTier: settings.userSubscriptionTier) {
+                           !hasModelAccess(provider: "pagespace", model: "glm-4.7", userTier: settings.userSubscriptionTier) {
                             Text("Upgrade to Pro or Business to access advanced models")
                                 .font(.caption)
                                 .foregroundColor(DesignTokens.Colors.primary)

@@ -145,7 +145,7 @@ class ConversationManager: ObservableObject {
             settingsState.setModel(settings.currentModel)
 
             // Auto-correct if user has restricted model selected without proper tier
-            if settingsState.selectedProvider == "pagespace" && settingsState.selectedModel == "glm-4.6" {
+            if settingsState.selectedProvider == "pagespace" && settingsState.selectedModel == "glm-4.7" {
                 let userTier = settings.userSubscriptionTier
                 if userTier != "pro" && userTier != "business" {
                     // Free user has restricted model selected, reset to default

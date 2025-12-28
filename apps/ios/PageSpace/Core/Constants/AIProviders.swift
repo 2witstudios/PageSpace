@@ -21,7 +21,7 @@ let AI_PROVIDERS: [String: AIProvider] = [
         name: "PageSpace",
         models: [
             "glm-4.5-air": "Standard",
-            "glm-4.6": "Pro (Pro/Business)"
+            "glm-4.7": "Pro (Pro/Business)"
         ]
     ),
 
@@ -295,7 +295,7 @@ func getProviderList() -> [String] {
 /// Checks if a model requires a Pro or Business subscription
 /// Mirrors web app's requiresSubscription() function
 func requiresSubscription(provider: String, model: String) -> Bool {
-    return provider == "pagespace" && model == "glm-4.6"
+    return provider == "pagespace" && model == "glm-4.7"
 }
 
 /// Checks if a user has access to a specific model based on their subscription tier
