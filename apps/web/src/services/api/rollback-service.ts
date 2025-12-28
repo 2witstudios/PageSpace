@@ -1762,7 +1762,7 @@ async function rollbackPageChange(
       trashedAt: new Date(),
     }, pageUpdateContext);
 
-    return { restoredValues: { trashed: true, pageId: activity.pageId }, pageMutationMeta };
+    return { restoredValues: { isTrashed: true }, pageMutationMeta };
   }
 
   const previousValues = activity.previousValues || {};
