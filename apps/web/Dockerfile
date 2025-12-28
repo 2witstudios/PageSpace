@@ -63,18 +63,16 @@ ENV NODE_ENV=production
 # Uncomment the following line in case you want to disable telemetry.
 # ENV NEXT_TELEMETRY_DISABLED 1
 
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
-
-# Create storage directory with proper permissions
-RUN mkdir -p /app/storage && chown -R nextjs:nodejs /app/storage
+# Use the existing node user (UID 1000) from the base image
+# This matches the processor container's UID for shared volume access
+RUN mkdir -p /app/storage && chown -R node:node /app/storage
 
 # Copy the standalone output
 COPY --from=builder /app/apps/web/.next/standalone .
 COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
 COPY --from=builder /app/apps/web/public ./apps/web/public
 
-USER nextjs
+USER node
 
 EXPOSE 3000
 
