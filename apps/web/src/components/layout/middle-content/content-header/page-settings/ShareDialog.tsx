@@ -27,7 +27,8 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
-import { ArrowUpLeftFromSquare, Users, UserCog, Lock } from 'lucide-react';
+import { Users, UserCog, Lock, Share2 } from 'lucide-react';
+import { useMobile } from '@/hooks/useMobile';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
@@ -59,6 +60,7 @@ export function ShareDialog({ pageId: propPageId }: { pageId?: string | null } =
   // Check user permissions
   const { permissions: userPermissions } = usePermissions(pageId);
   const canShare = userPermissions?.canShare || false;
+  const isMobile = useMobile();
 
   if (!page) return null;
 
@@ -128,9 +130,9 @@ export function ShareDialog({ pageId: propPageId }: { pageId?: string | null } =
       <TooltipProvider>
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button variant="ghost" size="sm" disabled className="opacity-50 cursor-not-allowed">
-              <Lock className="mr-2 h-4 w-4" />
-              Share
+            <Button variant="ghost" size={isMobile ? "icon" : "sm"} disabled className="opacity-50 cursor-not-allowed">
+              <Lock className={isMobile ? "h-4 w-4" : "mr-2 h-4 w-4"} />
+              {!isMobile && "Share"}
             </Button>
           </TooltipTrigger>
           <TooltipContent>
@@ -144,9 +146,9 @@ export function ShareDialog({ pageId: propPageId }: { pageId?: string | null } =
   return (
     <Dialog open={isOpen} onOpenChange={setIsOpen}>
       <DialogTrigger asChild>
-        <Button variant="ghost" size="sm">
-          <ArrowUpLeftFromSquare className="mr-2 h-4 w-4" />
-          Share
+        <Button variant="ghost" size={isMobile ? "icon" : "sm"}>
+          <Share2 className={isMobile ? "h-4 w-4" : "mr-2 h-4 w-4"} />
+          {!isMobile && "Share"}
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-2xl">

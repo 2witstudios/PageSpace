@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { FileText } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
+import { useMobile } from '@/hooks/useMobile';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,6 +24,7 @@ interface PaginationToggleProps {
 export function PaginationToggle({ pageId, initialIsPaginated, onToggle }: PaginationToggleProps) {
   const [isPaginated, setIsPaginated] = useState(initialIsPaginated);
   const [isUpdating, setIsUpdating] = useState(false);
+  const isMobile = useMobile();
 
   useEffect(() => {
     setIsPaginated(initialIsPaginated);
@@ -69,12 +71,12 @@ export function PaginationToggle({ pageId, initialIsPaginated, onToggle }: Pagin
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
-          size="sm"
+          size={isMobile ? "icon" : "sm"}
           disabled={isUpdating}
           className="h-8"
         >
-          <FileText className="h-4 w-4 mr-2" />
-          Page Layout
+          <FileText className={isMobile ? "h-4 w-4" : "h-4 w-4 mr-2"} />
+          {!isMobile && "Page Layout"}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
