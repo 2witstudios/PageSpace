@@ -738,7 +738,8 @@ async function previewActivityAction(
 
     if (effectiveOperation === 'create') {
       const isTrashed = currentPage[0].isTrashed;
-      const shouldBeTrashed = action === 'rollback';
+      // When rolling back a rollback of create, we should RESTORE (not trash)
+      const shouldBeTrashed = action === 'rollback' && !rollingBackRollback;
       if (isTrashed === shouldBeTrashed) {
         return basePreview({
           reason: shouldBeTrashed ? 'Page is already in trash' : 'Page is already restored',
@@ -818,7 +819,8 @@ async function previewActivityAction(
 
     if (effectiveOperation === 'create') {
       const isTrashed = currentDrive[0].isTrashed;
-      const shouldBeTrashed = action === 'rollback';
+      // When rolling back a rollback of create, we should RESTORE (not trash)
+      const shouldBeTrashed = action === 'rollback' && !rollingBackRollback;
       if (isTrashed === shouldBeTrashed) {
         return basePreview({
           reason: shouldBeTrashed ? 'Drive is already in trash' : 'Drive is already restored',
