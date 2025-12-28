@@ -68,6 +68,88 @@ import { db } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserEditPage, loggers } from '@pagespace/lib/server';
 
+// Type for page lookup mock (matches Drizzle schema)
+type PageType = 'DOCUMENT' | 'FOLDER' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'FILE' | 'SHEET' | 'TASK_LIST';
+type PageTreeScope = 'children' | 'drive';
+type ProcessingStatus = 'pending' | 'processing' | 'completed' | 'failed';
+
+type PageLookupResult = {
+  id: string;
+  title: string;
+  type: PageType;
+  content: string;
+  isPaginated: boolean;
+  position: number;
+  isTrashed: boolean;
+  driveId: string;
+  parentId: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  revision: number;
+  stateHash: string | null;
+  aiProvider: string | null;
+  aiModel: string | null;
+  systemPrompt: string | null;
+  enabledTools: unknown;
+  includeDrivePrompt: boolean;
+  agentDefinition: string | null;
+  visibleToGlobalAssistant: boolean;
+  includePageTree: boolean;
+  pageTreeScope: PageTreeScope | null;
+  fileSize: number | null;
+  mimeType: string | null;
+  originalFileName: string | null;
+  filePath: string | null;
+  fileMetadata: unknown;
+  processingStatus: ProcessingStatus | null;
+  processingError: string | null;
+  processedAt: Date | null;
+  extractionMethod: string | null;
+  extractionMetadata: unknown;
+  contentHash: string | null;
+  trashedAt: Date | null;
+  originalParentId: string | null;
+};
+
+const mockPageLookup = (overrides: Partial<PageLookupResult> = {}): PageLookupResult => ({
+  id: 'page_123',
+  title: 'Test Page',
+  type: 'DOCUMENT',
+  content: '',
+  isPaginated: false,
+  position: 0,
+  isTrashed: false,
+  driveId: 'drive_123',
+  parentId: null,
+  createdAt: new Date(),
+  updatedAt: new Date(),
+  revision: 0,
+  stateHash: null,
+  aiProvider: null,
+  aiModel: null,
+  systemPrompt: null,
+  enabledTools: null,
+  includeDrivePrompt: false,
+  agentDefinition: null,
+  visibleToGlobalAssistant: true,
+  includePageTree: false,
+  pageTreeScope: 'children',
+  fileSize: null,
+  mimeType: null,
+  originalFileName: null,
+  filePath: null,
+  fileMetadata: null,
+  processingStatus: 'pending',
+  processingError: null,
+  processedAt: null,
+  extractionMethod: null,
+  extractionMetadata: null,
+  contentHash: null,
+  trashedAt: null,
+  originalParentId: null,
+  ...overrides,
+});
+
 // Test fixtures
 const mockUserId = 'user_123';
 const mockMessageId = 'msg_123';
@@ -133,8 +215,8 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
     // Default: update succeeds
     vi.mocked(chatMessageRepository.updateMessageContent).mockResolvedValue(undefined);
 
-    // Default: page lookup for driveId (partial mock - only driveId needed for activity logging)
-    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive_123' } as { driveId: string });
+    // Default: page lookup for driveId
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPageLookup());
 
     // Default: actor info for activity logging
     vi.mocked(getActorInfo).mockResolvedValue({
@@ -429,8 +511,8 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
     // Default: delete succeeds
     vi.mocked(chatMessageRepository.softDeleteMessage).mockResolvedValue(undefined);
 
-    // Default: page lookup for driveId (partial mock - only driveId needed for activity logging)
-    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive_123' } as { driveId: string });
+    // Default: page lookup for driveId
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPageLookup());
 
     // Default: actor info for activity logging
     vi.mocked(getActorInfo).mockResolvedValue({
