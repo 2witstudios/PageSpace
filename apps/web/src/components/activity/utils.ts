@@ -1,7 +1,6 @@
 import { isToday, isYesterday, isThisWeek, format } from 'date-fns';
 import type {
   ActivityLog,
-  ActivityGroup,
   ActivityGroupSummary,
   ActivityGroupType,
   ActivityDisplayItem,

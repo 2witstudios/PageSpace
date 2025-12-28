@@ -36,7 +36,7 @@ import { RollbackToPointDialog, type RollbackToPointContext } from '@/components
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { useToast } from '@/hooks/useToast';
 import type { ActivityActionPreview, ActivityActionResult } from '@/types/activity-actions';
-import type { ActivityLog, ActivityDisplayItem, ActivityGroup } from '@/components/activity/types';
+import type { ActivityLog, ActivityGroup } from '@/components/activity/types';
 import { groupConsecutiveActivities } from '@/components/activity/utils';
 
 // Exported for unit testing
