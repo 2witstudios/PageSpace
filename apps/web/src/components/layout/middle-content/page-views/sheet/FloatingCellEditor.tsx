@@ -144,12 +144,17 @@ export const FloatingCellEditor: React.FC<FloatingCellEditorProps> = ({
     return null;
   }
 
+  // Responsive sizing for mobile
+  const isMobile = typeof window !== 'undefined' && window.innerWidth < 640;
+  const minWidth = isMobile ? 100 : 120;
+  const minHeight = isMobile ? 36 : cellRect.height;
+
   const style: React.CSSProperties = {
     position: 'fixed',
     left: cellRect.left,
     top: cellRect.top,
-    width: Math.max(cellRect.width, 120), // Minimum width for comfortable editing
-    height: cellRect.height,
+    width: Math.max(cellRect.width, minWidth),
+    height: Math.max(cellRect.height, minHeight),
     zIndex: 1000,
     pointerEvents: 'auto',
   };
@@ -168,17 +173,23 @@ export const FloatingCellEditor: React.FC<FloatingCellEditorProps> = ({
         onKeyDown={handleKeyDown}
         onBlur={handleBlur}
         className={cn(
-          'h-full w-full rounded-none border-2 border-primary bg-background px-3 py-2 text-sm',
+          'h-full w-full rounded-none border-2 border-primary bg-background px-2 py-1.5 text-sm',
+          'sm:px-3 sm:py-2',
           'focus:outline-none focus:ring-0',
           'pointer-events-auto',
-          'font-mono' // Use monospace for formulas
+          'font-mono', // Use monospace for formulas
+          // Mobile optimizations
+          'touch-manipulation'
         )}
         style={{
-          fontSize: '14px',
+          fontSize: isMobile ? '16px' : '14px', // 16px prevents iOS zoom on focus
           lineHeight: '1.2',
         }}
         autoComplete="off"
+        autoCapitalize="off"
+        autoCorrect="off"
         spellCheck={false}
+        enterKeyHint="done"
         aria-label="Edit cell value"
         aria-describedby="cell-editor-instructions"
       />
