@@ -198,9 +198,8 @@ function MobileTaskCard({
                 onCancelEdit();
               }}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && editingTitle.trim()) {
-                  onSaveTitle(task.id, editingTitle.trim());
-                  onCancelEdit();
+                if (e.key === 'Enter') {
+                  e.currentTarget.blur();
                 }
                 if (e.key === 'Escape') onCancelEdit();
               }}
@@ -208,15 +207,16 @@ function MobileTaskCard({
               className="h-8"
             />
           ) : (
-            <span
+            <button
+              type="button"
               className={cn(
-                'font-medium cursor-pointer hover:text-primary',
+                'font-medium cursor-pointer hover:text-primary bg-transparent border-0 p-0 text-left',
                 isCompleted && 'line-through text-muted-foreground'
               )}
               onClick={() => onNavigate(task)}
             >
               {task.title}
-            </span>
+            </button>
           )}
         </div>
         <DropdownMenu>
@@ -515,21 +515,24 @@ export default function TaskListView({ page }: TaskListViewProps) {
     setEditingTitle(task.title);
   };
 
-  // Save edited title
+  // Shared function to save task title
+  const handleSaveTaskTitle = async (taskId: string, title: string) => {
+    try {
+      await patch(`/api/pages/${page.id}/tasks/${taskId}`, { title });
+      mutate(`/api/pages/${page.id}/tasks`);
+    } catch {
+      toast.error('Failed to update task');
+    }
+  };
+
+  // Save edited title (wraps shared function with state cleanup)
   const handleSaveEdit = async () => {
     if (!editingTaskId || !editingTitle.trim()) {
       setEditingTaskId(null);
       return;
     }
 
-    try {
-      await patch(`/api/pages/${page.id}/tasks/${editingTaskId}`, {
-        title: editingTitle.trim(),
-      });
-      mutate(`/api/pages/${page.id}/tasks`);
-    } catch {
-      toast.error('Failed to update task');
-    }
+    await handleSaveTaskTitle(editingTaskId, editingTitle.trim());
     setEditingTaskId(null);
   };
 
@@ -692,7 +695,15 @@ export default function TaskListView({ page }: TaskListViewProps) {
         </div>
 
         {canEdit && (
-          <Button size="sm" className="w-full sm:w-auto" onClick={() => document.getElementById('new-task-input')?.focus()}>
+          <Button
+            size="sm"
+            className="w-full sm:w-auto"
+            onClick={() => {
+              const mobileInput = document.getElementById('new-task-input-mobile');
+              const desktopInput = document.getElementById('new-task-input');
+              (mobileInput ?? desktopInput)?.focus();
+            }}
+          >
             <Plus className="h-4 w-4 mr-1" />
             New Task
           </Button>
@@ -711,14 +722,7 @@ export default function TaskListView({ page }: TaskListViewProps) {
             onPriorityChange={handlePriorityChange}
             onAssigneeChange={handleAssigneeChange}
             onDueDateChange={handleDueDateChange}
-            onSaveTitle={async (taskId, title) => {
-              try {
-                await patch(`/api/pages/${page.id}/tasks/${taskId}`, { title });
-                mutate(`/api/pages/${page.id}/tasks`);
-              } catch {
-                toast.error('Failed to update task');
-              }
-            }}
+            onSaveTitle={handleSaveTaskTitle}
             onStartEdit={handleStartEdit}
             onDelete={handleDeleteTask}
             onNavigate={(t) => {
