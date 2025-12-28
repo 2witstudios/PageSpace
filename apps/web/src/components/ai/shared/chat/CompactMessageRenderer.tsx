@@ -55,7 +55,7 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
 
   return (
     <div
-      className={`group relative text-xs mb-1 ${role === 'user'
+      className={`group relative text-xs mb-1 max-w-full overflow-hidden ${role === 'user'
           ? 'p-2 rounded-md bg-primary/10 dark:bg-accent/20 ml-2'
           : ''
         }`}
@@ -335,7 +335,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
 
   return (
     <>
-      <div key={message.id} className="mb-1" style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 80px' }}>
+      <div key={message.id} className="mb-1 max-w-full overflow-hidden" style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 80px' }}>
         {groupedParts.map((group, index) => {
           if (isTextGroupPart(group)) {
             const isLastTextBlock = index === groupedParts.length - 1;
