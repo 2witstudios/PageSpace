@@ -20,7 +20,7 @@ import { RollbackToPointDialog, type RollbackToPointContext } from '@/components
 import { useToast } from '@/hooks/useToast';
 import { post } from '@/lib/auth/auth-fetch';
 import type { ActivityLog } from '@/components/activity/types';
-import type { ActivityAction, ActivityActionPreview, ActivityActionResult } from '@/types/activity-actions';
+import type { ActivityActionPreview, ActivityActionResult } from '@/types/activity-actions';
 
 const logger = createClientLogger({ namespace: 'rollback', component: 'VersionHistoryItem' });
 
@@ -28,7 +28,6 @@ interface VersionHistoryItemProps {
   activity: ActivityLog & { canRollback?: boolean };
   context: 'page' | 'drive' | 'ai_tool' | 'user_dashboard';
   onRollback?: (activityId: string, force: boolean) => Promise<ActivityActionResult>;
-  onRedo?: (activityId: string, force: boolean) => Promise<ActivityActionResult>;
   onRollbackToPointSuccess?: () => void;
 }
 
@@ -36,17 +35,13 @@ export function VersionHistoryItem({
   activity,
   context,
   onRollback,
-  onRedo,
   onRollbackToPointSuccess,
 }: VersionHistoryItemProps) {
   const [showConfirm, setShowConfirm] = useState(false);
   const [showRollbackToPoint, setShowRollbackToPoint] = useState(false);
   const [preview, setPreview] = useState<ActivityActionPreview | null>(null);
-  const [action, setAction] = useState<ActivityAction>('rollback');
   const { toast } = useToast();
 
-  const metadata = activity.metadata as { redoFromActivityId?: string } | null;
-  const isRedoEntry = activity.operation === 'rollback' && !!metadata?.redoFromActivityId;
   const displayOperation = activity.operation === 'rollback'
     ? activity.rollbackSourceOperation || activity.operation
     : activity.operation;
@@ -58,7 +53,7 @@ export function VersionHistoryItem({
   const actorName = activity.user?.name || activity.actorDisplayName || activity.actorEmail;
   const actorImage = activity.user?.image;
 
-  const handleActionClick = async (nextAction: ActivityAction) => {
+  const handleActionClick = async () => {
     logger.debug('[Rollback:Preview] User clicked restore version', {
       activityId: activity.id,
       operation: activity.operation,
@@ -66,14 +61,10 @@ export function VersionHistoryItem({
       context,
     });
 
-    setAction(nextAction);
-
     // Fetch preview using dry run to get warnings and conflict status
     try {
-      const endpoint = nextAction === 'redo'
-        ? `/api/activities/${activity.id}/redo`
-        : `/api/activities/${activity.id}/rollback`;
-      const data = await post<{ preview?: ActivityActionPreview }>(endpoint, { context, dryRun: true });
+      // All undo operations go through /rollback - server handles rollback-of-rollback
+      const data = await post<{ preview?: ActivityActionPreview }>(`/api/activities/${activity.id}/rollback`, { context, dryRun: true });
       logger.debug('[Rollback:Preview] Preview loaded', {
         activityId: activity.id,
         warningsCount: data.preview?.warnings?.length || 0,
@@ -92,7 +83,7 @@ export function VersionHistoryItem({
         variant: 'destructive',
       });
       setPreview({
-        action: nextAction,
+        action: 'rollback',
         canExecute: false,
         reason: 'Preview unavailable. Please try again.',
         warnings: [],
@@ -113,24 +104,15 @@ export function VersionHistoryItem({
     logger.debug('[Rollback:Execute] User confirmed rollback via dialog', {
       activityId: activity.id,
       force,
-      action,
     });
-    if (action === 'redo') {
-      if (!onRedo) {
-        throw new Error('Redo is not available');
-      }
-      return onRedo(activity.id, force);
-    }
     if (!onRollback) {
       throw new Error('Rollback is not available');
     }
     return onRollback(activity.id, force);
   };
 
-  const isRollbackActivity = activity.operation === 'rollback';
-  // For rollback activities, "Undo" means revert the rollback (redo)
-  // For other activities, "Undo" means rollback
-  const canUndo = activity.canRollback !== false && (isRollbackActivity ? onRedo : onRollback);
+  // All activities (including rollbacks) can be undone via the unified rollback endpoint
+  const canUndo = activity.canRollback !== false && onRollback;
 
   return (
     <>
@@ -147,7 +129,7 @@ export function VersionHistoryItem({
             <span className="font-medium text-sm">{actorName}</span>
             <Badge variant={opConfig.variant} className="text-xs">
               <OpIcon className="h-3 w-3 mr-1" />
-              {isRedoEntry ? 'Revert rollback' : opConfig.label}
+              {opConfig.label}
             </Badge>
             {activity.isAiGenerated && (
               <Badge variant="outline" className="text-xs gap-1">
@@ -195,7 +177,7 @@ export function VersionHistoryItem({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => handleActionClick(isRollbackActivity ? 'redo' : 'rollback')}>
+                <DropdownMenuItem onClick={() => handleActionClick()}>
                   <History className="h-4 w-4 mr-2" />
                   Undo this change
                 </DropdownMenuItem>
@@ -216,7 +198,6 @@ export function VersionHistoryItem({
         operation={dialogOperation}
         timestamp={activity.timestamp}
         preview={preview}
-        action={action}
         onConfirm={handleConfirm}
       />
 

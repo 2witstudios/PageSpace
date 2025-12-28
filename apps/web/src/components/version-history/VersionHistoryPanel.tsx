@@ -215,47 +215,6 @@ export function VersionHistoryPanel({
     }
   }, [context, pageId, driveId, toast, mutate, fetchVersions]);
 
-  const handleRedo = useCallback(async (activityId: string, force: boolean) => {
-    logger.debug('[Rollback:Execute] User initiated redo from history panel', {
-      activityId,
-      context,
-      force,
-    });
-
-    try {
-      const result = await post<ActivityActionResult>(`/api/activities/${activityId}/redo`, { context, force });
-
-      toast({
-        title: 'Success',
-        description: result.message || 'Rollback has been undone',
-      });
-
-      if (pageId) {
-        mutate(`/api/pages/${pageId}`);
-        mutate(`/api/pages/${pageId}/history`);
-      }
-      if (driveId) {
-        mutate(`/api/drives/${driveId}/pages`);
-        mutate(`/api/drives/${driveId}/history`);
-      }
-
-      fetchVersions(true);
-      return result;
-    } catch (error) {
-      logger.debug('[Rollback:Execute] Redo failed', {
-        activityId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-
-      toast({
-        title: 'Error',
-        description: error instanceof Error ? error.message : 'Failed to redo rollback',
-        variant: 'destructive',
-      });
-      throw error;
-    }
-  }, [context, pageId, driveId, toast, mutate, fetchVersions]);
-
   const handleLoadMore = () => {
     if (!loading && hasMore) {
       logger.debug('[History:Fetch] Loading more versions', {
@@ -345,8 +304,7 @@ export function VersionHistoryPanel({
                   key={version.id}
                   activity={version}
                   context={context}
-                  onRollback={version.canRollback ? handleRollback : undefined}
-                  onRedo={handleRedo}
+                  onRollback={version.canRollback !== false ? handleRollback : undefined}
                 />
               ))}
 

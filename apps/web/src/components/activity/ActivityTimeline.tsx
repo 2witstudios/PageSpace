@@ -17,7 +17,6 @@ interface ActivityTimelineProps {
   emptyDescription?: string;
   context?: RollbackContext;
   onRollback?: (activityId: string, force: boolean) => Promise<ActivityActionResult>;
-  onRedo?: (activityId: string, force: boolean) => Promise<ActivityActionResult>;
 }
 
 export function ActivityTimeline({
@@ -30,7 +29,6 @@ export function ActivityTimeline({
   emptyDescription = 'Activity will appear here',
   context,
   onRollback,
-  onRedo,
 }: ActivityTimelineProps) {
   const groupedActivities = groupActivitiesByDate(activities);
 
@@ -66,7 +64,6 @@ export function ActivityTimeline({
                 activity={activity}
                 context={context}
                 onRollback={onRollback}
-                onRedo={onRedo}
               />
             ))}
           </div>

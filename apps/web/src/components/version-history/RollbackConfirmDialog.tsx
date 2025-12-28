@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { AlertTriangle, History, Loader2, RotateCcw } from 'lucide-react';
+import { AlertTriangle, History, Loader2 } from 'lucide-react';
 import { createClientLogger } from '@/lib/logging/client-logger';
 import {
   AlertDialog,
@@ -16,7 +16,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
-import type { ActivityActionPreview, ActivityActionResult, ActivityAction } from '@/types/activity-actions';
+import type { ActivityActionPreview, ActivityActionResult } from '@/types/activity-actions';
 
 const logger = createClientLogger({ namespace: 'rollback', component: 'RollbackConfirmDialog' });
 
@@ -26,7 +26,6 @@ interface RollbackConfirmDialogProps {
   resourceTitle: string | null;
   operation: string;
   timestamp: string;
-  action: ActivityAction;
   preview: ActivityActionPreview | null;
   onConfirm: (force: boolean) => Promise<ActivityActionResult>;
 }
@@ -39,7 +38,6 @@ export function RollbackConfirmDialog({
   timestamp,
   onConfirm,
   preview,
-  action,
 }: RollbackConfirmDialogProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [force, setForce] = useState(false);
@@ -70,7 +68,7 @@ export function RollbackConfirmDialog({
         error: error instanceof Error ? error.message : String(error),
       });
       setResult({
-        action,
+        action: 'rollback',
         status: 'failed',
         message: error instanceof Error ? error.message : 'Action failed',
         warnings: [],
@@ -85,34 +83,20 @@ export function RollbackConfirmDialog({
     && !preview.isNoOp
     && (preview.canExecute || (preview.requiresForce && force));
 
-  const titleText = action === 'redo' ? 'Redo rollback' : 'Undo change';
-  const actionLabel = action === 'redo' ? 'Redo' : 'Undo';
-
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent className="max-w-lg">
         <AlertDialogHeader>
           <AlertDialogTitle className="flex items-center gap-2">
-            {action === 'redo' ? <RotateCcw className="h-5 w-5" /> : <History className="h-5 w-5" />}
-            {titleText}
+            <History className="h-5 w-5" />
+            Undo change
           </AlertDialogTitle>
           <AlertDialogDescription className="space-y-3">
             <p>
-              {action === 'redo' ? (
-                <>
-                  You are about to reapply{' '}
-                  <Badge variant="secondary">{operation}</Badge> on{' '}
-                  <strong>{resourceTitle || 'this resource'}</strong> from{' '}
-                  {new Date(timestamp).toLocaleDateString()}.
-                </>
-              ) : (
-                <>
-                  You are about to undo{' '}
-                  <Badge variant="secondary">{operation}</Badge> on{' '}
-                  <strong>{resourceTitle || 'this resource'}</strong> from{' '}
-                  {new Date(timestamp).toLocaleDateString()}.
-                </>
-              )}
+              You are about to undo{' '}
+              <Badge variant="secondary">{operation}</Badge> on{' '}
+              <strong>{resourceTitle || 'this resource'}</strong> from{' '}
+              {new Date(timestamp).toLocaleDateString()}.
             </p>
             <p className="text-xs text-muted-foreground">
               This only affects this specific change. Other updates stay as-is.
@@ -129,7 +113,7 @@ export function RollbackConfirmDialog({
                 <div className="flex items-start gap-2">
                   <AlertTriangle className="h-4 w-4 text-red-600 dark:text-red-500 mt-0.5" />
                   <div className="text-sm text-red-800 dark:text-red-200">
-                    <p className="font-medium">Cannot {actionLabel}</p>
+                    <p className="font-medium">Cannot undo</p>
                     <p className="mt-1">{preview.reason}</p>
                   </div>
                 </div>
@@ -191,7 +175,7 @@ export function RollbackConfirmDialog({
             {preview && preview.requiresForce && (
               <div className="flex items-center justify-between rounded-md border p-3">
                 <Label htmlFor="force-restore" className="text-sm">
-                  Force {actionLabel.toLowerCase()} (overwrite newer changes)
+                  Force undo (overwrite newer changes)
                 </Label>
                 <Switch
                   id="force-restore"
@@ -231,12 +215,12 @@ export function RollbackConfirmDialog({
               {isLoading ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  {actionLabel}ing...
+                  Undoing...
                 </>
               ) : (
                 <>
-                  {action === 'redo' ? <RotateCcw className="h-4 w-4" /> : <History className="h-4 w-4" />}
-                  {actionLabel}
+                  <History className="h-4 w-4" />
+                  Undo
                 </>
               )}
             </AlertDialogAction>

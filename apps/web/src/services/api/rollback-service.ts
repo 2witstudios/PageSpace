@@ -161,17 +161,21 @@ function buildActionTargetValues(
   activity: ActivityLogForRollback,
   contentSnapshot?: string | null
 ): Record<string, unknown> | null {
-  if (action === 'redo') {
+  // When rolling back a rollback activity, use previousValues (same as the old redo logic)
+  // This restores the state to what it was before the rollback happened
+  if (activity.operation === 'rollback') {
     return activity.previousValues ? { ...activity.previousValues } : null;
   }
   return buildRollbackTargetValues(activity, contentSnapshot);
 }
 
 function getEffectiveOperation(
-  action: ActivityAction,
+  _action: ActivityAction,
   activity: ActivityLogForRollback
 ): ActivityOperation | null {
-  if (action === 'redo') {
+  // When the target is a rollback activity, use the original operation type
+  // so the correct handler is called (e.g., page handler for page updates)
+  if (activity.operation === 'rollback') {
     return (activity.rollbackSourceOperation as ActivityOperation | null) ?? null;
   }
   return activity.operation as ActivityOperation;
@@ -604,16 +608,15 @@ async function previewActivityAction(
     return basePreview({ reason: 'Activity not found' });
   }
 
-  if (action === 'redo' && activity.operation !== 'rollback') {
-    return basePreview({
-      reason: 'Only rollback activities can be redone',
-    });
-  }
+  // When rolling back a rollback activity, we need the source operation to know what handler to use
+  const isRollingBackRollback = activity.operation === 'rollback';
 
   const effectiveOperation = getEffectiveOperation(action, activity);
   if (!effectiveOperation) {
     return basePreview({
-      reason: 'Rollback source operation not available',
+      reason: isRollingBackRollback
+        ? 'Rollback source operation not available'
+        : 'Operation not available',
     });
   }
 
@@ -632,12 +635,15 @@ async function previewActivityAction(
   }
 
   const hasTargetValues = !!targetValues && Object.keys(targetValues).length > 0;
-  const hasContentSnapshot = action === 'rollback' && !!resolvedContentSnapshot;
-  const allowMissingTarget = action === 'redo'
+  // Content snapshots are only relevant for regular rollbacks, not rollback of rollbacks
+  const hasContentSnapshot = !isRollingBackRollback && !!resolvedContentSnapshot;
+  // When rolling back a rollback, use the redo allow list since we're restoring forward
+  const allowMissingTarget = isRollingBackRollback
     ? REDO_ALLOW_MISSING_TARGET.has(effectiveOperation)
     : ROLLBACK_ALLOW_MISSING_TARGET.has(effectiveOperation);
   loggers.api.debug('[Rollback:Preview] Checking previous state availability', {
     action,
+    isRollingBackRollback,
     hasTargetValues,
     hasContentSnapshot,
     allowMissingTarget,
@@ -647,7 +653,7 @@ async function previewActivityAction(
   // For 'create' operations, rollback means trashing - no previous state needed
   if (effectiveOperation !== 'create' && !hasTargetValues && !hasContentSnapshot && !allowMissingTarget) {
     return basePreview({
-      reason: action === 'redo'
+      reason: isRollingBackRollback
         ? 'No rollback state available to reapply'
         : 'No values to restore',
     });
@@ -1308,6 +1314,13 @@ export async function executeRollback(
   const database = tx ?? db;
   const changeGroupId = createChangeGroupId();
   const changeGroupType = inferChangeGroupType({ isAiGenerated: false });
+
+  // When rolling back a rollback, use the original source operation for metadata
+  const isRollingBackRollback = activity.operation === 'rollback';
+  const effectiveSourceOperation = isRollingBackRollback
+    ? (activity.rollbackSourceOperation as ActivityOperation)
+    : (activity.operation as ActivityOperation);
+
   const pageUpdateContext: PageUpdateContext = {
     userId,
     changeGroupId,
@@ -1316,7 +1329,7 @@ export async function executeRollback(
     metadata: {
       action: 'rollback',
       rollbackFromActivityId: activityId,
-      rollbackSourceOperation: activity.operation,
+      rollbackSourceOperation: effectiveSourceOperation,
       rollbackSourceTimestamp: activity.timestamp,
     },
   };
@@ -1332,42 +1345,60 @@ export async function executeRollback(
     loggers.api.debug('[Rollback:Execute] Executing handler', {
       resourceType: activity.resourceType,
       operation: activity.operation,
+      effectiveSourceOperation,
+      isRollingBackRollback,
       resourceId: activity.resourceId,
     });
 
+    // When rolling back a rollback, use redo handlers (they take explicit targetValues and sourceOperation)
+    // Otherwise use regular rollback handlers
     switch (activity.resourceType) {
       case 'page': {
-        const result = await rollbackPageChange(activity, preview.currentValues, database, pageUpdateContext);
+        const result = isRollingBackRollback
+          ? await redoPageChange(activity, preview.targetValues, effectiveSourceOperation, database, pageUpdateContext)
+          : await rollbackPageChange(activity, preview.currentValues, database, pageUpdateContext);
         restoredValues = result.restoredValues;
         pageMutationMeta = result.pageMutationMeta;
         break;
       }
 
       case 'drive':
-        restoredValues = await rollbackDriveChange(activity, preview.currentValues, database, pageUpdateContext);
+        restoredValues = isRollingBackRollback
+          ? await redoDriveChange(activity, preview.targetValues, effectiveSourceOperation, database, pageUpdateContext)
+          : await rollbackDriveChange(activity, preview.currentValues, database, pageUpdateContext);
         break;
 
       case 'permission':
-        restoredValues = await rollbackPermissionChange(activity, database);
+        restoredValues = isRollingBackRollback
+          ? await redoPermissionChange(activity, preview.targetValues, effectiveSourceOperation, database)
+          : await rollbackPermissionChange(activity, database);
         break;
 
       case 'agent': {
-        const result = await rollbackAgentConfigChange(activity, preview.currentValues, database, pageUpdateContext);
+        const result = isRollingBackRollback
+          ? await redoAgentConfigChange(activity, preview.targetValues, database, pageUpdateContext)
+          : await rollbackAgentConfigChange(activity, preview.currentValues, database, pageUpdateContext);
         restoredValues = result.restoredValues;
         pageMutationMeta = result.pageMutationMeta;
         break;
       }
 
       case 'member':
-        restoredValues = await rollbackMemberChange(activity, database);
+        restoredValues = isRollingBackRollback
+          ? await redoMemberChange(activity, preview.targetValues, effectiveSourceOperation, database)
+          : await rollbackMemberChange(activity, database);
         break;
 
       case 'role':
-        restoredValues = await rollbackRoleChange(activity, database);
+        restoredValues = isRollingBackRollback
+          ? await redoRoleChange(activity, preview.targetValues, effectiveSourceOperation, database)
+          : await rollbackRoleChange(activity, database);
         break;
 
       case 'message':
-        restoredValues = await rollbackMessageChange(activity, database);
+        restoredValues = isRollingBackRollback
+          ? await redoMessageChange(activity, preview.targetValues, effectiveSourceOperation, database)
+          : await rollbackMessageChange(activity, database);
         break;
 
       case 'conversation':
@@ -1414,8 +1445,11 @@ export async function executeRollback(
       contentSnapshot: resolvedContentSnapshot ?? undefined,
       contentFormat: pageMutationMeta?.contentFormatAfter ?? activity.contentFormat ?? undefined,
       // Source activity snapshot - survives retention policy deletion
-      rollbackSourceOperation: activity.operation as ActivityOperation,
-      rollbackSourceTimestamp: activity.timestamp,
+      // Use effectiveSourceOperation so "rollback of rollback" logs the original operation
+      rollbackSourceOperation: effectiveSourceOperation,
+      rollbackSourceTimestamp: isRollingBackRollback
+        ? (activity.rollbackSourceTimestamp ?? activity.timestamp)
+        : activity.timestamp,
       rollbackSourceTitle: activity.resourceTitle ?? undefined,
       metadata: activity.metadata ? { sourceMetadata: activity.metadata } : undefined,
       changeGroupId,

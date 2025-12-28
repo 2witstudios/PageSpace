@@ -228,23 +228,6 @@ export function ActivityDashboard({ context, driveId: initialDriveId, driveName 
     }
   }, [rollbackContext, fetchActivities]);
 
-  const handleRedo = useCallback(async (activityId: string, force: boolean) => {
-    try {
-      const result = await post<ActivityActionResult>(`/api/activities/${activityId}/redo`, {
-        context: rollbackContext,
-        force,
-      });
-
-      toast.success(result.message || 'Rollback has been undone');
-      fetchActivities();
-      return result;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to redo rollback';
-      toast.error(message);
-      throw err;
-    }
-  }, [rollbackContext, fetchActivities]);
-
   // Loading skeleton
   if (loading && activities.length === 0) {
     return (
@@ -342,7 +325,6 @@ export function ActivityDashboard({ context, driveId: initialDriveId, driveName 
           }
           context={rollbackContext}
           onRollback={handleRollback}
-          onRedo={handleRedo}
         />
       </div>
     </div>
