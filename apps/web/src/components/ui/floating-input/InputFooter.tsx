@@ -124,7 +124,7 @@ export function InputFooter({
       </div>
 
       {/* Right group - Provider/Model Selector + Mic */}
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1 min-w-0">
         {!hideModelSelector && (
           <ProviderModelSelector
             provider={selectedProvider}

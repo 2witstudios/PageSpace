@@ -228,9 +228,9 @@ export function ProviderModelSelector({
             variant="ghost"
             size="sm"
             disabled={disabled || isSaving}
-            className="h-8 px-2 gap-1 text-muted-foreground hover:text-foreground hover:bg-transparent dark:hover:bg-transparent"
+            className="h-8 px-2 gap-1 min-w-0 text-muted-foreground hover:text-foreground hover:bg-transparent dark:hover:bg-transparent"
           >
-            <span className="text-xs">{providerDisplayName}</span>
+            <span className="text-xs max-w-[50px] sm:max-w-[80px] truncate">{providerDisplayName}</span>
             <ChevronDown className="h-3 w-3 shrink-0" />
           </Button>
         </PopoverTrigger>
@@ -280,9 +280,9 @@ export function ProviderModelSelector({
             variant="ghost"
             size="sm"
             disabled={disabled || isSaving}
-            className="h-8 px-2 gap-1 text-muted-foreground hover:text-foreground hover:bg-transparent dark:hover:bg-transparent"
+            className="h-8 px-2 gap-1 min-w-0 text-muted-foreground hover:text-foreground hover:bg-transparent dark:hover:bg-transparent"
           >
-            <span className="text-xs max-w-[100px] truncate">
+            <span className="text-xs max-w-[50px] sm:max-w-[100px] truncate">
               {modelDisplayName}
             </span>
             <ChevronDown className="h-3 w-3 shrink-0" />
