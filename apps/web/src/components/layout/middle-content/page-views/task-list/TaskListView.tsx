@@ -131,6 +131,188 @@ const fetcher = async (url: string) => {
   return res.json();
 };
 
+// Mobile task card component
+interface MobileTaskCardProps {
+  task: TaskItem;
+  canEdit: boolean;
+  onToggleComplete: (task: TaskItem) => void;
+  onStatusChange: (taskId: string, status: string) => void;
+  onPriorityChange: (taskId: string, priority: string) => void;
+  onAssigneeChange: (taskId: string, assigneeId: string | null) => void;
+  onDueDateChange: (taskId: string, date: Date | null) => void;
+  onSaveTitle: (taskId: string, title: string) => void;
+  onDelete: (taskId: string) => void;
+  onNavigate: (task: TaskItem) => void;
+  driveId: string;
+  isEditing: boolean;
+  editingTitle: string;
+  onEditingTitleChange: (title: string) => void;
+  onStartEdit: (task: TaskItem) => void;
+  onCancelEdit: () => void;
+}
+
+function MobileTaskCard({
+  task,
+  canEdit,
+  onToggleComplete,
+  onStatusChange,
+  onPriorityChange,
+  onAssigneeChange,
+  onDueDateChange,
+  onSaveTitle,
+  onDelete,
+  onNavigate,
+  driveId,
+  isEditing,
+  editingTitle,
+  onEditingTitleChange,
+  onStartEdit,
+  onCancelEdit,
+}: MobileTaskCardProps) {
+  const isCompleted = task.status === 'completed';
+
+  return (
+    <div
+      className={cn(
+        'border rounded-lg p-4 bg-card',
+        isCompleted && 'opacity-60'
+      )}
+    >
+      {/* Header: Checkbox + Title + Actions */}
+      <div className="flex items-start gap-3">
+        <Checkbox
+          checked={isCompleted}
+          onCheckedChange={() => onToggleComplete(task)}
+          disabled={!canEdit}
+          className="mt-0.5"
+        />
+        <div className="flex-1 min-w-0">
+          {isEditing ? (
+            <Input
+              value={editingTitle}
+              onChange={(e) => onEditingTitleChange(e.target.value)}
+              onBlur={() => {
+                if (editingTitle.trim()) {
+                  onSaveTitle(task.id, editingTitle.trim());
+                }
+                onCancelEdit();
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && editingTitle.trim()) {
+                  onSaveTitle(task.id, editingTitle.trim());
+                  onCancelEdit();
+                }
+                if (e.key === 'Escape') onCancelEdit();
+              }}
+              autoFocus
+              className="h-8"
+            />
+          ) : (
+            <span
+              className={cn(
+                'font-medium cursor-pointer hover:text-primary',
+                isCompleted && 'line-through text-muted-foreground'
+              )}
+              onClick={() => onNavigate(task)}
+            >
+              {task.title}
+            </span>
+          )}
+        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0">
+              <MoreHorizontal className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {task.pageId && (
+              <DropdownMenuItem onClick={() => onNavigate(task)}>
+                <FileText className="h-4 w-4 mr-2" />
+                Open
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuItem onClick={() => onStartEdit(task)} disabled={!canEdit}>
+              <Pencil className="h-4 w-4 mr-2" />
+              Rename
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => onDelete(task.id)}
+              className="text-destructive"
+              disabled={!canEdit}
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
+      {/* Metadata row */}
+      <div className="flex flex-wrap items-center gap-2 mt-3 pl-7">
+        {/* Status */}
+        <Select
+          value={task.status}
+          onValueChange={(value) => onStatusChange(task.id, value)}
+          disabled={!canEdit}
+        >
+          <SelectTrigger className="h-7 w-auto px-2">
+            <SelectValue>
+              <Badge className={cn('text-xs', STATUS_CONFIG[task.status].color)}>
+                {STATUS_CONFIG[task.status].label}
+              </Badge>
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {Object.entries(STATUS_CONFIG).map(([key, { label, color }]) => (
+              <SelectItem key={key} value={key}>
+                <Badge className={cn('text-xs', color)}>{label}</Badge>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        {/* Priority */}
+        <Select
+          value={task.priority}
+          onValueChange={(value) => onPriorityChange(task.id, value)}
+          disabled={!canEdit}
+        >
+          <SelectTrigger className="h-7 w-auto px-2">
+            <SelectValue>
+              <Badge className={cn('text-xs', PRIORITY_CONFIG[task.priority].color)}>
+                {PRIORITY_CONFIG[task.priority].label}
+              </Badge>
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {Object.entries(PRIORITY_CONFIG).map(([key, { label, color }]) => (
+              <SelectItem key={key} value={key}>
+                <Badge className={cn('text-xs', color)}>{label}</Badge>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        {/* Assignee */}
+        <AssigneeSelect
+          driveId={driveId}
+          currentAssignee={task.assignee}
+          onSelect={(assigneeId) => onAssigneeChange(task.id, assigneeId)}
+          disabled={!canEdit}
+        />
+
+        {/* Due Date */}
+        <DueDatePicker
+          currentDate={task.dueDate}
+          onSelect={(date) => onDueDateChange(task.id, date)}
+          disabled={!canEdit}
+        />
+      </div>
+    </div>
+  );
+}
+
 // Sortable row component for drag-and-drop
 interface SortableTaskRowProps {
   task: TaskItem;
@@ -477,8 +659,8 @@ export default function TaskListView({ page }: TaskListViewProps) {
   return (
     <div className="flex flex-col h-full">
       {/* Toolbar */}
-      <div className="flex items-center justify-between px-4 py-3 border-b bg-background">
-        <div className="flex items-center gap-2">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 py-3 border-b bg-background">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
           {/* Filter tabs */}
           <div className="flex items-center bg-muted rounded-md p-0.5">
             {(['all', 'active', 'completed'] as const).map((f) => (
@@ -486,7 +668,7 @@ export default function TaskListView({ page }: TaskListViewProps) {
                 key={f}
                 onClick={() => setFilter(f)}
                 className={cn(
-                  'px-3 py-1.5 text-sm font-medium rounded transition-colors',
+                  'px-3 py-1.5 text-sm font-medium rounded transition-colors flex-1 sm:flex-none',
                   filter === f
                     ? 'bg-background text-foreground shadow-sm'
                     : 'text-muted-foreground hover:text-foreground'
@@ -504,21 +686,79 @@ export default function TaskListView({ page }: TaskListViewProps) {
               placeholder="Filter tasks..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="pl-9 w-48"
+              className="pl-9 w-full sm:w-48"
             />
           </div>
         </div>
 
         {canEdit && (
-          <Button size="sm" onClick={() => document.getElementById('new-task-input')?.focus()}>
+          <Button size="sm" className="w-full sm:w-auto" onClick={() => document.getElementById('new-task-input')?.focus()}>
             <Plus className="h-4 w-4 mr-1" />
             New Task
           </Button>
         )}
       </div>
 
-      {/* Table */}
-      <div className="flex-1 overflow-auto">
+      {/* Mobile Card View */}
+      <div className="flex-1 overflow-auto md:hidden p-4 space-y-3">
+        {filteredTasks.map((task) => (
+          <MobileTaskCard
+            key={task.id}
+            task={task}
+            canEdit={canEdit}
+            onToggleComplete={handleToggleComplete}
+            onStatusChange={handleStatusChange}
+            onPriorityChange={handlePriorityChange}
+            onAssigneeChange={handleAssigneeChange}
+            onDueDateChange={handleDueDateChange}
+            onSaveTitle={async (taskId, title) => {
+              try {
+                await patch(`/api/pages/${page.id}/tasks/${taskId}`, { title });
+                mutate(`/api/pages/${page.id}/tasks`);
+              } catch {
+                toast.error('Failed to update task');
+              }
+            }}
+            onStartEdit={handleStartEdit}
+            onDelete={handleDeleteTask}
+            onNavigate={(t) => {
+              if (t.pageId) {
+                router.push(`/dashboard/${page.driveId}/${t.pageId}`);
+              }
+            }}
+            driveId={page.driveId}
+            isEditing={editingTaskId === task.id}
+            editingTitle={editingTitle}
+            onEditingTitleChange={setEditingTitle}
+            onCancelEdit={() => setEditingTaskId(null)}
+          />
+        ))}
+
+        {/* Mobile new task input */}
+        {canEdit && (
+          <div className="border rounded-lg p-4 bg-card">
+            <Input
+              id="new-task-input-mobile"
+              placeholder="+ Add a new task..."
+              value={newTaskTitle}
+              onChange={(e) => setNewTaskTitle(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleCreateTask();
+              }}
+              className="border-0 shadow-none focus-visible:ring-0 px-0"
+            />
+          </div>
+        )}
+
+        {filteredTasks.length === 0 && !canEdit && (
+          <div className="text-center py-12 text-muted-foreground">
+            No tasks yet
+          </div>
+        )}
+      </div>
+
+      {/* Desktop Table View */}
+      <div className="flex-1 overflow-auto hidden md:block">
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}
@@ -729,14 +969,14 @@ export default function TaskListView({ page }: TaskListViewProps) {
       </div>
 
       {/* Footer stats */}
-      <div className="flex items-center justify-between px-4 py-2 border-t bg-muted/50 text-sm text-muted-foreground">
-        <div className="flex gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 px-4 py-2 border-t bg-muted/50 text-sm text-muted-foreground">
+        <div className="flex flex-wrap gap-x-4 gap-y-1">
           <span><strong>{stats.total}</strong> tasks</span>
           <span><strong>{stats.inProgress}</strong> in progress</span>
           <span><strong>{stats.completed}</strong> completed</span>
         </div>
-        <span>
-          Last updated: {data?.taskList.updatedAt
+        <span className="text-xs sm:text-sm">
+          Updated {data?.taskList.updatedAt
             ? formatDistanceToNow(new Date(data.taskList.updatedAt), { addSuffix: true })
             : 'never'}
         </span>
