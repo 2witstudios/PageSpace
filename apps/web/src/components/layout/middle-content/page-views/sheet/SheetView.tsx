@@ -184,11 +184,15 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
   const [isFormulaFocused, setIsFormulaFocused] = useState(false);
   const [isReadOnly, setIsReadOnly] = useState(false);
 
-  // Mouse drag selection state
+  // Mouse/touch drag selection state
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState<GridSelection | null>(null);
 
-  // Context menu state
+  // Touch interaction state
+  const touchStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
+  const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Context menu state (desktop right-click menu)
   const [contextMenu, setContextMenu] = useState<{
     show: boolean;
     x: number;
@@ -198,6 +202,15 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     show: false,
     x: 0,
     y: 0,
+    cell: null
+  });
+
+  // Mobile action sheet state (long-press menu)
+  const [mobileActionSheet, setMobileActionSheet] = useState<{
+    show: boolean;
+    cell: GridSelection | null;
+  }>({
+    show: false,
     cell: null
   });
 
@@ -836,6 +849,114 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     }
   }, [isDragging]);
 
+  // Touch event handlers for mobile
+  const handleCellTouchStart = useCallback(
+    (row: number, column: number, event: React.TouchEvent) => {
+      const touch = event.touches[0];
+      touchStartRef.current = {
+        x: touch.clientX,
+        y: touch.clientY,
+        time: Date.now(),
+      };
+
+      // Set up long press detection for context menu
+      if (longPressTimerRef.current) {
+        clearTimeout(longPressTimerRef.current);
+      }
+
+      const cell = clampSelection({ row, column }, sheet);
+      longPressTimerRef.current = setTimeout(() => {
+        // Long press detected - show mobile action sheet
+        if (!isCellInSelection(row, column, selection)) {
+          setSelection({
+            type: 'single',
+            cell,
+          });
+        }
+        setMobileActionSheet({
+          show: true,
+          cell,
+        });
+        // Haptic feedback if available
+        if (navigator.vibrate) {
+          navigator.vibrate(50);
+        }
+      }, 500); // 500ms for long press
+    },
+    [sheet, selection]
+  );
+
+  const handleCellTouchMove = useCallback(
+    (event: React.TouchEvent) => {
+      // Cancel long press if moved too far
+      if (touchStartRef.current && longPressTimerRef.current) {
+        const touch = event.touches[0];
+        const dx = Math.abs(touch.clientX - touchStartRef.current.x);
+        const dy = Math.abs(touch.clientY - touchStartRef.current.y);
+        if (dx > 10 || dy > 10) {
+          clearTimeout(longPressTimerRef.current);
+          longPressTimerRef.current = null;
+        }
+      }
+    },
+    []
+  );
+
+  const handleCellTouchEnd = useCallback(
+    (row: number, column: number, event: React.TouchEvent) => {
+      // Clear long press timer
+      if (longPressTimerRef.current) {
+        clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = null;
+      }
+
+      // Check if this was a tap (quick touch without much movement)
+      if (touchStartRef.current) {
+        const touchDuration = Date.now() - touchStartRef.current.time;
+        const touch = event.changedTouches[0];
+        const dx = Math.abs(touch.clientX - touchStartRef.current.x);
+        const dy = Math.abs(touch.clientY - touchStartRef.current.y);
+
+        // If it was a quick tap without much movement, select the cell
+        if (touchDuration < 300 && dx < 10 && dy < 10) {
+          event.preventDefault();
+          handleCellSelect(row, column);
+        }
+      }
+
+      touchStartRef.current = null;
+    },
+    [handleCellSelect]
+  );
+
+  // Double tap detection for mobile editing
+  const lastTapRef = useRef<{ row: number; column: number; time: number } | null>(null);
+  const handleCellDoubleTap = useCallback(
+    (row: number, column: number) => {
+      const now = Date.now();
+      if (
+        lastTapRef.current &&
+        lastTapRef.current.row === row &&
+        lastTapRef.current.column === column &&
+        now - lastTapRef.current.time < 300
+      ) {
+        // Double tap detected - start editing
+        if (!isReadOnly) {
+          startCellEdit(row, column);
+        }
+        lastTapRef.current = null;
+      } else {
+        lastTapRef.current = { row, column, time: now };
+      }
+    },
+    [isReadOnly, startCellEdit]
+  );
+
+  // Close mobile action sheet
+  const closeMobileActionSheet = useCallback(() => {
+    setMobileActionSheet({ show: false, cell: null });
+  }, []);
+
   // Add global mouse up listener to handle drag end outside grid
   useEffect(() => {
     if (isDragging) {
@@ -1437,17 +1558,47 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
 
   return (
     <div className="flex h-full flex-col">
+      {/* Mobile-responsive formula bar */}
       <div className="border-b bg-muted/40">
-        <div className="grid grid-cols-[80px_1fr_auto] items-center gap-2 px-4 pt-3 pb-1">
-          <span className="text-xs font-medium uppercase text-muted-foreground">
-            {selection.type === 'range' ? 'Range' : 'Cell'}
-          </span>
-          <div className="font-semibold">{selectionAddress}</div>
-          <div className="text-xs text-muted-foreground">Value: {currentDisplay || '—'}</div>
+        {/* Cell info row - responsive layout */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 pt-2 pb-1 sm:px-4 sm:pt-3">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-medium uppercase text-muted-foreground sm:text-xs">
+              {selection.type === 'range' ? 'Range' : 'Cell'}
+            </span>
+            <span className="font-semibold text-sm sm:text-base">{selectionAddress}</span>
+          </div>
+          <div className="hidden text-xs text-muted-foreground sm:block">
+            Value: {currentDisplay || '—'}
+          </div>
+          {/* Mobile action buttons - visible only on small screens */}
+          <div className="ml-auto flex items-center gap-1 sm:hidden">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleAddColumn}
+              disabled={isReadOnly}
+              className="h-7 px-2 text-xs"
+              aria-label="Add column"
+            >
+              +Col
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleAddRow}
+              disabled={isReadOnly}
+              className="h-7 px-2 text-xs"
+              aria-label="Add row"
+            >
+              +Row
+            </Button>
+          </div>
         </div>
-        <div className="grid grid-cols-[80px_1fr_auto] items-center gap-2 px-4 pb-3">
-          <span className="text-xs font-medium uppercase text-muted-foreground">Formula</span>
-          <div className="relative">
+        {/* Formula input row */}
+        <div className="flex items-center gap-2 px-3 pb-2 sm:gap-3 sm:px-4 sm:pb-3">
+          <span className="hidden text-xs font-medium uppercase text-muted-foreground sm:block">Formula</span>
+          <div className="relative flex-1">
             <input
               ref={formulaInputRef}
               value={formulaValue}
@@ -1473,10 +1624,11 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
               onKeyDown={handleFormulaKeyDown}
               disabled={isReadOnly}
               className={cn(
-                'w-full rounded border border-input bg-background px-2 py-1 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20',
+                'w-full rounded border border-input bg-background px-2 py-1.5 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20',
+                'sm:py-1',
                 isReadOnly && 'cursor-not-allowed opacity-75'
               )}
-              placeholder="Enter a value or formula (e.g. =SUM(A1:A5))"
+              placeholder="Enter value or formula"
             />
             <SuggestionPopup
               isOpen={suggestionContext.isOpen}
@@ -1491,7 +1643,8 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
               popupPlacement="bottom"
             />
           </div>
-          <div className="flex items-center gap-2">
+          {/* Desktop action buttons */}
+          <div className="hidden items-center gap-2 sm:flex">
             <Button variant="outline" size="sm" onClick={handleAddColumn} disabled={isReadOnly}>
               + Column
             </Button>
@@ -1501,7 +1654,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
           </div>
         </div>
         {currentError && (
-          <div className="px-4 pb-3 text-xs text-destructive">Error: {currentError}</div>
+          <div className="px-3 pb-2 text-xs text-destructive sm:px-4 sm:pb-3">Error: {currentError}</div>
         )}
       </div>
       <div
@@ -1513,14 +1666,14 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         aria-activedescendant={`cell-${currentAddress}`}
         tabIndex={0}
         onKeyDown={handleGridKeyDown}
-        className="flex-1 overflow-auto focus:outline-none"
+        className="flex-1 overflow-auto focus:outline-none touch-pan-x touch-pan-y"
       >
         <table className="min-w-max border-collapse text-sm" role="presentation">
           <thead>
             <tr role="row">
               <th
                 role="columnheader"
-                className="sticky left-0 top-0 z-20 h-8 w-14 border border-border bg-muted text-left text-xs font-semibold text-muted-foreground"
+                className="sticky left-0 top-0 z-20 h-8 w-10 border border-border bg-muted text-left text-xs font-semibold text-muted-foreground sm:w-14"
                 aria-label="Row headers"
               ></th>
               {Array.from({ length: sheet.columnCount }).map((_, columnIndex) => (
@@ -1528,7 +1681,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
                   key={`column-${columnIndex}`}
                   role="columnheader"
                   aria-colindex={columnIndex + 1}
-                  className="sticky top-0 z-10 h-8 min-w-[120px] border border-border bg-muted px-3 text-left text-xs font-semibold text-muted-foreground"
+                  className="sticky top-0 z-10 h-8 min-w-[80px] border border-border bg-muted px-2 text-left text-xs font-semibold text-muted-foreground sm:min-w-[120px] sm:px-3"
                 >
                   {getColumnLabel(columnIndex)}
                 </th>
@@ -1541,7 +1694,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
                 <th
                   role="rowheader"
                   aria-rowindex={rowIndex + 1}
-                  className="sticky left-0 z-10 h-10 border border-border bg-muted px-2 text-left text-xs font-semibold text-muted-foreground"
+                  className="sticky left-0 z-10 h-9 border border-border bg-muted px-1.5 text-left text-xs font-semibold text-muted-foreground sm:h-10 sm:px-2"
                 >
                   {rowIndex + 1}
                 </th>
@@ -1564,8 +1717,11 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
                       data-cell={cellAddress}
                       tabIndex={isPrimaryCell ? 0 : -1}
                       className={cn(
-                        'h-10 min-w-[120px] cursor-pointer border border-border bg-background px-3 align-middle',
+                        'h-9 min-w-[80px] cursor-pointer border border-border bg-background px-2 align-middle text-sm',
+                        'sm:h-10 sm:min-w-[120px] sm:px-3',
                         'transition-colors hover:bg-muted/40 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-inset',
+                        // Mobile: larger tap targets with active states
+                        'active:bg-muted/60 touch-manipulation',
                         isSelected && 'bg-primary/10',
                         isPrimaryCell && 'outline outline-2 outline-offset-[-2px] outline-primary',
                         cellError && 'bg-destructive/10 text-destructive',
@@ -1574,13 +1730,20 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
                       )}
                       onMouseDown={(e) => handleCellMouseDown(rowIndex, columnIndex, e)}
                       onMouseEnter={() => handleCellMouseEnter(rowIndex, columnIndex)}
-                      onClick={() => handleCellSelect(rowIndex, columnIndex)}
+                      onClick={() => {
+                        handleCellSelect(rowIndex, columnIndex);
+                        handleCellDoubleTap(rowIndex, columnIndex);
+                      }}
                       onContextMenu={(e) => handleCellRightClick(rowIndex, columnIndex, e)}
                       onDoubleClick={() => {
                         if (!isReadOnly) {
                           startCellEdit(rowIndex, columnIndex);
                         }
                       }}
+                      // Touch events for mobile
+                      onTouchStart={(e) => handleCellTouchStart(rowIndex, columnIndex, e)}
+                      onTouchMove={handleCellTouchMove}
+                      onTouchEnd={(e) => handleCellTouchEnd(rowIndex, columnIndex, e)}
                     >
                       <span className="block w-full truncate">
                         {displayValue}
@@ -1668,6 +1831,117 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
             Paste Values
           </div>
         </div>
+      )}
+
+      {/* Mobile Action Sheet (long-press menu) */}
+      {mobileActionSheet.show && (
+        <>
+          {/* Backdrop */}
+          <div
+            className="fixed inset-0 z-40 bg-black/50 sm:hidden"
+            onClick={closeMobileActionSheet}
+            aria-hidden="true"
+          />
+          {/* Action Sheet */}
+          <div
+            className="fixed inset-x-0 bottom-0 z-50 rounded-t-2xl bg-background p-4 pb-8 shadow-lg sm:hidden"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Cell actions"
+          >
+            {/* Handle bar */}
+            <div className="mx-auto mb-4 h-1 w-12 rounded-full bg-muted-foreground/30" />
+
+            {/* Cell info */}
+            <div className="mb-4 text-center">
+              <span className="text-sm font-medium text-muted-foreground">
+                Cell {mobileActionSheet.cell ? encodeCellAddress(mobileActionSheet.cell.row, mobileActionSheet.cell.column) : ''}
+              </span>
+            </div>
+
+            {/* Action buttons */}
+            <div className="space-y-2">
+              <button
+                className="flex w-full items-center justify-center gap-2 rounded-lg bg-muted/50 px-4 py-3 text-base font-medium transition-colors active:bg-muted"
+                onClick={() => {
+                  if (mobileActionSheet.cell && !isReadOnly) {
+                    startCellEdit(mobileActionSheet.cell.row, mobileActionSheet.cell.column);
+                  }
+                  closeMobileActionSheet();
+                }}
+                disabled={isReadOnly}
+              >
+                Edit Cell
+              </button>
+              <button
+                className="flex w-full items-center justify-center gap-2 rounded-lg bg-muted/50 px-4 py-3 text-base font-medium transition-colors active:bg-muted"
+                onClick={() => {
+                  handleCopy('formulas');
+                  closeMobileActionSheet();
+                }}
+              >
+                Copy
+              </button>
+              <button
+                className="flex w-full items-center justify-center gap-2 rounded-lg bg-muted/50 px-4 py-3 text-base font-medium transition-colors active:bg-muted"
+                onClick={() => {
+                  handleCopy('values');
+                  closeMobileActionSheet();
+                }}
+              >
+                Copy Value
+              </button>
+              <button
+                className={cn(
+                  "flex w-full items-center justify-center gap-2 rounded-lg bg-muted/50 px-4 py-3 text-base font-medium transition-colors active:bg-muted",
+                  (!copiedData && !navigator.clipboard) && "opacity-50"
+                )}
+                onClick={() => {
+                  if (copiedData || navigator.clipboard) {
+                    handlePaste('auto');
+                  }
+                  closeMobileActionSheet();
+                }}
+                disabled={!copiedData && !navigator.clipboard}
+              >
+                Paste
+              </button>
+              <button
+                className={cn(
+                  "flex w-full items-center justify-center gap-2 rounded-lg bg-destructive/10 px-4 py-3 text-base font-medium text-destructive transition-colors active:bg-destructive/20",
+                  isReadOnly && "opacity-50"
+                )}
+                onClick={() => {
+                  if (!isReadOnly && mobileActionSheet.cell) {
+                    const cellAddress = encodeCellAddress(mobileActionSheet.cell.row, mobileActionSheet.cell.column);
+                    applySheetUpdate((previous) => {
+                      const nextCells = { ...previous.cells };
+                      delete nextCells[cellAddress];
+                      return {
+                        ...previous,
+                        version: previous.version + 1,
+                        cells: nextCells,
+                      };
+                    });
+                    setFormulaValue('');
+                  }
+                  closeMobileActionSheet();
+                }}
+                disabled={isReadOnly}
+              >
+                Clear Cell
+              </button>
+            </div>
+
+            {/* Cancel button */}
+            <button
+              className="mt-4 flex w-full items-center justify-center rounded-lg border border-border px-4 py-3 text-base font-medium transition-colors active:bg-muted"
+              onClick={closeMobileActionSheet}
+            >
+              Cancel
+            </button>
+          </div>
+        </>
       )}
 
       {/* Screen reader announcements */}
