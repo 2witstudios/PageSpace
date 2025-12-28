@@ -27,7 +27,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
-import { ArrowUpLeftFromSquare, Users, UserCog, Lock, Share2 } from 'lucide-react';
+import { Users, UserCog, Lock, Share2 } from 'lucide-react';
 import { useMobile } from '@/hooks/useMobile';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
