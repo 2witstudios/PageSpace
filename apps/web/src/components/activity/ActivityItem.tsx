@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { formatDistanceToNow, format } from 'date-fns';
-import { Bot, FileText, History, MoreVertical } from 'lucide-react';
+import { Bot, FileText, History, MoreVertical, RotateCcw } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -13,7 +13,9 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { RollbackConfirmDialog } from '@/components/version-history/RollbackConfirmDialog';
+import { RollbackToPointDialog } from './RollbackToPointDialog';
 import { useToast } from '@/hooks/useToast';
+import { post } from '@/lib/auth/auth-fetch';
 import { operationConfig, resourceTypeIcons, defaultOperationConfig } from './constants';
 import { getInitials } from './utils';
 import type { ActivityLog } from './types';
@@ -26,10 +28,12 @@ interface ActivityItemProps {
   context?: RollbackContext;
   onRollback?: (activityId: string, force: boolean) => Promise<ActivityActionResult>;
   onRedo?: (activityId: string, force: boolean) => Promise<ActivityActionResult>;
+  onRollbackToPointSuccess?: () => void;
 }
 
-export function ActivityItem({ activity, context, onRollback, onRedo }: ActivityItemProps) {
+export function ActivityItem({ activity, context, onRollback, onRedo, onRollbackToPointSuccess }: ActivityItemProps) {
   const [showConfirm, setShowConfirm] = useState(false);
+  const [showRollbackToPoint, setShowRollbackToPoint] = useState(false);
   const [preview, setPreview] = useState<ActivityActionPreview | null>(null);
   const [action, setAction] = useState<ActivityAction>('rollback');
   const { toast } = useToast();
@@ -46,8 +50,10 @@ export function ActivityItem({ activity, context, onRollback, onRedo }: Activity
   const actorName = activity.user?.name || activity.actorDisplayName || activity.actorEmail;
   const actorImage = activity.user?.image;
 
-  const canRestore = context && onRollback;
-  const canRedo = context && onRedo && activity.operation === 'rollback';
+  const isRollbackActivity = activity.operation === 'rollback';
+  // For rollback activities, "Undo" means revert the rollback (redo)
+  // For other activities, "Undo" means rollback
+  const canUndo = context && (isRollbackActivity ? onRedo : onRollback);
 
   const handleActionClick = async (nextAction: ActivityAction) => {
     if (!context) return;
@@ -57,15 +63,7 @@ export function ActivityItem({ activity, context, onRollback, onRedo }: Activity
       const endpoint = nextAction === 'redo'
         ? `/api/activities/${activity.id}/redo`
         : `/api/activities/${activity.id}/rollback`;
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ context, dryRun: true }),
-      });
-      if (!response.ok) {
-        throw new Error('Failed to load preview');
-      }
-      const data = await response.json();
+      const data = await post<{ preview?: ActivityActionPreview }>(endpoint, { context, dryRun: true });
       setPreview(data.preview ?? null);
     } catch (error) {
       toast({
@@ -119,7 +117,7 @@ export function ActivityItem({ activity, context, onRollback, onRedo }: Activity
           <span className="font-medium text-sm">{actorName}</span>
           <Badge variant={opConfig.variant} className="text-xs">
             <OpIcon className="h-3 w-3 mr-1" />
-            {isRedoEntry ? 'Redo rollback' : opConfig.label}
+            {isRedoEntry ? 'Revert rollback' : opConfig.label}
           </Badge>
           {activity.isAiGenerated && (
             <Badge variant="outline" className="text-xs gap-1">
@@ -154,7 +152,7 @@ export function ActivityItem({ activity, context, onRollback, onRedo }: Activity
           </div>
         </div>
 
-        {(canRestore || canRedo) && (
+        {canUndo && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -167,18 +165,14 @@ export function ActivityItem({ activity, context, onRollback, onRedo }: Activity
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              {canRestore && (
-                <DropdownMenuItem onClick={() => handleActionClick('rollback')}>
-                  <History className="h-4 w-4 mr-2" />
-                  Undo this change
-                </DropdownMenuItem>
-              )}
-              {canRedo && (
-                <DropdownMenuItem onClick={() => handleActionClick('redo')}>
-                  <History className="h-4 w-4 mr-2" />
-                  Redo rollback
-                </DropdownMenuItem>
-              )}
+              <DropdownMenuItem onClick={() => handleActionClick(isRollbackActivity ? 'redo' : 'rollback')}>
+                <History className="h-4 w-4 mr-2" />
+                Undo this change
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setShowRollbackToPoint(true)}>
+                <RotateCcw className="h-4 w-4 mr-2" />
+                Rollback to this point
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         )}
@@ -195,6 +189,16 @@ export function ActivityItem({ activity, context, onRollback, onRedo }: Activity
       action={action}
       onConfirm={handleConfirm}
     />
+
+    {context && (
+      <RollbackToPointDialog
+        open={showRollbackToPoint}
+        onOpenChange={setShowRollbackToPoint}
+        activityId={activity.id}
+        context={context}
+        onSuccess={onRollbackToPointSuccess}
+      />
+    )}
     </>
   );
 }

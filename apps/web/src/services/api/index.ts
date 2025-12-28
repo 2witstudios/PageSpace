@@ -69,6 +69,16 @@ export type {
 } from './ai-undo-service';
 
 export {
+  previewRollbackToPoint,
+  executeRollbackToPoint,
+} from './rollback-to-point-service';
+export type {
+  RollbackToPointContext,
+  RollbackToPointPreview,
+  RollbackToPointResult,
+} from './rollback-to-point-service';
+
+export {
   createDriveBackup,
   listDriveBackups,
 } from './drive-backup-service';

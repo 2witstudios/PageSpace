@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { formatDistanceToNow, format } from 'date-fns';
 import { createClientLogger } from '@/lib/logging/client-logger';
-import { Bot, FileText, History, MoreVertical } from 'lucide-react';
+import { Bot, FileText, History, MoreVertical, RotateCcw } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -16,7 +16,9 @@ import {
 import { operationConfig, resourceTypeIcons, defaultOperationConfig } from '@/components/activity/constants';
 import { getInitials } from '@/components/activity/utils';
 import { RollbackConfirmDialog } from './RollbackConfirmDialog';
+import { RollbackToPointDialog, type RollbackToPointContext } from '@/components/activity/RollbackToPointDialog';
 import { useToast } from '@/hooks/useToast';
+import { post } from '@/lib/auth/auth-fetch';
 import type { ActivityLog } from '@/components/activity/types';
 import type { ActivityAction, ActivityActionPreview, ActivityActionResult } from '@/types/activity-actions';
 
@@ -27,6 +29,7 @@ interface VersionHistoryItemProps {
   context: 'page' | 'drive' | 'ai_tool' | 'user_dashboard';
   onRollback?: (activityId: string, force: boolean) => Promise<ActivityActionResult>;
   onRedo?: (activityId: string, force: boolean) => Promise<ActivityActionResult>;
+  onRollbackToPointSuccess?: () => void;
 }
 
 export function VersionHistoryItem({
@@ -34,8 +37,10 @@ export function VersionHistoryItem({
   context,
   onRollback,
   onRedo,
+  onRollbackToPointSuccess,
 }: VersionHistoryItemProps) {
   const [showConfirm, setShowConfirm] = useState(false);
+  const [showRollbackToPoint, setShowRollbackToPoint] = useState(false);
   const [preview, setPreview] = useState<ActivityActionPreview | null>(null);
   const [action, setAction] = useState<ActivityAction>('rollback');
   const { toast } = useToast();
@@ -68,19 +73,7 @@ export function VersionHistoryItem({
       const endpoint = nextAction === 'redo'
         ? `/api/activities/${activity.id}/redo`
         : `/api/activities/${activity.id}/rollback`;
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ context, dryRun: true }),
-      });
-      if (!response.ok) {
-        logger.debug('[Rollback:Preview] Preview fetch failed', {
-          activityId: activity.id,
-          status: response.status,
-        });
-        throw new Error('Failed to load preview');
-      }
-      const data = await response.json();
+      const data = await post<{ preview?: ActivityActionPreview }>(endpoint, { context, dryRun: true });
       logger.debug('[Rollback:Preview] Preview loaded', {
         activityId: activity.id,
         warningsCount: data.preview?.warnings?.length || 0,
@@ -134,8 +127,10 @@ export function VersionHistoryItem({
     return onRollback(activity.id, force);
   };
 
-  const canRestore = activity.canRollback !== false && onRollback;
-  const canRedo = !!onRedo && activity.operation === 'rollback';
+  const isRollbackActivity = activity.operation === 'rollback';
+  // For rollback activities, "Undo" means revert the rollback (redo)
+  // For other activities, "Undo" means rollback
+  const canUndo = activity.canRollback !== false && (isRollbackActivity ? onRedo : onRollback);
 
   return (
     <>
@@ -152,7 +147,7 @@ export function VersionHistoryItem({
             <span className="font-medium text-sm">{actorName}</span>
             <Badge variant={opConfig.variant} className="text-xs">
               <OpIcon className="h-3 w-3 mr-1" />
-              {isRedoEntry ? 'Redo rollback' : opConfig.label}
+              {isRedoEntry ? 'Revert rollback' : opConfig.label}
             </Badge>
             {activity.isAiGenerated && (
               <Badge variant="outline" className="text-xs gap-1">
@@ -187,7 +182,7 @@ export function VersionHistoryItem({
             </div>
           </div>
 
-          {(canRestore || canRedo) && (
+          {canUndo && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -200,18 +195,14 @@ export function VersionHistoryItem({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                {canRestore && (
-                  <DropdownMenuItem onClick={() => handleActionClick('rollback')}>
-                    <History className="h-4 w-4 mr-2" />
-                    Undo this change
-                  </DropdownMenuItem>
-                )}
-                {canRedo && (
-                  <DropdownMenuItem onClick={() => handleActionClick('redo')}>
-                    <History className="h-4 w-4 mr-2" />
-                    Redo rollback
-                  </DropdownMenuItem>
-                )}
+                <DropdownMenuItem onClick={() => handleActionClick(isRollbackActivity ? 'redo' : 'rollback')}>
+                  <History className="h-4 w-4 mr-2" />
+                  Undo this change
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setShowRollbackToPoint(true)}>
+                  <RotateCcw className="h-4 w-4 mr-2" />
+                  Rollback to this point
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           )}
@@ -227,6 +218,14 @@ export function VersionHistoryItem({
         preview={preview}
         action={action}
         onConfirm={handleConfirm}
+      />
+
+      <RollbackToPointDialog
+        open={showRollbackToPoint}
+        onOpenChange={setShowRollbackToPoint}
+        activityId={activity.id}
+        context={context === 'ai_tool' ? 'page' : context as RollbackToPointContext}
+        onSuccess={onRollbackToPointSuccess}
       />
     </>
   );
