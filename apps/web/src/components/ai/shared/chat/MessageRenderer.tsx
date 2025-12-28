@@ -80,22 +80,25 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({
               <StreamingMarkdown content={content} id={`${messageId}-text`} isStreaming={isStreaming} />
             </div>
           </div>
-          {createdAt && (
-            <div className="flex items-center justify-between mt-2">
-              <div className="text-xs text-gray-500">
-                {new Date(createdAt).toLocaleTimeString()}
-                {editedAt && <span className="ml-2">(edited)</span>}
-              </div>
-              {onEdit && onDelete && !isEditing && (
-                <MessageActionButtons
-                  onEdit={onEdit}
-                  onDelete={onDelete}
-                  onRetry={onRetry}
-                  onUndoFromHere={onUndoFromHere}
-                />
+          {/* Always show footer with buttons; timestamp only when createdAt exists */}
+          <div className="flex items-center justify-between mt-2">
+            <div className="text-xs text-gray-500">
+              {createdAt && (
+                <>
+                  {new Date(createdAt).toLocaleTimeString()}
+                  {editedAt && <span className="ml-2">(edited)</span>}
+                </>
               )}
             </div>
-          )}
+            {onEdit && onDelete && !isEditing && (
+              <MessageActionButtons
+                onEdit={onEdit}
+                onDelete={onDelete}
+                onRetry={onRetry}
+                onUndoFromHere={onUndoFromHere}
+              />
+            )}
+          </div>
         </>
       )}
     </div>
