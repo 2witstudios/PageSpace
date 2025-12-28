@@ -26,13 +26,18 @@ import {
   Settings,
   History,
   MoreVertical,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import { RollbackConfirmDialog } from '@/components/version-history/RollbackConfirmDialog';
 import { RollbackToPointDialog, type RollbackToPointContext } from '@/components/activity/RollbackToPointDialog';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { useToast } from '@/hooks/useToast';
 import type { ActivityActionPreview, ActivityActionResult } from '@/types/activity-actions';
+import type { ActivityLog, ActivityGroup } from '@/components/activity/types';
+import { groupConsecutiveActivities } from '@/components/activity/utils';
 
 // Exported for unit testing
 export interface ActivityUser {
@@ -53,6 +58,8 @@ export interface ActivityItem {
   isAiGenerated: boolean;
   aiProvider: string | null;
   aiModel: string | null;
+  aiConversationId: string | null;
+  changeGroupId: string | null;
   metadata: Record<string, unknown> | null;
   rollbackSourceOperation: string | null;
   // User relation - null when user has been deleted (FK set null)
@@ -314,6 +321,40 @@ export default function SidebarActivityTab() {
     );
   }, [activities, searchQuery]);
 
+  // Group consecutive activities for cleaner display
+  const groupedDisplayItems = useMemo(() => {
+    // Cast to ActivityLog for grouping (types are compatible)
+    const asActivityLogs = filteredActivities.map((a) => ({
+      ...a,
+      actorEmail: a.actorEmail ?? '',
+      userId: null,
+      driveId: null,
+      pageId: null,
+      updatedFields: null,
+      previousValues: null,
+      newValues: null,
+      rollbackFromActivityId: null,
+      rollbackSourceTimestamp: null,
+      rollbackSourceTitle: null,
+    })) as unknown as ActivityLog[];
+    return groupConsecutiveActivities(asActivityLogs);
+  }, [filteredActivities]);
+
+  // State for expanded groups
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+
+  const toggleGroup = useCallback((groupId: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupId)) {
+        next.delete(groupId);
+      } else {
+        next.add(groupId);
+      }
+      return next;
+    });
+  }, []);
+
   // Loading state
   if (loading) {
     return (
@@ -360,7 +401,7 @@ export default function SidebarActivityTab() {
             <Activity className="h-8 w-8 mx-auto text-muted-foreground mb-2 opacity-50" />
             <p className="text-sm text-muted-foreground">{error}</p>
           </div>
-        ) : filteredActivities.length === 0 ? (
+        ) : groupedDisplayItems.length === 0 ? (
           <div className="text-center py-8 px-4">
             <Activity className="h-8 w-8 mx-auto text-muted-foreground mb-2 opacity-50" />
             <p className="text-sm text-muted-foreground">
@@ -369,101 +410,235 @@ export default function SidebarActivityTab() {
           </div>
         ) : (
           <div className="divide-y divide-[var(--separator)]">
-            {filteredActivities.map((activity) => (
-              <div
-                key={activity.id}
-                className="py-2.5 px-3 hover:bg-accent/30 transition-colors group"
-              >
-                <div className="flex items-start gap-2">
-                  {/* User avatar or AI indicator */}
-                  {activity.isAiGenerated ? (
-                    <div className="h-6 w-6 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
-                      <Bot className="h-3 w-3 text-primary" />
-                    </div>
-                  ) : (
-                    <Avatar className="h-6 w-6 flex-shrink-0">
-                      <AvatarImage src={getActorAvatar(activity).image || undefined} />
-                      <AvatarFallback className="text-xs bg-muted">
-                        {getActorAvatar(activity).initial}
-                      </AvatarFallback>
-                    </Avatar>
-                  )}
-
-                  <div className="flex-1 min-w-0">
-                    {/* Actor and action */}
-                    <div className="flex items-center gap-1 text-sm">
-                      <span className="font-medium truncate">
-                        {activity.isAiGenerated
-                          ? `${getActorDisplayName(activity)} (via AI)`
-                          : getActorDisplayName(activity)}
-                      </span>
-                    </div>
-
-                    {/* Operation and resource */}
-                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground mt-0.5">
-                      {operationIcons[activity.operation] || (
-                        <Activity className="h-3 w-3" />
+            {groupedDisplayItems.map((item) => {
+              if (item.type === 'single') {
+                // Render single activity
+                const activity = filteredActivities.find((a) => a.id === item.activity.id);
+                if (!activity) return null;
+                return (
+                  <div
+                    key={activity.id}
+                    className="py-2.5 px-3 hover:bg-accent/30 transition-colors group"
+                  >
+                    <div className="flex items-start gap-2">
+                      {/* User avatar or AI indicator */}
+                      {activity.isAiGenerated ? (
+                        <div className="h-6 w-6 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
+                          <Bot className="h-3 w-3 text-primary" />
+                        </div>
+                      ) : (
+                        <Avatar className="h-6 w-6 flex-shrink-0">
+                          <AvatarImage src={getActorAvatar(activity).image || undefined} />
+                          <AvatarFallback className="text-xs bg-muted">
+                            {getActorAvatar(activity).initial}
+                          </AvatarFallback>
+                        </Avatar>
                       )}
-                      <span>
-                        {getOperationLabel(activity)}
-                      </span>
-                      {activity.resourceTitle && (
-                        <>
-                          <span className="text-muted-foreground/60">-</span>
-                          <span className="truncate max-w-[120px]">
-                            {activity.resourceTitle}
+
+                      <div className="flex-1 min-w-0">
+                        {/* Actor and action */}
+                        <div className="flex items-center gap-1 text-sm">
+                          <span className="font-medium truncate">
+                            {activity.isAiGenerated
+                              ? `${getActorDisplayName(activity)} (via AI)`
+                              : getActorDisplayName(activity)}
                           </span>
-                        </>
-                      )}
-                    </div>
+                        </div>
 
-                    {/* Timestamp and AI model */}
-                    <div className="flex items-center gap-2 mt-1">
-                      <span className="text-xs text-muted-foreground/70">
-                        {formatDistanceToNow(new Date(activity.timestamp), {
-                          addSuffix: true,
-                        })}
-                      </span>
-                      {activity.isAiGenerated && activity.aiModel && (
-                        <Badge
-                          variant="secondary"
-                          className="text-[10px] h-4 px-1.5 py-0"
-                        >
-                          {activity.aiModel}
-                        </Badge>
-                      )}
+                        {/* Operation and resource */}
+                        <div className="flex items-center gap-1.5 text-xs text-muted-foreground mt-0.5">
+                          {operationIcons[activity.operation] || (
+                            <Activity className="h-3 w-3" />
+                          )}
+                          <span>
+                            {getOperationLabel(activity)}
+                          </span>
+                          {activity.resourceTitle && (
+                            <>
+                              <span className="text-muted-foreground/60">-</span>
+                              <span className="truncate max-w-[120px]">
+                                {activity.resourceTitle}
+                              </span>
+                            </>
+                          )}
+                        </div>
+
+                        {/* Timestamp and AI model */}
+                        <div className="flex items-center gap-2 mt-1">
+                          <span className="text-xs text-muted-foreground/70">
+                            {formatDistanceToNow(new Date(activity.timestamp), {
+                              addSuffix: true,
+                            })}
+                          </span>
+                          {activity.isAiGenerated && activity.aiModel && (
+                            <Badge
+                              variant="secondary"
+                              className="text-[10px] h-4 px-1.5 py-0"
+                            >
+                              {activity.aiModel}
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Rollback action */}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+                          >
+                            <MoreVertical className="h-3 w-3" />
+                            <span className="sr-only">Actions</span>
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => handleActionClick(activity)}>
+                            <History className="h-4 w-4 mr-2" />
+                            Undo this change
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => {
+                            setSelectedActivityForRollbackToPoint(activity);
+                            setShowRollbackToPoint(true);
+                          }}>
+                            <RotateCcw className="h-4 w-4 mr-2" />
+                            Rollback to this point
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  </div>
+                );
+              }
+
+              // Render group (collapsed by default)
+              const group = item as ActivityGroup;
+              const isExpanded = expandedGroups.has(group.id);
+              const GroupIcon = group.type === 'ai_stream' ? Bot : group.type === 'rollback' ? History : FileEdit;
+              const oldestActivity = filteredActivities.find((a) => a.id === group.activities[group.activities.length - 1].id);
+
+              return (
+                <Collapsible key={group.id} open={isExpanded} onOpenChange={() => toggleGroup(group.id)}>
+                  <div className="py-2.5 px-3 hover:bg-accent/30 transition-colors group">
+                    <div className="flex items-start gap-2">
+                      {/* Expand/collapse button */}
+                      <CollapsibleTrigger asChild>
+                        <Button variant="ghost" size="icon" className="h-5 w-5 shrink-0 -ml-1">
+                          {isExpanded ? (
+                            <ChevronDown className="h-3 w-3" />
+                          ) : (
+                            <ChevronRight className="h-3 w-3" />
+                          )}
+                        </Button>
+                      </CollapsibleTrigger>
+
+                      {/* Group icon */}
+                      <div className="h-6 w-6 rounded-full bg-muted flex items-center justify-center flex-shrink-0">
+                        <GroupIcon className="h-3 w-3 text-muted-foreground" />
+                      </div>
+
+                      <div className="flex-1 min-w-0">
+                        {/* Group label */}
+                        <div className="flex items-center gap-1 text-sm">
+                          <span className="font-medium truncate">
+                            {group.summary.label}
+                          </span>
+                        </div>
+
+                        {/* Actor and timestamp */}
+                        <div className="flex items-center gap-1.5 text-xs text-muted-foreground mt-0.5">
+                          <span>{group.summary.actorName}</span>
+                          <span className="text-muted-foreground/60">•</span>
+                          <span>
+                            {formatDistanceToNow(new Date(group.summary.timestamp), {
+                              addSuffix: true,
+                            })}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Group rollback action */}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+                          >
+                            <MoreVertical className="h-3 w-3" />
+                            <span className="sr-only">Actions</span>
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => {
+                            if (oldestActivity) {
+                              setSelectedActivityForRollbackToPoint(oldestActivity);
+                              setShowRollbackToPoint(true);
+                            }
+                          }}>
+                            <RotateCcw className="h-4 w-4 mr-2" />
+                            Undo all {group.activities.length} changes
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </div>
                   </div>
 
-                  {/* Rollback action */}
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
-                      >
-                        <MoreVertical className="h-3 w-3" />
-                        <span className="sr-only">Actions</span>
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => handleActionClick(activity)}>
-                        <History className="h-4 w-4 mr-2" />
-                        Undo this change
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => {
-                        setSelectedActivityForRollbackToPoint(activity);
-                        setShowRollbackToPoint(true);
-                      }}>
-                        <RotateCcw className="h-4 w-4 mr-2" />
-                        Rollback to this point
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-              </div>
-            ))}
+                  {/* Expanded content */}
+                  <CollapsibleContent>
+                    <div className="pl-8 border-l-2 border-muted ml-4">
+                      {group.activities.map((groupActivity) => {
+                        const activity = filteredActivities.find((a) => a.id === groupActivity.id);
+                        if (!activity) return null;
+                        return (
+                          <div
+                            key={activity.id}
+                            className="py-2 px-3 hover:bg-accent/30 transition-colors group/item"
+                          >
+                            <div className="flex items-start gap-2">
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                                  {operationIcons[activity.operation] || (
+                                    <Activity className="h-3 w-3" />
+                                  )}
+                                  <span>{getOperationLabel(activity)}</span>
+                                  {activity.resourceTitle && (
+                                    <>
+                                      <span className="text-muted-foreground/60">-</span>
+                                      <span className="truncate max-w-[100px]">
+                                        {activity.resourceTitle}
+                                      </span>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-5 w-5 opacity-0 group-hover/item:opacity-100 transition-opacity flex-shrink-0"
+                                  >
+                                    <MoreVertical className="h-3 w-3" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end">
+                                  <DropdownMenuItem onClick={() => handleActionClick(activity)}>
+                                    <History className="h-4 w-4 mr-2" />
+                                    Undo this change
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </CollapsibleContent>
+                </Collapsible>
+              );
+            })}
           </div>
         )}
       </div>

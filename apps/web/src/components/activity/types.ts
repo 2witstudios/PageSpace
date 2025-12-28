@@ -23,6 +23,7 @@ export interface ActivityLog {
   aiProvider: string | null;
   aiModel: string | null;
   aiConversationId: string | null;
+  changeGroupId: string | null;
   updatedFields: string[] | null;
   previousValues: Record<string, unknown> | null;
   newValues: Record<string, unknown> | null;
@@ -33,6 +34,30 @@ export interface ActivityLog {
   rollbackSourceTitle: string | null;
   user: ActivityUser | null;
 }
+
+// Activity grouping types
+export type ActivityGroupType = 'rollback' | 'ai_stream' | 'edit_session';
+
+export interface ActivityGroupSummary {
+  label: string;
+  actorName: string;
+  actorImage: string | null;
+  timestamp: string;
+}
+
+export interface ActivityGroup {
+  type: ActivityGroupType;
+  id: string;
+  activities: ActivityLog[];
+  summary: ActivityGroupSummary;
+}
+
+export interface SingleActivity {
+  type: 'single';
+  activity: ActivityLog;
+}
+
+export type ActivityDisplayItem = ActivityGroup | SingleActivity;
 
 export interface Drive {
   id: string;

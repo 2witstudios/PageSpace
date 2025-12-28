@@ -3,7 +3,8 @@
 import { Activity, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ActivityItem, type RollbackContext } from './ActivityItem';
-import { groupActivitiesByDate } from './utils';
+import { ActivityGroupItem } from './ActivityGroupItem';
+import { groupActivitiesByDate, groupConsecutiveActivities } from './utils';
 import type { ActivityLog, Pagination } from './types';
 import type { ActivityActionResult } from '@/types/activity-actions';
 
@@ -52,23 +53,37 @@ export function ActivityTimeline({
 
   return (
     <div className="space-y-6">
-      {Array.from(groupedActivities.entries()).map(([dateGroup, groupActivities]) => (
-        <div key={dateGroup}>
-          <h3 className="text-sm font-semibold text-muted-foreground mb-2 sticky top-0 bg-background py-2 z-10">
-            {dateGroup}
-          </h3>
-          <div className="space-y-0">
-            {groupActivities.map((activity) => (
-              <ActivityItem
-                key={activity.id}
-                activity={activity}
-                context={context}
-                onRollback={onRollback}
-              />
-            ))}
+      {Array.from(groupedActivities.entries()).map(([dateGroup, dateActivities]) => {
+        // Apply consecutive grouping within each date group
+        const displayItems = groupConsecutiveActivities(dateActivities);
+
+        return (
+          <div key={dateGroup}>
+            <h3 className="text-sm font-semibold text-muted-foreground mb-2 sticky top-0 bg-background py-2 z-10">
+              {dateGroup}
+            </h3>
+            <div className="space-y-0">
+              {displayItems.map((item) =>
+                item.type === 'single' ? (
+                  <ActivityItem
+                    key={item.activity.id}
+                    activity={item.activity}
+                    context={context}
+                    onRollback={onRollback}
+                  />
+                ) : (
+                  <ActivityGroupItem
+                    key={item.id}
+                    group={item}
+                    context={context}
+                    onRollback={onRollback}
+                  />
+                )
+              )}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
 
       {/* Load More */}
       {pagination?.hasMore && (

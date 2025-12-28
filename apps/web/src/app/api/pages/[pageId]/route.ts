@@ -40,6 +40,7 @@ const patchSchema = z.object({
   parentId: z.string().nullable().optional(),
   isPaginated: z.boolean().optional(),
   expectedRevision: z.number().int().min(0).optional(),
+  changeGroupId: z.string().optional(), // Groups related edits in activity log
 });
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
@@ -53,9 +54,12 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
   try {
     const body = await req.json();
     const safeBody = patchSchema.parse(body);
-    const { expectedRevision, ...updates } = safeBody;
+    const { expectedRevision, changeGroupId, ...updates } = safeBody;
 
-    const result = await pageService.updatePage(pageId, userId, updates, { expectedRevision });
+    const result = await pageService.updatePage(pageId, userId, updates, {
+      expectedRevision,
+      context: changeGroupId ? { changeGroupId } : undefined,
+    });
 
     if (!result.success) {
       return NextResponse.json(
