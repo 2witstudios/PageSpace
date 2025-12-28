@@ -30,6 +30,7 @@ import {
 import { formatDistanceToNow } from 'date-fns';
 import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import { RollbackConfirmDialog } from '@/components/version-history/RollbackConfirmDialog';
+import { RollbackToPointDialog, type RollbackToPointContext } from '@/components/activity/RollbackToPointDialog';
 import { useToast } from '@/hooks/useToast';
 import type { ActivityAction, ActivityActionPreview, ActivityActionResult } from '@/types/activity-actions';
 
@@ -164,6 +165,8 @@ export default function SidebarActivityTab() {
   // Rollback state
   const [selectedActivityForRollback, setSelectedActivityForRollback] = useState<ActivityItem | null>(null);
   const [showRollbackConfirm, setShowRollbackConfirm] = useState(false);
+  const [showRollbackToPoint, setShowRollbackToPoint] = useState(false);
+  const [selectedActivityForRollbackToPoint, setSelectedActivityForRollbackToPoint] = useState<ActivityItem | null>(null);
   const [preview, setPreview] = useState<ActivityActionPreview | null>(null);
   const [action, setAction] = useState<ActivityAction>('rollback');
 
@@ -470,6 +473,13 @@ export default function SidebarActivityTab() {
                           Redo rollback
                         </DropdownMenuItem>
                       )}
+                      <DropdownMenuItem onClick={() => {
+                        setSelectedActivityForRollbackToPoint(activity);
+                        setShowRollbackToPoint(true);
+                      }}>
+                        <RotateCcw className="h-4 w-4 mr-2" />
+                        Rollback to this point
+                      </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>
@@ -499,6 +509,15 @@ export default function SidebarActivityTab() {
         preview={preview}
         action={action}
         onConfirm={handleConfirmAction}
+      />
+
+      {/* Rollback to Point Dialog */}
+      <RollbackToPointDialog
+        open={showRollbackToPoint}
+        onOpenChange={setShowRollbackToPoint}
+        activityId={selectedActivityForRollbackToPoint?.id ?? null}
+        context={rollbackContext as RollbackToPointContext}
+        onSuccess={loadActivities}
       />
     </div>
   );
