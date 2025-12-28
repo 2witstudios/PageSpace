@@ -89,7 +89,6 @@ function getChangeDescription(activity: ActivityLogForRollback): string {
 }
 
 function buildChangeSummary(
-  _action: ActivityAction,
   activity: ActivityLogForRollback,
   targetValues: Record<string, unknown> | null
 ): ActivityChangeSummary[] {
@@ -579,7 +578,7 @@ async function previewActivityAction(
     ? await resolveActivityContentSnapshot(activity)
     : null;
   const targetValues = activity ? buildActionTargetValues(activity, resolvedContentSnapshot) : null;
-  const changes = activity ? buildChangeSummary(action, activity, targetValues) : [];
+  const changes = activity ? buildChangeSummary(activity, targetValues) : [];
   const affectedResources = activity
     ? [
         {
@@ -848,22 +847,46 @@ async function previewActivityAction(
       }
 
       if (effectiveOperation === 'member_add') {
-        if (currentMember.length === 0) {
-          return basePreview({
-            reason: 'Member has already been removed',
-            currentValues,
-            isNoOp: true,
-          });
+        if (rollingBackRollback) {
+          // Rollback of rollback: re-adding member, no-op if already exists
+          if (currentMember.length > 0) {
+            return basePreview({
+              reason: 'Member is already in the drive',
+              currentValues,
+              isNoOp: true,
+            });
+          }
+        } else {
+          // Regular rollback: removing member, no-op if already removed
+          if (currentMember.length === 0) {
+            return basePreview({
+              reason: 'Member has already been removed',
+              currentValues,
+              isNoOp: true,
+            });
+          }
         }
       }
 
       if (effectiveOperation === 'member_remove') {
-        if (currentMember.length > 0) {
-          return basePreview({
-            reason: 'Member has already been re-added to the drive',
-            currentValues,
-            isNoOp: true,
-          });
+        if (rollingBackRollback) {
+          // Rollback of rollback: removing member, no-op if already removed
+          if (currentMember.length === 0) {
+            return basePreview({
+              reason: 'Member has already been removed',
+              currentValues,
+              isNoOp: true,
+            });
+          }
+        } else {
+          // Regular rollback: re-adding member, no-op if already exists
+          if (currentMember.length > 0) {
+            return basePreview({
+              reason: 'Member has already been re-added to the drive',
+              currentValues,
+              isNoOp: true,
+            });
+          }
         }
       }
 
@@ -925,22 +948,46 @@ async function previewActivityAction(
       }
 
       if (effectiveOperation === 'permission_grant') {
-        if (currentPermission.length === 0) {
-          return basePreview({
-            reason: 'Permission has already been revoked',
-            currentValues,
-            isNoOp: true,
-          });
+        if (rollingBackRollback) {
+          // Rollback of rollback: re-granting permission, no-op if already exists
+          if (currentPermission.length > 0) {
+            return basePreview({
+              reason: 'Permission is already granted',
+              currentValues,
+              isNoOp: true,
+            });
+          }
+        } else {
+          // Regular rollback: revoking permission, no-op if already revoked
+          if (currentPermission.length === 0) {
+            return basePreview({
+              reason: 'Permission has already been revoked',
+              currentValues,
+              isNoOp: true,
+            });
+          }
         }
       }
 
       if (effectiveOperation === 'permission_revoke') {
-        if (currentPermission.length > 0) {
-          return basePreview({
-            reason: 'Permission has already been re-granted',
-            currentValues,
-            isNoOp: true,
-          });
+        if (rollingBackRollback) {
+          // Rollback of rollback: revoking permission, no-op if already revoked
+          if (currentPermission.length === 0) {
+            return basePreview({
+              reason: 'Permission has already been revoked',
+              currentValues,
+              isNoOp: true,
+            });
+          }
+        } else {
+          // Regular rollback: re-granting permission, no-op if already exists
+          if (currentPermission.length > 0) {
+            return basePreview({
+              reason: 'Permission has already been re-granted',
+              currentValues,
+              isNoOp: true,
+            });
+          }
         }
       }
 
@@ -1030,22 +1077,46 @@ async function previewActivityAction(
       }
 
       if (effectiveOperation === 'create') {
-        if (currentRole.length === 0) {
-          return basePreview({
-            reason: 'Role has already been deleted',
-            currentValues,
-            isNoOp: true,
-          });
+        if (rollingBackRollback) {
+          // Rollback of rollback: re-creating role, no-op if already exists
+          if (currentRole.length > 0) {
+            return basePreview({
+              reason: 'Role already exists',
+              currentValues,
+              isNoOp: true,
+            });
+          }
+        } else {
+          // Regular rollback: deleting role, no-op if already deleted
+          if (currentRole.length === 0) {
+            return basePreview({
+              reason: 'Role has already been deleted',
+              currentValues,
+              isNoOp: true,
+            });
+          }
         }
       }
 
       if (effectiveOperation === 'delete') {
-        if (currentRole.length > 0) {
-          return basePreview({
-            reason: 'Role already exists with this ID',
-            currentValues,
-            isNoOp: true,
-          });
+        if (rollingBackRollback) {
+          // Rollback of rollback: deleting role, no-op if already deleted
+          if (currentRole.length === 0) {
+            return basePreview({
+              reason: 'Role has already been deleted',
+              currentValues,
+              isNoOp: true,
+            });
+          }
+        } else {
+          // Regular rollback: re-creating role, no-op if already exists
+          if (currentRole.length > 0) {
+            return basePreview({
+              reason: 'Role already exists with this ID',
+              currentValues,
+              isNoOp: true,
+            });
+          }
         }
       }
 

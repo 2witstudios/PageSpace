@@ -133,9 +133,14 @@ export async function POST(
         if (activity.operation === 'rollback') {
           // Rolling back a rollback = restoring what was originally done
           const sourceOp = activity.rollbackSourceOperation;
-          memberOperation = sourceOp === 'member_add' ? 'member_added'
-            : sourceOp === 'member_remove' ? 'member_removed'
-            : 'member_role_changed';
+          if (!sourceOp) {
+            // Source operation unknown - fall back to generic role change broadcast
+            memberOperation = 'member_role_changed';
+          } else {
+            memberOperation = sourceOp === 'member_add' ? 'member_added'
+              : sourceOp === 'member_remove' ? 'member_removed'
+              : 'member_role_changed';
+          }
         } else {
           // Regular rollback = undoing what was done
           memberOperation = activity.operation === 'member_add' ? 'member_removed'
