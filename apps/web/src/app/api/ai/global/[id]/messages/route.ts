@@ -340,7 +340,7 @@ export async function POST(
     // RATE LIMIT CHECK: Verify user has remaining quota BEFORE streaming
     // This prevents users from exceeding their daily AI call limits
     if (currentProvider === 'pagespace') {
-      const isProModel = currentModel === 'glm-4.6';
+      const isProModel = currentModel === 'glm-4.7';
       const providerType = isProModel ? 'pro' : 'standard';
 
       loggers.api.debug('🚦 Global Assistant Chat API: Checking rate limit before streaming', {
@@ -853,7 +853,7 @@ MENTION PROCESSING:
             if (isPageSpaceProvider) {
               try {
                 // Determine if this is pro model based on model name
-                const isProModel = currentModel === 'glm-4.6';
+                const isProModel = currentModel === 'glm-4.7';
                 const providerType = isProModel ? 'pro' : 'standard';
 
                 usageLogger.debug('Incrementing usage for Global Assistant response', {

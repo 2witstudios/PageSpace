@@ -151,10 +151,12 @@ export const AI_PRICING = {
   'grok-vision-beta': { input: 2.00, output: 10.00 },
 
   // MiniMax Direct Models (openrouter.ai, Dec 2025)
+  'MiniMax-M2.1': { input: 0.30, output: 1.20 },
   'MiniMax-M2': { input: 0.30, output: 1.20 },
   'MiniMax-M2-Stable': { input: 0.30, output: 1.20 },
 
   // GLM Direct Models (openrouter.ai, Dec 2025)
+  'glm-4.7': { input: 0.39, output: 1.90 },
   'glm-4.6': { input: 0.39, output: 1.90 },
 
   // Ollama (local) - no cost
@@ -320,10 +322,12 @@ export const MODEL_CONTEXT_WINDOWS = {
   'grok-vision-beta': 128000,
 
   // MiniMax Direct Models
+  'MiniMax-M2.1': 128000,
   'MiniMax-M2': 128000,
   'MiniMax-M2-Stable': 128000,
 
   // PageSpace/GLM Models
+  'glm-4.7': 200000,
   'glm-4.6': 200000,
   'glm-4.5': 128000,
   'glm-4.5-air': 128000,

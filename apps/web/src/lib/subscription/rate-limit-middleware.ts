@@ -18,7 +18,7 @@ export async function checkAIRateLimit(
   model?: string
 ): Promise<RateLimitResult> {
   // Determine provider type based on model name for PageSpace provider
-  const isProModel = provider === 'pagespace' && model === 'glm-4.6';
+  const isProModel = provider === 'pagespace' && model === 'glm-4.7';
   const providerType: ProviderType = isProModel ? 'pro' : 'standard';
 
   try {
@@ -90,7 +90,7 @@ export function createRateLimitResponse(
  * Check if provider requires Pro subscription
  */
 export function requiresProSubscription(provider: string, model: string | undefined, subscriptionTier: string | undefined): boolean {
-  const isProModel = provider === 'pagespace' && model === 'glm-4.6';
+  const isProModel = provider === 'pagespace' && model === 'glm-4.7';
   if (!isProModel) {
     return false;
   }

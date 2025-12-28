@@ -153,7 +153,7 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
         setSelectedModel(data.currentModel);
 
         // Check if current model is accessible to user, if not, reset to default
-        if (uiProvider === 'pagespace' && data.currentModel === 'glm-4.6') {
+        if (uiProvider === 'pagespace' && data.currentModel === 'glm-4.7') {
           const userTier = data.userSubscriptionTier;
           if (userTier !== 'pro' && userTier !== 'business') {
             // Free user has restricted model selected, reset to default
@@ -258,7 +258,7 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
 
   // Check if a model requires Pro/Business subscription
   const requiresSubscription = (provider: string, model: string): boolean => {
-    return provider === 'pagespace' && model === 'glm-4.6';
+    return provider === 'pagespace' && model === 'glm-4.7';
   };
 
   // Check if user has access to a model
@@ -647,7 +647,7 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
 
           {/* Upgrade notification for restricted models */}
           {selectedProvider === 'pagespace' &&
-           !hasModelAccess('pagespace', 'glm-4.6') && (
+           !hasModelAccess('pagespace', 'glm-4.7') && (
             <Card className="border-primary/20 bg-primary/5 dark:bg-primary/10">
               <CardContent className="pt-6">
                 <div className="text-center space-y-3">
