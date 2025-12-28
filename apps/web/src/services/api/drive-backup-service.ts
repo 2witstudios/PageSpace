@@ -325,17 +325,23 @@ export async function createDriveBackup(
         },
       };
     } catch (error) {
-      // Mark backup as failed before rethrowing
+      // Mark backup as failed and return error result (don't throw - that would rollback the transaction)
+      const failureReason = error instanceof Error ? error.message : 'Unknown error';
       await tx
         .update(driveBackups)
         .set({
           status: 'failed',
           failedAt: new Date(),
-          failureReason: error instanceof Error ? error.message : 'Unknown error',
+          failureReason,
         })
         .where(eq(driveBackups.id, backup.id));
 
-      throw error;
+      return {
+        success: false,
+        backupId: backup.id,
+        status: 'failed' as const,
+        error: failureReason,
+      };
     }
   });
 }
