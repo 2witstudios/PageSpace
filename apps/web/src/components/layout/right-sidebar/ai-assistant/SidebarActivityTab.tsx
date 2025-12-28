@@ -594,7 +594,7 @@ export default function SidebarActivityTab() {
                         return (
                           <div
                             key={activity.id}
-                            className="py-2 px-3 hover:bg-accent/30 transition-colors group"
+                            className="py-2 px-3 hover:bg-accent/30 transition-colors group/item"
                           >
                             <div className="flex items-start gap-2">
                               <div className="flex-1 min-w-0">
@@ -618,7 +618,7 @@ export default function SidebarActivityTab() {
                                   <Button
                                     variant="ghost"
                                     size="icon"
-                                    className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+                                    className="h-5 w-5 opacity-0 group-hover/item:opacity-100 transition-opacity flex-shrink-0"
                                   >
                                     <MoreVertical className="h-3 w-3" />
                                   </Button>
