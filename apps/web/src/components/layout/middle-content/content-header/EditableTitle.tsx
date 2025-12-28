@@ -84,7 +84,7 @@ export function EditableTitle({ pageId: propPageId }: { pageId?: string | null }
         onChange={handleTitleChange}
         onBlur={updateTitle}
         onKeyDown={handleKeyDown}
-        className="text-2xl font-bold h-auto p-0 border-none focus-visible:ring-0"
+        className="text-lg sm:text-2xl font-bold h-auto p-0 border-none focus-visible:ring-0"
       />
     );
   }
@@ -92,7 +92,7 @@ export function EditableTitle({ pageId: propPageId }: { pageId?: string | null }
   return (
     <h1
       onClick={handleTitleClick}
-      className="text-2xl font-bold cursor-pointer truncate max-w-[200px] sm:max-w-[400px] md:max-w-[600px]"
+      className="text-lg sm:text-2xl font-bold cursor-pointer truncate max-w-[150px] sm:max-w-[400px] md:max-w-[600px]"
       title={page?.title || ''}
     >
       {page?.title}

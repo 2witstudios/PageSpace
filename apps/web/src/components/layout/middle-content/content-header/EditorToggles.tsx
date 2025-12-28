@@ -6,6 +6,7 @@ import { useParams } from 'next/navigation';
 import useSWR from 'swr';
 import { PageType, isDocumentPage, isCanvasPage } from '@pagespace/lib/client-safe';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { useMobile } from '@/hooks/useMobile';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -19,6 +20,7 @@ export function EditorToggles() {
   const { activeView, setActiveView } = useDocumentStore();
   const params = useParams();
   const pageId = params.pageId as string;
+  const isMobile = useMobile();
 
   // Fetch page data to determine type
   const { data: pageData } = useSWR(
@@ -30,11 +32,11 @@ export function EditorToggles() {
     }
   );
   
-  // Only show editor toggles for document and canvas pages
+  // Only show editor toggles for document and canvas pages, and not on mobile
   const pageType = pageData?.type as PageType;
   const shouldShowToggles = pageType && (isDocumentPage(pageType) || isCanvasPage(pageType));
-  
-  if (!shouldShowToggles) {
+
+  if (!shouldShowToggles || isMobile) {
     return null;
   }
 

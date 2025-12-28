@@ -12,6 +12,7 @@ import { FileDown, FileText, FileSpreadsheet, Sheet, Printer } from 'lucide-reac
 import { toast } from 'sonner';
 import { PageType } from '@pagespace/lib/client-safe';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { useMobile } from '@/hooks/useMobile';
 
 type ExportFormat = 'docx' | 'csv' | 'xlsx';
 
@@ -23,6 +24,7 @@ interface ExportDropdownProps {
 
 export function ExportDropdown({ pageId, pageTitle, pageType }: ExportDropdownProps) {
   const [isExporting, setIsExporting] = useState(false);
+  const isMobile = useMobile();
 
   const handleExport = async (format: ExportFormat) => {
     setIsExporting(true);
@@ -74,11 +76,11 @@ export function ExportDropdown({ pageId, pageTitle, pageType }: ExportDropdownPr
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
-          size="sm"
+          size={isMobile ? "icon" : "sm"}
           disabled={isExporting}
         >
-          <FileDown className="mr-2 h-4 w-4" />
-          {isExporting ? 'Exporting...' : 'Export'}
+          <FileDown className={isMobile ? "h-4 w-4" : "mr-2 h-4 w-4"} />
+          {!isMobile && (isExporting ? 'Exporting...' : 'Export')}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">

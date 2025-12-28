@@ -17,6 +17,7 @@ import { Download } from 'lucide-react';
 import { isDocumentPage, isFilePage, isSheetPage } from '@pagespace/lib/client-safe';
 import { ExportDropdown } from './ExportDropdown';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { useMobile } from '@/hooks/useMobile';
 
 interface ContentHeaderProps {
   children?: React.ReactNode;
@@ -31,6 +32,7 @@ export function ViewHeader({ children, pageId: propPageId }: ContentHeaderProps 
   const { tree } = usePageTree(driveId);
   const [isDownloading, setIsDownloading] = useState(false);
   const [isPaginated, setIsPaginated] = useState(false);
+  const isMobile = useMobile();
 
   const pageResult = pageId ? findNodeAndParent(tree, pageId) : null;
   const page = pageResult?.node;
@@ -91,16 +93,16 @@ export function ViewHeader({ children, pageId: propPageId }: ContentHeaderProps 
   };
 
   return (
-    <div className="flex flex-col gap-2 p-4 border-b border-[var(--separator)]">
+    <div className="flex flex-col gap-1 sm:gap-2 p-2 sm:p-4 border-b border-[var(--separator)]">
       <Breadcrumbs pageId={pageId} />
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
           <EditableTitle pageId={pageId} />
-          {(pageIsDocument || pageIsSheet) && (
+          {(pageIsDocument || pageIsSheet) && !isMobile && (
             <SaveStatusIndicator isDirty={document?.isDirty || false} isSaving={isSaving} />
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
           {pageIsDocument && <EditorToggles />}
           {pageIsDocument && page && (
             <PaginationToggle
@@ -117,10 +119,10 @@ export function ViewHeader({ children, pageId: propPageId }: ContentHeaderProps 
               onClick={handleDownload}
               disabled={isDownloading}
               variant="ghost"
-              size="sm"
+              size={isMobile ? "icon" : "sm"}
             >
-              <Download className="mr-2 h-4 w-4" />
-              {isDownloading ? 'Downloading...' : 'Download'}
+              <Download className={isMobile ? "h-4 w-4" : "mr-2 h-4 w-4"} />
+              {!isMobile && (isDownloading ? 'Downloading...' : 'Download')}
             </Button>
           )}
           <ShareDialog pageId={pageId} />
