@@ -16,6 +16,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "db:migrate": "tsx src/migrate.ts",
     "db:migrate:local": "DATABASE_URL=postgresql://user:password@localhost:5432/pagespace tsx src/migrate.ts",

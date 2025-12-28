@@ -1,8 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type {
-  MCPServerConfig,
   MCPConfig,
-  MCPServerStatus,
   MCPServerStatusInfo,
   MCPTool,
   ToolExecutionResult,

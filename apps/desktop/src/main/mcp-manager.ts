@@ -1,6 +1,5 @@
 import { ChildProcess, spawn } from 'child_process';
 import * as fs from 'fs/promises';
-import * as fsSync from 'fs';
 import * as path from 'path';
 import { app } from 'electron';
 import { resolveCommand, getEnhancedEnvironment } from './command-resolver';
@@ -393,7 +392,7 @@ export class MCPManager {
     // Reject all pending JSON-RPC requests
     const pendingMap = this.pendingRequests.get(name);
     if (pendingMap) {
-      for (const [requestId, pending] of pendingMap.entries()) {
+      for (const [_requestId, pending] of pendingMap.entries()) {
         clearTimeout(pending.timeout);
         pending.reject(new Error(`Server ${name} is stopping`));
       }
@@ -768,7 +767,7 @@ export class MCPManager {
 
       // Send request via stdin
       const requestStr = JSON.stringify(request) + '\n';
-      const writeSuccess = server.process.stdin?.write(requestStr);
+      const writeSuccess = server.process!.stdin?.write(requestStr);
 
       if (!writeSuccess) {
         clearTimeout(timeout);
@@ -829,7 +828,11 @@ export class MCPManager {
       const tools: MCPTool[] = toolsListResponse.tools.map(tool => ({
         name: tool.name,
         description: tool.description || '',
-        inputSchema: tool.inputSchema,
+        inputSchema: {
+          type: 'object' as const,
+          properties: tool.inputSchema.properties || {},
+          required: tool.inputSchema.required,
+        },
         serverName,
       }));
 
@@ -929,7 +932,7 @@ export class MCPManager {
       };
 
       // Send tools/call JSON-RPC request
-      const response = await this.sendJSONRPCRequest(serverName, 'tools/call', toolCallRequest);
+      const response = await this.sendJSONRPCRequest(serverName, 'tools/call', toolCallRequest as unknown as Record<string, unknown>);
 
       if (!response.result) {
         return {

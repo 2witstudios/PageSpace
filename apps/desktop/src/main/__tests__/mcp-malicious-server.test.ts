@@ -9,7 +9,7 @@
  * - Send invalid JSON continuously
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { MCP_CONSTANTS } from '../../shared/mcp-types';
 
 describe('MCP Malicious Server Protection (Issues #2 & #3)', () => {
@@ -71,7 +71,7 @@ describe('MCP Malicious Server Protection (Issues #2 & #3)', () => {
 
     it('should prevent excessive I/O from malicious server flooding output', () => {
       // Simulate a malicious server sending 10,000 log lines rapidly
-      const LOG_FLUSH_INTERVAL_MS = 1000; // 1 second
+      // Note: LOG_FLUSH_INTERVAL_MS = 1000ms (1 second) is the timer-based flush interval
       const LOG_BUFFER_MAX_SIZE = 100;
 
       let ioOperationCount = 0;
@@ -207,7 +207,12 @@ describe('MCP Malicious Server Protection (Issues #2 & #3)', () => {
   describe('Resource cleanup after malicious activity (Issue #3)', () => {
     it('should clear all state when stopping a server', () => {
       // Simulate server state before stop
-      const serverState = {
+      const serverState: {
+        stdoutBuffer: string;
+        logBuffers: Record<string, string[]>;
+        timers: Record<string, ReturnType<typeof setTimeout>>;
+        rotationChecks: Record<string, number>;
+      } = {
         stdoutBuffer: 'data'.repeat(1000),
         logBuffers: {
           'server:stdout': ['log1', 'log2', 'log3'],

@@ -4,7 +4,6 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { z } from 'zod';
 import {
   convertMCPToolToAISDK,
   convertMCPToolsToAISDK,
@@ -277,9 +276,8 @@ describe('MCP Tool Converter - Type Safety', () => {
         inputSchema: {
           type: 'object',
           properties: {
-            // @ts-expect-error - Testing unsupported type
             unsupportedField: {
-              type: 'null', // Unsupported type
+              type: 'null', // Unsupported type - tests fallback to z.unknown()
             },
           },
         },

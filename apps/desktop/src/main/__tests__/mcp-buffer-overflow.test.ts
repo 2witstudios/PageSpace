@@ -6,7 +6,7 @@
  * by parsing valid JSON-RPC messages before clearing the buffer, preventing data loss.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { MCP_CONSTANTS } from '../../shared/mcp-types';
 
 describe('MCP Buffer Overflow Protection (Issue #1)', () => {

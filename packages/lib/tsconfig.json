@@ -1,7 +1,14 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
-    "outDir": "dist"
+    "outDir": "dist",
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@pagespace/db": ["../db/src/index"],
+      "@pagespace/db/*": ["../db/src/*"],
+      "@pagespace/lib/*": ["src/*"]
+    }
   },
   "include": ["src"],
   "exclude": ["node_modules", "dist"]

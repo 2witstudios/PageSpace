@@ -133,8 +133,8 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
     // Default: update succeeds
     vi.mocked(chatMessageRepository.updateMessageContent).mockResolvedValue(undefined);
 
-    // Default: page lookup for driveId
-    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive_123' });
+    // Default: page lookup for driveId (partial mock - only driveId needed for activity logging)
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive_123' } as { driveId: string });
 
     // Default: actor info for activity logging
     vi.mocked(getActorInfo).mockResolvedValue({
@@ -387,7 +387,7 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
     });
 
     it('should handle null driveId when page not found', async () => {
-      vi.mocked(db.query.pages.findFirst).mockResolvedValue(null);
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(undefined);
 
       const request = createPatchRequest(mockMessageId, { content: 'Updated' });
       const context = createContext(mockMessageId);
@@ -429,8 +429,8 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
     // Default: delete succeeds
     vi.mocked(chatMessageRepository.softDeleteMessage).mockResolvedValue(undefined);
 
-    // Default: page lookup for driveId
-    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive_123' });
+    // Default: page lookup for driveId (partial mock - only driveId needed for activity logging)
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive_123' } as { driveId: string });
 
     // Default: actor info for activity logging
     vi.mocked(getActorInfo).mockResolvedValue({
@@ -622,7 +622,7 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
     });
 
     it('should handle null driveId when page not found', async () => {
-      vi.mocked(db.query.pages.findFirst).mockResolvedValue(null);
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(undefined);
 
       const request = createDeleteRequest(mockMessageId);
       const context = createContext(mockMessageId);

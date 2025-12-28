@@ -21,7 +21,7 @@ import {
   previewAiUndo,
   executeAiUndo,
 } from '../ai-undo-service';
-import type { ActivityActionPreview } from '../../types/activity-actions';
+import type { ActivityActionPreview } from '../../../types/activity-actions';
 
 // Mock the database
 vi.mock('@pagespace/db', () => {

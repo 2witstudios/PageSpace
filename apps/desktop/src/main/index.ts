@@ -130,7 +130,7 @@ function getMachineIdentifier(): string {
   }
 
   try {
-    cachedMachineId = machineIdSync({ original: true });
+    cachedMachineId = machineIdSync(true);
   } catch (error) {
     logger.warn('[Auth] Failed to read machine identifier, falling back to hostname', { error });
     cachedMachineId = `${os.hostname()}-${process.platform}-${process.arch}`;

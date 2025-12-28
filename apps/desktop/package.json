@@ -14,6 +14,7 @@
     "dev": "electron-vite dev",
     "test": "vitest run",
     "build": "electron-vite build",
+    "typecheck": "tsc --noEmit",
     "package": "pnpm build && electron-builder",
     "package:mac": "pnpm build && electron-builder --mac --publish never",
     "package:win": "pnpm build && electron-builder --win --publish never",

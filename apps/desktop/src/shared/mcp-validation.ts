@@ -44,10 +44,8 @@ export function validateMCPConfig(config: unknown): { success: true; data: z.inf
     return { success: true, data: result };
   } catch (error) {
     if (error instanceof z.ZodError) {
-      logger.error('Validation failed', { errors: error.errors });
-      // Include all errors for better debugging
-      const allErrors = error.errors.map(err => `${err.path.join('.')}: ${err.message}`).join('; ');
-      const firstError = error.errors[0];
+      logger.error('Validation failed', { errors: error.issues });
+      const firstError = error.issues[0];
       return {
         success: false,
         error: `${firstError.path.join('.')}: ${firstError.message}`,
@@ -82,8 +80,8 @@ export function validateServerConfig(name: string, config: unknown): { success: 
     return { success: true, data: result };
   } catch (error) {
     if (error instanceof z.ZodError) {
-      logger.error('Server validation failed', { serverName: name, errors: error.errors });
-      const firstError = error.errors[0];
+      logger.error('Server validation failed', { serverName: name, errors: error.issues });
+      const firstError = error.issues[0];
       return {
         success: false,
         error: `${firstError.path.join('.')}: ${firstError.message}`,

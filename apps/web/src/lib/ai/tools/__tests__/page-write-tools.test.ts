@@ -151,6 +151,8 @@ describe('page-write-tools', () => {
         position: 1,
         isTrashed: false,
         trashedAt: null,
+        revision: 1,
+        stateHash: null,
       });
 
       const context = {
@@ -182,6 +184,8 @@ describe('page-write-tools', () => {
         position: 1,
         isTrashed: false,
         trashedAt: null,
+        revision: 1,
+        stateHash: null,
       });
 
       const context = {
@@ -213,6 +217,8 @@ describe('page-write-tools', () => {
         position: 1,
         isTrashed: false,
         trashedAt: null,
+        revision: 1,
+        stateHash: null,
       });
       mockCanUserEditPage.mockResolvedValue(true);
       mockPageRepo.update.mockResolvedValue({
@@ -368,6 +374,8 @@ describe('page-write-tools', () => {
         position: 1,
         isTrashed: false,
         trashedAt: null,
+        revision: 1,
+        stateHash: null,
       });
       mockCanUserEditPage.mockResolvedValue(true);
       mockPageRepo.update.mockResolvedValue({
@@ -502,6 +510,8 @@ describe('page-write-tools', () => {
         position: 1,
         isTrashed: false,
         trashedAt: null,
+        revision: 1,
+        stateHash: null,
       });
 
       const context = {
