@@ -104,15 +104,31 @@ export async function previewRollbackToPoint(
       driveId,
     });
 
+    // Validate that the activity has the required scope ID for the context
+    if (context === 'page' && !pageId) {
+      loggers.api.warn('[RollbackToPoint] Page context requested but activity has no pageId', {
+        activityId,
+        context,
+      });
+      throw new Error('Cannot rollback to this point: activity is not associated with a page');
+    }
+    if (context === 'drive' && !driveId) {
+      loggers.api.warn('[RollbackToPoint] Drive context requested but activity has no driveId', {
+        activityId,
+        context,
+      });
+      throw new Error('Cannot rollback to this point: activity is not associated with a drive');
+    }
+
     // Build query conditions based on context
     const conditions = [gte(activityLogs.timestamp, timestamp)];
 
-    if (context === 'page' && pageId) {
+    if (context === 'page') {
       // Page context: only activities for this page
-      conditions.push(eq(activityLogs.pageId, pageId));
-    } else if (context === 'drive' && driveId) {
+      conditions.push(eq(activityLogs.pageId, pageId!));
+    } else if (context === 'drive') {
       // Drive context: all activities in this drive
-      conditions.push(eq(activityLogs.driveId, driveId));
+      conditions.push(eq(activityLogs.driveId, driveId!));
     } else if (context === 'user_dashboard') {
       // User dashboard: all activities by this user
       conditions.push(eq(activityLogs.userId, userId));

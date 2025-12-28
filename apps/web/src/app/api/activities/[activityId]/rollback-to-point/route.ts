@@ -4,7 +4,6 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import {
   previewRollbackToPoint,
   executeRollbackToPoint,
-  getActivityById,
   type RollbackToPointContext,
 } from '@/services/api';
 import { loggers } from '@pagespace/lib/server';
@@ -15,7 +14,6 @@ import {
   broadcastDriveEvent,
   createDriveEventPayload,
 } from '@/lib/websocket';
-import { db } from '@pagespace/db';
 
 const AUTH_OPTIONS_READ = { allow: ['jwt'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
@@ -50,18 +48,29 @@ export async function GET(
     context: rollbackContext,
   });
 
-  const preview = await previewRollbackToPoint(activityId, userId, rollbackContext);
+  try {
+    const preview = await previewRollbackToPoint(activityId, userId, rollbackContext);
 
-  if (!preview) {
-    return NextResponse.json({ error: 'Activity not found or preview failed' }, { status: 404 });
+    if (!preview) {
+      return NextResponse.json({ error: 'Activity not found or preview failed' }, { status: 404 });
+    }
+
+    loggers.api.debug('[RollbackToPoint:Route] Preview generated', {
+      activitiesCount: preview.activitiesAffected.length,
+      warningsCount: preview.warnings.length,
+    });
+
+    return NextResponse.json(preview);
+  } catch (error) {
+    loggers.api.error('[RollbackToPoint:Route] Preview failed', {
+      activityId: maskIdentifier(activityId),
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Preview failed' },
+      { status: 400 }
+    );
   }
-
-  loggers.api.debug('[RollbackToPoint:Route] Preview generated', {
-    activitiesCount: preview.activitiesAffected.length,
-    warningsCount: preview.warnings.length,
-  });
-
-  return NextResponse.json(preview);
 }
 
 /**

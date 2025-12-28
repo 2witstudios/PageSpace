@@ -16,7 +16,7 @@ import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import { formatDistanceToNow } from 'date-fns';
 import { createClientLogger } from '@/lib/logging/client-logger';
