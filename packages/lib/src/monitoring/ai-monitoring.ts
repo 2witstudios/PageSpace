@@ -50,6 +50,7 @@ export const AI_PRICING = {
   'google/gemini-2.0-pro': { input: 1.25, output: 5.00 },
 
   // OpenRouter Paid Models - Chinese/Asian (openrouter.ai, Dec 2025)
+  'z-ai/glm-4.7': { input: 0.39, output: 1.90 },
   'z-ai/glm-4.5v': { input: 0.48, output: 1.44 },
   'z-ai/glm-4.5': { input: 0.48, output: 1.44 },
   'z-ai/glm-4.5-air': { input: 0.35, output: 1.55 },
@@ -220,6 +221,7 @@ export const MODEL_CONTEXT_WINDOWS = {
   'google/gemini-2.0-flash': 1000000,
 
   // OpenRouter Models - Chinese/Asian
+  'z-ai/glm-4.7': 200000,
   'z-ai/glm-4.5v': 128000,
   'z-ai/glm-4.5': 128000,
   'z-ai/glm-4.5-air': 128000,
