@@ -82,23 +82,26 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
           <div className={`text-gray-900 dark:text-gray-100 prose prose-xs dark:prose-invert max-w-full overflow-hidden ${styles.compactProseContent}`}>
             <StreamingMarkdown content={content} id={`${messageId}-text`} isStreaming={isStreaming} />
           </div>
-          {createdAt && (
-            <div className="flex items-center justify-between mt-1">
-              <div className="text-[10px] text-gray-500">
-                {new Date(createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                {editedAt && <span className="ml-1">(edited)</span>}
-              </div>
-              {onEdit && onDelete && !isEditing && (
-                <MessageActionButtons
-                  onEdit={onEdit}
-                  onDelete={onDelete}
-                  onRetry={onRetry}
-                  onUndoFromHere={onUndoFromHere}
-                  compact
-                />
+          {/* Always show footer with buttons; timestamp only when createdAt exists */}
+          <div className="flex items-center justify-between mt-1">
+            <div className="text-[10px] text-gray-500">
+              {createdAt && (
+                <>
+                  {new Date(createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  {editedAt && <span className="ml-1">(edited)</span>}
+                </>
               )}
             </div>
-          )}
+            {onEdit && onDelete && !isEditing && (
+              <MessageActionButtons
+                onEdit={onEdit}
+                onDelete={onDelete}
+                onRetry={onRetry}
+                onUndoFromHere={onUndoFromHere}
+                compact
+              />
+            )}
+          </div>
         </>
       )}
     </div>
