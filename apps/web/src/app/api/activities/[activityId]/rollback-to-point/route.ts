@@ -40,7 +40,17 @@ export async function GET(
   const { activityId } = await context.params;
   const userId = auth.userId;
   const { searchParams } = new URL(request.url);
-  const rollbackContext = (searchParams.get('context') || 'page') as RollbackToPointContext;
+  const contextParam = searchParams.get('context') || 'page';
+
+  // Validate context parameter
+  const validContexts: RollbackToPointContext[] = ['page', 'drive', 'user_dashboard'];
+  if (!validContexts.includes(contextParam as RollbackToPointContext)) {
+    return NextResponse.json(
+      { error: `Invalid context. Must be one of: ${validContexts.join(', ')}` },
+      { status: 400 }
+    );
+  }
+  const rollbackContext = contextParam as RollbackToPointContext;
 
   loggers.api.debug('[RollbackToPoint:Route] GET request received', {
     activityId: maskIdentifier(activityId),
