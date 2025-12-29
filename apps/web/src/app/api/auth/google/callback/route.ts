@@ -8,7 +8,7 @@ import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { OAuth2Client } from 'google-auth-library';
 import { NextResponse } from 'next/server';
-import crypto from 'crypto';
+import crypto, { timingSafeEqual } from 'crypto';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 
 const googleCallbackSchema = z.object({
@@ -64,14 +64,19 @@ export async function GET(req: Request) {
 
         // Check if this is a signed state parameter (new format)
         if (stateWithSignature.data && stateWithSignature.sig) {
-          // Verify HMAC signature
+          // Verify HMAC signature using constant-time comparison to prevent timing attacks
           const { data, sig } = stateWithSignature;
           const expectedSignature = crypto
             .createHmac('sha256', process.env.OAUTH_STATE_SECRET!)
             .update(JSON.stringify(data))
             .digest('hex');
 
-          if (sig !== expectedSignature) {
+          // Use timing-safe comparison to prevent timing attacks
+          // Both signatures should be same length (hex-encoded SHA256 = 64 chars)
+          const sigBuffer = Buffer.from(sig, 'utf8');
+          const expectedBuffer = Buffer.from(expectedSignature, 'utf8');
+
+          if (sigBuffer.length !== expectedBuffer.length || !timingSafeEqual(sigBuffer, expectedBuffer)) {
             loggers.auth.warn('OAuth state signature mismatch', { stateParam });
             const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
             return NextResponse.redirect(new URL('/auth/signin?error=invalid_request', baseUrl));
