@@ -51,7 +51,7 @@ export async function PATCH(
   }
 
   const body = await req.json();
-  const { title, description, status, priority, assigneeId, dueDate, position } = body;
+  const { title, description, status, priority, assigneeId, assigneeAgentId, dueDate, position } = body;
 
   // Build update object
   const updates: Partial<typeof taskItems.$inferInsert> = {};
@@ -89,6 +89,10 @@ export async function PATCH(
 
   if (assigneeId !== undefined) {
     updates.assigneeId = assigneeId || null;
+  }
+
+  if (assigneeAgentId !== undefined) {
+    updates.assigneeAgentId = assigneeAgentId || null;
   }
 
   if (dueDate !== undefined) {
@@ -174,6 +178,13 @@ export async function PATCH(
           id: true,
           name: true,
           image: true,
+        },
+      },
+      assigneeAgent: {
+        columns: {
+          id: true,
+          title: true,
+          type: true,
         },
       },
       user: {

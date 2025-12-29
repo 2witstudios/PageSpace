@@ -104,9 +104,22 @@ export function ExpandableTaskItem({
 
   const handleAssigneeChange = (
     assigneeId: string | null,
-    member?: { id: string; name: string | null; image: string | null } | null
+    agentId: string | null,
+    data?: { id: string; name: string | null; image: string | null; type: 'user' | 'agent' } | null
   ) => {
-    handleFieldUpdate('assigneeId', assigneeId, 'assignee', assigneeId === null ? null : member);
+    // Handle both user and agent assignment
+    if (agentId) {
+      // Agent assignment - update assigneeAgentId and clear user assignee display
+      handleFieldUpdate('assigneeAgentId', agentId, 'assignee', null);
+    } else {
+      // User assignment or unassignment
+      const member = data && data.type === 'user' ? {
+        id: data.id,
+        name: data.name,
+        image: data.image,
+      } : null;
+      handleFieldUpdate('assigneeId', assigneeId, 'assignee', member);
+    }
   };
 
   const handleDueDateChange = (date: Date | null) => {

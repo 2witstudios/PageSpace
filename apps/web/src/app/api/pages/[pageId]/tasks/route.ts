@@ -75,6 +75,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       taskListId: true,
       userId: true,
       assigneeId: true,
+      assigneeAgentId: true,
       pageId: true,
       title: true,
       description: true,
@@ -93,6 +94,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
           id: true,
           name: true,
           image: true,
+        },
+      },
+      assigneeAgent: {
+        columns: {
+          id: true,
+          title: true,
+          type: true,
         },
       },
       user: {
@@ -167,7 +175,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   }
 
   const body = await req.json();
-  const { title, description, status, priority, assigneeId, dueDate } = body;
+  const { title, description, status, priority, assigneeId, assigneeAgentId, dueDate } = body;
 
   if (!title || typeof title !== 'string' || title.trim().length === 0) {
     return NextResponse.json({ error: 'Title is required' }, { status: 400 });
@@ -224,6 +232,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       status: status || 'pending',
       priority: priority || 'medium',
       assigneeId: assigneeId || null,
+      assigneeAgentId: assigneeAgentId || null,
       dueDate: dueDate ? new Date(dueDate) : null,
       position: nextTaskPosition,
     }).returning();
@@ -240,6 +249,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
           id: true,
           name: true,
           image: true,
+        },
+      },
+      assigneeAgent: {
+        columns: {
+          id: true,
+          title: true,
+          type: true,
         },
       },
       user: {
