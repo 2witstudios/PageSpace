@@ -287,7 +287,7 @@ interface PageMutationMeta {
 
 interface PageChangeResult {
   restoredValues: Record<string, unknown>;
-  pageMutationMeta: PageMutationMeta;
+  pageMutationMeta: PageMutationMeta | undefined;
 }
 
 async function applyPageUpdateWithRevision(
@@ -1646,15 +1646,23 @@ async function rollbackPageChange(
 
   // Handle create operation by trashing the page
   if (activity.operation === 'create') {
+    // Get the page's current state
+    const [page] = await database
+      .select({ parentId: pages.parentId, isTrashed: pages.isTrashed })
+      .from(pages)
+      .where(eq(pages.id, activity.pageId));
+
+    // If already trashed, skip - this is a no-op (handles AI undo of old activities)
+    if (page?.isTrashed) {
+      loggers.api.debug('[Rollback:Execute:Page] Page already trashed, skipping', {
+        pageId: activity.pageId,
+      });
+      return { restoredValues: { isTrashed: true }, pageMutationMeta: undefined };
+    }
+
     loggers.api.debug('[Rollback:Execute:Page] Trashing created page', {
       pageId: activity.pageId,
     });
-
-    // Get the page's parent (grandparent of any children)
-    const [page] = await database
-      .select({ parentId: pages.parentId })
-      .from(pages)
-      .where(eq(pages.id, activity.pageId));
 
     // Orphan any children to the grandparent (matches pageService.trashPage behavior)
     // This prevents broken tree with children pointing to trashed parent
