@@ -184,7 +184,7 @@ export const RollbackToPointDialog: React.FC<RollbackToPointDialogProps> = ({
                             {cannotRollbackActivities.length} change
                             {cannotRollbackActivities.length !== 1 ? 's' : ''} cannot be undone:
                           </p>
-                          <ScrollArea className="max-h-[120px]">
+                          <div className="max-h-[120px] overflow-y-auto">
                             <ul className="list-disc list-inside space-y-0.5 text-xs pr-2">
                               {cannotRollbackActivities.map((activity) => (
                                 <li key={activity.id}>
@@ -193,7 +193,7 @@ export const RollbackToPointDialog: React.FC<RollbackToPointDialogProps> = ({
                                 </li>
                               ))}
                             </ul>
-                          </ScrollArea>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -206,7 +206,7 @@ export const RollbackToPointDialog: React.FC<RollbackToPointDialogProps> = ({
                         <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-500 mt-0.5 shrink-0" />
                         <div className="text-sm text-yellow-800 dark:text-yellow-200">
                           <p className="font-medium mb-1">Conflicts detected</p>
-                          <ScrollArea className="max-h-[120px]">
+                          <div className="max-h-[120px] overflow-y-auto">
                             <ul className="list-disc list-inside space-y-0.5 text-xs pr-2">
                               {conflictedActivities.map((activity) => (
                                 <li key={activity.id}>
@@ -215,7 +215,7 @@ export const RollbackToPointDialog: React.FC<RollbackToPointDialogProps> = ({
                                 </li>
                               ))}
                             </ul>
-                          </ScrollArea>
+                          </div>
                         </div>
                       </div>
                     </div>

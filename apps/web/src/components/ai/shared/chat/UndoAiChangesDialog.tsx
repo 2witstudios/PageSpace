@@ -16,7 +16,6 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import type { AiUndoPreview, UndoMode } from '@/services/api';
 import { createClientLogger } from '@/lib/logging/client-logger';
@@ -209,13 +208,13 @@ export const UndoAiChangesDialog: React.FC<UndoAiChangesDialogProps> = ({
                         <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-500 mt-0.5 shrink-0" />
                         <div className="text-sm text-yellow-800 dark:text-yellow-200">
                           <p className="font-medium mb-1">Some changes cannot be undone:</p>
-                          <ScrollArea className="max-h-[120px]">
+                          <div className="max-h-[120px] overflow-y-auto">
                             <ul className="list-disc list-inside space-y-0.5 text-xs pr-2">
                               {preview.warnings.map((warning, idx) => (
                                 <li key={idx}>{warning}</li>
                               ))}
                             </ul>
-                          </ScrollArea>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -227,7 +226,7 @@ export const UndoAiChangesDialog: React.FC<UndoAiChangesDialogProps> = ({
                         <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-500 mt-0.5 shrink-0" />
                         <div className="text-sm text-yellow-800 dark:text-yellow-200">
                           <p className="font-medium mb-1">Conflicts detected</p>
-                          <ScrollArea className="max-h-[120px]">
+                          <div className="max-h-[120px] overflow-y-auto">
                             <ul className="list-disc list-inside space-y-0.5 text-xs pr-2">
                               {conflictedActivities.map((activity) => (
                                 <li key={activity.id}>
@@ -235,7 +234,7 @@ export const UndoAiChangesDialog: React.FC<UndoAiChangesDialogProps> = ({
                                 </li>
                               ))}
                             </ul>
-                          </ScrollArea>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -245,7 +244,7 @@ export const UndoAiChangesDialog: React.FC<UndoAiChangesDialogProps> = ({
                   {mode === 'messages_and_changes' && canRollbackCount > 0 && (
                     <div className="text-xs text-muted-foreground border-t pt-3">
                       <p className="font-medium mb-1">Changes to be undone:</p>
-                      <ScrollArea className="max-h-[100px]">
+                      <div className="max-h-[100px] overflow-y-auto">
                         <div className="flex flex-wrap gap-1 pr-2">
                           {preview.activitiesAffected
                             .filter(a => a.preview.canExecute || (force && a.preview.requiresForce))
@@ -255,7 +254,7 @@ export const UndoAiChangesDialog: React.FC<UndoAiChangesDialogProps> = ({
                               </Badge>
                             ))}
                         </div>
-                      </ScrollArea>
+                      </div>
                     </div>
                   )}
                 </>

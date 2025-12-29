@@ -736,7 +736,9 @@ async function previewActivityAction(
       isTrashed: currentPage[0].isTrashed,
     };
 
-    if (effectiveOperation === 'create') {
+    // Skip create no-op check for AI undo - old activities from previous sessions
+    // may reference already-trashed pages that should be silently ignored
+    if (effectiveOperation === 'create' && undoGroupActivityIds.length === 0) {
       const isTrashed = currentPage[0].isTrashed;
       // When rolling back a rollback of create, we should RESTORE (not trash)
       const shouldBeTrashed = action === 'rollback' && !rollingBackRollback;
