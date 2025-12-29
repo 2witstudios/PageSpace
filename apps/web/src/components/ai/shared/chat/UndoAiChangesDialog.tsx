@@ -208,14 +208,13 @@ export const UndoAiChangesDialog: React.FC<UndoAiChangesDialogProps> = ({
                         <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-500 mt-0.5 shrink-0" />
                         <div className="text-sm text-yellow-800 dark:text-yellow-200">
                           <p className="font-medium mb-1">Some changes cannot be undone:</p>
-                          <ul className="list-disc list-inside space-y-0.5 text-xs">
-                            {preview.warnings.slice(0, 3).map((warning, idx) => (
-                              <li key={idx}>{warning}</li>
-                            ))}
-                            {preview.warnings.length > 3 && (
-                              <li>...and {preview.warnings.length - 3} more</li>
-                            )}
-                          </ul>
+                          <div className="max-h-[120px] overflow-y-auto">
+                            <ul className="list-disc list-inside space-y-0.5 text-xs pr-2">
+                              {preview.warnings.map((warning, idx) => (
+                                <li key={idx}>{warning}</li>
+                              ))}
+                            </ul>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -227,16 +226,15 @@ export const UndoAiChangesDialog: React.FC<UndoAiChangesDialogProps> = ({
                         <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-500 mt-0.5 shrink-0" />
                         <div className="text-sm text-yellow-800 dark:text-yellow-200">
                           <p className="font-medium mb-1">Conflicts detected</p>
-                          <ul className="list-disc list-inside space-y-0.5 text-xs">
-                            {conflictedActivities.slice(0, 3).map((activity) => (
-                              <li key={activity.id}>
-                                {activity.resourceTitle || activity.resourceType}: {activity.preview.conflictFields.join(', ')}
-                              </li>
-                            ))}
-                            {conflictedActivities.length > 3 && (
-                              <li>...and {conflictedActivities.length - 3} more</li>
-                            )}
-                          </ul>
+                          <div className="max-h-[120px] overflow-y-auto">
+                            <ul className="list-disc list-inside space-y-0.5 text-xs pr-2">
+                              {conflictedActivities.map((activity) => (
+                                <li key={activity.id}>
+                                  {activity.resourceTitle || activity.resourceType}: {activity.preview.conflictFields.join(', ')}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -246,20 +244,16 @@ export const UndoAiChangesDialog: React.FC<UndoAiChangesDialogProps> = ({
                   {mode === 'messages_and_changes' && canRollbackCount > 0 && (
                     <div className="text-xs text-muted-foreground border-t pt-3">
                       <p className="font-medium mb-1">Changes to be undone:</p>
-                      <div className="flex flex-wrap gap-1">
-                        {preview.activitiesAffected
-                          .filter(a => a.preview.canExecute || (force && a.preview.requiresForce))
-                          .slice(0, 5)
-                          .map((activity) => (
-                            <Badge key={activity.id} variant="secondary" className="text-xs">
-                              {activity.preview.changes[0]?.label || `${activity.operation} ${activity.resourceTitle || activity.resourceType}`}
-                            </Badge>
-                          ))}
-                        {canRollbackCount > 5 && (
-                          <Badge variant="outline" className="text-xs">
-                            +{canRollbackCount - 5} more
-                          </Badge>
-                        )}
+                      <div className="max-h-[100px] overflow-y-auto">
+                        <div className="flex flex-wrap gap-1 pr-2">
+                          {preview.activitiesAffected
+                            .filter(a => a.preview.canExecute || (force && a.preview.requiresForce))
+                            .map((activity) => (
+                              <Badge key={activity.id} variant="secondary" className="text-xs">
+                                {activity.preview.changes[0]?.label || `${activity.operation} ${activity.resourceTitle || activity.resourceType}`}
+                              </Badge>
+                            ))}
+                        </div>
                       </div>
                     </div>
                   )}

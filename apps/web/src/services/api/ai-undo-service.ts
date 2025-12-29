@@ -291,9 +291,21 @@ export async function previewAiUndo(
       loggers.api.debug('[AiUndo:Preview] Activity eligibility result', {
         activityId: activity.id,
         canExecute: preview.canExecute,
+        isNoOp: preview.isNoOp,
         reason: preview.reason,
         warningsCount: preview.warnings.length,
       });
+
+      // Skip no-op activities (e.g., pages already trashed from previous sessions)
+      // These are silently filtered out to show accurate count of real changes
+      if (preview.isNoOp) {
+        loggers.api.debug('[AiUndo:Preview] Skipping no-op activity', {
+          activityId: activity.id,
+          operation: activity.operation,
+          resourceTitle: activity.resourceTitle,
+        });
+        continue;
+      }
 
       activitiesAffected.push({
         id: activity.id,

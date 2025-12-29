@@ -100,16 +100,23 @@ export function isEditSessionGroupable(activity: ActivityLog): boolean {
 }
 
 /**
- * Collect consecutive activities that are rollback operations
+ * Collect consecutive activities that are rollback operations with the same changeGroupId
  */
 function collectConsecutiveRollbacks(
   activities: ActivityLog[],
   startIndex: number
 ): ActivityLog[] {
+  const firstActivity = activities[startIndex];
+  const changeGroupId = firstActivity.changeGroupId;
+
   const group: ActivityLog[] = [];
   for (let i = startIndex; i < activities.length; i++) {
-    if (isRollbackOperation(activities[i])) {
-      group.push(activities[i]);
+    const current = activities[i];
+    if (
+      isRollbackOperation(current) &&
+      current.changeGroupId === changeGroupId
+    ) {
+      group.push(current);
     } else {
       break;
     }

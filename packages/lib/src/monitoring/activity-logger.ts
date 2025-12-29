@@ -154,6 +154,31 @@ export interface ActivityLogInput {
  */
 const MAX_CONTENT_SNAPSHOT_SIZE = 1024 * 1024; // 1MB
 
+/**
+ * Broadcast hook for real-time activity updates.
+ * Set by the web app to broadcast activity events to connected clients.
+ */
+type ActivityBroadcastHook = (payload: {
+  activityId: string;
+  operation: string;
+  resourceType: string;
+  resourceId: string;
+  driveId: string | null;
+  pageId: string | null;
+  userId: string;
+  timestamp: string;
+}) => Promise<void>;
+
+let activityBroadcastHook: ActivityBroadcastHook | null = null;
+
+/**
+ * Set the activity broadcast hook.
+ * Called by the web app at startup to enable real-time activity updates.
+ */
+export function setActivityBroadcastHook(hook: ActivityBroadcastHook | null): void {
+  activityBroadcastHook = hook;
+}
+
 function prepareActivityInsert(input: ActivityLogInput) {
   let contentSnapshot = input.contentSnapshot;
   let metadata = input.metadata;
@@ -215,11 +240,28 @@ function prepareActivityInsert(input: ActivityLogInput) {
 /**
  * Log an activity event to the database.
  * Fire-and-forget pattern - never blocks the caller.
+ * Also broadcasts the activity for real-time updates if a hook is configured.
  */
 export async function logActivity(input: ActivityLogInput): Promise<void> {
   try {
     const values = prepareActivityInsert(input);
     await db.insert(activityLogs).values(values);
+
+    // Broadcast for real-time updates (fire and forget)
+    if (activityBroadcastHook) {
+      activityBroadcastHook({
+        activityId: values.id,
+        operation: values.operation,
+        resourceType: values.resourceType,
+        resourceId: values.resourceId,
+        driveId: values.driveId ?? null,
+        pageId: values.pageId ?? null,
+        userId: values.userId,
+        timestamp: values.timestamp.toISOString(),
+      }).catch(() => {
+        // Broadcast failure shouldn't break anything
+      });
+    }
   } catch (error) {
     // Fire and forget - log error but don't throw
     console.error('[ActivityLogger] Failed to log activity:', error);
@@ -229,6 +271,8 @@ export async function logActivity(input: ActivityLogInput): Promise<void> {
 /**
  * Log an activity event using an existing transaction.
  * Intended for deterministic, atomic writes.
+ * Note: Broadcast happens after insert but within the transaction scope.
+ * The broadcast is debounced, so it will fire after the transaction commits.
  */
 export async function logActivityWithTx(
   input: ActivityLogInput,
@@ -236,6 +280,22 @@ export async function logActivityWithTx(
 ): Promise<void> {
   const values = prepareActivityInsert(input);
   await tx.insert(activityLogs).values(values);
+
+  // Broadcast for real-time updates (fire and forget, debounced)
+  if (activityBroadcastHook) {
+    activityBroadcastHook({
+      activityId: values.id,
+      operation: values.operation,
+      resourceType: values.resourceType,
+      resourceId: values.resourceId,
+      driveId: values.driveId ?? null,
+      pageId: values.pageId ?? null,
+      userId: values.userId,
+      timestamp: values.timestamp.toISOString(),
+    }).catch(() => {
+      // Broadcast failure shouldn't break anything
+    });
+  }
 }
 
 /**

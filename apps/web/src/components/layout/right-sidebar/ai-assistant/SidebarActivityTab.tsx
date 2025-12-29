@@ -35,6 +35,7 @@ import { RollbackConfirmDialog } from '@/components/version-history/RollbackConf
 import { RollbackToPointDialog, type RollbackToPointContext } from '@/components/activity/RollbackToPointDialog';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { useToast } from '@/hooks/useToast';
+import { useActivitySocket, type ActivityContext } from '@/hooks/useActivitySocket';
 import type { ActivityActionPreview, ActivityActionResult } from '@/types/activity-actions';
 import type { ActivityLog, ActivityGroup } from '@/components/activity/types';
 import { groupConsecutiveActivities } from '@/components/activity/utils';
@@ -242,6 +243,17 @@ export default function SidebarActivityTab() {
   useEffect(() => {
     loadActivities();
   }, [loadActivities, pathname]);
+
+  // Real-time activity updates via socket
+  // Only enabled when viewing a specific drive or page (not user dashboard)
+  const activityContext: ActivityContext | null = pageId ? 'page' : driveId ? 'drive' : null;
+  const activityContextId = pageId || driveId || null;
+
+  useActivitySocket({
+    context: activityContext || 'drive', // Fallback for type, but won't be used when contextId is null
+    contextId: activityContextId,
+    onActivityLogged: loadActivities,
+  });
 
   // Handle undo click - fetch preview and show confirm dialog
   const handleActionClick = useCallback(async (activity: ActivityItem) => {
