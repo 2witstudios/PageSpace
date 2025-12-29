@@ -184,17 +184,16 @@ export const RollbackToPointDialog: React.FC<RollbackToPointDialogProps> = ({
                             {cannotRollbackActivities.length} change
                             {cannotRollbackActivities.length !== 1 ? 's' : ''} cannot be undone:
                           </p>
-                          <ul className="list-disc list-inside space-y-0.5 text-xs">
-                            {cannotRollbackActivities.slice(0, 3).map((activity) => (
-                              <li key={activity.id}>
-                                {activity.operation} {activity.resourceTitle || activity.resourceType}
-                                {activity.preview.reason && `: ${activity.preview.reason}`}
-                              </li>
-                            ))}
-                            {cannotRollbackActivities.length > 3 && (
-                              <li>...and {cannotRollbackActivities.length - 3} more</li>
-                            )}
-                          </ul>
+                          <ScrollArea className="max-h-[120px]">
+                            <ul className="list-disc list-inside space-y-0.5 text-xs pr-2">
+                              {cannotRollbackActivities.map((activity) => (
+                                <li key={activity.id}>
+                                  {activity.operation} {activity.resourceTitle || activity.resourceType}
+                                  {activity.preview.reason && `: ${activity.preview.reason}`}
+                                </li>
+                              ))}
+                            </ul>
+                          </ScrollArea>
                         </div>
                       </div>
                     </div>
@@ -207,17 +206,16 @@ export const RollbackToPointDialog: React.FC<RollbackToPointDialogProps> = ({
                         <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-500 mt-0.5 shrink-0" />
                         <div className="text-sm text-yellow-800 dark:text-yellow-200">
                           <p className="font-medium mb-1">Conflicts detected</p>
-                          <ul className="list-disc list-inside space-y-0.5 text-xs">
-                            {conflictedActivities.slice(0, 3).map((activity) => (
-                              <li key={activity.id}>
-                                {activity.resourceTitle || activity.resourceType}:{' '}
-                                {activity.preview.conflictFields.join(', ')}
-                              </li>
-                            ))}
-                            {conflictedActivities.length > 3 && (
-                              <li>...and {conflictedActivities.length - 3} more</li>
-                            )}
-                          </ul>
+                          <ScrollArea className="max-h-[120px]">
+                            <ul className="list-disc list-inside space-y-0.5 text-xs pr-2">
+                              {conflictedActivities.map((activity) => (
+                                <li key={activity.id}>
+                                  {activity.resourceTitle || activity.resourceType}:{' '}
+                                  {activity.preview.conflictFields.join(', ')}
+                                </li>
+                              ))}
+                            </ul>
+                          </ScrollArea>
                         </div>
                       </div>
                     </div>
