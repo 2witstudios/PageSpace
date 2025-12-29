@@ -16,6 +16,18 @@ export type DriveOperation = 'created' | 'updated' | 'deleted';
 export type DriveMemberOperation = 'member_added' | 'member_role_changed' | 'member_removed';
 export type TaskOperation = 'task_list_created' | 'task_added' | 'task_updated' | 'task_completed' | 'task_deleted' | 'tasks_reordered';
 export type UsageOperation = 'updated';
+export type ActivityOperation = 'logged';
+
+export interface ActivityEventPayload {
+  activityId: string;
+  operation: string;
+  resourceType: string;
+  resourceId: string;
+  driveId: string | null;
+  pageId: string | null;
+  userId: string;
+  timestamp: string;
+}
 
 export interface PageEventPayload {
   driveId: string;
@@ -352,5 +364,89 @@ export async function broadcastUsageEvent(payload: UsageEventPayload): Promise<v
         channel: `notifications:${maskIdentifier(payload.userId)}`
       }
     );
+  }
+}
+
+// ============================================================================
+// Activity Events (with debouncing)
+// ============================================================================
+
+// In-memory debounce state per context
+const pendingActivityBroadcasts = new Map<string, NodeJS.Timeout>();
+const ACTIVITY_DEBOUNCE_MS = 500;
+
+/**
+ * Broadcasts an activity event to the realtime server with debouncing.
+ * Events are debounced per context (drive or page) to prevent event storms.
+ * @param payload - The activity event payload to broadcast
+ */
+export async function broadcastActivityEvent(payload: ActivityEventPayload): Promise<void> {
+  // Only broadcast if realtime URL is configured
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    return;
+  }
+
+  // Determine contexts to broadcast to
+  const contexts: { channelId: string; key: string }[] = [];
+  if (payload.driveId) {
+    contexts.push({
+      channelId: `activity:drive:${payload.driveId}`,
+      key: `drive:${payload.driveId}`,
+    });
+  }
+  if (payload.pageId) {
+    contexts.push({
+      channelId: `activity:page:${payload.pageId}`,
+      key: `page:${payload.pageId}`,
+    });
+  }
+
+  // Debounce broadcasts per context
+  for (const { channelId, key } of contexts) {
+    // Clear existing timeout for this context
+    const existing = pendingActivityBroadcasts.get(key);
+    if (existing) {
+      clearTimeout(existing);
+    }
+
+    // Set new timeout
+    const timeout = setTimeout(async () => {
+      pendingActivityBroadcasts.delete(key);
+
+      try {
+        const requestBody = JSON.stringify({
+          channelId,
+          event: 'activity:logged',
+          payload,
+        });
+
+        await fetch(`${realtimeUrl}/api/broadcast`, {
+          method: 'POST',
+          headers: createSignedBroadcastHeaders(requestBody),
+          body: requestBody,
+        });
+
+        if (verboseRealtimeLogging) {
+          realtimeLogger.debug('Activity event broadcasted', {
+            channelId,
+            operation: payload.operation,
+            resourceType: payload.resourceType,
+          });
+        }
+      } catch (error) {
+        // Log error but don't throw - broadcasting failures shouldn't break operations
+        realtimeLogger.error(
+          'Failed to broadcast activity event',
+          error instanceof Error ? error : undefined,
+          {
+            event: 'activity',
+            channel: channelId,
+          }
+        );
+      }
+    }, ACTIVITY_DEBOUNCE_MS);
+
+    pendingActivityBroadcasts.set(key, timeout);
   }
 }

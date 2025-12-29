@@ -11,11 +11,21 @@ import {
 vi.mock('next/navigation', () => ({
   useParams: vi.fn(() => ({})),
   usePathname: vi.fn(() => '/dashboard'),
+  useRouter: vi.fn(() => ({
+    push: vi.fn(),
+    replace: vi.fn(),
+    refresh: vi.fn(),
+  })),
 }));
 
 // Mock fetchWithAuth for component integration tests
 vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: vi.fn(),
+}));
+
+// Mock useActivitySocket to avoid socket dependencies in tests
+vi.mock('@/hooks/useActivitySocket', () => ({
+  useActivitySocket: vi.fn(() => ({ isSocketConnected: false })),
 }));
 
 import SidebarActivityTab from '../SidebarActivityTab';

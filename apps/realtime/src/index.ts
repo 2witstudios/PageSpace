@@ -264,10 +264,61 @@ io.on('connection', (socket: AuthSocket) => {
 
   socket.on('leave_global_drives', () => {
     if (!user?.id) return;
-    
+
     const globalDrivesRoom = 'global:drives';
     socket.leave(globalDrivesRoom);
     loggers.realtime.debug('User left global drives room', { userId: user.id, room: globalDrivesRoom });
+  });
+
+  // Activity channel handlers - for real-time activity feed updates
+  socket.on('join_activity_drive', async (driveId: string) => {
+    if (!user?.id) return;
+
+    try {
+      const hasAccess = await getUserDriveAccess(user.id, driveId);
+      if (hasAccess) {
+        const activityRoom = `activity:drive:${driveId}`;
+        socket.join(activityRoom);
+        loggers.realtime.debug('User joined activity drive room', { userId: user.id, room: activityRoom });
+      } else {
+        loggers.realtime.warn('User denied access to activity drive', { userId: user.id, driveId });
+      }
+    } catch (error) {
+      loggers.realtime.error('Error joining activity drive', error as Error, { driveId });
+    }
+  });
+
+  socket.on('join_activity_page', async (pageId: string) => {
+    if (!user?.id) return;
+
+    try {
+      const accessLevel = await getUserAccessLevel(user.id, pageId);
+      if (accessLevel) {
+        const activityRoom = `activity:page:${pageId}`;
+        socket.join(activityRoom);
+        loggers.realtime.debug('User joined activity page room', { userId: user.id, room: activityRoom });
+      } else {
+        loggers.realtime.warn('User denied access to activity page', { userId: user.id, pageId });
+      }
+    } catch (error) {
+      loggers.realtime.error('Error joining activity page', error as Error, { pageId });
+    }
+  });
+
+  socket.on('leave_activity_drive', (driveId: string) => {
+    if (!user?.id) return;
+
+    const activityRoom = `activity:drive:${driveId}`;
+    socket.leave(activityRoom);
+    loggers.realtime.debug('User left activity drive room', { userId: user.id, room: activityRoom });
+  });
+
+  socket.on('leave_activity_page', (pageId: string) => {
+    if (!user?.id) return;
+
+    const activityRoom = `activity:page:${pageId}`;
+    socket.leave(activityRoom);
+    loggers.realtime.debug('User left activity page room', { userId: user.id, room: activityRoom });
   });
 
   socket.on('disconnect', (reason) => {
