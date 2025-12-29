@@ -1315,7 +1315,9 @@ async function previewActivityAction(
     }
   }
 
-  const noOp = isNoOpChange(targetValues, currentValues);
+  // Skip no-op detection for AI undo - operations may appear as no-ops
+  // but the resource will be affected by other operations in the undo group
+  const noOp = undoGroupActivityIds.length === 0 && isNoOpChange(targetValues, currentValues);
   if (noOp) {
     return basePreview({
       reason: 'Already at this version',
