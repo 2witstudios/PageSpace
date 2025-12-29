@@ -145,6 +145,9 @@ export async function previewRollbackToPoint(
       activitiesCount: activities.length,
     });
 
+    // Collect all activity IDs for undo group logic (skip conflict/no-op detection within group)
+    const undoGroupActivityIds = activities.map(a => a.id);
+
     // Check rollback eligibility for each activity
     const activitiesAffected: RollbackToPointPreview['activitiesAffected'] = [];
     const warnings: string[] = [];
@@ -166,7 +169,7 @@ export async function previewRollbackToPoint(
 
       let preview: ActivityActionPreview;
       try {
-        preview = await previewRollback(activity.id, userId, rollbackContext);
+        preview = await previewRollback(activity.id, userId, rollbackContext, { undoGroupActivityIds });
         if (!preview) {
           preview = fallbackPreview('Preview failed');
           warnings.push(`Could not preview rollback for activity ${activity.id}`);
@@ -271,6 +274,9 @@ export async function executeRollbackToPoint(
       activitiesAffected: preview.activitiesAffected.length,
     });
 
+    // Collect all activity IDs for undo group logic (skip conflict/no-op detection within group)
+    const undoGroupActivityIds = preview.activitiesAffected.map(a => a.id);
+
     // Execute all rollbacks in a single transaction for atomicity
     loggers.api.debug('[RollbackToPoint:Execute] Starting transaction');
 
@@ -305,7 +311,7 @@ export async function executeRollbackToPoint(
           rollbackContext,
         });
 
-        const result = await executeRollback(activity.id, userId, rollbackContext, { tx, force });
+        const result = await executeRollback(activity.id, userId, rollbackContext, { tx, force, undoGroupActivityIds });
         if (!result.success) {
           loggers.api.debug('[RollbackToPoint:Execute] Activity rollback failed - aborting', {
             activityId: activity.id,
