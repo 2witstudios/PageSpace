@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useParams, usePathname } from 'next/navigation';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -35,7 +35,7 @@ import { RollbackConfirmDialog } from '@/components/version-history/RollbackConf
 import { RollbackToPointDialog, type RollbackToPointContext } from '@/components/activity/RollbackToPointDialog';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { useToast } from '@/hooks/useToast';
-import { useActivitySocket, type ActivityContext } from '@/hooks/useActivitySocket';
+import { useSocket } from '@/hooks/useSocket';
 import type { ActivityActionPreview, ActivityActionResult } from '@/types/activity-actions';
 import type { ActivityLog, ActivityGroup } from '@/components/activity/types';
 import { groupConsecutiveActivities } from '@/components/activity/utils';
@@ -245,15 +245,40 @@ export default function SidebarActivityTab() {
   }, [loadActivities, pathname]);
 
   // Real-time activity updates via socket
-  // Only enabled when viewing a specific drive or page (not user dashboard)
-  const activityContext: ActivityContext | null = pageId ? 'page' : driveId ? 'drive' : null;
-  const activityContextId = pageId || driveId || null;
+  // Listen for page events to refresh activity feed (reuses existing page tree socket)
+  const socket = useSocket();
+  const debounceRef = useRef<NodeJS.Timeout | undefined>(undefined);
 
-  useActivitySocket({
-    context: activityContext || 'drive', // Fallback for type, but won't be used when contextId is null
-    contextId: activityContextId,
-    onActivityLogged: loadActivities,
-  });
+  useEffect(() => {
+    if (!socket || !driveId) {
+      return;
+    }
+
+    // Debounced refetch to handle rapid events
+    const debouncedRefetch = () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+      }
+      debounceRef.current = setTimeout(() => {
+        loadActivities();
+      }, 300);
+    };
+
+    // Listen for page events (socket is already joined to drive room via page tree)
+    const pageEvents = ['page:created', 'page:updated', 'page:moved', 'page:trashed', 'page:restored', 'page:content-updated'];
+    pageEvents.forEach(event => {
+      socket.on(event, debouncedRefetch);
+    });
+
+    return () => {
+      pageEvents.forEach(event => {
+        socket.off(event, debouncedRefetch);
+      });
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+      }
+    };
+  }, [socket, driveId, loadActivities]);
 
   // Handle undo click - fetch preview and show confirm dialog
   const handleActionClick = useCallback(async (activity: ActivityItem) => {

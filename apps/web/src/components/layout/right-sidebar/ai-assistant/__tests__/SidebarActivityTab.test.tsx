@@ -23,9 +23,9 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: vi.fn(),
 }));
 
-// Mock useActivitySocket to avoid socket dependencies in tests
-vi.mock('@/hooks/useActivitySocket', () => ({
-  useActivitySocket: vi.fn(() => ({ isSocketConnected: false })),
+// Mock useSocket to avoid socket dependencies in tests
+vi.mock('@/hooks/useSocket', () => ({
+  useSocket: vi.fn(() => null),
 }));
 
 import SidebarActivityTab from '../SidebarActivityTab';

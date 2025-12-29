@@ -1570,9 +1570,9 @@ export async function executeRollback(
   activityId: string,
   userId: string,
   context: RollbackContext,
-  options?: { tx?: typeof db; force?: boolean; undoGroupActivityIds?: string[] }
+  options?: { tx?: typeof db; force?: boolean; undoGroupActivityIds?: string[]; changeGroupId?: string }
 ): Promise<RollbackResult> {
-  const { tx, force, undoGroupActivityIds } = options ?? {};
+  const { tx, force, undoGroupActivityIds, changeGroupId: passedChangeGroupId } = options ?? {};
   loggers.api.debug('[Rollback:Execute] Starting execution', {
     activityId,
     userId,
@@ -1613,7 +1613,7 @@ export async function executeRollback(
 
   const warnings: string[] = [...preview.warnings];
   const database = tx ?? db;
-  const changeGroupId = createChangeGroupId();
+  const changeGroupId = passedChangeGroupId ?? createChangeGroupId();
   const changeGroupType = inferChangeGroupType({ isAiGenerated: false });
 
   // When rolling back a rollback, use the original source operation for metadata

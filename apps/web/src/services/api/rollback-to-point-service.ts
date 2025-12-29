@@ -7,6 +7,7 @@
 
 import { db, activityLogs, eq, and, gte, desc } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
+import { createChangeGroupId } from '@pagespace/lib/monitoring';
 import {
   executeRollback,
   previewRollback,
@@ -289,6 +290,9 @@ export async function executeRollbackToPoint(
     // Collect all activity IDs for undo group logic (skip conflict/no-op detection within group)
     const undoGroupActivityIds = preview.activitiesAffected.map(a => a.id);
 
+    // Create a shared changeGroupId so all rollbacks in this batch are grouped together
+    const sharedChangeGroupId = createChangeGroupId();
+
     // Execute all rollbacks in a single transaction for atomicity
     loggers.api.debug('[RollbackToPoint:Execute] Starting transaction');
 
@@ -323,7 +327,7 @@ export async function executeRollbackToPoint(
           rollbackContext,
         });
 
-        const result = await executeRollback(activity.id, userId, rollbackContext, { tx, force, undoGroupActivityIds });
+        const result = await executeRollback(activity.id, userId, rollbackContext, { tx, force, undoGroupActivityIds, changeGroupId: sharedChangeGroupId });
         if (!result.success) {
           loggers.api.debug('[RollbackToPoint:Execute] Activity rollback failed - aborting', {
             activityId: activity.id,

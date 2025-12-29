@@ -12,6 +12,7 @@ import { loggers } from '@pagespace/lib/server';
 import {
   logConversationUndo,
   getActorInfo,
+  createChangeGroupId,
 } from '@pagespace/lib/monitoring';
 import {
   executeRollback,
@@ -450,6 +451,9 @@ export async function executeAiUndo(
         // to ignore "internal" conflicts from other activities in the same undo batch
         const undoGroupActivityIds = preview.activitiesAffected.map(a => a.id);
 
+        // Create a shared changeGroupId so all rollbacks in this batch are grouped together
+        const sharedChangeGroupId = createChangeGroupId();
+
         loggers.api.debug('[AiUndo:Execute] Rolling back activities', {
           activitiesToRollback: preview.activitiesAffected.length,
         });
@@ -484,7 +488,7 @@ export async function executeAiUndo(
 
           // Pass transaction to executeRollback for atomicity
           // Any failure aborts entire transaction
-          const result = await executeRollback(activity.id, userId, context, { tx, force, undoGroupActivityIds });
+          const result = await executeRollback(activity.id, userId, context, { tx, force, undoGroupActivityIds, changeGroupId: sharedChangeGroupId });
           if (!result.success) {
             loggers.api.debug('[AiUndo:Execute] Activity rollback failed - aborting', {
               activityId: activity.id,
