@@ -722,10 +722,23 @@ export async function POST(request: Request) {
     // Create UI message stream with visual content injection support
     // This handles the case where tools return visual content that needs to be injected into the stream
     let result;
+
+    // Generate server-side message ID for the AI response
+    // This ensures client and server use the same ID, fixing the undo-after-streaming issue
+    // See: https://ai-sdk.dev/docs/ai-sdk-ui/chatbot-message-persistence
+    const serverAssistantMessageId = createId();
+
     try {
       const stream = createUIMessageStream({
         originalMessages: sanitizedMessages,
         execute: async ({ writer }) => {
+          // Send the server-generated message ID to the client at stream start
+          // The client's useChat will use this ID instead of generating its own
+          writer.write({
+            type: 'start',
+            messageId: serverAssistantMessageId,
+          });
+
           // Start the AI response
           const aiResult = streamText({
             model,
@@ -809,7 +822,9 @@ export async function POST(request: Request) {
           // Save the AI's response message with tool calls and results (database-first approach)
           if (chatId && responseMessage) {
             try {
-              const messageId = responseMessage.id || createId();
+              // Use the server-generated ID that was sent to the client at stream start
+              // This ensures the saved message ID matches what the client has
+              const messageId = serverAssistantMessageId;
               const messageContent = extractMessageContent(responseMessage);
               
               // Extract tool calls and results from the response

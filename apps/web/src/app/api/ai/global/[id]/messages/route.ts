@@ -735,14 +735,24 @@ MENTION PROCESSING:
     });
 
     loggers.api.debug('📡 Global Assistant Chat API: Returning stream response', {});
-    
+
+    // Generate server-side message ID for the AI response
+    // This ensures client and server use the same ID, fixing the undo-after-streaming issue
+    // See: https://ai-sdk.dev/docs/ai-sdk-ui/chatbot-message-persistence
+    const serverAssistantMessageId = createId();
+
     return result.toUIMessageStreamResponse({
+      // Provide the server-generated ID to the stream response
+      // The client's useChat will use this ID instead of generating its own
+      generateMessageId: () => serverAssistantMessageId,
       onFinish: async ({ responseMessage }) => {
         loggers.api.debug('🏁 Global Assistant Chat API: onFinish callback triggered for AI response', {});
-        
+
         if (responseMessage) {
           try {
-            const messageId = responseMessage.id || createId();
+            // Use the server-generated ID that was sent to the client
+            // This ensures the saved message ID matches what the client has
+            const messageId = serverAssistantMessageId;
             const messageContent = extractMessageContent(responseMessage);
             const extractedToolCalls = extractToolCalls(responseMessage);
             const extractedToolResults = extractToolResults(responseMessage);
