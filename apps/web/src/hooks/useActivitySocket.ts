@@ -80,7 +80,7 @@ export function useActivitySocket({
       }
 
       // Leave room on unmount
-      if (socket && hasJoinedRef.current && currentContextRef.current) {
+      if (socket?.connected && hasJoinedRef.current && currentContextRef.current) {
         const [prevContext, prevId] = currentContextRef.current.split(':');
         const leaveEvent = prevContext === 'drive' ? 'leave_activity_drive' : 'leave_activity_page';
         socket.emit(leaveEvent, prevId);
