@@ -164,8 +164,11 @@ describe('encryption-utils', () => {
       const encrypted = await encrypt(testData)
       const parts = encrypted.split(':')
 
-      // Tamper with ciphertext but keep auth tag
-      parts[3] = parts[3].substring(0, parts[3].length - 2) + 'FF'
+      // Tamper with ciphertext by flipping a bit (XOR with 01)
+      // This guarantees a change unlike replacing with a static value
+      const lastByte = parseInt(parts[3].slice(-2), 16)
+      const flippedByte = (lastByte ^ 0x01).toString(16).padStart(2, '0')
+      parts[3] = parts[3].substring(0, parts[3].length - 2) + flippedByte
       const tampered = parts.join(':')
 
       // Should fail authentication

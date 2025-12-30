@@ -1,5 +1,5 @@
 import type { NextRequest } from 'next/server';
-import { createHash, randomBytes } from 'crypto';
+import { createHash, randomBytes, timingSafeEqual as cryptoTimingSafeEqual } from 'crypto';
 import { logger } from '@pagespace/lib';
 
 /**
@@ -105,11 +105,15 @@ export function verifyChallengeResponse(
     .update(challengeData.challenge + userId + sessionId)
     .digest('hex');
 
-  // Timing-safe comparison
-  const valid = timingSafeEqual(
-    Buffer.from(response, 'hex'),
-    Buffer.from(expectedResponse, 'hex')
-  );
+  // Timing-safe comparison using Node.js built-in
+  const responseBuffer = Buffer.from(response, 'hex');
+  const expectedBuffer = Buffer.from(expectedResponse, 'hex');
+
+  if (responseBuffer.length !== expectedBuffer.length) {
+    return { valid: false, failureReason: 'Invalid challenge response' };
+  }
+
+  const valid = cryptoTimingSafeEqual(responseBuffer, expectedBuffer);
 
   if (valid) {
     // Clear challenge on success
@@ -118,22 +122,6 @@ export function verifyChallengeResponse(
   }
 
   return { valid: false, failureReason: 'Invalid challenge response' };
-}
-
-/**
- * Timing-safe equality check to prevent timing attacks
- */
-function timingSafeEqual(a: Buffer, b: Buffer): boolean {
-  if (a.length !== b.length) {
-    return false;
-  }
-
-  let result = 0;
-  for (let i = 0; i < a.length; i++) {
-    result |= a[i] ^ b[i];
-  }
-
-  return result === 0;
 }
 
 /**
@@ -176,6 +164,9 @@ export function getConnectionFingerprint(request: NextRequest): string {
  *
  * Used to detect if user's IP or browser changed mid-session
  *
+ * Uses timing-safe comparison to prevent timing attacks that could
+ * reveal information about valid fingerprints.
+ *
  * @param currentFingerprint - Current connection fingerprint
  * @param storedFingerprint - Previously stored fingerprint
  * @returns true if fingerprints match
@@ -184,7 +175,15 @@ export function verifyFingerprint(
   currentFingerprint: string,
   storedFingerprint: string
 ): boolean {
-  return currentFingerprint === storedFingerprint;
+  // Use timing-safe comparison to prevent timing attacks
+  const currentBuffer = Buffer.from(currentFingerprint, 'utf8');
+  const storedBuffer = Buffer.from(storedFingerprint, 'utf8');
+
+  if (currentBuffer.length !== storedBuffer.length) {
+    return false;
+  }
+
+  return cryptoTimingSafeEqual(currentBuffer, storedBuffer);
 }
 
 // ============================================================================

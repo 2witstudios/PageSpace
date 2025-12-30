@@ -1,5 +1,6 @@
 import { cleanupExpiredDeviceTokens } from '@pagespace/lib/device-auth-utils';
 import { NextResponse } from 'next/server';
+import { timingSafeEqual } from 'crypto';
 
 /**
  * Cron endpoint to cleanup expired device tokens
@@ -39,7 +40,14 @@ export async function GET(request: Request) {
       );
     }
 
-    if (authHeader !== `Bearer ${expectedAuth}`) {
+    // Use timing-safe comparison to prevent timing attacks on the cron secret
+    const expectedFull = `Bearer ${expectedAuth}`;
+    const authBuffer = Buffer.from(authHeader || '', 'utf8');
+    const expectedBuffer = Buffer.from(expectedFull, 'utf8');
+
+    // Length check must happen before timingSafeEqual, but we still do constant-time comparison
+    // to avoid leaking valid prefix information
+    if (authBuffer.length !== expectedBuffer.length || !timingSafeEqual(authBuffer, expectedBuffer)) {
       console.warn('Unauthorized cron request attempt');
       return NextResponse.json(
         { error: 'Unauthorized' },
