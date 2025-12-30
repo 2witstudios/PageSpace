@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { db, taskLists, taskItems, pages, eq, and, desc, asc, or, isNull, not } from '@pagespace/db';
+import { db, taskLists, taskItems, pages, eq, and, desc, asc, not } from '@pagespace/db';
 import { type ToolExecutionContext } from '../core';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { canUserEditPage, canUserViewPage, logPageActivity, getActorInfo } from '@pagespace/lib/server';
