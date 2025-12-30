@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">PageSpace</string>
+    <string name="title_activity_main">PageSpace</string>
+    <string name="package_name">com.pagespace.app</string>
+    <string name="custom_url_scheme">com.pagespace.app</string>
+</resources>
