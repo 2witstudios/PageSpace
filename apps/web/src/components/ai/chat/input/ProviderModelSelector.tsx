@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   Popover,
@@ -94,26 +94,100 @@ export function ProviderModelSelector({
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
-  // Fetch provider settings on mount
-  useEffect(() => {
-    const fetchSettings = async () => {
-      setIsLoading(true);
-      try {
-        const response = await fetchWithAuth('/api/ai/settings');
-        if (response.ok) {
-          const data = await response.json();
-          setProviderSettings(data);
-        }
-      } catch (error) {
-        console.error('Failed to fetch provider settings:', error);
-        toast.error('Failed to load AI provider settings');
-      } finally {
-        setIsLoading(false);
-      }
-    };
+  // Dynamic local model state
+  const [ollamaModels, setOllamaModels] = useState<Record<string, string> | null>(null);
+  const [lmstudioModels, setLmstudioModels] = useState<Record<string, string> | null>(null);
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
 
-    fetchSettings();
+  // Fetch Ollama models dynamically
+  const fetchOllamaModels = useCallback(async () => {
+    if (ollamaModels !== null) return ollamaModels;
+    setIsLoadingModels(true);
+    try {
+      const response = await fetchWithAuth('/api/ai/ollama/models');
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.models) {
+          setOllamaModels(data.models);
+          return data.models;
+        }
+      }
+    } catch (error) {
+      console.error('Failed to fetch Ollama models:', error);
+    } finally {
+      setIsLoadingModels(false);
+    }
+    setOllamaModels({});
+    return {};
+  }, [ollamaModels]);
+
+  // Fetch LM Studio models dynamically
+  const fetchLMStudioModels = useCallback(async () => {
+    if (lmstudioModels !== null) return lmstudioModels;
+    setIsLoadingModels(true);
+    try {
+      const response = await fetchWithAuth('/api/ai/lmstudio/models');
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.models) {
+          setLmstudioModels(data.models);
+          return data.models;
+        }
+      }
+    } catch (error) {
+      console.error('Failed to fetch LM Studio models:', error);
+    } finally {
+      setIsLoadingModels(false);
+    }
+    setLmstudioModels({});
+    return {};
+  }, [lmstudioModels]);
+
+  // Fetch provider settings
+  const fetchSettings = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const response = await fetchWithAuth('/api/ai/settings');
+      if (response.ok) {
+        const data = await response.json();
+        setProviderSettings(data);
+      }
+    } catch (error) {
+      console.error('Failed to fetch provider settings:', error);
+      toast.error('Failed to load AI provider settings');
+    } finally {
+      setIsLoading(false);
+    }
   }, []);
+
+  // Fetch on mount
+  useEffect(() => {
+    fetchSettings();
+  }, [fetchSettings]);
+
+  // Listen for settings updates (from settings page)
+  useEffect(() => {
+    const handleSettingsUpdate = () => {
+      fetchSettings();
+      // Clear cached local models so they get refetched
+      setOllamaModels(null);
+      setLmstudioModels(null);
+    };
+    window.addEventListener('ai-settings-updated', handleSettingsUpdate);
+    return () => {
+      window.removeEventListener('ai-settings-updated', handleSettingsUpdate);
+    };
+  }, [fetchSettings]);
+
+  // Fetch local models when a local provider is selected
+  useEffect(() => {
+    if (provider === 'ollama' && ollamaModels === null) {
+      fetchOllamaModels();
+    }
+    if (provider === 'lmstudio' && lmstudioModels === null) {
+      fetchLMStudioModels();
+    }
+  }, [provider, ollamaModels, lmstudioModels, fetchOllamaModels, fetchLMStudioModels]);
 
   // Get display names
   const providerDisplayName = useMemo(() => {
@@ -124,20 +198,31 @@ export function ProviderModelSelector({
 
   const modelDisplayName = useMemo(() => {
     if (!model || !provider) return 'Standard';
+
+    // For local providers, use dynamically fetched model names
+    if (provider === 'ollama' && ollamaModels && ollamaModels[model]) {
+      return ollamaModels[model];
+    }
+    if (provider === 'lmstudio' && lmstudioModels && lmstudioModels[model]) {
+      return lmstudioModels[model];
+    }
+
     return getModelDisplayName(provider, model);
-  }, [provider, model]);
+  }, [provider, model, ollamaModels, lmstudioModels]);
 
   // Check if a provider is configured
   const isProviderConfigured = useCallback(
     (providerId: string) => {
       if (!providerSettings) return false;
-      const status = providerSettings.providers[providerId];
-      if (!status) {
-        // pagespace is always configured
-        if (providerId === 'pagespace') return true;
-        return false;
-      }
-      return status.isConfigured;
+
+      // PageSpace is always configured
+      if (providerId === 'pagespace') return true;
+
+      // openrouter_free uses the same API key as openrouter
+      const checkId = providerId === 'openrouter_free' ? 'openrouter' : providerId;
+
+      const status = providerSettings.providers[checkId];
+      return status?.isConfigured ?? false;
     },
     [providerSettings]
   );
@@ -145,10 +230,20 @@ export function ProviderModelSelector({
   // Get models for current provider
   const availableModels = useMemo(() => {
     if (!provider) return [];
+
+    // Use dynamically fetched models for local providers
+    if (provider === 'ollama' && ollamaModels) {
+      return Object.entries(ollamaModels);
+    }
+    if (provider === 'lmstudio' && lmstudioModels) {
+      return Object.entries(lmstudioModels);
+    }
+
+    // Fall back to static config for cloud providers
     const config = AI_PROVIDERS[provider as keyof typeof AI_PROVIDERS];
     if (!config) return [];
     return Object.entries(config.models);
-  }, [provider]);
+  }, [provider, ollamaModels, lmstudioModels]);
 
   // Handle provider selection
   const handleProviderSelect = useCallback(
@@ -162,12 +257,17 @@ export function ProviderModelSelector({
       try {
         const newModel = getDefaultModel(newProvider);
 
-        await patch('/api/ai/settings', {
+        // Build request body - model is optional for local providers
+        const requestBody: { provider: string; model?: string } = {
           provider: newProvider,
-          model: newModel,
-        });
+        };
+        if (newModel) {
+          requestBody.model = newModel;
+        }
 
-        onChange?.(newProvider, newModel);
+        await patch('/api/ai/settings', requestBody);
+
+        onChange?.(newProvider, newModel || '');
         setProviderOpen(false);
       } catch (error) {
         console.error('Failed to update provider:', error);
@@ -291,7 +391,12 @@ export function ProviderModelSelector({
         <PopoverContent className="w-52 p-0" align="end" sideOffset={8}>
           <ScrollArea className="h-[200px] p-2">
             <div className="space-y-0.5">
-              {availableModels.length === 0 ? (
+              {isLoadingModels ? (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground px-2 py-2">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Loading models...
+                </div>
+              ) : availableModels.length === 0 ? (
                 <div className="text-xs text-muted-foreground px-2 py-2">
                   {provider === 'ollama' || provider === 'lmstudio'
                     ? 'No models found. Start your local server.'

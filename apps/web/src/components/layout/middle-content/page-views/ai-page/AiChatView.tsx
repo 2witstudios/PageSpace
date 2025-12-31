@@ -461,6 +461,12 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                 isMcpServerEnabled={props.isMcpServerEnabled}
                 onMcpServerToggle={props.onMcpServerToggle}
                 showMcp={props.showMcp}
+                selectedProvider={selectedProvider}
+                selectedModel={selectedModel}
+                onProviderModelChange={(provider, model) => {
+                  setSelectedProvider(provider);
+                  setSelectedModel(model);
+                }}
               />
             )}
           />

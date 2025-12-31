@@ -17,7 +17,7 @@ export interface UserAISettings {
 
 export interface UpdateProviderSettingsInput {
   provider: string;
-  model: string;
+  model?: string;
 }
 
 /**
@@ -44,17 +44,21 @@ export const aiSettingsRepository = {
 
   /**
    * Update user's current AI provider and model selection.
+   * Model can be undefined for local providers (ollama, lmstudio) where models are discovered dynamically.
    */
   async updateProviderSettings(
     userId: string,
     settings: UpdateProviderSettingsInput
   ): Promise<void> {
-    await db
-      .update(users)
-      .set({
-        currentAiProvider: settings.provider,
-        currentAiModel: settings.model,
-      })
-      .where(eq(users.id, userId));
+    const updateData: { currentAiProvider: string; currentAiModel?: string } = {
+      currentAiProvider: settings.provider,
+    };
+
+    // Only update model if explicitly provided
+    if (settings.model) {
+      updateData.currentAiModel = settings.model;
+    }
+
+    await db.update(users).set(updateData).where(eq(users.id, userId));
   },
 };

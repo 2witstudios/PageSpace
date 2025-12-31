@@ -47,6 +47,12 @@ export interface ChatInputProps {
   onMcpServerToggle?: (serverName: string, enabled: boolean) => void;
   /** Whether MCP section should be shown (desktop only) */
   showMcp?: boolean;
+  /** Override provider from props (for page-level settings) */
+  selectedProvider?: string | null;
+  /** Override model from props (for page-level settings) */
+  selectedModel?: string | null;
+  /** Handler when provider/model changes (for page-level settings) */
+  onProviderModelChange?: (provider: string, model: string) => void;
 }
 
 export interface ChatInputRef {
@@ -89,6 +95,9 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       isMcpServerEnabled,
       onMcpServerToggle,
       showMcp = false,
+      selectedProvider: propProvider,
+      selectedModel: propModel,
+      onProviderModelChange,
     },
     ref
   ) => {
@@ -101,15 +110,22 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
     const toggleWebSearch = useAssistantSettingsStore((s) => s.toggleWebSearch);
     const toggleWriteMode = useAssistantSettingsStore((s) => s.toggleWriteMode);
     const toggleShowPageTree = useAssistantSettingsStore((s) => s.toggleShowPageTree);
-    const currentProvider = useAssistantSettingsStore((s) => s.currentProvider);
-    const currentModel = useAssistantSettingsStore((s) => s.currentModel);
+    const storeProvider = useAssistantSettingsStore((s) => s.currentProvider);
+    const storeModel = useAssistantSettingsStore((s) => s.currentModel);
     const setProviderSettings = useAssistantSettingsStore((s) => s.setProviderSettings);
     const loadSettings = useAssistantSettingsStore((s) => s.loadSettings);
 
-    // Load settings on mount
+    // Use props if provided, otherwise fallback to store
+    const currentProvider = propProvider ?? storeProvider;
+    const currentModel = propModel ?? storeModel;
+    const handleProviderModelChange = onProviderModelChange ?? setProviderSettings;
+
+    // Load settings on mount (only needed when not using props)
     useEffect(() => {
-      loadSettings();
-    }, [loadSettings]);
+      if (propProvider === undefined) {
+        loadSettings();
+      }
+    }, [loadSettings, propProvider]);
 
     // Speech recognition
     const { isListening, isSupported, toggleListening } = useSpeechRecognition({
@@ -177,7 +193,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
           isMicSupported={isSupported}
           selectedProvider={currentProvider}
           selectedModel={currentModel}
-          onProviderModelChange={setProviderSettings}
+          onProviderModelChange={handleProviderModelChange}
           hideModelSelector={hideModelSelector}
           disabled={isStreaming || disabled}
         />

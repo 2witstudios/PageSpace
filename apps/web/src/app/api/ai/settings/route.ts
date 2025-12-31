@@ -252,14 +252,19 @@ export async function PATCH(request: Request) {
     const { provider, model } = body;
 
     // Validate input - pagespace and openrouter_free are valid providers
-    if (!provider || !['pagespace', 'openrouter', 'openrouter_free', 'google', 'openai', 'anthropic', 'xai', 'ollama', 'lmstudio', 'glm', 'minimax'].includes(provider)) {
+    const validProviders = ['pagespace', 'openrouter', 'openrouter_free', 'google', 'openai', 'anthropic', 'xai', 'ollama', 'lmstudio', 'glm', 'minimax'];
+    const localProviders = ['ollama', 'lmstudio'];
+
+    if (!provider || !validProviders.includes(provider)) {
       return NextResponse.json(
         { error: 'Invalid provider. Must be "pagespace", "openrouter", "openrouter_free", "google", "openai", "anthropic", "xai", "ollama", "lmstudio", "glm", or "minimax"' },
         { status: 400 }
       );
     }
 
-    if (!model || typeof model !== 'string') {
+    // Local providers can have empty model (models discovered dynamically)
+    const isLocalProvider = localProviders.includes(provider);
+    if (!isLocalProvider && (!model || typeof model !== 'string')) {
       return NextResponse.json(
         { error: 'Model is required' },
         { status: 400 }
