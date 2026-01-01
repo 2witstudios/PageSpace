@@ -57,7 +57,7 @@
     "JWT_AUDIENCE",
     "CSRF_SECRET",
     "ENCRYPTION_KEY",
-    "ENCRYPTION_SALT",
+    "ENCRYPTION_SALT", // DEPRECATED: Kept for backward compatibility with legacy encryption format
     "WEB_APP_URL",
     "INTERNAL_REALTIME_URL",
     "PORT",
