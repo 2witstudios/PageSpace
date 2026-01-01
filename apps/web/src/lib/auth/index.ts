@@ -218,7 +218,10 @@ export async function authenticateRequestWithOptions(
   request: Request,
   options: AuthenticateOptions,
 ): Promise<AuthenticationResult> {
-  const { allow, requireCSRF = false, requireOriginValidation = false } = options;
+  const { allow, requireCSRF = false } = options;
+  // Origin validation is automatically enabled when requireCSRF is true (defense-in-depth)
+  // It can be explicitly disabled per-route by setting requireOriginValidation: false
+  const requireOriginValidation = options.requireOriginValidation ?? requireCSRF;
 
   if (!allow.length) {
     return {
