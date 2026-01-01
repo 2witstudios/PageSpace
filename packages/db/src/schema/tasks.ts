@@ -31,12 +31,18 @@ export const taskLists = pgTable('task_lists', {
  * Task Items - Individual tasks within a task list
  * For page-based task lists, each task has a linked document page (pageId)
  * For conversation-based task lists, description field is used instead
+ *
+ * Assignment:
+ * - assigneeId: Human user assignment (references users.id)
+ * - assigneeAgentId: AI agent assignment (references pages.id where type='AI_CHAT')
+ * - A task can have both a user and agent assignee
  */
 export const taskItems = pgTable('task_items', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   taskListId: text('taskListId').notNull().references(() => taskLists.id, { onDelete: 'cascade' }),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
   assigneeId: text('assigneeId').references(() => users.id, { onDelete: 'set null' }),
+  assigneeAgentId: text('assigneeAgentId').references(() => pages.id, { onDelete: 'set null' }),
   pageId: text('pageId').references(() => pages.id, { onDelete: 'cascade' }),
   title: text('title').notNull(),
   description: text('description'),
@@ -53,6 +59,7 @@ export const taskItems = pgTable('task_items', {
     taskListIdx: index('task_items_task_list_id_idx').on(table.taskListId),
     taskListStatusIdx: index('task_items_task_list_status_idx').on(table.taskListId, table.status),
     assigneeIdx: index('task_items_assignee_id_idx').on(table.assigneeId),
+    assigneeAgentIdx: index('task_items_assignee_agent_id_idx').on(table.assigneeAgentId),
     pageIdx: index('task_items_page_id_idx').on(table.pageId),
   };
 });
@@ -88,8 +95,14 @@ export const taskItemsRelations = relations(taskItems, ({ one }) => ({
     references: [users.id],
     relationName: 'assignee',
   }),
+  assigneeAgent: one(pages, {
+    fields: [taskItems.assigneeAgentId],
+    references: [pages.id],
+    relationName: 'assignedAgent',
+  }),
   page: one(pages, {
     fields: [taskItems.pageId],
     references: [pages.id],
+    relationName: 'taskPage',
   }),
 }));

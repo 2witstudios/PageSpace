@@ -70,6 +70,7 @@ interface TaskItem {
   taskListId: string;
   userId: string;
   assigneeId: string | null;
+  assigneeAgentId: string | null;
   pageId: string | null;
   title: string;
   description: string | null;
@@ -84,6 +85,11 @@ interface TaskItem {
     id: string;
     name: string | null;
     image: string | null;
+  } | null;
+  assigneeAgent?: {
+    id: string;
+    title: string | null;
+    type: string;
   } | null;
   user?: {
     id: string;
@@ -138,7 +144,7 @@ interface MobileTaskCardProps {
   onToggleComplete: (task: TaskItem) => void;
   onStatusChange: (taskId: string, status: string) => void;
   onPriorityChange: (taskId: string, priority: string) => void;
-  onAssigneeChange: (taskId: string, assigneeId: string | null) => void;
+  onAssigneeChange: (taskId: string, assigneeId: string | null, agentId: string | null) => void;
   onDueDateChange: (taskId: string, date: Date | null) => void;
   onSaveTitle: (taskId: string, title: string) => void;
   onDelete: (taskId: string) => void;
@@ -298,7 +304,8 @@ function MobileTaskCard({
         <AssigneeSelect
           driveId={driveId}
           currentAssignee={task.assignee}
-          onSelect={(assigneeId) => onAssigneeChange(task.id, assigneeId)}
+          currentAssigneeAgent={task.assigneeAgent}
+          onSelect={(assigneeId, agentId) => onAssigneeChange(task.id, assigneeId, agentId)}
           disabled={!canEdit}
         />
 
@@ -549,12 +556,15 @@ export default function TaskListView({ page }: TaskListViewProps) {
     }
   };
 
-  // Update task assignee
-  const handleAssigneeChange = async (taskId: string, assigneeId: string | null) => {
+  // Update task assignee (user or agent)
+  const handleAssigneeChange = async (taskId: string, assigneeId: string | null, agentId: string | null) => {
     if (!canEdit) return;
 
     try {
-      await patch(`/api/pages/${page.id}/tasks/${taskId}`, { assigneeId });
+      await patch(`/api/pages/${page.id}/tasks/${taskId}`, {
+        assigneeId,
+        assigneeAgentId: agentId,
+      });
       mutate(`/api/pages/${page.id}/tasks`);
     } catch {
       toast.error('Failed to update assignee');
@@ -888,7 +898,8 @@ export default function TaskListView({ page }: TaskListViewProps) {
                   <AssigneeSelect
                     driveId={page.driveId}
                     currentAssignee={task.assignee}
-                    onSelect={(assigneeId) => handleAssigneeChange(task.id, assigneeId)}
+                    currentAssigneeAgent={task.assigneeAgent}
+                    onSelect={(assigneeId, agentId) => handleAssigneeChange(task.id, assigneeId, agentId)}
                     disabled={!canEdit}
                   />
                 </TableCell>
