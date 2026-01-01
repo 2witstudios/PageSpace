@@ -1,0 +1,144 @@
+{
+  "feature": "Add Success, Warning, and Info Alert Variants",
+  "description": "Extend the Alert component with success, warning, and info variants to provide appropriate visual feedback for different message types, matching the toast notification types already used throughout the codebase (84+ occurrences of toast.success/warning/info).",
+  "created_at": "2026-01-01T01:56:08.521Z",
+  "updated_at": "2026-01-01T02:00:00.000Z",
+  "status": "in_progress",
+  "planStatus": "approved",
+  "workflow_type": "development",
+  "services_involved": ["apps/web"],
+  "spec_file": "spec.md",
+  "phases": [
+    {
+      "id": "phase-1",
+      "name": "Add CSS Color Tokens",
+      "description": "Add new semantic color tokens for success, warning, and info states to globals.css following the existing OKLCH color system",
+      "status": "pending",
+      "subtasks": [
+        {
+          "id": "1.1",
+          "title": "Add success color tokens to :root and .dark",
+          "description": "Add --success CSS variable with OKLCH green values that work with both light (vibrant green) and dark (muted green) themes. Light: oklch(0.62 0.19 145), Dark: oklch(0.55 0.16 145)",
+          "status": "pending",
+          "files": ["apps/web/src/app/globals.css"],
+          "estimated_minutes": 5
+        },
+        {
+          "id": "1.2",
+          "title": "Add warning color tokens to :root and .dark",
+          "description": "Add --warning CSS variable with OKLCH amber values. Light: oklch(0.75 0.18 75), Dark: oklch(0.68 0.16 75)",
+          "status": "pending",
+          "files": ["apps/web/src/app/globals.css"],
+          "estimated_minutes": 5
+        },
+        {
+          "id": "1.3",
+          "title": "Add info color tokens to :root and .dark",
+          "description": "Add --info CSS variable with OKLCH blue values. Light: oklch(0.55 0.18 235), Dark: oklch(0.60 0.16 235)",
+          "status": "pending",
+          "files": ["apps/web/src/app/globals.css"],
+          "estimated_minutes": 5
+        },
+        {
+          "id": "1.4",
+          "title": "Add Tailwind color mappings",
+          "description": "Add --color-success, --color-warning, and --color-info to the @theme inline block so Tailwind can use these colors with utility classes like text-success, bg-success, etc.",
+          "status": "pending",
+          "files": ["apps/web/src/app/globals.css"],
+          "estimated_minutes": 5
+        }
+      ]
+    },
+    {
+      "id": "phase-2",
+      "name": "Extend Alert Component",
+      "description": "Add the new variants to the Alert component's cva configuration following the existing destructive variant pattern",
+      "status": "pending",
+      "subtasks": [
+        {
+          "id": "2.1",
+          "title": "Add success variant to alertVariants",
+          "description": "Add 'success' variant: 'text-success bg-card [&>svg]:text-current *:data-[slot=alert-description]:text-success/90'",
+          "status": "pending",
+          "files": ["apps/web/src/components/ui/alert.tsx"],
+          "estimated_minutes": 5
+        },
+        {
+          "id": "2.2",
+          "title": "Add warning variant to alertVariants",
+          "description": "Add 'warning' variant: 'text-warning bg-card [&>svg]:text-current *:data-[slot=alert-description]:text-warning/90'",
+          "status": "pending",
+          "files": ["apps/web/src/components/ui/alert.tsx"],
+          "estimated_minutes": 5
+        },
+        {
+          "id": "2.3",
+          "title": "Add info variant to alertVariants",
+          "description": "Add 'info' variant: 'text-info bg-card [&>svg]:text-current *:data-[slot=alert-description]:text-info/90'",
+          "status": "pending",
+          "files": ["apps/web/src/components/ui/alert.tsx"],
+          "estimated_minutes": 5
+        }
+      ]
+    },
+    {
+      "id": "phase-3",
+      "name": "Testing & Validation",
+      "description": "Verify the implementation works correctly with tests and build verification",
+      "status": "pending",
+      "subtasks": [
+        {
+          "id": "3.1",
+          "title": "Create unit tests for Alert variants",
+          "description": "Create tests in apps/web/src/components/ui/__tests__/alert.test.tsx to verify all variants (default, destructive, success, warning, info) render correctly with proper data-slot and styling classes",
+          "status": "pending",
+          "files": ["apps/web/src/components/ui/__tests__/alert.test.tsx"],
+          "estimated_minutes": 15
+        },
+        {
+          "id": "3.2",
+          "title": "Run TypeScript check",
+          "description": "Run 'pnpm tsc --noEmit' to verify variant types are properly inferred and the component accepts the new variant values without type errors",
+          "status": "pending",
+          "files": [],
+          "estimated_minutes": 5
+        },
+        {
+          "id": "3.3",
+          "title": "Run build verification",
+          "description": "Run 'pnpm build' to ensure no compilation errors and the CSS color tokens are properly compiled",
+          "status": "pending",
+          "files": [],
+          "estimated_minutes": 5
+        }
+      ]
+    }
+  ],
+  "dependencies": [
+    "class-variance-authority (already installed)",
+    "tailwindcss v4 (already installed)"
+  ],
+  "risks": [
+    {
+      "description": "Color contrast issues in dark mode",
+      "mitigation": "Use OKLCH values tuned for readability in both themes"
+    },
+    {
+      "description": "Inconsistent styling with existing components",
+      "mitigation": "Follow the exact same pattern used by destructive variant"
+    }
+  ],
+  "qa_signoff": {
+    "status": "pending",
+    "issues": "",
+    "tests_passed": ""
+  },
+  "final_acceptance": [
+    "All 5 Alert variants render correctly (default, destructive, success, warning, info)",
+    "Colors work well in both light and dark modes",
+    "TypeScript types correctly infer the new variant options",
+    "All tests pass",
+    "Build completes successfully"
+  ],
+  "estimated_total_minutes": 60
+}
