@@ -1,0 +1,647 @@
+{
+  "feature": "Document Version Rollback Enhancement",
+  "workflow_type": "feature",
+  "workflow_rationale": "This is a feature enhancement that extends existing version control capabilities with visual diff comparison, comprehensive content type support, and granular rollback controls. It builds upon the existing pageVersions infrastructure while adding significant new functionality across backend, storage, and frontend layers.",
+  "phases": [
+    {
+      "id": "phase-1-package-verification",
+      "name": "Package Verification & Installation",
+      "type": "setup",
+      "description": "Verify and install required npm packages for compression and diff functionality before implementation",
+      "depends_on": [],
+      "parallel_safe": true,
+      "subtasks": [
+        {
+          "id": "subtask-1-1",
+          "description": "Research and verify compression library (pako) compatibility",
+          "service": "lib",
+          "files_to_modify": [],
+          "files_to_create": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "manual",
+            "instructions": "Verify pako package exists on npm, check API documentation, confirm React 19 compatibility"
+          },
+          "status": "completed",
+          "notes": "Verified pako@2.1.0 on npm. MIT+Zlib license, zero dependencies, ESM support. TypeScript types available via @types/pako@2.0.4. API: pako.deflate()/inflate() for sync, Deflate/Inflate classes for streaming. React 19 compatible (no React dependency). Performance: ~10 ops/sec deflate, ~130 ops/sec inflate on 1MB. Perfect for JSON/HTML/text compression.",
+          "updated_at": "2026-01-01T02:45:21.595038+00:00"
+        },
+        {
+          "id": "subtask-1-2",
+          "description": "Research and verify diff library (diff-match-patch or alternative)",
+          "service": "lib",
+          "files_to_modify": [],
+          "files_to_create": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "manual",
+            "instructions": "Verify diff library exists, check API for text diffing, confirm React 19 compatibility and bundle size impact"
+          },
+          "status": "pending",
+          "notes": "Research options: diff-match-patch, diff, or similar. Must support text/HTML/JSON diffing"
+        },
+        {
+          "id": "subtask-1-3",
+          "description": "Research and verify React diff viewer component",
+          "service": "web",
+          "files_to_modify": [],
+          "files_to_create": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "manual",
+            "instructions": "Verify react-diff-view or similar component, check React 19 compatibility, assess bundle size"
+          },
+          "status": "pending",
+          "notes": "Options: react-diff-view, react-diff-viewer-continued. Must work with React 19 and Tailwind CSS"
+        },
+        {
+          "id": "subtask-1-4",
+          "description": "Install verified packages",
+          "service": "lib",
+          "files_to_modify": [
+            "packages/lib/package.json"
+          ],
+          "files_to_create": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "pnpm install && pnpm list pako diff-match-patch",
+            "expected": "Packages installed successfully"
+          },
+          "status": "pending",
+          "notes": "Run: pnpm add pako diff-match-patch (or verified alternatives) to lib package"
+        }
+      ]
+    },
+    {
+      "id": "phase-2-storage-compression",
+      "name": "Storage Layer - Compression",
+      "type": "implementation",
+      "description": "Add compression support to page content storage for efficient version storage",
+      "depends_on": [
+        "phase-1-package-verification"
+      ],
+      "parallel_safe": true,
+      "subtasks": [
+        {
+          "id": "subtask-2-1",
+          "description": "Create compression utilities module",
+          "service": "lib",
+          "files_to_modify": [],
+          "files_to_create": [
+            "packages/lib/src/utils/compression.ts"
+          ],
+          "patterns_from": [
+            "packages/lib/src/utils/hash-utils.ts"
+          ],
+          "verification": {
+            "type": "command",
+            "command": "cd packages/lib && pnpm test -- compression.test.ts",
+            "expected": "All compression/decompression tests pass"
+          },
+          "status": "pending",
+          "notes": "Implement compress() and decompress() functions using verified pako library. Handle Buffer/Uint8Array conversions. Add error handling for corrupted data"
+        },
+        {
+          "id": "subtask-2-2",
+          "description": "Extend page-content-store with compression support",
+          "service": "lib",
+          "files_to_modify": [
+            "packages/lib/src/services/page-content-store.ts"
+          ],
+          "files_to_create": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cd packages/lib && pnpm test -- page-content-store.test.ts",
+            "expected": "Content store tests pass with compression"
+          },
+          "status": "pending",
+          "notes": "Add optional compression parameter to writePageContent(). Store compressed content if size > 1KB. Update readPageContent() to detect and decompress. Maintain backward compatibility with uncompressed content"
+        },
+        {
+          "id": "subtask-2-3",
+          "description": "Update page-version-service to use compression",
+          "service": "lib",
+          "files_to_modify": [
+            "packages/lib/src/services/page-version-service.ts"
+          ],
+          "files_to_create": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cd packages/lib && pnpm test -- page-version-service.test.ts",
+            "expected": "Version creation includes compression metadata"
+          },
+          "status": "pending",
+          "notes": "Modify createPageVersion() to enable compression for content. Store compression metadata in metadata JSONB field: { compressed: true, compressionRatio: X, originalSize: Y }"
+        }
+      ]
+    },
+    {
+      "id": "phase-3-database-schema",
+      "name": "Database Schema Extension",
+      "type": "implementation",
+      "description": "Extend pageVersions schema with retention policy and compression metadata fields",
+      "depends_on": [
+        "phase-1-package-verification"
+      ],
+      "parallel_safe": true,
+      "subtasks": [
+        {
+          "id": "subtask-3-1",
+          "description": "Add retention policy helper to versioning schema",
+          "service": "db",
+          "files_to_modify": [
+            "packages/db/src/schema/versioning.ts"
+          ],
+          "files_to_create": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "manual",
+            "instructions": "Review schema changes - no migration needed as expiresAt field already exists and metadata is JSONB"
+          },
+          "status": "pending",
+          "notes": "Add helper function to set expiresAt to 30 days from creation. Document metadata schema for compression info: { compressed: boolean, compressionRatio: number, originalSize: number }"
+        }
+      ]
+    },
+    {
+      "id": "phase-4-diff-engine",
+      "name": "Diff Engine - Backend",
+      "type": "implementation",
+      "description": "Implement server-side diff generation for comparing versions",
+      "depends_on": [
+        "phase-2-storage-compression"
+      ],
+      "parallel_safe": false,
+      "subtasks": [
+        {
+          "id": "subtask-4-1",
+          "description": "Create diff utilities module",
+          "service": "lib",
+          "files_to_modify": [],
+          "files_to_create": [
+            "packages/lib/src/content/diff-utils.ts"
+          ],
+          "patterns_from": [
+            "packages/lib/src/content/page-content-format.ts"
+          ],
+          "verification": {
+            "type": "command",
+            "command": "cd packages/lib && pnpm test -- diff-utils.test.ts",
+            "expected": "Diff generation tests pass for HTML, text, JSON"
+          },
+          "status": "pending",
+          "notes": "Implement diffContent(content1, content2, format) using verified diff library. Support multiple content formats: text, HTML, JSON, tiptap. Return structured diff with additions, deletions, unchanged sections"
+        },
+        {
+          "id": "subtask-4-2",
+          "description": "Create version comparison API endpoint",
+          "service": "web",
+          "files_to_modify": [],
+          "files_to_create": [
+            "apps/web/src/app/api/pages/[pageId]/versions/compare/route.ts"
+          ],
+          "patterns_from": [
+            "apps/web/src/app/api/pages/[pageId]/history/route.ts"
+          ],
+          "verification": {
+            "type": "api",
+            "method": "GET",
+            "url": "http://localhost:3000/api/pages/test-page-id/versions/compare?v1=version1&v2=version2",
+            "expected_status": 200
+          },
+          "status": "pending",
+          "notes": "GET endpoint accepting v1 and v2 query params (version IDs). Fetch both versions, decompress content, generate diff using diffContent(), return structured diff. Server-side only for security/performance"
+        }
+      ]
+    },
+    {
+      "id": "phase-5-rollback-enhancement",
+      "name": "Rollback Enhancement - Backend",
+      "type": "implementation",
+      "description": "Enhance rollback service to support embedded files and selective rollback",
+      "depends_on": [
+        "phase-2-storage-compression",
+        "phase-4-diff-engine"
+      ],
+      "parallel_safe": false,
+      "subtasks": [
+        {
+          "id": "subtask-5-1",
+          "description": "Add embedded file validation to rollback service",
+          "service": "web",
+          "files_to_modify": [
+            "apps/web/src/services/api/rollback-service.ts"
+          ],
+          "files_to_create": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cd apps/web && pnpm test -- rollback-service.test.ts",
+            "expected": "Rollback tests pass including embedded file scenarios"
+          },
+          "status": "pending",
+          "notes": "Add validateEmbeddedFiles() function to check file references exist before rollback. Handle deleted files gracefully (warn user, skip or placeholder). Ensure file references remain valid post-rollback"
+        },
+        {
+          "id": "subtask-5-2",
+          "description": "Implement selective rollback logic",
+          "service": "web",
+          "files_to_modify": [],
+          "files_to_create": [
+            "apps/web/src/services/api/selective-rollback-service.ts"
+          ],
+          "patterns_from": [
+            "apps/web/src/services/api/rollback-service.ts"
+          ],
+          "verification": {
+            "type": "command",
+            "command": "cd apps/web && pnpm test -- selective-rollback-service.test.ts",
+            "expected": "Selective rollback tests pass"
+          },
+          "status": "pending",
+          "notes": "Implement applySelectiveRollback(pageId, versionId, sections[]) to revert specific sections. Parse Tiptap JSON to extract node ranges. Merge selected nodes from old version into current content. Create new version with 'selective_rollback' source"
+        },
+        {
+          "id": "subtask-5-3",
+          "description": "Create selective rollback API endpoint",
+          "service": "web",
+          "files_to_modify": [],
+          "files_to_create": [
+            "apps/web/src/app/api/pages/[pageId]/versions/rollback/route.ts"
+          ],
+          "patterns_from": [
+            "apps/web/src/app/api/pages/[pageId]/history/route.ts"
+          ],
+          "verification": {
+            "type": "api",
+            "method": "POST",
+            "url": "http://localhost:3000/api/pages/test-page-id/versions/rollback",
+            "body": {
+              "versionId": "version-id",
+              "sections": [
+                "section-1"
+              ]
+            },
+            "expected_status": 200
+          },
+          "status": "pending",
+          "notes": "POST endpoint accepting versionId and optional sections array. If sections provided, use selective rollback service. Otherwise, full rollback. Return new version ID"
+        }
+      ]
+    },
+    {
+      "id": "phase-6-retention-policy",
+      "name": "Retention Policy Enforcement",
+      "type": "implementation",
+      "description": "Implement 30-day version retention policy with cleanup",
+      "depends_on": [
+        "phase-3-database-schema"
+      ],
+      "parallel_safe": true,
+      "subtasks": [
+        {
+          "id": "subtask-6-1",
+          "description": "Update version creation to set expiresAt",
+          "service": "lib",
+          "files_to_modify": [
+            "packages/lib/src/services/page-version-service.ts"
+          ],
+          "files_to_create": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cd packages/lib && pnpm test -- page-version-service.test.ts",
+            "expected": "New versions have expiresAt set to 30 days"
+          },
+          "status": "pending",
+          "notes": "Modify createPageVersion() to automatically set expiresAt to 30 days from creation. Respect isPinned flag (pinned versions don't expire)"
+        },
+        {
+          "id": "subtask-6-2",
+          "description": "Create version cleanup service",
+          "service": "web",
+          "files_to_modify": [],
+          "files_to_create": [
+            "apps/web/src/services/api/version-cleanup-service.ts"
+          ],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cd apps/web && pnpm test -- version-cleanup-service.test.ts",
+            "expected": "Cleanup service deletes expired versions"
+          },
+          "status": "pending",
+          "notes": "Implement cleanupExpiredVersions() to delete versions where expiresAt < now() AND isPinned = false. Also delete associated contentRef files from storage. Run as scheduled job or manual trigger"
+        }
+      ]
+    },
+    {
+      "id": "phase-7-frontend-diff-ui",
+      "name": "Frontend - Diff UI Components",
+      "type": "implementation",
+      "description": "Build UI components for version comparison and diff visualization",
+      "depends_on": [
+        "phase-4-diff-engine"
+      ],
+      "parallel_safe": false,
+      "subtasks": [
+        {
+          "id": "subtask-7-1",
+          "description": "Create version comparison page component",
+          "service": "web",
+          "files_to_modify": [],
+          "files_to_create": [
+            "apps/web/src/app/(authenticated)/pages/[pageId]/versions/compare/page.tsx"
+          ],
+          "patterns_from": [
+            "apps/web/src/app/(authenticated)/pages/[pageId]/page.tsx"
+          ],
+          "verification": {
+            "type": "browser",
+            "url": "http://localhost:3000/pages/test-page-id/versions/compare?v1=version1&v2=version2",
+            "checks": [
+              "Page renders",
+              "No console errors",
+              "Diff viewer displays"
+            ]
+          },
+          "status": "pending",
+          "notes": "Create Next.js page component for version comparison. Accept v1 and v2 query params. Fetch diff from API endpoint. Use verified React diff viewer component. Support split and unified views"
+        },
+        {
+          "id": "subtask-7-2",
+          "description": "Create version history panel component",
+          "service": "web",
+          "files_to_modify": [],
+          "files_to_create": [
+            "apps/web/src/components/version-history/VersionHistoryPanel.tsx"
+          ],
+          "patterns_from": [],
+          "verification": {
+            "type": "browser",
+            "url": "http://localhost:3000/pages/test-page-id",
+            "checks": [
+              "Version history panel renders",
+              "Version list displays",
+              "Compare button works"
+            ]
+          },
+          "status": "pending",
+          "notes": "Create reusable component for version history sidebar/panel. Display list of versions with timestamp, user, compressed size. Add 'Compare' button to select two versions. Link to compare page"
+        },
+        {
+          "id": "subtask-7-3",
+          "description": "Create selective rollback UI component",
+          "service": "web",
+          "files_to_modify": [],
+          "files_to_create": [
+            "apps/web/src/components/version-history/SelectiveRollbackDialog.tsx"
+          ],
+          "patterns_from": [],
+          "verification": {
+            "type": "browser",
+            "url": "http://localhost:3000/pages/test-page-id/versions/compare",
+            "checks": [
+              "Dialog renders",
+              "Section selection works",
+              "Rollback confirmation displays"
+            ]
+          },
+          "status": "pending",
+          "notes": "Create dialog component for selective rollback. Show diff with checkboxes for each section/paragraph. Preview what will be reverted. Confirm button calls rollback API with selected sections"
+        }
+      ]
+    },
+    {
+      "id": "phase-8-integration-testing",
+      "name": "Integration & E2E Testing",
+      "type": "integration",
+      "description": "Verify end-to-end version comparison, rollback, and retention workflows",
+      "depends_on": [
+        "phase-5-rollback-enhancement",
+        "phase-6-retention-policy",
+        "phase-7-frontend-diff-ui"
+      ],
+      "parallel_safe": false,
+      "subtasks": [
+        {
+          "id": "subtask-8-1",
+          "description": "Test full version comparison workflow",
+          "all_services": true,
+          "files_to_modify": [],
+          "files_to_create": [
+            "apps/web/src/__tests__/e2e/version-comparison.test.ts"
+          ],
+          "patterns_from": [],
+          "verification": {
+            "type": "e2e",
+            "steps": [
+              "Create document with initial content",
+              "Create multiple versions with changes",
+              "Open version history",
+              "Select two versions to compare",
+              "Verify diff displays correctly",
+              "Check additions shown in green, deletions in red"
+            ]
+          },
+          "status": "pending",
+          "notes": "E2E test covering full version comparison flow from UI to API to storage"
+        },
+        {
+          "id": "subtask-8-2",
+          "description": "Test selective rollback with embedded files",
+          "all_services": true,
+          "files_to_modify": [],
+          "files_to_create": [
+            "apps/web/src/__tests__/e2e/selective-rollback.test.ts"
+          ],
+          "patterns_from": [],
+          "verification": {
+            "type": "e2e",
+            "steps": [
+              "Create document with embedded image",
+              "Create version with text change",
+              "Delete embedded image",
+              "Create another version",
+              "Attempt selective rollback to version with image",
+              "Verify rollback handles deleted file gracefully"
+            ]
+          },
+          "status": "pending",
+          "notes": "Critical edge case: rollback must handle deleted embedded files without breaking"
+        },
+        {
+          "id": "subtask-8-3",
+          "description": "Test compression and retention policy",
+          "all_services": true,
+          "files_to_modify": [],
+          "files_to_create": [
+            "apps/web/src/__tests__/integration/version-retention.test.ts"
+          ],
+          "patterns_from": [],
+          "verification": {
+            "type": "e2e",
+            "steps": [
+              "Create large document version (>1MB)",
+              "Verify compression metadata in database",
+              "Verify compressed file in storage",
+              "Read version and verify decompression works",
+              "Create version with expiresAt in past",
+              "Run cleanup service",
+              "Verify expired version deleted"
+            ]
+          },
+          "status": "pending",
+          "notes": "Test compression, storage, decompression, and retention cleanup end-to-end"
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "total_phases": 8,
+    "total_subtasks": 21,
+    "services_involved": [
+      "web",
+      "db",
+      "lib"
+    ],
+    "parallelism": {
+      "max_parallel_phases": 2,
+      "parallel_groups": [
+        {
+          "phases": [
+            "phase-2-storage-compression",
+            "phase-3-database-schema"
+          ],
+          "reason": "Both depend only on phase-1-package-verification, work on different files (lib storage vs db schema)"
+        },
+        {
+          "phases": [
+            "phase-6-retention-policy"
+          ],
+          "reason": "Can run in parallel with phase-4/5 as it only depends on phase-3 and works on different concerns"
+        }
+      ],
+      "recommended_workers": 2,
+      "speedup_estimate": "1.4x faster than sequential"
+    },
+    "startup_command": "source auto-claude/.venv/bin/activate && python auto-claude/run.py --spec 008 --parallel 2"
+  },
+  "verification_strategy": {
+    "risk_level": "high",
+    "skip_validation": false,
+    "test_creation_phase": "post_implementation",
+    "test_types_required": [
+      "unit",
+      "integration",
+      "e2e"
+    ],
+    "security_scanning_required": false,
+    "staging_deployment_required": false,
+    "acceptance_criteria": [
+      "All existing tests pass (backwards compatibility)",
+      "New code has >80% test coverage",
+      "No data loss in rollback operations",
+      "Compression reduces storage for >1KB documents",
+      "Visual diff renders correctly for all content formats",
+      "Embedded file rollback handles deleted files gracefully",
+      "30-day retention policy enforced via expiresAt"
+    ],
+    "verification_steps": [
+      {
+        "name": "Unit Tests",
+        "command": "pnpm test",
+        "expected_outcome": "All tests pass",
+        "type": "test",
+        "required": true,
+        "blocking": true
+      },
+      {
+        "name": "Integration Tests",
+        "command": "pnpm test:integration",
+        "expected_outcome": "All integration tests pass",
+        "type": "test",
+        "required": true,
+        "blocking": true
+      },
+      {
+        "name": "E2E Tests",
+        "command": "pnpm test:e2e",
+        "expected_outcome": "All E2E tests pass",
+        "type": "test",
+        "required": true,
+        "blocking": true
+      }
+    ],
+    "reasoning": "High risk due to version control operations affecting data integrity. Requires comprehensive testing including E2E scenarios to verify rollback flows work correctly without data loss. Embedded file handling is critical edge case."
+  },
+  "qa_acceptance": {
+    "unit_tests": {
+      "required": true,
+      "commands": [
+        "cd packages/lib && pnpm test",
+        "cd apps/web && pnpm test"
+      ],
+      "minimum_coverage": 80
+    },
+    "integration_tests": {
+      "required": true,
+      "commands": [
+        "pnpm test:integration"
+      ],
+      "services_to_test": [
+        "web",
+        "lib",
+        "db"
+      ]
+    },
+    "e2e_tests": {
+      "required": true,
+      "commands": [
+        "pnpm test:e2e"
+      ],
+      "flows": [
+        "version-comparison",
+        "selective-rollback",
+        "full-rollback-with-files",
+        "retention-cleanup"
+      ]
+    },
+    "browser_verification": {
+      "required": true,
+      "pages": [
+        {
+          "url": "http://localhost:3000/pages/[pageId]",
+          "checks": [
+            "Version history panel renders",
+            "Version list displays",
+            "No console errors"
+          ]
+        },
+        {
+          "url": "http://localhost:3000/pages/[pageId]/versions/compare?v1=X&v2=Y",
+          "checks": [
+            "Diff viewer renders",
+            "Additions shown in green",
+            "Deletions shown in red",
+            "Unchanged sections in gray"
+          ]
+        }
+      ]
+    },
+    "database_verification": {
+      "required": true,
+      "checks": [
+        "Compression metadata exists in pageVersions.metadata JSONB",
+        "expiresAt set to 30 days from createdAt for new versions",
+        "contentRef points to compressed content in storage",
+        "Expired versions deleted by cleanup service"
+      ]
+    }
+  },
+  "qa_signoff": null,
+  "last_updated": "2026-01-01T02:45:21.595047+00:00"
+}

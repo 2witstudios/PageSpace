@@ -1,0 +1,1086 @@
+{
+  "project_root": "/Users/jono/production/PageSpace",
+  "project_type": "monorepo",
+  "services": {
+    "lib": {
+      "name": "lib",
+      "path": "/Users/jono/production/PageSpace/packages/lib",
+      "language": "JavaScript",
+      "framework": "React",
+      "type": "frontend",
+      "package_manager": "npm",
+      "default_port": 3000,
+      "key_directories": {
+        "src": {
+          "path": "src",
+          "purpose": "Source code"
+        }
+      },
+      "entry_point": "src/index.ts",
+      "dependencies": [
+        "@iarna/toml",
+        "@pagespace/db",
+        "@paralleldrive/cuid2",
+        "@react-email/components",
+        "google-auth-library",
+        "html-to-docx",
+        "ioredis",
+        "jose",
+        "mammoth",
+        "pdf-parse-debugging-disabled",
+        "react-email",
+        "resend",
+        "server-only",
+        "xlsx"
+      ],
+      "dev_dependencies": [
+        "@react-email/preview-server",
+        "@types/html-to-docx",
+        "@types/react",
+        "@types/xlsx",
+        "react"
+      ],
+      "environment": {
+        "variables": {
+          "JWT_SECRET": {
+            "value": "<REDACTED>",
+            "source": ".env.test",
+            "type": "string",
+            "sensitive": true,
+            "required": false
+          },
+          "JWT_ISSUER": {
+            "value": "pagespace-test",
+            "source": ".env.test",
+            "type": "string",
+            "sensitive": false,
+            "required": false
+          },
+          "JWT_AUDIENCE": {
+            "value": "pagespace-test-users",
+            "source": ".env.test",
+            "type": "string",
+            "sensitive": false,
+            "required": false
+          },
+          "ENCRYPTION_KEY": {
+            "value": "<REDACTED>",
+            "source": ".env.test",
+            "type": "string",
+            "sensitive": true,
+            "required": false
+          },
+          "ENCRYPTION_SALT": {
+            "value": "test-encryption-salt-for-backward-compatibility",
+            "source": ".env.test",
+            "type": "string",
+            "sensitive": false,
+            "required": false
+          },
+          "CSRF_SECRET": {
+            "value": "<REDACTED>",
+            "source": ".env.test",
+            "type": "string",
+            "sensitive": true,
+            "required": false
+          },
+          "REALTIME_BROADCAST_SECRET": {
+            "value": "<REDACTED>",
+            "source": ".env.test",
+            "type": "string",
+            "sensitive": true,
+            "required": false
+          },
+          "DATABASE_URL": {
+            "value": "postgresql://user:password@localhost:5432/pagespace_test",
+            "source": ".env.test",
+            "type": "url",
+            "sensitive": false,
+            "required": false
+          },
+          "FILE_STORAGE_PATH": {
+            "value": "/tmp/pagespace-test-files",
+            "source": ".env.test",
+            "type": "path",
+            "sensitive": false,
+            "required": false
+          },
+          "PROCESSOR_URL": {
+            "value": "http://localhost:3003",
+            "source": ".env.test",
+            "type": "url",
+            "sensitive": false,
+            "required": false
+          },
+          "INTERNAL_REALTIME_URL": {
+            "value": "http://localhost:3001",
+            "source": ".env.test",
+            "type": "url",
+            "sensitive": false,
+            "required": false
+          },
+          "REDIS_URL": {
+            "value": "",
+            "source": ".env.test",
+            "type": "string",
+            "sensitive": false,
+            "required": false
+          }
+        },
+        "required_count": 0,
+        "optional_count": 0,
+        "detected_count": 12
+      },
+      "services": {
+        "databases": [
+          {
+            "type": "redis",
+            "client": "ioredis"
+          }
+        ]
+      },
+      "auth": {
+        "strategies": [
+          "jwt"
+        ],
+        "libraries": [
+          "jose"
+        ],
+        "user_model": null,
+        "middleware": []
+      },
+      "consumes": [
+        "processor.api"
+      ]
+    },
+    "db": {
+      "name": "db",
+      "path": "/Users/jono/production/PageSpace/packages/db",
+      "language": "JavaScript",
+      "framework": null,
+      "type": "unknown",
+      "package_manager": "npm",
+      "orm": "Drizzle",
+      "key_directories": {
+        "src": {
+          "path": "src",
+          "purpose": "Source code"
+        }
+      },
+      "entry_point": "src/index.ts",
+      "dependencies": [
+        "@paralleldrive/cuid2",
+        "drizzle-orm",
+        "pg"
+      ],
+      "dev_dependencies": [
+        "@types/bcryptjs",
+        "@types/pg",
+        "bcryptjs",
+        "dotenv",
+        "drizzle-kit",
+        "tsx"
+      ],
+      "services": {
+        "databases": [
+          {
+            "type": "postgresql",
+            "client": "pg"
+          }
+        ]
+      }
+    },
+    "web": {
+      "name": "web",
+      "path": "/Users/jono/production/PageSpace/apps/web",
+      "language": "TypeScript",
+      "framework": "Next.js",
+      "type": "frontend",
+      "package_manager": "npm",
+      "default_port": 3000,
+      "styling": "Tailwind CSS",
+      "state_management": "Zustand",
+      "dev_command": "npm run dev",
+      "key_directories": {
+        "src": {
+          "path": "src",
+          "purpose": "Source code"
+        }
+      },
+      "dependencies": [
+        "@ai-sdk/anthropic",
+        "@ai-sdk/google",
+        "@ai-sdk/openai",
+        "@ai-sdk/openai-compatible",
+        "@ai-sdk/react",
+        "@ai-sdk/xai",
+        "@dnd-kit/core",
+        "@dnd-kit/sortable",
+        "@dnd-kit/utilities",
+        "@monaco-editor/react",
+        "@openrouter/ai-sdk-provider",
+        "@pagespace/db",
+        "@pagespace/lib",
+        "@paralleldrive/cuid2",
+        "@radix-ui/react-accordion",
+        "@radix-ui/react-alert-dialog",
+        "@radix-ui/react-avatar",
+        "@radix-ui/react-checkbox",
+        "@radix-ui/react-collapsible",
+        "@radix-ui/react-context-menu"
+      ],
+      "dev_dependencies": [
+        "@eslint/eslintrc",
+        "@next/eslint-plugin-next",
+        "@tailwindcss/postcss",
+        "@types/dompurify",
+        "@types/node",
+        "@types/react",
+        "@types/react-dom",
+        "@types/ws",
+        "eslint",
+        "eslint-config-next"
+      ],
+      "dockerfile": "Dockerfile",
+      "environment": {
+        "variables": {
+          "DATABASE_URL": {
+            "value": "postgresql://user:password@localhost:5432/pagespace",
+            "source": ".env.development",
+            "type": "url",
+            "sensitive": false,
+            "required": true
+          },
+          "JWT_SECRET": {
+            "value": "<REDACTED>",
+            "source": ".env.development",
+            "type": "string",
+            "sensitive": true,
+            "required": true
+          },
+          "JWT_ISSUER": {
+            "value": "pagespace",
+            "source": ".env.development",
+            "type": "string",
+            "sensitive": false,
+            "required": true
+          },
+          "JWT_AUDIENCE": {
+            "value": "pagespace-users",
+            "source": ".env.development",
+            "type": "string",
+            "sensitive": false,
+            "required": true
+          },
+          "SERVICE_JWT_SECRET": {
+            "value": "<REDACTED>",
+            "source": ".env.development",
+            "type": "string",
+            "sensitive": true,
+            "required": false
+          },
+          "PROCESSOR_AUTH_REQUIRED": {
+            "value": "<REDACTED>",
+            "source": ".env.development",
+            "type": "boolean",
+            "sensitive": true,
+            "required": false
+          },
+          "PROCESSOR_UPLOAD_RATE_LIMIT": {
+            "value": "100",
+            "source": ".env.development",
+            "type": "number",
+            "sensitive": false,
+            "required": false
+          },
+          "PROCESSOR_UPLOAD_RATE_WINDOW": {
+            "value": "3600",
+            "source": ".env.development",
+            "type": "number",
+            "sensitive": false,
+            "required": false
+          },
+          "CSRF_SECRET": {
+            "value": "<REDACTED>",
+            "source": ".env.development",
+            "type": "string",
+            "sensitive": true,
+            "required": true
+          },
+          "ENCRYPTION_KEY": {
+            "value": "<REDACTED>",
+            "source": ".env.development",
+            "type": "string",
+            "sensitive": true,
+            "required": true
+          },
+          "ENCRYPTION_SALT": {
+            "value": "ac4a215991971a9f3ed9f288025b6258",
+            "source": ".env.development",
+            "type": "string",
+            "sensitive": false,
+            "required": true
+          },
+          "NEXT_PUBLIC_APP_URL": {
+            "value": "http://localhost:3000",
+            "source": ".env.development",
+            "type": "url",
+            "sensitive": false,
+            "required": false
+          },
+          "WEB_APP_URL": {
+            "value": "http://localhost:3000",
+            "source": ".env.development",
+            "type": "url",
+            "sensitive": false,
+            "required": true
+          },
+          "NEXT_PUBLIC_REALTIME_URL": {
+            "value": "http://localhost:3001",
+            "source": ".env.development",
+            "type": "url",
+            "sensitive": false,
+            "required": true
+          },
+          "INTERNAL_REALTIME_URL": {
+            "value": "http://localhost:3001",
+            "source": ".env.development",
+            "type": "url",
+            "sensitive": false,
+            "required": true
+          },
+          "PROCESSOR_URL": {
+            "value": "http://localhost:3003",
+            "source": ".env.development",
+            "type": "url",
+            "sensitive": false,
+            "required": false
+          },
+          "FILE_STORAGE_PATH": {
+            "value": "./storage",
+            "source": ".env.development",
+            "type": "path",
+            "sensitive": false,
+            "required": false
+          },
+          "STORAGE_DEFAULT_QUOTA_MB": {
+            "value": "500",
+            "source": ".env.development",
+            "type": "number",
+            "sensitive": false,
+            "required": false
+          },
+          "STORAGE_MAX_FILE_SIZE_MB": {
+            "value": "20",
+            "source": ".env.development",
+            "type": "number",
+            "sensitive": false,
+            "required": false
+          },
+          "STORAGE_MAX_CONCURRENT_UPLOADS": {
+            "value": "5",
+            "source": ".env.development",
+            "type": "number",
+            "sensitive": false,
+            "required": false
+          },
+          "STORAGE_MIN_FREE_MEMORY_MB": {
+            "value": "500",
+            "source": ".env.development",
+            "type": "number",
+            "sensitive": false,
+            "required": false
+          },
+          "STORAGE_ENABLE_QUOTAS": {
+            "value": "true",
+            "source": ".env.development",
+            "type": "boolean",
+            "sensitive": false,
+            "required": false
+          },
+          "NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB": {
+            "value": "20",
+            "source": ".env.development",
+            "type": "number",
+            "sensitive": false,
+            "required": false
+          },
+          "REALTIME_PORT": {
+            "value": "3001",
+            "source": ".env.development",
+            "type": "number",
+            "sensitive": false,
+            "required": false
+          },
+          "CORS_ORIGIN": {
+            "value": "http://localhost:3000",
+            "source": ".env.development",
+            "type": "url",
+            "sensitive": false,
+            "required": true
+          },
+          "GOOGLE_AI_DEFAULT_API_KEY": {
+            "value": "<REDACTED>",
+            "source": ".env.development",
+            "type": "string",
+            "sensitive": true,
+            "required": true
+          },
+          "GLM_DEFAULT_API_KEY": {
+            "value": "<REDACTED>",
+            "source": ".env.development",
+            "type": "string",
+            "sensitive": true,
+            "required": false
+          },
+          "GOOGLE_OAUTH_CLIENT_ID": {
+            "value": "<REDACTED>",
+            "source": ".env.development",
+            "type": "string",
+            "sensitive": true,
+            "required": true
+          },
+          "GOOGLE_OAUTH_CLIENT_SECRET": {
+            "value": "<REDACTED>",
+            "source": ".env.development",
+            "type": "string",
+            "sensitive": true,
+            "required": true
+          },
+          "GOOGLE_OAUTH_REDIRECT_URI": {
+            "value": "<REDACTED>",
+            "source": ".env.development",
+            "type": "url",
+            "sensitive": true,
+            "required": true
+          },
+          "OAUTH_STATE_SECRET": {
+            "value": "<REDACTED>",
+            "source": ".env.development",
+            "type": "string",
+            "sensitive": true,
+            "required": true
+          },
+          "STRIPE_SECRET_KEY": {
+            "value": "<REDACTED>",
+            "source": ".env.development",
+            "type": "string",
+            "sensitive": true,
+            "required": false
+          },
+          "STRIPE_WEBHOOK_SECRET": {
+            "value": "<REDACTED>",
+            "source": ".env.development",
+            "type": "string",
+            "sensitive": true,
+            "required": false
+          },
+          "NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY": {
+            "value": "<REDACTED>",
+            "source": ".env.development",
+            "type": "string",
+            "sensitive": true,
+            "required": false
+          },
+          "NEXT_PUBLIC_STRIPE_PRICE_ID_PRO": {
+            "value": "price_1S8LNwPCGvbSozobTnEcQ23F",
+            "source": ".env.development",
+            "type": "string",
+            "sensitive": false,
+            "required": false
+          },
+          "NEXT_PUBLIC_STRIPE_PRICE_ID_FOUNDER": {
+            "value": "price_1SdO3GPCGvbSozobQENcmkFg",
+            "source": ".env.development",
+            "type": "string",
+            "sensitive": false,
+            "required": false
+          },
+          "NEXT_PUBLIC_STRIPE_PRICE_ID_BUSINESS": {
+            "value": "price_1SdNyfPCGvbSozobKucFEFnw",
+            "source": ".env.development",
+            "type": "string",
+            "sensitive": false,
+            "required": false
+          },
+          "MONITORING_INGEST_KEY": {
+            "value": "<REDACTED>",
+            "source": ".env.development",
+            "type": "string",
+            "sensitive": true,
+            "required": true
+          },
+          "MONITORING_INGEST_PATH": {
+            "value": "/api/internal/monitoring/ingest",
+            "source": ".env.development",
+            "type": "path",
+            "sensitive": false,
+            "required": true
+          },
+          "LOG_LEVEL": {
+            "value": "warn",
+            "source": ".env.development",
+            "type": "string",
+            "sensitive": false,
+            "required": true
+          },
+          "LOG_DESTINATION": {
+            "value": "both",
+            "source": ".env.development",
+            "type": "string",
+            "sensitive": false,
+            "required": true
+          },
+          "LOG_BATCH_SIZE": {
+            "value": "50",
+            "source": ".env.development",
+            "type": "number",
+            "sensitive": false,
+            "required": true
+          },
+          "LOG_FLUSH_INTERVAL": {
+            "value": "5000",
+            "source": ".env.development",
+            "type": "number",
+            "sensitive": false,
+            "required": true
+          },
+          "REALTIME_BROADCAST_SECRET": {
+            "value": "<REDACTED>",
+            "source": ".env.development",
+            "type": "string",
+            "sensitive": true,
+            "required": false
+          },
+          "REDIS_PASSWORD": {
+            "value": "<REDACTED>",
+            "source": ".env.development",
+            "type": "string",
+            "sensitive": true,
+            "required": false
+          },
+          "REDIS_URL": {
+            "value": "redis://:pagespace_redis@localhost:6379",
+            "source": ".env.development",
+            "type": "url",
+            "sensitive": false,
+            "required": false
+          },
+          "RESEND_API_KEY": {
+            "value": "<REDACTED>",
+            "source": ".env.development",
+            "type": "string",
+            "sensitive": true,
+            "required": false
+          },
+          "FROM_EMAIL": {
+            "value": "PageSpace <hello@pagespace.ai>",
+            "source": ".env.development",
+            "type": "email",
+            "sensitive": false,
+            "required": false
+          },
+          "CRON_SECRET": {
+            "value": "<REDACTED>",
+            "source": ".env.development",
+            "type": "string",
+            "sensitive": true,
+            "required": false
+          },
+          "PORT": {
+            "value": null,
+            "source": ".env.example",
+            "type": "string",
+            "sensitive": false,
+            "required": true
+          },
+          "NEXT_PUBLIC_OLLAMA_BASE_URL": {
+            "value": null,
+            "source": ".env.example",
+            "type": "string",
+            "sensitive": false,
+            "required": true
+          },
+          "OLLAMA_BASE_URL": {
+            "value": null,
+            "source": ".env.example",
+            "type": "string",
+            "sensitive": false,
+            "required": true
+          },
+          "GOOGLE_OAUTH_IOS_CLIENT_ID": {
+            "value": null,
+            "source": ".env.example",
+            "type": "string",
+            "sensitive": true,
+            "required": true
+          }
+        },
+        "required_count": 26,
+        "optional_count": 0,
+        "detected_count": 53
+      },
+      "services": {
+        "payments": [
+          {
+            "provider": "stripe",
+            "client": "stripe"
+          }
+        ]
+      },
+      "auth": {
+        "strategies": [
+          "jwt"
+        ],
+        "libraries": [
+          "jose"
+        ],
+        "user_model": null,
+        "middleware": []
+      },
+      "consumes": [
+        "processor.api"
+      ]
+    },
+    "processor": {
+      "name": "processor",
+      "path": "/Users/jono/production/PageSpace/apps/processor",
+      "language": "TypeScript",
+      "framework": "Express",
+      "type": "backend",
+      "package_manager": "npm",
+      "default_port": 3003,
+      "dev_command": "npm run dev",
+      "key_directories": {
+        "src": {
+          "path": "src",
+          "purpose": "Source code"
+        },
+        "tests": {
+          "path": "tests",
+          "purpose": "Tests"
+        }
+      },
+      "entry_point": "src/server.ts",
+      "dependencies": [
+        "@pagespace/db",
+        "@pagespace/lib",
+        "cors",
+        "crypto",
+        "dotenv",
+        "express",
+        "mammoth",
+        "multer",
+        "pdfjs-dist",
+        "pg",
+        "pg-boss",
+        "sharp",
+        "tesseract.js"
+      ],
+      "dev_dependencies": [
+        "@types/cors",
+        "@types/express",
+        "@types/multer",
+        "@types/node",
+        "ts-node",
+        "tsx",
+        "typescript"
+      ],
+      "test_directory": "tests",
+      "dockerfile": "Dockerfile",
+      "api": {
+        "routes": [
+          {
+            "path": "/health",
+            "methods": [
+              "GET"
+            ],
+            "file": "dist/server.js",
+            "framework": "Express",
+            "requires_auth": false
+          },
+          {
+            "path": "/api/queue/status",
+            "methods": [
+              "GET"
+            ],
+            "file": "dist/server.js",
+            "framework": "Express",
+            "requires_auth": true
+          },
+          {
+            "path": "/api/job/:jobId",
+            "methods": [
+              "GET"
+            ],
+            "file": "dist/server.js",
+            "framework": "Express",
+            "requires_auth": true
+          },
+          {
+            "path": "/upload",
+            "methods": [
+              "POST"
+            ],
+            "file": "dist/api/avatar.js",
+            "framework": "Express",
+            "requires_auth": false
+          },
+          {
+            "path": "/:userId",
+            "methods": [
+              "DELETE"
+            ],
+            "file": "dist/api/avatar.js",
+            "framework": "Express",
+            "requires_auth": false
+          },
+          {
+            "path": "/:contentHash/original",
+            "methods": [
+              "GET"
+            ],
+            "file": "dist/api/serve.js",
+            "framework": "Express",
+            "requires_auth": false
+          },
+          {
+            "path": "/:contentHash/:preset",
+            "methods": [
+              "GET"
+            ],
+            "file": "dist/api/serve.js",
+            "framework": "Express",
+            "requires_auth": false
+          },
+          {
+            "path": "/:contentHash/metadata",
+            "methods": [
+              "GET"
+            ],
+            "file": "dist/api/serve.js",
+            "framework": "Express",
+            "requires_auth": false
+          },
+          {
+            "path": "/by-page/:pageId",
+            "methods": [
+              "POST"
+            ],
+            "file": "dist/api/ingest.js",
+            "framework": "Express",
+            "requires_auth": false
+          },
+          {
+            "path": "/",
+            "methods": [
+              "POST"
+            ],
+            "file": "dist/api/optimize.js",
+            "framework": "Express",
+            "requires_auth": false
+          },
+          {
+            "path": "/batch",
+            "methods": [
+              "POST"
+            ],
+            "file": "dist/api/optimize.js",
+            "framework": "Express",
+            "requires_auth": false
+          },
+          {
+            "path": "/prepare-for-ai",
+            "methods": [
+              "POST"
+            ],
+            "file": "dist/api/optimize.js",
+            "framework": "Express",
+            "requires_auth": false
+          },
+          {
+            "path": "/single",
+            "methods": [
+              "POST"
+            ],
+            "file": "dist/api/upload.js",
+            "framework": "Express",
+            "requires_auth": false
+          },
+          {
+            "path": "/multiple",
+            "methods": [
+              "POST"
+            ],
+            "file": "dist/api/upload.js",
+            "framework": "Express",
+            "requires_auth": false
+          },
+          {
+            "path": "/chunk",
+            "methods": [
+              "POST"
+            ],
+            "file": "dist/api/upload.js",
+            "framework": "Express",
+            "requires_auth": false
+          },
+          {
+            "path": "/health",
+            "methods": [
+              "GET"
+            ],
+            "file": "src/server.ts",
+            "framework": "Express",
+            "requires_auth": false
+          },
+          {
+            "path": "/upload",
+            "methods": [
+              "POST"
+            ],
+            "file": "src/api/avatar.ts",
+            "framework": "Express",
+            "requires_auth": false
+          },
+          {
+            "path": "/:userId",
+            "methods": [
+              "DELETE"
+            ],
+            "file": "src/api/avatar.ts",
+            "framework": "Express",
+            "requires_auth": false
+          },
+          {
+            "path": "/:contentHash/original",
+            "methods": [
+              "GET"
+            ],
+            "file": "src/api/serve.ts",
+            "framework": "Express",
+            "requires_auth": false
+          },
+          {
+            "path": "/:contentHash/:preset",
+            "methods": [
+              "GET"
+            ],
+            "file": "src/api/serve.ts",
+            "framework": "Express",
+            "requires_auth": false
+          },
+          {
+            "path": "/:contentHash/metadata",
+            "methods": [
+              "GET"
+            ],
+            "file": "src/api/serve.ts",
+            "framework": "Express",
+            "requires_auth": false
+          },
+          {
+            "path": "/single",
+            "methods": [
+              "POST"
+            ],
+            "file": "src/api/upload.ts",
+            "framework": "Express",
+            "requires_auth": false
+          },
+          {
+            "path": "/multiple",
+            "methods": [
+              "POST"
+            ],
+            "file": "src/api/upload.ts",
+            "framework": "Express",
+            "requires_auth": false
+          },
+          {
+            "path": "/chunk",
+            "methods": [
+              "POST"
+            ],
+            "file": "src/api/upload.ts",
+            "framework": "Express",
+            "requires_auth": false
+          },
+          {
+            "path": "/by-page/:pageId",
+            "methods": [
+              "POST"
+            ],
+            "file": "src/api/ingest.ts",
+            "framework": "Express",
+            "requires_auth": false
+          },
+          {
+            "path": "/",
+            "methods": [
+              "POST"
+            ],
+            "file": "src/api/optimize.ts",
+            "framework": "Express",
+            "requires_auth": false
+          },
+          {
+            "path": "/batch",
+            "methods": [
+              "POST"
+            ],
+            "file": "src/api/optimize.ts",
+            "framework": "Express",
+            "requires_auth": false
+          },
+          {
+            "path": "/prepare-for-ai",
+            "methods": [
+              "POST"
+            ],
+            "file": "src/api/optimize.ts",
+            "framework": "Express",
+            "requires_auth": false
+          }
+        ],
+        "total_routes": 28,
+        "methods": [
+          "DELETE",
+          "GET",
+          "POST"
+        ],
+        "protected_routes": [
+          "/api/queue/status",
+          "/api/job/:jobId"
+        ]
+      },
+      "services": {
+        "databases": [
+          {
+            "type": "postgresql",
+            "client": "pg"
+          }
+        ]
+      },
+      "monitoring": {
+        "health_checks": [
+          "/health",
+          "/health"
+        ]
+      }
+    },
+    "desktop": {
+      "name": "desktop",
+      "path": "/Users/jono/production/PageSpace/apps/desktop",
+      "language": "TypeScript",
+      "framework": null,
+      "type": "unknown",
+      "package_manager": "npm",
+      "dev_command": "npm run dev",
+      "key_directories": {
+        "src": {
+          "path": "src",
+          "purpose": "Source code"
+        }
+      },
+      "dependencies": [
+        "electron-store",
+        "electron-updater",
+        "jose",
+        "node-machine-id",
+        "ws",
+        "zod"
+      ],
+      "dev_dependencies": [
+        "@types/node",
+        "@types/ws",
+        "electron",
+        "electron-builder",
+        "electron-vite",
+        "typescript"
+      ],
+      "environment": {
+        "variables": {
+          "PAGESPACE_URL": {
+            "value": null,
+            "source": ".env.example",
+            "type": "string",
+            "sensitive": false,
+            "required": true
+          },
+          "NODE_ENV": {
+            "value": null,
+            "source": ".env.example",
+            "type": "string",
+            "sensitive": false,
+            "required": true
+          }
+        },
+        "required_count": 2,
+        "optional_count": 0,
+        "detected_count": 2
+      },
+      "auth": {
+        "strategies": [
+          "jwt"
+        ],
+        "libraries": [
+          "jose"
+        ],
+        "user_model": null,
+        "middleware": []
+      }
+    },
+    "realtime": {
+      "name": "realtime",
+      "path": "/Users/jono/production/PageSpace/apps/realtime",
+      "language": "TypeScript",
+      "framework": null,
+      "type": "unknown",
+      "package_manager": "npm",
+      "dev_command": "npm run dev",
+      "key_directories": {
+        "src": {
+          "path": "src",
+          "purpose": "Source code"
+        }
+      },
+      "entry_point": "src/index.ts",
+      "dependencies": [
+        "@pagespace/db",
+        "@pagespace/lib",
+        "cookie",
+        "dotenv",
+        "socket.io"
+      ],
+      "dev_dependencies": [
+        "tsx",
+        "typescript"
+      ],
+      "dockerfile": "Dockerfile"
+    }
+  },
+  "infrastructure": {
+    "docker_compose": "docker-compose.yml",
+    "docker_services": [
+      "postgres",
+      "migrate",
+      "web",
+      "processor-permissions",
+      "processor",
+      "realtime",
+      "redis",
+      "test",
+      "nginx"
+    ],
+    "ci": "GitHub Actions",
+    "ci_workflows": [
+      "build-desktop.yml",
+      "test.yml"
+    ]
+  },
+  "conventions": {
+    "typescript": true
+  },
+  "monorepo_tool": "pnpm-workspace"
+}
