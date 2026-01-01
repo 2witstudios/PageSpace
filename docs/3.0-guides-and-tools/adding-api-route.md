@@ -86,9 +86,13 @@ export async function POST(request: Request) {
 }
 ```
 
-## 4. Authentication and CSRF Protection
+## 4. Authentication, CSRF, and Origin Validation
 
-Most routes require authentication. PageSpace uses a unified authentication system with built-in CSRF protection for mutation operations.
+Most routes require authentication. PageSpace uses a unified authentication system with built-in CSRF protection and Origin header validation for mutation operations.
+
+**Defense-in-Depth Security:**
+- **CSRF Token Validation**: Verifies the `X-CSRF-Token` header matches the session
+- **Origin Header Validation**: Ensures requests originate from allowed domains (enabled automatically when `requireCSRF: true`)
 
 ### Standard Authentication Pattern
 
@@ -101,7 +105,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 // Define authentication options at the top of the file
 const AUTH_OPTIONS = {
   allow: ['jwt', 'mcp'] as const,  // Allow JWT (web) and MCP (API) tokens
-  requireCSRF: true                 // Enable CSRF protection for mutations
+  requireCSRF: true                 // Enable CSRF + Origin validation for mutations
 };
 
 export async function POST(request: Request) {
@@ -119,9 +123,11 @@ export async function POST(request: Request) {
 }
 ```
 
-### CSRF Protection
+### CSRF and Origin Protection
 
 **CSRF protection is REQUIRED for all mutation endpoints** (POST, PUT, PATCH, DELETE) to prevent Cross-Site Request Forgery attacks.
+
+When `requireCSRF: true` is set, **Origin header validation is automatically enabled** as defense-in-depth. This ensures that even if a browser vulnerability bypasses SameSite cookie protections, requests from unexpected origins will be rejected.
 
 **When to use `requireCSRF: true`:**
 - ✅ All POST/PUT/PATCH/DELETE endpoints that modify data
@@ -141,17 +147,17 @@ import { db, pages, eq } from '@pagespace/db';
 
 const AUTH_OPTIONS = {
   allow: ['jwt', 'mcp'] as const,
-  requireCSRF: true  // CSRF protection for mutations
+  requireCSRF: true  // CSRF + Origin validation for mutations
 };
 
 export async function PATCH(
   request: Request,
   context: { params: Promise<{ pageId: string }> }
 ) {
-  // Authenticate and validate CSRF token
+  // Authenticate and validate CSRF token + Origin header
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
   if (isAuthError(auth)) {
-    return auth.error;  // Returns 401 for auth failure or 403 for CSRF failure
+    return auth.error;  // Returns 401 for auth failure or 403 for CSRF/Origin failure
   }
 
   const { pageId } = await context.params;
@@ -186,7 +192,8 @@ export async function GET(request: Request) {
 | Option | Type | Description |
 |--------|------|-------------|
 | `allow` | `['jwt'] \| ['mcp'] \| ['jwt', 'mcp']` | Which token types to accept |
-| `requireCSRF` | `boolean` | Enable CSRF validation (only applies to JWT tokens) |
+| `requireCSRF` | `boolean` | Enable CSRF validation (only applies to JWT tokens). Also enables Origin validation. |
+| `requireOriginValidation` | `boolean` | Override Origin validation (auto-enabled with `requireCSRF`). Set to `false` to disable. |
 
 ### Token Types
 
@@ -232,4 +239,4 @@ export async function GET(request: Request) {
 ## 6. Updating API Documentation
 
 After adding or modifying an API route, you **MUST** update the central API documentation. Refer to the format specified in `api_routes.md` and add or update the relevant file in `docs/2.0-architecture/2.4-api/`.
-**Last Updated:** 2025-10-07 (Added CSRF protection requirements)
+**Last Updated:** 2026-01-01 (Added Origin header validation as defense-in-depth)
