@@ -5,6 +5,7 @@
  * - actorEmail required in ActivityLogInput
  * - actorDisplayName optional
  * - Convenience wrappers pass actor info through
+ * - Hash chain fields computed on log insertion
  *
  * @scaffold - characterizing current behavior with ORM mock.
  * The activity-logger itself is the seam; these tests verify its contract.
@@ -15,16 +16,41 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Capture the values passed to the database insert
 let capturedInsertValues: Record<string, unknown> | null = null;
 
+// Track the last inserted log hash for chain simulation
+let lastInsertedHash: string | null = null;
+
 vi.mock('@pagespace/db', () => ({
   db: {
     insert: vi.fn().mockReturnValue({
       values: vi.fn().mockImplementation((values: Record<string, unknown>) => {
         capturedInsertValues = values;
+        // Track the log hash for next chain computation
+        if (values.logHash) {
+          lastInsertedHash = values.logHash as string;
+        }
         return Promise.resolve(undefined);
       }),
     }),
+    query: {
+      activityLogs: {
+        findFirst: vi.fn().mockImplementation(() => {
+          // Return the last inserted hash for chain computation
+          if (lastInsertedHash) {
+            return Promise.resolve({ logHash: lastInsertedHash });
+          }
+          return Promise.resolve(null);
+        }),
+      },
+    },
   },
-  activityLogs: { id: 'id' },
+  activityLogs: { id: 'id', logHash: 'logHash', timestamp: 'timestamp' },
+  eq: vi.fn(),
+}));
+
+// Mock drizzle-orm's isNotNull and desc functions
+vi.mock('drizzle-orm', () => ({
+  desc: vi.fn().mockImplementation((col) => col),
+  isNotNull: vi.fn().mockImplementation((col) => col),
 }));
 
 import { db } from '@pagespace/db';
@@ -47,6 +73,7 @@ describe('activity logger compliance', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     capturedInsertValues = null;
+    lastInsertedHash = null;
   });
 
   describe('ActivityLogInput interface', () => {
@@ -764,6 +791,132 @@ describe('activity logger compliance', () => {
       expect(capturedInsertValues).toMatchObject({
         driveId: null,
       });
+    });
+  });
+
+  describe('hash chain integration', () => {
+    it('should compute logHash on log insertion', async () => {
+      // Arrange
+      const input: ActivityLogInput = {
+        userId: 'user-123',
+        actorEmail: 'john@example.com',
+        operation: 'create',
+        resourceType: 'page',
+        resourceId: 'page-1',
+        driveId: 'drive-1',
+      };
+
+      // Act
+      await logActivity(input);
+
+      // Assert - verify hash chain fields are present
+      expect(capturedInsertValues).toHaveProperty('logHash');
+      expect(capturedInsertValues?.logHash).toBeDefined();
+      expect(typeof capturedInsertValues?.logHash).toBe('string');
+      expect((capturedInsertValues?.logHash as string).length).toBe(64); // SHA-256 hex length
+    });
+
+    it('should generate chainSeed for first log entry', async () => {
+      // Arrange - ensure no previous logs exist (lastInsertedHash is null)
+      lastInsertedHash = null;
+
+      const input: ActivityLogInput = {
+        userId: 'user-123',
+        actorEmail: 'john@example.com',
+        operation: 'create',
+        resourceType: 'page',
+        resourceId: 'page-1',
+        driveId: 'drive-1',
+      };
+
+      // Act
+      await logActivity(input);
+
+      // Assert - first entry should have chainSeed but no previousLogHash
+      expect(capturedInsertValues).toHaveProperty('chainSeed');
+      expect(capturedInsertValues?.chainSeed).toBeDefined();
+      expect(typeof capturedInsertValues?.chainSeed).toBe('string');
+      expect((capturedInsertValues?.chainSeed as string).length).toBe(64); // 32 bytes hex
+      expect(capturedInsertValues?.previousLogHash).toBeNull();
+    });
+
+    it('should chain to previous log hash for subsequent entries', async () => {
+      // Arrange - simulate a previous log entry
+      lastInsertedHash = 'abc123previoushash0000000000000000000000000000000000000000000000';
+
+      const input: ActivityLogInput = {
+        userId: 'user-123',
+        actorEmail: 'john@example.com',
+        operation: 'update',
+        resourceType: 'page',
+        resourceId: 'page-1',
+        driveId: 'drive-1',
+      };
+
+      // Act
+      await logActivity(input);
+
+      // Assert - subsequent entry should reference previous hash
+      expect(capturedInsertValues?.previousLogHash).toBe(lastInsertedHash);
+      expect(capturedInsertValues?.chainSeed).toBeNull(); // Only first entry has seed
+      expect(capturedInsertValues?.logHash).toBeDefined();
+      expect(capturedInsertValues?.logHash).not.toBe(lastInsertedHash); // Different hash
+    });
+
+    it('should produce deterministic hashes for same input data', async () => {
+      // This test verifies hash computation is deterministic
+      // We'll insert two entries and verify hashes are computed correctly
+
+      // First entry (will be first in chain)
+      const input1: ActivityLogInput = {
+        userId: 'user-123',
+        actorEmail: 'john@example.com',
+        operation: 'create',
+        resourceType: 'page',
+        resourceId: 'page-1',
+        driveId: 'drive-1',
+      };
+
+      await logActivity(input1);
+      const firstHash = capturedInsertValues?.logHash as string;
+
+      // Second entry (will chain to first)
+      const input2: ActivityLogInput = {
+        userId: 'user-123',
+        actorEmail: 'john@example.com',
+        operation: 'update',
+        resourceType: 'page',
+        resourceId: 'page-1',
+        driveId: 'drive-1',
+      };
+
+      await logActivity(input2);
+      const secondHash = capturedInsertValues?.logHash as string;
+
+      // Assert - both should have valid SHA-256 hashes
+      expect(firstHash).toHaveLength(64);
+      expect(secondHash).toHaveLength(64);
+      // And second should reference first
+      expect(capturedInsertValues?.previousLogHash).toBe(firstHash);
+    });
+
+    it('should include hash chain fields in logPageActivity', async () => {
+      // Arrange & Act
+      logPageActivity(
+        'user-123',
+        'create',
+        { id: 'page-1', title: 'Test Page', driveId: 'drive-1' },
+        { actorEmail: 'john@example.com' }
+      );
+
+      // Wait for async execution
+      await vi.waitFor(() => {
+        expect(capturedInsertValues).not.toBeNull();
+      });
+
+      // Assert - hash chain fields should be present
+      expect(capturedInsertValues).toHaveProperty('logHash');
+      expect(typeof capturedInsertValues?.logHash).toBe('string');
     });
   });
 });

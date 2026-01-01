@@ -459,11 +459,43 @@ function prepareActivityInsert(input: ActivityLogInput) {
  * Log an activity event to the database.
  * Fire-and-forget pattern - never blocks the caller.
  * Also broadcasts the activity for real-time updates if a hook is configured.
+ * Computes hash chain data for tamper-evident audit logging.
  */
 export async function logActivity(input: ActivityLogInput): Promise<void> {
   try {
     const values = prepareActivityInsert(input);
-    await db.insert(activityLogs).values(values);
+
+    // Get the latest log hash to chain this entry
+    const { previousHash, isFirstEntry } = await getLatestLogHash();
+
+    // Compute hash chain data for this entry
+    const hashChainData = computeHashChainData(
+      {
+        id: values.id,
+        timestamp: values.timestamp,
+        userId: values.userId,
+        actorEmail: values.actorEmail,
+        operation: values.operation,
+        resourceType: values.resourceType,
+        resourceId: values.resourceId,
+        driveId: values.driveId,
+        pageId: values.pageId,
+        contentSnapshot: values.contentSnapshot,
+        previousValues: values.previousValues,
+        newValues: values.newValues,
+        metadata: values.metadata,
+      },
+      previousHash,
+      isFirstEntry
+    );
+
+    // Insert with hash chain fields
+    await db.insert(activityLogs).values({
+      ...values,
+      previousLogHash: hashChainData.previousLogHash,
+      logHash: hashChainData.logHash,
+      chainSeed: hashChainData.chainSeed,
+    });
 
     // Broadcast for real-time updates (fire and forget)
     if (activityBroadcastHook) {
@@ -489,6 +521,7 @@ export async function logActivity(input: ActivityLogInput): Promise<void> {
 /**
  * Log an activity event using an existing transaction.
  * Intended for deterministic, atomic writes.
+ * Computes hash chain data within the transaction for consistency.
  * Note: Broadcast happens after insert but within the transaction scope.
  * The broadcast is debounced, so it will fire after the transaction commits.
  */
@@ -497,7 +530,38 @@ export async function logActivityWithTx(
   tx: typeof db
 ): Promise<void> {
   const values = prepareActivityInsert(input);
-  await tx.insert(activityLogs).values(values);
+
+  // Get the latest log hash within the transaction for atomic chain computation
+  const { previousHash, isFirstEntry } = await getLatestLogHashWithTx(tx);
+
+  // Compute hash chain data for this entry
+  const hashChainData = computeHashChainData(
+    {
+      id: values.id,
+      timestamp: values.timestamp,
+      userId: values.userId,
+      actorEmail: values.actorEmail,
+      operation: values.operation,
+      resourceType: values.resourceType,
+      resourceId: values.resourceId,
+      driveId: values.driveId,
+      pageId: values.pageId,
+      contentSnapshot: values.contentSnapshot,
+      previousValues: values.previousValues,
+      newValues: values.newValues,
+      metadata: values.metadata,
+    },
+    previousHash,
+    isFirstEntry
+  );
+
+  // Insert with hash chain fields
+  await tx.insert(activityLogs).values({
+    ...values,
+    previousLogHash: hashChainData.previousLogHash,
+    logHash: hashChainData.logHash,
+    chainSeed: hashChainData.chainSeed,
+  });
 
   // Broadcast for real-time updates (fire and forget, debounced)
   if (activityBroadcastHook) {
