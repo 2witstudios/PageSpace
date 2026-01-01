@@ -1,7 +1,11 @@
 import { scrypt, randomBytes, createCipheriv, createDecipheriv } from 'crypto';
 import { promisify } from 'util';
+import { loggers } from '../logging/logger-config';
 
 const scryptAsync = promisify(scrypt);
+
+// Track ciphertexts that have already triggered deprecation warnings to avoid log spam
+const loggedDeprecationWarnings = new Set<string>();
 
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 16;
@@ -101,6 +105,20 @@ export async function decrypt(encryptedText: string): Promise<string> {
 
 // Legacy decrypt function for backward compatibility
 async function decryptLegacy(encryptedText: string): Promise<string> {
+  // Emit deprecation warning (deduplicated by ciphertext identifier)
+  const ciphertextId = encryptedText.substring(0, 16) + '...' + encryptedText.slice(-8);
+  if (!loggedDeprecationWarnings.has(ciphertextId)) {
+    loggedDeprecationWarnings.add(ciphertextId);
+    loggers.security.warn(
+      'DEPRECATION: Legacy encryption format detected. This format uses a static salt and will be removed in a future version.',
+      {
+        ciphertextId,
+        format: 'legacy-3-part',
+        migration: 'Run the encryption migration script or use reEncrypt() to upgrade to the current 4-part format with unique per-operation salt.'
+      }
+    );
+  }
+
   try {
     const parts = encryptedText.split(':');
     const [ivHex, authTagHex, encryptedHex] = parts;
