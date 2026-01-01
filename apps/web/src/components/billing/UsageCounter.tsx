@@ -13,6 +13,7 @@ import { maskIdentifier } from '@/lib/logging/mask';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
+import { Skeleton } from '@/components/ui/skeleton';
 
 const usageLogger = createClientLogger({ namespace: 'usage', component: 'usage-counter' });
 
@@ -147,7 +148,7 @@ export function UsageCounter() {
     if (isPageSpaceProvider && !usage) {
       return (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <div className="h-4 w-4 animate-pulse bg-muted rounded" />
+          <Skeleton className="h-4 w-4" />
           <span className="hidden md:inline">Loading...</span>
         </div>
       );
