@@ -33,31 +33,37 @@
           "id": "1.2",
           "title": "Add warning color tokens to :root and .dark",
           "description": "Add --warning CSS variable with OKLCH amber values. Light: oklch(0.75 0.18 75), Dark: oklch(0.68 0.16 75)",
-          "status": "pending",
+          "status": "completed",
           "files": [
             "apps/web/src/app/globals.css"
           ],
-          "estimated_minutes": 5
+          "estimated_minutes": 5,
+          "notes": "Added --warning CSS variable with OKLCH amber values. Light: oklch(0.75 0.18 75), Dark: oklch(0.68 0.16 75). Committed as 96ee26f.",
+          "updated_at": "2026-01-01T02:04:33.355654+00:00"
         },
         {
           "id": "1.3",
           "title": "Add info color tokens to :root and .dark",
           "description": "Add --info CSS variable with OKLCH blue values. Light: oklch(0.55 0.18 235), Dark: oklch(0.60 0.16 235)",
-          "status": "pending",
+          "status": "completed",
           "files": [
             "apps/web/src/app/globals.css"
           ],
-          "estimated_minutes": 5
+          "estimated_minutes": 5,
+          "notes": "Added --info CSS variable with OKLCH blue values. Light: oklch(0.55 0.18 235), Dark: oklch(0.60 0.16 235). Committed as 87e2ed3.",
+          "updated_at": "2026-01-01T02:05:37.966332+00:00"
         },
         {
           "id": "1.4",
           "title": "Add Tailwind color mappings",
           "description": "Add --color-success, --color-warning, and --color-info to the @theme inline block so Tailwind can use these colors with utility classes like text-success, bg-success, etc.",
-          "status": "pending",
+          "status": "completed",
           "files": [
             "apps/web/src/app/globals.css"
           ],
-          "estimated_minutes": 5
+          "estimated_minutes": 5,
+          "notes": "Added --color-success, --color-warning, and --color-info to the @theme inline block following the same pattern as --color-destructive. This enables Tailwind utility classes like text-success, bg-success, etc. Committed as 64f3f64.",
+          "updated_at": "2026-01-01T02:06:53.185996+00:00"
         }
       ]
     },
@@ -71,11 +77,13 @@
           "id": "2.1",
           "title": "Add success variant to alertVariants",
           "description": "Add 'success' variant: 'text-success bg-card [&>svg]:text-current *:data-[slot=alert-description]:text-success/90'",
-          "status": "pending",
+          "status": "completed",
           "files": [
             "apps/web/src/components/ui/alert.tsx"
           ],
-          "estimated_minutes": 5
+          "estimated_minutes": 5,
+          "notes": "Added success variant to alertVariants cva configuration following the destructive variant pattern: 'text-success bg-card [&>svg]:text-current *:data-[slot=alert-description]:text-success/90'. Committed as d958eff.",
+          "updated_at": "2026-01-01T02:08:02.140623+00:00"
         },
         {
           "id": "2.2",
@@ -161,5 +169,5 @@
     "Build completes successfully"
   ],
   "estimated_total_minutes": 60,
-  "last_updated": "2026-01-01T02:03:24.693380+00:00"
+  "last_updated": "2026-01-01T02:08:02.140632+00:00"
 }
