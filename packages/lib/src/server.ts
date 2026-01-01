@@ -3,10 +3,6 @@ export * from './auth/auth-utils';
 export * from './auth/device-auth-utils';
 export * from './auth/csrf-utils';
 export * from './encryption';
-
-// Legacy encryption format detection and migration (for migration scripts and auto-migration)
-export { isLegacyFormat, reEncrypt, decryptAndMigrate } from './encryption';
-export type { ReEncryptResult, MigrationUpdateCallback } from './encryption';
 export * from './content';
 export * from './permissions/permissions-cached';
 export * from './auth/rate-limit-utils';

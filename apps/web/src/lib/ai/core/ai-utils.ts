@@ -1,5 +1,5 @@
 import { db, userAiSettings, eq, and } from '@pagespace/db';
-import { decryptAndMigrate } from '@pagespace/lib/server';
+import { decrypt } from '@pagespace/lib/server';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
@@ -54,7 +54,6 @@ export async function getDefaultPageSpaceSettings(): Promise<{
 /**
  * Gets user's OpenRouter API settings
  * Returns decrypted API key for use with OpenRouter provider
- * Automatically migrates legacy encryption format on access
  */
 export async function getUserOpenRouterSettings(userId: string): Promise<{
   apiKey: string;
@@ -72,21 +71,7 @@ export async function getUserOpenRouterSettings(userId: string): Promise<{
   }
 
   try {
-    const apiKey = await decryptAndMigrate(
-      settings.encryptedApiKey,
-      async (newEncryptedApiKey) => {
-        await db
-          .update(userAiSettings)
-          .set({
-            encryptedApiKey: newEncryptedApiKey,
-            updatedAt: new Date(),
-          })
-          .where(eq(userAiSettings.id, settings.id));
-        aiLogger.info('Migrated OpenRouter API key encryption format', {
-          userId: maskIdentifier(userId),
-        });
-      }
-    );
+    const apiKey = await decrypt(settings.encryptedApiKey);
     return {
       apiKey,
       isConfigured: true,
@@ -141,7 +126,6 @@ export async function createOpenRouterSettings(
 /**
  * Gets user's Google AI API settings
  * Returns decrypted API key for use with Google AI provider
- * Automatically migrates legacy encryption format on access
  */
 export async function getUserGoogleSettings(userId: string): Promise<{
   apiKey: string;
@@ -159,21 +143,7 @@ export async function getUserGoogleSettings(userId: string): Promise<{
   }
 
   try {
-    const apiKey = await decryptAndMigrate(
-      settings.encryptedApiKey,
-      async (newEncryptedApiKey) => {
-        await db
-          .update(userAiSettings)
-          .set({
-            encryptedApiKey: newEncryptedApiKey,
-            updatedAt: new Date(),
-          })
-          .where(eq(userAiSettings.id, settings.id));
-        aiLogger.info('Migrated Google API key encryption format', {
-          userId: maskIdentifier(userId),
-        });
-      }
-    );
+    const apiKey = await decrypt(settings.encryptedApiKey);
     return {
       apiKey,
       isConfigured: true,
@@ -266,7 +236,6 @@ export async function deleteGoogleSettings(userId: string): Promise<void> {
 /**
  * Gets user's OpenAI API settings
  * Returns decrypted API key for use with OpenAI provider
- * Automatically migrates legacy encryption format on access
  */
 export async function getUserOpenAISettings(userId: string): Promise<{
   apiKey: string;
@@ -284,21 +253,7 @@ export async function getUserOpenAISettings(userId: string): Promise<{
   }
 
   try {
-    const apiKey = await decryptAndMigrate(
-      settings.encryptedApiKey,
-      async (newEncryptedApiKey) => {
-        await db
-          .update(userAiSettings)
-          .set({
-            encryptedApiKey: newEncryptedApiKey,
-            updatedAt: new Date(),
-          })
-          .where(eq(userAiSettings.id, settings.id));
-        aiLogger.info('Migrated OpenAI API key encryption format', {
-          userId: maskIdentifier(userId),
-        });
-      }
-    );
+    const apiKey = await decrypt(settings.encryptedApiKey);
     return {
       apiKey,
       isConfigured: true,
@@ -372,7 +327,6 @@ export async function deleteOpenAISettings(userId: string): Promise<void> {
 /**
  * Gets user's Anthropic API settings
  * Returns decrypted API key for use with Anthropic provider
- * Automatically migrates legacy encryption format on access
  */
 export async function getUserAnthropicSettings(userId: string): Promise<{
   apiKey: string;
@@ -390,21 +344,7 @@ export async function getUserAnthropicSettings(userId: string): Promise<{
   }
 
   try {
-    const apiKey = await decryptAndMigrate(
-      settings.encryptedApiKey,
-      async (newEncryptedApiKey) => {
-        await db
-          .update(userAiSettings)
-          .set({
-            encryptedApiKey: newEncryptedApiKey,
-            updatedAt: new Date(),
-          })
-          .where(eq(userAiSettings.id, settings.id));
-        aiLogger.info('Migrated Anthropic API key encryption format', {
-          userId: maskIdentifier(userId),
-        });
-      }
-    );
+    const apiKey = await decrypt(settings.encryptedApiKey);
     return {
       apiKey,
       isConfigured: true,
@@ -478,7 +418,6 @@ export async function deleteAnthropicSettings(userId: string): Promise<void> {
 /**
  * Gets user's xAI API settings
  * Returns decrypted API key for use with xAI provider
- * Automatically migrates legacy encryption format on access
  */
 export async function getUserXAISettings(userId: string): Promise<{
   apiKey: string;
@@ -496,21 +435,7 @@ export async function getUserXAISettings(userId: string): Promise<{
   }
 
   try {
-    const apiKey = await decryptAndMigrate(
-      settings.encryptedApiKey,
-      async (newEncryptedApiKey) => {
-        await db
-          .update(userAiSettings)
-          .set({
-            encryptedApiKey: newEncryptedApiKey,
-            updatedAt: new Date(),
-          })
-          .where(eq(userAiSettings.id, settings.id));
-        aiLogger.info('Migrated xAI API key encryption format', {
-          userId: maskIdentifier(userId),
-        });
-      }
-    );
+    const apiKey = await decrypt(settings.encryptedApiKey);
     return {
       apiKey,
       isConfigured: true,
@@ -793,7 +718,6 @@ export async function deleteLMStudioSettings(userId: string): Promise<void> {
 /**
  * Gets user's GLM API settings
  * Returns decrypted API key for use with GLM Coder Plan provider
- * Automatically migrates legacy encryption format on access
  */
 export async function getUserGLMSettings(userId: string): Promise<{
   apiKey: string;
@@ -811,21 +735,7 @@ export async function getUserGLMSettings(userId: string): Promise<{
   }
 
   try {
-    const apiKey = await decryptAndMigrate(
-      settings.encryptedApiKey,
-      async (newEncryptedApiKey) => {
-        await db
-          .update(userAiSettings)
-          .set({
-            encryptedApiKey: newEncryptedApiKey,
-            updatedAt: new Date(),
-          })
-          .where(eq(userAiSettings.id, settings.id));
-        aiLogger.info('Migrated GLM API key encryption format', {
-          userId: maskIdentifier(userId),
-        });
-      }
-    );
+    const apiKey = await decrypt(settings.encryptedApiKey);
     return {
       apiKey,
       isConfigured: true,
@@ -899,7 +809,6 @@ export async function deleteGLMSettings(userId: string): Promise<void> {
 /**
  * Gets user's MiniMax API settings
  * Returns decrypted API key for use with MiniMax provider
- * Automatically migrates legacy encryption format on access
  */
 export async function getUserMiniMaxSettings(userId: string): Promise<{
   apiKey: string;
@@ -917,21 +826,7 @@ export async function getUserMiniMaxSettings(userId: string): Promise<{
   }
 
   try {
-    const apiKey = await decryptAndMigrate(
-      settings.encryptedApiKey,
-      async (newEncryptedApiKey) => {
-        await db
-          .update(userAiSettings)
-          .set({
-            encryptedApiKey: newEncryptedApiKey,
-            updatedAt: new Date(),
-          })
-          .where(eq(userAiSettings.id, settings.id));
-        aiLogger.info('Migrated MiniMax API key encryption format', {
-          userId: maskIdentifier(userId),
-        });
-      }
-    );
+    const apiKey = await decrypt(settings.encryptedApiKey);
     return {
       apiKey,
       isConfigured: true,

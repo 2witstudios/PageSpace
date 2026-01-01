@@ -29,13 +29,11 @@ echo "Running database migrations..."
 DATABASE_URL="$TEST_DB_URL" pnpm db:migrate || exit 1
 
 echo "Running tests..."
-# Note: ENCRYPTION_SALT is DEPRECATED - only needed for legacy data migration, will be removed
 DATABASE_URL="$TEST_DB_URL" \
 JWT_SECRET=test-secret-key-minimum-32-characters-long-for-testing \
 JWT_ISSUER=pagespace-test \
 JWT_AUDIENCE=pagespace-test-users \
 CSRF_SECRET=test-csrf-secret-minimum-32-characters-long-for-testing-purposes \
 ENCRYPTION_KEY=test-encryption-key-32-chars-minimum-required-length \
-ENCRYPTION_SALT=test-encryption-salt-for-backward-compatibility \
 REALTIME_BROADCAST_SECRET=test-realtime-broadcast-secret-32-chars-minimum-length \
 pnpm test:turbo --concurrency=1 --continue "$@"

@@ -22,9 +22,7 @@
     "db:migrate:local": "DATABASE_URL=postgresql://user:password@localhost:5432/pagespace tsx src/migrate.ts",
     "db:studio": "drizzle-kit studio",
     "db:seed": "tsx src/seed.ts",
-    "promote-admin": "tsx src/promote-admin.ts",
-    "migrate:encryption": "tsx scripts/migrate-legacy-encryption.ts",
-    "migrate:encryption:dry-run": "tsx scripts/migrate-legacy-encryption.ts --dry-run"
+    "promote-admin": "tsx src/promote-admin.ts"
   },
   "dependencies": {
     "@paralleldrive/cuid2": "^2.2.2",
