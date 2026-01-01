@@ -175,3 +175,155 @@ export function validateOrigin(request: Request): NextResponse | null {
 export function requiresOriginValidation(request: Request): boolean {
   return !SAFE_METHODS.has(request.method);
 }
+
+/**
+ * Validation mode for middleware origin checks
+ * - 'warn': Log warnings but don't block requests (default for initial rollout)
+ * - 'block': Block requests with invalid origins
+ */
+export type OriginValidationMode = 'warn' | 'block';
+
+/**
+ * Gets the origin validation mode from environment configuration
+ * Defaults to 'warn' for safe initial rollout
+ *
+ * @returns The configured validation mode
+ */
+function getOriginValidationMode(): OriginValidationMode {
+  const mode = process.env.ORIGIN_VALIDATION_MODE;
+  if (mode === 'block') {
+    return 'block';
+  }
+  return 'warn'; // Default to warn mode for safety
+}
+
+/**
+ * Result of middleware origin validation
+ */
+export interface MiddlewareOriginValidationResult {
+  /** Whether the origin is valid */
+  valid: boolean;
+  /** The origin that was checked (null if not present) */
+  origin: string | null;
+  /** Whether validation was skipped (safe method, no origin, etc.) */
+  skipped: boolean;
+  /** Reason for the validation result */
+  reason: string;
+}
+
+/**
+ * Validates origin for middleware with configurable mode (warn-only or blocking)
+ *
+ * This is designed for use in Next.js middleware to provide application-wide
+ * origin validation as an additional security layer. By default, it operates
+ * in warning-only mode to avoid breaking changes during initial rollout.
+ *
+ * Key behaviors:
+ * - Skips validation for safe methods (GET, HEAD, OPTIONS)
+ * - Skips validation for requests without Origin header (non-browser clients)
+ * - Returns validation result without automatically blocking (caller decides)
+ * - Logs all validation events for security monitoring
+ *
+ * @param request - The incoming HTTP request
+ * @returns Validation result with metadata for the caller to act upon
+ */
+export function validateOriginForMiddleware(request: Request): MiddlewareOriginValidationResult {
+  const method = request.method;
+  const url = request.url;
+
+  // Skip validation for safe methods
+  if (SAFE_METHODS.has(method)) {
+    return {
+      valid: true,
+      origin: null,
+      skipped: true,
+      reason: 'Safe HTTP method',
+    };
+  }
+
+  const origin = getOriginFromRequest(request);
+
+  // Skip validation if no Origin header
+  // Non-browser clients (curl, MCP, mobile apps) may not send Origin
+  if (!origin) {
+    loggers.auth.debug('Middleware origin validation: no Origin header (skipped)', {
+      method,
+      url,
+    });
+    return {
+      valid: true,
+      origin: null,
+      skipped: true,
+      reason: 'No Origin header present',
+    };
+  }
+
+  const allowedOrigins = getAllowedOrigins();
+
+  // If no allowed origins configured, skip validation but log warning
+  if (allowedOrigins.length === 0) {
+    loggers.auth.warn('Middleware origin validation: WEB_APP_URL not configured', {
+      method,
+      url,
+      origin,
+    });
+    return {
+      valid: true,
+      origin,
+      skipped: true,
+      reason: 'WEB_APP_URL not configured',
+    };
+  }
+
+  // Check if origin is allowed
+  if (isOriginAllowed(origin, allowedOrigins)) {
+    loggers.auth.debug('Middleware origin validation: valid origin', {
+      method,
+      url,
+      origin,
+    });
+    return {
+      valid: true,
+      origin,
+      skipped: false,
+      reason: 'Origin in allowed list',
+    };
+  }
+
+  // Origin not allowed - determine action based on mode
+  const mode = getOriginValidationMode();
+  const logContext = {
+    method,
+    url,
+    origin,
+    allowedOrigins,
+    mode,
+  };
+
+  if (mode === 'warn') {
+    loggers.auth.warn('Middleware origin validation: unexpected origin (warn mode)', logContext);
+    return {
+      valid: false,
+      origin,
+      skipped: false,
+      reason: 'Origin not in allowed list (warn mode - request allowed)',
+    };
+  } else {
+    loggers.auth.warn('Middleware origin validation: unexpected origin (block mode)', logContext);
+    return {
+      valid: false,
+      origin,
+      skipped: false,
+      reason: 'Origin not in allowed list (block mode - request rejected)',
+    };
+  }
+}
+
+/**
+ * Checks if the origin validation mode is set to blocking
+ *
+ * @returns true if mode is 'block', false if 'warn'
+ */
+export function isOriginValidationBlocking(): boolean {
+  return getOriginValidationMode() === 'block';
+}
