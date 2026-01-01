@@ -286,3 +286,4 @@ export async function authenticateRequestWithOptions(
 // Re-export from other auth modules for barrel export pattern
 export { verifyAuth, verifyAdminAuth, type VerifiedUser } from './auth';
 export { validateCSRF } from './csrf-validation';
+export { validateOrigin, requiresOriginValidation } from './origin-validation';
