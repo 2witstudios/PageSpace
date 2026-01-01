@@ -30,6 +30,24 @@ async function deriveKey(salt: Buffer): Promise<Buffer> {
 }
 
 /**
+ * Detects whether an encrypted string uses the legacy 3-part format.
+ *
+ * Legacy format: "iv:authTag:ciphertext" (uses static salt from ENCRYPTION_SALT env var)
+ * Current format: "salt:iv:authTag:ciphertext" (uses unique per-operation salt)
+ *
+ * @param encryptedText The encrypted string to check.
+ * @returns true if the string uses legacy 3-part format, false for 4-part format or invalid.
+ */
+export function isLegacyFormat(encryptedText: string): boolean {
+  if (!encryptedText || typeof encryptedText !== 'string') {
+    return false;
+  }
+
+  const parts = encryptedText.split(':');
+  return parts.length === 3;
+}
+
+/**
  * Encrypts a plaintext string (e.g., an API key).
  * @param text The plaintext to encrypt.
  * @returns A promise that resolves to the encrypted string, formatted as "salt:iv:authtag:ciphertext".

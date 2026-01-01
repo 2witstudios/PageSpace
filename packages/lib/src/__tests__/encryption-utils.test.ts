@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { encrypt, decrypt } from '../encryption/encryption-utils'
+import { encrypt, decrypt, isLegacyFormat } from '../encryption/encryption-utils'
 
 describe('encryption-utils', () => {
   const testData = 'sensitive-api-key-12345'
@@ -237,6 +237,60 @@ describe('encryption-utils', () => {
       await expect(encrypt(testData)).rejects.toThrow('ENCRYPTION_KEY must be at least 32 characters long')
 
       process.env.ENCRYPTION_KEY = original
+    })
+  })
+
+  describe('isLegacyFormat', () => {
+    it('returns true for legacy 3-part format', () => {
+      // Legacy format: iv:authTag:ciphertext
+      const legacyFormat = 'aabbccdd:11223344:55667788'
+      expect(isLegacyFormat(legacyFormat)).toBe(true)
+    })
+
+    it('returns false for current 4-part format', async () => {
+      // New format: salt:iv:authTag:ciphertext
+      const encrypted = await encrypt(testData)
+      expect(isLegacyFormat(encrypted)).toBe(false)
+    })
+
+    it('returns false for current 4-part format (static example)', () => {
+      const currentFormat = 'salt:iv:authTag:ciphertext'
+      expect(isLegacyFormat(currentFormat)).toBe(false)
+    })
+
+    it('returns false for invalid formats with wrong part count', () => {
+      expect(isLegacyFormat('one')).toBe(false)
+      expect(isLegacyFormat('one:two')).toBe(false)
+      expect(isLegacyFormat('one:two:three:four:five')).toBe(false)
+      expect(isLegacyFormat('a:b:c:d:e:f')).toBe(false)
+    })
+
+    it('returns false for empty string', () => {
+      expect(isLegacyFormat('')).toBe(false)
+    })
+
+    it('returns false for null/undefined', () => {
+      expect(isLegacyFormat(null as any)).toBe(false)
+      expect(isLegacyFormat(undefined as any)).toBe(false)
+    })
+
+    it('returns false for non-string types', () => {
+      expect(isLegacyFormat(123 as any)).toBe(false)
+      expect(isLegacyFormat({} as any)).toBe(false)
+      expect(isLegacyFormat([] as any)).toBe(false)
+    })
+
+    it('correctly detects format based on colon count only', () => {
+      // Doesn't validate hex content, just structure
+      expect(isLegacyFormat('any:thing:here')).toBe(true)
+      expect(isLegacyFormat('any:thing:here:now')).toBe(false)
+    })
+
+    it('handles edge case with empty parts', () => {
+      // Three colons means 4 parts (some empty)
+      expect(isLegacyFormat(':::')).toBe(false) // 4 empty parts
+      // Two colons means 3 parts
+      expect(isLegacyFormat('::')).toBe(true) // 3 empty parts
     })
   })
 })
