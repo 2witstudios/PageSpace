@@ -89,11 +89,13 @@
           "id": "2.2",
           "title": "Add warning variant to alertVariants",
           "description": "Add 'warning' variant: 'text-warning bg-card [&>svg]:text-current *:data-[slot=alert-description]:text-warning/90'",
-          "status": "pending",
+          "status": "completed",
           "files": [
             "apps/web/src/components/ui/alert.tsx"
           ],
-          "estimated_minutes": 5
+          "estimated_minutes": 5,
+          "notes": "Added warning variant to Alert component with classes: text-warning bg-card [&>svg]:text-current *:data-[slot=alert-description]:text-warning/90. Follows the same pattern as destructive and success variants.",
+          "updated_at": "2026-01-01T02:09:05.303739+00:00"
         },
         {
           "id": "2.3",
@@ -169,5 +171,5 @@
     "Build completes successfully"
   ],
   "estimated_total_minutes": 60,
-  "last_updated": "2026-01-01T02:08:02.140632+00:00"
+  "last_updated": "2026-01-01T02:09:05.303746+00:00"
 }
