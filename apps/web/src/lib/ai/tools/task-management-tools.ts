@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { db, taskLists, taskItems, pages, eq, and, desc, asc, not } from '@pagespace/db';
 import { type ToolExecutionContext } from '../core';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { canUserEditPage, canUserViewPage, logPageActivity, getActorInfo } from '@pagespace/lib/server';
+import { canUserEditPage, canUserViewPage, getUserDriveAccess, logPageActivity, getActorInfo } from '@pagespace/lib/server';
 import { getDefaultContent, PageType } from '@pagespace/lib';
 
 // Helper: Extract AI attribution context with actor info for activity logging
@@ -430,7 +430,7 @@ This helps agents understand their responsibilities and coordinate work with oth
       agentId: z.string().optional().describe('Agent page ID to query (defaults to current agent if in agent context)'),
       status: z.enum(['pending', 'in_progress', 'completed', 'blocked']).optional().describe('Filter by task status'),
       driveId: z.string().optional().describe('Filter by drive ID'),
-      includeCompleted: z.boolean().optional().default(false).describe('Include completed tasks (default: false)'),
+      includeCompleted: z.boolean().default(false).describe('Include completed tasks (default: false)'),
     }),
     execute: async (params, { experimental_context: context }) => {
       const { agentId, status, driveId, includeCompleted } = params;
@@ -508,10 +508,33 @@ This helps agents understand their responsibilities and coordinate work with oth
           },
         });
 
-        // Filter out tasks with trashed pages and optionally by driveId
+        // Get unique drive IDs from tasks and check permissions
+        const taskDriveIds = [...new Set(
+          tasks
+            .map(t => t.taskList?.page?.driveId)
+            .filter((id): id is string => !!id)
+        )];
+
+        // Check drive access in parallel for security
+        const driveAccessResults = await Promise.all(
+          taskDriveIds.map(async (taskDriveId) => ({
+            driveId: taskDriveId,
+            hasAccess: await getUserDriveAccess(userId, taskDriveId),
+          }))
+        );
+
+        const accessibleDriveIds = new Set(
+          driveAccessResults.filter(r => r.hasAccess).map(r => r.driveId)
+        );
+
+        // Filter out tasks with trashed pages, inaccessible drives, and optionally by driveId
         const filteredTasks = tasks.filter(task => {
           if (task.page?.isTrashed) return false;
-          if (driveId && task.taskList?.page?.driveId !== driveId) return false;
+          const taskDriveId = task.taskList?.page?.driveId;
+          // Security: only include tasks from drives the user can access
+          if (taskDriveId && !accessibleDriveIds.has(taskDriveId)) return false;
+          // Optional driveId filter from params
+          if (driveId && taskDriveId !== driveId) return false;
           return true;
         });
 

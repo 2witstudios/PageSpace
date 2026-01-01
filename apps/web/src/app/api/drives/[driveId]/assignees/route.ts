@@ -75,14 +75,16 @@ export async function GET(
       ))
       .orderBy(pages.position);
 
-    // Filter agents by view permissions
-    const accessibleAgents: { id: string; title: string | null }[] = [];
-    for (const agent of allAgents) {
-      const canView = await canUserViewPage(userId, agent.id);
-      if (canView) {
-        accessibleAgents.push(agent);
-      }
-    }
+    // Filter agents by view permissions (parallel checks for performance)
+    const agentAccessResults = await Promise.all(
+      allAgents.map(async (agent) => ({
+        agent,
+        canView: await canUserViewPage(userId, agent.id),
+      }))
+    );
+    const accessibleAgents = agentAccessResults
+      .filter((r) => r.canView)
+      .map((r) => r.agent);
 
     // Build unified assignee list
     const assignees: Assignee[] = [];

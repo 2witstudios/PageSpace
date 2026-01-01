@@ -191,6 +191,26 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     return NextResponse.json({ error: 'Task list page not found' }, { status: 404 });
   }
 
+  // Validate assigneeAgentId if provided
+  if (assigneeAgentId) {
+    const agentPage = await db.query.pages.findFirst({
+      where: and(
+        eq(pages.id, assigneeAgentId),
+        eq(pages.type, 'AI_CHAT'),
+        eq(pages.isTrashed, false)
+      ),
+      columns: { id: true, driveId: true },
+    });
+
+    if (!agentPage) {
+      return NextResponse.json({ error: 'Invalid agent ID - must be an AI agent page' }, { status: 400 });
+    }
+
+    if (agentPage.driveId !== taskListPage.driveId) {
+      return NextResponse.json({ error: 'Agent must be in the same drive as the task list' }, { status: 400 });
+    }
+  }
+
   // Get or create task list
   const taskList = await getOrCreateTaskListForPage(pageId, userId);
 
