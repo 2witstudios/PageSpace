@@ -6,7 +6,9 @@
   "status": "in_progress",
   "planStatus": "approved",
   "workflow_type": "development",
-  "services_involved": ["apps/web"],
+  "services_involved": [
+    "apps/web"
+  ],
   "spec_file": "spec.md",
   "phases": [
     {
@@ -19,16 +21,22 @@
           "id": "1.1",
           "title": "Add success color tokens to :root and .dark",
           "description": "Add --success CSS variable with OKLCH green values that work with both light (vibrant green) and dark (muted green) themes. Light: oklch(0.62 0.19 145), Dark: oklch(0.55 0.16 145)",
-          "status": "pending",
-          "files": ["apps/web/src/app/globals.css"],
-          "estimated_minutes": 5
+          "status": "completed",
+          "files": [
+            "apps/web/src/app/globals.css"
+          ],
+          "estimated_minutes": 5,
+          "notes": "Added --success CSS variable with OKLCH green values. Light: oklch(0.62 0.19 145), Dark: oklch(0.55 0.16 145). Committed as be0d0d8.",
+          "updated_at": "2026-01-01T02:03:24.693371+00:00"
         },
         {
           "id": "1.2",
           "title": "Add warning color tokens to :root and .dark",
           "description": "Add --warning CSS variable with OKLCH amber values. Light: oklch(0.75 0.18 75), Dark: oklch(0.68 0.16 75)",
           "status": "pending",
-          "files": ["apps/web/src/app/globals.css"],
+          "files": [
+            "apps/web/src/app/globals.css"
+          ],
           "estimated_minutes": 5
         },
         {
@@ -36,7 +44,9 @@
           "title": "Add info color tokens to :root and .dark",
           "description": "Add --info CSS variable with OKLCH blue values. Light: oklch(0.55 0.18 235), Dark: oklch(0.60 0.16 235)",
           "status": "pending",
-          "files": ["apps/web/src/app/globals.css"],
+          "files": [
+            "apps/web/src/app/globals.css"
+          ],
           "estimated_minutes": 5
         },
         {
@@ -44,7 +54,9 @@
           "title": "Add Tailwind color mappings",
           "description": "Add --color-success, --color-warning, and --color-info to the @theme inline block so Tailwind can use these colors with utility classes like text-success, bg-success, etc.",
           "status": "pending",
-          "files": ["apps/web/src/app/globals.css"],
+          "files": [
+            "apps/web/src/app/globals.css"
+          ],
           "estimated_minutes": 5
         }
       ]
@@ -60,7 +72,9 @@
           "title": "Add success variant to alertVariants",
           "description": "Add 'success' variant: 'text-success bg-card [&>svg]:text-current *:data-[slot=alert-description]:text-success/90'",
           "status": "pending",
-          "files": ["apps/web/src/components/ui/alert.tsx"],
+          "files": [
+            "apps/web/src/components/ui/alert.tsx"
+          ],
           "estimated_minutes": 5
         },
         {
@@ -68,7 +82,9 @@
           "title": "Add warning variant to alertVariants",
           "description": "Add 'warning' variant: 'text-warning bg-card [&>svg]:text-current *:data-[slot=alert-description]:text-warning/90'",
           "status": "pending",
-          "files": ["apps/web/src/components/ui/alert.tsx"],
+          "files": [
+            "apps/web/src/components/ui/alert.tsx"
+          ],
           "estimated_minutes": 5
         },
         {
@@ -76,7 +92,9 @@
           "title": "Add info variant to alertVariants",
           "description": "Add 'info' variant: 'text-info bg-card [&>svg]:text-current *:data-[slot=alert-description]:text-info/90'",
           "status": "pending",
-          "files": ["apps/web/src/components/ui/alert.tsx"],
+          "files": [
+            "apps/web/src/components/ui/alert.tsx"
+          ],
           "estimated_minutes": 5
         }
       ]
@@ -92,7 +110,9 @@
           "title": "Create unit tests for Alert variants",
           "description": "Create tests in apps/web/src/components/ui/__tests__/alert.test.tsx to verify all variants (default, destructive, success, warning, info) render correctly with proper data-slot and styling classes",
           "status": "pending",
-          "files": ["apps/web/src/components/ui/__tests__/alert.test.tsx"],
+          "files": [
+            "apps/web/src/components/ui/__tests__/alert.test.tsx"
+          ],
           "estimated_minutes": 15
         },
         {
@@ -140,5 +160,6 @@
     "All tests pass",
     "Build completes successfully"
   ],
-  "estimated_total_minutes": 60
+  "estimated_total_minutes": 60,
+  "last_updated": "2026-01-01T02:03:24.693380+00:00"
 }
