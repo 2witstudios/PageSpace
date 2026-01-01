@@ -72,6 +72,7 @@
   --destructive: oklch(0.577 0.245 27.325);
   --success: oklch(0.62 0.19 145);
   --warning: oklch(0.75 0.18 75);
+  --info: oklch(0.55 0.18 235);
   --border: oklch(0.90 0.005 230);
   --input: oklch(0.90 0.005 230);
   --ring: oklch(0.50 0.16 235);
@@ -122,6 +123,7 @@
   --destructive: oklch(0.6 0.2 15);
   --success: oklch(0.55 0.16 145);
   --warning: oklch(0.68 0.16 75);
+  --info: oklch(0.60 0.16 235);
   --border: oklch(0.25 0 0);
   --input: oklch(0.25 0 0);
   --ring: oklch(0.62 0.16 235);
