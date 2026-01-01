@@ -40,6 +40,7 @@ export type AllowedTokenType = TokenType;
 export interface AuthenticateOptions {
   allow: ReadonlyArray<AllowedTokenType>;
   requireCSRF?: boolean;
+  requireOriginValidation?: boolean;
 }
 
 function unauthorized(message: string, status = 401): NextResponse {
@@ -217,7 +218,7 @@ export async function authenticateRequestWithOptions(
   request: Request,
   options: AuthenticateOptions,
 ): Promise<AuthenticationResult> {
-  const { allow, requireCSRF = false } = options;
+  const { allow, requireCSRF = false, requireOriginValidation = false } = options;
 
   if (!allow.length) {
     return {
@@ -257,9 +258,21 @@ export async function authenticateRequestWithOptions(
     return authResult;
   }
 
-  // Apply CSRF validation only for cookie-based JWT authentication
-  // Bearer tokens (header-based auth) are CSRF-exempt because they're not sent automatically by browsers
-  if (requireCSRF && authResult.tokenType === 'jwt' && authResult.source === 'cookie') {
+  // Apply origin and CSRF validation only for cookie-based JWT authentication
+  // Bearer tokens (header-based auth) are exempt because they're not sent automatically by browsers
+  const isCookieBasedAuth = authResult.tokenType === 'jwt' && authResult.source === 'cookie';
+
+  // Origin validation (defense-in-depth) - happens before CSRF validation
+  if (requireOriginValidation && isCookieBasedAuth) {
+    const { validateOrigin } = await import('./origin-validation');
+    const originError = validateOrigin(request);
+    if (originError) {
+      return { error: originError };
+    }
+  }
+
+  // CSRF validation
+  if (requireCSRF && isCookieBasedAuth) {
     const { validateCSRF } = await import('./csrf-validation');
     const csrfError = await validateCSRF(request);
     if (csrfError) {
