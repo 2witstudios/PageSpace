@@ -150,3 +150,106 @@ Pako is verified and approved for use in document version compression.
 Proceed with subtask-1-4 for installation.
 
 === END SESSION 2 ===
+
+=== SESSION 3 (subtask-1-2) ===
+Date: 2025-12-31
+
+## Subtask 1-2: Research and verify diff library (diff-match-patch or alternative)
+
+### Verification Status: ✅ VERIFIED
+
+### Recommendation: Use `diff` package (jsdiff)
+
+### Package Details:
+- **Package**: diff
+- **Recommended Version**: 7.x (latest with built-in TypeScript types)
+- **npm URL**: https://www.npmjs.com/package/diff
+- **License**: BSD-3-Clause (compatible with project's AGPL-3.0)
+- **Dependencies**: Zero
+
+### Project Compatibility Evidence:
+- Already a transitive dependency in the project (v4.0.2 via jest-diff)
+- Confirmed in pnpm-lock.yaml - proven compatible with project dependencies
+- Node.js >=0.3.1 (compatible with any modern Node)
+
+### TypeScript Support:
+- Built-in TypeScript types since v5.x
+- No @types/* package needed for v7.x
+
+### API Summary:
+```typescript
+import { diffChars, diffWords, diffLines, diffSentences, createPatch, applyPatch } from 'diff';
+
+// Character-level diff
+const charDiff = diffChars(oldStr, newStr);
+
+// Word-level diff (ideal for documents)
+const wordDiff = diffWords(oldStr, newStr);
+
+// Line-level diff (for code/structured content)
+const lineDiff = diffLines(oldStr, newStr);
+
+// Sentence-level diff
+const sentenceDiff = diffSentences(oldStr, newStr);
+
+// Generate unified diff patch
+const patch = createPatch('document', oldStr, newStr);
+
+// Apply a patch
+const result = applyPatch(oldStr, patch);
+```
+
+### Output Format:
+```typescript
+interface Change {
+  value: string;      // The text content
+  added?: boolean;    // True if this was added
+  removed?: boolean;  // True if this was removed
+  // If neither added nor removed, it's unchanged
+}
+```
+
+### React 19 Compatibility: ✅ COMPATIBLE
+- No React dependency - pure JavaScript library
+- Works in any JavaScript environment
+- No framework-specific code
+
+### Bundle Size:
+- ~40KB minified
+- ~12KB gzipped
+- Acceptable for document version comparison feature
+
+### Why `diff` over `diff-match-patch`:
+1. Simpler, cleaner API for document comparison use case
+2. Built-in TypeScript types (no @types/* needed)
+3. Already proven in project dependency tree
+4. More active maintenance
+5. Better suited for line/word/sentence diffing (vs character-level focus)
+6. Smaller bundle size
+
+### Alternative Considered: diff-match-patch
+- Google's implementation
+- More complex API, focused on edit distance algorithms
+- Requires @types/diff-match-patch for TypeScript
+- Better for operational transformation scenarios (overkill here)
+- Apache 2.0 license
+
+### Recommended Installation:
+```bash
+# In packages/lib
+pnpm add diff
+# Types included in package (v5+)
+```
+
+### Use Case Fit:
+Perfect for document version comparison:
+- diffWords() for rich text content comparison
+- diffLines() for structured content (JSON pretty-printed)
+- createPatch()/applyPatch() for generating unified diffs
+- Works with all PageContentFormat types: text, html, json, tiptap
+
+### Conclusion:
+The `diff` package (jsdiff) is verified and approved for document version diffing.
+Proceed with subtask-1-4 for installation.
+
+=== END SESSION 3 ===

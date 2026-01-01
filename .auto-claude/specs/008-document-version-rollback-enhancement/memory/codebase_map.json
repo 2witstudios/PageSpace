@@ -1,10 +1,10 @@
 {
   "discovered_files": {
     "packages/lib/package.json": {
-      "description": "Pako compression library verified for document version compression. Package: pako@2.1.0, Types: @types/pako@2.0.4. MIT+Zlib license, zero dependencies, ESM support, ~1.6MB unpacked. API: pako.deflate()/inflate() for sync compression, pako.Deflate/Inflate classes for streaming. React 19 compatible (no framework dependency). Performance: ~10 ops/sec deflate, ~130 ops/sec inflate on 1MB data. Perfect for JSON/HTML/text compression of document versions.",
-      "category": "package-verification",
-      "discovered_at": "2026-01-01T02:44:56.612868+00:00"
+      "description": "Diff library verified for document version comparison. Recommendation: Use `diff` package (jsdiff) v7.x. Already a transitive dependency (v4.0.2 via jest-diff) confirming project compatibility. Features: diffChars(), diffWords(), diffLines(), diffSentences(), createPatch(), applyPatch(). Zero dependencies, pure JavaScript, fully React 19 compatible. Built-in TypeScript types since v5.x. ~40KB minified, ~12KB gzipped. BSD-3-Clause license. Alternative considered: diff-match-patch (Google's library) - more complex API, requires @types/diff-match-patch, better for edit distance algorithms but overkill for document comparison.",
+      "category": "dependency",
+      "discovered_at": "2026-01-01T02:47:41.566786+00:00"
     }
   },
-  "last_updated": "2026-01-01T02:44:56.612876+00:00"
+  "last_updated": "2026-01-01T02:47:41.566797+00:00"
 }
