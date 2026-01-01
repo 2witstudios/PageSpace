@@ -761,4 +761,360 @@ describe('encryption-utils', () => {
       })
     })
   })
+
+  /**
+   * Integration tests that verify the complete legacy format migration flow.
+   * These tests simulate real-world scenarios where:
+   * 1. Legacy encrypted data exists (from older app versions)
+   * 2. Data is accessed and automatically migrated
+   * 3. The migrated data is persisted and used going forward
+   */
+  describe('Integration: Legacy Format Migration Flow', () => {
+    const originalPlaintext = 'sk-real-api-key-1234567890abcdef'
+
+    describe('end-to-end migration flow', () => {
+      it('complete flow: create legacy → detect → decrypt → migrate → persist → verify', async () => {
+        // Step 1: Create legacy-format encrypted data (simulating old data in database)
+        const legacyEncrypted = await createLegacyEncrypted(originalPlaintext)
+
+        // Step 2: Verify it's detected as legacy format
+        expect(isLegacyFormat(legacyEncrypted)).toBe(true)
+        expect(legacyEncrypted.split(':').length).toBe(3)
+
+        // Step 3: Verify legacy data can be decrypted
+        const decryptedFromLegacy = await decrypt(legacyEncrypted)
+        expect(decryptedFromLegacy).toBe(originalPlaintext)
+
+        // Step 4: Migrate using reEncrypt
+        const migrationResult = await reEncrypt(legacyEncrypted)
+        expect(migrationResult.migrated).toBe(true)
+
+        // Step 5: Verify migrated format is correct (4-part)
+        expect(isLegacyFormat(migrationResult.encryptedText)).toBe(false)
+        expect(migrationResult.encryptedText.split(':').length).toBe(4)
+
+        // Step 6: Verify migrated data can be decrypted
+        const decryptedFromMigrated = await decrypt(migrationResult.encryptedText)
+        expect(decryptedFromMigrated).toBe(originalPlaintext)
+
+        // Step 7: Verify original plaintext is preserved through entire flow
+        expect(decryptedFromLegacy).toBe(decryptedFromMigrated)
+      })
+
+      it('simulates database persistence flow with decryptAndMigrate', async () => {
+        // Simulate a database row with legacy encrypted data
+        const simulatedDbRow = {
+          userId: 'user-123',
+          encryptedApiKey: await createLegacyEncrypted(originalPlaintext)
+        }
+
+        // Verify initial state is legacy
+        expect(isLegacyFormat(simulatedDbRow.encryptedApiKey)).toBe(true)
+
+        // Simulate the auto-migration callback that would update the database
+        const updateCallback = vi.fn(async (newEncryptedText: string) => {
+          // This simulates: UPDATE user_ai_settings SET encryptedApiKey = newEncryptedText WHERE userId = 'user-123'
+          simulatedDbRow.encryptedApiKey = newEncryptedText
+        })
+
+        // Access the data (triggers migration)
+        const plaintext = await decryptAndMigrate(simulatedDbRow.encryptedApiKey, updateCallback)
+
+        // Verify the plaintext was returned correctly
+        expect(plaintext).toBe(originalPlaintext)
+
+        // Verify the callback was called (database update would happen)
+        expect(updateCallback).toHaveBeenCalledTimes(1)
+
+        // Verify the simulated database now has current format
+        expect(isLegacyFormat(simulatedDbRow.encryptedApiKey)).toBe(false)
+        expect(simulatedDbRow.encryptedApiKey.split(':').length).toBe(4)
+
+        // Verify subsequent accesses don't trigger migration
+        const subsequentCallback = vi.fn()
+        const plaintextAgain = await decryptAndMigrate(simulatedDbRow.encryptedApiKey, subsequentCallback)
+
+        expect(plaintextAgain).toBe(originalPlaintext)
+        expect(subsequentCallback).not.toHaveBeenCalled()
+      })
+
+      it('multiple legacy entries can be migrated independently', async () => {
+        const entries = [
+          { id: 1, plaintext: 'api-key-user-1', encrypted: '' },
+          { id: 2, plaintext: 'api-key-user-2', encrypted: '' },
+          { id: 3, plaintext: 'api-key-user-3', encrypted: '' }
+        ]
+
+        // Create legacy encrypted data for each entry
+        for (const entry of entries) {
+          entry.encrypted = await createLegacyEncrypted(entry.plaintext)
+        }
+
+        // Verify all are legacy format
+        for (const entry of entries) {
+          expect(isLegacyFormat(entry.encrypted)).toBe(true)
+        }
+
+        // Migrate each entry
+        const migratedEntries = await Promise.all(
+          entries.map(async (entry) => {
+            const result = await reEncrypt(entry.encrypted)
+            return {
+              ...entry,
+              encrypted: result.encryptedText,
+              wasMigrated: result.migrated
+            }
+          })
+        )
+
+        // Verify all were migrated
+        for (const entry of migratedEntries) {
+          expect(entry.wasMigrated).toBe(true)
+          expect(isLegacyFormat(entry.encrypted)).toBe(false)
+
+          // Verify plaintext preserved
+          const decrypted = await decrypt(entry.encrypted)
+          expect(decrypted).toBe(entry.plaintext)
+        }
+
+        // Verify each has unique salt (all different from each other)
+        const salts = migratedEntries.map((e) => e.encrypted.split(':')[0])
+        const uniqueSalts = new Set(salts)
+        expect(uniqueSalts.size).toBe(entries.length)
+      })
+    })
+
+    describe('data integrity through migration', () => {
+      const dataIntegrityTestCases = [
+        { name: 'OpenAI API key', value: 'sk-proj-aBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890' },
+        { name: 'Anthropic API key', value: 'sk-ant-api03-aBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890-abcdef' },
+        { name: 'Google API key', value: 'AIzaSyABCDEFGHIJKLMNOPQRSTUVWXYZ12345' },
+        { name: 'special characters', value: 'key-with-special!@#$%^&*()_+-=[]{}|;:\'",.<>?/chars' },
+        { name: 'unicode content', value: '密钥-🔐-مفتاح-κλειδί-🗝️' },
+        { name: 'multiline content', value: 'line1\nline2\r\nline3\ttabbed' },
+        { name: 'very long content', value: 'x'.repeat(1000) }
+      ]
+
+      dataIntegrityTestCases.forEach(({ name, value }) => {
+        it(`preserves ${name} through complete migration flow`, async () => {
+          // Create legacy format
+          const legacyEncrypted = await createLegacyEncrypted(value)
+
+          // Verify can decrypt from legacy
+          const decryptedLegacy = await decrypt(legacyEncrypted)
+          expect(decryptedLegacy).toBe(value)
+
+          // Migrate to current format
+          const { migrated, encryptedText: migratedEncrypted } = await reEncrypt(legacyEncrypted)
+          expect(migrated).toBe(true)
+
+          // Verify can decrypt from migrated
+          const decryptedMigrated = await decrypt(migratedEncrypted)
+          expect(decryptedMigrated).toBe(value)
+
+          // Verify byte-for-byte equality
+          expect(decryptedLegacy).toBe(decryptedMigrated)
+        })
+      })
+    })
+
+    describe('format verification', () => {
+      it('legacy format has 3 colon-separated hex parts', async () => {
+        const legacyEncrypted = await createLegacyEncrypted(originalPlaintext)
+        const parts = legacyEncrypted.split(':')
+
+        expect(parts.length).toBe(3)
+
+        // Verify each part is valid hex
+        parts.forEach((part) => {
+          expect(part).toMatch(/^[0-9a-f]+$/i)
+        })
+
+        // Verify expected lengths (IV=16 bytes=32 hex, authTag=16 bytes=32 hex)
+        expect(parts[0].length).toBe(32) // IV
+        expect(parts[1].length).toBe(32) // authTag
+        expect(parts[2].length).toBeGreaterThan(0) // ciphertext
+      })
+
+      it('current format has 4 colon-separated hex parts with unique salt', async () => {
+        const legacyEncrypted = await createLegacyEncrypted(originalPlaintext)
+        const { encryptedText: migratedEncrypted } = await reEncrypt(legacyEncrypted)
+        const parts = migratedEncrypted.split(':')
+
+        expect(parts.length).toBe(4)
+
+        // Verify each part is valid hex
+        parts.forEach((part) => {
+          expect(part).toMatch(/^[0-9a-f]+$/i)
+        })
+
+        // Verify expected lengths (salt=32 bytes=64 hex, IV=16 bytes=32 hex, authTag=16 bytes=32 hex)
+        expect(parts[0].length).toBe(64) // salt
+        expect(parts[1].length).toBe(32) // IV
+        expect(parts[2].length).toBe(32) // authTag
+        expect(parts[3].length).toBeGreaterThan(0) // ciphertext
+      })
+
+      it('each migration produces unique salt and IV', async () => {
+        const legacyEncrypted = await createLegacyEncrypted(originalPlaintext)
+
+        // Migrate same legacy data multiple times (simulating if migration failed and retried)
+        const results = await Promise.all([
+          reEncrypt(legacyEncrypted),
+          reEncrypt(legacyEncrypted),
+          reEncrypt(legacyEncrypted)
+        ])
+
+        // All should be migrated
+        results.forEach((r) => expect(r.migrated).toBe(true))
+
+        // All should have different salts
+        const salts = results.map((r) => r.encryptedText.split(':')[0])
+        const uniqueSalts = new Set(salts)
+        expect(uniqueSalts.size).toBe(3)
+
+        // All should have different IVs
+        const ivs = results.map((r) => r.encryptedText.split(':')[1])
+        const uniqueIvs = new Set(ivs)
+        expect(uniqueIvs.size).toBe(3)
+
+        // But all should decrypt to same plaintext
+        for (const result of results) {
+          const decrypted = await decrypt(result.encryptedText)
+          expect(decrypted).toBe(originalPlaintext)
+        }
+      })
+    })
+
+    describe('migration idempotency and safety', () => {
+      it('reEncrypt is idempotent - running twice returns same for current format', async () => {
+        const legacyEncrypted = await createLegacyEncrypted(originalPlaintext)
+
+        // First migration
+        const firstResult = await reEncrypt(legacyEncrypted)
+        expect(firstResult.migrated).toBe(true)
+
+        // Second run on already-migrated data
+        const secondResult = await reEncrypt(firstResult.encryptedText)
+        expect(secondResult.migrated).toBe(false)
+        expect(secondResult.encryptedText).toBe(firstResult.encryptedText)
+
+        // Third run
+        const thirdResult = await reEncrypt(secondResult.encryptedText)
+        expect(thirdResult.migrated).toBe(false)
+        expect(thirdResult.encryptedText).toBe(firstResult.encryptedText)
+      })
+
+      it('decryptAndMigrate only triggers callback once per legacy entry', async () => {
+        const legacyEncrypted = await createLegacyEncrypted(originalPlaintext)
+        let persistedCiphertext = legacyEncrypted
+
+        // First access - should migrate
+        const firstCallback = vi.fn(async (newCiphertext: string) => {
+          persistedCiphertext = newCiphertext
+        })
+        const firstPlaintext = await decryptAndMigrate(persistedCiphertext, firstCallback)
+        expect(firstPlaintext).toBe(originalPlaintext)
+        expect(firstCallback).toHaveBeenCalledTimes(1)
+
+        // Second access with now-migrated data - should not trigger callback
+        const secondCallback = vi.fn()
+        const secondPlaintext = await decryptAndMigrate(persistedCiphertext, secondCallback)
+        expect(secondPlaintext).toBe(originalPlaintext)
+        expect(secondCallback).not.toHaveBeenCalled()
+
+        // Third access - still no callback
+        const thirdCallback = vi.fn()
+        const thirdPlaintext = await decryptAndMigrate(persistedCiphertext, thirdCallback)
+        expect(thirdPlaintext).toBe(originalPlaintext)
+        expect(thirdCallback).not.toHaveBeenCalled()
+      })
+
+      it('failed migration callback does not corrupt data access', async () => {
+        const legacyEncrypted = await createLegacyEncrypted(originalPlaintext)
+
+        // Callback that fails (simulating database error)
+        const failingCallback = vi.fn().mockRejectedValue(new Error('Database connection lost'))
+
+        // Should still return plaintext despite callback failure
+        const plaintext = await decryptAndMigrate(legacyEncrypted, failingCallback)
+        expect(plaintext).toBe(originalPlaintext)
+        expect(failingCallback).toHaveBeenCalled()
+
+        // Original legacy data can still be decrypted
+        const directDecrypt = await decrypt(legacyEncrypted)
+        expect(directDecrypt).toBe(originalPlaintext)
+      })
+    })
+
+    describe('mixed format scenarios', () => {
+      it('can process batch of mixed legacy and current format entries', async () => {
+        // Simulate a database table with mixed formats (some old, some new)
+        const entries = [
+          { userId: 'user-1', encryptedKey: await createLegacyEncrypted('key-1') },
+          { userId: 'user-2', encryptedKey: await encrypt('key-2') }, // Already current format
+          { userId: 'user-3', encryptedKey: await createLegacyEncrypted('key-3') },
+          { userId: 'user-4', encryptedKey: await encrypt('key-4') }, // Already current format
+        ]
+
+        // Process all entries with reEncrypt
+        const results = await Promise.all(
+          entries.map(async (entry) => {
+            const result = await reEncrypt(entry.encryptedKey)
+            return {
+              userId: entry.userId,
+              ...result
+            }
+          })
+        )
+
+        // Verify correct migration status
+        expect(results[0].migrated).toBe(true) // user-1 was legacy
+        expect(results[1].migrated).toBe(false) // user-2 was already current
+        expect(results[2].migrated).toBe(true) // user-3 was legacy
+        expect(results[3].migrated).toBe(false) // user-4 was already current
+
+        // Verify all are now current format
+        for (const result of results) {
+          expect(isLegacyFormat(result.encryptedText)).toBe(false)
+        }
+
+        // Verify all can be decrypted to original values
+        const decrypted = await Promise.all(
+          results.map((r) => decrypt(r.encryptedText))
+        )
+        expect(decrypted).toEqual(['key-1', 'key-2', 'key-3', 'key-4'])
+      })
+
+      it('concurrent migrations do not interfere with each other', async () => {
+        const legacyEntries = await Promise.all([
+          createLegacyEncrypted('concurrent-key-1'),
+          createLegacyEncrypted('concurrent-key-2'),
+          createLegacyEncrypted('concurrent-key-3'),
+          createLegacyEncrypted('concurrent-key-4'),
+          createLegacyEncrypted('concurrent-key-5')
+        ])
+
+        // Migrate all concurrently
+        const results = await Promise.all(
+          legacyEntries.map((entry) => reEncrypt(entry))
+        )
+
+        // All should be migrated
+        results.forEach((r) => expect(r.migrated).toBe(true))
+
+        // All should decrypt to correct values
+        const decryptedValues = await Promise.all(
+          results.map((r) => decrypt(r.encryptedText))
+        )
+        expect(decryptedValues).toEqual([
+          'concurrent-key-1',
+          'concurrent-key-2',
+          'concurrent-key-3',
+          'concurrent-key-4',
+          'concurrent-key-5'
+        ])
+      })
+    })
+  })
 })
