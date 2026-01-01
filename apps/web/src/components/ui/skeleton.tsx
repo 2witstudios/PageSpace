@@ -55,4 +55,43 @@ function SkeletonMessageBubble({
   )
 }
 
-export { Skeleton, SkeletonMessageBubble }
+interface SkeletonCardProps {
+  /** Height of the card body content area (e.g., "h-24", "h-32") */
+  bodyHeight?: string
+  /** Whether to show a header/title skeleton at the top */
+  showHeader?: boolean
+  /** Width of the header title skeleton (e.g., "w-1/3", "w-48") */
+  headerWidth?: string
+  /** Additional className for the container */
+  className?: string
+}
+
+/**
+ * Skeleton component for card-shaped content
+ * Matches the rounded corners and structure of the Card component
+ */
+function SkeletonCard({
+  bodyHeight = "h-24",
+  showHeader = false,
+  headerWidth = "w-1/3",
+  className,
+}: SkeletonCardProps) {
+  return (
+    <div
+      data-slot="skeleton-card"
+      className={cn(
+        "rounded-xl border bg-card p-6 animate-pulse",
+        className
+      )}
+    >
+      {showHeader && (
+        <div className="mb-6">
+          <Skeleton className={cn("h-5", headerWidth)} />
+        </div>
+      )}
+      <Skeleton className={cn("w-full", bodyHeight)} />
+    </div>
+  )
+}
+
+export { Skeleton, SkeletonMessageBubble, SkeletonCard }
