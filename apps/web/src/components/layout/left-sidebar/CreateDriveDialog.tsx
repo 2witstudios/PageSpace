@@ -31,7 +31,8 @@ export default function CreateDriveDialog({ isOpen, setIsOpen }: CreateDriveDial
 
   const router = useRouter();
 
-  const handleCreateDrive = async () => {
+  const handleCreateDrive = async (e: React.FormEvent) => {
+    e.preventDefault();
     if (!driveName.trim()) return;
     try {
       const newDrive = await post<Drive>("/api/drives", { name: driveName });
@@ -57,22 +58,24 @@ export default function CreateDriveDialog({ isOpen, setIsOpen }: CreateDriveDial
             Enter a name for your new drive.
           </DialogDescription>
         </DialogHeader>
-        <div className="grid gap-4 py-4">
-          <div className="grid grid-cols-4 items-center gap-4">
-            <Label htmlFor="name" className="text-right">
-              Name
-            </Label>
-            <Input
-              id="name"
-              value={driveName}
-              onChange={(e) => setDriveName(e.target.value)}
-              className="col-span-3"
-            />
+        <form onSubmit={handleCreateDrive}>
+          <div className="grid gap-4 py-4">
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="name" className="text-right">
+                Name
+              </Label>
+              <Input
+                id="name"
+                value={driveName}
+                onChange={(e) => setDriveName(e.target.value)}
+                className="col-span-3"
+              />
+            </div>
           </div>
-        </div>
-        <DialogFooter>
-          <Button onClick={handleCreateDrive}>Create</Button>
-        </DialogFooter>
+          <DialogFooter>
+            <Button type="submit">Create</Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   );
