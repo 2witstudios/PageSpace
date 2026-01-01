@@ -10,6 +10,133 @@ import { loggers } from '@pagespace/lib/logger-config';
 
 dotenv.config({ path: '../../.env' });
 
+/**
+ * Origin Validation for WebSocket Connections (Defense-in-Depth Logging)
+ *
+ * While Socket.IO CORS configuration handles blocking unauthorized origins,
+ * this module provides explicit logging for security monitoring.
+ * Warnings are logged for unexpected origins to aid in detecting potential attacks.
+ */
+
+/**
+ * Normalizes an origin URL by extracting protocol, host, and port
+ * This ensures consistent comparison between origins
+ *
+ * @param origin - The origin URL to normalize
+ * @returns Normalized origin (protocol://host:port) or empty string if invalid
+ */
+function normalizeOrigin(origin: string): string {
+  try {
+    const url = new URL(origin);
+    return url.origin;
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Gets the list of allowed origins from environment configuration
+ *
+ * @returns Array of allowed origin URLs
+ */
+function getAllowedOrigins(): string[] {
+  const origins: string[] = [];
+
+  // Primary origins from CORS_ORIGIN or WEB_APP_URL (matches Socket.IO CORS config)
+  const corsOrigin = process.env.CORS_ORIGIN;
+  const webAppUrl = process.env.WEB_APP_URL;
+
+  if (corsOrigin) {
+    const normalized = normalizeOrigin(corsOrigin);
+    if (normalized) origins.push(normalized);
+  } else if (webAppUrl) {
+    const normalized = normalizeOrigin(webAppUrl);
+    if (normalized) origins.push(normalized);
+  }
+
+  // Additional origins from ADDITIONAL_ALLOWED_ORIGINS (comma-separated)
+  const additionalOrigins = process.env.ADDITIONAL_ALLOWED_ORIGINS;
+  if (additionalOrigins) {
+    const parsed = additionalOrigins
+      .split(',')
+      .map((o) => normalizeOrigin(o.trim()))
+      .filter((o) => o.length > 0);
+    origins.push(...parsed);
+  }
+
+  return origins;
+}
+
+/**
+ * Checks if the given origin is in the allowed list
+ *
+ * @param origin - The origin to validate
+ * @param allowedOrigins - List of allowed origins
+ * @returns true if origin is allowed, false otherwise
+ */
+function isOriginAllowed(origin: string, allowedOrigins: string[]): boolean {
+  const normalizedOrigin = normalizeOrigin(origin);
+  if (!normalizedOrigin) {
+    return false;
+  }
+
+  return allowedOrigins.some((allowed) => allowed === normalizedOrigin);
+}
+
+/**
+ * Validates and logs WebSocket connection origin for security monitoring
+ *
+ * This function does NOT block connections - Socket.IO CORS handles that.
+ * It provides explicit logging for unexpected origins to aid security monitoring.
+ *
+ * @param origin - The Origin header value from the connection request
+ * @param metadata - Additional metadata for logging (socketId, IP, etc.)
+ */
+function validateAndLogWebSocketOrigin(
+  origin: string | undefined,
+  metadata: { socketId: string; ip: string | undefined; userAgent: string | undefined }
+): void {
+  const allowedOrigins = getAllowedOrigins();
+
+  // No origin header - could be non-browser client, log at debug level
+  if (!origin) {
+    loggers.realtime.debug('WebSocket origin validation: no Origin header', {
+      ...metadata,
+      reason: 'Non-browser client or same-origin request',
+    });
+    return;
+  }
+
+  // No allowed origins configured - log warning
+  if (allowedOrigins.length === 0) {
+    loggers.realtime.warn('WebSocket origin validation: no allowed origins configured', {
+      ...metadata,
+      origin,
+      reason: 'CORS_ORIGIN and WEB_APP_URL not set',
+    });
+    return;
+  }
+
+  // Check if origin is allowed
+  if (isOriginAllowed(origin, allowedOrigins)) {
+    loggers.realtime.debug('WebSocket origin validation: valid origin', {
+      ...metadata,
+      origin,
+    });
+    return;
+  }
+
+  // Origin not in allowed list - log security warning
+  // Note: Socket.IO CORS will block this connection, but we log for monitoring
+  loggers.realtime.warn('WebSocket origin validation: unexpected origin detected', {
+    ...metadata,
+    origin,
+    allowedOrigins,
+    severity: 'security',
+    reason: 'Origin not in allowed list - connection may be blocked by CORS',
+  });
+}
+
 const requestListener = (req: IncomingMessage, res: ServerResponse) => {
     if (req.method === 'POST' && req.url === '/api/broadcast') {
         let body = '';
@@ -90,13 +217,25 @@ interface AuthSocket extends Socket {
 }
 
 io.use(async (socket: AuthSocket, next) => {
+  // Extract connection metadata for logging
+  const connectionMetadata = {
+    socketId: socket.id,
+    ip: socket.handshake.address,
+    userAgent: socket.handshake.headers['user-agent']?.substring(0, 100),
+  };
+
+  // Validate and log Origin header for security monitoring
+  // Note: Socket.IO CORS configuration handles actual blocking
+  const origin = socket.handshake.headers.origin;
+  validateAndLogWebSocketOrigin(origin, connectionMetadata);
+
   // Debug: Log all available authentication sources
   loggers.realtime.debug('Socket.IO: Authentication attempt', {
     authField: !!socket.handshake.auth.token,
     authTokenLength: socket.handshake.auth.token?.length || 0,
     hasCookieHeader: !!socket.handshake.headers.cookie,
     cookieHeader: socket.handshake.headers.cookie ? 'present' : 'missing',
-    origin: socket.handshake.headers.origin,
+    origin: origin,
     userAgent: socket.handshake.headers['user-agent']?.substring(0, 50)
   });
 
