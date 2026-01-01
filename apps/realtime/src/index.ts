@@ -84,6 +84,81 @@ function isOriginAllowed(origin: string, allowedOrigins: string[]): boolean {
 }
 
 /**
+ * Result of WebSocket origin validation
+ */
+interface WebSocketOriginValidationResult {
+  /** Whether the origin is valid (allowed or not required) */
+  isValid: boolean;
+  /** The origin that was validated (normalized), or undefined if not provided */
+  origin: string | undefined;
+  /** Reason for the validation result */
+  reason: 'valid' | 'no_origin' | 'invalid' | 'no_config';
+}
+
+/**
+ * Validates a WebSocket connection origin against allowed origins
+ *
+ * This helper function provides a simple boolean check for origin validation.
+ * It can be used for additional security monitoring or optional blocking decisions.
+ *
+ * Validation rules:
+ * - Missing origin: Returns valid (non-browser clients like curl, mobile apps)
+ * - No config: Returns valid with warning (CORS_ORIGIN/WEB_APP_URL not set)
+ * - Origin matches allowed list: Returns valid
+ * - Origin doesn't match: Returns invalid
+ *
+ * @param origin - The Origin header value from the connection request
+ * @returns Validation result with isValid boolean and reason
+ *
+ * @example
+ * ```typescript
+ * const result = validateWebSocketOrigin(socket.handshake.headers.origin);
+ * if (!result.isValid) {
+ *   // Optionally reject the connection or log a warning
+ *   socket.disconnect();
+ * }
+ * ```
+ */
+function validateWebSocketOrigin(origin: string | undefined): WebSocketOriginValidationResult {
+  // No origin header - non-browser client, allow by default
+  if (!origin) {
+    return {
+      isValid: true,
+      origin: undefined,
+      reason: 'no_origin',
+    };
+  }
+
+  const normalizedOrigin = normalizeOrigin(origin);
+  const allowedOrigins = getAllowedOrigins();
+
+  // No allowed origins configured - allow but this is a misconfiguration
+  if (allowedOrigins.length === 0) {
+    return {
+      isValid: true,
+      origin: normalizedOrigin || origin,
+      reason: 'no_config',
+    };
+  }
+
+  // Check if origin is in allowed list
+  if (isOriginAllowed(origin, allowedOrigins)) {
+    return {
+      isValid: true,
+      origin: normalizedOrigin,
+      reason: 'valid',
+    };
+  }
+
+  // Origin not in allowed list
+  return {
+    isValid: false,
+    origin: normalizedOrigin || origin,
+    reason: 'invalid',
+  };
+}
+
+/**
  * Validates and logs WebSocket connection origin for security monitoring
  *
  * This function does NOT block connections - Socket.IO CORS handles that.
