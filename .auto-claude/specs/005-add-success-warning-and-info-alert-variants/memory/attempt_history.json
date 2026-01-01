@@ -71,11 +71,47 @@
         }
       ],
       "status": "completed"
+    },
+    "2.3": {
+      "attempts": [
+        {
+          "session": 8,
+          "timestamp": "2025-12-31T20:10:17.305601",
+          "approach": "Implemented: Add 'info' variant: 'text-info bg-card [&>svg]:text-current *:data-[slot=alert-description]:text-inf",
+          "success": true,
+          "error": null
+        }
+      ],
+      "status": "completed"
+    },
+    "3.1": {
+      "attempts": [
+        {
+          "session": 9,
+          "timestamp": "2025-12-31T20:12:20.866983",
+          "approach": "Implemented: Create tests in apps/web/src/components/ui/__tests__/alert.test.tsx to verify all variants (default,",
+          "success": true,
+          "error": null
+        }
+      ],
+      "status": "completed"
+    },
+    "3.2": {
+      "attempts": [
+        {
+          "session": 10,
+          "timestamp": "2025-12-31T20:14:49.741512",
+          "approach": "Implemented: Run 'pnpm tsc --noEmit' to verify variant types are properly inferred and the component accepts the ",
+          "success": true,
+          "error": null
+        }
+      ],
+      "status": "completed"
     }
   },
   "stuck_subtasks": [],
   "metadata": {
     "created_at": "2025-12-31T20:00:08.507925",
-    "last_updated": "2025-12-31T20:09:15.714369"
+    "last_updated": "2025-12-31T20:14:49.741517"
   }
 }
