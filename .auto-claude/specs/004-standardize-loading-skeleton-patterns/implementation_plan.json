@@ -113,7 +113,7 @@
           "title": "Update UsageCounter loading state",
           "description": "Replace inline skeleton styling in UsageCounter.tsx with the Skeleton component",
           "estimated_effort": "small",
-          "status": "pending",
+          "status": "completed",
           "file_paths": [
             "apps/web/src/components/billing/UsageCounter.tsx"
           ],
