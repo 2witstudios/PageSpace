@@ -122,6 +122,36 @@ Assignment:
             throw new Error('You do not have permission to update this task');
           }
 
+          // Get driveId for agent validation (if task list has a page)
+          let taskListDriveId: string | undefined;
+          if (taskList.pageId) {
+            const taskListPage = await db.query.pages.findFirst({
+              where: eq(pages.id, taskList.pageId),
+              columns: { driveId: true },
+            });
+            taskListDriveId = taskListPage?.driveId;
+          }
+
+          // Validate assigneeAgentId if provided
+          if (assigneeAgentId) {
+            const agentPage = await db.query.pages.findFirst({
+              where: and(
+                eq(pages.id, assigneeAgentId),
+                eq(pages.type, 'AI_CHAT'),
+                eq(pages.isTrashed, false)
+              ),
+              columns: { id: true, driveId: true },
+            });
+
+            if (!agentPage) {
+              throw new Error('Invalid agent ID - must be an AI agent page');
+            }
+
+            if (taskListDriveId && agentPage.driveId !== taskListDriveId) {
+              throw new Error('Agent must be in the same drive as the task list');
+            }
+          }
+
           // Build update object
           const updateData: Record<string, unknown> = {};
           if (title !== undefined) updateData.title = title;
@@ -243,6 +273,26 @@ Assignment:
             orderBy: [desc(pages.position)],
           });
           const nextPagePosition = (lastChildPage?.position ?? 0) + 1;
+
+          // Validate assigneeAgentId if provided
+          if (assigneeAgentId) {
+            const agentPage = await db.query.pages.findFirst({
+              where: and(
+                eq(pages.id, assigneeAgentId),
+                eq(pages.type, 'AI_CHAT'),
+                eq(pages.isTrashed, false)
+              ),
+              columns: { id: true, driveId: true },
+            });
+
+            if (!agentPage) {
+              throw new Error('Invalid agent ID - must be an AI agent page');
+            }
+
+            if (agentPage.driveId !== taskListPage.driveId) {
+              throw new Error('Agent must be in the same drive as the task list');
+            }
+          }
 
           // Create document page and task in transaction
           const result = await db.transaction(async (tx) => {

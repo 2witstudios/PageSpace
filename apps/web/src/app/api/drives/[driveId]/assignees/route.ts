@@ -89,15 +89,14 @@ export async function GET(
     // Build unified assignee list
     const assignees: Assignee[] = [];
 
-    // Add members
-    for (const member of members) {
-      if (!member.user) continue;
-
+    // Add members (filter out those with null user)
+    const validMembers = members.filter((m) => m.user);
+    for (const member of validMembers) {
       assignees.push({
         id: member.userId,
         type: 'user',
-        name: member.profile?.displayName || member.user.name || member.user.email,
-        image: member.profile?.avatarUrl || member.user.image || null,
+        name: member.profile?.displayName || member.user!.name || member.user!.email,
+        image: member.profile?.avatarUrl || member.user!.image || null,
       });
     }
 
@@ -115,7 +114,7 @@ export async function GET(
     return NextResponse.json({
       assignees,
       counts: {
-        members: members.length,
+        members: validMembers.length,
         agents: accessibleAgents.length,
         total: assignees.length,
       },
