@@ -21,10 +21,12 @@ import { isLegacyFormat, reEncrypt } from '../../lib/src/encryption';
 import { config } from 'dotenv';
 import path from 'path';
 
-// Load environment variables
-config({ path: path.resolve(__dirname, '../../../.env') });
+// Load environment variables (skip in test environment)
+if (process.env.NODE_ENV !== 'test') {
+  config({ path: path.resolve(__dirname, '../../../.env') });
+}
 
-interface MigrationStats {
+export interface MigrationStats {
   total: number;
   legacy: number;
   migrated: number;
@@ -39,16 +41,24 @@ interface RowToMigrate {
   encryptedApiKey: string;
 }
 
-async function migrateLegacyEncryption(dryRun: boolean): Promise<void> {
+export interface MigrationOptions {
+  dryRun: boolean;
+  quiet?: boolean; // Suppress console output (useful for testing)
+}
+
+export async function migrateLegacyEncryption(options: MigrationOptions): Promise<MigrationStats> {
+  const { dryRun, quiet = false } = options;
+  const log = quiet ? () => {} : console.log;
+  const logError = quiet ? () => {} : console.error;
+
   const mode = dryRun ? 'DRY RUN' : 'LIVE';
-  console.log(`\n${'='.repeat(60)}`);
-  console.log(`  Legacy Encryption Migration Script (${mode})`);
-  console.log(`${'='.repeat(60)}\n`);
+  log(`\n${'='.repeat(60)}`);
+  log(`  Legacy Encryption Migration Script (${mode})`);
+  log(`${'='.repeat(60)}\n`);
 
   // Validate environment
   if (!process.env.ENCRYPTION_KEY) {
-    console.error('ERROR: ENCRYPTION_KEY environment variable is required');
-    process.exit(1);
+    throw new Error('ENCRYPTION_KEY environment variable is required');
   }
 
   const stats: MigrationStats = {
@@ -61,7 +71,7 @@ async function migrateLegacyEncryption(dryRun: boolean): Promise<void> {
 
   try {
     // Fetch all rows with encrypted API keys
-    console.log('Scanning user_ai_settings for encrypted API keys...\n');
+    log('Scanning user_ai_settings for encrypted API keys...\n');
 
     const rows = await db
       .select({
@@ -73,11 +83,11 @@ async function migrateLegacyEncryption(dryRun: boolean): Promise<void> {
       .from(userAiSettings);
 
     stats.total = rows.length;
-    console.log(`Found ${stats.total} total records with encrypted API keys\n`);
+    log(`Found ${stats.total} total records with encrypted API keys\n`);
 
     if (stats.total === 0) {
-      console.log('No records to process. Exiting.\n');
-      return;
+      log('No records to process. Exiting.\n');
+      return stats;
     }
 
     // Identify legacy format entries
@@ -89,18 +99,18 @@ async function migrateLegacyEncryption(dryRun: boolean): Promise<void> {
     }
 
     stats.legacy = legacyRows.length;
-    console.log(`Found ${stats.legacy} records using legacy encryption format`);
-    console.log(`Found ${stats.total - stats.legacy} records already using current format\n`);
+    log(`Found ${stats.legacy} records using legacy encryption format`);
+    log(`Found ${stats.total - stats.legacy} records already using current format\n`);
 
     if (stats.legacy === 0) {
-      console.log('No legacy format entries found. Nothing to migrate.\n');
-      printSummary(stats, dryRun);
-      return;
+      log('No legacy format entries found. Nothing to migrate.\n');
+      printSummary(stats, dryRun, quiet);
+      return stats;
     }
 
     // Process each legacy entry
-    console.log(`${'─'.repeat(60)}`);
-    console.log(dryRun ? 'Analyzing entries (no changes will be made)...\n' : 'Migrating entries...\n');
+    log(`${'─'.repeat(60)}`);
+    log(dryRun ? 'Analyzing entries (no changes will be made)...\n' : 'Migrating entries...\n');
 
     for (let i = 0; i < legacyRows.length; i++) {
       const row = legacyRows[i];
@@ -111,7 +121,7 @@ async function migrateLegacyEncryption(dryRun: boolean): Promise<void> {
 
         if (result.migrated) {
           if (dryRun) {
-            console.log(`${progress} Would migrate: user=${row.userId.substring(0, 8)}... provider=${row.provider}`);
+            log(`${progress} Would migrate: user=${row.userId.substring(0, 8)}... provider=${row.provider}`);
             stats.migrated++;
           } else {
             // Perform the update
@@ -123,68 +133,74 @@ async function migrateLegacyEncryption(dryRun: boolean): Promise<void> {
               })
               .where(eq(userAiSettings.id, row.id));
 
-            console.log(`${progress} Migrated: user=${row.userId.substring(0, 8)}... provider=${row.provider}`);
+            log(`${progress} Migrated: user=${row.userId.substring(0, 8)}... provider=${row.provider}`);
             stats.migrated++;
           }
         } else {
           // This shouldn't happen since we filtered for legacy format, but handle it anyway
-          console.log(`${progress} Skipped (already current format): user=${row.userId.substring(0, 8)}... provider=${row.provider}`);
+          log(`${progress} Skipped (already current format): user=${row.userId.substring(0, 8)}... provider=${row.provider}`);
           stats.skipped++;
         }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        console.error(`${progress} ERROR for user=${row.userId.substring(0, 8)}... provider=${row.provider}: ${errorMessage}`);
+        logError(`${progress} ERROR for user=${row.userId.substring(0, 8)}... provider=${row.provider}: ${errorMessage}`);
         stats.errors++;
       }
     }
 
-    console.log(`\n${'─'.repeat(60)}`);
-    printSummary(stats, dryRun);
+    log(`\n${'─'.repeat(60)}`);
+    printSummary(stats, dryRun, quiet);
+    return stats;
 
   } catch (error) {
-    console.error('\nFatal error during migration:', error);
-    process.exit(1);
+    logError('\nFatal error during migration:', error);
+    throw error;
   }
 }
 
-function printSummary(stats: MigrationStats, dryRun: boolean): void {
-  console.log('\nMigration Summary:');
-  console.log(`${'─'.repeat(40)}`);
-  console.log(`  Total records scanned:     ${stats.total}`);
-  console.log(`  Legacy format entries:     ${stats.legacy}`);
-  console.log(`  Current format entries:    ${stats.total - stats.legacy}`);
-  console.log(`${'─'.repeat(40)}`);
+function printSummary(stats: MigrationStats, dryRun: boolean, quiet = false): void {
+  const log = quiet ? () => {} : console.log;
+
+  log('\nMigration Summary:');
+  log(`${'─'.repeat(40)}`);
+  log(`  Total records scanned:     ${stats.total}`);
+  log(`  Legacy format entries:     ${stats.legacy}`);
+  log(`  Current format entries:    ${stats.total - stats.legacy}`);
+  log(`${'─'.repeat(40)}`);
 
   if (dryRun) {
-    console.log(`  Would migrate:             ${stats.migrated}`);
-    console.log(`  Would skip:                ${stats.skipped}`);
-    console.log(`  Errors detected:           ${stats.errors}`);
-    console.log(`\n  This was a DRY RUN. No changes were made.`);
-    console.log(`  Run without --dry-run to perform the migration.\n`);
+    log(`  Would migrate:             ${stats.migrated}`);
+    log(`  Would skip:                ${stats.skipped}`);
+    log(`  Errors detected:           ${stats.errors}`);
+    log(`\n  This was a DRY RUN. No changes were made.`);
+    log(`  Run without --dry-run to perform the migration.\n`);
   } else {
-    console.log(`  Successfully migrated:     ${stats.migrated}`);
-    console.log(`  Skipped:                   ${stats.skipped}`);
-    console.log(`  Errors:                    ${stats.errors}`);
+    log(`  Successfully migrated:     ${stats.migrated}`);
+    log(`  Skipped:                   ${stats.skipped}`);
+    log(`  Errors:                    ${stats.errors}`);
 
     if (stats.errors > 0) {
-      console.log(`\n  WARNING: Some entries failed to migrate.`);
-      console.log(`  Review the errors above and address them before re-running.\n`);
+      log(`\n  WARNING: Some entries failed to migrate.`);
+      log(`  Review the errors above and address them before re-running.\n`);
     } else {
-      console.log(`\n  Migration completed successfully!\n`);
+      log(`\n  Migration completed successfully!\n`);
     }
   }
 }
 
-// Parse command line arguments
-const args = process.argv.slice(2);
-const dryRun = args.includes('--dry-run') || args.includes('-n');
+// CLI execution - only run when executed directly (not when imported)
+const isMainModule = require.main === module || process.argv[1]?.includes('migrate-legacy-encryption');
 
-// Run the migration
-migrateLegacyEncryption(dryRun)
-  .then(() => {
-    process.exit(0);
-  })
-  .catch((error) => {
-    console.error('Unhandled error:', error);
-    process.exit(1);
-  });
+if (isMainModule) {
+  const args = process.argv.slice(2);
+  const dryRun = args.includes('--dry-run') || args.includes('-n');
+
+  migrateLegacyEncryption({ dryRun })
+    .then(() => {
+      process.exit(0);
+    })
+    .catch((error) => {
+      console.error('Unhandled error:', error);
+      process.exit(1);
+    });
+}
