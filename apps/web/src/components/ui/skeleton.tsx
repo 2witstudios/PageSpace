@@ -94,4 +94,52 @@ function SkeletonCard({
   )
 }
 
-export { Skeleton, SkeletonMessageBubble, SkeletonCard }
+interface SkeletonListItemProps {
+  /** Whether to show an icon placeholder on the left */
+  showIcon?: boolean
+  /** Size of the icon placeholder (e.g., "h-4 w-4", "h-5 w-5") */
+  iconSize?: string
+  /** Whether to show a secondary text line below the primary */
+  showSecondaryText?: boolean
+  /** Width of the primary text skeleton (e.g., "w-3/4", "w-32") */
+  primaryWidth?: string
+  /** Width of the secondary text skeleton (e.g., "w-1/2", "w-24") */
+  secondaryWidth?: string
+  /** Additional className for the container */
+  className?: string
+}
+
+/**
+ * Skeleton component for list items
+ * Supports optional icon placeholder and secondary text line
+ */
+function SkeletonListItem({
+  showIcon = false,
+  iconSize = "h-4 w-4",
+  showSecondaryText = false,
+  primaryWidth = "w-3/4",
+  secondaryWidth = "w-1/2",
+  className,
+}: SkeletonListItemProps) {
+  return (
+    <div
+      data-slot="skeleton-list-item"
+      className={cn(
+        "flex items-center gap-2 p-2 animate-pulse",
+        className
+      )}
+    >
+      {showIcon && (
+        <Skeleton className={cn("rounded-md shrink-0", iconSize)} />
+      )}
+      <div className="flex-1 min-w-0 space-y-1.5">
+        <Skeleton className={cn("h-4", primaryWidth)} />
+        {showSecondaryText && (
+          <Skeleton className={cn("h-3", secondaryWidth)} />
+        )}
+      </div>
+    </div>
+  )
+}
+
+export { Skeleton, SkeletonMessageBubble, SkeletonCard, SkeletonListItem }
