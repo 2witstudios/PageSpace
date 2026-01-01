@@ -220,8 +220,9 @@
             "url": "http://localhost:3000/api/pages/test-page-id/versions/compare?v1=version1&v2=version2",
             "expected_status": 200
           },
-          "status": "pending",
-          "notes": "GET endpoint accepting v1 and v2 query params (version IDs). Fetch both versions, decompress content, generate diff using diffContent(), return structured diff. Server-side only for security/performance"
+          "status": "completed",
+          "notes": "Created version comparison API endpoint at apps/web/src/app/api/pages/[pageId]/versions/compare/route.ts. Features: GET endpoint with v1/v2 query params for version IDs, lineMode and prettyPrint options for diff customization, authentication via JWT/MCP, permission checks via canUserViewPage, content decompression from contentRef with contentSnapshot fallback, uses diffContent from @pagespace/lib/content for generating diffs. Returns structured response with { diff: DiffResult, summary: string, versions: { v1, v2 } } including version metadata (timestamps, actors, contentFormat, isAiGenerated). Security: validates both versions belong to the requested page. Committed as cc4f9ab1.",
+          "updated_at": "2026-01-01T03:15:00.000000+00:00"
         }
       ]
     },
@@ -651,5 +652,5 @@
     }
   },
   "qa_signoff": null,
-  "last_updated": "2026-01-01T03:10:30.948378+00:00"
+  "last_updated": "2026-01-01T03:15:00.000000+00:00"
 }
