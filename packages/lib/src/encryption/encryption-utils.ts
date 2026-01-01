@@ -52,6 +52,50 @@ export function isLegacyFormat(encryptedText: string): boolean {
 }
 
 /**
+ * Result of a re-encryption operation.
+ */
+export interface ReEncryptResult {
+  /** Whether the data was migrated from legacy to current format */
+  migrated: boolean;
+  /** The encrypted text (either original or newly encrypted) */
+  encryptedText: string;
+}
+
+/**
+ * Re-encrypts data from legacy format to current format if needed.
+ *
+ * If the encrypted text uses the legacy 3-part format, it will be decrypted
+ * and re-encrypted using the current 4-part format with a unique per-operation salt.
+ * If already using the current format, returns the original unchanged.
+ *
+ * @param encryptedText The encrypted string to potentially migrate.
+ * @returns A promise that resolves to an object with migrated flag and encrypted text.
+ * @throws Error if decryption or re-encryption fails (corrupted/invalid data).
+ */
+export async function reEncrypt(encryptedText: string): Promise<ReEncryptResult> {
+  if (!encryptedText || typeof encryptedText !== 'string') {
+    throw new Error('Encrypted text must be a non-empty string');
+  }
+
+  // Check if already using current format
+  if (!isLegacyFormat(encryptedText)) {
+    return {
+      migrated: false,
+      encryptedText: encryptedText
+    };
+  }
+
+  // Legacy format detected - decrypt and re-encrypt
+  const plaintext = await decrypt(encryptedText);
+  const newEncryptedText = await encrypt(plaintext);
+
+  return {
+    migrated: true,
+    encryptedText: newEncryptedText
+  };
+}
+
+/**
  * Encrypts a plaintext string (e.g., an API key).
  * @param text The plaintext to encrypt.
  * @returns A promise that resolves to the encrypted string, formatted as "salt:iv:authtag:ciphertext".

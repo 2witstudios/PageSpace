@@ -1,5 +1,31 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { encrypt, decrypt, isLegacyFormat } from '../encryption/encryption-utils'
+import { encrypt, decrypt, isLegacyFormat, reEncrypt } from '../encryption/encryption-utils'
+import { scrypt, randomBytes, createCipheriv } from 'crypto'
+import { promisify } from 'util'
+
+const scryptAsync = promisify(scrypt)
+
+/**
+ * Helper function to create legacy-format encrypted data for testing.
+ * This mimics the old encryption format: "iv:authTag:ciphertext"
+ */
+async function createLegacyEncrypted(text: string): Promise<string> {
+  const ALGORITHM = 'aes-256-gcm'
+  const IV_LENGTH = 16
+  const KEY_LENGTH = 32
+
+  const masterKey = process.env.ENCRYPTION_KEY!
+  const legacySalt = process.env.ENCRYPTION_SALT || 'a-secure-static-salt-for-everyone'
+
+  const iv = randomBytes(IV_LENGTH)
+  const key = (await scryptAsync(masterKey, legacySalt, KEY_LENGTH)) as Buffer
+  const cipher = createCipheriv(ALGORITHM, key, iv)
+
+  const encrypted = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()])
+  const authTag = cipher.getAuthTag()
+
+  return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted.toString('hex')}`
+}
 
 describe('encryption-utils', () => {
   const testData = 'sensitive-api-key-12345'
@@ -291,6 +317,182 @@ describe('encryption-utils', () => {
       expect(isLegacyFormat(':::')).toBe(false) // 4 empty parts
       // Two colons means 3 parts
       expect(isLegacyFormat('::')).toBe(true) // 3 empty parts
+    })
+  })
+
+  describe('reEncrypt', () => {
+    const testData = 'sensitive-api-key-12345'
+
+    describe('current format (no migration needed)', () => {
+      it('returns migrated=false for current 4-part format', async () => {
+        const encrypted = await encrypt(testData)
+        const result = await reEncrypt(encrypted)
+
+        expect(result.migrated).toBe(false)
+        expect(result.encryptedText).toBe(encrypted) // Returns original unchanged
+      })
+
+      it('returns the exact same ciphertext for current format', async () => {
+        const encrypted = await encrypt(testData)
+        const result = await reEncrypt(encrypted)
+
+        // Should be byte-for-byte identical
+        expect(result.encryptedText).toBe(encrypted)
+      })
+
+      it('works correctly for various data types in current format', async () => {
+        const testCases = [
+          'simple-text',
+          'with spaces and special chars !@#$%',
+          '你好世界 🌍',
+          'a'.repeat(5000), // large data
+        ]
+
+        for (const data of testCases) {
+          const encrypted = await encrypt(data)
+          const result = await reEncrypt(encrypted)
+
+          expect(result.migrated).toBe(false)
+          expect(result.encryptedText).toBe(encrypted)
+        }
+      })
+    })
+
+    describe('legacy format (migration needed)', () => {
+      it('returns migrated=true for legacy 3-part format', async () => {
+        const legacyEncrypted = await createLegacyEncrypted(testData)
+        const result = await reEncrypt(legacyEncrypted)
+
+        expect(result.migrated).toBe(true)
+        expect(result.encryptedText).not.toBe(legacyEncrypted)
+      })
+
+      it('produces 4-part format after migration', async () => {
+        const legacyEncrypted = await createLegacyEncrypted(testData)
+        const result = await reEncrypt(legacyEncrypted)
+
+        const parts = result.encryptedText.split(':')
+        expect(parts.length).toBe(4)
+      })
+
+      it('migrated ciphertext is no longer detected as legacy', async () => {
+        const legacyEncrypted = await createLegacyEncrypted(testData)
+        const result = await reEncrypt(legacyEncrypted)
+
+        expect(isLegacyFormat(result.encryptedText)).toBe(false)
+      })
+
+      it('preserves original plaintext through migration', async () => {
+        const legacyEncrypted = await createLegacyEncrypted(testData)
+        const result = await reEncrypt(legacyEncrypted)
+
+        // Decrypt the migrated ciphertext
+        const decrypted = await decrypt(result.encryptedText)
+        expect(decrypted).toBe(testData)
+      })
+
+      it('works correctly for various data types', async () => {
+        const testCases = [
+          'simple-text',
+          'with spaces and special chars !@#$%',
+          '你好世界 🌍',
+          'line1\nline2\tline3',
+        ]
+
+        for (const data of testCases) {
+          const legacyEncrypted = await createLegacyEncrypted(data)
+          const result = await reEncrypt(legacyEncrypted)
+
+          expect(result.migrated).toBe(true)
+          const decrypted = await decrypt(result.encryptedText)
+          expect(decrypted).toBe(data)
+        }
+      })
+
+      it('produces unique ciphertext on each migration of same data', async () => {
+        // Each migration should use new salt/IV
+        const legacyEncrypted1 = await createLegacyEncrypted(testData)
+        const legacyEncrypted2 = await createLegacyEncrypted(testData)
+
+        const result1 = await reEncrypt(legacyEncrypted1)
+        const result2 = await reEncrypt(legacyEncrypted2)
+
+        expect(result1.encryptedText).not.toBe(result2.encryptedText)
+      })
+    })
+
+    describe('error handling', () => {
+      it('throws error for empty string', async () => {
+        await expect(reEncrypt('')).rejects.toThrow('Encrypted text must be a non-empty string')
+      })
+
+      it('throws error for null/undefined', async () => {
+        await expect(reEncrypt(null as any)).rejects.toThrow('Encrypted text must be a non-empty string')
+        await expect(reEncrypt(undefined as any)).rejects.toThrow('Encrypted text must be a non-empty string')
+      })
+
+      it('throws error for non-string input', async () => {
+        await expect(reEncrypt(123 as any)).rejects.toThrow('Encrypted text must be a non-empty string')
+      })
+
+      it('throws error for corrupted legacy data', async () => {
+        const legacyEncrypted = await createLegacyEncrypted(testData)
+        const parts = legacyEncrypted.split(':')
+        // Corrupt the ciphertext
+        parts[2] = parts[2].substring(0, parts[2].length - 4) + 'XXXX'
+        const corrupted = parts.join(':')
+
+        await expect(reEncrypt(corrupted)).rejects.toThrow()
+      })
+
+      it('throws error for corrupted current format data', async () => {
+        const encrypted = await encrypt(testData)
+        const parts = encrypted.split(':')
+        // Corrupt the ciphertext
+        parts[3] = parts[3].substring(0, parts[3].length - 4) + 'XXXX'
+        const corrupted = parts.join(':')
+
+        // This should fail during the isLegacyFormat check (returns false for 4-part),
+        // so it tries decryptNew which should fail
+        await expect(reEncrypt(corrupted)).rejects.toThrow()
+      })
+
+      it('throws for invalid format (wrong part count)', async () => {
+        // 2 parts - invalid
+        await expect(reEncrypt('one:two')).rejects.toThrow()
+        // 5 parts - invalid
+        await expect(reEncrypt('one:two:three:four:five')).rejects.toThrow()
+      })
+    })
+
+    describe('idempotency', () => {
+      it('calling reEncrypt on already-migrated data returns unchanged', async () => {
+        const legacyEncrypted = await createLegacyEncrypted(testData)
+
+        // First migration
+        const result1 = await reEncrypt(legacyEncrypted)
+        expect(result1.migrated).toBe(true)
+
+        // Second call on migrated data
+        const result2 = await reEncrypt(result1.encryptedText)
+        expect(result2.migrated).toBe(false)
+        expect(result2.encryptedText).toBe(result1.encryptedText)
+      })
+
+      it('multiple calls on current format return same result', async () => {
+        const encrypted = await encrypt(testData)
+
+        const result1 = await reEncrypt(encrypted)
+        const result2 = await reEncrypt(result1.encryptedText)
+        const result3 = await reEncrypt(result2.encryptedText)
+
+        expect(result1.migrated).toBe(false)
+        expect(result2.migrated).toBe(false)
+        expect(result3.migrated).toBe(false)
+        expect(result1.encryptedText).toBe(encrypted)
+        expect(result2.encryptedText).toBe(encrypted)
+        expect(result3.encryptedText).toBe(encrypted)
+      })
     })
   })
 })
