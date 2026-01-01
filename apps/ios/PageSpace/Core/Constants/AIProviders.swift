@@ -76,27 +76,39 @@ let AI_PROVIDERS: [String: AIProvider] = [
     "openrouter_free": AIProvider(
         name: "OpenRouter (Free)",
         models: [
+            // Coding Models
+            "qwen/qwen3-coder:free": "Qwen3 Coder",
+            "kwaipilot/kat-coder-pro:free": "Kat Coder Pro",
+            "mistralai/devstral-small-2505:free": "Devstral Small",
+            "mistralai/devstral-2512:free": "Devstral 2512",
+            // Large Models (405B+)
+            "meta-llama/llama-3.1-405b-instruct:free": "Llama 3.1 405B",
+            "nousresearch/hermes-3-llama-3.1-405b:free": "Hermes 3 405B",
+            // Reasoning Models
+            "deepseek/deepseek-r1-0528:free": "DeepSeek R1",
+            "tngtech/deepseek-r1t-chimera:free": "DeepSeek R1T Chimera",
+            "allenai/olmo-3.1-32b-think:free": "OLMo 3.1 32B Think",
             // Google Models
             "google/gemini-2.0-flash-exp:free": "Gemini 2.0 Flash",
-            "google/gemini-exp-1206:free": "Gemini Exp 1206",
-            "google/gemini-2.0-flash-thinking-exp:free": "Gemini 2.0 Flash Thinking",
-            // Meta Models
+            "google/gemma-3-27b-it:free": "Gemma 3 27B",
+            "google/gemma-3-12b-it:free": "Gemma 3 12B",
+            // Meta Llama Models
             "meta-llama/llama-3.3-70b-instruct:free": "Llama 3.3 70B",
-            "meta-llama/llama-3.2-90b-vision-instruct:free": "Llama 3.2 90B Vision",
-            // Qwen Models
-            "qwen/qwen-2.5-coder-32b-instruct:free": "Qwen 2.5 Coder 32B",
-            "qwen/qwq-32b-preview:free": "QwQ 32B Preview",
-            // DeepSeek Models (2025)
-            "deepseek/deepseek-r1:free": "DeepSeek R1",
-            "deepseek/deepseek-r1-distill-llama-70b:free": "DeepSeek R1 Distill Llama 70B",
-            "deepseek/deepseek-r1-distill-qwen-32b:free": "DeepSeek R1 Distill Qwen 32B",
-            // Other Models (2025)
-            "minimax/minimax-m2:free": "MiniMax M2",
-            "nvidia/nemotron-nano-12b-v2-vl:free": "Nemotron Nano 12B VL",
-            "alibaba/tongyi-deepresearch-30b-a3b:free": "Tongyi DeepResearch 30B",
-            "openrouter/polaris-alpha:free": "Polaris Alpha",
+            "meta-llama/llama-3.2-3b-instruct:free": "Llama 3.2 3B",
+            // Mistral Models
+            "mistralai/mistral-small-3.1-24b-instruct:free": "Mistral Small 3.1 24B",
             "mistralai/mistral-7b-instruct:free": "Mistral 7B",
-            "microsoft/phi-3.5-mini-128k-instruct:free": "Phi 3.5 Mini"
+            "cognitivecomputations/dolphin-mistral-24b-venice-edition:free": "Dolphin Mistral 24B",
+            // Chinese/Asian Models
+            "z-ai/glm-4.5-air:free": "GLM 4.5 Air",
+            "qwen/qwen3-4b:free": "Qwen3 4B",
+            "moonshotai/kimi-k2:free": "Kimi K2",
+            "alibaba/tongyi-deepresearch-30b-a3b:free": "Tongyi DeepResearch 30B",
+            // OpenAI OSS Models
+            "openai/gpt-oss-120b:free": "GPT OSS 120B",
+            "openai/gpt-oss-20b:free": "GPT OSS 20B",
+            // Other Models
+            "nvidia/nemotron-nano-12b-v2-vl:free": "Nemotron Nano 12B VL"
         ]
     ),
 
@@ -239,7 +251,7 @@ func getDefaultModel(for provider: String) -> String {
     case "openrouter":
         return "anthropic/claude-sonnet-4.5"
     case "openrouter_free":
-        return "google/gemini-2.0-flash-exp:free"
+        return "qwen/qwen3-coder:free"
     case "google":
         return "gemini-2.5-flash" // Updated to 2.5 Flash (2025)
     case "openai":

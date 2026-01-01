@@ -85,48 +85,55 @@ export const AI_PROVIDERS = {
   openrouter_free: {
     name: 'OpenRouter (Free)',
     models: {
-      // Free Models - OpenAI
-      'openai/gpt-oss-20b:free': 'GPT OSS 20B',
-
-      // Free Models - Chinese/Asian (2025)
-      'z-ai/glm-4.5-air:free': 'GLM 4.5 Air',
+      // Coding Models
       'qwen/qwen3-coder:free': 'Qwen3 Coder',
-      'qwen/qwen3-4b:free': 'Qwen3 4B',
-      'qwen/qwen3-8b:free': 'Qwen3 8B',
-      'qwen/qwen3-14b:free': 'Qwen3 14B',
-      'qwen/qwen3-30b-a3b:free': 'Qwen3 30B A3B',
-      'qwen/qwen3-235b-a22b:free': 'Qwen3 235B A22B',
-      'moonshotai/kimi-k2:free': 'Kimi K2',
-      'moonshotai/kimi-dev-72b:free': 'Kimi Dev 72B',
-      'tencent/hunyuan-a13b-instruct:free': 'Hunyuan A13B',
-      'sarvamai/sarvam-m:free': 'Sarvam M',
-      'alibaba/tongyi-deepresearch-30b-a3b:free': 'Tongyi DeepResearch 30B',
-
-      // Free Models - DeepSeek (2025)
-      'deepseek/deepseek-r1-0528:free': 'DeepSeek R1',
-      'deepseek/deepseek-r1-0528-qwen3-8b:free': 'DeepSeek R1 Qwen3 8B',
-      'deepseek/deepseek-r1-distill-llama-70b:free': 'DeepSeek R1 Distill Llama 70B',
-      'deepseek/deepseek-r1-distill-qwen-32b:free': 'DeepSeek R1 Distill Qwen 32B',
-      'tngtech/deepseek-r1t-chimera:free': 'DeepSeek R1T Chimera',
-      'tngtech/deepseek-r1t2-chimera:free': 'DeepSeek R1T2 Chimera',
-
-      // Free Models - Google
-      'google/gemma-3n-e2b-it:free': 'Gemma 3N E2B',
-      'google/gemma-3n-e4b-it:free': 'Gemma 3N E4B',
-
-      // Free Models - Mistral
-      'mistralai/mistral-small-3.2-24b-instruct:free': 'Mistral Small 3.2 24B',
+      'kwaipilot/kat-coder-pro:free': 'Kat Coder Pro',
       'mistralai/devstral-small-2505:free': 'Devstral Small',
+      'mistralai/devstral-2512:free': 'Devstral 2512',
+
+      // Large Models (405B+)
+      'meta-llama/llama-3.1-405b-instruct:free': 'Llama 3.1 405B',
+      'nousresearch/hermes-3-llama-3.1-405b:free': 'Hermes 3 405B',
+
+      // Reasoning Models
+      'deepseek/deepseek-r1-0528:free': 'DeepSeek R1',
+      'tngtech/deepseek-r1t-chimera:free': 'DeepSeek R1T Chimera',
+      'tngtech/tng-r1t-chimera:free': 'TNG R1T Chimera',
+      'nex-agi/deepseek-v3.1-nex-n1:free': 'DeepSeek V3.1 Nex N1',
+      'allenai/olmo-3.1-32b-think:free': 'OLMo 3.1 32B Think',
+      'allenai/olmo-3-32b-think:free': 'OLMo 3 32B Think',
+
+      // Google Models
+      'google/gemini-2.0-flash-exp:free': 'Gemini 2.0 Flash',
+      'google/gemma-3-27b-it:free': 'Gemma 3 27B',
+      'google/gemma-3-12b-it:free': 'Gemma 3 12B',
+      'google/gemma-3-4b-it:free': 'Gemma 3 4B',
+
+      // Meta Llama Models
+      'meta-llama/llama-3.3-70b-instruct:free': 'Llama 3.3 70B',
+      'meta-llama/llama-3.2-3b-instruct:free': 'Llama 3.2 3B',
+
+      // Mistral Models
+      'mistralai/mistral-small-3.1-24b-instruct:free': 'Mistral Small 3.1 24B',
+      'mistralai/mistral-7b-instruct:free': 'Mistral 7B',
       'cognitivecomputations/dolphin-mistral-24b-venice-edition:free': 'Dolphin Mistral 24B',
 
-      // Free Models - Other (2025)
-      'minimax/minimax-m2:free': 'MiniMax M2',
+      // Chinese/Asian Models
+      'z-ai/glm-4.5-air:free': 'GLM 4.5 Air',
+      'qwen/qwen3-4b:free': 'Qwen3 4B',
+      'qwen/qwen-2.5-vl-7b-instruct:free': 'Qwen 2.5 VL 7B',
+      'moonshotai/kimi-k2:free': 'Kimi K2',
+      'alibaba/tongyi-deepresearch-30b-a3b:free': 'Tongyi DeepResearch 30B',
+      'xiaomi/mimo-v2-flash:free': 'MiMo V2 Flash',
+
+      // OpenAI OSS Models
+      'openai/gpt-oss-120b:free': 'GPT OSS 120B',
+      'openai/gpt-oss-20b:free': 'GPT OSS 20B',
+
+      // Other Models
       'nvidia/nemotron-nano-12b-v2-vl:free': 'Nemotron Nano 12B VL',
-      'openrouter/polaris-alpha:free': 'Polaris Alpha',
-      'microsoft/mai-ds-r1:free': 'Microsoft MAI DS R1',
-      'shisa-ai/shisa-v2-llama3.3-70b:free': 'Shisa v2 Llama 3.3 70B',
-      'arliai/qwq-32b-arliai-rpr-v1:free': 'QwQ 32B ArliAI',
-      'agentica-org/deepcoder-14b-preview:free': 'DeepCoder 14B',
+      'nvidia/nemotron-3-nano-30b-a3b:free': 'Nemotron 3 Nano 30B',
+      'arcee-ai/trinity-mini:free': 'Trinity Mini',
     },
   },
   google: {
