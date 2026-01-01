@@ -62,6 +62,68 @@ export interface ReEncryptResult {
 }
 
 /**
+ * Callback type for auto-migration updates.
+ * Called with the new ciphertext when legacy data is migrated.
+ */
+export type MigrationUpdateCallback = (newEncryptedText: string) => Promise<void>;
+
+/**
+ * Decrypts an encrypted string and automatically migrates legacy format data.
+ *
+ * This 'migrate-on-read' pattern enables gradual migration of legacy encrypted data
+ * as it is accessed. When legacy 3-part format is detected:
+ * 1. Decrypts the data
+ * 2. Re-encrypts using current 4-part format with unique per-operation salt
+ * 3. Calls the updateCallback with the new ciphertext for persistence
+ * 4. Returns the decrypted plaintext
+ *
+ * If the updateCallback throws, a warning is logged but the plaintext is still returned.
+ * This ensures decryption always succeeds even if the persistence update fails.
+ *
+ * @param encryptedText The encrypted string to decrypt.
+ * @param updateCallback Async callback called with new ciphertext when migration occurs.
+ * @returns A promise that resolves to the decrypted plaintext string.
+ * @throws Error if decryption fails (corrupted/invalid data).
+ */
+export async function decryptAndMigrate(
+  encryptedText: string,
+  updateCallback: MigrationUpdateCallback
+): Promise<string> {
+  if (!encryptedText || typeof encryptedText !== 'string') {
+    throw new Error('Encrypted text must be a non-empty string');
+  }
+
+  if (!updateCallback || typeof updateCallback !== 'function') {
+    throw new Error('updateCallback must be a function');
+  }
+
+  // Decrypt the data first
+  const plaintext = await decrypt(encryptedText);
+
+  // Check if migration is needed
+  if (isLegacyFormat(encryptedText)) {
+    try {
+      // Re-encrypt with current format
+      const newEncryptedText = await encrypt(plaintext);
+
+      // Call the update callback to persist the new ciphertext
+      await updateCallback(newEncryptedText);
+    } catch (error) {
+      // Log warning but don't throw - we still want to return the plaintext
+      loggers.security.warn(
+        'Auto-migration of legacy encrypted data failed during update callback',
+        {
+          error: error instanceof Error ? error.message : 'Unknown error',
+          migration: 'Data was decrypted successfully but the new ciphertext could not be persisted. The legacy format will be used until next access.'
+        }
+      );
+    }
+  }
+
+  return plaintext;
+}
+
+/**
  * Re-encrypts data from legacy format to current format if needed.
  *
  * If the encrypted text uses the legacy 3-part format, it will be decrypted

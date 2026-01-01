@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { encrypt, decrypt, isLegacyFormat, reEncrypt } from '../encryption/encryption-utils'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { encrypt, decrypt, isLegacyFormat, reEncrypt, decryptAndMigrate } from '../encryption/encryption-utils'
 import { scrypt, randomBytes, createCipheriv } from 'crypto'
 import { promisify } from 'util'
 
@@ -492,6 +492,272 @@ describe('encryption-utils', () => {
         expect(result1.encryptedText).toBe(encrypted)
         expect(result2.encryptedText).toBe(encrypted)
         expect(result3.encryptedText).toBe(encrypted)
+      })
+    })
+  })
+
+  describe('decryptAndMigrate', () => {
+    const testData = 'sensitive-api-key-12345'
+
+    describe('current format (no migration)', () => {
+      it('returns decrypted plaintext for current format', async () => {
+        const encrypted = await encrypt(testData)
+        const updateCallback = vi.fn()
+
+        const result = await decryptAndMigrate(encrypted, updateCallback)
+
+        expect(result).toBe(testData)
+      })
+
+      it('does not call updateCallback for current format', async () => {
+        const encrypted = await encrypt(testData)
+        const updateCallback = vi.fn()
+
+        await decryptAndMigrate(encrypted, updateCallback)
+
+        expect(updateCallback).not.toHaveBeenCalled()
+      })
+
+      it('works correctly for various data types', async () => {
+        const testCases = [
+          'simple-text',
+          'with spaces and special chars !@#$%',
+          '你好世界 🌍',
+          'a'.repeat(5000), // large data
+        ]
+
+        for (const data of testCases) {
+          const encrypted = await encrypt(data)
+          const updateCallback = vi.fn()
+
+          const result = await decryptAndMigrate(encrypted, updateCallback)
+
+          expect(result).toBe(data)
+          expect(updateCallback).not.toHaveBeenCalled()
+        }
+      })
+    })
+
+    describe('legacy format (migration triggered)', () => {
+      it('returns decrypted plaintext for legacy format', async () => {
+        const legacyEncrypted = await createLegacyEncrypted(testData)
+        const updateCallback = vi.fn()
+
+        const result = await decryptAndMigrate(legacyEncrypted, updateCallback)
+
+        expect(result).toBe(testData)
+      })
+
+      it('calls updateCallback with new 4-part format ciphertext', async () => {
+        const legacyEncrypted = await createLegacyEncrypted(testData)
+        const updateCallback = vi.fn()
+
+        await decryptAndMigrate(legacyEncrypted, updateCallback)
+
+        expect(updateCallback).toHaveBeenCalledTimes(1)
+
+        // Verify the new ciphertext is 4-part format
+        const newEncryptedText = updateCallback.mock.calls[0][0]
+        const parts = newEncryptedText.split(':')
+        expect(parts.length).toBe(4)
+      })
+
+      it('new ciphertext from callback decrypts to original plaintext', async () => {
+        const legacyEncrypted = await createLegacyEncrypted(testData)
+        let capturedNewCiphertext = ''
+        const updateCallback = vi.fn(async (newEncryptedText: string) => {
+          capturedNewCiphertext = newEncryptedText
+        })
+
+        await decryptAndMigrate(legacyEncrypted, updateCallback)
+
+        // Decrypt the new ciphertext to verify it matches original
+        const decrypted = await decrypt(capturedNewCiphertext)
+        expect(decrypted).toBe(testData)
+      })
+
+      it('new ciphertext is no longer detected as legacy', async () => {
+        const legacyEncrypted = await createLegacyEncrypted(testData)
+        let capturedNewCiphertext = ''
+        const updateCallback = vi.fn(async (newEncryptedText: string) => {
+          capturedNewCiphertext = newEncryptedText
+        })
+
+        await decryptAndMigrate(legacyEncrypted, updateCallback)
+
+        expect(isLegacyFormat(capturedNewCiphertext)).toBe(false)
+      })
+
+      it('works correctly for various legacy data types', async () => {
+        const testCases = [
+          'simple-text',
+          'with spaces and special chars !@#$%',
+          '你好世界 🌍',
+          'line1\nline2\tline3',
+        ]
+
+        for (const data of testCases) {
+          const legacyEncrypted = await createLegacyEncrypted(data)
+          let capturedNewCiphertext = ''
+          const updateCallback = vi.fn(async (newEncryptedText: string) => {
+            capturedNewCiphertext = newEncryptedText
+          })
+
+          const result = await decryptAndMigrate(legacyEncrypted, updateCallback)
+
+          expect(result).toBe(data)
+          expect(updateCallback).toHaveBeenCalledTimes(1)
+
+          // Verify migrated ciphertext decrypts correctly
+          const decrypted = await decrypt(capturedNewCiphertext)
+          expect(decrypted).toBe(data)
+        }
+      })
+    })
+
+    describe('callback error handling', () => {
+      it('returns plaintext even when callback throws', async () => {
+        const legacyEncrypted = await createLegacyEncrypted(testData)
+        const updateCallback = vi.fn().mockRejectedValue(new Error('Database connection failed'))
+
+        const result = await decryptAndMigrate(legacyEncrypted, updateCallback)
+
+        // Should still return the plaintext despite callback error
+        expect(result).toBe(testData)
+      })
+
+      it('callback is still called when it will throw', async () => {
+        const legacyEncrypted = await createLegacyEncrypted(testData)
+        const updateCallback = vi.fn().mockRejectedValue(new Error('Network error'))
+
+        await decryptAndMigrate(legacyEncrypted, updateCallback)
+
+        expect(updateCallback).toHaveBeenCalledTimes(1)
+      })
+
+      it('handles synchronous callback errors gracefully', async () => {
+        const legacyEncrypted = await createLegacyEncrypted(testData)
+        const updateCallback = vi.fn(() => {
+          throw new Error('Sync error')
+        })
+
+        const result = await decryptAndMigrate(legacyEncrypted, updateCallback)
+
+        expect(result).toBe(testData)
+      })
+
+      it('does not retry callback on failure', async () => {
+        const legacyEncrypted = await createLegacyEncrypted(testData)
+        const updateCallback = vi.fn().mockRejectedValue(new Error('First failure'))
+
+        await decryptAndMigrate(legacyEncrypted, updateCallback)
+
+        // Should only be called once (no retries)
+        expect(updateCallback).toHaveBeenCalledTimes(1)
+      })
+    })
+
+    describe('input validation', () => {
+      it('throws error for empty string', async () => {
+        const updateCallback = vi.fn()
+
+        await expect(decryptAndMigrate('', updateCallback))
+          .rejects.toThrow('Encrypted text must be a non-empty string')
+      })
+
+      it('throws error for null/undefined encryptedText', async () => {
+        const updateCallback = vi.fn()
+
+        await expect(decryptAndMigrate(null as any, updateCallback))
+          .rejects.toThrow('Encrypted text must be a non-empty string')
+        await expect(decryptAndMigrate(undefined as any, updateCallback))
+          .rejects.toThrow('Encrypted text must be a non-empty string')
+      })
+
+      it('throws error for non-string input', async () => {
+        const updateCallback = vi.fn()
+
+        await expect(decryptAndMigrate(123 as any, updateCallback))
+          .rejects.toThrow('Encrypted text must be a non-empty string')
+      })
+
+      it('throws error for missing callback', async () => {
+        const encrypted = await encrypt(testData)
+
+        await expect(decryptAndMigrate(encrypted, null as any))
+          .rejects.toThrow('updateCallback must be a function')
+        await expect(decryptAndMigrate(encrypted, undefined as any))
+          .rejects.toThrow('updateCallback must be a function')
+      })
+
+      it('throws error for non-function callback', async () => {
+        const encrypted = await encrypt(testData)
+
+        await expect(decryptAndMigrate(encrypted, 'not-a-function' as any))
+          .rejects.toThrow('updateCallback must be a function')
+        await expect(decryptAndMigrate(encrypted, {} as any))
+          .rejects.toThrow('updateCallback must be a function')
+      })
+
+      it('throws error for corrupted ciphertext (current format)', async () => {
+        const encrypted = await encrypt(testData)
+        const parts = encrypted.split(':')
+        parts[3] = parts[3].substring(0, parts[3].length - 4) + 'XXXX'
+        const corrupted = parts.join(':')
+        const updateCallback = vi.fn()
+
+        await expect(decryptAndMigrate(corrupted, updateCallback))
+          .rejects.toThrow('Decryption failed')
+      })
+
+      it('throws error for corrupted ciphertext (legacy format)', async () => {
+        const legacyEncrypted = await createLegacyEncrypted(testData)
+        const parts = legacyEncrypted.split(':')
+        parts[2] = parts[2].substring(0, parts[2].length - 4) + 'XXXX'
+        const corrupted = parts.join(':')
+        const updateCallback = vi.fn()
+
+        await expect(decryptAndMigrate(corrupted, updateCallback))
+          .rejects.toThrow()
+      })
+
+      it('throws error for invalid format (wrong part count)', async () => {
+        const updateCallback = vi.fn()
+
+        await expect(decryptAndMigrate('one:two', updateCallback))
+          .rejects.toThrow('Invalid encrypted text format')
+        await expect(decryptAndMigrate('one:two:three:four:five', updateCallback))
+          .rejects.toThrow('Invalid encrypted text format')
+      })
+    })
+
+    describe('idempotency', () => {
+      it('only triggers migration once for legacy data', async () => {
+        const legacyEncrypted = await createLegacyEncrypted(testData)
+        let migratedCiphertext = ''
+        const firstCallback = vi.fn(async (newEncryptedText: string) => {
+          migratedCiphertext = newEncryptedText
+        })
+
+        // First call - should migrate
+        await decryptAndMigrate(legacyEncrypted, firstCallback)
+        expect(firstCallback).toHaveBeenCalledTimes(1)
+
+        // Second call with migrated ciphertext - should not trigger callback
+        const secondCallback = vi.fn()
+        await decryptAndMigrate(migratedCiphertext, secondCallback)
+        expect(secondCallback).not.toHaveBeenCalled()
+      })
+
+      it('repeated calls with current format never trigger callback', async () => {
+        const encrypted = await encrypt(testData)
+        const callback = vi.fn()
+
+        await decryptAndMigrate(encrypted, callback)
+        await decryptAndMigrate(encrypted, callback)
+        await decryptAndMigrate(encrypted, callback)
+
+        expect(callback).not.toHaveBeenCalled()
       })
     })
   })

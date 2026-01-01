@@ -6,5 +6,5 @@
 export * from './encryption-utils';
 
 // Explicit re-exports for legacy format detection and migration (used in migration scripts)
-export { isLegacyFormat, reEncrypt } from './encryption-utils';
-export type { ReEncryptResult } from './encryption-utils';
+export { isLegacyFormat, reEncrypt, decryptAndMigrate } from './encryption-utils';
+export type { ReEncryptResult, MigrationUpdateCallback } from './encryption-utils';
