@@ -292,11 +292,13 @@
     "@pagespace/db": "workspace:*",
     "@paralleldrive/cuid2": "^2.2.2",
     "@react-email/components": "^0.5.5",
+    "diff-match-patch": "^1.0.5",
     "google-auth-library": "^10.3.0",
     "html-to-docx": "^1.8.0",
     "ioredis": "^5.8.0",
     "jose": "^6.0.11",
     "mammoth": "^1.10.0",
+    "pako": "^2.1.0",
     "pdf-parse-debugging-disabled": "^1.1.1",
     "react-email": "^4.2.12",
     "resend": "^6.1.2",
@@ -305,7 +307,9 @@
   },
   "devDependencies": {
     "@react-email/preview-server": "4.2.12",
+    "@types/diff-match-patch": "^1.0.36",
     "@types/html-to-docx": "^1.8.0",
+    "@types/pako": "^2.0.3",
     "@types/react": "^19.1.13",
     "@types/xlsx": "^0.0.36",
     "react": "^19.1.1"
