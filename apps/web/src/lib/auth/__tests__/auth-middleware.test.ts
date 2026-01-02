@@ -47,10 +47,15 @@ vi.mock('../csrf-validation', () => ({
   validateCSRF: vi.fn().mockResolvedValue(null),
 }));
 
+vi.mock('../origin-validation', () => ({
+  validateOrigin: vi.fn().mockReturnValue(null),
+}));
+
 import { parse } from 'cookie';
 import { decodeToken } from '@pagespace/lib/server';
 import { db } from '@pagespace/db';
 import { validateCSRF } from '../csrf-validation';
+import { validateOrigin } from '../origin-validation';
 
 describe('Auth Middleware', () => {
   const mockUser = {
@@ -72,6 +77,7 @@ describe('Auth Middleware', () => {
     (db.query.users.findFirst as Mock).mockResolvedValue(null);
     (db.query.mcpTokens.findFirst as Mock).mockResolvedValue(null);
     (validateCSRF as Mock).mockResolvedValue(null);
+    (validateOrigin as Mock).mockReturnValue(null);
   });
 
   describe('validateJWTToken', () => {
@@ -587,6 +593,213 @@ describe('Auth Middleware', () => {
         if (isAuthError(result)) {
           expect(result.error.status).toBe(403);
         }
+      });
+    });
+
+    describe('Origin validation (defense-in-depth)', () => {
+      it('validates origin when requireCSRF is true for cookie-based auth', async () => {
+        // Arrange
+        (parse as Mock).mockReturnValue({ accessToken: 'cookie-token' });
+        (decodeToken as Mock).mockResolvedValue(mockDecodedToken);
+        (db.query.users.findFirst as Mock).mockResolvedValue(mockUser);
+
+        const request = new Request('http://localhost/api/test', {
+          method: 'POST',
+          headers: {
+            Cookie: 'accessToken=cookie-token',
+            'X-CSRF-Token': 'valid-csrf-token',
+            Origin: 'http://localhost',
+          },
+        });
+
+        // Act
+        await authenticateRequestWithOptions(request, {
+          allow: ['jwt'],
+          requireCSRF: true,
+        });
+
+        // Assert - origin validation is called for cookie-based auth when requireCSRF is true
+        expect(validateOrigin).toHaveBeenCalledWith(request);
+      });
+
+      it('validates origin when requireOriginValidation is explicitly true', async () => {
+        // Arrange
+        (parse as Mock).mockReturnValue({ accessToken: 'cookie-token' });
+        (decodeToken as Mock).mockResolvedValue(mockDecodedToken);
+        (db.query.users.findFirst as Mock).mockResolvedValue(mockUser);
+
+        const request = new Request('http://localhost/api/test', {
+          method: 'POST',
+          headers: {
+            Cookie: 'accessToken=cookie-token',
+            Origin: 'http://localhost',
+          },
+        });
+
+        // Act
+        await authenticateRequestWithOptions(request, {
+          allow: ['jwt'],
+          requireOriginValidation: true,
+        });
+
+        // Assert
+        expect(validateOrigin).toHaveBeenCalledWith(request);
+      });
+
+      it('returns 403 when origin validation fails before CSRF check', async () => {
+        // Arrange
+        (parse as Mock).mockReturnValue({ accessToken: 'cookie-token' });
+        (decodeToken as Mock).mockResolvedValue(mockDecodedToken);
+        (db.query.users.findFirst as Mock).mockResolvedValue(mockUser);
+        // Origin validation fails
+        (validateOrigin as Mock).mockReturnValue(
+          Response.json(
+            { error: 'Origin not allowed', code: 'ORIGIN_INVALID' },
+            { status: 403 }
+          )
+        );
+
+        const request = new Request('http://localhost/api/test', {
+          method: 'POST',
+          headers: {
+            Cookie: 'accessToken=cookie-token',
+            'X-CSRF-Token': 'valid-csrf-token',
+            Origin: 'https://evil.example.com',
+          },
+        });
+
+        // Act
+        const result = await authenticateRequestWithOptions(request, {
+          allow: ['jwt'],
+          requireCSRF: true,
+        });
+
+        // Assert - origin failure returns 403
+        expect(isAuthError(result)).toBe(true);
+        if (isAuthError(result)) {
+          expect(result.error.status).toBe(403);
+          const body = await result.error.json();
+          expect(body.code).toBe('ORIGIN_INVALID');
+        }
+
+        // Assert - CSRF validation was NOT called because origin failed first
+        expect(validateCSRF).not.toHaveBeenCalled();
+      });
+
+      it('passes authentication with valid origin and valid CSRF', async () => {
+        // Arrange
+        (parse as Mock).mockReturnValue({ accessToken: 'cookie-token' });
+        (decodeToken as Mock).mockResolvedValue(mockDecodedToken);
+        (db.query.users.findFirst as Mock).mockResolvedValue(mockUser);
+        (validateOrigin as Mock).mockReturnValue(null);
+        (validateCSRF as Mock).mockResolvedValue(null);
+
+        const request = new Request('http://localhost/api/test', {
+          method: 'POST',
+          headers: {
+            Cookie: 'accessToken=cookie-token',
+            'X-CSRF-Token': 'valid-csrf-token',
+            Origin: 'http://localhost',
+          },
+        });
+
+        // Act
+        const result = await authenticateRequestWithOptions(request, {
+          allow: ['jwt'],
+          requireCSRF: true,
+        });
+
+        // Assert - authentication passes
+        expect(isAuthError(result)).toBe(false);
+        if (!isAuthError(result)) {
+          expect(result.userId).toBe(mockUser.id);
+          expect(result.tokenType).toBe('jwt');
+        }
+
+        // Assert - both validations were called
+        expect(validateOrigin).toHaveBeenCalledWith(request);
+        expect(validateCSRF).toHaveBeenCalledWith(request);
+      });
+
+      it('skips origin validation for Bearer token auth (non-browser)', async () => {
+        // Arrange
+        (decodeToken as Mock).mockResolvedValue(mockDecodedToken);
+        (db.query.users.findFirst as Mock).mockResolvedValue(mockUser);
+
+        const request = new Request('http://localhost/api/test', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer jwt-token',
+          },
+        });
+
+        // Act
+        await authenticateRequestWithOptions(request, {
+          allow: ['jwt'],
+          requireCSRF: true,
+          requireOriginValidation: true,
+        });
+
+        // Assert - origin validation not called for header-based auth
+        expect(validateOrigin).not.toHaveBeenCalled();
+      });
+
+      it('skips origin validation for MCP token auth', async () => {
+        // Arrange
+        const mockMCPToken = {
+          id: 'token-id',
+          userId: 'test-user-id',
+          user: {
+            id: 'test-user-id',
+            role: 'user',
+            tokenVersion: 0,
+          },
+        };
+        (db.query.mcpTokens.findFirst as Mock).mockResolvedValue(mockMCPToken);
+
+        const request = new Request('http://localhost/api/test', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer mcp_valid-token',
+          },
+        });
+
+        // Act
+        await authenticateRequestWithOptions(request, {
+          allow: ['mcp', 'jwt'],
+          requireCSRF: true,
+          requireOriginValidation: true,
+        });
+
+        // Assert - origin validation not called for MCP token auth
+        expect(validateOrigin).not.toHaveBeenCalled();
+      });
+
+      it('allows disabling origin validation even when requireCSRF is true', async () => {
+        // Arrange
+        (parse as Mock).mockReturnValue({ accessToken: 'cookie-token' });
+        (decodeToken as Mock).mockResolvedValue(mockDecodedToken);
+        (db.query.users.findFirst as Mock).mockResolvedValue(mockUser);
+
+        const request = new Request('http://localhost/api/test', {
+          method: 'POST',
+          headers: {
+            Cookie: 'accessToken=cookie-token',
+            'X-CSRF-Token': 'valid-csrf-token',
+          },
+        });
+
+        // Act
+        await authenticateRequestWithOptions(request, {
+          allow: ['jwt'],
+          requireCSRF: true,
+          requireOriginValidation: false, // explicitly disabled
+        });
+
+        // Assert - origin validation was NOT called because it was explicitly disabled
+        expect(validateOrigin).not.toHaveBeenCalled();
+        // Assert - CSRF validation was still called
+        expect(validateCSRF).toHaveBeenCalledWith(request);
       });
     });
   });

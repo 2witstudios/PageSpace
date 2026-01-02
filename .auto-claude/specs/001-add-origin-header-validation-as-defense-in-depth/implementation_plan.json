@@ -1,0 +1,316 @@
+{
+  "feature": "Add Origin Header Validation as Defense-in-Depth",
+  "description": "Implement Origin header validation as supplementary CSRF protection. While SameSite=strict cookies provide the primary defense, Origin validation adds an additional security layer against potential browser vulnerabilities or misconfigurations. This includes both the web app API routes and the realtime WebSocket service.",
+  "created_at": "2026-01-01T01:54:56.503Z",
+  "updated_at": "2026-01-01T02:30:00.000Z",
+  "status": "human_review",
+  "planStatus": "review",
+  "workflow_type": "development",
+  "services_involved": [
+    "web",
+    "realtime"
+  ],
+  "spec_file": "spec.md",
+  "phases": [
+    {
+      "id": "phase-1",
+      "name": "Origin Validation Utility",
+      "description": "Create the core origin validation utility for the web app",
+      "order": 1,
+      "status": "pending",
+      "subtasks": [
+        {
+          "id": "1.1",
+          "title": "Create origin-validation.ts module",
+          "description": "Create a new module at apps/web/src/lib/auth/origin-validation.ts that provides Origin header validation functionality. The module should:\n- Export a validateOrigin function that checks the Origin header against allowed origins\n- Allow requests without Origin header (same-origin, non-browser clients like curl, MCP)\n- Support configurable allowed origins via WEB_APP_URL environment variable\n- Log warnings for unexpected origins\n- Return null on success, NextResponse with 403 on failure",
+          "status": "completed",
+          "order": 1,
+          "acceptance_criteria": [
+            "Function validateOrigin(request: Request) exists and is exported",
+            "Returns null for valid origins or missing Origin header",
+            "Returns 403 NextResponse for invalid origins",
+            "Uses WEB_APP_URL environment variable for allowed origins",
+            "Logs security warnings for rejected origins"
+          ],
+          "notes": "Created origin-validation.ts module with validateOrigin and requiresOriginValidation functions. Module supports WEB_APP_URL and ADDITIONAL_ALLOWED_ORIGINS environment variables, allows missing Origin headers for non-browser clients, and returns 403 for invalid origins with appropriate logging.",
+          "updated_at": "2026-01-01T02:03:43.217510+00:00"
+        },
+        {
+          "id": "1.2",
+          "title": "Add requireOriginValidation option to AuthenticateOptions",
+          "description": "Update apps/web/src/lib/auth/index.ts to add an optional requireOriginValidation boolean to AuthenticateOptions interface. When enabled, the authenticateRequestWithOptions function should call validateOrigin before processing the request.",
+          "status": "completed",
+          "order": 2,
+          "acceptance_criteria": [
+            "AuthenticateOptions interface has optional requireOriginValidation?: boolean",
+            "authenticateRequestWithOptions calls validateOrigin when option is true",
+            "Origin validation happens early in the request flow (before CSRF validation)",
+            "Existing API routes continue to work without changes"
+          ],
+          "notes": "Added requireOriginValidation?: boolean to AuthenticateOptions interface. Updated authenticateRequestWithOptions to call validateOrigin when option is enabled. Origin validation happens before CSRF validation and only applies to cookie-based JWT authentication (Bearer tokens exempt). Committed in f94ee28.",
+          "updated_at": "2026-01-01T02:05:30.255532+00:00"
+        },
+        {
+          "id": "1.3",
+          "title": "Export origin validation from auth barrel",
+          "description": "Update apps/web/src/lib/auth/index.ts to re-export validateOrigin from origin-validation.ts for use by route handlers that want to validate origin independently.",
+          "status": "completed",
+          "order": 3,
+          "acceptance_criteria": [
+            "validateOrigin is exported from @/lib/auth",
+            "requiresOriginValidation helper function is exported"
+          ],
+          "notes": "Added re-export of validateOrigin and requiresOriginValidation from origin-validation.ts in the barrel export at the end of apps/web/src/lib/auth/index.ts. This allows route handlers to import these functions directly from '@/lib/auth' following the existing export pattern.",
+          "updated_at": "2026-01-01T02:06:40.123486+00:00"
+        }
+      ]
+    },
+    {
+      "id": "phase-2",
+      "name": "Web App Integration",
+      "description": "Integrate origin validation into the web app authentication flow",
+      "order": 2,
+      "status": "pending",
+      "subtasks": [
+        {
+          "id": "2.1",
+          "title": "Enable origin validation for CSRF-protected routes",
+          "description": "Update the authenticateRequestWithOptions function to automatically enable origin validation when requireCSRF is true. This provides defense-in-depth: if a request requires CSRF protection, it should also validate the Origin header.",
+          "status": "completed",
+          "order": 1,
+          "acceptance_criteria": [
+            "Routes with requireCSRF: true also validate Origin automatically",
+            "Origin validation can be disabled per-route if needed",
+            "Browser requests with valid Origin pass validation",
+            "Non-browser requests (no Origin header) pass validation"
+          ],
+          "notes": "Updated authenticateRequestWithOptions to automatically enable origin validation when requireCSRF is true. The logic uses nullish coalescing (options.requireOriginValidation ?? requireCSRF) so that: 1) explicitly set requireOriginValidation takes precedence, 2) if undefined, falls back to requireCSRF value. This provides defense-in-depth while allowing per-route opt-out. Committed in 381f7dc.",
+          "updated_at": "2026-01-01T02:08:11.574670+00:00"
+        },
+        {
+          "id": "2.2",
+          "title": "Add origin validation to middleware (optional layer)",
+          "description": "Consider adding origin validation to apps/web/middleware.ts as an additional security layer for all API routes. This provides consistent protection across the application. Implement with warning-only mode initially to avoid breaking changes.",
+          "status": "completed",
+          "order": 2,
+          "acceptance_criteria": [
+            "Middleware logs warnings for unexpected origins on API routes",
+            "Does not block requests initially (warning-only mode)",
+            "Can be toggled to blocking mode via environment variable",
+            "Excludes safe HTTP methods (GET, HEAD, OPTIONS)"
+          ],
+          "notes": "Added origin validation to apps/web/middleware.ts as an application-wide security layer for API routes. Implementation includes: 1) New validateOriginForMiddleware function that returns structured validation result, 2) Skips validation for safe HTTP methods (GET, HEAD, OPTIONS), 3) Skips validation for requests without Origin header (non-browser clients), 4) Warning-only mode by default (ORIGIN_VALIDATION_MODE=warn), 5) Can toggle to blocking mode via ORIGIN_VALIDATION_MODE=block env var, 6) Logs security events for unexpected origins with full context. Committed in d34181a.",
+          "updated_at": "2026-01-01T02:10:48.548996+00:00"
+        }
+      ]
+    },
+    {
+      "id": "phase-3",
+      "name": "Realtime Service Enhancement",
+      "description": "Add origin validation and logging to the WebSocket realtime service",
+      "order": 3,
+      "status": "pending",
+      "subtasks": [
+        {
+          "id": "3.1",
+          "title": "Add explicit Origin logging to Socket.IO middleware",
+          "description": "Update apps/realtime/src/index.ts to add explicit Origin header logging in the Socket.IO authentication middleware. Log warnings for connections from unexpected origins while still allowing connections (Socket.IO's CORS handles blocking).",
+          "status": "completed",
+          "order": 1,
+          "acceptance_criteria": [
+            "Origin header is extracted and logged for all WebSocket connections",
+            "Warning logged when Origin doesn't match WEB_APP_URL",
+            "Logging includes connection metadata for security monitoring",
+            "Existing Socket.IO CORS configuration remains unchanged"
+          ],
+          "notes": "Added explicit Origin header logging to Socket.IO authentication middleware. Implementation includes: 1) normalizeOrigin(), getAllowedOrigins(), isOriginAllowed() helper functions matching the web app pattern, 2) validateAndLogWebSocketOrigin() function that logs origins with appropriate severity (debug for valid/missing, warn for unexpected), 3) Origin validation called early in middleware with full connection metadata (socketId, IP, userAgent), 4) Supports CORS_ORIGIN, WEB_APP_URL, and ADDITIONAL_ALLOWED_ORIGINS env vars. Socket.IO CORS remains unchanged and handles actual blocking. Committed in 180eab4.",
+          "updated_at": "2026-01-01T02:13:00.991613+00:00"
+        },
+        {
+          "id": "3.2",
+          "title": "Add origin validation helper for realtime service",
+          "description": "Create a validateWebSocketOrigin helper function in the realtime service that checks if the connection origin is expected. This can be used for additional security monitoring or optional blocking.",
+          "status": "completed",
+          "order": 2,
+          "acceptance_criteria": [
+            "Helper function checks origin against WEB_APP_URL",
+            "Returns boolean indicating if origin is valid",
+            "Can be extended to support multiple allowed origins if needed"
+          ],
+          "notes": "Added validateWebSocketOrigin helper function to the realtime service. The function returns a WebSocketOriginValidationResult with isValid boolean, normalized origin, and reason ('valid' | 'no_origin' | 'invalid' | 'no_config'). It checks origin against WEB_APP_URL and ADDITIONAL_ALLOWED_ORIGINS environment variables. Missing origins (non-browser clients) return valid. Can be used for additional security monitoring or optional blocking decisions. Committed in 2c2c2d1.",
+          "updated_at": "2026-01-01T02:15:08.129053+00:00"
+        }
+      ]
+    },
+    {
+      "id": "phase-4",
+      "name": "Testing",
+      "description": "Comprehensive test coverage for origin validation",
+      "order": 4,
+      "status": "pending",
+      "subtasks": [
+        {
+          "id": "4.1",
+          "title": "Unit tests for origin-validation.ts",
+          "description": "Create comprehensive unit tests at apps/web/src/lib/auth/__tests__/origin-validation.test.ts covering all edge cases.",
+          "status": "completed",
+          "order": 1,
+          "acceptance_criteria": [
+            "Test: valid origin matches WEB_APP_URL returns null",
+            "Test: missing Origin header returns null (allows non-browser clients)",
+            "Test: invalid origin returns 403 with ORIGIN_INVALID code",
+            "Test: origin validation with various URL formats (http, https, ports)",
+            "Test: case sensitivity handling",
+            "Test: logs security warning for rejected origins"
+          ],
+          "notes": "Created comprehensive unit tests at apps/web/src/lib/auth/__tests__/origin-validation.test.ts covering all acceptance criteria: valid origin matching (WEB_APP_URL and ADDITIONAL_ALLOWED_ORIGINS), missing Origin header handling (non-browser clients), invalid origin 403 responses with ORIGIN_INVALID code, URL format variations (http/https, explicit ports, path normalization), case sensitivity handling, security warning logging for rejected origins, middleware validation modes (warn/block), and edge cases (localhost, subdomains, standard ports). Follows existing test patterns from csrf-validation.test.ts. Committed in f5da563.",
+          "updated_at": "2026-01-01T02:18:35.306629+00:00"
+        },
+        {
+          "id": "4.2",
+          "title": "Integration tests for auth middleware with origin validation",
+          "description": "Update existing auth middleware tests to verify origin validation integration.",
+          "status": "completed",
+          "order": 2,
+          "acceptance_criteria": [
+            "Test: authenticateRequestWithOptions with requireCSRF validates origin",
+            "Test: origin validation failure returns 403 before CSRF check",
+            "Test: valid origin with valid CSRF passes authentication",
+            "Test: Bearer token auth skips origin validation (non-browser)"
+          ],
+          "notes": "Added 7 integration tests to auth-middleware.test.ts verifying origin validation integration with authenticateRequestWithOptions: (1) validates origin when requireCSRF is true for cookie-based auth, (2) validates origin when requireOriginValidation is explicitly true, (3) returns 403 when origin validation fails before CSRF check (verifies origin is checked before CSRF), (4) passes authentication with valid origin and valid CSRF, (5) skips origin validation for Bearer token auth (non-browser), (6) skips origin validation for MCP token auth, (7) allows disabling origin validation even when requireCSRF is true. All tests follow existing patterns from CSRF validation tests. Committed in d97c483.",
+          "updated_at": "2026-01-01T02:21:37.789477+00:00"
+        },
+        {
+          "id": "4.3",
+          "title": "Realtime service origin logging tests",
+          "description": "Add tests for the realtime service origin validation and logging.",
+          "status": "completed",
+          "order": 3,
+          "acceptance_criteria": [
+            "Test: valid origin logged without warning",
+            "Test: unexpected origin triggers warning log",
+            "Test: missing origin handled gracefully"
+          ],
+          "notes": "Created comprehensive unit tests at apps/realtime/src/__tests__/origin-validation.test.ts covering all acceptance criteria: (1) valid origin logged at debug level without warning, (2) unexpected origin triggers security warning log with severity and allowed origins context, (3) missing origin (non-browser clients) handled gracefully at debug level. Tests cover normalizeOrigin, getAllowedOrigins, isOriginAllowed, validateWebSocketOrigin, and validateAndLogWebSocketOrigin functions with edge cases including localhost, multiple allowed origins, metadata propagation, and malformed URLs. Follows existing test patterns from auth.test.ts and rooms.test.ts. Committed in a8daa93.",
+          "updated_at": "2026-01-01T02:25:04.341922+00:00"
+        }
+      ]
+    },
+    {
+      "id": "phase-5",
+      "name": "Documentation and Configuration",
+      "description": "Update documentation and add configuration options",
+      "order": 5,
+      "status": "pending",
+      "subtasks": [
+        {
+          "id": "5.1",
+          "title": "Update .env.example with origin configuration",
+          "description": "Add comments and example values for origin validation configuration in .env.example files.",
+          "status": "completed",
+          "order": 1,
+          "acceptance_criteria": [
+            "WEB_APP_URL documented for origin validation",
+            "Optional ADDITIONAL_ALLOWED_ORIGINS variable documented",
+            "ORIGIN_VALIDATION_MODE (warn/block) documented"
+          ],
+          "notes": "Added origin validation documentation to both root .env.example and apps/web/.env.example. Updated WEB_APP_URL comment to note its use for Origin header validation. Added new \"Origin Validation\" section documenting ADDITIONAL_ALLOWED_ORIGINS for multi-domain deployments and ORIGIN_VALIDATION_MODE (warn/block) for API middleware. Committed in 907581a.",
+          "updated_at": "2026-01-01T02:26:47.064501+00:00"
+        },
+        {
+          "id": "5.2",
+          "title": "Update CSRF audit report with completion status",
+          "description": "Update docs/security/csrf-audit-report.md to mark the Origin header validation finding as FIXED and document the implementation.",
+          "status": "completed",
+          "order": 2,
+          "acceptance_criteria": [
+            "Section 2.4 updated to show FIXED status",
+            "Implementation details documented",
+            "Section 4 priority table updated"
+          ],
+          "notes": "Updated docs/security/csrf-audit-report.md: (1) Marked finding 2.4 (Origin/Referer Header Validation) as FIXED with detailed implementation docs, (2) Marked finding 2.6 (WebSocket Origin Logging) as FIXED, (3) Updated Remediation Priority table showing all items FIXED, (4) Updated Executive Summary with improved security rating, (5) Updated Conclusion with complete remediation status table, (6) Added new files to Appendix",
+          "updated_at": "2026-01-01T02:29:20.854197+00:00"
+        },
+        {
+          "id": "5.3",
+          "title": "Update adding-api-route.md guide",
+          "description": "Update the API route guide to mention origin validation as part of security best practices.",
+          "status": "completed",
+          "order": 3,
+          "acceptance_criteria": [
+            "Origin validation mentioned alongside CSRF protection",
+            "Example shows requireCSRF: true includes origin validation"
+          ],
+          "notes": "Updated docs/3.0-guides-and-tools/adding-api-route.md to document origin validation alongside CSRF protection: (1) Renamed section 4 to \"Authentication, CSRF, and Origin Validation\", (2) Added Defense-in-Depth Security explanation with bullet points for CSRF and Origin validation, (3) Updated code example comments to show \"CSRF + Origin validation\", (4) Added requireOriginValidation option to Authentication Options table with description of how it auto-enables with requireCSRF, (5) Added explanation that Origin validation is automatically enabled when requireCSRF: true. Committed in 9f2a3c1.",
+          "updated_at": "2026-01-01T02:31:26.554527+00:00"
+        }
+      ]
+    }
+  ],
+  "final_acceptance": [
+    "All origin validation tests pass",
+    "Existing CSRF tests continue to pass",
+    "Realtime service tests pass",
+    "Manual testing confirms valid origins work",
+    "Manual testing confirms invalid origins are blocked or logged",
+    "No regressions in authentication flow",
+    "Documentation is complete and accurate"
+  ],
+  "technical_notes": {
+    "key_files": [
+      "apps/web/src/lib/auth/origin-validation.ts (new)",
+      "apps/web/src/lib/auth/index.ts (modify)",
+      "apps/web/src/lib/auth/__tests__/origin-validation.test.ts (new)",
+      "apps/web/middleware.ts (optionally modify)",
+      "apps/realtime/src/index.ts (modify)",
+      "docs/security/csrf-audit-report.md (update)"
+    ],
+    "environment_variables": [
+      "WEB_APP_URL - Primary allowed origin (existing)",
+      "ADDITIONAL_ALLOWED_ORIGINS - Optional comma-separated list of additional origins",
+      "ORIGIN_VALIDATION_MODE - 'warn' or 'block' (default: block for CSRF routes)"
+    ],
+    "design_decisions": [
+      "Origin validation is tied to CSRF protection - if you need CSRF, you need origin validation",
+      "Missing Origin header is allowed (non-browser clients like curl, MCP, mobile)",
+      "Referer header is NOT validated (less reliable than Origin)",
+      "Bearer token auth skips origin validation (not vulnerable to CSRF)",
+      "Initial middleware implementation uses warning mode to avoid breaking changes"
+    ],
+    "security_considerations": [
+      "Origin header cannot be forged by JavaScript in browsers",
+      "Some older browsers may not send Origin on same-origin requests",
+      "WebSocket connections should be validated at connection time",
+      "Origin validation is defense-in-depth, not primary protection"
+    ]
+  },
+  "last_updated": "2026-01-01T02:34:43.584644+00:00",
+  "qa_signoff": {
+    "status": "approved",
+    "qa_session": 0,
+    "issues_found": [
+      {
+        "description": "None - all acceptance criteria met"
+      }
+    ],
+    "tests_passed": {},
+    "timestamp": "2026-01-01T02:34:43.584636+00:00",
+    "ready_for_qa_revalidation": false
+  },
+  "qa_iteration_history": [
+    {
+      "iteration": 1,
+      "status": "approved",
+      "timestamp": "2026-01-01T02:34:57.168527+00:00",
+      "issues": [],
+      "duration_seconds": 190.64
+    }
+  ],
+  "qa_stats": {
+    "total_iterations": 1,
+    "last_iteration": 1,
+    "last_status": "approved",
+    "issues_by_type": {}
+  }
+}

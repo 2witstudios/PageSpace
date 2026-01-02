@@ -40,6 +40,7 @@ export type AllowedTokenType = TokenType;
 export interface AuthenticateOptions {
   allow: ReadonlyArray<AllowedTokenType>;
   requireCSRF?: boolean;
+  requireOriginValidation?: boolean;
 }
 
 function unauthorized(message: string, status = 401): NextResponse {
@@ -218,6 +219,9 @@ export async function authenticateRequestWithOptions(
   options: AuthenticateOptions,
 ): Promise<AuthenticationResult> {
   const { allow, requireCSRF = false } = options;
+  // Origin validation is automatically enabled when requireCSRF is true (defense-in-depth)
+  // It can be explicitly disabled per-route by setting requireOriginValidation: false
+  const requireOriginValidation = options.requireOriginValidation ?? requireCSRF;
 
   if (!allow.length) {
     return {
@@ -257,9 +261,21 @@ export async function authenticateRequestWithOptions(
     return authResult;
   }
 
-  // Apply CSRF validation only for cookie-based JWT authentication
-  // Bearer tokens (header-based auth) are CSRF-exempt because they're not sent automatically by browsers
-  if (requireCSRF && authResult.tokenType === 'jwt' && authResult.source === 'cookie') {
+  // Apply origin and CSRF validation only for cookie-based JWT authentication
+  // Bearer tokens (header-based auth) are exempt because they're not sent automatically by browsers
+  const isCookieBasedAuth = authResult.tokenType === 'jwt' && authResult.source === 'cookie';
+
+  // Origin validation (defense-in-depth) - happens before CSRF validation
+  if (requireOriginValidation && isCookieBasedAuth) {
+    const { validateOrigin } = await import('./origin-validation');
+    const originError = validateOrigin(request);
+    if (originError) {
+      return { error: originError };
+    }
+  }
+
+  // CSRF validation
+  if (requireCSRF && isCookieBasedAuth) {
     const { validateCSRF } = await import('./csrf-validation');
     const csrfError = await validateCSRF(request);
     if (csrfError) {
@@ -273,3 +289,11 @@ export async function authenticateRequestWithOptions(
 // Re-export from other auth modules for barrel export pattern
 export { verifyAuth, verifyAdminAuth, type VerifiedUser } from './auth';
 export { validateCSRF } from './csrf-validation';
+export {
+  validateOrigin,
+  requiresOriginValidation,
+  validateOriginForMiddleware,
+  isOriginValidationBlocking,
+  type OriginValidationMode,
+  type MiddlewareOriginValidationResult,
+} from './origin-validation';

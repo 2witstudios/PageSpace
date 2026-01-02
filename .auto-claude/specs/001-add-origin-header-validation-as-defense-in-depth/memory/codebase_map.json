@@ -1,0 +1,30 @@
+{
+  "discovered_files": {
+    "apps/web/src/lib/auth/csrf-validation.ts": {
+      "description": "CSRF validation module that checks X-CSRF-Token header against JWT session. Uses HMAC-SHA256 tokens with 1-hour TTL. Safe methods (GET, HEAD, OPTIONS) are skipped. Returns NextResponse with 403 on failure.",
+      "category": "security",
+      "discovered_at": "2026-01-01T02:01:46.548639+00:00"
+    },
+    "apps/web/src/lib/auth/index.ts": {
+      "description": "authenticateRequestWithOptions now auto-enables origin validation when requireCSRF is true. Uses nullish coalescing: options.requireOriginValidation ?? requireCSRF. This means CSRF-protected routes get Origin validation by default (defense-in-depth), but can explicitly opt-out with requireOriginValidation: false.",
+      "category": "security",
+      "discovered_at": "2026-01-01T02:08:16.488775+00:00"
+    },
+    "apps/realtime/src/index.ts": {
+      "description": "Added validateWebSocketOrigin(origin) helper function that returns WebSocketOriginValidationResult with isValid boolean, normalized origin, and reason. Supports CORS_ORIGIN, WEB_APP_URL, and ADDITIONAL_ALLOWED_ORIGINS env vars. Can be used for optional blocking or security monitoring decisions.",
+      "category": "security",
+      "discovered_at": "2026-01-01T02:15:13.218066+00:00"
+    },
+    "apps/web/middleware.ts": {
+      "description": "Middleware now includes origin validation for all API routes. Uses validateOriginForMiddleware() early in the flow. Default mode is 'warn' (logs but allows requests). Set ORIGIN_VALIDATION_MODE=block to reject requests with invalid origins. Safe methods (GET, HEAD, OPTIONS) and requests without Origin header are skipped.",
+      "category": "security",
+      "discovered_at": "2026-01-01T02:10:54.424414+00:00"
+    },
+    "apps/realtime/src/__tests__/origin-validation.test.ts": {
+      "description": "Comprehensive tests for WebSocket origin validation in the realtime service. Tests cover normalizeOrigin, getAllowedOrigins, isOriginAllowed, validateWebSocketOrigin, and validateAndLogWebSocketOrigin functions. Mock pattern uses vi.mock('@pagespace/lib/logger-config') for the logger. Tests follow the existing auth.test.ts pattern with beforeEach/afterEach for env var cleanup.",
+      "category": "testing",
+      "discovered_at": "2026-01-01T02:25:11.295273+00:00"
+    }
+  },
+  "last_updated": "2026-01-01T02:25:11.295282+00:00"
+}
