@@ -6,6 +6,7 @@
 import React, { useRef, useEffect, forwardRef, useImperativeHandle, useState, useCallback } from 'react';
 import { UIMessage } from 'ai';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { SkeletonMessageBubble } from '@/components/ui/skeleton';
 import { Loader2 } from 'lucide-react';
 import { MessageRenderer } from './MessageRenderer';
 import { StreamingIndicator } from './StreamingIndicator';
@@ -106,14 +107,8 @@ export const ChatMessagesArea = forwardRef<ChatMessagesAreaRef, ChatMessagesArea
           </div>
         </div>
         <div className="space-y-3">
-          <div className="p-3 rounded-lg bg-gray-100 dark:bg-gray-800 mr-8 animate-pulse">
-            <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-3/4 mb-2"></div>
-            <div className="h-3 bg-gray-200 dark:bg-gray-700 rounded w-1/2"></div>
-          </div>
-          <div className="p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 ml-8 animate-pulse">
-            <div className="h-4 bg-blue-200 dark:bg-blue-700 rounded w-2/3 mb-2"></div>
-            <div className="h-3 bg-blue-200 dark:bg-blue-700 rounded w-1/3"></div>
-          </div>
+          <SkeletonMessageBubble variant="assistant" lineWidths={["w-3/4", "w-1/2"]} />
+          <SkeletonMessageBubble variant="user" lineWidths={["w-2/3", "w-1/3"]} />
         </div>
       </div>
     );
