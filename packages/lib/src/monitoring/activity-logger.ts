@@ -3,10 +3,13 @@
  *
  * Fire-and-forget async logging with zero performance impact.
  * Designed for auditability with future rollback support.
+ * Includes hash chain computation for tamper-evidence (SOC 2, HIPAA, GDPR compliance).
  */
 
 import { db, activityLogs, users, eq } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
+import { createHash, randomBytes } from 'crypto';
+import { desc, isNotNull } from 'drizzle-orm';
 
 /**
  * Actor info for audit logging - snapshotted at write time
@@ -42,6 +45,221 @@ export async function getActorInfo(userId: string): Promise<ActorInfo> {
     return { actorEmail: 'unknown@system' };
   }
 }
+
+// =============================================================================
+// HASH CHAIN COMPUTATION UTILITIES
+// =============================================================================
+// These utilities provide tamper-evident audit logging using SHA-256 hash chains.
+// Each log entry's hash includes the previous entry's hash, creating a chain
+// that makes it cryptographically detectable if any entry is modified or deleted.
+
+/**
+ * Hash chain data for a log entry.
+ * Contains all fields needed to store hash chain metadata.
+ */
+export interface HashChainData {
+  /** Hash of the previous log entry (null for first entry in chain) */
+  previousLogHash: string | null;
+  /** SHA-256 hash of the current entry */
+  logHash: string;
+  /** Initial seed for hash chain verification (only set on first entry) */
+  chainSeed: string | null;
+}
+
+/**
+ * Data used to compute the hash of a log entry.
+ * Includes immutable fields that define the entry's content.
+ */
+interface HashableLogData {
+  id: string;
+  timestamp: Date;
+  userId: string;
+  actorEmail: string;
+  operation: string;
+  resourceType: string;
+  resourceId: string;
+  driveId: string | null;
+  pageId?: string;
+  contentSnapshot?: string;
+  previousValues?: Record<string, unknown>;
+  newValues?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Generate a cryptographically secure random chain seed.
+ * Used to initialize a new hash chain.
+ * @returns 32-byte hex-encoded random seed
+ */
+export function generateChainSeed(): string {
+  return randomBytes(32).toString('hex');
+}
+
+/**
+ * Compute SHA-256 hash of data combined with previous hash.
+ * This creates the cryptographic chain linking each entry to its predecessor.
+ *
+ * @param data - Serialized log entry data to hash
+ * @param previousHash - Hash of the previous log entry (empty string for first entry)
+ * @returns SHA-256 hash as hex string
+ */
+export function computeHash(data: string, previousHash: string): string {
+  return createHash('sha256')
+    .update(previousHash + data)
+    .digest('hex');
+}
+
+/**
+ * Serialize log entry data for hashing.
+ * Creates a deterministic JSON string from the hashable fields.
+ * Uses sorted keys to ensure consistent hash computation.
+ *
+ * @param data - Log entry data to serialize
+ * @returns Deterministic JSON string
+ */
+export function serializeLogDataForHash(data: HashableLogData): string {
+  // Create object with sorted keys for deterministic serialization
+  const hashableObject = {
+    id: data.id,
+    timestamp: data.timestamp.toISOString(),
+    userId: data.userId,
+    actorEmail: data.actorEmail,
+    operation: data.operation,
+    resourceType: data.resourceType,
+    resourceId: data.resourceId,
+    driveId: data.driveId,
+    pageId: data.pageId ?? null,
+    contentSnapshot: data.contentSnapshot ?? null,
+    previousValues: data.previousValues ?? null,
+    newValues: data.newValues ?? null,
+    metadata: data.metadata ?? null,
+  };
+
+  // JSON.stringify with sorted keys for deterministic output
+  return JSON.stringify(hashableObject, Object.keys(hashableObject).sort());
+}
+
+/**
+ * Compute hash for a log entry given its data and the previous hash.
+ *
+ * @param data - Log entry data
+ * @param previousHash - Hash of the previous entry (empty string for first entry)
+ * @returns SHA-256 hash of the entry
+ */
+export function computeLogHash(data: HashableLogData, previousHash: string): string {
+  const serialized = serializeLogDataForHash(data);
+  return computeHash(serialized, previousHash);
+}
+
+/**
+ * Get the latest log hash from the database.
+ * Used to fetch the previous hash when inserting a new entry.
+ * Returns null if no entries exist (starting a new chain).
+ *
+ * @returns Object containing the latest log hash and whether this is the first entry
+ */
+export async function getLatestLogHash(): Promise<{
+  previousHash: string | null;
+  isFirstEntry: boolean;
+}> {
+  try {
+    const latestEntry = await db.query.activityLogs.findFirst({
+      where: isNotNull(activityLogs.logHash),
+      orderBy: [desc(activityLogs.timestamp)],
+      columns: { logHash: true },
+    });
+
+    if (!latestEntry?.logHash) {
+      return { previousHash: null, isFirstEntry: true };
+    }
+
+    return { previousHash: latestEntry.logHash, isFirstEntry: false };
+  } catch (error) {
+    console.error('[ActivityLogger] Failed to get latest log hash:', error);
+    // Return null on error - allows logging to continue without hash chain
+    // The hash chain can be repaired later if needed
+    return { previousHash: null, isFirstEntry: false };
+  }
+}
+
+/**
+ * Get the latest log hash within a transaction.
+ * Used for atomic hash chain computation during transactional inserts.
+ *
+ * @param tx - Database transaction
+ * @returns Object containing the latest log hash and whether this is the first entry
+ */
+export async function getLatestLogHashWithTx(tx: typeof db): Promise<{
+  previousHash: string | null;
+  isFirstEntry: boolean;
+}> {
+  try {
+    const latestEntry = await tx.query.activityLogs.findFirst({
+      where: isNotNull(activityLogs.logHash),
+      orderBy: [desc(activityLogs.timestamp)],
+      columns: { logHash: true },
+    });
+
+    if (!latestEntry?.logHash) {
+      return { previousHash: null, isFirstEntry: true };
+    }
+
+    return { previousHash: latestEntry.logHash, isFirstEntry: false };
+  } catch (error) {
+    console.error('[ActivityLogger] Failed to get latest log hash in tx:', error);
+    return { previousHash: null, isFirstEntry: false };
+  }
+}
+
+/**
+ * Compute complete hash chain data for a new log entry.
+ * Handles both first entries (with chain seed) and subsequent entries.
+ *
+ * @param logData - The log entry data to compute hash for
+ * @param previousHash - Hash of the previous entry (null for first entry)
+ * @param isFirstEntry - Whether this is the first entry in the chain
+ * @returns Complete hash chain data for storage
+ */
+export function computeHashChainData(
+  logData: HashableLogData,
+  previousHash: string | null,
+  isFirstEntry: boolean
+): HashChainData {
+  // For first entry, generate chain seed and use it as the previous hash basis
+  const chainSeed = isFirstEntry ? generateChainSeed() : null;
+  const hashInput = isFirstEntry ? chainSeed! : (previousHash ?? '');
+
+  // Compute the hash of this entry
+  const logHash = computeLogHash(logData, hashInput);
+
+  return {
+    previousLogHash: previousHash,
+    logHash,
+    chainSeed,
+  };
+}
+
+/**
+ * Verify that a log entry's hash is valid given its data and previous hash.
+ * Used for integrity checking.
+ *
+ * @param logData - The log entry data
+ * @param expectedHash - The hash stored in the entry
+ * @param previousHash - Hash of the previous entry (or chain seed for first entry)
+ * @returns true if the hash is valid
+ */
+export function verifyLogHash(
+  logData: HashableLogData,
+  expectedHash: string,
+  previousHash: string
+): boolean {
+  const computedHash = computeLogHash(logData, previousHash);
+  return computedHash === expectedHash;
+}
+
+// =============================================================================
+// END HASH CHAIN COMPUTATION UTILITIES
+// =============================================================================
 
 // Type definitions matching the database schema
 export type ActivityOperation =
@@ -241,11 +459,43 @@ function prepareActivityInsert(input: ActivityLogInput) {
  * Log an activity event to the database.
  * Fire-and-forget pattern - never blocks the caller.
  * Also broadcasts the activity for real-time updates if a hook is configured.
+ * Computes hash chain data for tamper-evident audit logging.
  */
 export async function logActivity(input: ActivityLogInput): Promise<void> {
   try {
     const values = prepareActivityInsert(input);
-    await db.insert(activityLogs).values(values);
+
+    // Get the latest log hash to chain this entry
+    const { previousHash, isFirstEntry } = await getLatestLogHash();
+
+    // Compute hash chain data for this entry
+    const hashChainData = computeHashChainData(
+      {
+        id: values.id,
+        timestamp: values.timestamp,
+        userId: values.userId,
+        actorEmail: values.actorEmail,
+        operation: values.operation,
+        resourceType: values.resourceType,
+        resourceId: values.resourceId,
+        driveId: values.driveId,
+        pageId: values.pageId,
+        contentSnapshot: values.contentSnapshot,
+        previousValues: values.previousValues,
+        newValues: values.newValues,
+        metadata: values.metadata,
+      },
+      previousHash,
+      isFirstEntry
+    );
+
+    // Insert with hash chain fields
+    await db.insert(activityLogs).values({
+      ...values,
+      previousLogHash: hashChainData.previousLogHash,
+      logHash: hashChainData.logHash,
+      chainSeed: hashChainData.chainSeed,
+    });
 
     // Broadcast for real-time updates (fire and forget)
     if (activityBroadcastHook) {
@@ -271,6 +521,7 @@ export async function logActivity(input: ActivityLogInput): Promise<void> {
 /**
  * Log an activity event using an existing transaction.
  * Intended for deterministic, atomic writes.
+ * Computes hash chain data within the transaction for consistency.
  * Note: Broadcast happens after insert but within the transaction scope.
  * The broadcast is debounced, so it will fire after the transaction commits.
  */
@@ -279,7 +530,38 @@ export async function logActivityWithTx(
   tx: typeof db
 ): Promise<void> {
   const values = prepareActivityInsert(input);
-  await tx.insert(activityLogs).values(values);
+
+  // Get the latest log hash within the transaction for atomic chain computation
+  const { previousHash, isFirstEntry } = await getLatestLogHashWithTx(tx);
+
+  // Compute hash chain data for this entry
+  const hashChainData = computeHashChainData(
+    {
+      id: values.id,
+      timestamp: values.timestamp,
+      userId: values.userId,
+      actorEmail: values.actorEmail,
+      operation: values.operation,
+      resourceType: values.resourceType,
+      resourceId: values.resourceId,
+      driveId: values.driveId,
+      pageId: values.pageId,
+      contentSnapshot: values.contentSnapshot,
+      previousValues: values.previousValues,
+      newValues: values.newValues,
+      metadata: values.metadata,
+    },
+    previousHash,
+    isFirstEntry
+  );
+
+  // Insert with hash chain fields
+  await tx.insert(activityLogs).values({
+    ...values,
+    previousLogHash: hashChainData.previousLogHash,
+    logHash: hashChainData.logHash,
+    chainSeed: hashChainData.chainSeed,
+  });
 
   // Broadcast for real-time updates (fire and forget, debounced)
   if (activityBroadcastHook) {
