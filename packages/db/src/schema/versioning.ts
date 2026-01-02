@@ -40,6 +40,103 @@ export const driveBackupStatusEnum = pgEnum('drive_backup_status', [
   'failed',
 ]);
 
+// ============================================================================
+// Retention Policy Configuration
+// ============================================================================
+
+/**
+ * Default retention period for page versions and drive backups.
+ * Versions are automatically retained for at least 30 days.
+ * Pinned versions (isPinned = true) are exempt from expiration.
+ */
+export const DEFAULT_VERSION_RETENTION_DAYS = 30;
+
+/**
+ * Calculates the expiration date for a version based on retention policy.
+ *
+ * @param createdAt - The creation date of the version (defaults to now)
+ * @param retentionDays - Number of days to retain the version (defaults to 30)
+ * @returns The expiration date
+ *
+ * @example
+ * ```typescript
+ * // Using default retention (30 days from now)
+ * const expiresAt = calculateVersionExpiresAt();
+ *
+ * // Using custom creation date
+ * const expiresAt = calculateVersionExpiresAt(new Date('2024-01-15'));
+ *
+ * // Using custom retention period
+ * const expiresAt = calculateVersionExpiresAt(new Date(), 90);
+ * ```
+ */
+export function calculateVersionExpiresAt(
+  createdAt: Date = new Date(),
+  retentionDays: number = DEFAULT_VERSION_RETENTION_DAYS
+): Date {
+  const expiresAt = new Date(createdAt);
+  expiresAt.setDate(expiresAt.getDate() + retentionDays);
+  return expiresAt;
+}
+
+// ============================================================================
+// Metadata Type Definitions
+// ============================================================================
+
+/**
+ * Compression metadata stored in pageVersions.metadata JSONB field.
+ * This tracks how content was stored for version storage optimization.
+ *
+ * @see packages/lib/src/services/page-version-service.ts for usage
+ */
+export interface VersionCompressionMetadata {
+  /** Whether the content was compressed */
+  compressed: boolean;
+  /** Original content size in bytes */
+  originalSize: number;
+  /** Stored size in bytes (may be smaller if compressed) */
+  storedSize: number;
+  /** Compression ratio (storedSize / originalSize), 1.0 if not compressed */
+  compressionRatio: number;
+}
+
+/**
+ * Full metadata schema for page versions.
+ * Used to document the structure of the metadata JSONB field.
+ *
+ * @example
+ * ```typescript
+ * const metadata: PageVersionMetadata = {
+ *   compression: {
+ *     compressed: true,
+ *     originalSize: 15000,
+ *     storedSize: 4500,
+ *     compressionRatio: 0.3,
+ *   },
+ *   // Additional custom metadata fields can be added here
+ * };
+ * ```
+ */
+export interface PageVersionMetadata {
+  /** Compression information for version content */
+  compression?: VersionCompressionMetadata;
+  /** Additional custom metadata fields */
+  [key: string]: unknown;
+}
+
+/**
+ * Metadata schema for drive backups.
+ * Used to document the structure of the metadata JSONB field.
+ */
+export interface DriveBackupMetadata {
+  /** Number of pages included in the backup */
+  pageCount?: number;
+  /** Total size of all page content in bytes */
+  totalContentSize?: number;
+  /** Additional custom metadata fields */
+  [key: string]: unknown;
+}
+
 export const pageVersions = pgTable('page_versions', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   pageId: text('pageId').notNull().references(() => pages.id, { onDelete: 'cascade' }),
