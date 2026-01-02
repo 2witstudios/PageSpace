@@ -2,6 +2,7 @@ import { promises as fs } from 'fs';
 import { join, dirname } from 'path';
 import { hashWithPrefix } from '../utils/hash-utils';
 import {
+  compress,
   compressIfNeeded,
   decompressIfNeeded,
   COMPRESSION_THRESHOLD_BYTES,
@@ -131,7 +132,12 @@ export async function writePageContent(
   let compressionRatio = 1;
 
   if (applyCompression) {
-    const compressionResult = compressIfNeeded(content);
+    // If compress: true was explicitly set, use compress() directly to force compression
+    // Otherwise use compressIfNeeded() which respects the size threshold
+    const forceCompression = options?.compress === true;
+    const compressionResult = forceCompression ?
+      { ...compress(content), compressed: true } :
+      compressIfNeeded(content);
 
     if (compressionResult.compressed) {
       // Prepend magic header to identify compressed content

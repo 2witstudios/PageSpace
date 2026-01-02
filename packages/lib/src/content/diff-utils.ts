@@ -171,7 +171,14 @@ export function applyDiff(baseContent: string, patchText: string): { content: st
   const normalizedBase = baseContent ?? '';
 
   try {
-    const patches = dmp.patch_fromText(patchText);
+    // Strip unified diff headers (--- and +++ lines) if present
+    let cleanedPatch = patchText;
+    const lines = patchText.split('\n');
+    if (lines.length >= 2 && lines[0].startsWith('---') && lines[1].startsWith('+++')) {
+      cleanedPatch = lines.slice(2).join('\n');
+    }
+
+    const patches = dmp.patch_fromText(cleanedPatch);
     const [result, success] = dmp.patch_apply(patches, normalizedBase);
 
     return {
