@@ -16,22 +16,18 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
+  CommandSeparator,
 } from '@/components/ui/command';
 import { Button } from '@/components/ui/button';
-import { User, Check } from 'lucide-react';
+import { User, Check, Bot } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-interface DriveMember {
-  userId: string;
-  user: {
-    id: string;
-    email: string;
-    name: string | null;
-  };
-  profile?: {
-    displayName?: string;
-    avatarUrl?: string;
-  } | null;
+interface Assignee {
+  id: string;
+  type: 'user' | 'agent';
+  name: string;
+  image: string | null;
+  agentTitle?: string;
 }
 
 interface AssigneeSelectProps {
@@ -41,39 +37,70 @@ interface AssigneeSelectProps {
     name: string | null;
     image: string | null;
   } | null;
-  onSelect: (userId: string | null, member?: { id: string; name: string | null; image: string | null } | null) => void;
+  currentAssigneeAgent?: {
+    id: string;
+    title: string | null;
+    type: string;
+  } | null;
+  onSelect: (
+    userId: string | null,
+    agentId: string | null,
+    data?: { id: string; name: string | null; image: string | null; type: 'user' | 'agent' } | null
+  ) => void;
   disabled?: boolean;
 }
 
-const membersFetcher = async (url: string) => {
+const assigneesFetcher = async (url: string) => {
   const res = await fetchWithAuth(url);
-  if (!res.ok) throw new Error('Failed to fetch members');
+  if (!res.ok) throw new Error('Failed to fetch assignees');
   return res.json();
 };
 
 export function AssigneeSelect({
   driveId,
   currentAssignee,
+  currentAssigneeAgent,
   onSelect,
   disabled = false,
 }: AssigneeSelectProps) {
   const [open, setOpen] = useState(false);
 
-  const { data } = useSWR<{ members: DriveMember[] }>(
-    driveId ? `/api/drives/${driveId}/members` : null,
-    membersFetcher,
+  const { data } = useSWR<{ assignees: Assignee[] }>(
+    driveId ? `/api/drives/${driveId}/assignees` : null,
+    assigneesFetcher,
     { revalidateOnFocus: false }
   );
 
-  const members = data?.members || [];
+  const assignees = data?.assignees || [];
+  const members = assignees.filter(a => a.type === 'user');
+  const agents = assignees.filter(a => a.type === 'agent');
 
-  const handleSelect = (userId: string | null, member?: DriveMember | null) => {
-    const memberData = member ? {
-      id: member.userId,
-      name: member.profile?.displayName || member.user.name || null,
-      image: member.profile?.avatarUrl || null,
-    } : null;
-    onSelect(userId, memberData);
+  // Determine current selection
+  const hasUserAssignee = !!currentAssignee;
+  const hasAgentAssignee = !!currentAssigneeAgent;
+  const currentId = currentAssignee?.id || currentAssigneeAgent?.id;
+  const currentType = hasAgentAssignee ? 'agent' : (hasUserAssignee ? 'user' : null);
+
+  const handleSelect = (assignee: Assignee | null) => {
+    if (!assignee) {
+      // Unassign
+      onSelect(null, null, null);
+    } else if (assignee.type === 'user') {
+      onSelect(assignee.id, null, {
+        id: assignee.id,
+        name: assignee.name,
+        image: assignee.image,
+        type: 'user',
+      });
+    } else {
+      // Agent
+      onSelect(null, assignee.id, {
+        id: assignee.id,
+        name: assignee.name,
+        image: null,
+        type: 'agent',
+      });
+    }
     setOpen(false);
   };
 
@@ -87,6 +114,10 @@ export function AssigneeSelect({
       .slice(0, 2);
   };
 
+  const displayName = currentAssigneeAgent?.title || currentAssignee?.name || null;
+  const displayImage = currentAssignee?.image || null;
+  const isAgent = !!currentAssigneeAgent;
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild disabled={disabled}>
@@ -99,16 +130,22 @@ export function AssigneeSelect({
             disabled && 'pointer-events-none'
           )}
         >
-          {currentAssignee ? (
+          {displayName ? (
             <div className="flex items-center gap-2">
-              <Avatar className="h-5 w-5">
-                <AvatarImage src={currentAssignee.image || undefined} />
-                <AvatarFallback className="text-[10px]">
-                  {getInitials(currentAssignee.name)}
-                </AvatarFallback>
-              </Avatar>
+              {isAgent ? (
+                <div className="h-5 w-5 rounded-full bg-primary/10 flex items-center justify-center">
+                  <Bot className="h-3 w-3 text-primary" />
+                </div>
+              ) : (
+                <Avatar className="h-5 w-5">
+                  <AvatarImage src={displayImage || undefined} />
+                  <AvatarFallback className="text-[10px]">
+                    {getInitials(displayName)}
+                  </AvatarFallback>
+                </Avatar>
+              )}
               <span className="text-sm truncate max-w-20">
-                {currentAssignee.name || 'Unknown'}
+                {displayName}
               </span>
             </div>
           ) : (
@@ -121,44 +158,73 @@ export function AssigneeSelect({
       </PopoverTrigger>
       <PopoverContent className="w-64 p-0" align="start">
         <Command>
-          <CommandInput placeholder="Search members..." />
+          <CommandInput placeholder="Search members or agents..." />
           <CommandList>
-            <CommandEmpty>No members found.</CommandEmpty>
+            <CommandEmpty>No assignees found.</CommandEmpty>
+
+            {/* Unassign option */}
             <CommandGroup>
-              {/* Unassign option */}
-              <CommandItem value="unassign" onSelect={() => handleSelect(null, null)}>
+              <CommandItem value="unassign" onSelect={() => handleSelect(null)}>
                 <User className="mr-2 h-4 w-4 text-muted-foreground" />
                 <span>Unassigned</span>
-                {!currentAssignee && <Check className="ml-auto h-4 w-4" />}
+                {!currentId && <Check className="ml-auto h-4 w-4" />}
               </CommandItem>
-
-              {/* Member options */}
-              {members.map((member) => {
-                const displayName =
-                  member.profile?.displayName ||
-                  member.user.name ||
-                  member.user.email;
-                const avatarUrl = member.profile?.avatarUrl;
-                const isSelected = currentAssignee?.id === member.userId;
-
-                return (
-                  <CommandItem
-                    key={member.userId}
-                    value={displayName}
-                    onSelect={() => handleSelect(member.userId, member)}
-                  >
-                    <Avatar className="mr-2 h-5 w-5">
-                      <AvatarImage src={avatarUrl} />
-                      <AvatarFallback className="text-[10px]">
-                        {getInitials(member.user.name)}
-                      </AvatarFallback>
-                    </Avatar>
-                    <span className="truncate">{displayName}</span>
-                    {isSelected && <Check className="ml-auto h-4 w-4" />}
-                  </CommandItem>
-                );
-              })}
             </CommandGroup>
+
+            {/* Members section */}
+            {members.length > 0 && (
+              <>
+                <CommandSeparator />
+                <CommandGroup heading="Members">
+                  {members.map((member) => {
+                    const isSelected = currentType === 'user' && currentId === member.id;
+
+                    return (
+                      <CommandItem
+                        key={`user-${member.id}`}
+                        value={`user-${member.name}`}
+                        onSelect={() => handleSelect(member)}
+                      >
+                        <Avatar className="mr-2 h-5 w-5">
+                          <AvatarImage src={member.image || undefined} />
+                          <AvatarFallback className="text-[10px]">
+                            {getInitials(member.name)}
+                          </AvatarFallback>
+                        </Avatar>
+                        <span className="truncate">{member.name}</span>
+                        {isSelected && <Check className="ml-auto h-4 w-4" />}
+                      </CommandItem>
+                    );
+                  })}
+                </CommandGroup>
+              </>
+            )}
+
+            {/* Agents section */}
+            {agents.length > 0 && (
+              <>
+                <CommandSeparator />
+                <CommandGroup heading="AI Agents">
+                  {agents.map((agent) => {
+                    const isSelected = currentType === 'agent' && currentId === agent.id;
+
+                    return (
+                      <CommandItem
+                        key={`agent-${agent.id}`}
+                        value={`agent-${agent.name}`}
+                        onSelect={() => handleSelect(agent)}
+                      >
+                        <div className="mr-2 h-5 w-5 rounded-full bg-primary/10 flex items-center justify-center">
+                          <Bot className="h-3 w-3 text-primary" />
+                        </div>
+                        <span className="truncate">{agent.name}</span>
+                        {isSelected && <Check className="ml-auto h-4 w-4" />}
+                      </CommandItem>
+                    );
+                  })}
+                </CommandGroup>
+              </>
+            )}
           </CommandList>
         </Command>
       </PopoverContent>

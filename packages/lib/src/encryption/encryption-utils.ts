@@ -38,12 +38,12 @@ export async function encrypt(text: string): Promise<string> {
   if (!text || typeof text !== 'string') {
     throw new Error('Text to encrypt must be a non-empty string');
   }
-  
+
   try {
     // Generate unique salt and IV for this encryption operation
     const salt = randomBytes(SALT_LENGTH);
     const iv = randomBytes(IV_LENGTH);
-    
+
     // Derive key using the unique salt
     const key = await deriveKey(salt);
     const cipher = createCipheriv(ALGORITHM, key, iv);
@@ -66,51 +66,16 @@ export async function decrypt(encryptedText: string): Promise<string> {
   if (!encryptedText || typeof encryptedText !== 'string') {
     throw new Error('Encrypted text must be a non-empty string');
   }
-  
+
   const parts = encryptedText.split(':');
-  
-  // Support both old format (3 parts) and new format (4 parts) for backward compatibility
-  if (parts.length === 3) {
-    // Legacy format: "iv:authtag:ciphertext" (uses static salt)
-    return await decryptLegacy(encryptedText);
-  } else if (parts.length === 4) {
-    // New format: "salt:iv:authtag:ciphertext"
-    return await decryptNew(encryptedText);
-  } else {
-    throw new Error('Invalid encrypted text format. Expected either 3 or 4 colon-separated parts.');
+
+  if (parts.length !== 4) {
+    throw new Error('Invalid encrypted text format. Expected 4 colon-separated parts (salt:iv:authTag:ciphertext).');
   }
-}
 
-// Legacy decrypt function for backward compatibility
-async function decryptLegacy(encryptedText: string): Promise<string> {
   try {
-    const parts = encryptedText.split(':');
-    const [ivHex, authTagHex, encryptedHex] = parts;
-    
-    const iv = Buffer.from(ivHex, 'hex');
-    const authTag = Buffer.from(authTagHex, 'hex');
-    const encrypted = Buffer.from(encryptedHex, 'hex');
-
-    // Use legacy static salt for backward compatibility
-    const legacySalt = process.env.ENCRYPTION_SALT || 'a-secure-static-salt-for-everyone';
-    const key = (await scryptAsync(getEncryptionKey(), legacySalt, KEY_LENGTH)) as Buffer;
-
-    const decipher = createDecipheriv(ALGORITHM, key, iv);
-    decipher.setAuthTag(authTag);
-
-    const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
-    return decrypted.toString('utf8');
-  } catch (error) {
-    throw new Error(`Legacy decryption failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-  }
-}
-
-// New decrypt function with unique salt
-async function decryptNew(encryptedText: string): Promise<string> {
-  try {
-    const parts = encryptedText.split(':');
     const [saltHex, ivHex, authTagHex, encryptedHex] = parts;
-    
+
     const salt = Buffer.from(saltHex, 'hex');
     const iv = Buffer.from(ivHex, 'hex');
     const authTag = Buffer.from(authTagHex, 'hex');

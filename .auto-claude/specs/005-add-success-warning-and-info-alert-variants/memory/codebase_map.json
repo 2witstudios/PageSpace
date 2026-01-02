@@ -1,0 +1,15 @@
+{
+  "discovered_files": {
+    "apps/web/src/components/ui/alert.tsx": {
+      "description": "Alert component now has 5 variants: default, destructive, success, warning, and info. All colored variants follow the same pattern: 'text-{color} bg-card [&>svg]:text-current *:data-[slot=alert-description]:text-{color}/90'",
+      "category": "component",
+      "discovered_at": "2026-01-01T02:10:08.256414+00:00"
+    },
+    "apps/web/src/app/globals.css": {
+      "description": "Uses OKLCH color system. Color tokens defined in :root and .dark blocks. Tailwind color mappings in @theme inline block (e.g., --color-destructive: var(--destructive)). Currently no success/warning/info tokens exist.",
+      "category": "styling",
+      "discovered_at": "2026-01-01T02:02:19.728886+00:00"
+    }
+  },
+  "last_updated": "2026-01-01T02:10:08.256424+00:00"
+}

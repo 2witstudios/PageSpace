@@ -1,0 +1,12 @@
+{
+  "sourceType": "ideation",
+  "ideationType": "ui_ux_improvements",
+  "ideaId": "uiux-002",
+  "rationale": "The Alert component currently only has 'default' and 'destructive' variants. The codebase uses toast.success, toast.info, and toast.warning (found 50+ usages), but there's no equivalent Alert component styling for persistent inline feedback. This limits the ability to show contextual success messages or warnings within the page layout.",
+  "category": "ui_ux",
+  "uiuxCategory": "visual",
+  "affectedFiles": [
+    "apps/web/src/components/ui/alert.tsx"
+  ],
+  "problemSolved": "Alert component in alert.tsx only has variants: { default: 'bg-card text-card-foreground', destructive: 'text-destructive bg-card...' }. No success (green), warning (amber), or info (blue) variants exist."
+}

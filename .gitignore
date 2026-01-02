@@ -146,3 +146,8 @@ playground.xcworkspace
 
 # Production environment files
 .env.production
+
+# Auto-Claude build system
+.auto-claude/
+.auto-claude-status
+.claude_settings.json

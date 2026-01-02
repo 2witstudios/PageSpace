@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { encrypt, decrypt } from '../encryption/encryption-utils'
 
 describe('encryption-utils', () => {
@@ -22,7 +22,7 @@ describe('encryption-utils', () => {
       expect(encrypted1).not.toBe(encrypted2)
     })
 
-    it('produces 4-part colon-separated format (new format)', async () => {
+    it('produces 4-part colon-separated format', async () => {
       const encrypted = await encrypt(testData)
       const parts = encrypted.split(':')
 
@@ -69,7 +69,7 @@ describe('encryption-utils', () => {
   })
 
   describe('decrypt', () => {
-    it('decrypts encrypted data successfully (new format)', async () => {
+    it('decrypts encrypted data successfully', async () => {
       const encrypted = await encrypt(testData)
       const decrypted = await decrypt(encrypted)
 
@@ -87,18 +87,10 @@ describe('encryption-utils', () => {
       expect(current).toBe(testData)
     })
 
-    it('handles legacy 3-part format for backward compatibility', async () => {
-      // We can't easily create a legacy token without exposing internals,
-      // but we can test that the parser handles 3-part format
-      const fakeLegacy = 'iv:authTag:ciphertext'
-
-      // This will fail decryption but should recognize format
-      await expect(decrypt(fakeLegacy)).rejects.toThrow()
-    })
-
     it('throws error for invalid format (not enough parts)', async () => {
       await expect(decrypt('invalid')).rejects.toThrow('Invalid encrypted text format')
       await expect(decrypt('one:two')).rejects.toThrow('Invalid encrypted text format')
+      await expect(decrypt('one:two:three')).rejects.toThrow('Invalid encrypted text format')
     })
 
     it('throws error for invalid format (too many parts)', async () => {
@@ -237,6 +229,26 @@ describe('encryption-utils', () => {
       await expect(encrypt(testData)).rejects.toThrow('ENCRYPTION_KEY must be at least 32 characters long')
 
       process.env.ENCRYPTION_KEY = original
+    })
+  })
+
+  describe('format verification', () => {
+    it('encrypted format has 4 colon-separated hex parts', async () => {
+      const encrypted = await encrypt('test-plaintext')
+      const parts = encrypted.split(':')
+
+      expect(parts.length).toBe(4)
+
+      // Verify each part is valid hex
+      parts.forEach((part) => {
+        expect(part).toMatch(/^[0-9a-f]+$/i)
+      })
+
+      // Verify expected lengths (salt=32 bytes=64 hex, IV=16 bytes=32 hex, authTag=16 bytes=32 hex)
+      expect(parts[0].length).toBe(64) // salt
+      expect(parts[1].length).toBe(32) // IV
+      expect(parts[2].length).toBe(32) // authTag
+      expect(parts[3].length).toBeGreaterThan(0) // ciphertext
     })
   })
 })

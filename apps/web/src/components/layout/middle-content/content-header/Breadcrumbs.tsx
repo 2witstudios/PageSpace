@@ -5,6 +5,7 @@ import { usePageStore } from "@/hooks/usePage";
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import { useMobile } from "@/hooks/useMobile";
+import { Skeleton } from "@/components/ui/skeleton";
 
 export function Breadcrumbs({ pageId: propPageId }: { pageId?: string | null } = {}) {
   const storePageId = usePageStore((state) => state.pageId);
@@ -13,7 +14,7 @@ export function Breadcrumbs({ pageId: propPageId }: { pageId?: string | null } =
   const isMobile = useMobile();
 
   if (isLoading) {
-    return <div className="h-6 w-1/2 bg-muted animate-pulse rounded-md" />;
+    return <Skeleton className="h-6 w-1/2" />;
   }
 
   if (!breadcrumbs || breadcrumbs.length <= 1) {

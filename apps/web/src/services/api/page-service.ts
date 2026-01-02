@@ -111,7 +111,7 @@ function sanitizeEmptyContent(content: string): string {
 /**
  * Page types
  */
-export type PageType = 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'SHEET';
+export type PageType = 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'SHEET' | 'TASK_LIST';
 
 /**
  * Message with user info for page details

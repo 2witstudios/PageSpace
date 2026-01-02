@@ -6,7 +6,7 @@ import { isEditingActive } from '@/stores/useEditingStore';
 interface BreadcrumbItem {
   id: string;
   title: string;
-  type: 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'FILE' | 'SHEET';
+  type: 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'FILE' | 'SHEET' | 'TASK_LIST';
   parentId: string | null;
   driveId: string;
   drive: { id: string; slug: string; name: string } | null;

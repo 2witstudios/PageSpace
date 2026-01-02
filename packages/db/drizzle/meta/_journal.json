@@ -225,6 +225,13 @@
       "when": 1766869142427,
       "tag": "0031_useful_lifeguard",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1767044310333,
+      "tag": "0032_misty_goblin_queen",
+      "breakpoints": true
     }
   ]
 }
