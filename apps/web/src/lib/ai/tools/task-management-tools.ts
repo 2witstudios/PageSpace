@@ -1,9 +1,9 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { db, taskLists, taskItems, pages, eq, and, desc, asc } from '@pagespace/db';
+import { db, taskLists, taskItems, pages, eq, and, desc, asc, not } from '@pagespace/db';
 import { type ToolExecutionContext } from '../core';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { canUserEditPage, logPageActivity, getActorInfo } from '@pagespace/lib/server';
+import { canUserEditPage, canUserViewPage, getUserDriveAccess, logPageActivity, getActorInfo } from '@pagespace/lib/server';
 import { getDefaultContent, PageType } from '@pagespace/lib';
 
 // Helper: Extract AI attribution context with actor info for activity logging
@@ -50,7 +50,13 @@ When creating tasks:
 - A DOCUMENT page is automatically created as a child of the TASK_LIST page
 - This linked page stores task notes and progress
 - The page title stays synced with the task title
-- DO NOT delete these pages directly - use this tool to manage tasks`,
+- DO NOT delete these pages directly - use this tool to manage tasks
+
+Assignment:
+- Use assigneeId to assign to a human user
+- Use assigneeAgentId to assign to an AI agent (use the agent's page ID)
+- Agents can assign tasks to themselves or other agents
+- Set both to null to unassign`,
     inputSchema: z.object({
       taskId: z.string().optional().describe('Task ID to update (omit to create new task)'),
       pageId: z.string().optional().describe('TASK_LIST page ID (required when creating new task)'),
@@ -58,13 +64,14 @@ When creating tasks:
       description: z.string().optional().describe('Task description'),
       status: z.enum(['pending', 'in_progress', 'completed', 'blocked']).optional().describe('Task status'),
       priority: z.enum(['low', 'medium', 'high']).optional().describe('Task priority'),
-      assigneeId: z.string().nullable().optional().describe('User ID to assign (null to unassign)'),
+      assigneeId: z.string().nullable().optional().describe('User ID to assign (null to unassign user)'),
+      assigneeAgentId: z.string().nullable().optional().describe('Agent page ID to assign (null to unassign agent). Use this to assign tasks to AI agents including yourself.'),
       dueDate: z.string().nullable().optional().describe('Due date in ISO format (null to clear)'),
       note: z.string().optional().describe('Note about this update'),
       position: z.number().optional().describe('Position in the list (for new tasks, defaults to end)'),
     }),
     execute: async (params, { experimental_context: context }) => {
-      const { taskId, pageId, title, description, status, priority, assigneeId, dueDate, note, position } = params;
+      const { taskId, pageId, title, description, status, priority, assigneeId, assigneeAgentId, dueDate, note, position } = params;
       const userId = (context as ToolExecutionContext)?.userId;
 
       if (!userId) {
@@ -115,6 +122,36 @@ When creating tasks:
             throw new Error('You do not have permission to update this task');
           }
 
+          // Get driveId for agent validation (if task list has a page)
+          let taskListDriveId: string | undefined;
+          if (taskList.pageId) {
+            const taskListPage = await db.query.pages.findFirst({
+              where: eq(pages.id, taskList.pageId),
+              columns: { driveId: true },
+            });
+            taskListDriveId = taskListPage?.driveId;
+          }
+
+          // Validate assigneeAgentId if provided
+          if (assigneeAgentId) {
+            const agentPage = await db.query.pages.findFirst({
+              where: and(
+                eq(pages.id, assigneeAgentId),
+                eq(pages.type, 'AI_CHAT'),
+                eq(pages.isTrashed, false)
+              ),
+              columns: { id: true, driveId: true },
+            });
+
+            if (!agentPage) {
+              throw new Error('Invalid agent ID - must be an AI agent page');
+            }
+
+            if (taskListDriveId && agentPage.driveId !== taskListDriveId) {
+              throw new Error('Agent must be in the same drive as the task list');
+            }
+          }
+
           // Build update object
           const updateData: Record<string, unknown> = {};
           if (title !== undefined) updateData.title = title;
@@ -125,6 +162,7 @@ When creating tasks:
           }
           if (priority !== undefined) updateData.priority = priority;
           if (assigneeId !== undefined) updateData.assigneeId = assigneeId;
+          if (assigneeAgentId !== undefined) updateData.assigneeAgentId = assigneeAgentId;
           if (dueDate !== undefined) updateData.dueDate = dueDate ? new Date(dueDate) : null;
 
           // Add note to metadata
@@ -236,6 +274,26 @@ When creating tasks:
           });
           const nextPagePosition = (lastChildPage?.position ?? 0) + 1;
 
+          // Validate assigneeAgentId if provided
+          if (assigneeAgentId) {
+            const agentPage = await db.query.pages.findFirst({
+              where: and(
+                eq(pages.id, assigneeAgentId),
+                eq(pages.type, 'AI_CHAT'),
+                eq(pages.isTrashed, false)
+              ),
+              columns: { id: true, driveId: true },
+            });
+
+            if (!agentPage) {
+              throw new Error('Invalid agent ID - must be an AI agent page');
+            }
+
+            if (agentPage.driveId !== taskListPage.driveId) {
+              throw new Error('Agent must be in the same drive as the task list');
+            }
+          }
+
           // Create document page and task in transaction
           const result = await db.transaction(async (tx) => {
             // Create document page for the task
@@ -259,6 +317,7 @@ When creating tasks:
               status: status || 'pending',
               priority: priority || 'medium',
               assigneeId: assigneeId || null,
+              assigneeAgentId: assigneeAgentId || null,
               dueDate: dueDate ? new Date(dueDate) : null,
               position: nextTaskPosition,
               metadata: {
@@ -322,6 +381,13 @@ When creating tasks:
                 image: true,
               },
             },
+            assigneeAgent: {
+              columns: {
+                id: true,
+                title: true,
+                type: true,
+              },
+            },
           },
         });
 
@@ -350,6 +416,7 @@ When creating tasks:
             status: resultTask.status,
             priority: resultTask.priority,
             assigneeId: resultTask.assigneeId,
+            assigneeAgentId: resultTask.assigneeAgentId,
             dueDate: resultTask.dueDate,
             position: resultTask.position,
             completedAt: resultTask.completedAt,
@@ -370,6 +437,7 @@ When creating tasks:
             status: t.status,
             priority: t.priority,
             assigneeId: t.assigneeId,
+            assigneeAgentId: t.assigneeAgentId,
             dueDate: t.dueDate,
             position: t.position,
             completedAt: t.completedAt,
@@ -379,12 +447,194 @@ When creating tasks:
               name: t.assignee.name,
               image: t.assignee.image,
             } : null,
+            assigneeAgent: t.assigneeAgent ? {
+              id: t.assigneeAgent.id,
+              title: t.assigneeAgent.title,
+              type: t.assigneeAgent.type,
+            } : null,
           })),
           message,
         };
       } catch (error) {
         console.error('Error in update_task:', error);
         throw new Error(`Failed to ${isUpdate ? 'update' : 'create'} task: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+  }),
+
+  /**
+   * Get tasks assigned to an agent (including the current agent)
+   * Allows agents to see their workload and responsibilities
+   */
+  get_assigned_tasks: tool({
+    description: `Get tasks assigned to an AI agent. Use this to see your assigned tasks or tasks assigned to other agents.
+
+By default, returns tasks assigned to YOU (the current agent).
+Optionally filter by:
+- agentId: See tasks assigned to a specific agent
+- status: Filter by task status (pending, in_progress, completed, blocked)
+- driveId: Only show tasks from a specific drive
+
+This helps agents understand their responsibilities and coordinate work with other agents.`,
+    inputSchema: z.object({
+      agentId: z.string().optional().describe('Agent page ID to query (defaults to current agent if in agent context)'),
+      status: z.enum(['pending', 'in_progress', 'completed', 'blocked']).optional().describe('Filter by task status'),
+      driveId: z.string().optional().describe('Filter by drive ID'),
+      includeCompleted: z.boolean().default(false).describe('Include completed tasks (default: false)'),
+    }),
+    execute: async (params, { experimental_context: context }) => {
+      const { agentId, status, driveId, includeCompleted } = params;
+      const userId = (context as ToolExecutionContext)?.userId;
+      const toolContext = context as ToolExecutionContext;
+
+      if (!userId) {
+        throw new Error('User authentication required');
+      }
+
+      // Determine which agent to query
+      // If agentId is provided, use that. Otherwise, try to derive from agent chain context
+      let targetAgentId = agentId;
+
+      // If we're running in an agent context (has agentChain) and no agentId specified,
+      // use the current agent (last in the chain)
+      if (!targetAgentId && toolContext.agentChain && toolContext.agentChain.length > 0) {
+        targetAgentId = toolContext.agentChain[toolContext.agentChain.length - 1];
+      }
+
+      if (!targetAgentId) {
+        throw new Error('No agent ID specified. Please provide an agentId parameter to query tasks for a specific agent.');
+      }
+
+      // Verify the target agent exists and user has access
+      const agent = await db.query.pages.findFirst({
+        where: and(
+          eq(pages.id, targetAgentId),
+          eq(pages.type, 'AI_CHAT'),
+          eq(pages.isTrashed, false),
+        ),
+        columns: { id: true, title: true, driveId: true },
+      });
+
+      if (!agent) {
+        throw new Error(`Agent with ID ${targetAgentId} not found`);
+      }
+
+      const canView = await canUserViewPage(userId, targetAgentId);
+      if (!canView) {
+        throw new Error('You do not have permission to view this agent\'s tasks');
+      }
+
+      try {
+        // Build query conditions
+        const conditions = [eq(taskItems.assigneeAgentId, targetAgentId)];
+
+        // Status filter
+        if (status) {
+          conditions.push(eq(taskItems.status, status));
+        } else if (!includeCompleted) {
+          // Exclude completed by default
+          conditions.push(not(eq(taskItems.status, 'completed')));
+        }
+
+        // Query tasks assigned to the agent
+        const tasks = await db.query.taskItems.findMany({
+          where: and(...conditions),
+          orderBy: [asc(taskItems.position)],
+          with: {
+            taskList: {
+              columns: { id: true, title: true, pageId: true },
+              with: {
+                page: {
+                  columns: { id: true, title: true, driveId: true },
+                },
+              },
+            },
+            assignee: {
+              columns: { id: true, name: true },
+            },
+            page: {
+              columns: { id: true, title: true, isTrashed: true },
+            },
+          },
+        });
+
+        // Get unique drive IDs from tasks and check permissions
+        const taskDriveIds = [...new Set(
+          tasks
+            .map(t => t.taskList?.page?.driveId)
+            .filter((id): id is string => !!id)
+        )];
+
+        // Check drive access in parallel for security
+        const driveAccessResults = await Promise.all(
+          taskDriveIds.map(async (taskDriveId) => ({
+            driveId: taskDriveId,
+            hasAccess: await getUserDriveAccess(userId, taskDriveId),
+          }))
+        );
+
+        const accessibleDriveIds = new Set(
+          driveAccessResults.filter(r => r.hasAccess).map(r => r.driveId)
+        );
+
+        // Filter out tasks with trashed pages, inaccessible drives, and optionally by driveId
+        const filteredTasks = tasks.filter(task => {
+          if (task.page?.isTrashed) return false;
+          const taskDriveId = task.taskList?.page?.driveId;
+          // Security: only include tasks from drives the user can access
+          if (taskDriveId && !accessibleDriveIds.has(taskDriveId)) return false;
+          // Optional driveId filter from params
+          if (driveId && taskDriveId !== driveId) return false;
+          return true;
+        });
+
+        // Group tasks by status for easier consumption
+        const tasksByStatus = {
+          pending: filteredTasks.filter(t => t.status === 'pending'),
+          in_progress: filteredTasks.filter(t => t.status === 'in_progress'),
+          blocked: filteredTasks.filter(t => t.status === 'blocked'),
+          completed: filteredTasks.filter(t => t.status === 'completed'),
+        };
+
+        return {
+          success: true,
+          agent: {
+            id: agent.id,
+            title: agent.title,
+            driveId: agent.driveId,
+          },
+          summary: {
+            total: filteredTasks.length,
+            pending: tasksByStatus.pending.length,
+            in_progress: tasksByStatus.in_progress.length,
+            blocked: tasksByStatus.blocked.length,
+            completed: tasksByStatus.completed.length,
+          },
+          tasks: filteredTasks.map(t => ({
+            id: t.id,
+            title: t.title,
+            description: t.description,
+            status: t.status,
+            priority: t.priority,
+            dueDate: t.dueDate,
+            pageId: t.pageId,
+            taskList: t.taskList ? {
+              id: t.taskList.id,
+              title: t.taskList.title,
+              pageId: t.taskList.pageId,
+              driveId: t.taskList.page?.driveId,
+            } : null,
+            // Include user co-assignee if present
+            userAssignee: t.assignee ? {
+              id: t.assignee.id,
+              name: t.assignee.name,
+            } : null,
+          })),
+          message: `Found ${filteredTasks.length} task(s) assigned to agent "${agent.title}"`,
+        };
+      } catch (error) {
+        console.error('Error in get_assigned_tasks:', error);
+        throw new Error(`Failed to get assigned tasks: ${error instanceof Error ? error.message : String(error)}`);
       }
     },
   }),

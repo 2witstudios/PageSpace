@@ -35,6 +35,5 @@ JWT_ISSUER=pagespace-test \
 JWT_AUDIENCE=pagespace-test-users \
 CSRF_SECRET=test-csrf-secret-minimum-32-characters-long-for-testing-purposes \
 ENCRYPTION_KEY=test-encryption-key-32-chars-minimum-required-length \
-ENCRYPTION_SALT=test-encryption-salt-for-backward-compatibility \
 REALTIME_BROADCAST_SECRET=test-realtime-broadcast-secret-32-chars-minimum-length \
 pnpm test:turbo --concurrency=1 --continue "$@"

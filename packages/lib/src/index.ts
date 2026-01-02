@@ -78,6 +78,7 @@ export * from './logging/logger-database';
 export * from './monitoring/ai-monitoring';
 export * from './monitoring/activity-tracker';
 export * from './monitoring/activity-logger';
+export * from './monitoring/hash-chain-verifier';
 
 // Repository seams (server-only)
 export * from './repositories';

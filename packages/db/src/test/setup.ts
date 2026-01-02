@@ -2,6 +2,9 @@ import { beforeAll, afterAll, afterEach } from 'vitest'
 import { sql } from 'drizzle-orm'
 import { db } from '../index'
 
+// Encryption environment variables
+process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'test-encryption-key-32-chars-minimum-required-length'
+
 beforeAll(async () => {
   // Test database should be running
   console.log('Test database ready')

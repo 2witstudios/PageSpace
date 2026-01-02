@@ -14,10 +14,11 @@ PageSpace implements a **robust CSRF protection system** with enterprise-grade s
 2. **Cryptographic CSRF tokens** bound to user sessions
 3. **HMAC-SHA256 signed tokens** with timing-safe comparison
 4. **Automatic token rotation** and expiration (1-hour TTL)
+5. **Origin header validation** as defense-in-depth (added December 2025)
 
-**Overall Security Rating: STRONG with Minor Gaps**
+**Overall Security Rating: STRONG** ✅
 
-While the core implementation is solid, this audit identified several areas requiring attention.
+All identified gaps from the initial audit have been remediated. The implementation now includes comprehensive defense-in-depth protections.
 
 ---
 
@@ -145,28 +146,59 @@ export async function POST(req: Request) {
 
 ---
 
-### 2.4 MEDIUM: No Origin/Referer Header Validation
+### 2.4 ~~MEDIUM: No Origin/Referer Header Validation~~ FIXED
 
-**Issue:** No additional Origin or Referer header validation as defense-in-depth.
+**Status:** ✅ **FIXED** (December 2025)
 
-**Evidence:** Grep search for `request.headers.get('origin')` returned no matches in the web app.
+**Original Issue:** No additional Origin or Referer header validation as defense-in-depth.
 
-**Recommendation:** Add Origin validation as supplementary protection:
+**Implementation:**
 
+Origin header validation has been implemented at two levels:
+
+1. **Middleware-Level Validation** (`apps/web/middleware.ts`):
+   - Validates Origin header for all `/api/*` routes automatically
+   - Configurable mode via `ORIGIN_VALIDATION_MODE` environment variable:
+     - `warn` (default): Logs warnings but allows requests (safe initial rollout)
+     - `block`: Rejects requests with invalid origins (403 Forbidden)
+   - Skips validation for safe methods (GET, HEAD, OPTIONS) and requests without Origin header
+
+2. **Route-Level Validation** (`apps/web/src/lib/auth/origin-validation.ts`):
+   - `validateOrigin()` function for explicit validation in individual routes
+   - `validateOriginForMiddleware()` function for middleware integration
+   - Supports additional origins via `ADDITIONAL_ALLOWED_ORIGINS` env variable
+
+**Key Security Behaviors:**
+- Missing Origin header is ALLOWED (non-browser clients like curl, MCP, mobile apps)
+- Invalid Origin returns 403 with error code `ORIGIN_INVALID`
+- Uses `WEB_APP_URL` environment variable for allowed origins
+- Security events logged for monitoring and alerting
+
+**Example Usage in Routes:**
 ```typescript
-// Suggested addition to csrf-validation.ts
-function validateOrigin(request: Request): boolean {
-  const origin = request.headers.get('origin');
-  const allowedOrigins = [process.env.WEB_APP_URL];
+import { validateOrigin } from '@/lib/auth/origin-validation';
 
-  // Allow requests without Origin (same-origin, non-browser)
-  if (!origin) return true;
+export async function POST(request: Request) {
+  const originError = validateOrigin(request);
+  if (originError) return originError;
 
-  return allowedOrigins.some(allowed => origin === allowed);
+  // Continue with request processing
 }
 ```
 
-**Severity:** MEDIUM (defense-in-depth, not primary vulnerability)
+**Environment Configuration:**
+```bash
+# Required: Primary allowed origin
+WEB_APP_URL=https://app.pagespace.com
+
+# Optional: Additional allowed origins (comma-separated)
+ADDITIONAL_ALLOWED_ORIGINS=https://staging.pagespace.com,https://dev.pagespace.com
+
+# Optional: Validation mode (warn|block, default: warn)
+ORIGIN_VALIDATION_MODE=block
+```
+
+**Severity:** ~~MEDIUM~~ → RESOLVED
 
 ---
 
@@ -191,38 +223,48 @@ export async function POST(req: Request) {
 
 ---
 
-### 2.6 LOW: WebSocket Handshake Relies on CORS Only
+### 2.6 ~~LOW: WebSocket Handshake Relies on CORS Only~~ FIXED
 
-**Issue:** The realtime service validates WebSocket connections via CORS and JWT, but doesn't explicitly check the Origin header in application code.
+**Status:** ✅ **FIXED** (December 2025)
 
-**Evidence:**
-```typescript
-// apps/realtime/src/index.ts:77-82
-const io = new Server(httpServer, {
-  cors: {
-    origin: process.env.CORS_ORIGIN || process.env.WEB_APP_URL,
-    credentials: true,
-  },
-});
+**Original Issue:** The realtime service validates WebSocket connections via CORS and JWT, but doesn't explicitly check the Origin header in application code.
+
+**Implementation:**
+
+Explicit Origin validation and logging has been added to the realtime service (`apps/realtime/src/index.ts`):
+
+1. **Origin Validation Helper:**
+   - `validateWebSocketOrigin()` function validates connection origins
+   - Returns detailed result with `isValid`, `origin`, and `reason`
+   - Handles missing origins gracefully (non-browser clients)
+
+2. **Socket.IO Middleware Integration:**
+   - Validates origin on every WebSocket connection
+   - Logs warnings for unexpected origins with full context
+   - Supports `CORS_ORIGIN` and `WEB_APP_URL` environment variables
+   - Additional origins configurable via `ADDITIONAL_ALLOWED_ORIGINS`
+
+3. **Security Monitoring:**
+   - All unexpected origins logged with warning level
+   - Includes socket ID, origin, and allowed origins list
+   - Enables detection of potential cross-origin attacks
+
+**Key Behaviors:**
+- Missing Origin: Allowed (non-browser clients)
+- No config: Allowed with warning log
+- Valid Origin: Allowed
+- Invalid Origin: Warning logged (connection still allowed per CORS policy)
+
+**Example Log Output:**
+```
+WARN [realtime] WebSocket connection from unexpected origin {
+  socketId: "abc123",
+  origin: "https://malicious-site.com",
+  allowedOrigins: ["https://app.pagespace.com"]
+}
 ```
 
-**Mitigation:** Socket.IO's CORS handles Origin validation at the library level. JWT validation occurs in middleware.
-
-**Recommendation:** Add explicit Origin logging for security monitoring:
-
-```typescript
-io.use(async (socket, next) => {
-  const origin = socket.handshake.headers.origin;
-  const allowedOrigin = process.env.WEB_APP_URL;
-
-  if (origin && origin !== allowedOrigin) {
-    loggers.realtime.warn('WebSocket connection from unexpected origin', { origin });
-  }
-  // Continue with JWT validation...
-});
-```
-
-**Severity:** LOW
+**Severity:** ~~LOW~~ → RESOLVED
 
 ---
 
@@ -280,8 +322,10 @@ event = stripe.webhooks.constructEvent(payload, signature, webhookSecret);
 |----------|---------|--------|--------|--------|
 | **P1** | Add CSRF to `authenticateHybridRequest` routes | Low | High | **FIXED** |
 | **P2** | Add Login CSRF protection | Medium | Medium | **FIXED** |
-| **P3** | Add Origin header validation | Low | Low | Open |
-| **P4** | Add WebSocket Origin logging | Low | Low | Open |
+| **P3** | Add Origin header validation | Low | Low | **FIXED** |
+| **P4** | Add WebSocket Origin logging | Low | Low | **FIXED** |
+
+✅ **All identified issues have been remediated.**
 
 ---
 
@@ -373,13 +417,22 @@ Recommend adding tests for:
 
 PageSpace demonstrates a mature security posture with enterprise-grade CSRF protection. The primary defense (SameSite=strict cookies) is complemented by cryptographic CSRF tokens with session binding.
 
-**Key Recommendations:**
+**Remediation Status (Updated December 2025):**
 
-1. **Immediate:** Add `requireCSRF: true` to routes using `authenticateHybridRequest` that perform mutations
-2. **Short-term:** Implement Login CSRF protection
-3. **Long-term:** Add Origin header validation as defense-in-depth
+| Recommendation | Status |
+|----------------|--------|
+| ~~Add `requireCSRF: true` to routes using `authenticateHybridRequest`~~ | ✅ Complete |
+| ~~Implement Login CSRF protection~~ | ✅ Complete |
+| ~~Add Origin header validation as defense-in-depth~~ | ✅ Complete |
+| ~~Add WebSocket Origin logging~~ | ✅ Complete |
 
-The identified gaps are mitigated by the strong SameSite cookie policy, reducing overall risk to **LOW** for most attack scenarios.
+**All identified security gaps have been remediated.** The implementation now features comprehensive defense-in-depth with:
+
+- **Origin Header Validation:** Middleware-level validation for all API routes with configurable warn/block modes
+- **WebSocket Origin Logging:** Explicit origin monitoring on all realtime connections
+- **Enhanced CSRF Protection:** All mutation routes properly protected
+
+Overall risk assessment: **LOW** - The application follows security best practices with multiple layers of CSRF protection.
 
 ---
 
@@ -387,6 +440,7 @@ The identified gaps are mitigated by the strong SameSite cookie policy, reducing
 
 - `apps/web/src/lib/auth/index.ts`
 - `apps/web/src/lib/auth/csrf-validation.ts`
+- `apps/web/src/lib/auth/origin-validation.ts` *(added December 2025)*
 - `packages/lib/src/auth/csrf-utils.ts`
 - `apps/web/src/lib/auth/auth-fetch.ts`
 - `apps/web/src/app/api/auth/login/route.ts`
@@ -398,6 +452,6 @@ The identified gaps are mitigated by the strong SameSite cookie policy, reducing
 - `apps/web/src/app/api/stripe/webhook/route.ts`
 - `apps/web/src/app/api/mcp/documents/route.ts`
 - `apps/web/src/app/api/ai/page-agents/*/route.ts`
-- `apps/realtime/src/index.ts`
-- `apps/web/middleware.ts`
+- `apps/realtime/src/index.ts` *(updated December 2025)*
+- `apps/web/middleware.ts` *(updated December 2025)*
 - 87 additional route files via grep analysis

@@ -572,6 +572,9 @@ importers:
       diff-match-patch:
         specifier: ^1.0.5
         version: 1.0.5
+      drizzle-orm:
+        specifier: ^0.32.2
+        version: 0.32.2(@opentelemetry/api@1.9.0)(@types/pg@8.15.5)(@types/react@19.1.13)(pg@8.16.3)(react@19.2.1)
       google-auth-library:
         specifier: ^10.3.0
         version: 10.3.0
@@ -8085,6 +8088,7 @@ packages:
   next@15.3.6:
     resolution: {integrity: sha512-oI6D1zbbsh6JzzZFDCSHnnx6Qpvd1fSkVJu/5d8uluqnxzuoqtodVZjYvNovooznUq8udSAiKp7MbwlfZ8Gm6w==}
     engines: {node: ^18.18.0 || ^19.8.0 || >= 20.0.0}
+    deprecated: This version has a security vulnerability. Please upgrade to a patched version. See https://nextjs.org/blog/security-update-2025-12-11 for more details.
     hasBin: true
     peerDependencies:
       '@opentelemetry/api': ^1.1.0

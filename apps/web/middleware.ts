@@ -3,7 +3,11 @@ import { decodeToken } from '@pagespace/lib/server';
 import { parse } from 'cookie';
 import { monitoringMiddleware } from '@/middleware/monitoring';
 import { loggers, logAuthEvent, logSecurityEvent } from '@pagespace/lib/server';
-import { validateMCPToken } from '@/lib/auth';
+import {
+  validateMCPToken,
+  validateOriginForMiddleware,
+  isOriginValidationBlocking,
+} from '@/lib/auth';
 
 const MCP_BEARER_PREFIX = 'Bearer mcp_';
 
@@ -14,6 +18,45 @@ export async function middleware(req: NextRequest) {
       req.headers.get('x-forwarded-for')?.split(',')[0] ||
       req.headers.get('x-real-ip') ||
       'unknown';
+
+    // Origin validation for API routes (defense-in-depth)
+    // This provides application-wide origin checking as an additional security layer
+    // By default operates in warning-only mode; set ORIGIN_VALIDATION_MODE=block to reject
+    if (pathname.startsWith('/api')) {
+      const originResult = validateOriginForMiddleware(req);
+
+      if (!originResult.valid && !originResult.skipped) {
+        // Origin validation failed
+        if (isOriginValidationBlocking()) {
+          // Block mode: reject the request
+          logSecurityEvent('origin_validation_failed', {
+            pathname,
+            origin: originResult.origin,
+            reason: originResult.reason,
+            action: 'blocked',
+            ip,
+          });
+          return new NextResponse(
+            JSON.stringify({
+              error: 'Origin not allowed',
+              code: 'ORIGIN_INVALID',
+            }),
+            {
+              status: 403,
+              headers: { 'Content-Type': 'application/json' },
+            }
+          );
+        }
+        // Warn mode: log warning but allow request to continue
+        logSecurityEvent('origin_validation_warning', {
+          pathname,
+          origin: originResult.origin,
+          reason: originResult.reason,
+          action: 'allowed',
+          ip,
+        });
+      }
+    }
 
     const authHeader = req.headers.get('authorization');
     if (authHeader?.startsWith(MCP_BEARER_PREFIX)) {

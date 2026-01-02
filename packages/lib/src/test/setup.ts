@@ -10,7 +10,6 @@ process.env.JWT_AUDIENCE = process.env.JWT_AUDIENCE || 'pagespace-test-users'
 
 // Encryption environment variables
 process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'test-encryption-key-32-chars-minimum-required-length'
-process.env.ENCRYPTION_SALT = process.env.ENCRYPTION_SALT || 'test-encryption-salt-for-backward-compatibility'
 
 // CSRF protection environment variables
 process.env.CSRF_SECRET = process.env.CSRF_SECRET || 'test-csrf-secret-minimum-32-characters-long-for-testing-purposes'

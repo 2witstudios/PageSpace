@@ -38,3 +38,15 @@ export {
   authProvider,
   platformType,
 } from './schema/auth';
+
+// Activity logging and monitoring re-exports
+export {
+  activityLogs,
+  activityLogsRelations,
+  activityOperationEnum,
+  activityResourceEnum,
+  activityChangeGroupTypeEnum,
+  contentFormatEnum,
+  retentionPolicies,
+  subscriptionTierEnum,
+} from './schema/monitoring';

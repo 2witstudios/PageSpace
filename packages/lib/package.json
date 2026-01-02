@@ -73,6 +73,11 @@
       "import": "./dist/monitoring/activity-logger.js",
       "require": "./dist/monitoring/activity-logger.js"
     },
+    "./monitoring/hash-chain-verifier": {
+      "types": "./dist/monitoring/hash-chain-verifier.d.ts",
+      "import": "./dist/monitoring/hash-chain-verifier.js",
+      "require": "./dist/monitoring/hash-chain-verifier.js"
+    },
     "./auth-utils": {
       "types": "./dist/auth/auth-utils.d.ts",
       "import": "./dist/auth/auth-utils.js",
@@ -219,6 +224,9 @@
       "monitoring/activity-logger": [
         "./dist/monitoring/activity-logger.d.ts"
       ],
+      "monitoring/hash-chain-verifier": [
+        "./dist/monitoring/hash-chain-verifier.d.ts"
+      ],
       "auth-utils": [
         "./dist/auth/auth-utils.d.ts"
       ],
@@ -290,6 +298,7 @@
   "dependencies": {
     "@iarna/toml": "^2.2.5",
     "@pagespace/db": "workspace:*",
+    "drizzle-orm": "^0.32.2",
     "@paralleldrive/cuid2": "^2.2.2",
     "@react-email/components": "^0.5.5",
     "diff-match-patch": "^1.0.5",

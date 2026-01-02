@@ -51,7 +51,7 @@ export async function PATCH(
   }
 
   const body = await req.json();
-  const { title, description, status, priority, assigneeId, dueDate, position } = body;
+  const { title, description, status, priority, assigneeId, assigneeAgentId, dueDate, position } = body;
 
   // Build update object
   const updates: Partial<typeof taskItems.$inferInsert> = {};
@@ -91,6 +91,35 @@ export async function PATCH(
     updates.assigneeId = assigneeId || null;
   }
 
+  // Get task list page for driveId (needed for validation and broadcasts)
+  const taskListPage = await db.query.pages.findFirst({
+    where: eq(pages.id, pageId),
+    columns: { driveId: true },
+  });
+
+  if (assigneeAgentId !== undefined) {
+    if (assigneeAgentId) {
+      // Validate that assigneeAgentId is a valid AI_CHAT page in the same drive
+      const agentPage = await db.query.pages.findFirst({
+        where: and(
+          eq(pages.id, assigneeAgentId),
+          eq(pages.type, 'AI_CHAT'),
+          eq(pages.isTrashed, false)
+        ),
+        columns: { id: true, driveId: true },
+      });
+
+      if (!agentPage) {
+        return NextResponse.json({ error: 'Invalid agent ID - must be an AI agent page' }, { status: 400 });
+      }
+
+      if (taskListPage && agentPage.driveId !== taskListPage.driveId) {
+        return NextResponse.json({ error: 'Agent must be in the same drive as the task list' }, { status: 400 });
+      }
+    }
+    updates.assigneeAgentId = assigneeAgentId || null;
+  }
+
   if (dueDate !== undefined) {
     updates.dueDate = dueDate ? new Date(dueDate) : null;
   }
@@ -98,12 +127,6 @@ export async function PATCH(
   if (position !== undefined) {
     updates.position = position;
   }
-
-  // Get task list page for driveId (needed for page broadcasts)
-  const taskListPage = await db.query.pages.findFirst({
-    where: eq(pages.id, pageId),
-    columns: { driveId: true },
-  });
 
   const actorInfo = await getActorInfo(userId);
   let linkedPageUpdated = false;
@@ -174,6 +197,13 @@ export async function PATCH(
           id: true,
           name: true,
           image: true,
+        },
+      },
+      assigneeAgent: {
+        columns: {
+          id: true,
+          title: true,
+          type: true,
         },
       },
       user: {

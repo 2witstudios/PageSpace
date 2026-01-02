@@ -3,4 +3,4 @@
  * @description Encryption and cryptographic utilities
  */
 
-export * from './encryption-utils';
+export { encrypt, decrypt } from './encryption-utils';

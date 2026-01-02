@@ -11,7 +11,7 @@ const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 // Zod schema for page creation request
 const createPageSchema = z.object({
   title: z.string().min(1, 'Title is required'),
-  type: z.enum(['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET']),
+  type: z.enum(['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET', 'TASK_LIST']),
   driveId: z.string().min(1, 'Drive ID is required'),
   parentId: z.string().nullable().optional(),
   content: z.string().optional(),

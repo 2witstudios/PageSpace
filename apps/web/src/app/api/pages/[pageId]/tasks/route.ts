@@ -75,6 +75,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       taskListId: true,
       userId: true,
       assigneeId: true,
+      assigneeAgentId: true,
       pageId: true,
       title: true,
       description: true,
@@ -93,6 +94,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
           id: true,
           name: true,
           image: true,
+        },
+      },
+      assigneeAgent: {
+        columns: {
+          id: true,
+          title: true,
+          type: true,
         },
       },
       user: {
@@ -167,7 +175,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   }
 
   const body = await req.json();
-  const { title, description, status, priority, assigneeId, dueDate } = body;
+  const { title, description, status, priority, assigneeId, assigneeAgentId, dueDate } = body;
 
   if (!title || typeof title !== 'string' || title.trim().length === 0) {
     return NextResponse.json({ error: 'Title is required' }, { status: 400 });
@@ -181,6 +189,26 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
   if (!taskListPage) {
     return NextResponse.json({ error: 'Task list page not found' }, { status: 404 });
+  }
+
+  // Validate assigneeAgentId if provided
+  if (assigneeAgentId) {
+    const agentPage = await db.query.pages.findFirst({
+      where: and(
+        eq(pages.id, assigneeAgentId),
+        eq(pages.type, 'AI_CHAT'),
+        eq(pages.isTrashed, false)
+      ),
+      columns: { id: true, driveId: true },
+    });
+
+    if (!agentPage) {
+      return NextResponse.json({ error: 'Invalid agent ID - must be an AI agent page' }, { status: 400 });
+    }
+
+    if (agentPage.driveId !== taskListPage.driveId) {
+      return NextResponse.json({ error: 'Agent must be in the same drive as the task list' }, { status: 400 });
+    }
   }
 
   // Get or create task list
@@ -224,6 +252,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       status: status || 'pending',
       priority: priority || 'medium',
       assigneeId: assigneeId || null,
+      assigneeAgentId: assigneeAgentId || null,
       dueDate: dueDate ? new Date(dueDate) : null,
       position: nextTaskPosition,
     }).returning();
@@ -240,6 +269,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
           id: true,
           name: true,
           image: true,
+        },
+      },
+      assigneeAgent: {
+        columns: {
+          id: true,
+          title: true,
+          type: true,
         },
       },
       user: {
