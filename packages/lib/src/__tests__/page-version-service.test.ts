@@ -242,7 +242,7 @@ describe('page-version-service', () => {
         pageRevision: 5,
         stateHash: 'hash-abc',
         changeGroupId: 'group-1',
-        changeGroupType: 'bulk',
+        changeGroupType: 'automation',
       });
 
       expect(capturedValues!.pageId).toBe('page-123');
@@ -254,7 +254,7 @@ describe('page-version-service', () => {
       expect(capturedValues!.pageRevision).toBe(5);
       expect(capturedValues!.stateHash).toBe('hash-abc');
       expect(capturedValues!.changeGroupId).toBe('group-1');
-      expect(capturedValues!.changeGroupType).toBe('bulk');
+      expect(capturedValues!.changeGroupType).toBe('automation');
     });
 
     it('handles null createdBy', async () => {
