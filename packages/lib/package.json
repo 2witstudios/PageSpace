@@ -290,6 +290,7 @@
   "dependencies": {
     "@iarna/toml": "^2.2.5",
     "@pagespace/db": "workspace:*",
+    "drizzle-orm": "^0.32.2",
     "@paralleldrive/cuid2": "^2.2.2",
     "@react-email/components": "^0.5.5",
     "google-auth-library": "^10.3.0",
