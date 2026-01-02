@@ -842,7 +842,8 @@ describe('activity logger compliance', () => {
 
     it('should chain to previous log hash for subsequent entries', async () => {
       // Arrange - simulate a previous log entry
-      lastInsertedHash = 'abc123previoushash0000000000000000000000000000000000000000000000';
+      const expectedPreviousHash = 'abc123previoushash0000000000000000000000000000000000000000000000';
+      lastInsertedHash = expectedPreviousHash;
 
       const input: ActivityLogInput = {
         userId: 'user-123',
@@ -857,7 +858,8 @@ describe('activity logger compliance', () => {
       await logActivity(input);
 
       // Assert - subsequent entry should reference previous hash
-      expect(capturedInsertValues?.previousLogHash).toBe(lastInsertedHash);
+      // Note: lastInsertedHash gets updated by the mock, so compare against saved value
+      expect(capturedInsertValues?.previousLogHash).toBe(expectedPreviousHash);
       expect(capturedInsertValues?.chainSeed).toBeNull(); // Only first entry has seed
       expect(capturedInsertValues?.logHash).toBeDefined();
       expect(capturedInsertValues?.logHash).not.toBe(lastInsertedHash); // Different hash
