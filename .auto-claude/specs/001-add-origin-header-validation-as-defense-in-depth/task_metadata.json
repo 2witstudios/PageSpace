@@ -1,0 +1,10 @@
+{
+  "sourceType": "ideation",
+  "ideationType": "security_hardening",
+  "ideaId": "sec-001",
+  "rationale": "Defense-in-depth is a security best practice. Browser-level protections like SameSite cookies could potentially be bypassed by future browser bugs or edge cases. Origin validation ensures requests originate from expected domains even if cookie protections fail.",
+  "category": "security",
+  "securitySeverity": "medium",
+  "impact": "medium",
+  "priority": "medium"
+}
