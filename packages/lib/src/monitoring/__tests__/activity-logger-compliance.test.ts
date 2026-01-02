@@ -862,7 +862,7 @@ describe('activity logger compliance', () => {
       expect(capturedInsertValues?.previousLogHash).toBe(expectedPreviousHash);
       expect(capturedInsertValues?.chainSeed).toBeNull(); // Only first entry has seed
       expect(capturedInsertValues?.logHash).toBeDefined();
-      expect(capturedInsertValues?.logHash).not.toBe(lastInsertedHash); // Different hash
+      expect(capturedInsertValues?.logHash).not.toBe(expectedPreviousHash); // New hash should differ from previous
     });
 
     it('should produce deterministic hashes for same input data', async () => {
