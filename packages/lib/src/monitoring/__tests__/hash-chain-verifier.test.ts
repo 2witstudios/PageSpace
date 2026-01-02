@@ -167,17 +167,17 @@ function createValidHashChain(count: number): typeof mockLogEntries {
       resourceType: 'page',
       resourceId: `page-${i + 1}`,
       driveId: 'drive-1',
-      pageId: null as string | null,
-      contentSnapshot: null as string | null,
-      previousValues: null as Record<string, unknown> | null,
-      newValues: null as Record<string, unknown> | null,
-      metadata: null as Record<string, unknown> | null,
     };
 
     const logHash = computeLogHash(entryData, previousHash);
 
     entries.push({
       ...entryData,
+      pageId: null,
+      contentSnapshot: null,
+      previousValues: null,
+      newValues: null,
+      metadata: null,
       previousLogHash: i === 0 ? null : entries[i - 1]?.logHash ?? null,
       logHash,
       chainSeed: i === 0 ? chainSeed : null,
