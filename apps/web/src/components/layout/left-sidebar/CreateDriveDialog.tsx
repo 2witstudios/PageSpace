@@ -23,6 +23,7 @@ interface CreateDriveDialogProps {
 
 export default function CreateDriveDialog({ isOpen, setIsOpen }: CreateDriveDialogProps) {
   const [driveName, setDriveName] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Use selective Zustand subscriptions to prevent unnecessary re-renders
   const addDrive = useDriveStore(state => state.addDrive);
@@ -33,7 +34,8 @@ export default function CreateDriveDialog({ isOpen, setIsOpen }: CreateDriveDial
 
   const handleCreateDrive = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!driveName.trim()) return;
+    if (!driveName.trim() || isSubmitting) return;
+    setIsSubmitting(true);
     try {
       const newDrive = await post<Drive>("/api/drives", { name: driveName });
       // Add the drive with correct ownership flag
@@ -46,6 +48,8 @@ export default function CreateDriveDialog({ isOpen, setIsOpen }: CreateDriveDial
       setIsOpen(false);
     } catch (error) {
       console.error(error);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -69,11 +73,14 @@ export default function CreateDriveDialog({ isOpen, setIsOpen }: CreateDriveDial
                 value={driveName}
                 onChange={(e) => setDriveName(e.target.value)}
                 className="col-span-3"
+                autoFocus
               />
             </div>
           </div>
           <DialogFooter>
-            <Button type="submit">Create</Button>
+            <Button type="submit" disabled={isSubmitting}>
+              {isSubmitting ? 'Creating...' : 'Create'}
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>
