@@ -30,7 +30,7 @@ This master plan consolidates four security planning documents into a single, ac
 
 ## Project Structure
 
-```
+```text
 Phase 0: Infrastructure & Preparation
 Phase 1: Critical Security Foundation
 Phase 2: Zero-Trust Token Architecture

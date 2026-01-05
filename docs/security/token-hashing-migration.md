@@ -155,7 +155,7 @@ pnpm tsx scripts/verify-token-migration.ts
 ```
 
 **Expected Output:**
-```
+```text
 Token Migration Verification
 ============================
 Refresh Tokens:
@@ -329,7 +329,7 @@ function compareHashes(a: string, b: string): boolean {
 | 5 | 2 days | Monitoring |
 | 6 | 1 day | Remove plaintext |
 
-**Total: ~1 week**
+### Total Duration: ~1 week
 
 ## Checklist
 

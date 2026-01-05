@@ -32,7 +32,7 @@ describe('security-test-utils', () => {
     it('each category contains multiple test cases', () => {
       const inputs = getMaliciousInputs();
 
-      for (const [category, cases] of Object.entries(inputs)) {
+      for (const [_category, cases] of Object.entries(inputs)) {
         expect(cases.length).toBeGreaterThan(0);
         expect(Array.isArray(cases)).toBe(true);
       }

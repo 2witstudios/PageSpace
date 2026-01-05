@@ -16,6 +16,10 @@
  *   # Export results to JSON
  *   k6 run --out json=results/baseline-$(date +%Y-%m-%d).json tests/load/auth-baseline.k6.js
  *
+ * Prerequisites:
+ *   # Ensure output directory exists before running (k6 doesn't create it)
+ *   mkdir -p tests/load/results
+ *
  * Environment Variables:
  *   BASE_URL - Target URL (default: http://localhost:3000)
  *   TEST_EMAIL - Test user email
@@ -114,7 +118,7 @@ export default function (data) {
 
     if (!loginSuccess) {
       authErrorRate.add(1);
-      console.log(`Login failed: ${loginResponse.status} - ${loginResponse.body}`);
+      console.log(`Login failed: status ${loginResponse.status}`);
     } else {
       authErrorRate.add(0);
     }
@@ -258,7 +262,7 @@ export function handleSummary(data) {
   };
 
   return {
-    'stdout': textSummary(data, { indent: ' ', enableColors: true }),
+    'stdout': textSummary(data),
     'tests/load/results/baseline-latest.json': JSON.stringify(summary, null, 2),
   };
 }
@@ -266,7 +270,7 @@ export function handleSummary(data) {
 /**
  * Text summary helper
  */
-function textSummary(data, options) {
+function textSummary(data) {
   const lines = [
     '',
     '='.repeat(60),
