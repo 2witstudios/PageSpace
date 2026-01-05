@@ -508,8 +508,8 @@ Before implementing security hardening, ensure infrastructure is prepared:
    - Migrate MCP tokens to hashed storage
    - Add migration script for existing tokens
 
-4. **Make Distributed Rate Limiting Mandatory**
-   - Require Redis for rate limiting in production
+4. **Enforce Distributed Rate-Limiting**
+   - Require Redis for rate-limiting in production
    - Fail startup if Redis unavailable
 
 ### Phase 2: High Priority (Weeks 2-3)
@@ -591,14 +591,14 @@ Before implementing security hardening, ensure infrastructure is prepared:
 2. Token manipulation and forgery
 3. Multi-tenant isolation
 4. Service-to-service trust exploitation
-5. Rate limiting effectiveness
+5. Rate-limiting effectiveness
 6. Session management weaknesses
 
 ### Positive Security Tests (Happy Path + Security)
 
 Verify that security measures don't break normal operations:
 
-- [ ] Successful login with rate limiting active (below threshold)
+- [ ] Successful login with rate-limiting active (below threshold)
 - [ ] File download with valid service token and proper tenant isolation
 - [ ] Token refresh during high-concurrency periods
 - [ ] Cross-tenant operations with audit logging enabled

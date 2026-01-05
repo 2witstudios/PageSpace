@@ -527,11 +527,32 @@ async function validateHashedTokensMigration(): Promise<void> {
 
 **Deployment Strategy:**
 1. Deploy migration (adds `tokenHash` column, computes hashes)
-2. Verify: Run `validateHashedTokensMigration()`
+2. **Verify immediately after migration completes** (before any new deployments):
+   - Run `validateHashedTokensMigration()` to confirm all tokens hashed
+   - Log metrics: tokens processed, time elapsed, any errors
+   - If verification fails, investigate before proceeding
 3. Deploy new code using `tokenHash` for lookups (feature flag optional)
-4. Monitor for 24-48 hours
-5. Deploy column drop migration
+4. Monitor for 24-48 hours:
+   - Track token lookup latency (hashed vs previous)
+   - Monitor error rates on refresh endpoints
+   - Alert on any "token not found" errors
+5. Deploy column drop migration (only after step 4 passes)
 6. **Rollback**: If step 3 fails, revert deployment - plaintext still available
+
+**Migration Progress Tracking:**
+```typescript
+// Add logging to track migration progress
+async function migrateWithMetrics() {
+  const startTime = Date.now();
+  let processed = 0;
+
+  // ... batch processing loop ...
+  processed += tokens.length;
+  console.log(`Progress: ${processed} tokens hashed (${Date.now() - startTime}ms)`);
+
+  console.log(`Migration complete: ${processed} tokens in ${Date.now() - startTime}ms`);
+}
+```
 
 ---
 

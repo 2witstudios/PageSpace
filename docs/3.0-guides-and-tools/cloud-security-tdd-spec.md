@@ -567,6 +567,19 @@ describe('Session Security', () => {
       expect(setCookie).toContain('SameSite=Strict');
     });
 
+    it('cookies have safe SameSite default in development', async () => {
+      // Even in non-production, SameSite should default to Lax or Strict
+      // Never 'None' without Secure flag (browser will reject)
+      process.env.NODE_ENV = 'development';
+      const response = await loginRequest(testUser);
+      const setCookie = response.headers.get('set-cookie');
+
+      // Should be either Strict or Lax (both are safe defaults)
+      expect(setCookie).toMatch(/SameSite=(Strict|Lax)/);
+      // Must NOT be 'None' without Secure
+      expect(setCookie).not.toMatch(/SameSite=None(?!.*Secure)/);
+    });
+
     it('cookies have Secure flag in production', async () => {
       process.env.NODE_ENV = 'production';
       const response = await loginRequest(testUser);
