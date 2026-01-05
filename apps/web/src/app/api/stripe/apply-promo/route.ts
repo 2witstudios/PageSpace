@@ -127,17 +127,18 @@ export async function POST(request: NextRequest) {
     });
 
     // Get discount info from the new invoice
-    const discount = newInvoice.discounts?.[0];
-    const coupon = typeof discount === 'object' && discount !== null && 'coupon' in discount
-      ? discount.coupon
-      : null;
+    // In Stripe v20, discounts can be string IDs or expanded objects
+    const discountItem = newInvoice.discounts?.[0];
+    const discount = typeof discountItem === 'object' ? discountItem as Stripe.Discount : null;
+    // In Stripe v20, coupon is nested under source.coupon
+    const coupon = discount?.source?.coupon;
 
     return NextResponse.json({
       success: true,
       subscriptionId: newSubscription.id,
       clientSecret,
       amountDue: newInvoice.amount_due,
-      discount: coupon ? {
+      discount: coupon && typeof coupon === 'object' ? {
         couponId: coupon.id,
         percentOff: coupon.percent_off,
         amountOff: coupon.amount_off,

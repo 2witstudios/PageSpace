@@ -309,13 +309,13 @@
     "mammoth": "^1.10.0",
     "pako": "^2.1.0",
     "pdf-parse-debugging-disabled": "^1.1.1",
-    "react-email": "^4.2.12",
+    "react-email": "^5.1.1",
     "resend": "^6.1.2",
     "server-only": "^0.0.1",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
-    "@react-email/preview-server": "4.2.12",
+    "@react-email/preview-server": "5.1.1",
     "@types/diff-match-patch": "^1.0.36",
     "@types/html-to-docx": "^1.8.0",
     "@types/pako": "^2.0.3",

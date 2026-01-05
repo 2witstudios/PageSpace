@@ -64,7 +64,8 @@ const mockAuthError = (status = 401): AuthError => ({
   error: NextResponse.json({ error: 'Unauthorized' }, { status }),
 });
 
-// Helper to create mock promotion code
+// Helper to create mock promotion code (Stripe v20 structure)
+// In Stripe v20, coupon is nested under promotion.coupon
 const mockPromoCode = (overrides: Partial<{
   id: string;
   code: string;
@@ -87,15 +88,18 @@ const mockPromoCode = (overrides: Partial<{
   max_redemptions: overrides.max_redemptions ?? null,
   times_redeemed: overrides.times_redeemed ?? 0,
   expires_at: overrides.expires_at ?? null,
-  coupon: overrides.coupon ?? {
-    id: 'coupon_123',
-    name: '20% Off',
-    valid: true,
-    percent_off: 20,
-    amount_off: null,
-    currency: null,
-    duration: 'forever' as const,
-    duration_in_months: null,
+  // Stripe v20: coupon is nested under promotion.coupon
+  promotion: {
+    coupon: overrides.coupon ?? {
+      id: 'coupon_123',
+      name: '20% Off',
+      valid: true,
+      percent_off: 20,
+      amount_off: null,
+      currency: null,
+      duration: 'forever' as const,
+      duration_in_months: null,
+    },
   },
 });
 

@@ -129,6 +129,7 @@ const mockOldSubscription = (overrides: Partial<{
 });
 
 // Helper to create mock new subscription (for create - after promo applied)
+// In Stripe v20, coupon is nested under discounts[0].source.coupon
 const mockNewSubscription = (overrides: Partial<{
   id: string;
   status: string;
@@ -136,7 +137,7 @@ const mockNewSubscription = (overrides: Partial<{
     id: string;
     amount_due: number;
     confirmation_secret: { client_secret: string };
-    discounts: Array<{ coupon: { id: string; percent_off: number | null; amount_off: number | null } }>;
+    discounts: Array<{ source: { coupon: { id: string; percent_off: number | null; amount_off: number | null } } }>;
   };
 }> = {}) => ({
   id: overrides.id ?? 'sub_new_456',
@@ -145,11 +146,14 @@ const mockNewSubscription = (overrides: Partial<{
     id: 'in_new_456',
     amount_due: 1600, // $16.00 (after 20% discount)
     confirmation_secret: { client_secret: 'pi_secret_new_456' },
+    // Stripe v20: coupon is nested under source.coupon
     discounts: [{
-      coupon: {
-        id: 'coupon_123',
-        percent_off: 20,
-        amount_off: null,
+      source: {
+        coupon: {
+          id: 'coupon_123',
+          percent_off: 20,
+          amount_off: null,
+        },
       },
     }],
   },

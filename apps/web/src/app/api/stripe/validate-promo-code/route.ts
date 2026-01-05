@@ -65,7 +65,16 @@ export async function POST(request: NextRequest) {
     }
 
     const promoCode = promos.data[0];
-    const coupon = promoCode.coupon;
+    // In Stripe v20, coupon is nested under promotion.coupon
+    const couponData = promoCode.promotion.coupon;
+    // Handle case where coupon might be a string ID or expanded object
+    if (!couponData || typeof couponData === 'string') {
+      return NextResponse.json({
+        valid: false,
+        error: 'Invalid promotion code configuration',
+      });
+    }
+    const coupon = couponData;
 
     // Check if coupon is still valid
     if (!coupon.valid) {
