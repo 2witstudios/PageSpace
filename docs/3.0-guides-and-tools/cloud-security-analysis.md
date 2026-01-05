@@ -186,7 +186,7 @@ async function createValidatedServiceToken(
 
 ---
 
-## High Severity Vulnerabilities
+## High-Severity Vulnerabilities
 
 ### 5. Rate Limiting is Instance-Local (Not Distributed)
 
@@ -415,7 +415,7 @@ if (auth.role !== 'admin') {
 
 ---
 
-## Medium Severity Vulnerabilities
+## Medium-Severity Vulnerabilities
 
 ### 13. Service Token Resource Scoping Not Enforced
 
@@ -445,7 +445,7 @@ if (auth.role !== 'admin') {
 
 ---
 
-## Low Severity Vulnerabilities
+## Low-Severity Vulnerabilities
 
 ### 19. Console.log Statements in Production Paths
 
@@ -467,7 +467,31 @@ if (auth.role !== 'admin') {
 
 ## Recommended Hardening Roadmap
 
-### Phase 1: Critical Fixes (Week 1)
+### Pre-Phase 0: Infrastructure Readiness
+
+Before implementing security hardening, ensure infrastructure is prepared:
+
+1. **Redis Cluster Capacity**
+   - Provision Redis cluster with sufficient memory for JTI tracking
+   - Configure persistence (RDB/AOF) for rate limit and revocation data
+   - Set up Redis monitoring and alerting
+
+2. **Database Migration Strategy**
+   - Plan token hashing migration: add column → compute hashes → verify → drop plaintext
+   - Test migration on staging with production-like data volume
+   - Prepare rollback scripts for each migration step
+
+3. **Load Testing Baseline**
+   - Benchmark current authentication latency
+   - Profile database queries in token validation paths
+   - Identify bottlenecks before adding validation checks
+
+4. **Monitoring & Alerting**
+   - Set up dashboards for rate limit hits, token revocations, JTI lookups
+   - Configure alerts for Redis latency spikes
+   - Establish security incident response procedures
+
+### Phase 1: Critical Fixes
 
 1. **Implement Service Token JTI Tracking**
    - Add Redis-based JTI allowlist/denylist
@@ -569,6 +593,27 @@ if (auth.role !== 'admin') {
 4. Service-to-service trust exploitation
 5. Rate limiting effectiveness
 6. Session management weaknesses
+
+### Positive Security Tests (Happy Path + Security)
+
+Verify that security measures don't break normal operations:
+
+- [ ] Successful login with rate limiting active (below threshold)
+- [ ] File download with valid service token and proper tenant isolation
+- [ ] Token refresh during high-concurrency periods
+- [ ] Cross-tenant operations with audit logging enabled
+- [ ] Multi-device login with device token management
+- [ ] Admin operations after role validation implementation
+
+### Load Testing Security Features
+
+Test security measures under production-like load:
+
+- [ ] Rate limiting Redis operations at 10K+ requests/second
+- [ ] JTI lookup latency under peak authentication load
+- [ ] Token validation with user suspension checks at scale
+- [ ] Distributed rate limit consistency across 10+ instances
+- [ ] Token hashing performance during bulk token refresh
 
 ---
 

@@ -168,6 +168,17 @@ describe('Security Invariants', () => {
 
 Race conditions are among the most critical security issues in distributed systems.
 
+> **Testing Limitations Note:**
+>
+> JavaScript's `Promise.all()` doesn't guarantee true parallelism - it schedules tasks concurrently but they execute on a single event loop. For rigorous race condition testing:
+>
+> 1. **Unit tests** (below): Good for catching obvious issues, but may miss subtle timing windows
+> 2. **Integration tests**: Use `node:worker_threads` or separate processes for true parallelism
+> 3. **Load testing**: Use tools like k6, Artillery, or Locust to generate genuine concurrent HTTP requests
+> 4. **CI/CD**: Run race condition tests multiple times (e.g., `--repeat 10`) to catch intermittent failures
+>
+> Consider injecting artificial delays in test environments to widen race windows.
+
 ### Token Refresh Race Conditions
 
 ```typescript
@@ -521,6 +532,17 @@ describe('Session Security', () => {
    * Cookie Security Attributes
    */
   describe('Cookie Security', () => {
+    // Properly isolate environment changes to prevent test pollution
+    let originalNodeEnv: string | undefined;
+
+    beforeEach(() => {
+      originalNodeEnv = process.env.NODE_ENV;
+    });
+
+    afterEach(() => {
+      process.env.NODE_ENV = originalNodeEnv;
+    });
+
     it('access token cookie has httpOnly flag', async () => {
       const response = await loginRequest(testUser);
       const setCookie = response.headers.get('set-cookie');
@@ -770,6 +792,15 @@ describe('Token Revocation', () => {
       expect(response.status).toBe(401);
     });
 
+    /**
+     * NOTE: This test assumes Redis has persistence enabled (RDB or AOF).
+     * In production, configure redis.conf with:
+     *   save 900 1    # Save after 900 sec if at least 1 key changed
+     *   appendonly yes # Enable AOF for durability
+     *
+     * Without persistence, JTI denylist data would be lost on Redis restart,
+     * allowing revoked tokens to be used again.
+     */
     it('JTI denylist survives Redis restart', async () => {
       const token = await createServiceToken('web', ['files:read'], { userId: testUser.id });
       const jti = extractJTI(token);
@@ -940,39 +971,56 @@ describe('Path Traversal Prevention', () => {
 describe('Secret Management', () => {
   /**
    * Timing-safe comparisons
+   *
+   * NOTE: Empirical timing tests (measuring variance) are unreliable for detecting
+   * timing attacks because:
+   * 1. bcrypt is designed to be slow AND timing-safe, so variance is natural
+   * 2. System noise (GC, I/O, scheduling) can mask timing leaks
+   * 3. Statistically significant results require thousands of samples
+   *
+   * Instead, we use static code analysis to verify timingSafeEqual is used
+   * for all secret comparisons.
    */
   describe('Timing-Safe Operations', () => {
-    it('password comparison is timing-safe', async () => {
-      const timings: number[] = [];
-      const correctPassword = 'correct-password-123';
-      const hash = await bcrypt.hash(correctPassword, 10);
-
-      // Time comparisons with different inputs
-      for (let i = 0; i < 100; i++) {
-        const wrongPassword = 'x'.repeat(i) + 'wrong';
-        const start = process.hrtime.bigint();
-        await bcrypt.compare(wrongPassword, hash);
-        const end = process.hrtime.bigint();
-        timings.push(Number(end - start));
-      }
-
-      // Calculate variance - should be low for timing-safe comparison
-      const mean = timings.reduce((a, b) => a + b) / timings.length;
-      const variance = timings.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / timings.length;
-      const coefficientOfVariation = Math.sqrt(variance) / mean;
-
-      // CV should be reasonable (bcrypt is naturally timing-safe)
-      expect(coefficientOfVariation).toBeLessThan(0.5);
-    });
-
-    it('token comparison uses timingSafeEqual', async () => {
-      // This is a code analysis test
-      const authUtilsCode = await fs.readFile(
-        'packages/lib/src/auth/csrf-utils.ts',
+    it('password comparison uses bcrypt (inherently timing-safe)', async () => {
+      // bcrypt.compare is designed to be timing-safe
+      // Verify the auth code uses bcrypt, not plain comparison
+      const authCode = await fs.readFile(
+        'apps/web/src/lib/auth/auth-utils.ts',
         'utf-8'
       );
 
-      expect(authUtilsCode).toContain('timingSafeEqual');
+      expect(authCode).toContain('bcrypt.compare');
+      expect(authCode).not.toMatch(/password\s*===\s*|password\s*!==\s*/);
+    });
+
+    it('CSRF token comparison uses timingSafeEqual', async () => {
+      const csrfUtilsCode = await fs.readFile(
+        'apps/web/src/lib/auth/csrf-utils.ts',
+        'utf-8'
+      );
+
+      expect(csrfUtilsCode).toContain('timingSafeEqual');
+      // Verify no plain equality for token comparison
+      expect(csrfUtilsCode).not.toMatch(/token\s*===\s*|token\s*!==\s*/);
+    });
+
+    it('cron secret comparison uses timingSafeEqual', async () => {
+      const cronCode = await fs.readFile(
+        'apps/web/src/app/api/cron/cleanup-tokens/route.ts',
+        'utf-8'
+      );
+
+      expect(cronCode).toContain('timingSafeEqual');
+    });
+
+    it('monitoring ingest key comparison uses timingSafeEqual', async () => {
+      const ingestCode = await fs.readFile(
+        'apps/web/src/app/api/internal/monitoring/ingest/route.ts',
+        'utf-8'
+      );
+
+      expect(ingestCode).toContain('timingSafeEqual');
     });
   });
 
@@ -1188,24 +1236,48 @@ test.describe('Security E2E Tests', () => {
     expect(content).not.toContain('onerror=alert');
   });
 
+  /**
+   * CSRF Protection Test
+   *
+   * This test simulates a cross-site request forgery attack scenario:
+   *
+   * Attack Model:
+   * 1. Victim is logged into PageSpace (has valid session cookies)
+   * 2. Attacker hosts a malicious site that submits forms to PageSpace
+   * 3. If victim visits attacker's site, the browser sends cookies automatically
+   * 4. Without CSRF protection, attacker could perform actions as victim
+   *
+   * Why this test works:
+   * - We copy victim's cookies to attacker context (simulating cross-site request)
+   * - Attacker CANNOT access the CSRF token (it's in a same-site cookie or DOM)
+   * - SameSite=Strict cookies prevent cross-site cookie sending in real attacks
+   * - This test verifies the server rejects requests without valid CSRF tokens
+   *
+   * Defense layers:
+   * 1. SameSite=Strict cookies (primary defense)
+   * 2. CSRF token validation (defense in depth)
+   * 3. Origin header validation (additional layer)
+   */
   test('CSRF protection prevents cross-site POST', async ({ page, context }) => {
     await loginAsTestUser(page);
 
-    // Get the auth cookies
+    // Get the auth cookies (in real attack, browser sends these automatically)
     const cookies = await context.cookies();
 
-    // Create a new context (simulating attacker's site)
+    // Create a new browser context (simulating attacker's site at evil.com)
     const attackerContext = await page.context().browser()!.newContext();
     const attackerPage = await attackerContext.newPage();
 
-    // Set victim's cookies in attacker context (simulating cookie theft)
+    // Copy victim's cookies to attacker context
+    // This simulates what would happen if SameSite wasn't set (legacy browsers)
     await attackerContext.addCookies(cookies);
 
-    // Try to make request without CSRF token
+    // Attacker tries to POST without CSRF token (they can't access it cross-site)
     const response = await attackerPage.request.post('/api/pages', {
       data: { title: 'Hacked!' }
     });
 
+    // Server MUST reject the request - CSRF token is missing/invalid
     expect(response.status()).toBe(403);
     expect(await response.json()).toHaveProperty('error', expect.stringContaining('CSRF'));
 

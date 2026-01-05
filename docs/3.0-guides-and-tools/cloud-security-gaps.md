@@ -458,7 +458,7 @@ trufflehog git file://. --only-verified
 ### 16. Key Rotation Procedures (NOT COVERED)
 
 **Required Procedures:**
-```
+```text
 JWT_SECRET Rotation:
 1. Generate new secret
 2. Set JWT_SECRET_NEW alongside JWT_SECRET
@@ -488,47 +488,78 @@ async function migrateToHashedTokens() {
     ALTER TABLE mcp_tokens ADD COLUMN token_hash TEXT;
   `);
 
-  // 2. Compute hashes for existing tokens
-  const refreshTokens = await db.select().from(refreshTokens);
-  for (const token of refreshTokens) {
-    const hash = createHash('sha256').update(token.token).digest('hex');
-    await db.update(refreshTokens)
-      .set({ tokenHash: hash })
-      .where(eq(refreshTokens.id, token.id));
+  // 2. Compute hashes for existing tokens (batch for performance)
+  const BATCH_SIZE = 1000;
+  let offset = 0;
+  while (true) {
+    const tokens = await db.select().from(refreshTokens).limit(BATCH_SIZE).offset(offset);
+    if (tokens.length === 0) break;
+
+    for (const token of tokens) {
+      const hash = createHash('sha256').update(token.token).digest('hex');
+      await db.update(refreshTokens)
+        .set({ tokenHash: hash })
+        .where(eq(refreshTokens.id, token.id));
+    }
+    offset += BATCH_SIZE;
   }
 
-  // 3. After migration, drop token column
-  // (do this in separate migration after code is updated)
+  // 3. Verify all tokens are hashed before proceeding
+  await validateHashedTokensMigration();
 }
+
+// Verification step - MUST pass before dropping plaintext column
+async function validateHashedTokensMigration(): Promise<void> {
+  const unhashed = await db.select({ count: sql<number>`count(*)` })
+    .from(refreshTokens)
+    .where(isNull(refreshTokens.tokenHash));
+
+  if (unhashed[0].count > 0) {
+    throw new Error(`Migration incomplete: ${unhashed[0].count} tokens still unhashed`);
+  }
+
+  console.log('✓ All tokens hashed successfully');
+}
+
+// 4. After code is updated to use tokenHash, drop plaintext in separate migration
+// Rollback: If new code fails, revert deployment - plaintext column still exists
 ```
+
+**Deployment Strategy:**
+1. Deploy migration (adds `tokenHash` column, computes hashes)
+2. Verify: Run `validateHashedTokensMigration()`
+3. Deploy new code using `tokenHash` for lookups (feature flag optional)
+4. Monitor for 24-48 hours
+5. Deploy column drop migration
+6. **Rollback**: If step 3 fails, revert deployment - plaintext still available
 
 ---
 
 ## Priority Matrix
 
-| Gap | Severity | Effort | Priority Score |
-|-----|----------|--------|----------------|
-| Race Conditions | Critical | Medium | 1 |
-| SSRF Prevention | Critical | Low | 2 |
-| Distributed Rate Limit | Critical | Medium | 3 |
-| Session Fixation | High | Low | 4 |
-| Cookie Security | High | Low | 5 |
-| CSP Headers | High | Low | 6 |
-| Token Hashing Migration | High | Medium | 7 |
-| Path Traversal Advanced | Medium | Low | 8 |
-| Timing Attacks | Medium | Low | 9 |
-| Password Reset | Medium | Medium | 10 |
-| WebSocket Replay | Medium | Medium | 11 |
-| SQL Injection Edge | Medium | Low | 12 |
-| Infrastructure | Medium | Medium | 13 |
-| Dependency Audit | Low | Low | 14 |
-| Secret Scanning | Low | Low | 15 |
+| Gap | Severity | Effort | Priority | Implementation Notes |
+|-----|----------|--------|----------|---------------------|
+| Race Conditions | Critical | Medium | 1 | Requires DB transaction isolation testing |
+| SSRF Prevention | Critical | Low | 2 | Single-service change (processor) |
+| Distributed Rate Limit | Critical | Medium → High | 3 | Cross-service: web, processor, realtime; Redis coordination |
+| Session Fixation | High | Low | 4 | Web service only |
+| Cookie Security | High | Low | 5 | Configuration changes |
+| CSP Headers | High | Low | 6 | Middleware addition |
+| Token Hashing Migration | High | Medium | 7 | Affects refresh_tokens + mcp_tokens; audit schema first |
+| Path Traversal Advanced | Medium | Low | 8 | Processor service only |
+| Timing Attacks | Medium | Low | 9 | Multiple endpoints; consider shared utility |
+| Password Reset | Medium | Medium | 10 | Requires email service integration |
+| WebSocket Replay | Medium | Medium | 11 | Realtime service + broadcast protocol change |
+| SQL Injection Edge | Medium | Low | 12 | Code review task |
+| Infrastructure | Medium | Medium → High | 13 | Docker/K8s config; may require deployment changes |
+| Dependency Audit | Low | Low | 14 | CI/CD integration |
+| Secret Scanning | Low | Low | 15 | One-time setup + CI hook |
 
 ---
 
 ## Test File Structure
 
-```
+```text
 packages/lib/src/__tests__/
 ├── security-invariants.test.ts       # Core security invariants
 ├── race-conditions.test.ts           # Concurrency tests
