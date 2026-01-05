@@ -19,12 +19,12 @@ This document specifies a comprehensive security hardening for PageSpace cloud d
 ### 1.1 Replace JWTs with Opaque Tokens
 
 **Current State (Vulnerable):**
-```
+```text
 Web App → JWT with claims → Processor (trusts claims)
 ```
 
 **Target State (Zero-Trust):**
-```
+```text
 Web App → Opaque Token → Processor → Auth Service → Session Store
                                             ↓
                                     Verified Claims
@@ -129,7 +129,7 @@ export function isValidTokenFormat(token: string): boolean {
 // packages/lib/src/auth/session-service.ts
 
 import { db, sessions, users } from '@pagespace/db';
-import { eq, and, isNull, gt } from 'drizzle-orm';
+import { eq, and, isNull, gt, lt } from 'drizzle-orm';
 import { hashToken, generateOpaqueToken, isValidTokenFormat } from './opaque-tokens';
 
 export interface SessionClaims {
@@ -821,6 +821,13 @@ export function requireResource(type: string, idParam: string) {
 import { EnforcedAuthContext } from '@pagespace/lib/permissions';
 import { EnforcedFileRepository } from '@pagespace/lib/repositories';
 
+export interface OptimizeOptions {
+  quality?: number;
+  maxWidth?: number;
+  maxHeight?: number;
+  format?: 'webp' | 'avif' | 'jpeg' | 'png';
+}
+
 export class EnforcedFileService {
   private fileRepo: EnforcedFileRepository;
 
@@ -981,17 +988,44 @@ export interface AuditEvent {
   anomalyFlags?: string[];
 }
 
+/**
+ * Security Audit Service with hash chain integrity
+ *
+ * IMPORTANT: Multi-instance considerations
+ * - This service maintains an in-memory lastHash for the hash chain
+ * - In multi-instance deployments, use database-backed state instead:
+ *   1. Use a Redis lock or database advisory lock before inserting
+ *   2. Always read the latest hash from DB within the transaction
+ *   3. Or use a dedicated single-instance audit writer service
+ *
+ * For production cloud deployments, consider:
+ * - Running as a singleton service behind a queue
+ * - Using database sequences for ordering
+ * - Accepting eventual consistency with per-instance chains merged later
+ */
 export class SecurityAuditService {
   private lastHash: string | null = null;
+  private initialized = false;
+
+  /**
+   * Initialize the service by loading the last hash from the database
+   * Call this during service startup, not lazily
+   */
+  async initialize(): Promise<void> {
+    if (this.initialized) return;
+
+    const lastEvent = await db.query.securityAuditLog.findFirst({
+      orderBy: desc(securityAuditLog.timestamp),
+      columns: { eventHash: true }
+    });
+    this.lastHash = lastEvent?.eventHash ?? 'genesis';
+    this.initialized = true;
+  }
 
   async logEvent(event: AuditEvent): Promise<void> {
-    // Get previous hash for chain integrity
-    if (this.lastHash === null) {
-      const lastEvent = await db.query.securityAuditLog.findFirst({
-        orderBy: desc(securityAuditLog.timestamp),
-        columns: { eventHash: true }
-      });
-      this.lastHash = lastEvent?.eventHash ?? 'genesis';
+    // Ensure initialized (fallback for lazy init, but prefer explicit init)
+    if (!this.initialized) {
+      await this.initialize();
     }
 
     // Create hash of this event (includes previous hash for chain)
@@ -1141,10 +1175,18 @@ export class AnomalyDetector {
 
     // Check for impossible travel
     const lastLocation = await this.getLastLocation(ctx.userId);
-    if (lastLocation && this.isImpossibleTravel(lastLocation, ctx.ipAddress)) {
+    if (lastLocation && await this.isImpossibleTravel(lastLocation, ctx.ipAddress)) {
       flags.push('impossible_travel');
       riskScore += 0.4;
     }
+
+    // Update last location for future checks
+    await this.redis.set(
+      `user:${ctx.userId}:last_location`,
+      JSON.stringify({ ip: ctx.ipAddress, timestamp: Date.now() }),
+      'EX',
+      86400 // 24 hour TTL
+    );
 
     // Check for unusual user agent
     const knownAgents = await this.getKnownUserAgents(ctx.userId);
@@ -1182,13 +1224,58 @@ export class AnomalyDetector {
     return { riskScore, flags };
   }
 
-  private async getLastLocation(userId: string): Promise<string | null> {
-    return this.redis.get(`user:${userId}:last_ip`);
+  private async getLastLocation(userId: string): Promise<{ ip: string; timestamp: number } | null> {
+    const data = await this.redis.get(`user:${userId}:last_location`);
+    if (!data) return null;
+    try {
+      return JSON.parse(data);
+    } catch {
+      return null;
+    }
   }
 
-  private isImpossibleTravel(lastIp: string, currentIp: string): boolean {
-    // Implementation would use GeoIP lookup and time-based distance calculation
-    return false; // Placeholder
+  /**
+   * Detect impossible travel based on IP geolocation and time
+   *
+   * Implementation notes:
+   * - Requires a GeoIP database (e.g., MaxMind GeoIP2)
+   * - Calculate distance between coordinates using Haversine formula
+   * - Compare against maximum feasible travel speed (~900 km/h for commercial flight)
+   *
+   * For production, integrate with:
+   * - @maxmind/geoip2-node for IP geolocation
+   * - A proper geo distance library
+   */
+  private async isImpossibleTravel(
+    lastLocation: { ip: string; timestamp: number },
+    currentIp: string
+  ): Promise<boolean> {
+    // Skip if same IP
+    if (lastLocation.ip === currentIp) return false;
+
+    const timeDiffMs = Date.now() - lastLocation.timestamp;
+    const timeDiffHours = timeDiffMs / (1000 * 60 * 60);
+
+    // If less than 1 hour, flag IPs from different /16 subnets as suspicious
+    // This is a simplified heuristic - production should use GeoIP
+    if (timeDiffHours < 1) {
+      const lastPrefix = lastLocation.ip.split('.').slice(0, 2).join('.');
+      const currentPrefix = currentIp.split('.').slice(0, 2).join('.');
+      if (lastPrefix !== currentPrefix) {
+        // Different /16 subnet in under an hour - potentially suspicious
+        // In production, use actual geo coordinates and distance calculation
+        return true;
+      }
+    }
+
+    // For proper implementation:
+    // 1. const lastGeo = await geoip.lookup(lastLocation.ip);
+    // 2. const currentGeo = await geoip.lookup(currentIp);
+    // 3. const distanceKm = haversine(lastGeo.coords, currentGeo.coords);
+    // 4. const maxPossibleDistanceKm = timeDiffHours * 900; // Max flight speed
+    // 5. return distanceKm > maxPossibleDistanceKm;
+
+    return false;
   }
 
   private async getKnownUserAgents(userId: string): Promise<string[]> {
@@ -1218,8 +1305,9 @@ During migration, support both old JWT and new opaque token systems:
 ```typescript
 // packages/lib/src/auth/dual-mode-auth.ts
 
-import { validateServiceToken } from './service-client';
+import { validateServiceToken, type SessionClaims } from './service-client';
 import { verifyServiceToken as verifyLegacyJWT } from './legacy-service-auth';
+import { securityAudit } from '../audit/security-audit';
 
 export async function validateToken(token: string): Promise<SessionClaims | null> {
   // New opaque tokens start with 'ps_'
@@ -1231,10 +1319,16 @@ export async function validateToken(token: string): Promise<SessionClaims | null
   try {
     const claims = await verifyLegacyJWT(token);
 
-    // Log legacy token usage for migration tracking
-    console.warn('Legacy JWT token used', {
-      service: claims.service,
-      subject: claims.sub
+    // Log legacy token usage for migration tracking via audit system
+    await securityAudit.logEvent({
+      eventType: 'auth.token.created', // Using existing enum, consider adding 'auth.legacy.jwt.used'
+      serviceId: claims.service,
+      userId: claims.sub,
+      details: {
+        tokenType: 'legacy_jwt',
+        migrationNote: 'Legacy JWT token still in use - should migrate to opaque tokens',
+      },
+      riskScore: 0.1, // Low risk but worth tracking
     });
 
     return {
@@ -1331,7 +1425,7 @@ SERVICE_JWT_SECRET=<legacy-to-be-removed>
 
 ## Appendix: File Structure
 
-```
+```text
 packages/lib/src/
 ├── auth/
 │   ├── opaque-tokens.ts          # Token generation
