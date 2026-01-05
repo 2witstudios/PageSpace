@@ -23,7 +23,9 @@ function getInvoiceDescription(invoice: Stripe.Invoice): string {
   const targetLine = subscriptionLines.find(line => line.amount > 0)
     || subscriptionLines[0];
 
-  const priceId = targetLine?.pricing?.price_details?.price;
+  const priceData = targetLine?.pricing?.price_details?.price;
+  // In Stripe v20, price can be a string ID or expanded Price object
+  const priceId = typeof priceData === 'string' ? priceData : priceData?.id;
   if (priceId) {
     // Parse unit_amount_decimal to get cents for fallback tier detection
     const unitAmount = targetLine.pricing?.unit_amount_decimal
