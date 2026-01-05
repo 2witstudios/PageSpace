@@ -3,6 +3,25 @@ import { createId } from '@paralleldrive/cuid2';
 import { db, systemLogs } from '@pagespace/db';
 import { writeApiMetrics, writeError } from '@pagespace/lib/logger-database';
 import { loggers } from '@pagespace/lib/server';
+import { timingSafeEqual } from 'crypto';
+
+/**
+ * Timing-safe comparison of secret values to prevent timing attacks.
+ * Returns false if lengths differ (avoiding information leakage about length).
+ */
+function secureCompare(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, 'utf8');
+  const bufB = Buffer.from(b, 'utf8');
+
+  // Length check must happen, but we still do the comparison to maintain constant time
+  if (bufA.length !== bufB.length) {
+    // Compare with self to maintain constant timing
+    timingSafeEqual(bufA, bufA);
+    return false;
+  }
+
+  return timingSafeEqual(bufA, bufB);
+}
 
 interface ApiRequestPayload {
   type: 'api-request';
@@ -45,7 +64,8 @@ export async function POST(request: Request) {
   }
 
   const providedKey = request.headers.get('x-monitoring-ingest-key');
-  if (!providedKey || providedKey !== ingestKey) {
+  // Use timing-safe comparison to prevent timing attacks
+  if (!providedKey || !secureCompare(providedKey, ingestKey)) {
     return unauthorized('Unauthorized');
   }
 

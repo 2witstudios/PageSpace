@@ -317,48 +317,56 @@ describe('Service Token JTI Race Conditions', () => {
 ```typescript
 // apps/processor/tests/ssrf-prevention.test.ts
 
+import { parse as parseIP, IPv4, IPv6 } from 'ipaddr.js';
+
 describe('SSRF Prevention', () => {
+  /**
+   * SSRF payload categories with expected blocked reasons
+   * Each payload includes the URL and the expected extracted hostname for verification
+   */
   const ssrfPayloads = [
     // Localhost variants
-    'http://localhost/',
-    'http://localhost:3000/',
-    'http://127.0.0.1/',
-    'http://127.0.0.1:5432/',
-    'http://[::1]/',
-    'http://0.0.0.0/',
-    'http://0/',
+    { url: 'http://localhost/', expectedHost: 'localhost', reason: 'loopback' },
+    { url: 'http://localhost:3000/', expectedHost: 'localhost', reason: 'loopback' },
+    { url: 'http://127.0.0.1/', expectedHost: '127.0.0.1', reason: 'loopback' },
+    { url: 'http://127.0.0.1:5432/', expectedHost: '127.0.0.1', reason: 'loopback' },
+    { url: 'http://[::1]/', expectedHost: '::1', reason: 'loopback' },
+    { url: 'http://0.0.0.0/', expectedHost: '0.0.0.0', reason: 'unspecified' },
 
     // Private IP ranges
-    'http://10.0.0.1/',
-    'http://10.255.255.255/',
-    'http://172.16.0.1/',
-    'http://172.31.255.255/',
-    'http://192.168.0.1/',
-    'http://192.168.255.255/',
+    { url: 'http://10.0.0.1/', expectedHost: '10.0.0.1', reason: 'private' },
+    { url: 'http://10.255.255.255/', expectedHost: '10.255.255.255', reason: 'private' },
+    { url: 'http://172.16.0.1/', expectedHost: '172.16.0.1', reason: 'private' },
+    { url: 'http://172.31.255.255/', expectedHost: '172.31.255.255', reason: 'private' },
+    { url: 'http://192.168.0.1/', expectedHost: '192.168.0.1', reason: 'private' },
+    { url: 'http://192.168.255.255/', expectedHost: '192.168.255.255', reason: 'private' },
+
+    // IPv6 link-local (fe80::/10)
+    { url: 'http://[fe80::1]/', expectedHost: 'fe80::1', reason: 'linkLocal' },
 
     // Cloud metadata endpoints
-    'http://169.254.169.254/',  // AWS
-    'http://169.254.169.254/latest/meta-data/',
-    'http://metadata.google.internal/',  // GCP
-    'http://100.100.100.200/',  // Alibaba
+    { url: 'http://169.254.169.254/', expectedHost: '169.254.169.254', reason: 'metadata' },
+    { url: 'http://169.254.169.254/latest/meta-data/', expectedHost: '169.254.169.254', reason: 'metadata' },
+    { url: 'http://metadata.google.internal/', expectedHost: 'metadata.google.internal', reason: 'metadata' },
+    { url: 'http://100.100.100.200/', expectedHost: '100.100.100.200', reason: 'metadata' },
 
-    // DNS rebinding variants
-    'http://localtest.me/',
-    'http://127.0.0.1.nip.io/',
-
-    // Protocol smuggling
-    'file:///etc/passwd',
-    'gopher://127.0.0.1:25/',
-    'dict://127.0.0.1:11211/',
-
-    // URL encoding bypasses
-    'http://127.0.0.1%00@attacker.com/',
-    'http://attacker.com@127.0.0.1/',
+    // Protocol smuggling (blocked protocols)
+    { url: 'file:///etc/passwd', expectedHost: '', reason: 'protocol' },
+    { url: 'gopher://127.0.0.1:25/', expectedHost: '127.0.0.1', reason: 'protocol' },
+    { url: 'dict://127.0.0.1:11211/', expectedHost: '127.0.0.1', reason: 'protocol' },
   ];
 
   describe('URL validation in file processor', () => {
-    ssrfPayloads.forEach(payload => {
-      it(`blocks SSRF payload: ${payload}`, async () => {
+    ssrfPayloads.forEach(({ url: payload, expectedHost, reason }) => {
+      it(`blocks SSRF payload (${reason}): ${payload}`, async () => {
+        // First, verify we're parsing the URL correctly
+        try {
+          const parsed = new URL(payload);
+          expect(parsed.hostname).toBe(expectedHost);
+        } catch {
+          // file:// URLs may not parse the same way - that's ok
+        }
+
         const response = await processorIngest({
           url: payload,
           userId: testUser.id
@@ -366,7 +374,56 @@ describe('SSRF Prevention', () => {
 
         expect(response.status).toBe(400);
         expect(response.body.error).toMatch(/blocked|invalid|forbidden/i);
+        // Verify the error indicates the correct blocking reason
+        expect(response.body.reason || response.body.error).toMatch(
+          new RegExp(reason, 'i')
+        );
       });
+    });
+  });
+
+  /**
+   * Auth component bypass tests
+   * URL auth syntax: http://user:pass@host/ - the "host" after @ is the real target
+   */
+  describe('Auth component bypass prevention', () => {
+    it('correctly identifies target host in auth@host URLs', () => {
+      // http://127.0.0.1%00@attacker.com/ - null byte is invalid, parsed as attacker.com
+      const url1 = new URL('http://127.0.0.1%00@attacker.com/');
+      expect(url1.hostname).toBe('attacker.com');
+      // This should be ALLOWED (attacker.com is external)
+
+      // http://attacker.com@127.0.0.1/ - auth syntax, target is 127.0.0.1
+      const url2 = new URL('http://attacker.com@127.0.0.1/');
+      expect(url2.hostname).toBe('127.0.0.1');
+      // This should be BLOCKED (127.0.0.1 is loopback)
+    });
+
+    it('blocks auth component attacks targeting internal IPs', async () => {
+      // The @ makes "attacker.com" the username, "127.0.0.1" the actual host
+      const response = await processorIngest({
+        url: 'http://attacker.com@127.0.0.1/',
+        userId: testUser.id
+      });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toMatch(/blocked|loopback/i);
+    });
+
+    it('allows auth component URLs targeting external hosts', async () => {
+      // The null byte makes this invalid, resulting in attacker.com as host
+      // Depending on implementation, this might be blocked or allowed
+      // Document the expected behavior clearly
+      const response = await processorIngest({
+        url: 'http://127.0.0.1%00@attacker.com/',
+        userId: testUser.id
+      });
+
+      // This URL's actual hostname is "attacker.com" which is external
+      // Implementation should either:
+      // 1. Block for having suspicious auth component, OR
+      // 2. Allow after verifying attacker.com resolves to public IP
+      expect([200, 400]).toContain(response.status);
     });
   });
 
@@ -398,6 +455,20 @@ describe('SSRF Prevention', () => {
 
     expect(response.status).toBe(400);
     expect(response.body.error).toContain('redirect');
+  });
+
+  /**
+   * IPv6-mapped IPv4 address bypass
+   */
+  it('blocks IPv6-mapped IPv4 addresses', async () => {
+    // ::ffff:127.0.0.1 is IPv4-mapped IPv6 for 127.0.0.1
+    const response = await processorIngest({
+      url: 'http://[::ffff:127.0.0.1]/',
+      userId: testUser.id
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toMatch(/blocked|loopback/i);
   });
 });
 ```

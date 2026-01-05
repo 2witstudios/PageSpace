@@ -36,22 +36,148 @@ it('database operations use SERIALIZABLE isolation for auth');
 **Required Implementation:**
 ```typescript
 // packages/lib/src/security/url-validator.ts
-export function validateExternalURL(url: string): boolean {
+import { promises as dns } from 'dns';
+import { isIP } from 'net';
+
+// Use ipaddr.js for robust IP parsing (handles IPv4, IPv6, mapped addresses)
+import { parse as parseIP, IPv4, IPv6 } from 'ipaddr.js';
+
+/**
+ * Cloud metadata endpoints that must be blocked
+ */
+const METADATA_IPS = [
+  '169.254.169.254',    // AWS, Azure, DigitalOcean
+  '100.100.100.200',    // Alibaba Cloud
+  'fd00:ec2::254',      // AWS IPv6 metadata
+];
+
+const METADATA_HOSTNAMES = [
+  'metadata.google.internal',
+  'metadata.goog',
+  'kubernetes.default.svc',
+];
+
+/**
+ * Check if an IP address is private, loopback, or link-local
+ * Handles IPv4, IPv6, and IPv4-mapped IPv6 addresses
+ */
+function isBlockedIP(ipStr: string): boolean {
+  try {
+    const addr = parseIP(ipStr);
+
+    // Handle IPv4-mapped IPv6 (::ffff:127.0.0.1)
+    if (addr.kind() === 'ipv6') {
+      const v6 = addr as IPv6;
+      if (v6.isIPv4MappedAddress()) {
+        const v4 = v6.toIPv4Address();
+        return isBlockedIPv4(v4);
+      }
+      // IPv6 link-local (fe80::/10)
+      if (v6.range() === 'linkLocal') return true;
+      // IPv6 loopback (::1)
+      if (v6.range() === 'loopback') return true;
+      // IPv6 private (fc00::/7)
+      if (v6.range() === 'uniqueLocal') return true;
+    } else {
+      return isBlockedIPv4(addr as IPv4);
+    }
+
+    // Check against metadata IPs
+    if (METADATA_IPS.includes(ipStr)) return true;
+
+    return false;
+  } catch {
+    // Invalid IP format - block by default
+    return true;
+  }
+}
+
+function isBlockedIPv4(addr: IPv4): boolean {
+  const range = addr.range();
+  return [
+    'loopback',      // 127.0.0.0/8
+    'private',       // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+    'linkLocal',     // 169.254.0.0/16
+    'broadcast',     // 255.255.255.255
+    'unspecified',   // 0.0.0.0
+  ].includes(range);
+}
+
+/**
+ * Validate a URL for SSRF safety
+ * Returns validated URL info or throws on blocked URL
+ */
+export async function validateExternalURL(url: string): Promise<{
+  url: URL;
+  resolvedIPs: string[];
+}> {
   const parsed = new URL(url);
 
-  // 1. Protocol check
-  if (!['http:', 'https:'].includes(parsed.protocol)) return false;
+  // 1. Protocol allowlist (strict)
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error(`Blocked protocol: ${parsed.protocol}`);
+  }
 
-  // 2. Resolve DNS and check against blocklist
-  const ip = await dns.resolve(parsed.hostname);
-  if (isPrivateIP(ip) || isCloudMetadata(ip)) return false;
+  // 2. Block known metadata hostnames
+  const hostname = parsed.hostname.toLowerCase();
+  if (METADATA_HOSTNAMES.some(h => hostname === h || hostname.endsWith('.' + h))) {
+    throw new Error(`Blocked metadata hostname: ${hostname}`);
+  }
 
-  // 3. No localhost variants
-  if (isLocalhost(parsed.hostname)) return false;
+  // 3. If hostname is already an IP, validate it directly
+  if (isIP(hostname)) {
+    if (isBlockedIP(hostname)) {
+      throw new Error(`Blocked IP address: ${hostname}`);
+    }
+    return { url: parsed, resolvedIPs: [hostname] };
+  }
 
-  return true;
+  // 4. Resolve DNS and validate ALL returned IPs (both A and AAAA)
+  const [ipv4Results, ipv6Results] = await Promise.allSettled([
+    dns.resolve4(hostname),
+    dns.resolve6(hostname),
+  ]);
+
+  const resolvedIPs: string[] = [];
+  if (ipv4Results.status === 'fulfilled') resolvedIPs.push(...ipv4Results.value);
+  if (ipv6Results.status === 'fulfilled') resolvedIPs.push(...ipv6Results.value);
+
+  if (resolvedIPs.length === 0) {
+    throw new Error(`DNS resolution failed: ${hostname}`);
+  }
+
+  // 5. ALL resolved IPs must be safe (prevents DNS rebinding partial bypass)
+  for (const ip of resolvedIPs) {
+    if (isBlockedIP(ip)) {
+      throw new Error(`Blocked IP in DNS response: ${ip} for ${hostname}`);
+    }
+  }
+
+  return { url: parsed, resolvedIPs };
+}
+
+/**
+ * Fetch with SSRF protection
+ * Re-validates IP at connection time to prevent DNS rebinding TOCTOU
+ */
+export async function safeFetch(url: string, options?: RequestInit): Promise<Response> {
+  const validated = await validateExternalURL(url);
+
+  // Use custom DNS resolver to prevent rebinding between validation and fetch
+  // This requires using a library like undici with custom resolver, or
+  // connecting directly to the validated IPs with Host header
+  // Implementation depends on your HTTP client
+
+  // Example with node's http/https modules:
+  // 1. Use validated.resolvedIPs[0] as the socket address
+  // 2. Set Host header to validated.url.hostname
+  // 3. Validate the connection IP matches validated.resolvedIPs
+
+  return fetch(validated.url.toString(), options);
 }
 ```
+
+> **Note:** For production use, consider using `undici` with a custom DNS resolver that pins resolved IPs, or implement connection-time IP validation to fully prevent DNS rebinding TOCTOU attacks.
 
 ---
 

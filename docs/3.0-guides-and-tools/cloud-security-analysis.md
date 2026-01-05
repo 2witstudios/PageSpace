@@ -208,17 +208,51 @@ const attempts = new Map<string, RateLimitAttempt>();
 
 **Recommended Hardening:**
 ```typescript
-// Redis-based distributed rate limiting
-import { Ratelimit } from '@upstash/ratelimit';
-import { Redis } from '@upstash/redis';
+// Redis-based distributed rate limiting using ioredis (PageSpace's Redis client)
+import Redis from 'ioredis';
 
-const redis = new Redis({ url: process.env.REDIS_URL });
-const ratelimit = new Ratelimit({
-  redis,
-  limiter: Ratelimit.slidingWindow(5, '15 m'),
-  prefix: 'pagespace:ratelimit',
-});
+const redis = new Redis(process.env.REDIS_URL);
+
+interface RateLimitResult {
+  allowed: boolean;
+  remaining: number;
+  resetAt: Date;
+}
+
+/**
+ * Sliding window rate limiter using Redis
+ * @param key - Unique identifier (e.g., `login:${email}` or `refresh:${ip}`)
+ * @param limit - Maximum attempts allowed
+ * @param windowMs - Time window in milliseconds
+ */
+async function checkDistributedRateLimit(
+  key: string,
+  limit: number,
+  windowMs: number
+): Promise<RateLimitResult> {
+  const now = Date.now();
+  const windowStart = now - windowMs;
+  const redisKey = `ratelimit:${key}`;
+
+  // Use Redis transaction for atomic operations
+  const pipeline = redis.pipeline();
+  pipeline.zremrangebyscore(redisKey, 0, windowStart);  // Remove old entries
+  pipeline.zadd(redisKey, now, `${now}-${Math.random()}`);  // Add current request
+  pipeline.zcard(redisKey);  // Count requests in window
+  pipeline.pexpire(redisKey, windowMs);  // Set expiry
+
+  const results = await pipeline.exec();
+  const count = results?.[2]?.[1] as number || 0;
+
+  return {
+    allowed: count <= limit,
+    remaining: Math.max(0, limit - count),
+    resetAt: new Date(now + windowMs),
+  };
+}
 ```
+
+> **Note:** For serverless environments (e.g., Vercel Edge), consider `@upstash/ratelimit` with `@upstash/redis` as an alternative that doesn't require persistent connections.
 
 ---
 
