@@ -50,8 +50,9 @@ Phase 5: Monitoring & Incident Response
 **Description:** Provision Redis cluster for session store, rate limiting, and JTI tracking.
 
 **Files to Create/Modify:**
-- `docker-compose.security.yml` (new)
-- `packages/lib/src/services/redis-client.ts` (new)
+- `packages/lib/src/security/security-redis.ts` (new)
+- `packages/lib/src/security/distributed-rate-limit.ts` (new)
+- `packages/lib/src/security/index.ts` (new)
 - `.env.example` (update)
 
 **Implementation:**
@@ -300,12 +301,29 @@ export function extractJWTClaims(token: string): Record<string, unknown> {
 - `docs/security/migration-runbook.md`
 
 **Migration Steps:**
-1. Add `tokenHash` column to `refresh_tokens` and `mcp_tokens`
-2. Compute hashes for existing tokens (batch processing)
-3. Verify all tokens hashed
-4. Deploy code using `tokenHash`
-5. Monitor for 24-48 hours
-6. Drop plaintext `token` column
+1. Add `tokenHash` column to `refresh_tokens` and `mcp_tokens` (nullable initially)
+2. Add `tokenPrefix` column to `refresh_tokens` and `mcp_tokens` (nullable initially)
+3. Batch compute hashes for existing tokens:
+   ```sql
+   UPDATE refresh_tokens SET token_hash = encode(sha256(token::bytea), 'hex');
+   UPDATE mcp_tokens SET token_hash = encode(sha256(token::bytea), 'hex');
+   ```
+4. Batch compute prefixes from existing tokens:
+   ```sql
+   UPDATE refresh_tokens SET token_prefix = substring(token, 1, 12);
+   UPDATE mcp_tokens SET token_prefix = substring(token, 1, 12);
+   ```
+5. Make both columns non-null:
+   ```sql
+   ALTER TABLE refresh_tokens ALTER COLUMN token_hash SET NOT NULL;
+   ALTER TABLE refresh_tokens ALTER COLUMN token_prefix SET NOT NULL;
+   ALTER TABLE mcp_tokens ALTER COLUMN token_hash SET NOT NULL;
+   ALTER TABLE mcp_tokens ALTER COLUMN token_prefix SET NOT NULL;
+   ```
+6. Verify all tokens processed (zero NULL values)
+7. Deploy code using `tokenHash` for lookups
+8. Monitor for 24-48 hours
+9. Drop plaintext `token` column
 
 **Rollback Plan:**
 - If step 4 fails: Revert code, plaintext still available
@@ -516,7 +534,7 @@ export const refreshTokens = pgTable('refresh_tokens', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   tokenHash: text('token_hash').unique().notNull(), // SHA-256 hash
-  tokenPrefix: text('token_prefix').notNull(), // First 8 chars for debugging
+  tokenPrefix: text('token_prefix').notNull(), // First 12 chars for debugging (e.g., "ps_refresh_a")
   tokenVersion: integer('token_version').notNull(),
   deviceId: text('device_id'),
   expiresAt: timestamp('expires_at', { mode: 'date' }).notNull(),
@@ -528,8 +546,8 @@ export const refreshTokens = pgTable('refresh_tokens', {
 export const mcpTokens = pgTable('mcp_tokens', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  tokenHash: text('token_hash').unique().notNull(),
-  tokenPrefix: text('token_prefix').notNull(),
+  tokenHash: text('token_hash').unique().notNull(), // SHA-256 hash
+  tokenPrefix: text('token_prefix').notNull(), // First 12 chars for debugging (e.g., "ps_mcp_abc12")
   name: text('name').notNull(),
   scopes: text('scopes').array().notNull().default([]),
   expiresAt: timestamp('expires_at', { mode: 'date' }),
@@ -1963,7 +1981,17 @@ export function verifyBroadcastSignature(
     return { valid: false, reason: 'malformed_signature' };
   }
 
+  // IMPORTANT: Validate hex format before timingSafeEqual to prevent DoS
+  // timingSafeEqual throws if buffers have different lengths
+  if (!/^[0-9a-fA-F]{64}$/.test(sig)) {
+    return { valid: false, reason: 'invalid_signature_format' };
+  }
+
   const timestamp = parseInt(timestampStr, 10);
+  if (isNaN(timestamp)) {
+    return { valid: false, reason: 'invalid_timestamp' };
+  }
+
   const age = Date.now() - timestamp;
 
   // Reject old messages (replay attack)
@@ -2028,6 +2056,7 @@ describe('Broadcast Security', () => {
 // apps/web/src/middleware/security-headers.ts
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { randomUUID } from 'crypto';
 
 export function securityHeaders(request: NextRequest, response: NextResponse) {
   const isAPI = request.nextUrl.pathname.startsWith('/api/');
@@ -2038,10 +2067,15 @@ export function securityHeaders(request: NextRequest, response: NextResponse) {
       "default-src 'none'; frame-ancestors 'none'"
     );
   } else {
+    // IMPORTANT: Next.js App Router requires nonces for inline hydration scripts
+    // Using 'self' alone will break hydration - always use nonce-based CSP
+    const nonce = randomUUID();
     response.headers.set(
       'Content-Security-Policy',
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self' wss:; frame-ancestors 'none'"
+      `default-src 'self'; script-src 'self' 'nonce-${nonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self' wss:; frame-ancestors 'none'`
     );
+    // Pass nonce to app for Script components
+    response.headers.set('x-nonce', nonce);
   }
 
   response.headers.set('X-Content-Type-Options', 'nosniff');
@@ -2052,6 +2086,9 @@ export function securityHeaders(request: NextRequest, response: NextResponse) {
   return response;
 }
 ```
+
+**Additional files to create/modify for nonce support:**
+- `apps/web/src/app/layout.tsx` - Read nonce from headers, pass to Script components
 
 **Tests Required:**
 ```typescript
@@ -2199,13 +2236,35 @@ import { realpath, lstat } from 'fs/promises';
 /**
  * Resolve a path within a base directory, preventing traversal
  * Returns null if path would escape base
+ *
+ * IMPORTANT: Decodes iteratively to prevent double/triple encoding bypasses
+ * like %252e%252e%252f -> %2e%2e%2f -> ../
  */
 export async function resolvePathWithin(
   base: string,
   userPath: string
 ): Promise<string | null> {
-  // Normalize and decode
-  let normalized = decodeURIComponent(userPath);
+  // CRITICAL: Decode iteratively until stable (prevents double-encoding attacks)
+  let normalized = userPath;
+  let previous: string;
+  let iterations = 0;
+  const MAX_ITERATIONS = 5;
+
+  do {
+    previous = normalized;
+    try {
+      normalized = decodeURIComponent(normalized);
+    } catch {
+      // URIError from malformed encoding - reject as potential attack
+      return null;
+    }
+    iterations++;
+  } while (normalized !== previous && iterations < MAX_ITERATIONS);
+
+  // If still changing after MAX_ITERATIONS, likely an attack - reject
+  if (normalized !== previous) {
+    return null;
+  }
 
   // Remove null bytes
   normalized = normalized.replace(/\x00/g, '');
