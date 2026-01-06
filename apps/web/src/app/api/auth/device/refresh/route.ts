@@ -195,7 +195,13 @@ export async function POST(req: Request) {
     });
 
     // Reset rate limit on successful refresh
-    await resetDistributedRateLimit(`refresh:device:ip:${clientIP}`);
+    try {
+      await resetDistributedRateLimit(`refresh:device:ip:${clientIP}`);
+    } catch (error) {
+      loggers.auth.warn('Rate limit reset failed after successful device refresh', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
 
     // For web platform, set httpOnly cookies instead of returning tokens in JSON
     // Detect web by platform === 'web' in device record
@@ -225,6 +231,8 @@ export async function POST(req: Request) {
       const headers = new Headers();
       headers.append('Set-Cookie', accessTokenCookie);
       headers.append('Set-Cookie', refreshTokenCookie);
+      headers.set('X-RateLimit-Limit', String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts));
+      headers.set('X-RateLimit-Remaining', String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts));
 
       return Response.json(
         {
@@ -242,6 +250,11 @@ export async function POST(req: Request) {
       refreshToken,
       csrfToken,
       deviceToken: activeDeviceToken,
+    }, {
+      headers: {
+        'X-RateLimit-Limit': String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts),
+        'X-RateLimit-Remaining': String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts),
+      },
     });
   } catch (error) {
     loggers.auth.error('Device token refresh error', error as Error);

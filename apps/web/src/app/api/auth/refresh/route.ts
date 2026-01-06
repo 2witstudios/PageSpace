@@ -1,6 +1,6 @@
 import { users, refreshTokens, deviceTokens } from '@pagespace/db';
 import { db, eq, sql, and, isNull } from '@pagespace/db';
-import { decodeToken, generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge } from '@pagespace/lib/server';
+import { decodeToken, generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, loggers } from '@pagespace/lib/server';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
@@ -165,7 +165,13 @@ export async function POST(req: Request) {
   });
 
   // Reset rate limit on successful refresh
-  await resetDistributedRateLimit(`refresh:ip:${clientIP}`);
+  try {
+    await resetDistributedRateLimit(`refresh:ip:${clientIP}`);
+  } catch (error) {
+    loggers.auth.warn('Rate limit reset failed after successful refresh', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 
   const headers = new Headers();
   headers.append('Set-Cookie', accessTokenCookie);

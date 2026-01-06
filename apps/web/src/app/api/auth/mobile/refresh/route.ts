@@ -136,7 +136,13 @@ export async function POST(req: Request) {
       token: accessToken,
       csrfToken,
       deviceToken: activeDeviceToken,
-    }, { status: 200 });
+    }, {
+      status: 200,
+      headers: {
+        'X-RateLimit-Limit': String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts),
+        'X-RateLimit-Remaining': String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts),
+      },
+    });
 
   } catch (error) {
     loggers.auth.error('Mobile token refresh error', error as Error);

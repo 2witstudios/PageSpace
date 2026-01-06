@@ -231,7 +231,13 @@ export async function GET(req: Request) {
     });
 
     // Reset rate limits on successful login
-    await resetDistributedRateLimit(`oauth:callback:ip:${clientIP}`);
+    try {
+      await resetDistributedRateLimit(`oauth:callback:ip:${clientIP}`);
+    } catch (error) {
+      loggers.auth.warn('Rate limit reset failed after successful OAuth callback', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
 
     // Log successful login
     logAuthEvent('login', user.id, email, clientIP, 'Google OAuth');
