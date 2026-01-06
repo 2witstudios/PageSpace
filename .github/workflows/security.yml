@@ -1,0 +1,161 @@
+name: Security Tests
+
+on:
+  push:
+    branches: [master, develop]
+    paths:
+      - 'packages/lib/src/security/**'
+      - 'packages/lib/src/auth/**'
+      - 'apps/web/src/lib/auth/**'
+      - 'apps/web/src/app/api/auth/**'
+      - 'apps/processor/src/middleware/auth*'
+      - '.github/workflows/security.yml'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'packages/lib/src/security/**'
+      - 'packages/lib/src/auth/**'
+      - 'apps/web/src/lib/auth/**'
+      - 'apps/web/src/app/api/auth/**'
+      - 'apps/processor/src/middleware/auth*'
+      - '.github/workflows/security.yml'
+  # Allow manual trigger
+  workflow_dispatch:
+
+jobs:
+  security-tests:
+    name: Security Test Suite
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: pagespace_test
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run security tests
+        run: pnpm --filter @pagespace/lib vitest run src/security/
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
+          REDIS_URL: redis://localhost:6379
+          NODE_ENV: test
+
+      - name: Run auth tests
+        run: pnpm --filter @pagespace/lib vitest run src/auth/
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
+          REDIS_URL: redis://localhost:6379
+          NODE_ENV: test
+
+  dependency-audit:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run audit
+        run: pnpm audit --audit-level=high
+        continue-on-error: true # Don't fail on audit warnings, but report them
+
+      - name: Check for critical vulnerabilities
+        run: pnpm audit --audit-level=critical
+
+  secret-scanning:
+    name: Secret Scanning
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Full history for secret scanning
+
+      - name: TruffleHog Secret Scan
+        # Pinned to v3.92.4 (2025-12-19) for reproducibility; Dependabot updates this automatically
+        uses: trufflesecurity/trufflehog@v3.92.4
+        with:
+          path: ./
+          base: ${{ github.event.repository.default_branch }}
+          head: HEAD
+          extra_args: --only-verified
+
+  static-analysis:
+    name: Static Security Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: TypeScript type checking
+        run: pnpm typecheck
+
+      - name: ESLint security rules
+        run: pnpm --filter web lint

@@ -18,3 +18,17 @@ services:
       retries: 5
     tmpfs:
       - /var/lib/postgresql/data  # Use tmpfs for faster tests, data is ephemeral
+
+  redis-test:
+    image: redis:7.4-alpine
+    container_name: pagespace-redis-test
+    ports:
+      - "6380:6379"  # Different port to avoid conflict with dev redis
+    command: redis-server --maxmemory 64mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    tmpfs:
+      - /data  # Use tmpfs for faster tests, data is ephemeral
