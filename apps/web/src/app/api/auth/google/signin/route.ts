@@ -91,8 +91,22 @@ export async function POST(req: Request) {
   }
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
+    // Rate limiting by IP address
+    const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] ||
+                     req.headers.get('x-real-ip') ||
+                     'unknown';
+
+    const ipRateLimit = await checkDistributedRateLimit(
+      `oauth:signin:ip:${clientIP}`,
+      DISTRIBUTED_RATE_LIMITS.LOGIN
+    );
+    if (!ipRateLimit.allowed) {
+      const baseUrl = process.env.WEB_APP_URL || process.env.NEXTAUTH_URL || 'http://localhost:3000';
+      return Response.redirect(new URL('/auth/signin?error=rate_limit', baseUrl).toString());
+    }
+
     // Generate OAuth URL for direct link access
     const params = new URLSearchParams({
       client_id: process.env.GOOGLE_OAUTH_CLIENT_ID!,

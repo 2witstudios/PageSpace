@@ -133,7 +133,7 @@ export async function POST(req: Request) {
     // Prevents resource exhaustion from invalid token spam
     const oauthRateLimit = await checkDistributedRateLimit(
       `mobile:oauth:verify:${clientIP}`,
-      { maxAttempts: 10, windowMs: 5 * 60 * 1000 } // 10 attempts per 5 minutes
+      DISTRIBUTED_RATE_LIMITS.OAUTH_VERIFY
     );
 
     if (!oauthRateLimit.allowed) {
@@ -152,7 +152,7 @@ export async function POST(req: Request) {
           status: 429,
           headers: {
             'Retry-After': String(oauthRateLimit.retryAfter || 300),
-            'X-RateLimit-Limit': '10',
+            'X-RateLimit-Limit': String(DISTRIBUTED_RATE_LIMITS.OAUTH_VERIFY.maxAttempts),
             'X-RateLimit-Remaining': '0',
           },
         }
@@ -266,8 +266,8 @@ export async function POST(req: Request) {
       lastUsedAt: new Date(),
     });
 
-    // Reset rate limits on successful authentication
-    await Promise.all([
+    // Reset rate limits on successful authentication (graceful - failures don't affect successful auth)
+    await Promise.allSettled([
       resetDistributedRateLimit(`mobile:oauth:ip:${clientIP}`),
       resetDistributedRateLimit(`mobile:oauth:verify:${clientIP}`),
       resetDistributedRateLimit(`mobile:oauth:email:${userInfo.email.toLowerCase()}`),

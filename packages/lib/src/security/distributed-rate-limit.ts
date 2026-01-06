@@ -341,6 +341,12 @@ export const DISTRIBUTED_RATE_LIMITS = {
     blockDurationMs: 5 * 60 * 1000,
     progressiveDelay: false,
   },
+  OAUTH_VERIFY: {
+    maxAttempts: 10,
+    windowMs: 5 * 60 * 1000, // 5 minutes
+    blockDurationMs: 5 * 60 * 1000,
+    progressiveDelay: false,
+  },
   API: {
     maxAttempts: 100,
     windowMs: 60 * 1000, // 1 minute

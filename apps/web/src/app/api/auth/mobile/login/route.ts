@@ -113,9 +113,11 @@ export async function POST(req: Request) {
       ipAddress: clientIP,
     });
 
-    // Reset rate limits on successful login
-    await resetDistributedRateLimit(`login:ip:${clientIP}`);
-    await resetDistributedRateLimit(`login:email:${email.toLowerCase()}`);
+    // Reset rate limits on successful login (parallel, graceful - failures don't affect successful auth)
+    await Promise.allSettled([
+      resetDistributedRateLimit(`login:ip:${clientIP}`),
+      resetDistributedRateLimit(`login:email:${email.toLowerCase()}`),
+    ]);
 
     // Log successful login
     logAuthEvent('login', user.id, email, clientIP);
@@ -147,7 +149,8 @@ export async function POST(req: Request) {
     // Return tokens in JSON body for mobile clients (device-token-only pattern)
     const headers = new Headers();
     headers.set('X-RateLimit-Limit', String(DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts));
-    headers.set('X-RateLimit-Remaining', String(Math.min(distributedIpLimit.attemptsRemaining ?? DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts, distributedEmailLimit.attemptsRemaining ?? DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts)));
+    // After successful login and rate limit reset, remaining attempts are back to max
+    headers.set('X-RateLimit-Remaining', String(DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts));
 
     return Response.json({
       user: {

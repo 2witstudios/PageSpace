@@ -239,9 +239,20 @@ export async function verifyServiceToken(token: string): Promise<ServiceTokenCla
     // JTI validation (fail-closed in production)
     const redis = await tryGetSecurityRedisClient();
     if (redis) {
-      const revoked = await isJTIRevoked(claims.jti);
-      if (revoked) {
-        throw new Error('Token revoked or invalid');
+      // Validate JTI exists before checking revocation
+      // Skip for tokens without JTI (backward compatibility with pre-tracking tokens)
+      if (typeof claims.jti === 'string' && claims.jti.length > 0) {
+        const revoked = await isJTIRevoked(claims.jti);
+        if (revoked) {
+          throw new Error('Token revoked or invalid');
+        }
+      } else {
+        // Token lacks JTI - log for observability but don't reject
+        // (maintains backward compatibility with tokens created before JTI tracking)
+        loggers.api.debug('Service token verified without JTI tracking', {
+          subject: claims.sub,
+          service: claims.service,
+        });
       }
     } else if (process.env.NODE_ENV === 'production') {
       throw new Error('Security infrastructure unavailable');

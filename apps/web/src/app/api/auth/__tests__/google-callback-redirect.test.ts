@@ -59,7 +59,12 @@ vi.mock('@pagespace/lib/security', () => ({
   checkDistributedRateLimit: vi.fn(),
   resetDistributedRateLimit: vi.fn(),
   DISTRIBUTED_RATE_LIMITS: {
-    LOGIN: { maxAttempts: 5, windowMs: 900000 },
+    LOGIN: {
+      maxAttempts: 5,
+      windowMs: 900000,
+      blockDurationMs: 900000,
+      progressiveDelay: true,
+    },
   },
 }));
 

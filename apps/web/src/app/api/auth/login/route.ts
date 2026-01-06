@@ -187,9 +187,11 @@ export async function POST(req: Request) {
       platform: 'web',
     });
 
-    // Reset rate limits on successful login
-    await resetDistributedRateLimit(`login:ip:${clientIP}`);
-    await resetDistributedRateLimit(`login:email:${email.toLowerCase()}`);
+    // Reset rate limits on successful login (parallel, graceful - failures don't affect successful auth)
+    await Promise.allSettled([
+      resetDistributedRateLimit(`login:ip:${clientIP}`),
+      resetDistributedRateLimit(`login:email:${email.toLowerCase()}`),
+    ]);
     
     // Log successful login
     logAuthEvent('login', user.id, email, clientIP);

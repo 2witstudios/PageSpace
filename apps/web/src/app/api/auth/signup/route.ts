@@ -196,9 +196,11 @@ export async function POST(req: Request) {
     logAuthEvent('signup', user.id, email, clientIP);
     loggers.auth.info('New user created', { userId: user.id, email, name });
 
-    // Reset rate limits on successful signup
-    await resetDistributedRateLimit(`signup:ip:${clientIP}`);
-    await resetDistributedRateLimit(`signup:email:${email.toLowerCase()}`);
+    // Reset rate limits on successful signup (parallel, graceful - failures don't affect successful auth)
+    await Promise.allSettled([
+      resetDistributedRateLimit(`signup:ip:${clientIP}`),
+      resetDistributedRateLimit(`signup:email:${email.toLowerCase()}`),
+    ]);
 
     // Track signup event
     trackAuthEvent(user.id, 'signup', {
