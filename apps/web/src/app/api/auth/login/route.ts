@@ -16,7 +16,7 @@ import { serialize, parse } from 'cookie';
 import { loggers, logAuthEvent, logSecurityEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
-import { validateLoginCSRFToken } from '@/lib/auth/login-csrf-utils';
+import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 import { authRepository } from '@/lib/repositories/auth-repository';
 
 const loginSchema = z.object({
@@ -33,9 +33,7 @@ const loginSchema = z.object({
 export async function POST(req: Request) {
   try {
     // Get client IP early for logging
-    const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] ||
-                     req.headers.get('x-real-ip') ||
-                     'unknown';
+    const clientIP = getClientIP(req);
 
     // Validate Login CSRF token to prevent Login CSRF attacks
     // This prevents attackers from forcing victims to log into attacker's account

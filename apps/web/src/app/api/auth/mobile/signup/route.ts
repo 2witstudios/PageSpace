@@ -22,6 +22,7 @@ import { sendEmail } from '@pagespace/lib/services/email-service';
 import { VerificationEmail } from '@pagespace/lib/email-templates/VerificationEmail';
 import React from 'react';
 import { populateUserDrive } from '@/lib/onboarding/drive-setup';
+import { getClientIP } from '@/lib/auth';
 
 const signupSchema = z.object({
   name: z.string().min(1, {
@@ -44,9 +45,7 @@ const signupSchema = z.object({
 });
 
 export async function POST(req: Request) {
-  const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] ||
-                   req.headers.get('x-real-ip') ||
-                   'unknown';
+  const clientIP = getClientIP(req);
 
   let email: string | undefined;
 

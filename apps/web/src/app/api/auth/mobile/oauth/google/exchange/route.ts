@@ -65,6 +65,7 @@ import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { verifyOAuthIdToken, createOrLinkOAuthUser, saveRefreshToken, OAuthProvider } from '@pagespace/lib/server';
 import type { MobileOAuthResponse } from '@pagespace/lib/server';
+import { getClientIP } from '@/lib/auth';
 
 const oauthExchangeSchema = z.object({
   idToken: z.string().min(1, 'ID token is required'),
@@ -103,13 +104,10 @@ export async function POST(req: Request) {
     platform = requestPlatform;
 
     // Rate limiting by IP address
-    const clientIP =
-      req.headers.get('x-forwarded-for')?.split(',')[0] ||
-      req.headers.get('x-real-ip') ||
-      'unknown';
+    const clientIP = getClientIP(req);
 
     const ipRateLimit = await checkDistributedRateLimit(
-      `mobile:oauth:ip:${clientIP}`,
+      `oauth:exchange:ip:${clientIP}`,
       DISTRIBUTED_RATE_LIMITS.LOGIN
     );
     if (!ipRateLimit.allowed) {
@@ -132,7 +130,7 @@ export async function POST(req: Request) {
     // Additional rate limiting specifically for OAuth token verification
     // Prevents resource exhaustion from invalid token spam
     const oauthRateLimit = await checkDistributedRateLimit(
-      `mobile:oauth:verify:${clientIP}`,
+      `oauth:exchange:verify:${clientIP}`,
       DISTRIBUTED_RATE_LIMITS.OAUTH_VERIFY
     );
 
@@ -193,7 +191,7 @@ export async function POST(req: Request) {
 
     // Rate limiting by email
     const emailRateLimit = await checkDistributedRateLimit(
-      `mobile:oauth:email:${userInfo.email.toLowerCase()}`,
+      `oauth:exchange:email:${userInfo.email.toLowerCase()}`,
       DISTRIBUTED_RATE_LIMITS.LOGIN
     );
     if (!emailRateLimit.allowed) {
@@ -268,9 +266,9 @@ export async function POST(req: Request) {
 
     // Reset rate limits on successful authentication (graceful - failures don't affect successful auth)
     const resetResults = await Promise.allSettled([
-      resetDistributedRateLimit(`mobile:oauth:ip:${clientIP}`),
-      resetDistributedRateLimit(`mobile:oauth:verify:${clientIP}`),
-      resetDistributedRateLimit(`mobile:oauth:email:${userInfo.email.toLowerCase()}`),
+      resetDistributedRateLimit(`oauth:exchange:ip:${clientIP}`),
+      resetDistributedRateLimit(`oauth:exchange:verify:${clientIP}`),
+      resetDistributedRateLimit(`oauth:exchange:email:${userInfo.email.toLowerCase()}`),
     ]);
 
     // Log any reset failures for observability

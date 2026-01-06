@@ -17,7 +17,7 @@ import { VerificationEmail } from '@pagespace/lib/email-templates/VerificationEm
 import React from 'react';
 import { NextResponse } from 'next/server';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
-import { validateLoginCSRFToken } from '@/lib/auth/login-csrf-utils';
+import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 
 const signupSchema = z.object({
   name: z.string().min(1, {
@@ -43,9 +43,7 @@ const signupSchema = z.object({
 });
 
 export async function POST(req: Request) {
-  const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] ||
-    req.headers.get('x-real-ip') ||
-    'unknown';
+  const clientIP = getClientIP(req);
 
   let email: string | undefined;
 

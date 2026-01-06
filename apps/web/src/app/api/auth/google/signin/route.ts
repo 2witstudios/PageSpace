@@ -5,6 +5,7 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
 import crypto from 'crypto';
+import { getClientIP } from '@/lib/auth';
 
 const googleSigninSchema = z.object({
   returnUrl: z.string().optional(),
@@ -34,10 +35,10 @@ export async function POST(req: Request) {
       return Response.json({ errors: validation.error.flatten().fieldErrors }, { status: 400 });
     }
 
+    const { returnUrl, platform, deviceId } = validation.data;
+
     // Rate limiting by IP address
-    const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] ||
-                     req.headers.get('x-real-ip') ||
-                     'unknown';
+    const clientIP = getClientIP(req);
 
     const ipRateLimit = await checkDistributedRateLimit(
       `oauth:signin:ip:${clientIP}`,
@@ -59,8 +60,6 @@ export async function POST(req: Request) {
         }
       );
     }
-
-    const { returnUrl, platform, deviceId } = validation.data;
 
     // Create state object to preserve platform and deviceId through OAuth redirect
     const stateData = {
@@ -117,9 +116,7 @@ export async function GET(req: Request) {
     }
 
     // Rate limiting by IP address
-    const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] ||
-                     req.headers.get('x-real-ip') ||
-                     'unknown';
+    const clientIP = getClientIP(req);
 
     const ipRateLimit = await checkDistributedRateLimit(
       `oauth:signin:ip:${clientIP}`,

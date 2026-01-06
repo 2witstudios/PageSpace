@@ -21,6 +21,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { serialize } from 'cookie';
+import { getClientIP } from '@/lib/auth';
 
 const deviceRefreshSchema = z.object({
   deviceToken: z.string().min(1, { message: 'Device token is required' }),
@@ -40,10 +41,7 @@ export async function POST(req: Request) {
 
     const { deviceToken, deviceId, userAgent, appVersion } = validation.data;
 
-    const clientIP =
-      req.headers.get('x-forwarded-for')?.split(',')[0] ||
-      req.headers.get('x-real-ip') ||
-      'unknown';
+    const clientIP = getClientIP(req);
 
     // Distributed rate limiting by IP address for device refresh attempts
     const distributedIpLimit = await checkDistributedRateLimit(

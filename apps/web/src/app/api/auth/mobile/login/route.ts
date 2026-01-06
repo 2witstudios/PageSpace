@@ -15,6 +15,7 @@ import {
 import { generateCSRFToken, getSessionIdFromJWT } from '@pagespace/lib/server';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
+import { getClientIP } from '@/lib/auth';
 
 const loginSchema = z.object({
   email: z.email(),
@@ -39,9 +40,7 @@ export async function POST(req: Request) {
 
     const { email, password, deviceId, platform, deviceName, appVersion, deviceToken: existingDeviceToken } = validation.data;
 
-    const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] ||
-                     req.headers.get('x-real-ip') ||
-                     'unknown';
+    const clientIP = getClientIP(req);
 
     // Distributed rate limiting (parallel checks for better performance)
     const [distributedIpLimit, distributedEmailLimit] = await Promise.all([

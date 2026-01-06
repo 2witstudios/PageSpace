@@ -10,6 +10,7 @@ import { validateDeviceToken } from '@pagespace/lib/device-auth-utils';
 import { serialize } from 'cookie';
 import { parse } from 'cookie';
 import { createId } from '@paralleldrive/cuid2';
+import { getClientIP } from '@/lib/auth';
 
 export async function POST(req: Request) {
   const cookieHeader = req.headers.get('cookie');
@@ -20,9 +21,7 @@ export async function POST(req: Request) {
     return Response.json({ error: 'Refresh token not found.' }, { status: 401 });
   }
 
-  const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] ||
-                   req.headers.get('x-real-ip') ||
-                   'unknown';
+  const clientIP = getClientIP(req);
 
   // Distributed rate limiting - IP only for refresh
   const distributedIpLimit = await checkDistributedRateLimit(

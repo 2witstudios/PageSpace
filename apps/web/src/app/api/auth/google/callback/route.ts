@@ -15,6 +15,7 @@ import { OAuth2Client } from 'google-auth-library';
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { getClientIP } from '@/lib/auth';
 
 const googleCallbackSchema = z.object({
   code: z.string().min(1, "Authorization code is required"),
@@ -99,9 +100,7 @@ export async function GET(req: Request) {
     }
 
     // Rate limiting by IP address
-    const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] ||
-                     req.headers.get('x-real-ip') ||
-                     'unknown';
+    const clientIP = getClientIP(req);
 
     const ipRateLimit = await checkDistributedRateLimit(
       `oauth:callback:ip:${clientIP}`,

@@ -16,6 +16,7 @@ import {
 } from '@pagespace/lib/security';
 import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/server';
+import { getClientIP } from '@/lib/auth';
 
 const refreshSchema = z.object({
   deviceToken: z.string().min(1, { message: 'Device token is required' }),
@@ -34,10 +35,7 @@ export async function POST(req: Request) {
 
     const { deviceToken, deviceId } = validation.data;
 
-    const clientIP =
-      req.headers.get('x-forwarded-for')?.split(',')[0] ||
-      req.headers.get('x-real-ip') ||
-      'unknown';
+    const clientIP = getClientIP(req);
 
     // Distributed rate limiting by IP address for refresh attempts
     const distributedIpLimit = await checkDistributedRateLimit(

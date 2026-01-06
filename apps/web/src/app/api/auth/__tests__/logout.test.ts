@@ -38,16 +38,20 @@ vi.mock('@pagespace/lib/device-auth-utils', () => ({
   revokeDeviceTokensByDevice: vi.fn().mockResolvedValue(1),
 }));
 
-vi.mock('@/lib/auth', () => ({
-  authenticateRequestWithOptions: vi.fn().mockResolvedValue({
-    userId: 'test-user-id',
-    role: 'user',
-    tokenVersion: 0,
-    tokenType: 'jwt',
-    source: 'cookie',
-  }),
-  isAuthError: vi.fn().mockReturnValue(false),
-}));
+vi.mock('@/lib/auth', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth')>();
+  return {
+    ...actual,
+    authenticateRequestWithOptions: vi.fn().mockResolvedValue({
+      userId: 'test-user-id',
+      role: 'user',
+      tokenVersion: 0,
+      tokenType: 'jwt',
+      source: 'cookie',
+    }),
+    isAuthError: vi.fn().mockReturnValue(false),
+  };
+});
 
 import { db, eq } from '@pagespace/db';
 import { parse, serialize } from 'cookie';
