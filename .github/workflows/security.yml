@@ -124,7 +124,8 @@ jobs:
           fetch-depth: 0 # Full history for secret scanning
 
       - name: TruffleHog Secret Scan
-        uses: trufflesecurity/trufflehog@main
+        # Pinned to v3.92.4 (2025-12-19) for reproducibility; Dependabot updates this automatically
+        uses: trufflesecurity/trufflehog@v3.92.4
         with:
           path: ./
           base: ${{ github.event.repository.default_branch }}
