@@ -129,7 +129,13 @@ export async function POST(req: Request) {
     const csrfToken = generateCSRFToken(sessionId);
 
     // Reset rate limit on successful refresh
-    await resetDistributedRateLimit(`refresh:device:ip:${clientIP}`);
+    try {
+      await resetDistributedRateLimit(`refresh:device:ip:${clientIP}`);
+    } catch (error) {
+      loggers.auth.warn('Rate limit reset failed after successful mobile refresh', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
 
     // Return tokens (device-token-only pattern - no refreshToken)
     return Response.json({
