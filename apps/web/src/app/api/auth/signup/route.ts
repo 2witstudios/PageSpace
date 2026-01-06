@@ -197,10 +197,19 @@ export async function POST(req: Request) {
     loggers.auth.info('New user created', { userId: user.id, email, name });
 
     // Reset rate limits on successful signup (parallel, graceful - failures don't affect successful auth)
-    await Promise.allSettled([
+    const resetResults = await Promise.allSettled([
       resetDistributedRateLimit(`signup:ip:${clientIP}`),
       resetDistributedRateLimit(`signup:email:${email.toLowerCase()}`),
     ]);
+
+    // Log any reset failures for observability
+    const failures = resetResults.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+    if (failures.length > 0) {
+      loggers.auth.warn('Rate limit reset failed after successful signup', {
+        failureCount: failures.length,
+        reasons: failures.map(f => f.reason?.message || String(f.reason)),
+      });
+    }
 
     // Track signup event
     trackAuthEvent(user.id, 'signup', {

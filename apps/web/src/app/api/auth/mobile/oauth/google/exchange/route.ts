@@ -267,11 +267,20 @@ export async function POST(req: Request) {
     });
 
     // Reset rate limits on successful authentication (graceful - failures don't affect successful auth)
-    await Promise.allSettled([
+    const resetResults = await Promise.allSettled([
       resetDistributedRateLimit(`mobile:oauth:ip:${clientIP}`),
       resetDistributedRateLimit(`mobile:oauth:verify:${clientIP}`),
       resetDistributedRateLimit(`mobile:oauth:email:${userInfo.email.toLowerCase()}`),
     ]);
+
+    // Log any reset failures for observability
+    const failures = resetResults.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+    if (failures.length > 0) {
+      loggers.auth.warn('Rate limit reset failed after successful OAuth', {
+        failureCount: failures.length,
+        reasons: failures.map(f => f.reason?.message || String(f.reason)),
+      });
+    }
 
     // Log successful OAuth login
     logAuthEvent('login', user.id, user.email, clientIP, 'Google OAuth Mobile');

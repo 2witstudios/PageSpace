@@ -14,6 +14,19 @@ const googleSigninSchema = z.object({
 
 export async function POST(req: Request) {
   try {
+    // Validate required OAuth environment variables
+    if (!process.env.GOOGLE_OAUTH_CLIENT_ID || !process.env.GOOGLE_OAUTH_REDIRECT_URI || !process.env.OAUTH_STATE_SECRET) {
+      loggers.auth.error('Missing required OAuth environment variables', {
+        hasClientId: !!process.env.GOOGLE_OAUTH_CLIENT_ID,
+        hasRedirectUri: !!process.env.GOOGLE_OAUTH_REDIRECT_URI,
+        hasStateSecret: !!process.env.OAUTH_STATE_SECRET,
+      });
+      return Response.json(
+        { error: 'OAuth not configured' },
+        { status: 500 }
+      );
+    }
+
     const body = await req.json();
     const validation = googleSigninSchema.safeParse(body);
 
@@ -93,6 +106,16 @@ export async function POST(req: Request) {
 
 export async function GET(req: Request) {
   try {
+    // Validate required OAuth environment variables
+    if (!process.env.GOOGLE_OAUTH_CLIENT_ID || !process.env.GOOGLE_OAUTH_REDIRECT_URI) {
+      loggers.auth.error('Missing required OAuth environment variables for GET', {
+        hasClientId: !!process.env.GOOGLE_OAUTH_CLIENT_ID,
+        hasRedirectUri: !!process.env.GOOGLE_OAUTH_REDIRECT_URI,
+      });
+      const baseUrl = process.env.WEB_APP_URL || process.env.NEXTAUTH_URL || 'http://localhost:3000';
+      return Response.redirect(new URL('/auth/signin?error=oauth_config', baseUrl).toString());
+    }
+
     // Rate limiting by IP address
     const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] ||
                      req.headers.get('x-real-ip') ||

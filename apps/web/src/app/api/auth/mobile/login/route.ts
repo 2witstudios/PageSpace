@@ -114,10 +114,19 @@ export async function POST(req: Request) {
     });
 
     // Reset rate limits on successful login (parallel, graceful - failures don't affect successful auth)
-    await Promise.allSettled([
+    const resetResults = await Promise.allSettled([
       resetDistributedRateLimit(`login:ip:${clientIP}`),
       resetDistributedRateLimit(`login:email:${email.toLowerCase()}`),
     ]);
+
+    // Log any reset failures for observability
+    const failures = resetResults.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+    if (failures.length > 0) {
+      loggers.auth.warn('Rate limit reset failed after successful mobile login', {
+        failureCount: failures.length,
+        reasons: failures.map(f => f.reason?.message || String(f.reason)),
+      });
+    }
 
     // Log successful login
     logAuthEvent('login', user.id, email, clientIP);

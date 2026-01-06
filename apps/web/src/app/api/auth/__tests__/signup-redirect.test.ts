@@ -105,7 +105,7 @@ describe('/api/auth/signup redirect', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    (checkDistributedRateLimit as Mock).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
+    (checkDistributedRateLimit as Mock).mockResolvedValue({ allowed: true, attemptsRemaining: 3 });
     (bcrypt.hash as Mock).mockResolvedValue('hashed-password');
     (generateAccessToken as Mock).mockResolvedValue('access-token');
     (generateRefreshToken as Mock).mockResolvedValue('refresh-token');
