@@ -4,9 +4,6 @@ import {
   generateAccessToken,
   generateRefreshToken,
   getRefreshTokenMaxAge,
-  checkRateLimit,
-  resetRateLimit,
-  RATE_LIMIT_CONFIGS,
   decodeToken,
   validateOrCreateDeviceToken,
 } from '@pagespace/lib/server';
@@ -99,41 +96,7 @@ export async function POST(req: Request) {
 
     const { email, password, deviceId, deviceName, deviceToken: existingDeviceToken } = validation.data;
 
-    // In-memory rate limiting (legacy - kept for backwards compatibility)
-    const ipRateLimit = checkRateLimit(clientIP, RATE_LIMIT_CONFIGS.LOGIN);
-    const emailRateLimit = checkRateLimit(email.toLowerCase(), RATE_LIMIT_CONFIGS.LOGIN);
-
-    if (!ipRateLimit.allowed) {
-      return Response.json(
-        {
-          error: 'Too many login attempts from this IP address. Please try again later.',
-          retryAfter: ipRateLimit.retryAfter
-        },
-        {
-          status: 429,
-          headers: {
-            'Retry-After': ipRateLimit.retryAfter?.toString() || '900'
-          }
-        }
-      );
-    }
-
-    if (!emailRateLimit.allowed) {
-      return Response.json(
-        {
-          error: 'Too many login attempts for this email. Please try again later.',
-          retryAfter: emailRateLimit.retryAfter
-        },
-        {
-          status: 429,
-          headers: {
-            'Retry-After': emailRateLimit.retryAfter?.toString() || '900'
-          }
-        }
-      );
-    }
-
-    // Distributed rate limiting (P1-T5)
+    // Distributed rate limiting
     const distributedIpLimit = await checkDistributedRateLimit(
       `login:ip:${clientIP}`,
       DISTRIBUTED_RATE_LIMITS.LOGIN
@@ -229,10 +192,6 @@ export async function POST(req: Request) {
     });
 
     // Reset rate limits on successful login
-    resetRateLimit(clientIP);
-    resetRateLimit(email.toLowerCase());
-
-    // Reset distributed rate limits (P1-T5)
     await resetDistributedRateLimit(`login:ip:${clientIP}`);
     await resetDistributedRateLimit(`login:email:${email.toLowerCase()}`);
     
@@ -269,7 +228,6 @@ export async function POST(req: Request) {
     const headers = new Headers();
     headers.append('Set-Cookie', accessTokenCookie);
     headers.append('Set-Cookie', refreshTokenCookie);
-    // Add rate limit headers (P1-T5)
     headers.set('X-RateLimit-Limit', String(DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts));
     headers.set('X-RateLimit-Remaining', String(Math.min(distributedIpLimit.attemptsRemaining ?? DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts, distributedEmailLimit.attemptsRemaining ?? DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts)));
 

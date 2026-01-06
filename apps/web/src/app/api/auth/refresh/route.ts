@@ -1,6 +1,6 @@
 import { users, refreshTokens, deviceTokens } from '@pagespace/db';
 import { db, eq, sql, and, isNull } from '@pagespace/db';
-import { decodeToken, generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, checkRateLimit, RATE_LIMIT_CONFIGS } from '@pagespace/lib/server';
+import { decodeToken, generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge } from '@pagespace/lib/server';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
@@ -20,29 +20,11 @@ export async function POST(req: Request) {
     return Response.json({ error: 'Refresh token not found.' }, { status: 401 });
   }
 
-  // Rate limiting by IP address for refresh attempts
-  const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] || 
-                   req.headers.get('x-real-ip') || 
+  const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] ||
+                   req.headers.get('x-real-ip') ||
                    'unknown';
-  
-  const rateLimit = checkRateLimit(`refresh:${clientIP}`, RATE_LIMIT_CONFIGS.REFRESH);
-  
-  if (!rateLimit.allowed) {
-    return Response.json(
-      {
-        error: 'Too many refresh attempts. Please try again later.',
-        retryAfter: rateLimit.retryAfter
-      },
-      {
-        status: 429,
-        headers: {
-          'Retry-After': rateLimit.retryAfter?.toString() || '300'
-        }
-      }
-    );
-  }
 
-  // Distributed rate limiting (P1-T5) - IP only for refresh
+  // Distributed rate limiting - IP only for refresh
   const distributedIpLimit = await checkDistributedRateLimit(
     `refresh:ip:${clientIP}`,
     DISTRIBUTED_RATE_LIMITS.REFRESH
@@ -183,13 +165,12 @@ export async function POST(req: Request) {
     ...(isProduction && { domain: process.env.COOKIE_DOMAIN })
   });
 
-  // Reset distributed rate limit on successful refresh (P1-T5)
+  // Reset rate limit on successful refresh
   await resetDistributedRateLimit(`refresh:ip:${clientIP}`);
 
   const headers = new Headers();
   headers.append('Set-Cookie', accessTokenCookie);
   headers.append('Set-Cookie', refreshTokenCookie);
-  // Add rate limit headers (P1-T5)
   headers.set('X-RateLimit-Limit', String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts));
   headers.set('X-RateLimit-Remaining', String(distributedIpLimit.attemptsRemaining ?? DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts));
 

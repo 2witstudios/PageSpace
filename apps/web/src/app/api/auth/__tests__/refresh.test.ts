@@ -58,10 +58,6 @@ vi.mock('@pagespace/lib/server', () => ({
   generateAccessToken: vi.fn().mockResolvedValue('new-access-token'),
   generateRefreshToken: vi.fn().mockResolvedValue('new-refresh-token'),
   getRefreshTokenMaxAge: vi.fn().mockReturnValue(2592000),
-  checkRateLimit: vi.fn().mockReturnValue({ allowed: true }),
-  RATE_LIMIT_CONFIGS: {
-    REFRESH: { maxAttempts: 10, windowMs: 300000 },
-  },
 }));
 
 vi.mock('@pagespace/lib/device-auth-utils', () => ({
@@ -91,7 +87,6 @@ import { db } from '@pagespace/db';
 import { parse } from 'cookie';
 import {
   decodeToken,
-  checkRateLimit,
   generateAccessToken,
   generateRefreshToken,
 } from '@pagespace/lib/server';
@@ -124,7 +119,6 @@ describe('/api/auth/refresh', () => {
 
     // Default: valid refresh token flow
     (parse as Mock).mockReturnValue({ refreshToken: 'valid-refresh-token' });
-    (checkRateLimit as Mock).mockReturnValue({ allowed: true });
 
     // Mock transaction to return valid token
     (db.transaction as Mock).mockImplementation(async (cb) => {
@@ -508,7 +502,7 @@ describe('/api/auth/refresh', () => {
   describe('rate limiting', () => {
     it('returns 429 when rate limit exceeded', async () => {
       // Arrange
-      (checkRateLimit as Mock).mockReturnValue({ allowed: false, retryAfter: 300 });
+      (checkDistributedRateLimit as Mock).mockResolvedValue({ allowed: false, retryAfter: 300, attemptsRemaining: 0 });
 
       const request = new Request('http://localhost/api/auth/refresh', {
         method: 'POST',
@@ -542,14 +536,23 @@ describe('/api/auth/refresh', () => {
       await POST(request);
 
       // Assert
-      expect(checkRateLimit).toHaveBeenCalledWith(
-        'refresh:192.168.1.1',
+      expect(checkDistributedRateLimit).toHaveBeenCalledWith(
+        'refresh:ip:192.168.1.1',
         expect.any(Object)
       );
     });
   });
 
-  describe('distributed rate limiting (P1-T5)', () => {
+  describe('distributed rate limiting', () => {
+    beforeEach(() => {
+      // Reset rate limiting mock to allow requests
+      (checkDistributedRateLimit as Mock).mockResolvedValue({
+        allowed: true,
+        attemptsRemaining: 9,
+        retryAfter: undefined,
+      });
+    });
+
     it('calls checkDistributedRateLimit for IP', async () => {
       // Arrange
       const request = new Request('http://localhost/api/auth/refresh', {

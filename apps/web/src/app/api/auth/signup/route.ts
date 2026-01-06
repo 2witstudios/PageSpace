@@ -1,7 +1,7 @@
 import { users, userAiSettings, refreshTokens, db, eq } from '@pagespace/db';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod/v4';
-import { generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, checkRateLimit, resetRateLimit, RATE_LIMIT_CONFIGS, createNotification, decodeToken, validateOrCreateDeviceToken } from '@pagespace/lib/server';
+import { generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, createNotification, decodeToken, validateOrCreateDeviceToken } from '@pagespace/lib/server';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
@@ -110,43 +110,7 @@ export async function POST(req: Request) {
     const { name, email: validatedEmail, password, deviceId, deviceName, deviceToken: existingDeviceToken } = validation.data;
     email = validatedEmail;
 
-    // Rate limiting by IP address and email (prevent spam and email enumeration)
-    const ipRateLimit = checkRateLimit(clientIP, RATE_LIMIT_CONFIGS.SIGNUP);
-    const emailRateLimit = checkRateLimit(email.toLowerCase(), RATE_LIMIT_CONFIGS.SIGNUP);
-
-    if (!ipRateLimit.allowed) {
-      logAuthEvent('failed', undefined, email, clientIP, 'IP rate limit exceeded');
-      return Response.json(
-        {
-          error: 'Too many signup attempts from this IP address. Please try again later.',
-          retryAfter: ipRateLimit.retryAfter
-        },
-        {
-          status: 429,
-          headers: {
-            'Retry-After': ipRateLimit.retryAfter?.toString() || '3600'
-          }
-        }
-      );
-    }
-
-    if (!emailRateLimit.allowed) {
-      logAuthEvent('failed', undefined, email, clientIP, 'Email rate limit exceeded');
-      return Response.json(
-        {
-          error: 'Too many signup attempts for this email. Please try again later.',
-          retryAfter: emailRateLimit.retryAfter
-        },
-        {
-          status: 429,
-          headers: {
-            'Retry-After': emailRateLimit.retryAfter?.toString() || '3600'
-          }
-        }
-      );
-    }
-
-    // Distributed rate limiting (P1-T5)
+    // Distributed rate limiting
     const distributedIpLimit = await checkDistributedRateLimit(
       `signup:ip:${clientIP}`,
       DISTRIBUTED_RATE_LIMITS.SIGNUP
@@ -157,7 +121,7 @@ export async function POST(req: Request) {
     );
 
     if (!distributedIpLimit.allowed) {
-      logAuthEvent('failed', undefined, email, clientIP, 'Distributed IP rate limit exceeded');
+      logAuthEvent('failed', undefined, email, clientIP, 'IP rate limit exceeded');
       return Response.json(
         {
           error: 'Too many signup attempts from this IP address. Please try again later.',
@@ -175,7 +139,7 @@ export async function POST(req: Request) {
     }
 
     if (!distributedEmailLimit.allowed) {
-      logAuthEvent('failed', undefined, email, clientIP, 'Distributed email rate limit exceeded');
+      logAuthEvent('failed', undefined, email, clientIP, 'Email rate limit exceeded');
       return Response.json(
         {
           error: 'Too many signup attempts for this email. Please try again later.',
@@ -237,10 +201,6 @@ export async function POST(req: Request) {
     loggers.auth.info('New user created', { userId: user.id, email, name });
 
     // Reset rate limits on successful signup
-    resetRateLimit(clientIP);
-    resetRateLimit(email.toLowerCase());
-
-    // Reset distributed rate limits (P1-T5)
     await resetDistributedRateLimit(`signup:ip:${clientIP}`);
     await resetDistributedRateLimit(`signup:email:${email.toLowerCase()}`);
 

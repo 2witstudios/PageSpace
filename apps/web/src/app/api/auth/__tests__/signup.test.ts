@@ -42,11 +42,6 @@ vi.mock('@pagespace/lib/server', () => ({
   generateAccessToken: vi.fn().mockResolvedValue('mock-access-token'),
   generateRefreshToken: vi.fn().mockResolvedValue('mock-refresh-token'),
   getRefreshTokenMaxAge: vi.fn().mockReturnValue(2592000),
-  checkRateLimit: vi.fn().mockReturnValue({ allowed: true }),
-  resetRateLimit: vi.fn(),
-  RATE_LIMIT_CONFIGS: {
-    SIGNUP: { maxAttempts: 3, windowMs: 3600000 },
-  },
   createNotification: vi.fn().mockResolvedValue(undefined),
   decodeToken: vi.fn().mockResolvedValue({
     userId: 'new-user-id',
@@ -66,6 +61,7 @@ vi.mock('@pagespace/lib/server', () => ({
     },
   },
   logAuthEvent: vi.fn(),
+  logSecurityEvent: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
@@ -128,8 +124,6 @@ vi.mock('react', () => ({
 import { db } from '@pagespace/db';
 import bcrypt from 'bcryptjs';
 import {
-  checkRateLimit,
-  resetRateLimit,
   generateAccessToken,
   generateRefreshToken,
   createNotification,
@@ -177,7 +171,6 @@ describe('/api/auth/signup', () => {
 
     // Default: no existing user
     (db.query.users.findFirst as Mock).mockResolvedValue(null);
-    (checkRateLimit as Mock).mockReturnValue({ allowed: true });
   });
 
   describe('with valid input', () => {
@@ -360,8 +353,8 @@ describe('/api/auth/signup', () => {
       await POST(request);
 
       // Assert
-      expect(resetRateLimit).toHaveBeenCalledWith('192.168.1.1');
-      expect(resetRateLimit).toHaveBeenCalledWith('new@example.com');
+      expect(resetDistributedRateLimit).toHaveBeenCalledWith('signup:ip:192.168.1.1');
+      expect(resetDistributedRateLimit).toHaveBeenCalledWith('signup:email:new@example.com');
     });
 
     it('generates tokens for automatic authentication', async () => {
@@ -595,9 +588,9 @@ describe('/api/auth/signup', () => {
   describe('rate limiting', () => {
     it('returns 429 when IP rate limit exceeded', async () => {
       // Arrange
-      (checkRateLimit as Mock)
-        .mockReturnValueOnce({ allowed: false, retryAfter: 3600 })
-        .mockReturnValue({ allowed: true });
+      (checkDistributedRateLimit as Mock)
+        .mockResolvedValueOnce({ allowed: false, retryAfter: 3600, attemptsRemaining: 0 })
+        .mockResolvedValue({ allowed: true, attemptsRemaining: 2 });
 
       const request = createSignupRequest(validSignupPayload, {
         'x-forwarded-for': '192.168.1.1',
@@ -615,9 +608,9 @@ describe('/api/auth/signup', () => {
 
     it('returns 429 when email rate limit exceeded', async () => {
       // Arrange
-      (checkRateLimit as Mock)
-        .mockReturnValueOnce({ allowed: true })
-        .mockReturnValueOnce({ allowed: false, retryAfter: 3600 });
+      (checkDistributedRateLimit as Mock)
+        .mockResolvedValueOnce({ allowed: true, attemptsRemaining: 2 })
+        .mockResolvedValueOnce({ allowed: false, retryAfter: 3600, attemptsRemaining: 0 });
 
       const request = createSignupRequest(validSignupPayload);
 
@@ -632,7 +625,7 @@ describe('/api/auth/signup', () => {
 
     it('logs rate limit failure', async () => {
       // Arrange
-      (checkRateLimit as Mock).mockReturnValue({ allowed: false, retryAfter: 3600 });
+      (checkDistributedRateLimit as Mock).mockResolvedValue({ allowed: false, retryAfter: 3600, attemptsRemaining: 0 });
 
       const request = createSignupRequest(validSignupPayload, {
         'x-forwarded-for': '192.168.1.1',
@@ -652,7 +645,7 @@ describe('/api/auth/signup', () => {
     });
   });
 
-  describe('distributed rate limiting (P1-T5)', () => {
+  describe('distributed rate limiting', () => {
     it('calls checkDistributedRateLimit for IP and email', async () => {
       // Arrange
       const request = createSignupRequest(validSignupPayload, {
