@@ -157,4 +157,4 @@ jobs:
         run: pnpm typecheck
 
       - name: ESLint security rules
-        run: pnpm --filter @pagespace/lib lint
+        run: pnpm --filter web lint
