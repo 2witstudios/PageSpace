@@ -132,6 +132,10 @@ fastlane/test_output/
 playwright-report/
 test-results/
 
+## Load test results (k6 JSON output)
+tests/load/results/*.json
+tests/load/results/*.html
+
 ## Code coverage
 *.gcda
 *.gcno

@@ -1,0 +1,104 @@
+name: Load Test
+
+on:
+  schedule:
+    # Weekly on Sundays at 2 AM UTC
+    - cron: '0 2 * * 0'
+  workflow_dispatch:
+    inputs:
+      vus:
+        description: 'Number of virtual users'
+        required: false
+        default: '50'
+      duration:
+        description: 'Test duration (e.g., 30s, 1m)'
+        required: false
+        default: '30s'
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  load-test:
+    name: Auth Baseline Load Test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pagespace_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm build
+
+      - name: Setup test database
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
+          JWT_SECRET: test-secret-key-minimum-32-characters-long-for-ci
+          JWT_ISSUER: pagespace-test
+          JWT_AUDIENCE: pagespace-test-users
+        run: pnpm --filter @pagespace/db db:migrate
+
+      - name: Start web server
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
+          REDIS_URL: redis://localhost:6379
+          JWT_SECRET: test-secret-key-minimum-32-characters-long-for-ci
+          JWT_ISSUER: pagespace-test
+          JWT_AUDIENCE: pagespace-test-users
+          NODE_ENV: test
+        run: |
+          pnpm --filter web build
+          pnpm --filter web start &
+          sleep 10
+
+      - name: Run k6 load test
+        uses: grafana/k6-action@v0.3.1
+        with:
+          filename: tests/load/auth-baseline.k6.js
+        env:
+          K6_VUS: ${{ github.event.inputs.vus || '50' }}
+          K6_DURATION: ${{ github.event.inputs.duration || '30s' }}
+          BASE_URL: http://localhost:3000
+
+      - name: Upload load test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: load-test-results-${{ github.run_id }}
+          path: tests/load/results/
+          retention-days: 30

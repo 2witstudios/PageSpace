@@ -18,9 +18,62 @@ import { loggers } from '../logging/logger-config';
 
 const KEY_PREFIX = 'sec:';
 
+// Separate clients for sessions and rate limiting
+let sessionRedisClient: Redis | null = null;
+let rateLimitRedisClient: Redis | null = null;
+
+/**
+ * Get the session Redis client (Database 0 for JTI tracking and session data).
+ * Falls back to REDIS_URL if REDIS_SESSION_URL not configured.
+ */
+async function getSessionRedisClient(): Promise<Redis> {
+  if (sessionRedisClient) return sessionRedisClient;
+
+  const sessionUrl = process.env.REDIS_SESSION_URL || process.env.REDIS_URL;
+  if (!sessionUrl) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('REDIS_SESSION_URL required in production');
+    }
+    throw new Error('Redis not available');
+  }
+
+  sessionRedisClient = new Redis(sessionUrl, {
+    maxRetriesPerRequest: 3,
+    lazyConnect: false,
+  });
+
+  await sessionRedisClient.ping();
+  return sessionRedisClient;
+}
+
+/**
+ * Get the rate limiting Redis client (Database 1 for distributed rate limit counters).
+ * Falls back to REDIS_URL if REDIS_RATE_LIMIT_URL not configured.
+ */
+async function getRateLimitRedisClient(): Promise<Redis> {
+  if (rateLimitRedisClient) return rateLimitRedisClient;
+
+  const rateLimitUrl = process.env.REDIS_RATE_LIMIT_URL || process.env.REDIS_URL;
+  if (!rateLimitUrl) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('REDIS_RATE_LIMIT_URL required in production');
+    }
+    throw new Error('Redis not available');
+  }
+
+  rateLimitRedisClient = new Redis(rateLimitUrl, {
+    maxRetriesPerRequest: 3,
+    lazyConnect: false,
+  });
+
+  await rateLimitRedisClient.ping();
+  return rateLimitRedisClient;
+}
+
 /**
  * Get the security Redis client.
  * In production, this MUST be available - throws if not.
+ * @deprecated Use getSessionRedisClient() or getRateLimitRedisClient() instead
  */
 export async function getSecurityRedisClient(): Promise<Redis> {
   const client = await getSharedRedisClient();
@@ -68,7 +121,7 @@ export async function recordJTI(
   userId: string,
   expiresInSeconds: number
 ): Promise<void> {
-  const redis = await getSecurityRedisClient();
+  const redis = await getSessionRedisClient();
   const key = `${KEY_PREFIX}jti:${jti}`;
 
   // Store as valid with user ID for potential auditing
@@ -86,7 +139,7 @@ export async function recordJTI(
  * - JTI is not found (expired or never recorded)
  */
 export async function isJTIRevoked(jti: string): Promise<boolean> {
-  const redis = await getSecurityRedisClient();
+  const redis = await getSessionRedisClient();
   const key = `${KEY_PREFIX}jti:${jti}`;
 
   const value = await redis.get(key);
@@ -110,7 +163,7 @@ export async function isJTIRevoked(jti: string): Promise<boolean> {
  * The revocation is stored with the remaining TTL.
  */
 export async function revokeJTI(jti: string, reason: string): Promise<boolean> {
-  const redis = await getSecurityRedisClient();
+  const redis = await getSessionRedisClient();
   const key = `${KEY_PREFIX}jti:${jti}`;
 
   // Get remaining TTL
@@ -183,7 +236,7 @@ export async function checkRateLimit(
   limit: number,
   windowMs: number
 ): Promise<RateLimitResult> {
-  const redis = await getSecurityRedisClient();
+  const redis = await getRateLimitRedisClient();
   const redisKey = `${KEY_PREFIX}rate:${key}`;
   const now = Date.now();
   const windowStart = now - windowMs;
@@ -224,7 +277,7 @@ export async function getRateLimitStatus(
   limit: number,
   windowMs: number
 ): Promise<RateLimitResult> {
-  const redis = await getSecurityRedisClient();
+  const redis = await getRateLimitRedisClient();
   const redisKey = `${KEY_PREFIX}rate:${key}`;
   const now = Date.now();
   const windowStart = now - windowMs;
@@ -244,7 +297,7 @@ export async function getRateLimitStatus(
  * Reset rate limit for a key (e.g., after successful login).
  */
 export async function resetRateLimit(key: string): Promise<void> {
-  const redis = await getSecurityRedisClient();
+  const redis = await getRateLimitRedisClient();
   const redisKey = `${KEY_PREFIX}rate:${key}`;
   await redis.del(redisKey);
 }
@@ -261,7 +314,7 @@ export async function setSessionData(
   data: Record<string, unknown>,
   expiresInSeconds: number
 ): Promise<void> {
-  const redis = await getSecurityRedisClient();
+  const redis = await getSessionRedisClient();
   const key = `${KEY_PREFIX}session:${sessionId}`;
   await redis.setex(key, expiresInSeconds, JSON.stringify(data));
 }
@@ -272,7 +325,7 @@ export async function setSessionData(
 export async function getSessionData(
   sessionId: string
 ): Promise<Record<string, unknown> | null> {
-  const redis = await getSecurityRedisClient();
+  const redis = await getSessionRedisClient();
   const key = `${KEY_PREFIX}session:${sessionId}`;
   const value = await redis.get(key);
 
@@ -289,7 +342,7 @@ export async function getSessionData(
  * Delete session data.
  */
 export async function deleteSessionData(sessionId: string): Promise<void> {
-  const redis = await getSecurityRedisClient();
+  const redis = await getSessionRedisClient();
   const key = `${KEY_PREFIX}session:${sessionId}`;
   await redis.del(key);
 }

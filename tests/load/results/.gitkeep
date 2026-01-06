@@ -1,0 +1,2 @@
+# Keep this directory for k6 load test results
+# JSON output files are gitignored
