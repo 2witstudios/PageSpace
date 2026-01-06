@@ -56,6 +56,39 @@ describe('security-test-utils', () => {
 
       expect(inputs.pathTraversal).toContainEqual(expect.stringContaining('..'));
     });
+
+    it('SSRF inputs contain internal URLs', () => {
+      const inputs = getMaliciousInputs();
+
+      expect(inputs.ssrf).toContainEqual(expect.stringContaining('localhost'));
+      expect(inputs.ssrf).toContainEqual(expect.stringContaining('169.254'));
+    });
+
+    it('command injection inputs contain shell metacharacters', () => {
+      const inputs = getMaliciousInputs();
+
+      expect(inputs.commandInjection).toContainEqual(expect.stringContaining(';'));
+      expect(inputs.commandInjection).toContainEqual(expect.stringContaining('|'));
+    });
+
+    it('LDAP injection inputs contain LDAP special characters', () => {
+      const inputs = getMaliciousInputs();
+
+      expect(inputs.ldapInjection).toContainEqual(expect.stringContaining('*'));
+      expect(inputs.ldapInjection).toContainEqual(expect.stringContaining('('));
+    });
+
+    it('header injection inputs contain CRLF sequences', () => {
+      const inputs = getMaliciousInputs();
+
+      expect(inputs.headerInjection).toContainEqual(expect.stringContaining('\r\n'));
+    });
+
+    it('null byte inputs contain null characters', () => {
+      const inputs = getMaliciousInputs();
+
+      expect(inputs.nullByte).toContainEqual(expect.stringContaining('\x00'));
+    });
   });
 
   describe('getAllMaliciousInputs', () => {
@@ -70,7 +103,7 @@ describe('security-test-utils', () => {
   });
 
   describe('racingRequests', () => {
-    it('executes multiple requests concurrently', async () => {
+    it('executes multiple requests concurrently and demonstrates race conditions', async () => {
       let counter = 0;
       const increment = async () => {
         const current = counter;
@@ -82,7 +115,12 @@ describe('security-test-utils', () => {
       const results = await racingRequests(increment, 5);
 
       expect(results.length).toBe(5);
-      // Due to race conditions, not all results will be unique
+      // Due to race conditions, final counter should be less than 5
+      // (multiple increments read the same value before any writes complete)
+      expect(counter).toBeLessThan(5);
+      // Results should contain duplicate values confirming race condition
+      const uniqueResults = new Set(results);
+      expect(uniqueResults.size).toBeLessThan(results.length);
     });
 
     it('uses default count of 10', async () => {

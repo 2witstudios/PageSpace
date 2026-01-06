@@ -116,7 +116,8 @@ REDIS_RATE_LIMIT_URL=redis://localhost:6380/1
 - `packages/lib/src/security/distributed-rate-limit.ts`
 - `docker-compose.test.yml` (add Redis test service)
 
-**Fix 1: JTI Logging - Use Full Redaction**
+#### Fix 1: JTI Logging - Use Full Redaction
+
 ```typescript
 // BEFORE (line 145)
 loggers.api.info('JTI revoked', { jti: jti.substring(0, 8) + '...', reason });
@@ -125,7 +126,8 @@ loggers.api.info('JTI revoked', { jti: jti.substring(0, 8) + '...', reason });
 loggers.api.info('JTI revoked', { jti: '[REDACTED]', reason });
 ```
 
-**Fix 2: Memory Leak - Store Interval, Add Cleanup**
+#### Fix 2: Memory Leak - Store Interval, Add Cleanup
+
 ```typescript
 // BEFORE (line 53-67)
 const inMemoryAttempts = new Map<string, InMemoryAttempt>();
@@ -167,7 +169,8 @@ if (typeof setInterval !== 'undefined') {
 }
 ```
 
-**Fix 3: Add Redis to docker-compose.test.yml**
+#### Fix 3: Add Redis to docker-compose.test.yml
+
 ```yaml
 services:
   redis-test:
@@ -184,7 +187,8 @@ services:
       - /data
 ```
 
-**Fix 4: Add Integration Test File**
+#### Fix 4: Add Integration Test File
+
 Create `packages/lib/src/security/__tests__/security-redis.integration.test.ts`:
 - Test with real Redis when available
 - Skip gracefully when Redis unavailable
@@ -2453,7 +2457,7 @@ jobs:
 
 ### New Files to Create
 
-```
+```text
 packages/lib/src/
 ├── auth/
 │   ├── opaque-tokens.ts
@@ -2498,7 +2502,7 @@ apps/realtime/src/broadcast/
 
 ### Files to Modify
 
-```
+```text
 packages/lib/src/
 ├── auth/
 │   ├── rate-limit-utils.ts
@@ -2529,7 +2533,7 @@ apps/web/src/lib/auth/
 
 ## Dependency Graph
 
-```
+```text
 P0-T1 (Redis) ←─┬─ P1-T1 (JTI) ←── P1-T2 (User Validation)
                 │
                 ├─ P1-T5 (Rate Limit)
