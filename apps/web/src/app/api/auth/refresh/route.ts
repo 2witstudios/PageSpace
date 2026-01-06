@@ -1,6 +1,11 @@
 import { users, refreshTokens, deviceTokens } from '@pagespace/db';
 import { db, eq, sql, and, isNull } from '@pagespace/db';
 import { decodeToken, generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, checkRateLimit, RATE_LIMIT_CONFIGS } from '@pagespace/lib/server';
+import {
+  checkDistributedRateLimit,
+  resetDistributedRateLimit,
+  DISTRIBUTED_RATE_LIMITS,
+} from '@pagespace/lib/security';
 import { validateDeviceToken } from '@pagespace/lib/device-auth-utils';
 import { serialize } from 'cookie';
 import { parse } from 'cookie';
@@ -33,6 +38,29 @@ export async function POST(req: Request) {
         headers: {
           'Retry-After': rateLimit.retryAfter?.toString() || '300'
         }
+      }
+    );
+  }
+
+  // Distributed rate limiting (P1-T5) - IP only for refresh
+  const distributedIpLimit = await checkDistributedRateLimit(
+    `refresh:ip:${clientIP}`,
+    DISTRIBUTED_RATE_LIMITS.REFRESH
+  );
+
+  if (!distributedIpLimit.allowed) {
+    return Response.json(
+      {
+        error: 'Too many refresh attempts. Please try again later.',
+        retryAfter: distributedIpLimit.retryAfter,
+      },
+      {
+        status: 429,
+        headers: {
+          'Retry-After': String(distributedIpLimit.retryAfter || 300),
+          'X-RateLimit-Limit': String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts),
+          'X-RateLimit-Remaining': '0',
+        },
       }
     );
   }
@@ -155,9 +183,15 @@ export async function POST(req: Request) {
     ...(isProduction && { domain: process.env.COOKIE_DOMAIN })
   });
 
+  // Reset distributed rate limit on successful refresh (P1-T5)
+  await resetDistributedRateLimit(`refresh:ip:${clientIP}`);
+
   const headers = new Headers();
   headers.append('Set-Cookie', accessTokenCookie);
   headers.append('Set-Cookie', refreshTokenCookie);
+  // Add rate limit headers (P1-T5)
+  headers.set('X-RateLimit-Limit', String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts));
+  headers.set('X-RateLimit-Remaining', String(distributedIpLimit.attemptsRemaining ?? DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts));
 
   return Response.json({ message: 'Token refreshed successfully' }, { status: 200, headers });
 }

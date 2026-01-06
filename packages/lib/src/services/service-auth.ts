@@ -1,5 +1,6 @@
 import { SignJWT, decodeProtectedHeader, jwtVerify, type JWTPayload } from 'jose';
 import { createId } from '@paralleldrive/cuid2';
+import { recordJTI, isJTIRevoked, tryGetSecurityRedisClient } from '../security/security-redis';
 
 export type ServiceScope =
   | '*'
@@ -44,6 +45,33 @@ interface ServiceJWTConfig {
 }
 
 const SERVICE_JWT_ALG = 'HS256';
+const DEFAULT_SERVICE_TOKEN_EXPIRY = '5m';
+const DEFAULT_SERVICE_TOKEN_EXPIRY_SECONDS = 300;
+
+/**
+ * Convert jose duration string to seconds.
+ * Supports: 's' (seconds), 'm' (minutes), 'h' (hours), 'd' (days)
+ */
+function durationToSeconds(duration: string): number {
+  const match = duration.match(/^(\d+)([smhd])$/);
+  if (!match) return DEFAULT_SERVICE_TOKEN_EXPIRY_SECONDS;
+
+  const value = parseInt(match[1], 10);
+  const unit = match[2];
+
+  switch (unit) {
+    case 's':
+      return value;
+    case 'm':
+      return value * 60;
+    case 'h':
+      return value * 60 * 60;
+    case 'd':
+      return value * 24 * 60 * 60;
+    default:
+      return DEFAULT_SERVICE_TOKEN_EXPIRY_SECONDS;
+  }
+}
 
 function getServiceConfig(): ServiceJWTConfig {
   const rawSecret = process.env.SERVICE_JWT_SECRET;
@@ -92,6 +120,10 @@ export async function createServiceToken(options: ServiceTokenOptions): Promise<
     }
   }
 
+  const jti = createId();
+  const expiresIn = options.expiresIn ?? DEFAULT_SERVICE_TOKEN_EXPIRY;
+  const expiresInSeconds = durationToSeconds(expiresIn);
+
   const payload: ServiceTokenClaims = {
     sub: options.subject,
     service: options.service,
@@ -99,17 +131,29 @@ export async function createServiceToken(options: ServiceTokenOptions): Promise<
     driveId: options.driveId,
     scopes: Array.from(new Set(options.scopes)),
     tokenType: 'service',
-    jti: createId(),
+    jti,
     ...additionalClaims,
   };
 
-  return await new SignJWT(payload)
+  const token = await new SignJWT(payload)
     .setProtectedHeader({ alg: SERVICE_JWT_ALG })
     .setIssuer(config.issuer)
     .setAudience(config.audience)
     .setIssuedAt()
-    .setExpirationTime(options.expiresIn ?? '5m')
+    .setExpirationTime(expiresIn)
     .sign(config.secret);
+
+  // Record JTI in Redis for tracking/revocation (graceful degradation)
+  try {
+    const redis = await tryGetSecurityRedisClient();
+    if (redis) {
+      await recordJTI(jti, options.subject, expiresInSeconds);
+    }
+  } catch {
+    // Log but don't fail token creation - graceful degradation
+  }
+
+  return token;
 }
 
 export async function verifyServiceToken(token: string): Promise<ServiceTokenClaims> {
@@ -146,6 +190,17 @@ export async function verifyServiceToken(token: string): Promise<ServiceTokenCla
 
     if (claims.resource && typeof claims.resource !== 'string') {
       throw new Error('Service token resource must be a string');
+    }
+
+    // JTI validation (fail-closed in production)
+    const redis = await tryGetSecurityRedisClient();
+    if (redis) {
+      const revoked = await isJTIRevoked(claims.jti);
+      if (revoked) {
+        throw new Error('Token revoked or invalid');
+      }
+    } else if (process.env.NODE_ENV === 'production') {
+      throw new Error('Security infrastructure unavailable');
     }
 
     return claims;

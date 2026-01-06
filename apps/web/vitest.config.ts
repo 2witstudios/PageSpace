@@ -46,6 +46,8 @@ export default defineConfig({
       '@pagespace/lib/services/email-service': path.resolve(packagesDir, 'lib/src/services/email-service'),
       '@pagespace/lib/email-templates/VerificationEmail': path.resolve(packagesDir, 'lib/src/email-templates/VerificationEmail'),
       '@pagespace/lib/api-utils': path.resolve(packagesDir, 'lib/src/utils/api-utils'),
+      '@pagespace/lib/security': path.resolve(packagesDir, 'lib/src/security'),
+      '@pagespace/lib/secure-compare': path.resolve(packagesDir, 'lib/src/auth/secure-compare'),
       // Fallback for general @pagespace/lib imports
       '@pagespace/lib': path.resolve(packagesDir, 'lib/src'),
     },

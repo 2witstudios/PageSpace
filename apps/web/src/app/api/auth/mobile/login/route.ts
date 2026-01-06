@@ -10,6 +10,11 @@ import {
   decodeToken,
   validateOrCreateDeviceToken,
 } from '@pagespace/lib/server';
+import {
+  checkDistributedRateLimit,
+  resetDistributedRateLimit,
+  DISTRIBUTED_RATE_LIMITS,
+} from '@pagespace/lib/security';
 import { generateCSRFToken, getSessionIdFromJWT } from '@pagespace/lib/server';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
@@ -75,6 +80,50 @@ export async function POST(req: Request) {
       );
     }
 
+    // Distributed rate limiting (P1-T5)
+    const distributedIpLimit = await checkDistributedRateLimit(
+      `login:ip:${clientIP}`,
+      DISTRIBUTED_RATE_LIMITS.LOGIN
+    );
+    const distributedEmailLimit = await checkDistributedRateLimit(
+      `login:email:${email.toLowerCase()}`,
+      DISTRIBUTED_RATE_LIMITS.LOGIN
+    );
+
+    if (!distributedIpLimit.allowed) {
+      return Response.json(
+        {
+          error: 'Too many login attempts from this IP address. Please try again later.',
+          retryAfter: distributedIpLimit.retryAfter,
+        },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': String(distributedIpLimit.retryAfter || 900),
+            'X-RateLimit-Limit': String(DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts),
+            'X-RateLimit-Remaining': '0',
+          },
+        }
+      );
+    }
+
+    if (!distributedEmailLimit.allowed) {
+      return Response.json(
+        {
+          error: 'Too many login attempts for this email. Please try again later.',
+          retryAfter: distributedEmailLimit.retryAfter,
+        },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': String(distributedEmailLimit.retryAfter || 900),
+            'X-RateLimit-Limit': String(DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts),
+            'X-RateLimit-Remaining': '0',
+          },
+        }
+      );
+    }
+
     const user = await db.query.users.findFirst({
       where: eq(users.email, email),
     });
@@ -109,6 +158,10 @@ export async function POST(req: Request) {
     resetRateLimit(clientIP);
     resetRateLimit(email.toLowerCase());
 
+    // Reset distributed rate limits (P1-T5)
+    await resetDistributedRateLimit(`login:ip:${clientIP}`);
+    await resetDistributedRateLimit(`login:email:${email.toLowerCase()}`);
+
     // Log successful login
     logAuthEvent('login', user.id, email, clientIP);
 
@@ -137,6 +190,11 @@ export async function POST(req: Request) {
     const csrfToken = generateCSRFToken(sessionId);
 
     // Return tokens in JSON body for mobile clients (device-token-only pattern)
+    const headers = new Headers();
+    // Add rate limit headers (P1-T5)
+    headers.set('X-RateLimit-Limit', String(DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts));
+    headers.set('X-RateLimit-Remaining', String(Math.min(distributedIpLimit.attemptsRemaining ?? DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts, distributedEmailLimit.attemptsRemaining ?? DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts)));
+
     return Response.json({
       user: {
         id: user.id,
@@ -147,7 +205,7 @@ export async function POST(req: Request) {
       token: accessToken,
       csrfToken: csrfToken,
       deviceToken: deviceTokenValue,
-    }, { status: 200 });
+    }, { status: 200, headers });
 
   } catch (error) {
     loggers.auth.error('Mobile login error', error as Error);

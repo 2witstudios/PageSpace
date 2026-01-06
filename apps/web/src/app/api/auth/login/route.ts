@@ -10,6 +10,11 @@ import {
   decodeToken,
   validateOrCreateDeviceToken,
 } from '@pagespace/lib/server';
+import {
+  checkDistributedRateLimit,
+  resetDistributedRateLimit,
+  DISTRIBUTED_RATE_LIMITS,
+} from '@pagespace/lib/security';
 import { serialize, parse } from 'cookie';
 import { loggers, logAuthEvent, logSecurityEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
@@ -93,17 +98,18 @@ export async function POST(req: Request) {
     }
 
     const { email, password, deviceId, deviceName, deviceToken: existingDeviceToken } = validation.data;
-    
+
+    // In-memory rate limiting (legacy - kept for backwards compatibility)
     const ipRateLimit = checkRateLimit(clientIP, RATE_LIMIT_CONFIGS.LOGIN);
     const emailRateLimit = checkRateLimit(email.toLowerCase(), RATE_LIMIT_CONFIGS.LOGIN);
 
     if (!ipRateLimit.allowed) {
       return Response.json(
-        { 
+        {
           error: 'Too many login attempts from this IP address. Please try again later.',
-          retryAfter: ipRateLimit.retryAfter 
-        }, 
-        { 
+          retryAfter: ipRateLimit.retryAfter
+        },
+        {
           status: 429,
           headers: {
             'Retry-After': ipRateLimit.retryAfter?.toString() || '900'
@@ -114,15 +120,59 @@ export async function POST(req: Request) {
 
     if (!emailRateLimit.allowed) {
       return Response.json(
-        { 
+        {
           error: 'Too many login attempts for this email. Please try again later.',
-          retryAfter: emailRateLimit.retryAfter 
-        }, 
-        { 
+          retryAfter: emailRateLimit.retryAfter
+        },
+        {
           status: 429,
           headers: {
             'Retry-After': emailRateLimit.retryAfter?.toString() || '900'
           }
+        }
+      );
+    }
+
+    // Distributed rate limiting (P1-T5)
+    const distributedIpLimit = await checkDistributedRateLimit(
+      `login:ip:${clientIP}`,
+      DISTRIBUTED_RATE_LIMITS.LOGIN
+    );
+    const distributedEmailLimit = await checkDistributedRateLimit(
+      `login:email:${email.toLowerCase()}`,
+      DISTRIBUTED_RATE_LIMITS.LOGIN
+    );
+
+    if (!distributedIpLimit.allowed) {
+      return Response.json(
+        {
+          error: 'Too many login attempts from this IP address. Please try again later.',
+          retryAfter: distributedIpLimit.retryAfter,
+        },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': String(distributedIpLimit.retryAfter || 900),
+            'X-RateLimit-Limit': String(DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts),
+            'X-RateLimit-Remaining': '0',
+          },
+        }
+      );
+    }
+
+    if (!distributedEmailLimit.allowed) {
+      return Response.json(
+        {
+          error: 'Too many login attempts for this email. Please try again later.',
+          retryAfter: distributedEmailLimit.retryAfter,
+        },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': String(distributedEmailLimit.retryAfter || 900),
+            'X-RateLimit-Limit': String(DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts),
+            'X-RateLimit-Remaining': '0',
+          },
         }
       );
     }
@@ -181,6 +231,10 @@ export async function POST(req: Request) {
     // Reset rate limits on successful login
     resetRateLimit(clientIP);
     resetRateLimit(email.toLowerCase());
+
+    // Reset distributed rate limits (P1-T5)
+    await resetDistributedRateLimit(`login:ip:${clientIP}`);
+    await resetDistributedRateLimit(`login:email:${email.toLowerCase()}`);
     
     // Log successful login
     logAuthEvent('login', user.id, email, clientIP);
@@ -215,6 +269,9 @@ export async function POST(req: Request) {
     const headers = new Headers();
     headers.append('Set-Cookie', accessTokenCookie);
     headers.append('Set-Cookie', refreshTokenCookie);
+    // Add rate limit headers (P1-T5)
+    headers.set('X-RateLimit-Limit', String(DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts));
+    headers.set('X-RateLimit-Remaining', String(Math.min(distributedIpLimit.attemptsRemaining ?? DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts, distributedEmailLimit.attemptsRemaining ?? DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts)));
 
     let redirectTo: string | undefined;
     try {

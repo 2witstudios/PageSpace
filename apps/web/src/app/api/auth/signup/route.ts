@@ -2,6 +2,11 @@ import { users, userAiSettings, refreshTokens, db, eq } from '@pagespace/db';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod/v4';
 import { generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, checkRateLimit, resetRateLimit, RATE_LIMIT_CONFIGS, createNotification, decodeToken, validateOrCreateDeviceToken } from '@pagespace/lib/server';
+import {
+  checkDistributedRateLimit,
+  resetDistributedRateLimit,
+  DISTRIBUTED_RATE_LIMITS,
+} from '@pagespace/lib/security';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent, logSecurityEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
@@ -141,6 +146,52 @@ export async function POST(req: Request) {
       );
     }
 
+    // Distributed rate limiting (P1-T5)
+    const distributedIpLimit = await checkDistributedRateLimit(
+      `signup:ip:${clientIP}`,
+      DISTRIBUTED_RATE_LIMITS.SIGNUP
+    );
+    const distributedEmailLimit = await checkDistributedRateLimit(
+      `signup:email:${email.toLowerCase()}`,
+      DISTRIBUTED_RATE_LIMITS.SIGNUP
+    );
+
+    if (!distributedIpLimit.allowed) {
+      logAuthEvent('failed', undefined, email, clientIP, 'Distributed IP rate limit exceeded');
+      return Response.json(
+        {
+          error: 'Too many signup attempts from this IP address. Please try again later.',
+          retryAfter: distributedIpLimit.retryAfter,
+        },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': String(distributedIpLimit.retryAfter || 3600),
+            'X-RateLimit-Limit': String(DISTRIBUTED_RATE_LIMITS.SIGNUP.maxAttempts),
+            'X-RateLimit-Remaining': '0',
+          },
+        }
+      );
+    }
+
+    if (!distributedEmailLimit.allowed) {
+      logAuthEvent('failed', undefined, email, clientIP, 'Distributed email rate limit exceeded');
+      return Response.json(
+        {
+          error: 'Too many signup attempts for this email. Please try again later.',
+          retryAfter: distributedEmailLimit.retryAfter,
+        },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': String(distributedEmailLimit.retryAfter || 3600),
+            'X-RateLimit-Limit': String(DISTRIBUTED_RATE_LIMITS.SIGNUP.maxAttempts),
+            'X-RateLimit-Remaining': '0',
+          },
+        }
+      );
+    }
+
     const existingUser = await db.query.users.findFirst({
       where: eq(users.email, email),
     });
@@ -188,6 +239,10 @@ export async function POST(req: Request) {
     // Reset rate limits on successful signup
     resetRateLimit(clientIP);
     resetRateLimit(email.toLowerCase());
+
+    // Reset distributed rate limits (P1-T5)
+    await resetDistributedRateLimit(`signup:ip:${clientIP}`);
+    await resetDistributedRateLimit(`signup:email:${email.toLowerCase()}`);
 
     // Track signup event
     trackAuthEvent(user.id, 'signup', {

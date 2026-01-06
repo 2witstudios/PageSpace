@@ -51,6 +51,21 @@ vi.mock('@pagespace/lib/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 
+// Mock distributed rate limiting (P1-T5)
+vi.mock('@pagespace/lib/security', () => ({
+  checkDistributedRateLimit: vi.fn().mockResolvedValue({
+    allowed: true,
+    attemptsRemaining: 4,
+    retryAfter: undefined,
+  }),
+  resetDistributedRateLimit: vi.fn().mockResolvedValue(undefined),
+  DISTRIBUTED_RATE_LIMITS: {
+    LOGIN: { maxAttempts: 5, windowMs: 900000, progressiveDelay: true },
+    SIGNUP: { maxAttempts: 3, windowMs: 3600000, progressiveDelay: false },
+    REFRESH: { maxAttempts: 10, windowMs: 300000, progressiveDelay: false },
+  },
+}));
+
 import { db } from '@pagespace/db';
 import bcrypt from 'bcryptjs';
 import {
@@ -59,6 +74,11 @@ import {
   validateOrCreateDeviceToken,
   logAuthEvent,
 } from '@pagespace/lib/server';
+import {
+  checkDistributedRateLimit,
+  resetDistributedRateLimit,
+  DISTRIBUTED_RATE_LIMITS,
+} from '@pagespace/lib/security';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 
 describe('/api/auth/mobile/login', () => {
@@ -498,6 +518,141 @@ describe('/api/auth/mobile/login', () => {
       // Assert
       expect(response.status).toBe(500);
       expect(body.error).toBe('An unexpected error occurred.');
+    });
+  });
+
+  describe('distributed rate limiting (P1-T5)', () => {
+    it('calls checkDistributedRateLimit for IP and email', async () => {
+      // Arrange
+      const request = new Request('http://localhost/api/auth/mobile/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-forwarded-for': '192.168.1.100',
+        },
+        body: JSON.stringify(validLoginPayload),
+      });
+
+      // Act
+      await POST(request);
+
+      // Assert
+      expect(checkDistributedRateLimit).toHaveBeenCalledWith(
+        'login:ip:192.168.1.100',
+        DISTRIBUTED_RATE_LIMITS.LOGIN
+      );
+      expect(checkDistributedRateLimit).toHaveBeenCalledWith(
+        'login:email:test@example.com',
+        DISTRIBUTED_RATE_LIMITS.LOGIN
+      );
+    });
+
+    it('returns 429 with X-RateLimit headers when distributed IP limit exceeded', async () => {
+      // Arrange
+      (checkDistributedRateLimit as Mock)
+        .mockResolvedValueOnce({ allowed: false, retryAfter: 900, attemptsRemaining: 0 })
+        .mockResolvedValue({ allowed: true, attemptsRemaining: 4 });
+
+      const request = new Request('http://localhost/api/auth/mobile/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validLoginPayload),
+      });
+
+      // Act
+      const response = await POST(request);
+      const body = await response.json();
+
+      // Assert
+      expect(response.status).toBe(429);
+      expect(body.error).toContain('Too many login attempts from this IP');
+      expect(response.headers.get('Retry-After')).toBe('900');
+      expect(response.headers.get('X-RateLimit-Limit')).toBe('5');
+      expect(response.headers.get('X-RateLimit-Remaining')).toBe('0');
+    });
+
+    it('returns 429 with X-RateLimit headers when distributed email limit exceeded', async () => {
+      // Arrange
+      (checkDistributedRateLimit as Mock)
+        .mockResolvedValueOnce({ allowed: true, attemptsRemaining: 4 })
+        .mockResolvedValueOnce({ allowed: false, retryAfter: 900, attemptsRemaining: 0 });
+
+      const request = new Request('http://localhost/api/auth/mobile/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validLoginPayload),
+      });
+
+      // Act
+      const response = await POST(request);
+      const body = await response.json();
+
+      // Assert
+      expect(response.status).toBe(429);
+      expect(body.error).toContain('Too many login attempts for this email');
+      expect(response.headers.get('X-RateLimit-Limit')).toBe('5');
+      expect(response.headers.get('X-RateLimit-Remaining')).toBe('0');
+    });
+
+    it('resets distributed rate limits on successful login', async () => {
+      // Arrange
+      const request = new Request('http://localhost/api/auth/mobile/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-forwarded-for': '192.168.1.100',
+        },
+        body: JSON.stringify(validLoginPayload),
+      });
+
+      // Act
+      await POST(request);
+
+      // Assert
+      expect(resetDistributedRateLimit).toHaveBeenCalledWith('login:ip:192.168.1.100');
+      expect(resetDistributedRateLimit).toHaveBeenCalledWith('login:email:test@example.com');
+    });
+
+    it('includes X-RateLimit headers on successful response', async () => {
+      // Arrange
+      const request = new Request('http://localhost/api/auth/mobile/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validLoginPayload),
+      });
+
+      // Act
+      const response = await POST(request);
+
+      // Assert
+      expect(response.status).toBe(200);
+      expect(response.headers.get('X-RateLimit-Limit')).toBe('5');
+      expect(response.headers.get('X-RateLimit-Remaining')).toBeTruthy();
+    });
+
+    it('uses login:ip and login:email keys (same as web login)', async () => {
+      // Arrange
+      const request = new Request('http://localhost/api/auth/mobile/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-forwarded-for': '10.0.0.1',
+        },
+        body: JSON.stringify(validLoginPayload),
+      });
+
+      // Act
+      await POST(request);
+
+      // Assert - mobile login shares rate limit with web login
+      expect(checkDistributedRateLimit).toHaveBeenCalledWith(
+        expect.stringMatching(/^login:ip:/),
+        expect.any(Object)
+      );
+      expect(checkDistributedRateLimit).toHaveBeenCalledWith(
+        expect.stringMatching(/^login:email:/),
+        expect.any(Object)
+      );
     });
   });
 });
