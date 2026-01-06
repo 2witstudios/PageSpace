@@ -7,6 +7,18 @@ vi.mock('../../security/security-redis', () => ({
   tryGetSecurityRedisClient: vi.fn(),
 }));
 
+// Mock loggers
+vi.mock('../../logging/logger-config', () => ({
+  loggers: {
+    api: {
+      warn: vi.fn(),
+      error: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+    },
+  },
+}));
+
 // Mock cuid2 for predictable JTI values
 const DEFAULT_JTI = 'test-jti-predictable-123';
 vi.mock('@paralleldrive/cuid2', () => ({
@@ -20,6 +32,7 @@ import {
 } from '../service-auth';
 import { recordJTI, isJTIRevoked, tryGetSecurityRedisClient } from '../../security/security-redis';
 import { createId } from '@paralleldrive/cuid2';
+import { loggers } from '../../logging/logger-config';
 
 /**
  * Service Auth JTI Integration Tests (P1-T1)
@@ -113,7 +126,8 @@ describe('service-auth JTI integration', () => {
       );
     });
 
-    it('token creation succeeds when Redis unavailable (graceful degradation)', async () => {
+    it('token creation succeeds when Redis unavailable in dev/test (graceful degradation)', async () => {
+      process.env.NODE_ENV = 'test';
       vi.mocked(tryGetSecurityRedisClient).mockResolvedValue(null);
 
       const token = await createServiceToken(validOptions);
@@ -123,7 +137,8 @@ describe('service-auth JTI integration', () => {
       expect(recordJTI).not.toHaveBeenCalled();
     });
 
-    it('token creation succeeds when recordJTI throws (graceful degradation)', async () => {
+    it('token creation succeeds when recordJTI throws in dev/test (graceful degradation)', async () => {
+      process.env.NODE_ENV = 'test';
       vi.mocked(tryGetSecurityRedisClient).mockResolvedValue({} as never);
       vi.mocked(recordJTI).mockRejectedValue(new Error('Redis error'));
 
@@ -131,6 +146,31 @@ describe('service-auth JTI integration', () => {
 
       expect(token).toBeDefined();
       expect(typeof token).toBe('string');
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Failed to record JTI in Redis, token created without tracking',
+        expect.objectContaining({
+          error: 'Redis error',
+          subject: 'user-123',
+        })
+      );
+    });
+
+    it('token creation FAILS when Redis unavailable in production (fail-closed)', async () => {
+      process.env.NODE_ENV = 'production';
+      vi.mocked(tryGetSecurityRedisClient).mockResolvedValue(null);
+
+      await expect(createServiceToken(validOptions)).rejects.toThrow(
+        'Security infrastructure unavailable - cannot issue service token'
+      );
+      expect(recordJTI).not.toHaveBeenCalled();
+    });
+
+    it('token creation FAILS when recordJTI throws in production (fail-closed)', async () => {
+      process.env.NODE_ENV = 'production';
+      vi.mocked(tryGetSecurityRedisClient).mockResolvedValue({} as never);
+      vi.mocked(recordJTI).mockRejectedValue(new Error('Redis connection lost'));
+
+      await expect(createServiceToken(validOptions)).rejects.toThrow('Redis connection lost');
     });
 
     it('each token gets a unique JTI', async () => {
@@ -292,6 +332,91 @@ describe('service-auth JTI integration', () => {
 
       expect(claims.sub).toBe('user-123');
       expect(claims.service).toBe('test-service');
+    });
+  });
+
+  describe('duration validation', () => {
+    beforeEach(() => {
+      vi.mocked(tryGetSecurityRedisClient).mockResolvedValue({} as never);
+      vi.mocked(isJTIRevoked).mockResolvedValue(false);
+    });
+
+    it('zero duration returns default (5m = 300s)', async () => {
+      await createServiceToken({ ...validOptions, expiresIn: '0m' });
+
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Invalid duration value (must be positive), using default',
+        expect.objectContaining({ duration: '0m', value: 0 })
+      );
+      expect(recordJTI).toHaveBeenCalledWith(
+        expect.any(String),
+        'user-123',
+        300 // default
+      );
+    });
+
+    it('negative duration returns default (5m = 300s)', async () => {
+      await createServiceToken({ ...validOptions, expiresIn: '-5m' });
+
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Invalid duration value (must be positive), using default',
+        expect.objectContaining({ duration: '-5m', value: -5 })
+      );
+      expect(recordJTI).toHaveBeenCalledWith(
+        expect.any(String),
+        'user-123',
+        300 // default
+      );
+    });
+
+    it('invalid format returns default (5m = 300s)', async () => {
+      await createServiceToken({ ...validOptions, expiresIn: '5x' });
+
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Invalid duration format, using default',
+        expect.objectContaining({ duration: '5x' })
+      );
+      expect(recordJTI).toHaveBeenCalledWith(
+        expect.any(String),
+        'user-123',
+        300 // default
+      );
+    });
+
+    it('duration exceeding 30 days is capped at 30 days', async () => {
+      const thirtyDaysInSeconds = 30 * 24 * 60 * 60; // 2592000
+
+      await createServiceToken({ ...validOptions, expiresIn: '100d' });
+
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Duration exceeds maximum, capping at 30 days',
+        expect.objectContaining({
+          duration: '100d',
+          requestedSeconds: 100 * 24 * 60 * 60,
+          cappedTo: thirtyDaysInSeconds,
+        })
+      );
+      expect(recordJTI).toHaveBeenCalledWith(
+        expect.any(String),
+        'user-123',
+        thirtyDaysInSeconds // capped at 30 days
+      );
+    });
+
+    it('duration at exactly 30 days is accepted without warning', async () => {
+      const thirtyDaysInSeconds = 30 * 24 * 60 * 60;
+
+      await createServiceToken({ ...validOptions, expiresIn: '30d' });
+
+      expect(loggers.api.warn).not.toHaveBeenCalledWith(
+        'Duration exceeds maximum, capping at 30 days',
+        expect.anything()
+      );
+      expect(recordJTI).toHaveBeenCalledWith(
+        expect.any(String),
+        'user-123',
+        thirtyDaysInSeconds
+      );
     });
   });
 });

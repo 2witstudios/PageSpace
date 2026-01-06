@@ -1,7 +1,12 @@
 import { users, refreshTokens } from '@pagespace/db';
 import { db, eq, or } from '@pagespace/db';
 import { z } from 'zod/v4';
-import { generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, checkRateLimit, resetRateLimit, RATE_LIMIT_CONFIGS, decodeToken, generateCSRFToken, getSessionIdFromJWT, validateOrCreateDeviceToken } from '@pagespace/lib/server';
+import { generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, decodeToken, generateCSRFToken, getSessionIdFromJWT, validateOrCreateDeviceToken } from '@pagespace/lib/server';
+import {
+  checkDistributedRateLimit,
+  resetDistributedRateLimit,
+  DISTRIBUTED_RATE_LIMITS,
+} from '@pagespace/lib/security';
 import { serialize } from 'cookie';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
@@ -94,11 +99,14 @@ export async function GET(req: Request) {
     }
 
     // Rate limiting by IP address
-    const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] || 
-                     req.headers.get('x-real-ip') || 
+    const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] ||
+                     req.headers.get('x-real-ip') ||
                      'unknown';
-    
-    const ipRateLimit = checkRateLimit(clientIP, RATE_LIMIT_CONFIGS.LOGIN);
+
+    const ipRateLimit = await checkDistributedRateLimit(
+      `oauth:callback:ip:${clientIP}`,
+      DISTRIBUTED_RATE_LIMITS.LOGIN
+    );
     if (!ipRateLimit.allowed) {
       const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
       return NextResponse.redirect(new URL('/auth/signin?error=rate_limit', baseUrl));
@@ -224,8 +232,7 @@ export async function GET(req: Request) {
     });
 
     // Reset rate limits on successful login
-    resetRateLimit(clientIP);
-    resetRateLimit(email.toLowerCase());
+    await resetDistributedRateLimit(`oauth:callback:ip:${clientIP}`);
 
     // Log successful login
     logAuthEvent('login', user.id, email, clientIP, 'Google OAuth');

@@ -43,15 +43,11 @@ export async function POST(req: Request) {
                      req.headers.get('x-real-ip') ||
                      'unknown';
 
-    // Distributed rate limiting
-    const distributedIpLimit = await checkDistributedRateLimit(
-      `login:ip:${clientIP}`,
-      DISTRIBUTED_RATE_LIMITS.LOGIN
-    );
-    const distributedEmailLimit = await checkDistributedRateLimit(
-      `login:email:${email.toLowerCase()}`,
-      DISTRIBUTED_RATE_LIMITS.LOGIN
-    );
+    // Distributed rate limiting (parallel checks for better performance)
+    const [distributedIpLimit, distributedEmailLimit] = await Promise.all([
+      checkDistributedRateLimit(`login:ip:${clientIP}`, DISTRIBUTED_RATE_LIMITS.LOGIN),
+      checkDistributedRateLimit(`login:email:${email.toLowerCase()}`, DISTRIBUTED_RATE_LIMITS.LOGIN),
+    ]);
 
     if (!distributedIpLimit.allowed) {
       return Response.json(

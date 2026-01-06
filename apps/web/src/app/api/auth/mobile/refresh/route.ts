@@ -6,11 +6,14 @@ import {
   validateDeviceToken,
   rotateDeviceToken,
   updateDeviceTokenActivity,
-  checkRateLimit,
-  RATE_LIMIT_CONFIGS,
   generateCSRFToken,
   getSessionIdFromJWT,
 } from '@pagespace/lib/server';
+import {
+  checkDistributedRateLimit,
+  resetDistributedRateLimit,
+  DISTRIBUTED_RATE_LIMITS,
+} from '@pagespace/lib/security';
 import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/server';
 
@@ -36,20 +39,25 @@ export async function POST(req: Request) {
       req.headers.get('x-real-ip') ||
       'unknown';
 
-    // Rate limiting by IP address for refresh attempts
-    const rateLimit = checkRateLimit(`refresh:device:${clientIP}`, RATE_LIMIT_CONFIGS.REFRESH);
+    // Distributed rate limiting by IP address for refresh attempts
+    const distributedIpLimit = await checkDistributedRateLimit(
+      `refresh:device:ip:${clientIP}`,
+      DISTRIBUTED_RATE_LIMITS.REFRESH
+    );
 
-    if (!rateLimit.allowed) {
+    if (!distributedIpLimit.allowed) {
       return Response.json(
         {
           error: 'Too many refresh attempts. Please try again later.',
-          retryAfter: rateLimit.retryAfter
+          retryAfter: distributedIpLimit.retryAfter,
         },
         {
           status: 429,
           headers: {
-            'Retry-After': rateLimit.retryAfter?.toString() || '300'
-          }
+            'Retry-After': String(distributedIpLimit.retryAfter || 300),
+            'X-RateLimit-Limit': String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts),
+            'X-RateLimit-Remaining': '0',
+          },
         }
       );
     }
@@ -121,6 +129,9 @@ export async function POST(req: Request) {
       iat: decodedAccess.iat,
     });
     const csrfToken = generateCSRFToken(sessionId);
+
+    // Reset rate limit on successful refresh
+    await resetDistributedRateLimit(`refresh:device:ip:${clientIP}`);
 
     // Return tokens (device-token-only pattern - no refreshToken)
     return Response.json({

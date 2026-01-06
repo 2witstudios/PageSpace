@@ -172,7 +172,8 @@ export async function POST(req: Request) {
   headers.append('Set-Cookie', accessTokenCookie);
   headers.append('Set-Cookie', refreshTokenCookie);
   headers.set('X-RateLimit-Limit', String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts));
-  headers.set('X-RateLimit-Remaining', String(distributedIpLimit.attemptsRemaining ?? DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts));
+  // After successful refresh and rate limit reset, remaining attempts are back to max
+  headers.set('X-RateLimit-Remaining', String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts));
 
   return Response.json({ message: 'Token refreshed successfully' }, { status: 200, headers });
 }

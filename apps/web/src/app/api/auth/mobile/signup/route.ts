@@ -4,13 +4,15 @@ import { z } from 'zod/v4';
 import {
   slugify,
   generateAccessToken,
-  checkRateLimit,
-  resetRateLimit,
-  RATE_LIMIT_CONFIGS,
   createNotification,
   decodeToken,
   validateOrCreateDeviceToken,
 } from '@pagespace/lib/server';
+import {
+  checkDistributedRateLimit,
+  resetDistributedRateLimit,
+  DISTRIBUTED_RATE_LIMITS,
+} from '@pagespace/lib/security';
 import { generateCSRFToken, getSessionIdFromJWT } from '@pagespace/lib/server';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
@@ -67,38 +69,44 @@ export async function POST(req: Request) {
     } = validation.data;
     email = validatedEmail;
 
-    // Rate limiting by IP address and email (prevent spam and email enumeration)
-    const ipRateLimit = checkRateLimit(clientIP, RATE_LIMIT_CONFIGS.SIGNUP);
-    const emailRateLimit = checkRateLimit(email.toLowerCase(), RATE_LIMIT_CONFIGS.SIGNUP);
+    // Distributed rate limiting by IP address and email (prevent spam and email enumeration)
+    const [distributedIpLimit, distributedEmailLimit] = await Promise.all([
+      checkDistributedRateLimit(`signup:ip:${clientIP}`, DISTRIBUTED_RATE_LIMITS.SIGNUP),
+      checkDistributedRateLimit(`signup:email:${email.toLowerCase()}`, DISTRIBUTED_RATE_LIMITS.SIGNUP),
+    ]);
 
-    if (!ipRateLimit.allowed) {
+    if (!distributedIpLimit.allowed) {
       logAuthEvent('failed', undefined, email, clientIP, 'IP rate limit exceeded');
       return Response.json(
         {
           error: 'Too many signup attempts from this IP address. Please try again later.',
-          retryAfter: ipRateLimit.retryAfter
+          retryAfter: distributedIpLimit.retryAfter,
         },
         {
           status: 429,
           headers: {
-            'Retry-After': ipRateLimit.retryAfter?.toString() || '3600'
-          }
+            'Retry-After': String(distributedIpLimit.retryAfter || 3600),
+            'X-RateLimit-Limit': String(DISTRIBUTED_RATE_LIMITS.SIGNUP.maxAttempts),
+            'X-RateLimit-Remaining': '0',
+          },
         }
       );
     }
 
-    if (!emailRateLimit.allowed) {
+    if (!distributedEmailLimit.allowed) {
       logAuthEvent('failed', undefined, email, clientIP, 'Email rate limit exceeded');
       return Response.json(
         {
           error: 'Too many signup attempts for this email. Please try again later.',
-          retryAfter: emailRateLimit.retryAfter
+          retryAfter: distributedEmailLimit.retryAfter,
         },
         {
           status: 429,
           headers: {
-            'Retry-After': emailRateLimit.retryAfter?.toString() || '3600'
-          }
+            'Retry-After': String(distributedEmailLimit.retryAfter || 3600),
+            'X-RateLimit-Limit': String(DISTRIBUTED_RATE_LIMITS.SIGNUP.maxAttempts),
+            'X-RateLimit-Remaining': '0',
+          },
         }
       );
     }
@@ -160,8 +168,10 @@ export async function POST(req: Request) {
     loggers.auth.info('New user created via mobile', { userId: user.id, email, name, platform });
 
     // Reset rate limits on successful signup
-    resetRateLimit(clientIP);
-    resetRateLimit(email.toLowerCase());
+    await Promise.all([
+      resetDistributedRateLimit(`signup:ip:${clientIP}`),
+      resetDistributedRateLimit(`signup:email:${email.toLowerCase()}`),
+    ]);
 
     // Track signup event
     trackAuthEvent(user.id, 'signup', {

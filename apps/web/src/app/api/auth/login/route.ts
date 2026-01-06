@@ -96,15 +96,11 @@ export async function POST(req: Request) {
 
     const { email, password, deviceId, deviceName, deviceToken: existingDeviceToken } = validation.data;
 
-    // Distributed rate limiting
-    const distributedIpLimit = await checkDistributedRateLimit(
-      `login:ip:${clientIP}`,
-      DISTRIBUTED_RATE_LIMITS.LOGIN
-    );
-    const distributedEmailLimit = await checkDistributedRateLimit(
-      `login:email:${email.toLowerCase()}`,
-      DISTRIBUTED_RATE_LIMITS.LOGIN
-    );
+    // Distributed rate limiting (parallel checks for better performance)
+    const [distributedIpLimit, distributedEmailLimit] = await Promise.all([
+      checkDistributedRateLimit(`login:ip:${clientIP}`, DISTRIBUTED_RATE_LIMITS.LOGIN),
+      checkDistributedRateLimit(`login:email:${email.toLowerCase()}`, DISTRIBUTED_RATE_LIMITS.LOGIN),
+    ]);
 
     if (!distributedIpLimit.allowed) {
       return Response.json(
@@ -229,7 +225,8 @@ export async function POST(req: Request) {
     headers.append('Set-Cookie', accessTokenCookie);
     headers.append('Set-Cookie', refreshTokenCookie);
     headers.set('X-RateLimit-Limit', String(DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts));
-    headers.set('X-RateLimit-Remaining', String(Math.min(distributedIpLimit.attemptsRemaining ?? DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts, distributedEmailLimit.attemptsRemaining ?? DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts)));
+    // After successful login and rate limit reset, remaining attempts are back to max
+    headers.set('X-RateLimit-Remaining', String(DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts));
 
     let redirectTo: string | undefined;
     try {

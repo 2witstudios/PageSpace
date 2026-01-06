@@ -110,15 +110,11 @@ export async function POST(req: Request) {
     const { name, email: validatedEmail, password, deviceId, deviceName, deviceToken: existingDeviceToken } = validation.data;
     email = validatedEmail;
 
-    // Distributed rate limiting
-    const distributedIpLimit = await checkDistributedRateLimit(
-      `signup:ip:${clientIP}`,
-      DISTRIBUTED_RATE_LIMITS.SIGNUP
-    );
-    const distributedEmailLimit = await checkDistributedRateLimit(
-      `signup:email:${email.toLowerCase()}`,
-      DISTRIBUTED_RATE_LIMITS.SIGNUP
-    );
+    // Distributed rate limiting (parallel checks for better performance)
+    const [distributedIpLimit, distributedEmailLimit] = await Promise.all([
+      checkDistributedRateLimit(`signup:ip:${clientIP}`, DISTRIBUTED_RATE_LIMITS.SIGNUP),
+      checkDistributedRateLimit(`signup:email:${email.toLowerCase()}`, DISTRIBUTED_RATE_LIMITS.SIGNUP),
+    ]);
 
     if (!distributedIpLimit.allowed) {
       logAuthEvent('failed', undefined, email, clientIP, 'IP rate limit exceeded');

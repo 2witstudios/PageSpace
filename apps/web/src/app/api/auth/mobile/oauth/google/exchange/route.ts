@@ -51,14 +51,16 @@ import {
   generateAccessToken,
   generateRefreshToken,
   getRefreshTokenMaxAge,
-  checkRateLimit,
-  resetRateLimit,
-  RATE_LIMIT_CONFIGS,
   decodeToken,
   generateCSRFToken,
   getSessionIdFromJWT,
   validateOrCreateDeviceToken,
 } from '@pagespace/lib/server';
+import {
+  checkDistributedRateLimit,
+  resetDistributedRateLimit,
+  DISTRIBUTED_RATE_LIMITS,
+} from '@pagespace/lib/security';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { verifyOAuthIdToken, createOrLinkOAuthUser, saveRefreshToken, OAuthProvider } from '@pagespace/lib/server';
@@ -106,7 +108,10 @@ export async function POST(req: Request) {
       req.headers.get('x-real-ip') ||
       'unknown';
 
-    const ipRateLimit = checkRateLimit(clientIP, RATE_LIMIT_CONFIGS.LOGIN);
+    const ipRateLimit = await checkDistributedRateLimit(
+      `mobile:oauth:ip:${clientIP}`,
+      DISTRIBUTED_RATE_LIMITS.LOGIN
+    );
     if (!ipRateLimit.allowed) {
       return Response.json(
         {
@@ -116,7 +121,9 @@ export async function POST(req: Request) {
         {
           status: 429,
           headers: {
-            'Retry-After': ipRateLimit.retryAfter?.toString() || '900',
+            'Retry-After': String(ipRateLimit.retryAfter || 900),
+            'X-RateLimit-Limit': String(DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts),
+            'X-RateLimit-Remaining': '0',
           },
         }
       );
@@ -124,14 +131,12 @@ export async function POST(req: Request) {
 
     // Additional rate limiting specifically for OAuth token verification
     // Prevents resource exhaustion from invalid token spam
-    const ipOAuthRateLimit = checkRateLimit(`oauth:${clientIP}`, {
-      maxAttempts: 10,
-      windowMs: 5 * 60 * 1000, // 5 minutes
-      blockDurationMs: 5 * 60 * 1000, // 5 minutes
-      progressiveDelay: false,
-    });
+    const oauthRateLimit = await checkDistributedRateLimit(
+      `mobile:oauth:verify:${clientIP}`,
+      { maxAttempts: 10, windowMs: 5 * 60 * 1000 } // 10 attempts per 5 minutes
+    );
 
-    if (!ipOAuthRateLimit.allowed) {
+    if (!oauthRateLimit.allowed) {
       loggers.auth.warn('OAuth verification rate limit exceeded', { clientIP });
       trackAuthEvent(undefined, 'failed_oauth', {
         reason: 'rate_limit_verification',
@@ -141,12 +146,14 @@ export async function POST(req: Request) {
       return Response.json(
         {
           error: 'Too many OAuth verification attempts. Please try again later.',
-          retryAfter: ipOAuthRateLimit.retryAfter,
+          retryAfter: oauthRateLimit.retryAfter,
         },
         {
           status: 429,
           headers: {
-            'Retry-After': ipOAuthRateLimit.retryAfter?.toString() || '300',
+            'Retry-After': String(oauthRateLimit.retryAfter || 300),
+            'X-RateLimit-Limit': '10',
+            'X-RateLimit-Remaining': '0',
           },
         }
       );
@@ -185,9 +192,9 @@ export async function POST(req: Request) {
     });
 
     // Rate limiting by email
-    const emailRateLimit = checkRateLimit(
-      userInfo.email.toLowerCase(),
-      RATE_LIMIT_CONFIGS.LOGIN
+    const emailRateLimit = await checkDistributedRateLimit(
+      `mobile:oauth:email:${userInfo.email.toLowerCase()}`,
+      DISTRIBUTED_RATE_LIMITS.LOGIN
     );
     if (!emailRateLimit.allowed) {
       return Response.json(
@@ -198,7 +205,9 @@ export async function POST(req: Request) {
         {
           status: 429,
           headers: {
-            'Retry-After': emailRateLimit.retryAfter?.toString() || '900',
+            'Retry-After': String(emailRateLimit.retryAfter || 900),
+            'X-RateLimit-Limit': String(DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts),
+            'X-RateLimit-Remaining': '0',
           },
         }
       );
@@ -258,9 +267,11 @@ export async function POST(req: Request) {
     });
 
     // Reset rate limits on successful authentication
-    resetRateLimit(clientIP);
-    resetRateLimit(`oauth:${clientIP}`); // Reset OAuth verification rate limit
-    resetRateLimit(userInfo.email.toLowerCase());
+    await Promise.all([
+      resetDistributedRateLimit(`mobile:oauth:ip:${clientIP}`),
+      resetDistributedRateLimit(`mobile:oauth:verify:${clientIP}`),
+      resetDistributedRateLimit(`mobile:oauth:email:${userInfo.email.toLowerCase()}`),
+    ]);
 
     // Log successful OAuth login
     logAuthEvent('login', user.id, user.email, clientIP, 'Google OAuth Mobile');

@@ -12,6 +12,11 @@ import {
   generateCSRFToken,
   getSessionIdFromJWT,
 } from '@pagespace/lib/server';
+import {
+  checkDistributedRateLimit,
+  resetDistributedRateLimit,
+  DISTRIBUTED_RATE_LIMITS,
+} from '@pagespace/lib/security';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
@@ -39,6 +44,29 @@ export async function POST(req: Request) {
       req.headers.get('x-forwarded-for')?.split(',')[0] ||
       req.headers.get('x-real-ip') ||
       'unknown';
+
+    // Distributed rate limiting by IP address for device refresh attempts
+    const distributedIpLimit = await checkDistributedRateLimit(
+      `refresh:device:ip:${clientIP}`,
+      DISTRIBUTED_RATE_LIMITS.REFRESH
+    );
+
+    if (!distributedIpLimit.allowed) {
+      return Response.json(
+        {
+          error: 'Too many refresh attempts. Please try again later.',
+          retryAfter: distributedIpLimit.retryAfter,
+        },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': String(distributedIpLimit.retryAfter || 300),
+            'X-RateLimit-Limit': String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts),
+            'X-RateLimit-Remaining': '0',
+          },
+        }
+      );
+    }
 
     const deviceRecord = await validateDeviceToken(deviceToken);
     if (!deviceRecord) {
@@ -167,6 +195,9 @@ export async function POST(req: Request) {
       userAgent: userAgent ?? req.headers.get('user-agent'),
       appVersion,
     });
+
+    // Reset rate limit on successful refresh
+    await resetDistributedRateLimit(`refresh:device:ip:${clientIP}`);
 
     // For web platform, set httpOnly cookies instead of returning tokens in JSON
     // Detect web by platform === 'web' in device record

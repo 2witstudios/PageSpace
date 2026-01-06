@@ -1,6 +1,9 @@
 import { z } from 'zod/v4';
-import { checkRateLimit, RATE_LIMIT_CONFIGS } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
+import {
+  checkDistributedRateLimit,
+  DISTRIBUTED_RATE_LIMITS,
+} from '@pagespace/lib/security';
 import crypto from 'crypto';
 
 const googleSigninSchema = z.object({
@@ -19,22 +22,27 @@ export async function POST(req: Request) {
     }
 
     // Rate limiting by IP address
-    const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] || 
-                     req.headers.get('x-real-ip') || 
+    const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] ||
+                     req.headers.get('x-real-ip') ||
                      'unknown';
-    
-    const ipRateLimit = checkRateLimit(clientIP, RATE_LIMIT_CONFIGS.LOGIN);
+
+    const ipRateLimit = await checkDistributedRateLimit(
+      `oauth:signin:ip:${clientIP}`,
+      DISTRIBUTED_RATE_LIMITS.LOGIN
+    );
     if (!ipRateLimit.allowed) {
       return Response.json(
-        { 
+        {
           error: 'Too many login attempts from this IP address. Please try again later.',
-          retryAfter: ipRateLimit.retryAfter 
-        }, 
-        { 
+          retryAfter: ipRateLimit.retryAfter,
+        },
+        {
           status: 429,
           headers: {
-            'Retry-After': ipRateLimit.retryAfter?.toString() || '900'
-          }
+            'Retry-After': String(ipRateLimit.retryAfter || 900),
+            'X-RateLimit-Limit': String(DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts),
+            'X-RateLimit-Remaining': '0',
+          },
         }
       );
     }
