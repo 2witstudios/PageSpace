@@ -87,13 +87,18 @@ jobs:
           sleep 10
 
       - name: Run k6 load test
-        uses: grafana/k6-action@v0.3.1
-        with:
-          filename: tests/load/auth-baseline.k6.js
         env:
           K6_VUS: ${{ github.event.inputs.vus || '50' }}
           K6_DURATION: ${{ github.event.inputs.duration || '30s' }}
           BASE_URL: http://localhost:3000
+        run: |
+          mkdir -p tests/load/results
+          docker run --rm \
+            -v "$PWD":/scripts \
+            -e K6_VUS \
+            -e K6_DURATION \
+            -e BASE_URL \
+            grafana/k6 run /scripts/tests/load/auth-baseline.k6.js
 
       - name: Upload load test results
         uses: actions/upload-artifact@v4

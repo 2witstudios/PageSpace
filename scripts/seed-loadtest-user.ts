@@ -4,19 +4,28 @@ import { config } from 'dotenv';
 // Load .env from current working directory (run from project root)
 config();
 
-// Fix DATABASE_URL for local execution (Docker uses "postgres" hostname, local needs "localhost")
-if (process.env.DATABASE_URL) {
-  const originalUrl = process.env.DATABASE_URL;
-  // Replace Docker hostname with localhost for local script execution
-  process.env.DATABASE_URL = originalUrl
-    .replace('://postgres:', '://localhost:')
-    .replace('@postgres/', '@localhost/')
-    .replace('@postgres:', '@localhost:');
+function adjustDatabaseUrlForLocalExecution(): void {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) return;
 
-  if (originalUrl !== process.env.DATABASE_URL) {
-    console.log('Note: Adjusted DATABASE_URL for local execution (postgres -> localhost)\n');
+  try {
+    const parsed = new URL(databaseUrl);
+    if (parsed.hostname !== 'postgres') return;
+
+    parsed.hostname = 'localhost';
+    const adjustedUrl = parsed.toString();
+
+    if (adjustedUrl !== databaseUrl) {
+      process.env.DATABASE_URL = adjustedUrl;
+      console.log('Note: Adjusted DATABASE_URL for local execution (postgres -> localhost)\n');
+    }
+  } catch {
+    console.warn('Warning: DATABASE_URL is not a valid URL; skipping host adjustment.\n');
   }
 }
+
+// Fix DATABASE_URL for local execution (Docker uses "postgres" hostname, local needs "localhost")
+adjustDatabaseUrlForLocalExecution();
 
 /**
  * Seed Load Test User
@@ -26,7 +35,7 @@ if (process.env.DATABASE_URL) {
  *
  * Usage:
  *   # From project root:
- *   node_modules/.pnpm/node_modules/.bin/tsx scripts/seed-loadtest-user.ts
+ *   pnpm exec tsx scripts/seed-loadtest-user.ts
  *
  *   # Or add to package.json scripts:
  *   pnpm seed:loadtest
@@ -40,8 +49,15 @@ if (process.env.DATABASE_URL) {
  *   - Name: Load Test User
  */
 
-// Dynamic import after DATABASE_URL is fixed
 async function main() {
+  // Check if running in production before loading database modules
+  if (process.env.NODE_ENV === 'production') {
+    console.error('ERROR: Cannot seed load test user in production environment!');
+    process.exitCode = 1;
+    return;
+  }
+
+  // Dynamic import after DATABASE_URL is fixed
   const { db, users } = await import('@pagespace/db');
   const { eq } = await import('drizzle-orm');
   const bcrypt = await import('bcryptjs');
@@ -58,12 +74,7 @@ async function main() {
   console.log('Load Test User Seeder');
   console.log('=====================\n');
 
-  // Check if running in production
-  if (process.env.NODE_ENV === 'production') {
-    console.error('ERROR: Cannot seed load test user in production environment!');
-    process.exit(1);
-  }
-
+  let exitCode = 0;
   try {
     // Check if user already exists
     const existingUser = await db.query.users.findFirst({
@@ -75,39 +86,40 @@ async function main() {
       console.log(`  ID: ${existingUser.id}`);
       console.log(`  Name: ${existingUser.name}`);
       console.log('\nTo update password, delete the user first and re-run this script.');
-      process.exit(0);
+    } else {
+      // Hash password
+      const hashedPassword = await bcrypt.default.hash(password, 12);
+
+      // Create user
+      const userId = createId();
+      await db.insert(users).values({
+        id: userId,
+        email,
+        name,
+        password: hashedPassword,
+        provider: 'email',
+        emailVerified: new Date(), // Mark as verified for testing
+        role: 'user',
+        tokenVersion: 0,
+        subscriptionTier: 'free',
+      });
+
+      console.log('Load test user created successfully!\n');
+      console.log('Credentials:');
+      console.log(`  Email: ${email}`);
+      console.log(`  Password: ${password}`);
+      console.log(`  User ID: ${userId}`);
+      console.log('\nYou can now run load tests with:');
+      console.log('  k6 run tests/load/auth-baseline.k6.js');
     }
-
-    // Hash password
-    const hashedPassword = await bcrypt.default.hash(password, 12);
-
-    // Create user
-    const userId = createId();
-    await db.insert(users).values({
-      id: userId,
-      email,
-      name,
-      password: hashedPassword,
-      provider: 'email',
-      emailVerified: new Date(), // Mark as verified for testing
-      role: 'user',
-      tokenVersion: 0,
-      subscriptionTier: 'free',
-    });
-
-    console.log('Load test user created successfully!\n');
-    console.log('Credentials:');
-    console.log(`  Email: ${email}`);
-    console.log(`  Password: ${password}`);
-    console.log(`  User ID: ${userId}`);
-    console.log('\nYou can now run load tests with:');
-    console.log(`  k6 run tests/load/auth-baseline.k6.js`);
-
-    process.exit(0);
   } catch (error) {
     console.error('Failed to create load test user:', error);
-    process.exit(1);
+    exitCode = 1;
+  } finally {
+    await db.$client.end();
   }
+
+  process.exitCode = exitCode;
 }
 
 main();

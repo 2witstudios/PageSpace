@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 import { db, refreshTokens, mcpTokens } from '@pagespace/db';
-import { isNull, sql } from 'drizzle-orm';
+import { eq, isNull, sql } from 'drizzle-orm';
 import { createHash } from 'crypto';
 
 interface CliOptions {
@@ -26,75 +26,21 @@ function getTokenPrefix(token: string): string {
   return token.substring(0, 12);
 }
 
-async function migrateRefreshTokens(batchSize: number, dryRun: boolean): Promise<number> {
-  console.log(`\nMigrating refresh_tokens (batch size: ${batchSize})...`);
+type TokenTable = typeof refreshTokens | typeof mcpTokens;
 
-  const counts = await db.execute(
-    sql.raw(`SELECT COUNT(*) as count FROM refresh_tokens WHERE token_hash IS NULL`)
-  );
-  const unmigrated = Number(counts.rows[0]?.count ?? 0);
+async function migrateTokenTable<TTable extends TokenTable>(
+  tableName: string,
+  table: TTable,
+  batchSize: number,
+  dryRun: boolean
+): Promise<number> {
+  console.log(`\nMigrating ${tableName} (batch size: ${batchSize})...`);
 
-  if (unmigrated === 0) {
-    console.log('  ✓ All tokens already migrated');
-    return 0;
-  }
-
-  console.log(`  Unmigrated: ${unmigrated}`);
-
-  if (dryRun) {
-    console.log('  [DRY RUN] Would migrate tokens...');
-    return 0;
-  }
-
-  let processedTotal = 0;
-  while (true) {
-    const batchResult = await db.transaction(async (tx) => {
-      const tokens = await tx
-        .select({ id: refreshTokens.id, token: refreshTokens.token })
-        .from(refreshTokens)
-        .where(isNull(refreshTokens.tokenHash))
-        .limit(batchSize);
-
-      if (tokens.length === 0) return 0;
-
-      const updates = tokens.map(t => ({
-        id: t.id,
-        tokenHash: hashToken(t.token),
-        tokenPrefix: getTokenPrefix(t.token),
-      }));
-
-      const values = updates
-        .map(u => `('${u.id}', '${u.tokenHash}', '${u.tokenPrefix}')`)
-        .join(',');
-
-      await tx.execute(sql.raw(`
-        UPDATE refresh_tokens AS rt
-        SET token_hash = v.hash, token_prefix = v.prefix
-        FROM (VALUES ${values}) AS v(id, hash, prefix)
-        WHERE rt.id = v.id
-      `));
-
-      return tokens.length;
-    });
-
-    if (batchResult === 0) break;
-
-    processedTotal += batchResult;
-    const progress = ((processedTotal / unmigrated) * 100).toFixed(1);
-    process.stdout.write(`\r  Progress: ${processedTotal}/${unmigrated} (${progress}%)`);
-  }
-
-  console.log('\n  ✓ Migration complete');
-  return processedTotal;
-}
-
-async function migrateMcpTokens(batchSize: number, dryRun: boolean): Promise<number> {
-  console.log(`\nMigrating mcp_tokens (batch size: ${batchSize})...`);
-
-  const counts = await db.execute(
-    sql.raw(`SELECT COUNT(*) as count FROM mcp_tokens WHERE token_hash IS NULL`)
-  );
-  const unmigrated = Number(counts.rows[0]?.count ?? 0);
+  const counts = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(table)
+    .where(isNull(table.tokenHash));
+  const unmigrated = Number(counts[0]?.count ?? 0);
 
   if (unmigrated === 0) {
     console.log('  ✓ All tokens already migrated');
@@ -112,9 +58,9 @@ async function migrateMcpTokens(batchSize: number, dryRun: boolean): Promise<num
   while (true) {
     const batchResult = await db.transaction(async (tx) => {
       const tokens = await tx
-        .select({ id: mcpTokens.id, token: mcpTokens.token })
-        .from(mcpTokens)
-        .where(isNull(mcpTokens.tokenHash))
+        .select({ id: table.id, token: table.token })
+        .from(table)
+        .where(isNull(table.tokenHash))
         .limit(batchSize);
 
       if (tokens.length === 0) return 0;
@@ -125,16 +71,12 @@ async function migrateMcpTokens(batchSize: number, dryRun: boolean): Promise<num
         tokenPrefix: getTokenPrefix(t.token),
       }));
 
-      const values = updates
-        .map(u => `('${u.id}', '${u.tokenHash}', '${u.tokenPrefix}')`)
-        .join(',');
-
-      await tx.execute(sql.raw(`
-        UPDATE mcp_tokens AS mt
-        SET token_hash = v.hash, token_prefix = v.prefix
-        FROM (VALUES ${values}) AS v(id, hash, prefix)
-        WHERE mt.id = v.id
-      `));
+      for (const update of updates) {
+        await tx
+          .update(table)
+          .set({ tokenHash: update.tokenHash, tokenPrefix: update.tokenPrefix })
+          .where(eq(table.id, update.id));
+      }
 
       return tokens.length;
     });
@@ -158,8 +100,18 @@ async function main() {
   if (options.dryRun) console.log('MODE: DRY RUN\n');
 
   try {
-    const refreshCount = await migrateRefreshTokens(options.batchSize, options.dryRun);
-    const mcpCount = await migrateMcpTokens(options.batchSize, options.dryRun);
+    const refreshCount = await migrateTokenTable(
+      'refresh_tokens',
+      refreshTokens,
+      options.batchSize,
+      options.dryRun
+    );
+    const mcpCount = await migrateTokenTable(
+      'mcp_tokens',
+      mcpTokens,
+      options.batchSize,
+      options.dryRun
+    );
 
     console.log('\n===================');
     console.log('Migration Summary');

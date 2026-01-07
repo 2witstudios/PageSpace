@@ -47,6 +47,21 @@ async function getSessionRedisClient(): Promise<Redis> {
 }
 
 /**
+ * Try to get session Redis client without throwing in non-production.
+ * Re-throws in production to preserve strict security behavior.
+ */
+async function tryGetSessionRedisClient(): Promise<Redis | null> {
+  try {
+    return await getSessionRedisClient();
+  } catch (error) {
+    if (process.env.NODE_ENV === 'production') {
+      throw error;
+    }
+    return null;
+  }
+}
+
+/**
  * Get the rate limiting Redis client (Database 1 for distributed rate limit counters).
  * Falls back to REDIS_URL if REDIS_RATE_LIMIT_URL not configured.
  */
@@ -121,7 +136,8 @@ export async function recordJTI(
   userId: string,
   expiresInSeconds: number
 ): Promise<void> {
-  const redis = await getSessionRedisClient();
+  const redis = await tryGetSessionRedisClient();
+  if (!redis) return;
   const key = `${KEY_PREFIX}jti:${jti}`;
 
   // Store as valid with user ID for potential auditing
@@ -139,7 +155,8 @@ export async function recordJTI(
  * - JTI is not found (expired or never recorded)
  */
 export async function isJTIRevoked(jti: string): Promise<boolean> {
-  const redis = await getSessionRedisClient();
+  const redis = await tryGetSessionRedisClient();
+  if (!redis) return false;
   const key = `${KEY_PREFIX}jti:${jti}`;
 
   const value = await redis.get(key);
@@ -163,7 +180,8 @@ export async function isJTIRevoked(jti: string): Promise<boolean> {
  * The revocation is stored with the remaining TTL.
  */
 export async function revokeJTI(jti: string, reason: string): Promise<boolean> {
-  const redis = await getSessionRedisClient();
+  const redis = await tryGetSessionRedisClient();
+  if (!redis) return false;
   const key = `${KEY_PREFIX}jti:${jti}`;
 
   // Get remaining TTL

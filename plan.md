@@ -41,6 +41,27 @@ Phase 5: Monitoring & Incident Response
 
 ---
 
+## Lessons Learned (P0-P1 Implementation)
+
+> Post-implementation insights from PR #167 remediation rounds.
+
+### IP Extraction Standardization
+- **Issue:** IP extraction logic duplicated across 12 auth routes
+- **Solution:** Centralized `getClientIP(request)` utility in `auth-helpers.ts`
+- **Lesson:** Identify cross-cutting concerns early to avoid duplication
+
+### Promise.allSettled for Resilience
+- **Issue:** Rate-limit reset failures caused 500 errors on successful auth
+- **Solution:** Changed `Promise.all` → `Promise.allSettled` with logging
+- **Lesson:** Always use `allSettled` for non-critical cleanup operations
+
+### X-RateLimit Header Timing
+- **Issue:** `X-RateLimit-Remaining` computed before decrement showed stale values
+- **Solution:** Return post-decrement values in response headers
+- **Lesson:** Test header values match actual state after operations
+
+---
+
 ## Phase 0: Infrastructure & Preparation
 
 **Objective:** Prepare infrastructure and establish security testing foundation before implementing changes.
@@ -94,6 +115,7 @@ REDIS_RATE_LIMIT_URL=redis://localhost:6380/1
 - Created `packages/lib/src/security/security-redis.ts` - JTI, rate limiting, sessions
 - Created `packages/lib/src/security/distributed-rate-limit.ts` - Distributed rate limiter
 - Created `packages/lib/src/security/index.ts` - Module exports
+- Ensured `packages/lib/src/security/index.ts` re-exports distributed rate limiting APIs and security Redis utilities for `@pagespace/lib/security`
 - Updated `.env.example` with security Redis documentation
 - 64 tests passing
 
@@ -294,7 +316,7 @@ export function extractJWTClaims(token: string): Record<string, unknown> {
 **Implementation Notes:**
 - Created `packages/lib/src/__tests__/security-test-utils.ts` with malicious input generators
 - Created `packages/lib/src/__tests__/test-fixtures/security-fixtures.ts` with test data
-- Created `.github/workflows/security.yml` CI workflow
+- Created `.github/workflows/security.yml` GitHub workflow
 - All security test utilities working and tested
 
 ---
@@ -384,7 +406,7 @@ export function extractJWTClaims(token: string): Record<string, unknown> {
 
 **Implementation Notes:**
 - Created `tests/load/auth-baseline.k6.js` with proper CSRF token handling and cookie management
-- Created `.github/workflows/load-test.yml` CI workflow (weekly + manual trigger)
+- Created `.github/workflows/load-test.yml` GitHub workflow (weekly + manual trigger)
 - Created `scripts/seed-loadtest-user.ts` for seeding test user (loadtest@example.com)
 - Baseline captured with actual auth flow:
   - CSRF fetch: p95 ~9ms
@@ -882,6 +904,20 @@ describe('Codebase Secret Comparison Audit', () => {
 - [ ] Timing attack vector eliminated
 
 **Dependencies:** None
+
+---
+
+## Lessons Learned & Remediation Notes (Phase 1, PR #167)
+
+**Remediation Rounds:**
+- Round 1 (commit e6dbf5c): Fixed JTI existence checks, added OAuth rate limiting, corrected headers, parallelized resets.
+- Round 2 (commit d41c172): Added failure logging, OAuth environment validation, test mock fixes.
+- Round 3 (commit 11fe272): Centralized IP extraction via `getClientIP()`, standardized rate-limit key naming.
+
+**Key Lessons for P2-P5:**
+- IP extraction standardization: use `getClientIP(request)` across auth routes to avoid drift.
+- Promise.allSettled for resilience: avoid failing auth on non-critical cleanup/reset operations.
+- Rate-limit header accuracy: ensure `X-RateLimit-Remaining` reflects the authoritative store, not stale state.
 
 ---
 
@@ -2079,6 +2115,10 @@ describe('Broadcast Security', () => {
 
 **Description:** Add CSP headers to all responses.
 
+**Status:** PLANNED (Phase 4; not part of PR #167)
+
+**Scope Note:** Nonce wiring in `apps/web/src/app/layout.tsx` is part of P4-T1 and should be implemented when Phase 4 begins.
+
 **Files to Create:**
 - `apps/web/src/middleware/security-headers.ts`
 
@@ -2120,6 +2160,28 @@ export function securityHeaders(request: NextRequest, response: NextResponse) {
 
 **Additional files to create/modify for nonce support:**
 - `apps/web/src/app/layout.tsx` - Read nonce from headers, pass to Script components
+
+> **Scope Note:** Nonce integration in `layout.tsx` is part of P4-T1 implementation. The middleware code above shows the pattern; actual integration happens when CSP is enabled in Phase 4.
+
+**Nonce wiring example:**
+```tsx
+// apps/web/src/app/layout.tsx
+import { headers } from 'next/headers';
+import Script from 'next/script';
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  const nonce = headers().get('x-nonce') ?? undefined;
+
+  return (
+    <html lang="en">
+      <body>
+        <Script nonce={nonce} src="/path/to/script.js" strategy="beforeInteractive" />
+        {children}
+      </body>
+    </html>
+  );
+}
+```
 
 **Tests Required:**
 ```typescript
@@ -2524,7 +2586,16 @@ jobs:
 
 ---
 
-## Test Coverage Matrix
+## Phase 1 Test Coverage (PR #167)
+
+- JTI: 20 tests ✅
+- Secure-compare: 28 tests ✅
+- Distributed rate-limit: 22 tests ✅
+- Auth routes: 194 total (after remediation) ✅
+
+## Test Coverage Targets (Phases 1-5)
+
+_Matrix below reflects project-wide targets; "Current" is the pre-Phase 1 baseline estimate._
 
 | Category | Current | Target | Priority |
 |----------|---------|--------|----------|
@@ -2658,7 +2729,7 @@ P5-T1 (Audit Schema) ←── P5-T2 (Audit Service) ←── P5-T3 (Anomaly)
 
 ---
 
-## Success Metrics
+## Success Metrics (Project Targets)
 
 - [ ] Zero critical vulnerabilities
 - [ ] <5ms added latency for auth

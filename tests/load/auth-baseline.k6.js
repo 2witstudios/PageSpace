@@ -4,10 +4,11 @@
  * Establishes performance baselines for authentication endpoints
  * before security enhancements are applied.
  *
- * Install k6: https://k6.io/docs/getting-started/installation/
+ * Install k6: [k6 installation docs](https://k6.io/docs/getting-started/installation/)
  *
  * Usage:
  *   # Run baseline test
+ *   mkdir -p tests/load/results
  *   k6 run tests/load/auth-baseline.k6.js
  *
  *   # Run with custom options
@@ -37,6 +38,7 @@ const refreshLatency = new Trend('refresh_latency');
 const tokenValidationLatency = new Trend('token_validation_latency');
 const csrfLatency = new Trend('csrf_latency');
 const authErrorRate = new Rate('auth_error_rate');
+const refreshErrorRate = new Rate('refresh_error_rate');
 
 // Test configuration
 export const options = {
@@ -53,7 +55,8 @@ export const options = {
     'refresh_latency': ['p(95)<200'],          // 95th percentile < 200ms
     'token_validation_latency': ['p(95)<100'], // 95th percentile < 100ms
     'csrf_latency': ['p(95)<50'],              // 95th percentile < 50ms
-    'auth_error_rate': ['rate<0.30'],          // Less than 30% errors (refresh token consumption expected)
+    'auth_error_rate': ['rate<0.10'],          // Less than 10% errors for non-refresh operations
+    'refresh_error_rate': ['rate<0.30'],       // Less than 30% errors (refresh token consumption expected)
     'http_req_duration': ['p(95)<1500'],       // Overall p95 < 1500ms (accounts for bcrypt)
   },
 };
@@ -289,14 +292,14 @@ export default function (data) {
     });
 
     if (!refreshSuccess) {
-      authErrorRate.add(1);
+      refreshErrorRate.add(1);
       if (refreshResponse.status === 429) {
         console.log(`Refresh rate limited: ${refreshResponse.body}`);
       } else {
         console.log(`Refresh failed: status ${refreshResponse.status}`);
       }
     } else {
-      authErrorRate.add(0);
+      refreshErrorRate.add(0);
     }
   });
 
@@ -352,6 +355,7 @@ export function handleSummary(data) {
         count: data.metrics.token_validation_latency?.values?.count || 0,
       },
       errorRate: data.metrics.auth_error_rate?.values?.rate || 0,
+      refreshErrorRate: data.metrics.refresh_error_rate?.values?.rate || 0,
       totalRequests: data.metrics.http_reqs?.values?.count || 0,
     },
     thresholds: {
@@ -402,6 +406,7 @@ function textSummary(data) {
     `    count: ${data.metrics.refresh_latency?.values?.count || 0}`,
     '',
     '  Error Rate: ' + ((data.metrics.auth_error_rate?.values?.rate || 0) * 100).toFixed(2) + '%',
+    '  Refresh Error Rate: ' + ((data.metrics.refresh_error_rate?.values?.rate || 0) * 100).toFixed(2) + '%',
     '  Total Requests: ' + (data.metrics.http_reqs?.values?.count || 0),
     '',
     '  Thresholds: ' + (Object.entries(data.metrics)
