@@ -283,11 +283,19 @@ export function extractJWTClaims(token: string): Record<string, unknown> {
 **Tests Required:** Self-testing utilities
 
 **Acceptance Criteria:**
-- [ ] Test utilities available in all packages
-- [ ] CI workflow triggers on security-related files
-- [ ] Malicious input generators working
+- [x] Test utilities available in all packages
+- [x] CI workflow triggers on security-related files
+- [x] Malicious input generators working
 
 **Dependencies:** None
+
+**Status:** ✅ COMPLETED (2026-01-06)
+
+**Implementation Notes:**
+- Created `packages/lib/src/__tests__/security-test-utils.ts` with malicious input generators
+- Created `packages/lib/src/__tests__/test-fixtures/security-fixtures.ts` with test data
+- Created `.github/workflows/security.yml` CI workflow
+- All security test utilities working and tested
 
 ---
 
@@ -334,11 +342,20 @@ export function extractJWTClaims(token: string): Record<string, unknown> {
 - `packages/db/src/__tests__/token-migration.test.ts`
 
 **Acceptance Criteria:**
-- [ ] Migration script handles 100K+ tokens efficiently
-- [ ] Verification script confirms zero unhashed tokens
-- [ ] Rollback procedure documented and tested
+- [x] Migration script handles 100K+ tokens efficiently
+- [x] Verification script confirms zero unhashed tokens
+- [x] Rollback procedure documented and tested
 
 **Dependencies:** None
+
+**Status:** ✅ COMPLETED (2026-01-06)
+
+**Implementation Notes:**
+- Generated migration 0033 with tokenHash and tokenPrefix columns
+- Created `scripts/migrate-token-hashes.ts` with batch processing (1000/batch)
+- Created `scripts/verify-token-migration.ts` for post-migration validation
+- Created `docs/security/token-hashing-migration.md` as comprehensive runbook
+- Partial unique indexes ensure migration safety (NULL values allowed during transition)
 
 ---
 
@@ -357,11 +374,25 @@ export function extractJWTClaims(token: string): Record<string, unknown> {
 - Database query latency for auth operations
 
 **Acceptance Criteria:**
-- [ ] Baseline metrics documented
-- [ ] Performance regression threshold defined (<10% increase)
-- [ ] Load test scripts in CI
+- [x] Baseline metrics documented
+- [x] Performance regression threshold defined (<10% increase)
+- [x] Load test scripts in CI
 
 **Dependencies:** P0-T1
+
+**Status:** ✅ COMPLETED (2026-01-06)
+
+**Implementation Notes:**
+- Created `tests/load/auth-baseline.k6.js` with proper CSRF token handling and cookie management
+- Created `.github/workflows/load-test.yml` CI workflow (weekly + manual trigger)
+- Created `scripts/seed-loadtest-user.ts` for seeding test user (loadtest@example.com)
+- Baseline captured with actual auth flow:
+  - CSRF fetch: p95 ~9ms
+  - Login: p95 ~978ms (bcrypt intentionally slow for security)
+  - Token validation: p95 ~17ms
+  - Refresh: p95 ~9ms (25% error rate expected due to token consumption)
+- Results saved to `tests/load/results/baseline-2026-01-06.json`
+- Performance thresholds: login <1500ms p95, refresh <200ms p95, validation <100ms p95
 
 ---
 
