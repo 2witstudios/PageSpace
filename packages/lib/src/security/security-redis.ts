@@ -48,10 +48,14 @@ const REDIS_CLIENT_OPTIONS = {
  * Falls back to REDIS_URL if REDIS_SESSION_URL not configured.
  */
 async function getSessionRedisClient(): Promise<Redis> {
-  if (sessionRedisClient?.status === 'ready') return sessionRedisClient;
+  // Check if client is connected (status varies by ioredis version: 'ready' or 'connect')
+  const sessionStatus = sessionRedisClient?.status as string;
+  if (sessionStatus === 'ready' || sessionStatus === 'connect') {
+    return sessionRedisClient!;
+  }
 
   // Reset if connection is broken
-  if (sessionRedisClient && sessionRedisClient.status !== 'ready') {
+  if (sessionRedisClient && sessionStatus !== 'ready' && sessionStatus !== 'connect') {
     try {
       await sessionRedisClient.quit();
     } catch {
@@ -94,10 +98,14 @@ async function tryGetSessionRedisClient(): Promise<Redis | null> {
  * Falls back to REDIS_URL if REDIS_RATE_LIMIT_URL not configured.
  */
 async function getRateLimitRedisClient(): Promise<Redis> {
-  if (rateLimitRedisClient?.status === 'ready') return rateLimitRedisClient;
+  // Check if client is connected (status varies by ioredis version: 'ready' or 'connect')
+  const rateLimitStatus = rateLimitRedisClient?.status as string;
+  if (rateLimitStatus === 'ready' || rateLimitStatus === 'connect') {
+    return rateLimitRedisClient!;
+  }
 
   // Reset if connection is broken
-  if (rateLimitRedisClient && rateLimitRedisClient.status !== 'ready') {
+  if (rateLimitRedisClient && rateLimitStatus !== 'ready' && rateLimitStatus !== 'connect') {
     try {
       await rateLimitRedisClient.quit();
     } catch {
