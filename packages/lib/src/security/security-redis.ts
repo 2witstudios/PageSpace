@@ -23,11 +23,42 @@ let sessionRedisClient: Redis | null = null;
 let rateLimitRedisClient: Redis | null = null;
 
 /**
+ * Common Redis client options with reconnection support.
+ */
+const REDIS_CLIENT_OPTIONS = {
+  maxRetriesPerRequest: 3,
+  lazyConnect: false,
+  // Reconnection strategy: exponential backoff up to 3 seconds
+  retryStrategy: (times: number) => {
+    if (times > 10) {
+      // After 10 retries, stop trying
+      return null;
+    }
+    return Math.min(times * 100, 3000);
+  },
+  // Reconnect on certain errors
+  reconnectOnError: (err: Error) => {
+    const targetErrors = ['READONLY', 'ECONNRESET', 'ECONNREFUSED'];
+    return targetErrors.some(e => err.message.includes(e));
+  },
+};
+
+/**
  * Get the session Redis client (Database 0 for JTI tracking and session data).
  * Falls back to REDIS_URL if REDIS_SESSION_URL not configured.
  */
 async function getSessionRedisClient(): Promise<Redis> {
-  if (sessionRedisClient) return sessionRedisClient;
+  if (sessionRedisClient?.status === 'ready') return sessionRedisClient;
+
+  // Reset if connection is broken
+  if (sessionRedisClient && sessionRedisClient.status !== 'ready') {
+    try {
+      await sessionRedisClient.quit();
+    } catch {
+      // Ignore quit errors
+    }
+    sessionRedisClient = null;
+  }
 
   const sessionUrl = process.env.REDIS_SESSION_URL || process.env.REDIS_URL;
   if (!sessionUrl) {
@@ -37,10 +68,7 @@ async function getSessionRedisClient(): Promise<Redis> {
     throw new Error('Redis not available');
   }
 
-  sessionRedisClient = new Redis(sessionUrl, {
-    maxRetriesPerRequest: 3,
-    lazyConnect: false,
-  });
+  sessionRedisClient = new Redis(sessionUrl, REDIS_CLIENT_OPTIONS);
 
   await sessionRedisClient.ping();
   return sessionRedisClient;
@@ -66,7 +94,17 @@ async function tryGetSessionRedisClient(): Promise<Redis | null> {
  * Falls back to REDIS_URL if REDIS_RATE_LIMIT_URL not configured.
  */
 async function getRateLimitRedisClient(): Promise<Redis> {
-  if (rateLimitRedisClient) return rateLimitRedisClient;
+  if (rateLimitRedisClient?.status === 'ready') return rateLimitRedisClient;
+
+  // Reset if connection is broken
+  if (rateLimitRedisClient && rateLimitRedisClient.status !== 'ready') {
+    try {
+      await rateLimitRedisClient.quit();
+    } catch {
+      // Ignore quit errors
+    }
+    rateLimitRedisClient = null;
+  }
 
   const rateLimitUrl = process.env.REDIS_RATE_LIMIT_URL || process.env.REDIS_URL;
   if (!rateLimitUrl) {
@@ -76,10 +114,7 @@ async function getRateLimitRedisClient(): Promise<Redis> {
     throw new Error('Redis not available');
   }
 
-  rateLimitRedisClient = new Redis(rateLimitUrl, {
-    maxRetriesPerRequest: 3,
-    lazyConnect: false,
-  });
+  rateLimitRedisClient = new Redis(rateLimitUrl, REDIS_CLIENT_OPTIONS);
 
   await rateLimitRedisClient.ping();
   return rateLimitRedisClient;
@@ -123,6 +158,21 @@ export async function tryGetSecurityRedisClient(): Promise<Redis | null> {
   }
 }
 
+/**
+ * Try to get rate limit Redis client without throwing.
+ * Re-throws in production to preserve strict security behavior.
+ */
+export async function tryGetRateLimitRedisClient(): Promise<Redis | null> {
+  try {
+    return await getRateLimitRedisClient();
+  } catch (error) {
+    if (process.env.NODE_ENV === 'production') {
+      throw error;
+    }
+    return null;
+  }
+}
+
 // =============================================================================
 // JTI (JWT ID) Operations
 // =============================================================================
@@ -130,6 +180,9 @@ export async function tryGetSecurityRedisClient(): Promise<Redis | null> {
 /**
  * Record a new JTI (JWT ID) for a service token.
  * The JTI is stored with a TTL matching the token's expiration.
+ *
+ * SECURITY: In production, throws if Redis unavailable (fail-closed).
+ * In development, logs warning and continues (graceful degradation).
  */
 export async function recordJTI(
   jti: string,
@@ -137,7 +190,13 @@ export async function recordJTI(
   expiresInSeconds: number
 ): Promise<void> {
   const redis = await tryGetSessionRedisClient();
-  if (!redis) return;
+  if (!redis) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('Cannot record JTI: Redis unavailable in production');
+    }
+    loggers.api.warn('JTI recording skipped: Redis unavailable', { userId });
+    return;
+  }
   const key = `${KEY_PREFIX}jti:${jti}`;
 
   // Store as valid with user ID for potential auditing
@@ -150,13 +209,24 @@ export async function recordJTI(
 
 /**
  * Check if a JTI is revoked.
- * Returns true if:
+ * Returns true (revoked) if:
  * - JTI is explicitly revoked
  * - JTI is not found (expired or never recorded)
+ * - Redis is unavailable (fail-closed security)
+ *
+ * SECURITY: Always fails closed - when in doubt, treat token as revoked.
  */
 export async function isJTIRevoked(jti: string): Promise<boolean> {
   const redis = await tryGetSessionRedisClient();
-  if (!redis) return false;
+  if (!redis) {
+    // FAIL CLOSED: If we can't verify, treat as revoked
+    if (process.env.NODE_ENV === 'production') {
+      loggers.api.error('JTI check failed: Redis unavailable in production - treating as revoked');
+    } else {
+      loggers.api.warn('JTI check failed: Redis unavailable - treating as revoked');
+    }
+    return true;
+  }
   const key = `${KEY_PREFIX}jti:${jti}`;
 
   const value = await redis.get(key);
@@ -178,10 +248,18 @@ export async function isJTIRevoked(jti: string): Promise<boolean> {
 /**
  * Revoke a specific JTI.
  * The revocation is stored with the remaining TTL.
+ *
+ * SECURITY: In production, throws if Redis unavailable (fail-closed).
  */
 export async function revokeJTI(jti: string, reason: string): Promise<boolean> {
   const redis = await tryGetSessionRedisClient();
-  if (!redis) return false;
+  if (!redis) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('Cannot revoke JTI: Redis unavailable in production');
+    }
+    loggers.api.warn('JTI revocation skipped: Redis unavailable');
+    return false;
+  }
   const key = `${KEY_PREFIX}jti:${jti}`;
 
   // Get remaining TTL

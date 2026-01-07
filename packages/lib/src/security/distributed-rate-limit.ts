@@ -17,8 +17,7 @@ import {
   checkRateLimit as redisCheckRateLimit,
   resetRateLimit as redisResetRateLimit,
   getRateLimitStatus as redisGetRateLimitStatus,
-  isSecurityRedisAvailable,
-  tryGetSecurityRedisClient,
+  tryGetRateLimitRedisClient,
 } from './security-redis';
 import { loggers } from '../logging/logger-config';
 
@@ -205,8 +204,8 @@ export async function checkDistributedRateLimit(
   identifier: string,
   config: RateLimitConfig
 ): Promise<RateLimitResult> {
-  // Try Redis first
-  const redis = await tryGetSecurityRedisClient();
+  // Try rate limit Redis client (uses REDIS_RATE_LIMIT_URL)
+  const redis = await tryGetRateLimitRedisClient();
 
   if (redis) {
     if (!redisAvailableLogged) {
@@ -252,13 +251,19 @@ export async function checkDistributedRateLimit(
     }
   }
 
-  // Fallback to in-memory (development only)
+  // Production: FAIL CLOSED - deny request if we can't properly rate limit
   if (process.env.NODE_ENV === 'production') {
-    // In production, we should fail closed (deny) if Redis is unavailable
-    loggers.api.error('Redis unavailable in production - rate limiting may be inconsistent');
-    // Still use in-memory as last resort to prevent complete auth bypass
+    loggers.api.error('Redis unavailable in production - DENYING request (fail-closed)', {
+      identifier: identifier.substring(0, 20) + '...',
+    });
+    return {
+      allowed: false,
+      retryAfter: 60, // Tell client to retry in 60 seconds
+      attemptsRemaining: 0,
+    };
   }
 
+  // Development only: fall back to in-memory (acceptable for single-instance dev)
   return inMemoryCheckRateLimit(identifier, config);
 }
 
@@ -268,7 +273,7 @@ export async function checkDistributedRateLimit(
 export async function resetDistributedRateLimit(identifier: string): Promise<void> {
   // Reset in both Redis and in-memory to be safe
   try {
-    const redis = await tryGetSecurityRedisClient();
+    const redis = await tryGetRateLimitRedisClient();
     if (redis) {
       await redisResetRateLimit(identifier);
     }
@@ -289,7 +294,7 @@ export async function getDistributedRateLimitStatus(
   config: RateLimitConfig
 ): Promise<{ blocked: boolean; retryAfter?: number; attemptsRemaining?: number }> {
   try {
-    const redis = await tryGetSecurityRedisClient();
+    const redis = await tryGetRateLimitRedisClient();
     if (redis) {
       const result = await redisGetRateLimitStatus(
         identifier,
@@ -380,7 +385,7 @@ export async function initializeDistributedRateLimiting(): Promise<{
   error?: string;
 }> {
   try {
-    const redis = await tryGetSecurityRedisClient();
+    const redis = await tryGetRateLimitRedisClient();
 
     if (redis) {
       // Verify connection with a ping
