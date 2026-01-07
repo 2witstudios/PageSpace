@@ -42,8 +42,12 @@ if (!process.env.REDIS_URL) {
 // Security Redis URLs - required for security-redis tests
 // These use separate databases on the same Redis instance
 if (process.env.REDIS_URL && !process.env.REDIS_SESSION_URL) {
-  process.env.REDIS_SESSION_URL = process.env.REDIS_URL.replace(/\/\d*$/, '/0') || `${process.env.REDIS_URL}/0`
+  // Strip any existing database suffix (e.g., /0, /15) then append /0
+  const baseUrl = process.env.REDIS_URL.replace(/\/\d+$/, '')
+  process.env.REDIS_SESSION_URL = `${baseUrl}/0`
 }
 if (process.env.REDIS_URL && !process.env.REDIS_RATE_LIMIT_URL) {
-  process.env.REDIS_RATE_LIMIT_URL = process.env.REDIS_URL.replace(/\/\d*$/, '/1') || `${process.env.REDIS_URL}/1`
+  // Strip any existing database suffix then append /1
+  const baseUrl = process.env.REDIS_URL.replace(/\/\d+$/, '')
+  process.env.REDIS_RATE_LIMIT_URL = `${baseUrl}/1`
 }
