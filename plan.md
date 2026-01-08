@@ -103,9 +103,9 @@ REDIS_RATE_LIMIT_URL=redis://localhost:6380/1
 **Tests Required:** None (infrastructure)
 
 **Acceptance Criteria:**
-- [ ] Redis cluster running with persistence enabled
-- [ ] Health checks passing
-- [ ] Connection verified from all services
+- [x] Redis cluster running with persistence enabled
+- [x] Health checks passing
+- [x] Connection verified from all services
 
 **Dependencies:** None
 
@@ -328,7 +328,7 @@ export function extractJWTClaims(token: string): Record<string, unknown> {
 **Files to Create:**
 - `packages/db/drizzle/migrations/XXXX_add_token_hash_columns.sql` (generated)
 - `scripts/verify-token-migration.ts`
-- `docs/security/migration-runbook.md`
+- `docs/security/token-hashing-migration.md`
 
 **Migration Steps:**
 1. Add `tokenHash` column to `refresh_tokens` and `mcp_tokens` (nullable initially)

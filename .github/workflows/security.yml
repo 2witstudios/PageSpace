@@ -6,6 +6,8 @@ on:
     paths:
       - 'packages/lib/src/security/**'
       - 'packages/lib/src/auth/**'
+      - 'packages/lib/src/__tests__/security-test-utils.ts'
+      - 'packages/lib/src/__tests__/test-fixtures/security-fixtures.ts'
       - 'apps/web/src/lib/auth/**'
       - 'apps/web/src/app/api/auth/**'
       - 'apps/processor/src/middleware/auth*'
@@ -15,6 +17,8 @@ on:
     paths:
       - 'packages/lib/src/security/**'
       - 'packages/lib/src/auth/**'
+      - 'packages/lib/src/__tests__/security-test-utils.ts'
+      - 'packages/lib/src/__tests__/test-fixtures/security-fixtures.ts'
       - 'apps/web/src/lib/auth/**'
       - 'apps/web/src/app/api/auth/**'
       - 'apps/processor/src/middleware/auth*'
@@ -60,7 +64,7 @@ jobs:
         uses: pnpm/action-setup@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'pnpm'
@@ -94,7 +98,7 @@ jobs:
         uses: pnpm/action-setup@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'pnpm'
@@ -140,7 +144,7 @@ jobs:
         uses: pnpm/action-setup@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'pnpm'
