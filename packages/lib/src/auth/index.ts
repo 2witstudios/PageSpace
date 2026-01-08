@@ -12,4 +12,6 @@ export * from './oauth-types';
 export * from './oauth-utils';
 export * from './rate-limit-utils';
 export * from './secure-compare';
+export * from './token-lookup';
+export * from './token-utils';
 export * from './verification-utils';

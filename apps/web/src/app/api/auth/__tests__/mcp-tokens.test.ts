@@ -51,9 +51,11 @@ vi.mock('@pagespace/lib/server', () => ({
   },
 }));
 
-vi.mock('crypto', () => ({
-  randomBytes: vi.fn().mockReturnValue({
-    toString: vi.fn().mockReturnValue('randomBase64UrlString'),
+vi.mock('@pagespace/lib/auth', () => ({
+  generateToken: vi.fn().mockReturnValue({
+    token: 'mcp_randomBase64UrlString',
+    hash: 'mockTokenHash123',
+    tokenPrefix: 'mcp_randomBas',
   }),
 }));
 

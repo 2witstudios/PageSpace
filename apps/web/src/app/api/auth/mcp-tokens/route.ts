@@ -1,19 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, mcpTokens } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import * as crypto from 'crypto';
 import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/server';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { generateToken } from '@pagespace/lib/auth';
 
 const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
-
-// Generate a secure MCP token with prefix
-function generateMCPToken(): string {
-  const randomBytes = crypto.randomBytes(32).toString('base64url');
-  return `mcp_${randomBytes}`;
-}
 
 // Schema for creating a new MCP token
 const createTokenSchema = z.object({
@@ -30,13 +24,15 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { name } = createTokenSchema.parse(body);
 
-    // Generate a new MCP token
-    const token = generateMCPToken();
+    // P1-T3: Generate token with hash and prefix for secure storage
+    const { token, hash: tokenHash, tokenPrefix } = generateToken('mcp');
 
-    // Store the token in the database
+    // Store the token in the database with hash for lookup
     const [newToken] = await db.insert(mcpTokens).values({
       userId,
       token,
+      tokenHash,
+      tokenPrefix,
       name,
     }).returning();
 

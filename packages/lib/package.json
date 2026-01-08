@@ -197,6 +197,11 @@
       "types": "./dist/security/index.d.ts",
       "import": "./dist/security/index.js",
       "require": "./dist/security/index.js"
+    },
+    "./auth": {
+      "types": "./dist/auth/index.d.ts",
+      "import": "./dist/auth/index.js",
+      "require": "./dist/auth/index.js"
     }
   },
   "typesVersions": {
@@ -308,6 +313,9 @@
       ],
       "security": [
         "./dist/security/index.d.ts"
+      ],
+      "auth": [
+        "./dist/auth/index.d.ts"
       ]
     }
   },

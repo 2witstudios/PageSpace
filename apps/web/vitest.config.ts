@@ -48,6 +48,7 @@ export default defineConfig({
       '@pagespace/lib/api-utils': path.resolve(packagesDir, 'lib/src/utils/api-utils'),
       '@pagespace/lib/security': path.resolve(packagesDir, 'lib/src/security'),
       '@pagespace/lib/secure-compare': path.resolve(packagesDir, 'lib/src/auth/secure-compare'),
+      '@pagespace/lib/auth': path.resolve(packagesDir, 'lib/src/auth'),
       // Fallback for general @pagespace/lib imports
       '@pagespace/lib': path.resolve(packagesDir, 'lib/src'),
     },

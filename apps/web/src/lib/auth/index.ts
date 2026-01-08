@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { parse } from 'cookie';
 import { decodeToken } from '@pagespace/lib/server';
 import { db, mcpTokens, users, eq, and, isNull } from '@pagespace/db';
+import { hashToken } from '@pagespace/lib/auth';
 
 const BEARER_PREFIX = 'Bearer ';
 const MCP_TOKEN_PREFIX = 'mcp_';
@@ -71,8 +72,12 @@ export async function validateMCPToken(token: string): Promise<MCPAuthDetails | 
       return null;
     }
 
-    const tokenRecord = await db.query.mcpTokens.findFirst({
-      where: and(eq(mcpTokens.token, token), isNull(mcpTokens.revokedAt)),
+    // P1-T3: Hash-based token lookup with plaintext fallback for migration
+    const tokenHash = hashToken(token);
+
+    // Try hash lookup first (new tokens)
+    let tokenRecord = await db.query.mcpTokens.findFirst({
+      where: and(eq(mcpTokens.tokenHash, tokenHash), isNull(mcpTokens.revokedAt)),
       columns: {
         id: true,
         userId: true,
@@ -87,6 +92,26 @@ export async function validateMCPToken(token: string): Promise<MCPAuthDetails | 
         },
       },
     });
+
+    // Fall back to plaintext lookup (legacy tokens during migration)
+    if (!tokenRecord) {
+      tokenRecord = await db.query.mcpTokens.findFirst({
+        where: and(eq(mcpTokens.token, token), isNull(mcpTokens.revokedAt)),
+        columns: {
+          id: true,
+          userId: true,
+        },
+        with: {
+          user: {
+            columns: {
+              id: true,
+              role: true,
+              tokenVersion: true,
+            },
+          },
+        },
+      });
+    }
 
     const user = tokenRecord?.user;
     if (!tokenRecord || !user) {

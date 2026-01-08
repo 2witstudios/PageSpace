@@ -6,7 +6,7 @@ import {
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
-import { validateDeviceToken } from '@pagespace/lib/device-auth-utils';
+import { validateDeviceToken, hashToken, getTokenPrefix } from '@pagespace/lib/auth';
 import { serialize } from 'cookie';
 import { parse } from 'cookie';
 import { createId } from '@paralleldrive/cuid2';
@@ -66,13 +66,26 @@ export async function POST(req: Request) {
 
   // Use database transaction to prevent race conditions
   const result = await db.transaction(async (trx) => {
-    // Check if the token exists and delete it atomically
-    const existingToken = await trx.query.refreshTokens.findFirst({
-      where: eq(refreshTokens.token, refreshTokenValue),
+    // P1-T3: Hash-based token lookup with plaintext fallback for migration
+    const tokenHash = hashToken(refreshTokenValue);
+
+    // Try hash lookup first (new tokens)
+    let existingToken = await trx.query.refreshTokens.findFirst({
+      where: eq(refreshTokens.tokenHash, tokenHash),
       with: {
         user: true,
       },
     });
+
+    // Fall back to plaintext lookup (legacy tokens during migration)
+    if (!existingToken) {
+      existingToken = await trx.query.refreshTokens.findFirst({
+        where: eq(refreshTokens.token, refreshTokenValue),
+        with: {
+          user: true,
+        },
+      });
+    }
 
     // If token doesn't exist, it might have been stolen and used.
     // For added security, we can check if the decoded token is valid and if so,
@@ -129,10 +142,12 @@ export async function POST(req: Request) {
     ? new Date(refreshPayload.exp * 1000)
     : new Date(Date.now() + getRefreshTokenMaxAge() * 1000);
 
-  // Store the new refresh token
+  // Store the new refresh token with hash (P1-T3)
   await db.insert(refreshTokens).values({
     id: createId(),
     token: newRefreshToken,
+    tokenHash: hashToken(newRefreshToken),
+    tokenPrefix: getTokenPrefix(newRefreshToken),
     userId: user.id,
     device: req.headers.get('user-agent'),
     userAgent: req.headers.get('user-agent'),

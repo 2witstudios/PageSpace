@@ -51,6 +51,10 @@ vi.mock('../origin-validation', () => ({
   validateOrigin: vi.fn().mockReturnValue(null),
 }));
 
+vi.mock('@pagespace/lib/auth', () => ({
+  hashToken: vi.fn().mockReturnValue('mocked-hash'),
+}));
+
 import { parse } from 'cookie';
 import { decodeToken } from '@pagespace/lib/server';
 import { db } from '@pagespace/db';
