@@ -289,13 +289,25 @@ describe('distributed-rate-limit', () => {
       expect(status.retryAfter).toBeLessThanOrEqual(45);
     });
 
-    it('falls back to in-memory when Redis unavailable', async () => {
+    it('falls back to in-memory when Redis unavailable in development', async () => {
+      process.env.NODE_ENV = 'development';
       vi.mocked(tryGetRateLimitRedisClient).mockResolvedValue(null);
 
       const status = await getDistributedRateLimitStatus('memory-status', testConfig);
 
       expect(status.blocked).toBe(false);
       expect(status.attemptsRemaining).toBe(5);
+    });
+
+    it('reports blocked in production when Redis unavailable (fail-closed)', async () => {
+      process.env.NODE_ENV = 'production';
+      vi.mocked(tryGetRateLimitRedisClient).mockResolvedValue(null);
+
+      const status = await getDistributedRateLimitStatus('prod-status', testConfig);
+
+      expect(status.blocked).toBe(true);
+      expect(status.retryAfter).toBe(60); // 60000ms / 1000 = 60s
+      expect(status.attemptsRemaining).toBe(0);
     });
   });
 

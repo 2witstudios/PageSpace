@@ -10,11 +10,18 @@ interface CliOptions {
 
 function parseArgs(): CliOptions {
   const args = process.argv.slice(2);
+  const batchSizeArg = args.find(arg => arg.startsWith('--batch-size='))?.split('=')[1];
+  const parsedBatchSize = parseInt(batchSizeArg ?? '1000', 10);
+
+  // Validate batch size to prevent NaN or invalid values
+  if (isNaN(parsedBatchSize) || parsedBatchSize <= 0) {
+    console.error('Error: --batch-size must be a positive integer');
+    process.exit(1);
+  }
+
   return {
     dryRun: args.includes('--dry-run'),
-    batchSize: parseInt(
-      args.find(arg => arg.startsWith('--batch-size='))?.split('=')[1] ?? '1000'
-    )
+    batchSize: parsedBatchSize
   };
 }
 
