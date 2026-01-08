@@ -84,7 +84,21 @@ jobs:
         run: |
           pnpm --filter web build
           pnpm --filter web start &
-          sleep 10
+
+          # Health check loop - wait for server to be ready
+          MAX_ATTEMPTS=30
+          ATTEMPT=0
+          echo "Waiting for server to be ready..."
+          until curl -sf http://localhost:3000/api/health > /dev/null 2>&1; do
+            ATTEMPT=$((ATTEMPT + 1))
+            if [ $ATTEMPT -ge $MAX_ATTEMPTS ]; then
+              echo "ERROR: Server failed to start after $MAX_ATTEMPTS attempts"
+              exit 1
+            fi
+            echo "Attempt $ATTEMPT/$MAX_ATTEMPTS - server not ready, waiting..."
+            sleep 2
+          done
+          echo "Server is ready!"
 
       - name: Run k6 load test
         env:
@@ -94,6 +108,7 @@ jobs:
         run: |
           mkdir -p tests/load/results
           docker run --rm \
+            --network host \
             -v "$PWD":/scripts \
             -e K6_VUS \
             -e K6_DURATION \
