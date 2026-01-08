@@ -18,6 +18,7 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
 import { createId } from '@paralleldrive/cuid2';
+import { hashToken, getTokenPrefix } from '@pagespace/lib/auth';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { serialize } from 'cookie';
@@ -160,9 +161,13 @@ export async function POST(req: Request) {
       ? new Date(refreshPayload.exp * 1000)
       : new Date(Date.now() + getRefreshTokenMaxAge() * 1000);
 
+    // SECURITY: Only hash stored, never plaintext
+    const refreshTokenHash = hashToken(refreshToken);
     await db.insert(refreshTokens).values({
       id: createId(),
-      token: refreshToken,
+      token: refreshTokenHash, // Store hash, NOT plaintext
+      tokenHash: refreshTokenHash,
+      tokenPrefix: getTokenPrefix(refreshToken),
       userId: user.id,
       device: userAgent ?? deviceRecord.deviceName,
       userAgent: userAgent ?? deviceRecord.userAgent,

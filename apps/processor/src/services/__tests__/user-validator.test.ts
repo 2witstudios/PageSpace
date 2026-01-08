@@ -43,7 +43,26 @@ describe('validateServiceUser', () => {
     it('should return validated user object', async () => {
       const mockUser = {
         id: 'user-123',
-        role: 'user',
+        name: 'Test User',
+        email: 'test@example.com',
+        role: 'user' as const,
+        provider: 'email' as const,
+        subscriptionTier: 'free',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        emailVerified: null,
+        image: null,
+        password: null,
+        googleId: null,
+        tokenVersion: 0,
+        storageUsedBytes: 0,
+        stripeCustomerId: null,
+        stripeSubscriptionId: null,
+        tosAcceptedAt: null,
+        currentAiProvider: 'pagespace',
+        currentAiModel: 'glm-4.5-air',
+        activeUploads: 0,
+        lastStorageCalculated: null,
       };
 
       vi.mocked(db.query.users.findFirst).mockResolvedValue(mockUser);
@@ -113,7 +132,26 @@ describe('validateServiceUser', () => {
     it('should return validated user with admin role', async () => {
       const mockUser = {
         id: 'admin-123',
-        role: 'admin',
+        name: 'Admin User',
+        email: 'admin@example.com',
+        role: 'admin' as const,
+        provider: 'email' as const,
+        subscriptionTier: 'pro',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        emailVerified: new Date(),
+        image: null,
+        password: null,
+        googleId: null,
+        tokenVersion: 0,
+        storageUsedBytes: 0,
+        stripeCustomerId: null,
+        stripeSubscriptionId: null,
+        tosAcceptedAt: null,
+        currentAiProvider: 'pagespace',
+        currentAiModel: 'glm-4.5-air',
+        activeUploads: 0,
+        lastStorageCalculated: null,
       };
 
       vi.mocked(db.query.users.findFirst).mockResolvedValue(mockUser);

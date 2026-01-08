@@ -113,7 +113,7 @@ export async function findRefreshTokenByValue(
     },
   });
 
-  return byPlaintext as RefreshTokenRecord | null;
+  return (byPlaintext ?? null) as RefreshTokenRecord | null;
 }
 
 /**
@@ -182,5 +182,5 @@ export async function findMCPTokenByValue(
     },
   });
 
-  return byPlaintext as MCPTokenRecord | null;
+  return (byPlaintext ?? null) as MCPTokenRecord | null;
 }

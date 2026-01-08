@@ -16,6 +16,7 @@ import {
   type InferSelectModel,
 } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
+import { hashToken, getTokenPrefix } from '@pagespace/lib/auth';
 
 // Types derived from Drizzle schema - ensures type safety without manual definitions
 export type User = InferSelectModel<typeof users>;
@@ -58,11 +59,15 @@ export const authRepository = {
 
   /**
    * Store a new refresh token in the database
+   * SECURITY: Only hash stored, never plaintext - hash computed here from raw token
    */
   async createRefreshToken(input: CreateRefreshTokenInput): Promise<void> {
+    const tokenHash = hashToken(input.token);
     await db.insert(refreshTokens).values({
       id: createId(),
-      token: input.token,
+      token: tokenHash, // Store hash, NOT plaintext
+      tokenHash: tokenHash,
+      tokenPrefix: getTokenPrefix(input.token),
       userId: input.userId,
       device: input.device,
       userAgent: input.userAgent,
@@ -76,24 +81,48 @@ export const authRepository = {
 
   /**
    * Find a refresh token with its associated user (for refresh flow)
+   * Uses dual-mode lookup: hash first (new tokens), plaintext fallback (legacy migration)
    */
   async findRefreshTokenWithUser(
     token: string
   ): Promise<RefreshTokenWithUser | null> {
-    const record = await db.query.refreshTokens.findFirst({
-      where: eq(refreshTokens.token, token),
+    const tokenHash = hashToken(token);
+
+    // Try hash lookup first (new tokens)
+    let record = await db.query.refreshTokens.findFirst({
+      where: eq(refreshTokens.tokenHash, tokenHash),
       with: {
         user: true,
       },
     });
+
+    // Fall back to plaintext lookup (legacy tokens during migration)
+    if (!record) {
+      record = await db.query.refreshTokens.findFirst({
+        where: eq(refreshTokens.token, token),
+        with: {
+          user: true,
+        },
+      });
+    }
+
     return record ?? null;
   },
 
   /**
    * Delete a refresh token by its value (for token rotation)
+   * Uses dual-mode lookup: hash first (new tokens), plaintext fallback (legacy migration)
    */
   async deleteRefreshToken(token: string): Promise<void> {
-    await db.delete(refreshTokens).where(eq(refreshTokens.token, token));
+    const tokenHash = hashToken(token);
+
+    // Try to delete by hash first
+    const result = await db.delete(refreshTokens).where(eq(refreshTokens.tokenHash, tokenHash)).returning();
+
+    // If no rows deleted by hash, try plaintext (legacy tokens)
+    if (result.length === 0) {
+      await db.delete(refreshTokens).where(eq(refreshTokens.token, token));
+    }
   },
 
   /**

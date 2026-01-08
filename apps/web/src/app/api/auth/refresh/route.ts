@@ -143,10 +143,12 @@ export async function POST(req: Request) {
     : new Date(Date.now() + getRefreshTokenMaxAge() * 1000);
 
   // Store the new refresh token with hash (P1-T3)
+  // SECURITY: Only the hash is stored - plaintext token goes to cookie, never persisted
+  const newRefreshTokenHash = hashToken(newRefreshToken);
   await db.insert(refreshTokens).values({
     id: createId(),
-    token: newRefreshToken,
-    tokenHash: hashToken(newRefreshToken),
+    token: newRefreshTokenHash, // Store hash, NOT plaintext
+    tokenHash: newRefreshTokenHash,
     tokenPrefix: getTokenPrefix(newRefreshToken),
     userId: user.id,
     device: req.headers.get('user-agent'),

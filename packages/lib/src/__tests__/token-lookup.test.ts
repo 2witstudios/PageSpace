@@ -60,6 +60,14 @@ describe('Token Lookup - Dual Mode', () => {
           tokenPrefix: 'ps_refresh_ab',
           token: mockToken,
           user: { id: 'user-id-1', tokenVersion: 1, role: 'user' },
+          createdAt: new Date(),
+          device: null,
+          ip: null,
+          userAgent: null,
+          expiresAt: new Date(),
+          lastUsedAt: new Date(),
+          platform: 'web' as const,
+          deviceTokenId: null,
         };
 
         vi.mocked(db.query.refreshTokens.findFirst).mockResolvedValue(mockRecord);
@@ -81,12 +89,20 @@ describe('Token Lookup - Dual Mode', () => {
           tokenPrefix: null,
           token: legacyToken,
           user: { id: 'user-id-2', tokenVersion: 1, role: 'user' },
+          createdAt: new Date(),
+          device: null,
+          ip: null,
+          userAgent: null,
+          expiresAt: new Date(),
+          lastUsedAt: new Date(),
+          platform: 'web' as const,
+          deviceTokenId: null,
         };
 
         // First call (hash lookup) returns null
         // Second call (plaintext lookup) returns the record
         vi.mocked(db.query.refreshTokens.findFirst)
-          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce(undefined)
           .mockResolvedValueOnce(mockRecord);
 
         const result = await findRefreshTokenByValue(legacyToken);
@@ -99,8 +115,8 @@ describe('Token Lookup - Dual Mode', () => {
     describe('given a non-existent token', () => {
       it('should return null after both lookups fail', async () => {
         vi.mocked(db.query.refreshTokens.findFirst)
-          .mockResolvedValueOnce(null)
-          .mockResolvedValueOnce(null);
+          .mockResolvedValueOnce(undefined)
+          .mockResolvedValueOnce(undefined);
 
         const result = await findRefreshTokenByValue('nonexistent_token');
 
@@ -142,7 +158,8 @@ describe('Token Lookup - Dual Mode', () => {
           token: mockToken,
           name: 'Test MCP Token',
           revokedAt: null,
-          user: { id: 'user-id-1', tokenVersion: 1, role: 'user' },
+          createdAt: new Date(),
+          lastUsed: new Date(),
         };
 
         vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(mockRecord);
@@ -165,11 +182,12 @@ describe('Token Lookup - Dual Mode', () => {
           token: legacyToken,
           name: 'Legacy Token',
           revokedAt: null,
-          user: { id: 'user-id-2', tokenVersion: 1, role: 'user' },
+          createdAt: new Date(),
+          lastUsed: new Date(),
         };
 
         vi.mocked(db.query.mcpTokens.findFirst)
-          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce(undefined)
           .mockResolvedValueOnce(mockRecord);
 
         const result = await findMCPTokenByValue(legacyToken);
@@ -183,8 +201,8 @@ describe('Token Lookup - Dual Mode', () => {
       it('should return null (revoked tokens filtered by query)', async () => {
         // The query includes isNull(revokedAt), so revoked tokens won't match
         vi.mocked(db.query.mcpTokens.findFirst)
-          .mockResolvedValueOnce(null)
-          .mockResolvedValueOnce(null);
+          .mockResolvedValueOnce(undefined)
+          .mockResolvedValueOnce(undefined);
 
         const result = await findMCPTokenByValue('mcp_revoked_token');
 
@@ -195,8 +213,8 @@ describe('Token Lookup - Dual Mode', () => {
     describe('given a non-existent token', () => {
       it('should return null after both lookups fail', async () => {
         vi.mocked(db.query.mcpTokens.findFirst)
-          .mockResolvedValueOnce(null)
-          .mockResolvedValueOnce(null);
+          .mockResolvedValueOnce(undefined)
+          .mockResolvedValueOnce(undefined);
 
         const result = await findMCPTokenByValue('mcp_nonexistent');
 

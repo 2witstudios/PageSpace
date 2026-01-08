@@ -25,12 +25,14 @@ export async function POST(req: NextRequest) {
     const { name } = createTokenSchema.parse(body);
 
     // P1-T3: Generate token with hash and prefix for secure storage
-    const { token, hash: tokenHash, tokenPrefix } = generateToken('mcp');
+    // SECURITY: Only the hash is stored - plaintext token is returned once and never persisted
+    const { token: rawToken, hash: tokenHash, tokenPrefix } = generateToken('mcp');
 
-    // Store the token in the database with hash for lookup
+    // Store ONLY the hash in the database - never store plaintext tokens
+    // The 'token' column stores the hash to satisfy the NOT NULL + UNIQUE constraints
     const [newToken] = await db.insert(mcpTokens).values({
       userId,
-      token,
+      token: tokenHash, // Store hash, NOT plaintext
       tokenHash,
       tokenPrefix,
       name,
@@ -44,11 +46,11 @@ export async function POST(req: NextRequest) {
       tokenName: newToken.name,
     }, actorInfo);
 
-    // Return the token (only shown once to the user)
+    // Return the raw token ONCE to the user - this is the only time they'll see it
     return NextResponse.json({
       id: newToken.id,
       name: newToken.name,
-      token: newToken.token,
+      token: rawToken, // Return the actual token, not the hash
       createdAt: newToken.createdAt,
     });
   } catch (error) {

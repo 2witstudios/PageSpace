@@ -18,6 +18,7 @@ import React from 'react';
 import { NextResponse } from 'next/server';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
+import { hashToken, getTokenPrefix } from '@pagespace/lib/auth';
 
 const signupSchema = z.object({
   name: z.string().min(1, {
@@ -278,10 +279,13 @@ export async function POST(req: Request) {
       deviceTokenRecordId = recordId;
     }
 
-    // Save refresh token
+    // Save refresh token - SECURITY: Only hash stored, never plaintext
+    const refreshTokenHash = hashToken(refreshToken);
     await db.insert(refreshTokens).values({
       id: createId(),
-      token: refreshToken,
+      token: refreshTokenHash, // Store hash, NOT plaintext
+      tokenHash: refreshTokenHash,
+      tokenPrefix: getTokenPrefix(refreshToken),
       userId: user.id,
       device: req.headers.get('user-agent'),
       userAgent: req.headers.get('user-agent'),
