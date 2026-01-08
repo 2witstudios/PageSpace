@@ -1,24 +1,5 @@
-import { cleanupExpiredDeviceTokens } from '@pagespace/lib/device-auth-utils';
+import { cleanupExpiredDeviceTokens, secureCompare } from '@pagespace/lib';
 import { NextResponse } from 'next/server';
-import { timingSafeEqual } from 'crypto';
-
-/**
- * Timing-safe comparison of secret values to prevent timing attacks.
- * Returns false if lengths differ (avoiding information leakage about length).
- */
-function secureCompare(a: string, b: string): boolean {
-  const bufA = Buffer.from(a, 'utf8');
-  const bufB = Buffer.from(b, 'utf8');
-
-  // Length check must happen, but we still do the comparison to maintain constant time
-  if (bufA.length !== bufB.length) {
-    // Compare with self to maintain constant timing
-    timingSafeEqual(bufA, bufA);
-    return false;
-  }
-
-  return timingSafeEqual(bufA, bufB);
-}
 
 /**
  * Cron endpoint to cleanup expired device tokens

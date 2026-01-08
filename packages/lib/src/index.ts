@@ -47,6 +47,7 @@ export * from './sheets';
 // Auth and security utilities (server-only)
 export * from './auth/auth-utils';
 export * from './auth/device-auth-utils';
+export { secureCompare } from './auth/secure-compare';
 export {
   createServiceToken as createServiceTokenV2,
   verifyServiceToken as verifyServiceTokenV2,

@@ -36,9 +36,9 @@ async function countTokens(
     );
     const total = Number(totalResult.rows[0]?.count ?? 0);
 
-    // Count tokens with hash
+    // Count tokens with hash (use quoted column name for camelCase)
     const withHashResult = await db.execute(
-      sql.raw(`SELECT COUNT(*) as count FROM ${tableName} WHERE ${hashColumn} IS NOT NULL`)
+      sql.raw(`SELECT COUNT(*) as count FROM ${tableName} WHERE "${hashColumn}" IS NOT NULL`)
     );
     const withHash = Number(withHashResult.rows[0]?.count ?? 0);
 
@@ -72,12 +72,12 @@ async function verifyHashLookup(): Promise<boolean> {
   console.log('Hash Lookup Test:');
 
   try {
-    // Try to select a token with hash
+    // Try to select a token with hash (use quoted column names for camelCase)
     const result = await db.execute(
       sql.raw(`
-        SELECT id, token_hash, token_prefix
+        SELECT id, "tokenHash", "tokenPrefix"
         FROM refresh_tokens
-        WHERE token_hash IS NOT NULL
+        WHERE "tokenHash" IS NOT NULL
         LIMIT 1
       `)
     );
@@ -87,8 +87,8 @@ async function verifyHashLookup(): Promise<boolean> {
       return true;
     }
 
-    const token = result.rows[0];
-    if (token.token_hash && token.token_prefix) {
+    const token = result.rows[0] as { tokenHash?: string; tokenPrefix?: string };
+    if (token.tokenHash && token.tokenPrefix) {
       console.log('  ✓ Sample token has valid hash and prefix');
       return true;
     } else {
@@ -112,7 +112,7 @@ async function main() {
 
   // Check refresh tokens
   console.log('Refresh Tokens:');
-  const refreshResult = await countTokens('refresh_tokens', 'token_hash');
+  const refreshResult = await countTokens('refresh_tokens', 'tokenHash');
   console.log(`  Total: ${refreshResult.total}`);
   console.log(`  With hash: ${refreshResult.withHash}`);
   console.log(`  Without hash: ${refreshResult.withoutHash}`);
@@ -130,7 +130,7 @@ async function main() {
 
   // Check MCP tokens
   console.log('MCP Tokens:');
-  const mcpResult = await countTokens('mcp_tokens', 'token_hash');
+  const mcpResult = await countTokens('mcp_tokens', 'tokenHash');
   console.log(`  Total: ${mcpResult.total}`);
   console.log(`  With hash: ${mcpResult.withHash}`);
   console.log(`  Without hash: ${mcpResult.withoutHash}`);

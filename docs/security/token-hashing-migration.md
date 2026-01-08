@@ -12,8 +12,8 @@
 - Tokens can be read directly from database (security risk)
 
 ### Target State
-- Tokens stored as SHA-256 hashes in `token_hash` column
-- Only first 12 characters stored as `token_prefix` for debugging
+- Tokens stored as SHA-256 hashes in `tokenHash` column
+- Only first 12 characters stored as `tokenPrefix` for debugging
 - Original plaintext tokens never stored after creation
 - Token lookup uses hash comparison
 
@@ -41,17 +41,18 @@ Add new columns without removing old ones:
 
 ```sql
 -- Migration: add_token_hash_columns
+-- NOTE: PostgreSQL column names are case-sensitive when quoted
 ALTER TABLE refresh_tokens
-  ADD COLUMN token_hash TEXT,
-  ADD COLUMN token_prefix VARCHAR(12);
+  ADD COLUMN "tokenHash" TEXT,
+  ADD COLUMN "tokenPrefix" VARCHAR(12);
 
 ALTER TABLE mcp_tokens
-  ADD COLUMN token_hash TEXT,
-  ADD COLUMN token_prefix VARCHAR(12);
+  ADD COLUMN "tokenHash" TEXT,
+  ADD COLUMN "tokenPrefix" VARCHAR(12);
 
 -- Indexes for efficient lookup
-CREATE UNIQUE INDEX idx_refresh_tokens_hash ON refresh_tokens(token_hash) WHERE token_hash IS NOT NULL;
-CREATE UNIQUE INDEX idx_mcp_tokens_hash ON mcp_tokens(token_hash) WHERE token_hash IS NOT NULL;
+CREATE UNIQUE INDEX idx_refresh_tokens_hash ON refresh_tokens("tokenHash") WHERE "tokenHash" IS NOT NULL;
+CREATE UNIQUE INDEX idx_mcp_tokens_hash ON mcp_tokens("tokenHash") WHERE "tokenHash" IS NOT NULL;
 ```
 
 ### Phase 2: Backfill Existing Tokens
@@ -194,14 +195,14 @@ ALTER TABLE refresh_tokens
 ALTER TABLE mcp_tokens
   DROP COLUMN token;
 
--- Make hash columns NOT NULL
+-- Make hash columns NOT NULL (use quoted names for camelCase)
 ALTER TABLE refresh_tokens
-  ALTER COLUMN token_hash SET NOT NULL,
-  ALTER COLUMN token_prefix SET NOT NULL;
+  ALTER COLUMN "tokenHash" SET NOT NULL,
+  ALTER COLUMN "tokenPrefix" SET NOT NULL;
 
 ALTER TABLE mcp_tokens
-  ALTER COLUMN token_hash SET NOT NULL,
-  ALTER COLUMN token_prefix SET NOT NULL;
+  ALTER COLUMN "tokenHash" SET NOT NULL,
+  ALTER COLUMN "tokenPrefix" SET NOT NULL;
 ```
 
 ## Rollback Procedure
