@@ -6,6 +6,8 @@ on:
     paths:
       - 'packages/lib/src/security/**'
       - 'packages/lib/src/auth/**'
+      - 'packages/lib/src/__tests__/security-test-utils.ts'
+      - 'packages/lib/src/__tests__/test-fixtures/security-fixtures.ts'
       - 'apps/web/src/lib/auth/**'
       - 'apps/web/src/app/api/auth/**'
       - 'apps/processor/src/middleware/auth*'
@@ -15,6 +17,8 @@ on:
     paths:
       - 'packages/lib/src/security/**'
       - 'packages/lib/src/auth/**'
+      - 'packages/lib/src/__tests__/security-test-utils.ts'
+      - 'packages/lib/src/__tests__/test-fixtures/security-fixtures.ts'
       - 'apps/web/src/lib/auth/**'
       - 'apps/web/src/app/api/auth/**'
       - 'apps/processor/src/middleware/auth*'

@@ -73,6 +73,8 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
           REDIS_URL: redis://localhost:6379
+          REDIS_SESSION_URL: redis://localhost:6379/0
+          REDIS_RATE_LIMIT_URL: redis://localhost:6379/1
           JWT_SECRET: test-secret-key-minimum-32-characters-long-for-ci
           JWT_ISSUER: pagespace-test
           JWT_AUDIENCE: pagespace-test-users

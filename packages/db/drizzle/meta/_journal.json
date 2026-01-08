@@ -232,6 +232,13 @@
       "when": 1767044310333,
       "tag": "0032_misty_goblin_queen",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1767732969716,
+      "tag": "0033_furry_vampiro",
+      "breakpoints": true
     }
   ]
 }

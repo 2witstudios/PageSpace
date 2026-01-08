@@ -40,11 +40,6 @@ vi.mock('@pagespace/lib/server', () => ({
   generateAccessToken: vi.fn(),
   generateRefreshToken: vi.fn(),
   getRefreshTokenMaxAge: vi.fn(),
-  checkRateLimit: vi.fn(),
-  resetRateLimit: vi.fn(),
-  RATE_LIMIT_CONFIGS: {
-    LOGIN: {},
-  },
   decodeToken: vi.fn(),
   generateCSRFToken: vi.fn(),
   getSessionIdFromJWT: vi.fn(),
@@ -58,6 +53,19 @@ vi.mock('@pagespace/lib/server', () => ({
     },
   },
   logAuthEvent: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/security', () => ({
+  checkDistributedRateLimit: vi.fn(),
+  resetDistributedRateLimit: vi.fn(),
+  DISTRIBUTED_RATE_LIMITS: {
+    LOGIN: {
+      maxAttempts: 5,
+      windowMs: 900000,
+      blockDurationMs: 900000,
+      progressiveDelay: true,
+    },
+  },
 }));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
@@ -78,19 +86,19 @@ vi.mock('@/lib/onboarding/getting-started-drive', () => ({
 
 import { db, users, refreshTokens } from '@pagespace/db';
 import {
-  checkRateLimit,
   decodeToken,
   generateAccessToken,
   generateRefreshToken,
   getRefreshTokenMaxAge,
 } from '@pagespace/lib/server';
+import { checkDistributedRateLimit } from '@pagespace/lib/security';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 
 describe('/api/auth/google/callback redirect', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    (checkRateLimit as Mock).mockReturnValue({ allowed: true });
+    (checkDistributedRateLimit as Mock).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
     (generateAccessToken as Mock).mockResolvedValue('access-token');
     (generateRefreshToken as Mock).mockResolvedValue('refresh-token');
     (decodeToken as Mock).mockResolvedValue({

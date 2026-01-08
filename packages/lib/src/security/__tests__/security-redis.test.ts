@@ -1,4 +1,111 @@
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi, afterEach, beforeAll } from 'vitest';
+
+// Create mock Redis instance that all functions will use - MUST be created before mock setup
+// Since the security-redis module caches clients, we use ONE mock throughout all tests
+const sharedMockStore = new Map<string, { value: string; expiry?: number }>();
+const sharedSortedSets = new Map<string, Array<{ score: number; member: string }>>();
+
+function createSharedMockRedis() {
+  return {
+    setex: vi.fn(async (key: string, ttl: number, value: string) => {
+      sharedMockStore.set(key, { value, expiry: Date.now() + ttl * 1000 });
+      return 'OK';
+    }),
+    get: vi.fn(async (key: string) => {
+      const entry = sharedMockStore.get(key);
+      if (!entry) return null;
+      if (entry.expiry && Date.now() > entry.expiry) {
+        sharedMockStore.delete(key);
+        return null;
+      }
+      return entry.value;
+    }),
+    ttl: vi.fn(async (key: string) => {
+      const entry = sharedMockStore.get(key);
+      if (!entry || !entry.expiry) return -1;
+      const remaining = Math.ceil((entry.expiry - Date.now()) / 1000);
+      return remaining > 0 ? remaining : -2;
+    }),
+    del: vi.fn(async (key: string) => {
+      const deleted = sharedMockStore.delete(key) ? 1 : 0;
+      sharedSortedSets.delete(key);
+      return deleted;
+    }),
+    ping: vi.fn(async () => 'PONG'),
+    pipeline: vi.fn(() => {
+      const commands: Array<{ cmd: string; args: unknown[] }> = [];
+      const pipe = {
+        zremrangebyscore: (key: string, min: number, max: number) => {
+          commands.push({ cmd: 'zremrangebyscore', args: [key, min, max] });
+          return pipe;
+        },
+        zadd: (key: string, score: number, member: string) => {
+          commands.push({ cmd: 'zadd', args: [key, score, member] });
+          return pipe;
+        },
+        zcard: (key: string) => {
+          commands.push({ cmd: 'zcard', args: [key] });
+          return pipe;
+        },
+        pexpire: (key: string, ms: number) => {
+          commands.push({ cmd: 'pexpire', args: [key, ms] });
+          return pipe;
+        },
+        exec: vi.fn(async () => {
+          const results: Array<[null, unknown]> = [];
+          for (const { cmd, args } of commands) {
+            const key = args[0] as string;
+            if (!sharedSortedSets.has(key)) {
+              sharedSortedSets.set(key, []);
+            }
+            const set = sharedSortedSets.get(key)!;
+
+            switch (cmd) {
+              case 'zremrangebyscore': {
+                const [, min, max] = args as [string, number, number];
+                const before = set.length;
+                const filtered = set.filter(e => e.score < min || e.score > max);
+                sharedSortedSets.set(key, filtered);
+                results.push([null, before - filtered.length]);
+                break;
+              }
+              case 'zadd': {
+                const [, score, member] = args as [string, number, string];
+                set.push({ score, member });
+                results.push([null, 1]);
+                break;
+              }
+              case 'zcard':
+                results.push([null, set.length]);
+                break;
+              case 'pexpire':
+                results.push([null, 1]);
+                break;
+            }
+          }
+          return results;
+        }),
+      };
+      return pipe;
+    }),
+    zcount: vi.fn(async (key: string, min: number, max: number) => {
+      const set = sharedSortedSets.get(key);
+      if (!set) return 0;
+      return set.filter(e => e.score >= min && e.score <= max).length;
+    }),
+    // For test inspection
+    get _store() { return sharedMockStore; },
+    get _sortedSets() { return sharedSortedSets; },
+  };
+}
+
+// Create THE mock instance that will be used throughout all tests
+const mockRedisInstance = createSharedMockRedis();
+
+// Mock ioredis before anything else - this is used by getSessionRedisClient/getRateLimitRedisClient
+vi.mock('ioredis', () => ({
+  default: vi.fn().mockImplementation(() => mockRedisInstance),
+}));
 
 // Mock the shared-redis module before importing the module under test
 vi.mock('../../services/shared-redis', () => ({
@@ -36,118 +143,31 @@ import {
 } from '../security-redis';
 import { getSharedRedisClient, isSharedRedisAvailable } from '../../services/shared-redis';
 
-// Create a mock Redis client with proper sorted set simulation
-function createMockRedis() {
-  const store = new Map<string, { value: string; expiry?: number }>();
-  // Use Map<string, Array<{score: number, member: string}>> for proper sorted set behavior
-  const sortedSets = new Map<string, Array<{ score: number; member: string }>>();
-
-  return {
-    setex: vi.fn(async (key: string, ttl: number, value: string) => {
-      store.set(key, { value, expiry: Date.now() + ttl * 1000 });
-      return 'OK';
-    }),
-    get: vi.fn(async (key: string) => {
-      const entry = store.get(key);
-      if (!entry) return null;
-      if (entry.expiry && Date.now() > entry.expiry) {
-        store.delete(key);
-        return null;
-      }
-      return entry.value;
-    }),
-    ttl: vi.fn(async (key: string) => {
-      const entry = store.get(key);
-      if (!entry || !entry.expiry) return -1;
-      const remaining = Math.ceil((entry.expiry - Date.now()) / 1000);
-      return remaining > 0 ? remaining : -2;
-    }),
-    del: vi.fn(async (key: string) => {
-      const deleted = store.delete(key) ? 1 : 0;
-      sortedSets.delete(key);
-      return deleted;
-    }),
-    ping: vi.fn(async () => 'PONG'),
-    pipeline: vi.fn(() => {
-      const commands: Array<{ cmd: string; args: unknown[] }> = [];
-      const pipe = {
-        zremrangebyscore: (key: string, min: number, max: number) => {
-          commands.push({ cmd: 'zremrangebyscore', args: [key, min, max] });
-          return pipe;
-        },
-        zadd: (key: string, score: number, member: string) => {
-          commands.push({ cmd: 'zadd', args: [key, score, member] });
-          return pipe;
-        },
-        zcard: (key: string) => {
-          commands.push({ cmd: 'zcard', args: [key] });
-          return pipe;
-        },
-        pexpire: (key: string, ms: number) => {
-          commands.push({ cmd: 'pexpire', args: [key, ms] });
-          return pipe;
-        },
-        exec: vi.fn(async () => {
-          const results: Array<[null, unknown]> = [];
-          for (const { cmd, args } of commands) {
-            const key = args[0] as string;
-            if (!sortedSets.has(key)) {
-              sortedSets.set(key, []);
-            }
-            const set = sortedSets.get(key)!;
-
-            switch (cmd) {
-              case 'zremrangebyscore': {
-                const [, min, max] = args as [string, number, number];
-                const before = set.length;
-                const filtered = set.filter(e => e.score < min || e.score > max);
-                sortedSets.set(key, filtered);
-                results.push([null, before - filtered.length]);
-                break;
-              }
-              case 'zadd': {
-                const [, score, member] = args as [string, number, string];
-                set.push({ score, member });
-                results.push([null, 1]);
-                break;
-              }
-              case 'zcard':
-                results.push([null, set.length]);
-                break;
-              case 'pexpire':
-                results.push([null, 1]);
-                break;
-            }
-          }
-          return results;
-        }),
-      };
-      return pipe;
-    }),
-    zcount: vi.fn(async (key: string, min: number, max: number) => {
-      const set = sortedSets.get(key);
-      if (!set) return 0;
-      return set.filter(e => e.score >= min && e.score <= max).length;
-    }),
-    // For test inspection
-    _store: store,
-    _sortedSets: sortedSets,
-  };
-}
-
 describe('security-redis', () => {
-  let mockRedis: ReturnType<typeof createMockRedis>;
-  const originalEnv = process.env.NODE_ENV;
+  // Use the shared mock instance throughout all tests
+  const mockRedis = mockRedisInstance;
+  const originalEnv = { ...process.env };
+
+  beforeAll(() => {
+    // Set Redis URLs ONCE before all tests so the module creates clients with our mock
+    process.env.REDIS_SESSION_URL = 'redis://localhost:6379/0';
+    process.env.REDIS_RATE_LIMIT_URL = 'redis://localhost:6379/1';
+  });
 
   beforeEach(() => {
-    mockRedis = createMockRedis();
+    // Clear mock call history and data between tests
+    sharedMockStore.clear();
+    sharedSortedSets.clear();
+
+    // Also mock shared-redis for getSecurityRedisClient tests
     vi.mocked(getSharedRedisClient).mockResolvedValue(mockRedis as never);
     vi.mocked(isSharedRedisAvailable).mockReturnValue(true);
     vi.clearAllMocks();
   });
 
   afterEach(() => {
-    process.env.NODE_ENV = originalEnv;
+    // Restore environment
+    process.env.NODE_ENV = originalEnv.NODE_ENV;
   });
 
   describe('getSecurityRedisClient', () => {

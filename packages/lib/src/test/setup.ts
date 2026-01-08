@@ -32,8 +32,23 @@ process.env.PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://localhost:3003'
 // Realtime service URL
 process.env.INTERNAL_REALTIME_URL = process.env.INTERNAL_REALTIME_URL || 'http://localhost:3001'
 
-// Disable Redis for unit tests (unless explicitly enabled)
+// Redis configuration (for security-redis tests)
+// If REDIS_URL is provided (e.g., in CI), use it for all Redis clients
 if (!process.env.REDIS_URL) {
   // Redis is optional for tests - permission cache will use memory-only mode
   process.env.REDIS_URL = ''
+}
+
+// Security Redis URLs - required for security-redis tests
+// These use separate databases on the same Redis instance
+if (process.env.REDIS_URL && !process.env.REDIS_SESSION_URL) {
+  // Strip any existing database suffix (e.g., /0, /15) or trailing slash, then append /0
+  // Handles: redis://host:6379, redis://host:6379/, redis://host:6379/0, redis://host:6379/15
+  const baseUrl = process.env.REDIS_URL.replace(/\/\d*$/, '')
+  process.env.REDIS_SESSION_URL = `${baseUrl}/0`
+}
+if (process.env.REDIS_URL && !process.env.REDIS_RATE_LIMIT_URL) {
+  // Strip any existing database suffix or trailing slash, then append /1
+  const baseUrl = process.env.REDIS_URL.replace(/\/\d*$/, '')
+  process.env.REDIS_RATE_LIMIT_URL = `${baseUrl}/1`
 }

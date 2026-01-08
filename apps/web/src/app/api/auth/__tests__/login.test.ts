@@ -36,11 +36,6 @@ vi.mock('@pagespace/lib/server', () => ({
   generateAccessToken: vi.fn().mockResolvedValue('mock-access-token'),
   generateRefreshToken: vi.fn().mockResolvedValue('mock-refresh-token'),
   getRefreshTokenMaxAge: vi.fn().mockReturnValue(2592000), // 30 days
-  checkRateLimit: vi.fn().mockReturnValue({ allowed: true }),
-  resetRateLimit: vi.fn(),
-  RATE_LIMIT_CONFIGS: {
-    LOGIN: { maxAttempts: 5, windowMs: 900000 },
-  },
   decodeToken: vi.fn().mockResolvedValue({
     userId: 'test-user-id',
     exp: Math.floor(Date.now() / 1000) + 2592000,
@@ -59,6 +54,21 @@ vi.mock('@pagespace/lib/server', () => ({
     },
   },
   logAuthEvent: vi.fn(),
+}));
+
+// Mock distributed rate limiting (P1-T5)
+vi.mock('@pagespace/lib/security', () => ({
+  checkDistributedRateLimit: vi.fn().mockResolvedValue({
+    allowed: true,
+    attemptsRemaining: 4,
+    retryAfter: undefined,
+  }),
+  resetDistributedRateLimit: vi.fn().mockResolvedValue(undefined),
+  DISTRIBUTED_RATE_LIMITS: {
+    LOGIN: { maxAttempts: 5, windowMs: 900000, progressiveDelay: true },
+    SIGNUP: { maxAttempts: 3, windowMs: 3600000, progressiveDelay: false },
+    REFRESH: { maxAttempts: 10, windowMs: 300000, progressiveDelay: false },
+  },
 }));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
@@ -83,14 +93,17 @@ import { authRepository } from '@/lib/repositories/auth-repository';
 import { serialize } from 'cookie';
 import bcrypt from 'bcryptjs';
 import {
-  checkRateLimit,
-  resetRateLimit,
   generateAccessToken,
   generateRefreshToken,
   validateOrCreateDeviceToken,
   logAuthEvent,
 } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
+import {
+  checkDistributedRateLimit,
+  resetDistributedRateLimit,
+  DISTRIBUTED_RATE_LIMITS,
+} from '@pagespace/lib/security';
 
 // Test fixtures
 const mockUser: User = {
@@ -146,7 +159,6 @@ describe('POST /api/auth/login', () => {
     vi.mocked(authRepository.findUserByEmail).mockResolvedValue(mockUser);
     vi.mocked(authRepository.createRefreshToken).mockResolvedValue(undefined);
     (bcrypt.compare as Mock).mockResolvedValue(true);
-    (checkRateLimit as Mock).mockReturnValue({ allowed: true });
   });
 
   describe('successful login', () => {
@@ -225,8 +237,8 @@ describe('POST /api/auth/login', () => {
 
       await POST(request);
 
-      expect(resetRateLimit).toHaveBeenCalledWith('192.168.1.1');
-      expect(resetRateLimit).toHaveBeenCalledWith('test@example.com');
+      expect(resetDistributedRateLimit).toHaveBeenCalledWith('login:ip:192.168.1.1');
+      expect(resetDistributedRateLimit).toHaveBeenCalledWith('login:email:test@example.com');
     });
 
     it('logs successful login event', async () => {
@@ -399,9 +411,9 @@ describe('POST /api/auth/login', () => {
 
   describe('rate limiting', () => {
     it('returns 429 when IP rate limit exceeded', async () => {
-      (checkRateLimit as Mock)
-        .mockReturnValueOnce({ allowed: false, retryAfter: 900 }) // IP limit
-        .mockReturnValue({ allowed: true }); // email limit
+      (checkDistributedRateLimit as Mock)
+        .mockResolvedValueOnce({ allowed: false, retryAfter: 900, attemptsRemaining: 0 })
+        .mockResolvedValue({ allowed: true, attemptsRemaining: 4 });
 
       const request = createLoginRequest(validLoginPayload, {
         'x-forwarded-for': '192.168.1.1',
@@ -412,14 +424,13 @@ describe('POST /api/auth/login', () => {
 
       expect(response.status).toBe(429);
       expect(body.error).toContain('Too many login attempts from this IP');
-      expect(body.retryAfter).toBe(900);
       expect(response.headers.get('Retry-After')).toBe('900');
     });
 
     it('returns 429 when email rate limit exceeded', async () => {
-      (checkRateLimit as Mock)
-        .mockReturnValueOnce({ allowed: true }) // IP limit
-        .mockReturnValueOnce({ allowed: false, retryAfter: 900 }); // email limit
+      (checkDistributedRateLimit as Mock)
+        .mockResolvedValueOnce({ allowed: true, attemptsRemaining: 4 })
+        .mockResolvedValueOnce({ allowed: false, retryAfter: 900, attemptsRemaining: 0 });
 
       const request = createLoginRequest(validLoginPayload);
       const response = await POST(request);
@@ -430,7 +441,7 @@ describe('POST /api/auth/login', () => {
     });
 
     it('checks rate limits before database query', async () => {
-      (checkRateLimit as Mock).mockReturnValue({ allowed: false, retryAfter: 900 });
+      (checkDistributedRateLimit as Mock).mockResolvedValue({ allowed: false, retryAfter: 900, attemptsRemaining: 0 });
 
       const request = createLoginRequest(validLoginPayload);
       await POST(request);
@@ -448,8 +459,8 @@ describe('POST /api/auth/login', () => {
 
       await POST(request);
 
-      expect(checkRateLimit).toHaveBeenCalledWith(
-        '203.0.113.195',
+      expect(checkDistributedRateLimit).toHaveBeenCalledWith(
+        'login:ip:203.0.113.195',
         expect.any(Object)
       );
     });
@@ -461,8 +472,8 @@ describe('POST /api/auth/login', () => {
 
       await POST(request);
 
-      expect(checkRateLimit).toHaveBeenCalledWith(
-        '192.168.1.100',
+      expect(checkDistributedRateLimit).toHaveBeenCalledWith(
+        'login:ip:192.168.1.100',
         expect.any(Object)
       );
     });
@@ -471,11 +482,20 @@ describe('POST /api/auth/login', () => {
       const request = createLoginRequest(validLoginPayload);
       await POST(request);
 
-      expect(checkRateLimit).toHaveBeenCalledWith('unknown', expect.any(Object));
+      expect(checkDistributedRateLimit).toHaveBeenCalledWith('login:ip:unknown', expect.any(Object));
     });
   });
 
   describe('error handling', () => {
+    beforeEach(() => {
+      // Reset rate limiting mock to allow requests
+      (checkDistributedRateLimit as Mock).mockResolvedValue({
+        allowed: true,
+        attemptsRemaining: 4,
+        retryAfter: undefined,
+      });
+    });
+
     it('returns 500 on unexpected errors', async () => {
       vi.mocked(authRepository.findUserByEmail).mockRejectedValue(
         new Error('Database connection failed')
@@ -504,6 +524,15 @@ describe('POST /api/auth/login', () => {
   });
 
   describe('case sensitivity', () => {
+    beforeEach(() => {
+      // Reset rate limiting mock to allow requests
+      (checkDistributedRateLimit as Mock).mockResolvedValue({
+        allowed: true,
+        attemptsRemaining: 4,
+        retryAfter: undefined,
+      });
+    });
+
     it('normalizes email to lowercase for rate limiting', async () => {
       const request = createLoginRequest({
         email: 'TEST@EXAMPLE.COM',
@@ -512,10 +541,117 @@ describe('POST /api/auth/login', () => {
 
       await POST(request);
 
-      expect(checkRateLimit).toHaveBeenCalledWith(
-        'test@example.com',
+      expect(checkDistributedRateLimit).toHaveBeenCalledWith(
+        'login:email:test@example.com',
         expect.any(Object)
       );
+    });
+  });
+
+  describe('distributed rate limiting', () => {
+    beforeEach(() => {
+      // Default: distributed rate limiting allows requests
+      vi.mocked(checkDistributedRateLimit).mockResolvedValue({
+        allowed: true,
+        attemptsRemaining: 4,
+        retryAfter: undefined,
+      });
+    });
+
+    it('calls checkDistributedRateLimit for IP', async () => {
+      const request = createLoginRequest(validLoginPayload, {
+        'x-forwarded-for': '192.168.1.1',
+      });
+
+      await POST(request);
+
+      expect(checkDistributedRateLimit).toHaveBeenCalledWith(
+        expect.stringContaining('192.168.1.1'),
+        DISTRIBUTED_RATE_LIMITS.LOGIN
+      );
+    });
+
+    it('calls checkDistributedRateLimit for email', async () => {
+      const request = createLoginRequest(validLoginPayload);
+
+      await POST(request);
+
+      expect(checkDistributedRateLimit).toHaveBeenCalledWith(
+        expect.stringContaining('test@example.com'),
+        DISTRIBUTED_RATE_LIMITS.LOGIN
+      );
+    });
+
+    it('returns 429 with X-RateLimit headers when IP rate limit exceeded', async () => {
+      vi.mocked(checkDistributedRateLimit)
+        .mockResolvedValueOnce({
+          allowed: false,
+          attemptsRemaining: 0,
+          retryAfter: 900,
+        })
+        .mockResolvedValue({
+          allowed: true,
+          attemptsRemaining: 4,
+          retryAfter: undefined,
+        });
+
+      const request = createLoginRequest(validLoginPayload, {
+        'x-forwarded-for': '192.168.1.1',
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(429);
+      expect(response.headers.get('Retry-After')).toBeTruthy();
+      expect(response.headers.get('X-RateLimit-Limit')).toBeTruthy();
+      expect(response.headers.get('X-RateLimit-Remaining')).toBe('0');
+    });
+
+    it('returns 429 with X-RateLimit headers when email rate limit exceeded', async () => {
+      vi.mocked(checkDistributedRateLimit)
+        .mockResolvedValueOnce({
+          allowed: true,
+          attemptsRemaining: 4,
+          retryAfter: undefined,
+        })
+        .mockResolvedValueOnce({
+          allowed: false,
+          attemptsRemaining: 0,
+          retryAfter: 900,
+        });
+
+      const request = createLoginRequest(validLoginPayload);
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(429);
+      expect(response.headers.get('Retry-After')).toBeTruthy();
+    });
+
+    it('calls resetDistributedRateLimit on successful login', async () => {
+      const request = createLoginRequest(validLoginPayload, {
+        'x-forwarded-for': '192.168.1.1',
+      });
+
+      await POST(request);
+
+      expect(resetDistributedRateLimit).toHaveBeenCalledWith(
+        expect.stringContaining('192.168.1.1')
+      );
+      expect(resetDistributedRateLimit).toHaveBeenCalledWith(
+        expect.stringContaining('test@example.com')
+      );
+    });
+
+    it('includes X-RateLimit headers in successful responses', async () => {
+      const request = createLoginRequest(validLoginPayload);
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      // After P1-T5 implementation, these headers should be present
+      expect(response.headers.get('X-RateLimit-Limit')).toBeTruthy();
+      expect(response.headers.get('X-RateLimit-Remaining')).toBeTruthy();
     });
   });
 });

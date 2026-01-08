@@ -41,6 +41,27 @@ Phase 5: Monitoring & Incident Response
 
 ---
 
+## Lessons Learned (P0-P1 Implementation)
+
+> Post-implementation insights from PR #167 remediation rounds.
+
+### IP Extraction Standardization
+- **Issue:** IP extraction logic duplicated across 12 auth routes
+- **Solution:** Centralized `getClientIP(request)` utility in `auth-helpers.ts`
+- **Lesson:** Identify cross-cutting concerns early to avoid duplication
+
+### Promise.allSettled for Resilience
+- **Issue:** Rate-limit reset failures caused 500 errors on successful auth
+- **Solution:** Changed `Promise.all` → `Promise.allSettled` with logging
+- **Lesson:** Always use `allSettled` for non-critical cleanup operations
+
+### X-RateLimit Header Timing
+- **Issue:** `X-RateLimit-Remaining` computed before decrement showed stale values
+- **Solution:** Return post-decrement values in response headers
+- **Lesson:** Test header values match actual state after operations
+
+---
+
 ## Phase 0: Infrastructure & Preparation
 
 **Objective:** Prepare infrastructure and establish security testing foundation before implementing changes.
@@ -50,8 +71,9 @@ Phase 5: Monitoring & Incident Response
 **Description:** Provision Redis cluster for session store, rate limiting, and JTI tracking.
 
 **Files to Create/Modify:**
-- `docker-compose.security.yml` (new)
-- `packages/lib/src/services/redis-client.ts` (new)
+- `packages/lib/src/security/security-redis.ts` (new)
+- `packages/lib/src/security/distributed-rate-limit.ts` (new)
+- `packages/lib/src/security/index.ts` (new)
 - `.env.example` (update)
 
 **Implementation:**
@@ -81,9 +103,9 @@ REDIS_RATE_LIMIT_URL=redis://localhost:6380/1
 **Tests Required:** None (infrastructure)
 
 **Acceptance Criteria:**
-- [ ] Redis cluster running with persistence enabled
-- [ ] Health checks passing
-- [ ] Connection verified from all services
+- [x] Redis cluster running with persistence enabled
+- [x] Health checks passing
+- [x] Connection verified from all services
 
 **Dependencies:** None
 
@@ -93,6 +115,7 @@ REDIS_RATE_LIMIT_URL=redis://localhost:6380/1
 - Created `packages/lib/src/security/security-redis.ts` - JTI, rate limiting, sessions
 - Created `packages/lib/src/security/distributed-rate-limit.ts` - Distributed rate limiter
 - Created `packages/lib/src/security/index.ts` - Module exports
+- Ensured `packages/lib/src/security/index.ts` re-exports distributed rate limiting APIs and security Redis utilities for `@pagespace/lib/security`
 - Updated `.env.example` with security Redis documentation
 - 64 tests passing
 
@@ -282,11 +305,19 @@ export function extractJWTClaims(token: string): Record<string, unknown> {
 **Tests Required:** Self-testing utilities
 
 **Acceptance Criteria:**
-- [ ] Test utilities available in all packages
-- [ ] CI workflow triggers on security-related files
-- [ ] Malicious input generators working
+- [x] Test utilities available in all packages
+- [x] CI workflow triggers on security-related files
+- [x] Malicious input generators working
 
 **Dependencies:** None
+
+**Status:** ✅ COMPLETED (2026-01-06)
+
+**Implementation Notes:**
+- Created `packages/lib/src/__tests__/security-test-utils.ts` with malicious input generators
+- Created `packages/lib/src/__tests__/test-fixtures/security-fixtures.ts` with test data
+- Created `.github/workflows/security.yml` GitHub workflow
+- All security test utilities working and tested
 
 ---
 
@@ -297,15 +328,32 @@ export function extractJWTClaims(token: string): Record<string, unknown> {
 **Files to Create:**
 - `packages/db/drizzle/migrations/XXXX_add_token_hash_columns.sql` (generated)
 - `scripts/verify-token-migration.ts`
-- `docs/security/migration-runbook.md`
+- `docs/security/token-hashing-migration.md`
 
 **Migration Steps:**
-1. Add `tokenHash` column to `refresh_tokens` and `mcp_tokens`
-2. Compute hashes for existing tokens (batch processing)
-3. Verify all tokens hashed
-4. Deploy code using `tokenHash`
-5. Monitor for 24-48 hours
-6. Drop plaintext `token` column
+1. Add `tokenHash` column to `refresh_tokens` and `mcp_tokens` (nullable initially)
+2. Add `tokenPrefix` column to `refresh_tokens` and `mcp_tokens` (nullable initially)
+3. Batch compute hashes for existing tokens:
+   ```sql
+   UPDATE refresh_tokens SET token_hash = encode(sha256(token::bytea), 'hex');
+   UPDATE mcp_tokens SET token_hash = encode(sha256(token::bytea), 'hex');
+   ```
+4. Batch compute prefixes from existing tokens:
+   ```sql
+   UPDATE refresh_tokens SET token_prefix = substring(token, 1, 12);
+   UPDATE mcp_tokens SET token_prefix = substring(token, 1, 12);
+   ```
+5. Make both columns non-null:
+   ```sql
+   ALTER TABLE refresh_tokens ALTER COLUMN token_hash SET NOT NULL;
+   ALTER TABLE refresh_tokens ALTER COLUMN token_prefix SET NOT NULL;
+   ALTER TABLE mcp_tokens ALTER COLUMN token_hash SET NOT NULL;
+   ALTER TABLE mcp_tokens ALTER COLUMN token_prefix SET NOT NULL;
+   ```
+6. Verify all tokens processed (zero NULL values)
+7. Deploy code using `tokenHash` for lookups
+8. Monitor for 24-48 hours
+9. Drop plaintext `token` column
 
 **Rollback Plan:**
 - If step 4 fails: Revert code, plaintext still available
@@ -316,11 +364,20 @@ export function extractJWTClaims(token: string): Record<string, unknown> {
 - `packages/db/src/__tests__/token-migration.test.ts`
 
 **Acceptance Criteria:**
-- [ ] Migration script handles 100K+ tokens efficiently
-- [ ] Verification script confirms zero unhashed tokens
-- [ ] Rollback procedure documented and tested
+- [x] Migration script handles 100K+ tokens efficiently
+- [x] Verification script confirms zero unhashed tokens
+- [x] Rollback procedure documented and tested
 
 **Dependencies:** None
+
+**Status:** ✅ COMPLETED (2026-01-06)
+
+**Implementation Notes:**
+- Generated migration 0033 with tokenHash and tokenPrefix columns
+- Created `scripts/migrate-token-hashes.ts` with batch processing (1000/batch)
+- Created `scripts/verify-token-migration.ts` for post-migration validation
+- Created `docs/security/token-hashing-migration.md` as comprehensive runbook
+- Partial unique indexes ensure migration safety (NULL values allowed during transition)
 
 ---
 
@@ -339,11 +396,25 @@ export function extractJWTClaims(token: string): Record<string, unknown> {
 - Database query latency for auth operations
 
 **Acceptance Criteria:**
-- [ ] Baseline metrics documented
-- [ ] Performance regression threshold defined (<10% increase)
-- [ ] Load test scripts in CI
+- [x] Baseline metrics documented
+- [x] Performance regression threshold defined (<10% increase)
+- [x] Load test scripts in CI
 
 **Dependencies:** P0-T1
+
+**Status:** ✅ COMPLETED (2026-01-06)
+
+**Implementation Notes:**
+- Created `tests/load/auth-baseline.k6.js` with proper CSRF token handling and cookie management
+- Created `.github/workflows/load-test.yml` GitHub workflow (weekly + manual trigger)
+- Created `scripts/seed-loadtest-user.ts` for seeding test user (loadtest@example.com)
+- Baseline captured with actual auth flow:
+  - CSRF fetch: p95 ~9ms
+  - Login: p95 ~978ms (bcrypt intentionally slow for security)
+  - Token validation: p95 ~17ms
+  - Refresh: p95 ~9ms (25% error rate expected due to token consumption)
+- Results saved to `tests/load/results/baseline-2026-01-06.json`
+- Performance thresholds: login <1500ms p95, refresh <200ms p95, validation <100ms p95
 
 ---
 
@@ -516,7 +587,7 @@ export const refreshTokens = pgTable('refresh_tokens', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   tokenHash: text('token_hash').unique().notNull(), // SHA-256 hash
-  tokenPrefix: text('token_prefix').notNull(), // First 8 chars for debugging
+  tokenPrefix: text('token_prefix').notNull(), // First 12 chars for debugging (e.g., "ps_refresh_a")
   tokenVersion: integer('token_version').notNull(),
   deviceId: text('device_id'),
   expiresAt: timestamp('expires_at', { mode: 'date' }).notNull(),
@@ -528,8 +599,8 @@ export const refreshTokens = pgTable('refresh_tokens', {
 export const mcpTokens = pgTable('mcp_tokens', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  tokenHash: text('token_hash').unique().notNull(),
-  tokenPrefix: text('token_prefix').notNull(),
+  tokenHash: text('token_hash').unique().notNull(), // SHA-256 hash
+  tokenPrefix: text('token_prefix').notNull(), // First 12 chars for debugging (e.g., "ps_mcp_abc12")
   name: text('name').notNull(),
   scopes: text('scopes').array().notNull().default([]),
   expiresAt: timestamp('expires_at', { mode: 'date' }),
@@ -833,6 +904,20 @@ describe('Codebase Secret Comparison Audit', () => {
 - [ ] Timing attack vector eliminated
 
 **Dependencies:** None
+
+---
+
+## Lessons Learned & Remediation Notes (Phase 1, PR #167)
+
+**Remediation Rounds:**
+- Round 1 (commit e6dbf5c): Fixed JTI existence checks, added OAuth rate limiting, corrected headers, parallelized resets.
+- Round 2 (commit d41c172): Added failure logging, OAuth environment validation, test mock fixes.
+- Round 3 (commit 11fe272): Centralized IP extraction via `getClientIP()`, standardized rate-limit key naming.
+
+**Key Lessons for P2-P5:**
+- IP extraction standardization: use `getClientIP(request)` across auth routes to avoid drift.
+- Promise.allSettled for resilience: avoid failing auth on non-critical cleanup/reset operations.
+- Rate-limit header accuracy: ensure `X-RateLimit-Remaining` reflects the authoritative store, not stale state.
 
 ---
 
@@ -1963,7 +2048,17 @@ export function verifyBroadcastSignature(
     return { valid: false, reason: 'malformed_signature' };
   }
 
+  // IMPORTANT: Validate hex format before timingSafeEqual to prevent DoS
+  // timingSafeEqual throws if buffers have different lengths
+  if (!/^[0-9a-fA-F]{64}$/.test(sig)) {
+    return { valid: false, reason: 'invalid_signature_format' };
+  }
+
   const timestamp = parseInt(timestampStr, 10);
+  if (isNaN(timestamp)) {
+    return { valid: false, reason: 'invalid_timestamp' };
+  }
+
   const age = Date.now() - timestamp;
 
   // Reject old messages (replay attack)
@@ -2020,6 +2115,10 @@ describe('Broadcast Security', () => {
 
 **Description:** Add CSP headers to all responses.
 
+**Status:** PLANNED (Phase 4; not part of PR #167)
+
+**Scope Note:** Nonce wiring in `apps/web/src/app/layout.tsx` is part of P4-T1 and should be implemented when Phase 4 begins.
+
 **Files to Create:**
 - `apps/web/src/middleware/security-headers.ts`
 
@@ -2028,6 +2127,7 @@ describe('Broadcast Security', () => {
 // apps/web/src/middleware/security-headers.ts
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { randomUUID } from 'crypto';
 
 export function securityHeaders(request: NextRequest, response: NextResponse) {
   const isAPI = request.nextUrl.pathname.startsWith('/api/');
@@ -2038,10 +2138,15 @@ export function securityHeaders(request: NextRequest, response: NextResponse) {
       "default-src 'none'; frame-ancestors 'none'"
     );
   } else {
+    // IMPORTANT: Next.js App Router requires nonces for inline hydration scripts
+    // Using 'self' alone will break hydration - always use nonce-based CSP
+    const nonce = randomUUID();
     response.headers.set(
       'Content-Security-Policy',
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self' wss:; frame-ancestors 'none'"
+      `default-src 'self'; script-src 'self' 'nonce-${nonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self' wss:; frame-ancestors 'none'`
     );
+    // Pass nonce to app for Script components
+    response.headers.set('x-nonce', nonce);
   }
 
   response.headers.set('X-Content-Type-Options', 'nosniff');
@@ -2050,6 +2155,31 @@ export function securityHeaders(request: NextRequest, response: NextResponse) {
   response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
 
   return response;
+}
+```
+
+**Additional files to create/modify for nonce support:**
+- `apps/web/src/app/layout.tsx` - Read nonce from headers, pass to Script components
+
+> **Scope Note:** Nonce integration in `layout.tsx` is part of P4-T1 implementation. The middleware code above shows the pattern; actual integration happens when CSP is enabled in Phase 4.
+
+**Nonce wiring example:**
+```tsx
+// apps/web/src/app/layout.tsx
+import { headers } from 'next/headers';
+import Script from 'next/script';
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  const nonce = headers().get('x-nonce') ?? undefined;
+
+  return (
+    <html lang="en">
+      <body>
+        <Script nonce={nonce} src="/path/to/script.js" strategy="beforeInteractive" />
+        {children}
+      </body>
+    </html>
+  );
 }
 ```
 
@@ -2199,13 +2329,35 @@ import { realpath, lstat } from 'fs/promises';
 /**
  * Resolve a path within a base directory, preventing traversal
  * Returns null if path would escape base
+ *
+ * IMPORTANT: Decodes iteratively to prevent double/triple encoding bypasses
+ * like %252e%252e%252f -> %2e%2e%2f -> ../
  */
 export async function resolvePathWithin(
   base: string,
   userPath: string
 ): Promise<string | null> {
-  // Normalize and decode
-  let normalized = decodeURIComponent(userPath);
+  // CRITICAL: Decode iteratively until stable (prevents double-encoding attacks)
+  let normalized = userPath;
+  let previous: string;
+  let iterations = 0;
+  const MAX_ITERATIONS = 5;
+
+  do {
+    previous = normalized;
+    try {
+      normalized = decodeURIComponent(normalized);
+    } catch {
+      // URIError from malformed encoding - reject as potential attack
+      return null;
+    }
+    iterations++;
+  } while (normalized !== previous && iterations < MAX_ITERATIONS);
+
+  // If still changing after MAX_ITERATIONS, likely an attack - reject
+  if (normalized !== previous) {
+    return null;
+  }
 
   // Remove null bytes
   normalized = normalized.replace(/\x00/g, '');
@@ -2434,7 +2586,16 @@ jobs:
 
 ---
 
-## Test Coverage Matrix
+## Phase 1 Test Coverage (PR #167)
+
+- JTI: 20 tests ✅
+- Secure-compare: 28 tests ✅
+- Distributed rate-limit: 22 tests ✅
+- Auth routes: 194 total (after remediation) ✅
+
+## Test Coverage Targets (Phases 1-5)
+
+_Matrix below reflects project-wide targets; "Current" is the pre-Phase 1 baseline estimate._
 
 | Category | Current | Target | Priority |
 |----------|---------|--------|----------|
@@ -2568,7 +2729,7 @@ P5-T1 (Audit Schema) ←── P5-T2 (Audit Service) ←── P5-T3 (Anomaly)
 
 ---
 
-## Success Metrics
+## Success Metrics (Project Targets)
 
 - [ ] Zero critical vulnerabilities
 - [ ] <5ms added latency for auth

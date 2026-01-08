@@ -5,8 +5,7 @@ vi.mock('../security-redis', () => ({
   checkRateLimit: vi.fn(),
   resetRateLimit: vi.fn(),
   getRateLimitStatus: vi.fn(),
-  isSecurityRedisAvailable: vi.fn(),
-  tryGetSecurityRedisClient: vi.fn(),
+  tryGetRateLimitRedisClient: vi.fn(),
 }));
 
 // Mock logger
@@ -34,7 +33,7 @@ import {
   checkRateLimit as redisCheckRateLimit,
   resetRateLimit as redisResetRateLimit,
   getRateLimitStatus as redisGetRateLimitStatus,
-  tryGetSecurityRedisClient,
+  tryGetRateLimitRedisClient,
 } from '../security-redis';
 
 describe('distributed-rate-limit', () => {
@@ -57,7 +56,7 @@ describe('distributed-rate-limit', () => {
 
     describe('with Redis available', () => {
       beforeEach(() => {
-        vi.mocked(tryGetSecurityRedisClient).mockResolvedValue({} as never);
+        vi.mocked(tryGetRateLimitRedisClient).mockResolvedValue({} as never);
       });
 
       it('allows requests within limit', async () => {
@@ -149,17 +148,19 @@ describe('distributed-rate-limit', () => {
 
     describe('with Redis unavailable', () => {
       beforeEach(() => {
-        vi.mocked(tryGetSecurityRedisClient).mockResolvedValue(null);
+        vi.mocked(tryGetRateLimitRedisClient).mockResolvedValue(null);
       });
 
-      it('falls back to in-memory rate limiting', async () => {
+      it('falls back to in-memory rate limiting in development', async () => {
+        process.env.NODE_ENV = 'development';
         const result = await checkDistributedRateLimit('fallback-test', testConfig);
 
         expect(result.allowed).toBe(true);
         expect(result.attemptsRemaining).toBe(4);
       });
 
-      it('in-memory rate limiting works correctly', async () => {
+      it('in-memory rate limiting works correctly in development', async () => {
+        process.env.NODE_ENV = 'development';
         // Make 5 requests (limit)
         for (let i = 0; i < 5; i++) {
           await checkDistributedRateLimit('memory-test', testConfig);
@@ -171,21 +172,26 @@ describe('distributed-rate-limit', () => {
         expect(result.retryAfter).toBeGreaterThan(0);
       });
 
-      it('logs error in production when Redis unavailable', async () => {
+      it('denies requests in production when Redis unavailable (fail-closed)', async () => {
         process.env.NODE_ENV = 'production';
         const { loggers } = await import('../../logging/logger-config');
 
-        await checkDistributedRateLimit('prod-fallback', testConfig);
+        const result = await checkDistributedRateLimit('prod-fallback', testConfig);
 
+        expect(result.allowed).toBe(false);
+        expect(result.retryAfter).toBe(60);
+        expect(result.attemptsRemaining).toBe(0);
         expect(loggers.api.error).toHaveBeenCalledWith(
-          'Redis unavailable in production - rate limiting may be inconsistent'
+          'Redis unavailable in production - DENYING request (fail-closed)',
+          expect.any(Object)
         );
       });
     });
 
     describe('Redis error handling', () => {
-      it('falls back to in-memory on Redis error', async () => {
-        vi.mocked(tryGetSecurityRedisClient).mockResolvedValue({} as never);
+      it('falls back to in-memory on Redis error in development', async () => {
+        process.env.NODE_ENV = 'development';
+        vi.mocked(tryGetRateLimitRedisClient).mockResolvedValue({} as never);
         vi.mocked(redisCheckRateLimit).mockRejectedValue(new Error('Redis connection lost'));
 
         const { loggers } = await import('../../logging/logger-config');
@@ -197,12 +203,32 @@ describe('distributed-rate-limit', () => {
           expect.any(Object)
         );
       });
+
+      it('denies request on Redis error in production (fail-closed)', async () => {
+        process.env.NODE_ENV = 'production';
+        vi.mocked(tryGetRateLimitRedisClient).mockResolvedValue({} as never);
+        vi.mocked(redisCheckRateLimit).mockRejectedValue(new Error('Redis connection lost'));
+
+        const { loggers } = await import('../../logging/logger-config');
+        const result = await checkDistributedRateLimit('error-test-prod', testConfig);
+
+        expect(result.allowed).toBe(false);
+        expect(result.retryAfter).toBe(60);
+        expect(loggers.api.warn).toHaveBeenCalledWith(
+          'Redis rate limit check failed, falling back to in-memory',
+          expect.any(Object)
+        );
+        expect(loggers.api.error).toHaveBeenCalledWith(
+          'Redis unavailable in production - DENYING request (fail-closed)',
+          expect.any(Object)
+        );
+      });
     });
   });
 
   describe('resetDistributedRateLimit', () => {
     it('resets both Redis and in-memory', async () => {
-      vi.mocked(tryGetSecurityRedisClient).mockResolvedValue({} as never);
+      vi.mocked(tryGetRateLimitRedisClient).mockResolvedValue({} as never);
 
       await resetDistributedRateLimit('reset-key');
 
@@ -210,7 +236,7 @@ describe('distributed-rate-limit', () => {
     });
 
     it('handles Redis reset failure gracefully', async () => {
-      vi.mocked(tryGetSecurityRedisClient).mockResolvedValue({} as never);
+      vi.mocked(tryGetRateLimitRedisClient).mockResolvedValue({} as never);
       vi.mocked(redisResetRateLimit).mockRejectedValue(new Error('Redis error'));
 
       // Should not throw
@@ -218,7 +244,7 @@ describe('distributed-rate-limit', () => {
     });
 
     it('works when Redis unavailable', async () => {
-      vi.mocked(tryGetSecurityRedisClient).mockResolvedValue(null);
+      vi.mocked(tryGetRateLimitRedisClient).mockResolvedValue(null);
 
       // Should not throw
       await expect(resetDistributedRateLimit('no-redis')).resolves.toBeUndefined();
@@ -232,7 +258,7 @@ describe('distributed-rate-limit', () => {
     };
 
     it('returns status from Redis when available', async () => {
-      vi.mocked(tryGetSecurityRedisClient).mockResolvedValue({} as never);
+      vi.mocked(tryGetRateLimitRedisClient).mockResolvedValue({} as never);
       vi.mocked(redisGetRateLimitStatus).mockResolvedValue({
         allowed: true,
         remaining: 3,
@@ -248,7 +274,7 @@ describe('distributed-rate-limit', () => {
 
     it('returns blocked status with retryAfter', async () => {
       const resetAt = new Date(Date.now() + 45000);
-      vi.mocked(tryGetSecurityRedisClient).mockResolvedValue({} as never);
+      vi.mocked(tryGetRateLimitRedisClient).mockResolvedValue({} as never);
       vi.mocked(redisGetRateLimitStatus).mockResolvedValue({
         allowed: false,
         remaining: 0,
@@ -263,20 +289,32 @@ describe('distributed-rate-limit', () => {
       expect(status.retryAfter).toBeLessThanOrEqual(45);
     });
 
-    it('falls back to in-memory when Redis unavailable', async () => {
-      vi.mocked(tryGetSecurityRedisClient).mockResolvedValue(null);
+    it('falls back to in-memory when Redis unavailable in development', async () => {
+      process.env.NODE_ENV = 'development';
+      vi.mocked(tryGetRateLimitRedisClient).mockResolvedValue(null);
 
       const status = await getDistributedRateLimitStatus('memory-status', testConfig);
 
       expect(status.blocked).toBe(false);
       expect(status.attemptsRemaining).toBe(5);
     });
+
+    it('reports blocked in production when Redis unavailable (fail-closed)', async () => {
+      process.env.NODE_ENV = 'production';
+      vi.mocked(tryGetRateLimitRedisClient).mockResolvedValue(null);
+
+      const status = await getDistributedRateLimitStatus('prod-status', testConfig);
+
+      expect(status.blocked).toBe(true);
+      expect(status.retryAfter).toBe(60); // 60000ms / 1000 = 60s
+      expect(status.attemptsRemaining).toBe(0);
+    });
   });
 
   describe('initializeDistributedRateLimiting', () => {
     it('returns redis mode when Redis available', async () => {
       const mockRedis = { ping: vi.fn().mockResolvedValue('PONG') };
-      vi.mocked(tryGetSecurityRedisClient).mockResolvedValue(mockRedis as never);
+      vi.mocked(tryGetRateLimitRedisClient).mockResolvedValue(mockRedis as never);
 
       const result = await initializeDistributedRateLimiting();
 
@@ -287,7 +325,7 @@ describe('distributed-rate-limit', () => {
 
     it('returns memory mode in development when Redis unavailable', async () => {
       process.env.NODE_ENV = 'development';
-      vi.mocked(tryGetSecurityRedisClient).mockResolvedValue(null);
+      vi.mocked(tryGetRateLimitRedisClient).mockResolvedValue(null);
 
       const result = await initializeDistributedRateLimiting();
 
@@ -295,31 +333,27 @@ describe('distributed-rate-limit', () => {
       expect(result.error).toBeUndefined();
     });
 
-    it('returns memory mode with error in production when Redis unavailable', async () => {
+    it('throws error in production when Redis unavailable (fail-fast)', async () => {
       process.env.NODE_ENV = 'production';
-      vi.mocked(tryGetSecurityRedisClient).mockResolvedValue(null);
+      vi.mocked(tryGetRateLimitRedisClient).mockResolvedValue(null);
 
-      const result = await initializeDistributedRateLimiting();
-
-      expect(result.mode).toBe('memory');
-      expect(result.error).toBe('Redis required for distributed rate limiting in production');
+      await expect(initializeDistributedRateLimiting()).rejects.toThrow(
+        'Redis required for distributed rate limiting in production'
+      );
     });
 
-    it('handles Redis ping failure in production', async () => {
+    it('throws error on Redis ping failure in production (fail-fast)', async () => {
       process.env.NODE_ENV = 'production';
       const mockRedis = { ping: vi.fn().mockRejectedValue(new Error('Connection refused')) };
-      vi.mocked(tryGetSecurityRedisClient).mockResolvedValue(mockRedis as never);
+      vi.mocked(tryGetRateLimitRedisClient).mockResolvedValue(mockRedis as never);
 
-      const result = await initializeDistributedRateLimiting();
-
-      expect(result.mode).toBe('memory');
-      expect(result.error).toBe('Connection refused');
+      await expect(initializeDistributedRateLimiting()).rejects.toThrow('Connection refused');
     });
 
     it('handles Redis ping failure in development (no error returned)', async () => {
       process.env.NODE_ENV = 'development';
       const mockRedis = { ping: vi.fn().mockRejectedValue(new Error('Connection refused')) };
-      vi.mocked(tryGetSecurityRedisClient).mockResolvedValue(mockRedis as never);
+      vi.mocked(tryGetRateLimitRedisClient).mockResolvedValue(mockRedis as never);
 
       const result = await initializeDistributedRateLimiting();
 
@@ -368,7 +402,8 @@ describe('distributed-rate-limit', () => {
 
   describe('shutdownRateLimiting', () => {
     beforeEach(() => {
-      vi.mocked(tryGetSecurityRedisClient).mockResolvedValue(null);
+      process.env.NODE_ENV = 'development';
+      vi.mocked(tryGetRateLimitRedisClient).mockResolvedValue(null);
     });
 
     it('clears in-memory rate limit data', async () => {
@@ -398,9 +433,10 @@ describe('distributed-rate-limit', () => {
     });
   });
 
-  describe('in-memory fallback isolation', () => {
+  describe('in-memory fallback isolation (development only)', () => {
     beforeEach(() => {
-      vi.mocked(tryGetSecurityRedisClient).mockResolvedValue(null);
+      process.env.NODE_ENV = 'development';
+      vi.mocked(tryGetRateLimitRedisClient).mockResolvedValue(null);
     });
 
     it('maintains separate limits per identifier', async () => {

@@ -26,11 +26,6 @@ vi.mock('@pagespace/lib/server', () => ({
   generateAccessToken: vi.fn(),
   generateRefreshToken: vi.fn(),
   getRefreshTokenMaxAge: vi.fn(),
-  checkRateLimit: vi.fn(),
-  resetRateLimit: vi.fn(),
-  RATE_LIMIT_CONFIGS: {
-    SIGNUP: {},
-  },
   createNotification: vi.fn(),
   decodeToken: vi.fn(),
   validateOrCreateDeviceToken: vi.fn(),
@@ -43,6 +38,20 @@ vi.mock('@pagespace/lib/server', () => ({
     },
   },
   logAuthEvent: vi.fn(),
+  logSecurityEvent: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/security', () => ({
+  checkDistributedRateLimit: vi.fn(),
+  resetDistributedRateLimit: vi.fn(),
+  DISTRIBUTED_RATE_LIMITS: {
+    SIGNUP: {
+      maxAttempts: 3,
+      windowMs: 3600000,
+      blockDurationMs: 3600000,
+      progressiveDelay: false,
+    },
+  },
 }));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
@@ -82,13 +91,13 @@ vi.mock('@/lib/onboarding/getting-started-drive', () => ({
 import { db, users, userAiSettings, refreshTokens } from '@pagespace/db';
 import bcrypt from 'bcryptjs';
 import {
-  checkRateLimit,
   createNotification,
   decodeToken,
   generateAccessToken,
   generateRefreshToken,
   getRefreshTokenMaxAge,
 } from '@pagespace/lib/server';
+import { checkDistributedRateLimit } from '@pagespace/lib/security';
 import { createVerificationToken } from '@pagespace/lib/verification-utils';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 
@@ -96,7 +105,7 @@ describe('/api/auth/signup redirect', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    (checkRateLimit as Mock).mockReturnValue({ allowed: true });
+    (checkDistributedRateLimit as Mock).mockResolvedValue({ allowed: true, attemptsRemaining: 3 });
     (bcrypt.hash as Mock).mockResolvedValue('hashed-password');
     (generateAccessToken as Mock).mockResolvedValue('access-token');
     (generateRefreshToken as Mock).mockResolvedValue('refresh-token');

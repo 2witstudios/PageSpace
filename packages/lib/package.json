@@ -187,6 +187,16 @@
       "types": "./dist/test/auth-helpers.d.ts",
       "import": "./dist/test/auth-helpers.js",
       "require": "./dist/test/auth-helpers.js"
+    },
+    "./secure-compare": {
+      "types": "./dist/auth/secure-compare.d.ts",
+      "import": "./dist/auth/secure-compare.js",
+      "require": "./dist/auth/secure-compare.js"
+    },
+    "./security": {
+      "types": "./dist/security/index.d.ts",
+      "import": "./dist/security/index.js",
+      "require": "./dist/security/index.js"
     }
   },
   "typesVersions": {
@@ -292,6 +302,12 @@
       ],
       "test/auth-helpers": [
         "./dist/test/auth-helpers.d.ts"
+      ],
+      "secure-compare": [
+        "./dist/auth/secure-compare.d.ts"
+      ],
+      "security": [
+        "./dist/security/index.d.ts"
       ]
     }
   },

@@ -1,7 +1,11 @@
 import { z } from 'zod/v4';
-import { checkRateLimit, RATE_LIMIT_CONFIGS } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
+import {
+  checkDistributedRateLimit,
+  DISTRIBUTED_RATE_LIMITS,
+} from '@pagespace/lib/security';
 import crypto from 'crypto';
+import { getClientIP } from '@/lib/auth';
 
 const googleSigninSchema = z.object({
   returnUrl: z.string().optional(),
@@ -11,6 +15,19 @@ const googleSigninSchema = z.object({
 
 export async function POST(req: Request) {
   try {
+    // Validate required OAuth environment variables
+    if (!process.env.GOOGLE_OAUTH_CLIENT_ID || !process.env.GOOGLE_OAUTH_REDIRECT_URI || !process.env.OAUTH_STATE_SECRET) {
+      loggers.auth.error('Missing required OAuth environment variables', {
+        hasClientId: !!process.env.GOOGLE_OAUTH_CLIENT_ID,
+        hasRedirectUri: !!process.env.GOOGLE_OAUTH_REDIRECT_URI,
+        hasStateSecret: !!process.env.OAUTH_STATE_SECRET,
+      });
+      return Response.json(
+        { error: 'OAuth not configured' },
+        { status: 500 }
+      );
+    }
+
     const body = await req.json();
     const validation = googleSigninSchema.safeParse(body);
 
@@ -18,28 +35,31 @@ export async function POST(req: Request) {
       return Response.json({ errors: validation.error.flatten().fieldErrors }, { status: 400 });
     }
 
+    const { returnUrl, platform, deviceId } = validation.data;
+
     // Rate limiting by IP address
-    const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] || 
-                     req.headers.get('x-real-ip') || 
-                     'unknown';
-    
-    const ipRateLimit = checkRateLimit(clientIP, RATE_LIMIT_CONFIGS.LOGIN);
+    const clientIP = getClientIP(req);
+
+    const ipRateLimit = await checkDistributedRateLimit(
+      `oauth:signin:ip:${clientIP}`,
+      DISTRIBUTED_RATE_LIMITS.LOGIN
+    );
     if (!ipRateLimit.allowed) {
       return Response.json(
-        { 
+        {
           error: 'Too many login attempts from this IP address. Please try again later.',
-          retryAfter: ipRateLimit.retryAfter 
-        }, 
-        { 
+          retryAfter: ipRateLimit.retryAfter,
+        },
+        {
           status: 429,
           headers: {
-            'Retry-After': ipRateLimit.retryAfter?.toString() || '900'
-          }
+            'Retry-After': String(ipRateLimit.retryAfter || 900),
+            'X-RateLimit-Limit': String(DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts),
+            'X-RateLimit-Remaining': '0',
+          },
         }
       );
     }
-
-    const { returnUrl, platform, deviceId } = validation.data;
 
     // Create state object to preserve platform and deviceId through OAuth redirect
     const stateData = {
@@ -83,8 +103,30 @@ export async function POST(req: Request) {
   }
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
+    // Validate required OAuth environment variables
+    if (!process.env.GOOGLE_OAUTH_CLIENT_ID || !process.env.GOOGLE_OAUTH_REDIRECT_URI) {
+      loggers.auth.error('Missing required OAuth environment variables for GET', {
+        hasClientId: !!process.env.GOOGLE_OAUTH_CLIENT_ID,
+        hasRedirectUri: !!process.env.GOOGLE_OAUTH_REDIRECT_URI,
+      });
+      const baseUrl = process.env.WEB_APP_URL || process.env.NEXTAUTH_URL || 'http://localhost:3000';
+      return Response.redirect(new URL('/auth/signin?error=oauth_config', baseUrl).toString());
+    }
+
+    // Rate limiting by IP address
+    const clientIP = getClientIP(req);
+
+    const ipRateLimit = await checkDistributedRateLimit(
+      `oauth:signin:ip:${clientIP}`,
+      DISTRIBUTED_RATE_LIMITS.LOGIN
+    );
+    if (!ipRateLimit.allowed) {
+      const baseUrl = process.env.WEB_APP_URL || process.env.NEXTAUTH_URL || 'http://localhost:3000';
+      return Response.redirect(new URL('/auth/signin?error=rate_limit', baseUrl).toString());
+    }
+
     // Generate OAuth URL for direct link access
     const params = new URLSearchParams({
       client_id: process.env.GOOGLE_OAUTH_CLIENT_ID!,

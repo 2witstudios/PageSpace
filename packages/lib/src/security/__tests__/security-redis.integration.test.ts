@@ -16,10 +16,9 @@ const REDIS_TEST_URL = process.env.REDIS_URL || 'redis://localhost:6380';
 
 describe('security-redis integration', () => {
   let redis: Redis | null = null;
-  let isRedisAvailable = false;
 
   beforeAll(async () => {
-    // Attempt to connect to Redis
+    // Attempt to connect to Redis - tests skip gracefully if unavailable
     try {
       redis = new Redis(REDIS_TEST_URL, {
         maxRetriesPerRequest: 1,
@@ -27,10 +26,7 @@ describe('security-redis integration', () => {
         lazyConnect: true,
       });
       await redis.ping();
-      isRedisAvailable = true;
-      console.log('Redis available for integration tests');
     } catch {
-      console.log('Redis not available, skipping integration tests');
       redis = null;
     }
   });
@@ -58,10 +54,7 @@ describe('security-redis integration', () => {
 
   describe('JTI Operations with real Redis', () => {
     it('stores and retrieves JTI data with TTL', async () => {
-      if (!redis) {
-        console.log('Skipping: Redis not available');
-        return;
-      }
+      if (!redis) return;
 
       const jti = 'test-jti-' + Date.now();
       const key = `sec:test:jti:${jti}`;
@@ -88,10 +81,7 @@ describe('security-redis integration', () => {
     });
 
     it('revocation preserves TTL', async () => {
-      if (!redis) {
-        console.log('Skipping: Redis not available');
-        return;
-      }
+      if (!redis) return;
 
       const jti = 'test-jti-revoke-' + Date.now();
       const key = `sec:test:jti:${jti}`;
@@ -128,10 +118,7 @@ describe('security-redis integration', () => {
 
   describe('Rate Limiting with real Redis', () => {
     it('sliding window algorithm works correctly', async () => {
-      if (!redis) {
-        console.log('Skipping: Redis not available');
-        return;
-      }
+      if (!redis) return;
 
       const key = 'sec:test:rate:sliding-' + Date.now();
       const windowMs = 10000; // 10 seconds
@@ -172,10 +159,7 @@ describe('security-redis integration', () => {
     });
 
     it('separate keys maintain separate limits', async () => {
-      if (!redis) {
-        console.log('Skipping: Redis not available');
-        return;
-      }
+      if (!redis) return;
 
       const key1 = 'sec:test:rate:user1-' + Date.now();
       const key2 = 'sec:test:rate:user2-' + Date.now();
@@ -197,10 +181,7 @@ describe('security-redis integration', () => {
     });
 
     it('expired entries are removed from window', async () => {
-      if (!redis) {
-        console.log('Skipping: Redis not available');
-        return;
-      }
+      if (!redis) return;
 
       const key = 'sec:test:rate:expiry-' + Date.now();
       const now = Date.now();
@@ -226,10 +207,7 @@ describe('security-redis integration', () => {
 
   describe('Session Operations with real Redis', () => {
     it('stores and retrieves session data', async () => {
-      if (!redis) {
-        console.log('Skipping: Redis not available');
-        return;
-      }
+      if (!redis) return;
 
       const sessionId = 'test-session-' + Date.now();
       const key = `sec:test:session:${sessionId}`;
@@ -253,10 +231,7 @@ describe('security-redis integration', () => {
     });
 
     it('session deletion works correctly', async () => {
-      if (!redis) {
-        console.log('Skipping: Redis not available');
-        return;
-      }
+      if (!redis) return;
 
       const sessionId = 'test-session-delete-' + Date.now();
       const key = `sec:test:session:${sessionId}`;
@@ -277,20 +252,14 @@ describe('security-redis integration', () => {
 
   describe('Health Check', () => {
     it('ping returns PONG', async () => {
-      if (!redis) {
-        console.log('Skipping: Redis not available');
-        return;
-      }
+      if (!redis) return;
 
       const result = await redis.ping();
       expect(result).toBe('PONG');
     });
 
     it('measures latency accurately', async () => {
-      if (!redis) {
-        console.log('Skipping: Redis not available');
-        return;
-      }
+      if (!redis) return;
 
       const start = Date.now();
       await redis.ping();

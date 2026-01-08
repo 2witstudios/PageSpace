@@ -1,10 +1,16 @@
 import { users, refreshTokens, deviceTokens } from '@pagespace/db';
 import { db, eq, sql, and, isNull } from '@pagespace/db';
-import { decodeToken, generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, checkRateLimit, RATE_LIMIT_CONFIGS } from '@pagespace/lib/server';
+import { decodeToken, generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, loggers } from '@pagespace/lib/server';
+import {
+  checkDistributedRateLimit,
+  resetDistributedRateLimit,
+  DISTRIBUTED_RATE_LIMITS,
+} from '@pagespace/lib/security';
 import { validateDeviceToken } from '@pagespace/lib/device-auth-utils';
 import { serialize } from 'cookie';
 import { parse } from 'cookie';
 import { createId } from '@paralleldrive/cuid2';
+import { getClientIP } from '@/lib/auth';
 
 export async function POST(req: Request) {
   const cookieHeader = req.headers.get('cookie');
@@ -15,24 +21,27 @@ export async function POST(req: Request) {
     return Response.json({ error: 'Refresh token not found.' }, { status: 401 });
   }
 
-  // Rate limiting by IP address for refresh attempts
-  const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] || 
-                   req.headers.get('x-real-ip') || 
-                   'unknown';
-  
-  const rateLimit = checkRateLimit(`refresh:${clientIP}`, RATE_LIMIT_CONFIGS.REFRESH);
-  
-  if (!rateLimit.allowed) {
+  const clientIP = getClientIP(req);
+
+  // Distributed rate limiting - IP only for refresh
+  const distributedIpLimit = await checkDistributedRateLimit(
+    `refresh:ip:${clientIP}`,
+    DISTRIBUTED_RATE_LIMITS.REFRESH
+  );
+
+  if (!distributedIpLimit.allowed) {
     return Response.json(
       {
         error: 'Too many refresh attempts. Please try again later.',
-        retryAfter: rateLimit.retryAfter
+        retryAfter: distributedIpLimit.retryAfter,
       },
       {
         status: 429,
         headers: {
-          'Retry-After': rateLimit.retryAfter?.toString() || '300'
-        }
+          'Retry-After': String(distributedIpLimit.retryAfter || 300),
+          'X-RateLimit-Limit': String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts),
+          'X-RateLimit-Remaining': '0',
+        },
       }
     );
   }
@@ -155,9 +164,21 @@ export async function POST(req: Request) {
     ...(isProduction && { domain: process.env.COOKIE_DOMAIN })
   });
 
+  // Reset rate limit on successful refresh
+  try {
+    await resetDistributedRateLimit(`refresh:ip:${clientIP}`);
+  } catch (error) {
+    loggers.auth.warn('Rate limit reset failed after successful refresh', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
   const headers = new Headers();
   headers.append('Set-Cookie', accessTokenCookie);
   headers.append('Set-Cookie', refreshTokenCookie);
+  headers.set('X-RateLimit-Limit', String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts));
+  // After successful refresh and rate limit reset, remaining attempts are back to max
+  headers.set('X-RateLimit-Remaining', String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts));
 
   return Response.json({ message: 'Token refreshed successfully' }, { status: 200, headers });
 }

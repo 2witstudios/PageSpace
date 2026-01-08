@@ -65,6 +65,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      redis-sessions:
+        condition: service_healthy
     volumes:
       - file_storage:/app/storage
     env_file: .env
@@ -74,6 +76,8 @@ services:
       - FILE_STORAGE_PATH=/app/storage
       - PROCESSOR_URL=http://processor:3003
       - REDIS_URL=redis://:${REDIS_PASSWORD:-pagespace_redis}@redis:6379
+      - REDIS_SESSION_URL=redis://:${REDIS_PASSWORD:-pagespace_redis}@redis-sessions:6379/0
+      - REDIS_RATE_LIMIT_URL=redis://:${REDIS_PASSWORD:-pagespace_redis}@redis-sessions:6379/1
       - PORT=3000
       - NODE_OPTIONS=--max-old-space-size=640
       - SERVICE_JWT_SECRET=${SERVICE_JWT_SECRET}
@@ -164,12 +168,16 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+      redis-sessions:
+        condition: service_healthy
     env_file: .env
     environment:
       - DATABASE_URL=postgresql://user:password@postgres:5432/pagespace
       - PORT=${REALTIME_PORT}
       - CORS_ORIGIN=${WEB_APP_URL}
       - REDIS_URL=redis://:${REDIS_PASSWORD:-pagespace_redis}@redis:6379
+      - REDIS_SESSION_URL=redis://:${REDIS_PASSWORD:-pagespace_redis}@redis-sessions:6379/0
+      - REDIS_RATE_LIMIT_URL=redis://:${REDIS_PASSWORD:-pagespace_redis}@redis-sessions:6379/1
     deploy:
       resources:
         limits:

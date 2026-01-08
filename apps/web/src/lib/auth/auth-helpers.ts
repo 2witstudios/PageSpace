@@ -4,6 +4,22 @@ import {
   isAuthError as isAuthResultError,
 } from './index';
 
+/**
+ * Extract client IP address from request headers.
+ * Checks x-forwarded-for (proxy), x-real-ip (nginx), falls back to 'unknown'.
+ *
+ * @example
+ * const clientIP = getClientIP(request);
+ * const rateLimit = await checkDistributedRateLimit(`login:ip:${clientIP}`, config);
+ */
+export function getClientIP(request: Request | NextRequest): string {
+  return (
+    request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+    request.headers.get('x-real-ip') ||
+    'unknown'
+  );
+}
+
 export interface AuthUser {
   userId: string;
   role: 'user' | 'admin';

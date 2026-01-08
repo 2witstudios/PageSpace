@@ -1,5 +1,6 @@
 import { users, db, eq, deviceTokens, sql, and, isNull } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
+import { secureCompare } from '@pagespace/lib/secure-compare';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getUserDeviceTokens, revokeAllUserDeviceTokens, decodeDeviceToken, createDeviceTokenRecord, revokeExpiredDeviceTokens } from '@pagespace/lib/device-auth-utils';
 
@@ -52,7 +53,7 @@ export async function GET(req: Request) {
       userAgent: device.userAgent,
       createdAt: device.createdAt.toISOString(),
       expiresAt: device.expiresAt.toISOString(),
-      isCurrent: device.token === currentDeviceToken,
+      isCurrent: currentDeviceToken ? secureCompare(device.token, currentDeviceToken) : false,
     }));
 
     return Response.json(response);

@@ -1,7 +1,12 @@
 import { users, userAiSettings, refreshTokens, db, eq } from '@pagespace/db';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod/v4';
-import { generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, checkRateLimit, resetRateLimit, RATE_LIMIT_CONFIGS, createNotification, decodeToken, validateOrCreateDeviceToken } from '@pagespace/lib/server';
+import { generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, createNotification, decodeToken, validateOrCreateDeviceToken } from '@pagespace/lib/server';
+import {
+  checkDistributedRateLimit,
+  resetDistributedRateLimit,
+  DISTRIBUTED_RATE_LIMITS,
+} from '@pagespace/lib/security';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent, logSecurityEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
@@ -12,7 +17,7 @@ import { VerificationEmail } from '@pagespace/lib/email-templates/VerificationEm
 import React from 'react';
 import { NextResponse } from 'next/server';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
-import { validateLoginCSRFToken } from '@/lib/auth/login-csrf-utils';
+import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 
 const signupSchema = z.object({
   name: z.string().min(1, {
@@ -38,9 +43,7 @@ const signupSchema = z.object({
 });
 
 export async function POST(req: Request) {
-  const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] ||
-    req.headers.get('x-real-ip') ||
-    'unknown';
+  const clientIP = getClientIP(req);
 
   let email: string | undefined;
 
@@ -105,38 +108,44 @@ export async function POST(req: Request) {
     const { name, email: validatedEmail, password, deviceId, deviceName, deviceToken: existingDeviceToken } = validation.data;
     email = validatedEmail;
 
-    // Rate limiting by IP address and email (prevent spam and email enumeration)
-    const ipRateLimit = checkRateLimit(clientIP, RATE_LIMIT_CONFIGS.SIGNUP);
-    const emailRateLimit = checkRateLimit(email.toLowerCase(), RATE_LIMIT_CONFIGS.SIGNUP);
+    // Distributed rate limiting (parallel checks for better performance)
+    const [distributedIpLimit, distributedEmailLimit] = await Promise.all([
+      checkDistributedRateLimit(`signup:ip:${clientIP}`, DISTRIBUTED_RATE_LIMITS.SIGNUP),
+      checkDistributedRateLimit(`signup:email:${email.toLowerCase()}`, DISTRIBUTED_RATE_LIMITS.SIGNUP),
+    ]);
 
-    if (!ipRateLimit.allowed) {
+    if (!distributedIpLimit.allowed) {
       logAuthEvent('failed', undefined, email, clientIP, 'IP rate limit exceeded');
       return Response.json(
         {
           error: 'Too many signup attempts from this IP address. Please try again later.',
-          retryAfter: ipRateLimit.retryAfter
+          retryAfter: distributedIpLimit.retryAfter,
         },
         {
           status: 429,
           headers: {
-            'Retry-After': ipRateLimit.retryAfter?.toString() || '3600'
-          }
+            'Retry-After': String(distributedIpLimit.retryAfter || 3600),
+            'X-RateLimit-Limit': String(DISTRIBUTED_RATE_LIMITS.SIGNUP.maxAttempts),
+            'X-RateLimit-Remaining': '0',
+          },
         }
       );
     }
 
-    if (!emailRateLimit.allowed) {
+    if (!distributedEmailLimit.allowed) {
       logAuthEvent('failed', undefined, email, clientIP, 'Email rate limit exceeded');
       return Response.json(
         {
           error: 'Too many signup attempts for this email. Please try again later.',
-          retryAfter: emailRateLimit.retryAfter
+          retryAfter: distributedEmailLimit.retryAfter,
         },
         {
           status: 429,
           headers: {
-            'Retry-After': emailRateLimit.retryAfter?.toString() || '3600'
-          }
+            'Retry-After': String(distributedEmailLimit.retryAfter || 3600),
+            'X-RateLimit-Limit': String(DISTRIBUTED_RATE_LIMITS.SIGNUP.maxAttempts),
+            'X-RateLimit-Remaining': '0',
+          },
         }
       );
     }
@@ -185,9 +194,20 @@ export async function POST(req: Request) {
     logAuthEvent('signup', user.id, email, clientIP);
     loggers.auth.info('New user created', { userId: user.id, email, name });
 
-    // Reset rate limits on successful signup
-    resetRateLimit(clientIP);
-    resetRateLimit(email.toLowerCase());
+    // Reset rate limits on successful signup (parallel, graceful - failures don't affect successful auth)
+    const resetResults = await Promise.allSettled([
+      resetDistributedRateLimit(`signup:ip:${clientIP}`),
+      resetDistributedRateLimit(`signup:email:${email.toLowerCase()}`),
+    ]);
+
+    // Log any reset failures for observability
+    const failures = resetResults.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+    if (failures.length > 0) {
+      loggers.auth.warn('Rate limit reset failed after successful signup', {
+        failureCount: failures.length,
+        reasons: failures.map(f => f.reason?.message || String(f.reason)),
+      });
+    }
 
     // Track signup event
     trackAuthEvent(user.id, 'signup', {

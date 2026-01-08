@@ -17,8 +17,7 @@ import {
   checkRateLimit as redisCheckRateLimit,
   resetRateLimit as redisResetRateLimit,
   getRateLimitStatus as redisGetRateLimitStatus,
-  isSecurityRedisAvailable,
-  tryGetSecurityRedisClient,
+  tryGetRateLimitRedisClient,
 } from './security-redis';
 import { loggers } from '../logging/logger-config';
 
@@ -205,8 +204,8 @@ export async function checkDistributedRateLimit(
   identifier: string,
   config: RateLimitConfig
 ): Promise<RateLimitResult> {
-  // Try Redis first
-  const redis = await tryGetSecurityRedisClient();
+  // Try rate limit Redis client (uses REDIS_RATE_LIMIT_URL)
+  const redis = await tryGetRateLimitRedisClient();
 
   if (redis) {
     if (!redisAvailableLogged) {
@@ -252,13 +251,24 @@ export async function checkDistributedRateLimit(
     }
   }
 
-  // Fallback to in-memory (development only)
+  // Production: FAIL CLOSED - deny request if we can't properly rate limit
   if (process.env.NODE_ENV === 'production') {
-    // In production, we should fail closed (deny) if Redis is unavailable
-    loggers.api.error('Redis unavailable in production - rate limiting may be inconsistent');
-    // Still use in-memory as last resort to prevent complete auth bypass
+    // Safe truncation that won't throw on short/undefined identifiers
+    const safeId = String(identifier ?? '').slice(0, 20);
+    // Compute retryAfter from the actual rate-limit window for this request
+    const retryAfterSeconds = Math.ceil(config.windowMs / 1000);
+
+    loggers.api.error('Redis unavailable in production - DENYING request (fail-closed)', {
+      identifier: safeId.length >= 20 ? `${safeId}...` : safeId,
+    });
+    return {
+      allowed: false,
+      retryAfter: retryAfterSeconds,
+      attemptsRemaining: 0,
+    };
   }
 
+  // Development only: fall back to in-memory (acceptable for single-instance dev)
   return inMemoryCheckRateLimit(identifier, config);
 }
 
@@ -268,7 +278,7 @@ export async function checkDistributedRateLimit(
 export async function resetDistributedRateLimit(identifier: string): Promise<void> {
   // Reset in both Redis and in-memory to be safe
   try {
-    const redis = await tryGetSecurityRedisClient();
+    const redis = await tryGetRateLimitRedisClient();
     if (redis) {
       await redisResetRateLimit(identifier);
     }
@@ -283,13 +293,15 @@ export async function resetDistributedRateLimit(identifier: string): Promise<voi
 
 /**
  * Get rate limit status without incrementing.
+ * In production, fails closed (reports blocked) when Redis is unavailable to avoid
+ * returning potentially stale/incorrect in-memory status in distributed deployments.
  */
 export async function getDistributedRateLimitStatus(
   identifier: string,
   config: RateLimitConfig
 ): Promise<{ blocked: boolean; retryAfter?: number; attemptsRemaining?: number }> {
   try {
-    const redis = await tryGetSecurityRedisClient();
+    const redis = await tryGetRateLimitRedisClient();
     if (redis) {
       const result = await redisGetRateLimitStatus(
         identifier,
@@ -306,9 +318,20 @@ export async function getDistributedRateLimitStatus(
       };
     }
   } catch {
-    // Fall through to in-memory
+    // Fall through to fail-closed/in-memory handling below
   }
 
+  // Production: FAIL CLOSED - report as blocked when Redis unavailable
+  // This prevents returning stale in-memory status in distributed deployments
+  if (process.env.NODE_ENV === 'production') {
+    return {
+      blocked: true,
+      retryAfter: Math.ceil(config.windowMs / 1000),
+      attemptsRemaining: 0,
+    };
+  }
+
+  // Development only: fall back to in-memory status
   return inMemoryGetRateLimitStatus(identifier, config);
 }
 
@@ -336,6 +359,12 @@ export const DISTRIBUTED_RATE_LIMITS = {
     progressiveDelay: false,
   },
   REFRESH: {
+    maxAttempts: 10,
+    windowMs: 5 * 60 * 1000, // 5 minutes
+    blockDurationMs: 5 * 60 * 1000,
+    progressiveDelay: false,
+  },
+  OAUTH_VERIFY: {
     maxAttempts: 10,
     windowMs: 5 * 60 * 1000, // 5 minutes
     blockDurationMs: 5 * 60 * 1000,
@@ -374,7 +403,7 @@ export async function initializeDistributedRateLimiting(): Promise<{
   error?: string;
 }> {
   try {
-    const redis = await tryGetSecurityRedisClient();
+    const redis = await tryGetRateLimitRedisClient();
 
     if (redis) {
       // Verify connection with a ping
@@ -386,8 +415,7 @@ export async function initializeDistributedRateLimiting(): Promise<{
     if (process.env.NODE_ENV === 'production') {
       const error = 'Redis required for distributed rate limiting in production';
       loggers.api.error(error);
-      // Don't throw - allow startup but log the error
-      return { mode: 'memory', error };
+      throw new Error(error);
     }
 
     loggers.api.warn('Distributed rate limiting using in-memory fallback (development only)');
@@ -397,7 +425,7 @@ export async function initializeDistributedRateLimiting(): Promise<{
     loggers.api.error('Failed to initialize distributed rate limiting', { error: message });
 
     if (process.env.NODE_ENV === 'production') {
-      return { mode: 'memory', error: message };
+      throw error;
     }
 
     return { mode: 'memory' };

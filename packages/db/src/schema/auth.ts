@@ -36,6 +36,8 @@ export const refreshTokens = pgTable('refresh_tokens', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
   token: text('token').unique().notNull(),
+  tokenHash: text('tokenHash'),
+  tokenPrefix: text('tokenPrefix'),
   device: text('device'),
   ip: text('ip'),
   userAgent: text('userAgent'),
@@ -47,6 +49,9 @@ export const refreshTokens = pgTable('refresh_tokens', {
 }, (table) => {
   return {
     userIdx: index('refresh_tokens_user_id_idx').on(table.userId),
+    tokenHashPartialIdx: uniqueIndex('refresh_tokens_token_hash_partial_idx')
+      .on(table.tokenHash)
+      .where(sql`${table.tokenHash} IS NOT NULL`),
   };
 });
 
@@ -96,6 +101,8 @@ export const mcpTokens = pgTable('mcp_tokens', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
   token: text('token').unique().notNull(),
+  tokenHash: text('tokenHash'),
+  tokenPrefix: text('tokenPrefix'),
   name: text('name').notNull(),
   lastUsed: timestamp('lastUsed', { mode: 'date' }),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
@@ -104,6 +111,9 @@ export const mcpTokens = pgTable('mcp_tokens', {
   return {
     userIdx: index('mcp_tokens_user_id_idx').on(table.userId),
     tokenIdx: index('mcp_tokens_token_idx').on(table.token),
+    tokenHashPartialIdx: uniqueIndex('mcp_tokens_token_hash_partial_idx')
+      .on(table.tokenHash)
+      .where(sql`${table.tokenHash} IS NOT NULL`),
   };
 });
 

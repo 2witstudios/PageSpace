@@ -4,17 +4,19 @@ import {
   generateAccessToken,
   generateRefreshToken,
   getRefreshTokenMaxAge,
-  checkRateLimit,
-  resetRateLimit,
-  RATE_LIMIT_CONFIGS,
   decodeToken,
   validateOrCreateDeviceToken,
 } from '@pagespace/lib/server';
+import {
+  checkDistributedRateLimit,
+  resetDistributedRateLimit,
+  DISTRIBUTED_RATE_LIMITS,
+} from '@pagespace/lib/security';
 import { serialize, parse } from 'cookie';
 import { loggers, logAuthEvent, logSecurityEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
-import { validateLoginCSRFToken } from '@/lib/auth/login-csrf-utils';
+import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 import { authRepository } from '@/lib/repositories/auth-repository';
 
 const loginSchema = z.object({
@@ -31,9 +33,7 @@ const loginSchema = z.object({
 export async function POST(req: Request) {
   try {
     // Get client IP early for logging
-    const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0] ||
-                     req.headers.get('x-real-ip') ||
-                     'unknown';
+    const clientIP = getClientIP(req);
 
     // Validate Login CSRF token to prevent Login CSRF attacks
     // This prevents attackers from forcing victims to log into attacker's account
@@ -93,36 +93,43 @@ export async function POST(req: Request) {
     }
 
     const { email, password, deviceId, deviceName, deviceToken: existingDeviceToken } = validation.data;
-    
-    const ipRateLimit = checkRateLimit(clientIP, RATE_LIMIT_CONFIGS.LOGIN);
-    const emailRateLimit = checkRateLimit(email.toLowerCase(), RATE_LIMIT_CONFIGS.LOGIN);
 
-    if (!ipRateLimit.allowed) {
+    // Distributed rate limiting (parallel checks for better performance)
+    const [distributedIpLimit, distributedEmailLimit] = await Promise.all([
+      checkDistributedRateLimit(`login:ip:${clientIP}`, DISTRIBUTED_RATE_LIMITS.LOGIN),
+      checkDistributedRateLimit(`login:email:${email.toLowerCase()}`, DISTRIBUTED_RATE_LIMITS.LOGIN),
+    ]);
+
+    if (!distributedIpLimit.allowed) {
       return Response.json(
-        { 
+        {
           error: 'Too many login attempts from this IP address. Please try again later.',
-          retryAfter: ipRateLimit.retryAfter 
-        }, 
-        { 
+          retryAfter: distributedIpLimit.retryAfter,
+        },
+        {
           status: 429,
           headers: {
-            'Retry-After': ipRateLimit.retryAfter?.toString() || '900'
-          }
+            'Retry-After': String(distributedIpLimit.retryAfter || 900),
+            'X-RateLimit-Limit': String(DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts),
+            'X-RateLimit-Remaining': '0',
+          },
         }
       );
     }
 
-    if (!emailRateLimit.allowed) {
+    if (!distributedEmailLimit.allowed) {
       return Response.json(
-        { 
+        {
           error: 'Too many login attempts for this email. Please try again later.',
-          retryAfter: emailRateLimit.retryAfter 
-        }, 
-        { 
+          retryAfter: distributedEmailLimit.retryAfter,
+        },
+        {
           status: 429,
           headers: {
-            'Retry-After': emailRateLimit.retryAfter?.toString() || '900'
-          }
+            'Retry-After': String(distributedEmailLimit.retryAfter || 900),
+            'X-RateLimit-Limit': String(DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts),
+            'X-RateLimit-Remaining': '0',
+          },
         }
       );
     }
@@ -178,10 +185,21 @@ export async function POST(req: Request) {
       platform: 'web',
     });
 
-    // Reset rate limits on successful login
-    resetRateLimit(clientIP);
-    resetRateLimit(email.toLowerCase());
-    
+    // Reset rate limits on successful login (parallel, graceful - failures don't affect successful auth)
+    const resetResults = await Promise.allSettled([
+      resetDistributedRateLimit(`login:ip:${clientIP}`),
+      resetDistributedRateLimit(`login:email:${email.toLowerCase()}`),
+    ]);
+
+    // Log any reset failures for observability
+    const failures = resetResults.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+    if (failures.length > 0) {
+      loggers.auth.warn('Rate limit reset failed after successful login', {
+        failureCount: failures.length,
+        reasons: failures.map(f => f.reason?.message || String(f.reason)),
+      });
+    }
+
     // Log successful login
     logAuthEvent('login', user.id, email, clientIP);
     
@@ -215,6 +233,9 @@ export async function POST(req: Request) {
     const headers = new Headers();
     headers.append('Set-Cookie', accessTokenCookie);
     headers.append('Set-Cookie', refreshTokenCookie);
+    headers.set('X-RateLimit-Limit', String(DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts));
+    // After successful login and rate limit reset, remaining attempts are back to max
+    headers.set('X-RateLimit-Remaining', String(DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts));
 
     let redirectTo: string | undefined;
     try {

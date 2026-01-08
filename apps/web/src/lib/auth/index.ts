@@ -297,3 +297,5 @@ export {
   type OriginValidationMode,
   type MiddlewareOriginValidationResult,
 } from './origin-validation';
+export { getClientIP } from './auth-helpers';
+export { validateLoginCSRFToken } from './login-csrf-utils';

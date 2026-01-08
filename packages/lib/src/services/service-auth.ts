@@ -1,5 +1,7 @@
 import { SignJWT, decodeProtectedHeader, jwtVerify, type JWTPayload } from 'jose';
 import { createId } from '@paralleldrive/cuid2';
+import { recordJTI, isJTIRevoked, tryGetSecurityRedisClient } from '../security/security-redis';
+import { loggers } from '../logging/logger-config';
 
 export type ServiceScope =
   | '*'
@@ -44,6 +46,63 @@ interface ServiceJWTConfig {
 }
 
 const SERVICE_JWT_ALG = 'HS256';
+const DEFAULT_SERVICE_TOKEN_EXPIRY = '5m';
+const DEFAULT_SERVICE_TOKEN_EXPIRY_SECONDS = 300;
+
+// Maximum allowed duration for service tokens (30 days)
+const MAX_DURATION_SECONDS = 30 * 24 * 60 * 60;
+
+/**
+ * Convert jose duration string to seconds.
+ * Supports: 's' (seconds), 'm' (minutes), 'h' (hours), 'd' (days)
+ *
+ * Validation rules:
+ * - Invalid format returns default (5m)
+ * - Zero or negative values return default
+ * - Values exceeding 30 days are capped at 30 days
+ */
+function durationToSeconds(duration: string): number {
+  const match = duration.match(/^(-?\d+)([smhd])$/);
+  if (!match) {
+    loggers.api.warn('Invalid duration format, using default', { duration, default: DEFAULT_SERVICE_TOKEN_EXPIRY_SECONDS });
+    return DEFAULT_SERVICE_TOKEN_EXPIRY_SECONDS;
+  }
+
+  const value = parseInt(match[1], 10);
+  const unit = match[2];
+
+  // Validate value is positive
+  if (value <= 0) {
+    loggers.api.warn('Invalid duration value (must be positive), using default', { duration, value, default: DEFAULT_SERVICE_TOKEN_EXPIRY_SECONDS });
+    return DEFAULT_SERVICE_TOKEN_EXPIRY_SECONDS;
+  }
+
+  let seconds: number;
+  switch (unit) {
+    case 's':
+      seconds = value;
+      break;
+    case 'm':
+      seconds = value * 60;
+      break;
+    case 'h':
+      seconds = value * 60 * 60;
+      break;
+    case 'd':
+      seconds = value * 24 * 60 * 60;
+      break;
+    default:
+      return DEFAULT_SERVICE_TOKEN_EXPIRY_SECONDS;
+  }
+
+  // Cap at maximum duration
+  if (seconds > MAX_DURATION_SECONDS) {
+    loggers.api.warn('Duration exceeds maximum, capping at 30 days', { duration, requestedSeconds: seconds, cappedTo: MAX_DURATION_SECONDS });
+    return MAX_DURATION_SECONDS;
+  }
+
+  return seconds;
+}
 
 function getServiceConfig(): ServiceJWTConfig {
   const rawSecret = process.env.SERVICE_JWT_SECRET;
@@ -92,6 +151,10 @@ export async function createServiceToken(options: ServiceTokenOptions): Promise<
     }
   }
 
+  const jti = createId();
+  const expiresIn = options.expiresIn ?? DEFAULT_SERVICE_TOKEN_EXPIRY;
+  const expiresInSeconds = durationToSeconds(expiresIn);
+
   const payload: ServiceTokenClaims = {
     sub: options.subject,
     service: options.service,
@@ -99,17 +162,42 @@ export async function createServiceToken(options: ServiceTokenOptions): Promise<
     driveId: options.driveId,
     scopes: Array.from(new Set(options.scopes)),
     tokenType: 'service',
-    jti: createId(),
+    jti,
     ...additionalClaims,
   };
 
-  return await new SignJWT(payload)
+  const token = await new SignJWT(payload)
     .setProtectedHeader({ alg: SERVICE_JWT_ALG })
     .setIssuer(config.issuer)
     .setAudience(config.audience)
     .setIssuedAt()
-    .setExpirationTime(options.expiresIn ?? '5m')
+    .setExpirationTime(`${expiresInSeconds}s`) // Use validated seconds to ensure valid duration
     .sign(config.secret);
+
+  // Record JTI in Redis for tracking/revocation
+  // In production: fail-closed - Redis required for token issuance
+  // In dev/test: graceful degradation - token issued without JTI tracking
+  try {
+    const redis = await tryGetSecurityRedisClient();
+    if (redis) {
+      await recordJTI(jti, options.subject, expiresInSeconds);
+    } else if (process.env.NODE_ENV === 'production') {
+      throw new Error('Security infrastructure unavailable - cannot issue service token');
+    }
+    // In dev/test: token issued without JTI tracking (acceptable)
+  } catch (error) {
+    // In production, propagate the error - fail-closed
+    if (process.env.NODE_ENV === 'production') {
+      throw error;
+    }
+    // In dev/test, log but don't fail - graceful degradation
+    loggers.api.warn('Failed to record JTI in Redis, token created without tracking', {
+      error: error instanceof Error ? error.message : String(error),
+      subject: options.subject,
+    });
+  }
+
+  return token;
 }
 
 export async function verifyServiceToken(token: string): Promise<ServiceTokenClaims> {
@@ -146,6 +234,28 @@ export async function verifyServiceToken(token: string): Promise<ServiceTokenCla
 
     if (claims.resource && typeof claims.resource !== 'string') {
       throw new Error('Service token resource must be a string');
+    }
+
+    // JTI validation (fail-closed in production)
+    const redis = await tryGetSecurityRedisClient();
+    if (redis) {
+      // Validate JTI exists before checking revocation
+      // Skip for tokens without JTI (backward compatibility with pre-tracking tokens)
+      if (typeof claims.jti === 'string' && claims.jti.length > 0) {
+        const revoked = await isJTIRevoked(claims.jti);
+        if (revoked) {
+          throw new Error('Token revoked or invalid');
+        }
+      } else {
+        // Token lacks JTI - log for observability but don't reject
+        // (maintains backward compatibility with tokens created before JTI tracking)
+        loggers.api.debug('Service token verified without JTI tracking', {
+          subject: claims.sub,
+          service: claims.service,
+        });
+      }
+    } else if (process.env.NODE_ENV === 'production') {
+      throw new Error('Security infrastructure unavailable');
     }
 
     return claims;

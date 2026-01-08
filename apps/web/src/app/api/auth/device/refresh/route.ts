@@ -12,10 +12,16 @@ import {
   generateCSRFToken,
   getSessionIdFromJWT,
 } from '@pagespace/lib/server';
+import {
+  checkDistributedRateLimit,
+  resetDistributedRateLimit,
+  DISTRIBUTED_RATE_LIMITS,
+} from '@pagespace/lib/security';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { serialize } from 'cookie';
+import { getClientIP } from '@/lib/auth';
 
 const deviceRefreshSchema = z.object({
   deviceToken: z.string().min(1, { message: 'Device token is required' }),
@@ -35,10 +41,30 @@ export async function POST(req: Request) {
 
     const { deviceToken, deviceId, userAgent, appVersion } = validation.data;
 
-    const clientIP =
-      req.headers.get('x-forwarded-for')?.split(',')[0] ||
-      req.headers.get('x-real-ip') ||
-      'unknown';
+    const clientIP = getClientIP(req);
+
+    // Distributed rate limiting by IP address for device refresh attempts
+    const distributedIpLimit = await checkDistributedRateLimit(
+      `refresh:device:ip:${clientIP}`,
+      DISTRIBUTED_RATE_LIMITS.REFRESH
+    );
+
+    if (!distributedIpLimit.allowed) {
+      return Response.json(
+        {
+          error: 'Too many refresh attempts. Please try again later.',
+          retryAfter: distributedIpLimit.retryAfter,
+        },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': String(distributedIpLimit.retryAfter || 300),
+            'X-RateLimit-Limit': String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts),
+            'X-RateLimit-Remaining': '0',
+          },
+        }
+      );
+    }
 
     const deviceRecord = await validateDeviceToken(deviceToken);
     if (!deviceRecord) {
@@ -168,6 +194,15 @@ export async function POST(req: Request) {
       appVersion,
     });
 
+    // Reset rate limit on successful refresh
+    try {
+      await resetDistributedRateLimit(`refresh:device:ip:${clientIP}`);
+    } catch (error) {
+      loggers.auth.warn('Rate limit reset failed after successful device refresh', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
     // For web platform, set httpOnly cookies instead of returning tokens in JSON
     // Detect web by platform === 'web' in device record
     const isWebPlatform = deviceRecord.platform === 'web';
@@ -196,6 +231,8 @@ export async function POST(req: Request) {
       const headers = new Headers();
       headers.append('Set-Cookie', accessTokenCookie);
       headers.append('Set-Cookie', refreshTokenCookie);
+      headers.set('X-RateLimit-Limit', String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts));
+      headers.set('X-RateLimit-Remaining', String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts));
 
       return Response.json(
         {
@@ -213,6 +250,11 @@ export async function POST(req: Request) {
       refreshToken,
       csrfToken,
       deviceToken: activeDeviceToken,
+    }, {
+      headers: {
+        'X-RateLimit-Limit': String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts),
+        'X-RateLimit-Remaining': String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts),
+      },
     });
   } catch (error) {
     loggers.auth.error('Device token refresh error', error as Error);
