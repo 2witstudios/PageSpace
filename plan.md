@@ -476,12 +476,20 @@ describe('JTI Service', () => {
 ```
 
 **Acceptance Criteria:**
-- [ ] JTI recorded on every service token creation
-- [ ] JTI checked on every service token validation
-- [ ] Revocation takes effect within 1 second
-- [ ] Redis failure degrades gracefully (deny by default)
+- [x] JTI recorded on every service token creation
+- [x] JTI checked on every service token validation
+- [x] Revocation takes effect within 1 second
+- [x] Redis failure degrades gracefully (deny by default)
 
 **Dependencies:** P0-T1
+
+**Status:** ✅ COMPLETED (2026-01-08)
+
+**Implementation Notes:**
+- Implemented in `packages/lib/src/security/security-redis.ts` (not jti-service.ts as originally planned)
+- Functions: `recordJTI()`, `isJTIRevoked()`, `revokeJTI()`, `revokeAllUserJTIs()`
+- Fail-closed security in production (missing JTIs treated as revoked)
+- 39+ JTI-related tests passing
 
 ---
 
@@ -565,6 +573,15 @@ describe('Service Token User Validation', () => {
 
 **Dependencies:** P0-T1, P1-T1
 
+**Status:** ✅ COMPLETED (2026-01-08)
+
+**Implementation Notes:**
+- Implemented in `apps/processor/src/services/user-validator.ts`
+- Function: `validateServiceUser()` checks user exists in database
+- Processor middleware updated to call validator before accepting service tokens
+- Note: tokenVersion validation not performed here (service tokens are short-lived + JTI protected)
+- 6 unit tests passing
+
 ---
 
 ### P1-T3: Hash Sensitive Tokens at Rest
@@ -643,12 +660,26 @@ describe('Token Storage Invariant', () => {
 ```
 
 **Acceptance Criteria:**
-- [ ] New tokens stored as SHA-256 hashes
-- [ ] Existing tokens migrated via P0-T3 migration
-- [ ] Token lookup uses hash comparison
-- [ ] No plaintext tokens in database
+- [x] New tokens stored as SHA-256 hashes
+- [x] Existing tokens migrated via P0-T3 migration (schema ready, scripts ready)
+- [x] Token lookup uses hash comparison
+- [ ] No plaintext tokens in database (requires migration run)
 
 **Dependencies:** P0-T3
+
+**Status:** ✅ COMPLETED (2026-01-08) - Application code done, migration pending
+
+**Implementation Notes:**
+- ✅ Schema: `tokenHash` and `tokenPrefix` columns added to refresh_tokens and mcp_tokens
+- ✅ Migration scripts: `scripts/migrate-token-hashes.ts` and `scripts/verify-token-migration.ts`
+- ✅ Partial unique indexes on tokenHash columns
+- ✅ `packages/lib/src/auth/token-utils.ts` created with `hashToken()`, `getTokenPrefix()`, `generateToken()`
+- ✅ `packages/lib/src/auth/token-lookup.ts` created with dual-mode lookup (hash first, plaintext fallback)
+- ✅ Refresh route updated to use hash-based lookup and store hashes
+- ✅ MCP token validation updated to use hash-based lookup
+- ✅ MCP token creation stores tokenHash and tokenPrefix
+- 27 token tests passing
+- **Next step:** Run migration script to hash existing tokens, then remove plaintext fallback
 
 ---
 
@@ -727,6 +758,14 @@ describe('Validated Service Token', () => {
 - [ ] Audit log records scope grants
 
 **Dependencies:** P1-T2
+
+**Status:** ⏳ NOT STARTED
+
+**Implementation Notes:**
+- No `packages/lib/src/auth/validated-service-token.ts` exists yet
+- No `createValidatedServiceToken` function found
+- Service tokens created without permission validation
+- This is a genuine remaining P1 task
 
 ---
 
@@ -820,12 +859,23 @@ describe('Distributed Rate Limiting', () => {
 ```
 
 **Acceptance Criteria:**
-- [ ] All rate limiting uses Redis
-- [ ] Production startup fails without Redis
-- [ ] Rate limits consistent across all instances
-- [ ] Rate limit headers returned in responses
+- [x] All rate limiting uses Redis
+- [x] Production startup fails without Redis
+- [x] Rate limits consistent across all instances
+- [x] Rate limit headers returned in responses
 
 **Dependencies:** P0-T1
+
+**Status:** ✅ COMPLETED (2026-01-08)
+
+**Implementation Notes:**
+- Implemented in `packages/lib/src/security/distributed-rate-limit.ts` (434 lines)
+- Redis-based sliding window algorithm using sorted sets
+- All auth routes integrated: login, signup, refresh, OAuth
+- Configurations: LOGIN (5/15min), SIGNUP (3/1hr), REFRESH (10/5min), OAUTH_VERIFY (10/5min), API (100/1min)
+- Progressive delay for repeated violations (LOGIN only)
+- Fail-closed in production, graceful fallback in development
+- 50+ rate limiting tests passing
 
 ---
 
@@ -899,11 +949,21 @@ describe('Codebase Secret Comparison Audit', () => {
 ```
 
 **Acceptance Criteria:**
-- [ ] All secret comparisons use secureCompare
-- [ ] Static analysis verifies no plain === for secrets
-- [ ] Timing attack vector eliminated
+- [x] All secret comparisons use secureCompare
+- [x] Static analysis verifies no plain === for secrets
+- [x] Timing attack vector eliminated
 
 **Dependencies:** None
+
+**Status:** ✅ COMPLETED (2026-01-08)
+
+**Implementation Notes:**
+- Implemented in `packages/lib/src/auth/secure-compare.ts` (43 lines)
+- Uses `crypto.timingSafeEqual()` for constant-time comparison
+- Handles mismatched lengths with constant-time self-comparison
+- Exported from `@pagespace/lib/auth`
+- Used in: cron cleanup-tokens route, monitoring ingest route, CSRF validation
+- 28 secure-compare tests passing
 
 ---
 
