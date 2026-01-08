@@ -321,25 +321,21 @@ describe('distributed-rate-limit', () => {
       expect(result.error).toBeUndefined();
     });
 
-    it('returns memory mode with error in production when Redis unavailable', async () => {
+    it('throws error in production when Redis unavailable (fail-fast)', async () => {
       process.env.NODE_ENV = 'production';
       vi.mocked(tryGetRateLimitRedisClient).mockResolvedValue(null);
 
-      const result = await initializeDistributedRateLimiting();
-
-      expect(result.mode).toBe('memory');
-      expect(result.error).toBe('Redis required for distributed rate limiting in production');
+      await expect(initializeDistributedRateLimiting()).rejects.toThrow(
+        'Redis required for distributed rate limiting in production'
+      );
     });
 
-    it('handles Redis ping failure in production', async () => {
+    it('throws error on Redis ping failure in production (fail-fast)', async () => {
       process.env.NODE_ENV = 'production';
       const mockRedis = { ping: vi.fn().mockRejectedValue(new Error('Connection refused')) };
       vi.mocked(tryGetRateLimitRedisClient).mockResolvedValue(mockRedis as never);
 
-      const result = await initializeDistributedRateLimiting();
-
-      expect(result.mode).toBe('memory');
-      expect(result.error).toBe('Connection refused');
+      await expect(initializeDistributedRateLimiting()).rejects.toThrow('Connection refused');
     });
 
     it('handles Redis ping failure in development (no error returned)', async () => {

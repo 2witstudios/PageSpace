@@ -397,8 +397,7 @@ export async function initializeDistributedRateLimiting(): Promise<{
     if (process.env.NODE_ENV === 'production') {
       const error = 'Redis required for distributed rate limiting in production';
       loggers.api.error(error);
-      // Don't throw - allow startup but log the error
-      return { mode: 'memory', error };
+      throw new Error(error);
     }
 
     loggers.api.warn('Distributed rate limiting using in-memory fallback (development only)');
@@ -408,7 +407,7 @@ export async function initializeDistributedRateLimiting(): Promise<{
     loggers.api.error('Failed to initialize distributed rate limiting', { error: message });
 
     if (process.env.NODE_ENV === 'production') {
-      return { mode: 'memory', error: message };
+      throw error;
     }
 
     return { mode: 'memory' };
