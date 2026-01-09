@@ -23,6 +23,7 @@ export * from './content';
 
 // Permissions (export cached version by default)
 export * from './permissions/permissions-cached'; // Server-only: cached permissions (preferred)
+export type { DrivePermissionLevel } from './permissions/permissions-cached';
 
 // Export specific functions from original permissions that aren't in cached version
 export {

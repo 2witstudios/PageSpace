@@ -12,7 +12,7 @@ import {
 } from '@pagespace/lib/services/storage-limits';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkMemoryMiddleware } from '@pagespace/lib/services/memory-monitor';
-import { createServiceToken } from '@pagespace/lib/auth-utils';
+import { createDriveServiceToken } from '@pagespace/lib';
 import { sanitizeFilenameForHeader } from '@pagespace/lib/utils/file-security';
 import { getActorInfo, logFileActivity } from '@pagespace/lib/monitoring/activity-logger';
 
@@ -151,13 +151,13 @@ export async function POST(request: NextRequest) {
     processorFormData.append('driveId', driveId);
 
     try {
-      // Create service JWT token for processor authentication
-      const serviceToken = await createServiceToken('web', ['files:write'], {
+      // Create service JWT token for processor authentication (validates drive membership)
+      const { token: serviceToken } = await createDriveServiceToken(
         userId,
-        tenantId: pageId,
-        driveIds: [driveId],
-        expirationTime: '10m'
-      });
+        driveId,
+        ['files:write'],
+        '10m'
+      );
 
       const processorResponse = await fetch(`${PROCESSOR_URL}/api/upload/single`, {
         method: 'POST',

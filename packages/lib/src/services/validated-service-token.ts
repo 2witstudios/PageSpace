@@ -9,9 +9,7 @@
 
 import {
   getUserAccessLevel,
-  canUserViewPage,
-  canUserEditPage,
-  getUserDriveAccess,
+  getUserDrivePermissions,
 } from '../permissions/permissions-cached';
 import { createServiceToken, ServiceScope } from './service-auth';
 import { loggers } from '../logging/logger-config';
@@ -40,6 +38,8 @@ export interface ValidatedTokenOptions {
   resourceId: string;
   /** Scopes being requested */
   requestedScopes: ServiceScope[];
+  /** Drive ID for drive-scoped tokens (required for processor validation) */
+  driveId?: string;
   /** Token expiration (jose duration string, default '5m') */
   expiresIn?: string;
   /** Additional context for the token */
@@ -121,6 +121,7 @@ export async function createValidatedServiceToken(
     service: 'web',
     subject: userId,
     resource: resourceId,
+    driveId: options.driveId,
     scopes: grantedScopes,
     expiresIn,
     additionalClaims,
@@ -156,19 +157,17 @@ async function getPermissionsForResource(
     }
 
     case 'drive': {
-      // Drive access is simpler - either you have access or you don't
-      // For more granular permissions, we'd need to check drive membership role
-      const hasAccess = await getUserDriveAccess(userId, resourceId);
-      if (!hasAccess) {
+      // Get granular drive permissions (excludes page-level collaborators)
+      const drivePerms = await getUserDrivePermissions(userId, resourceId);
+      if (!drivePerms) {
+        // Page collaborators must use page-scoped tokens instead
         return null;
       }
-      // For now, drive access grants view and edit (write files)
-      // Delete and owner-level scopes require additional checks
       return {
         canView: true,
-        canEdit: true,
-        canDelete: false, // Would need role check for this
-        isOwner: false, // Would need owner check for this
+        canEdit: drivePerms.canEdit, // Only owners/admins/editors
+        canDelete: drivePerms.isOwner || drivePerms.isAdmin,
+        isOwner: drivePerms.isOwner,
       };
     }
 
@@ -260,6 +259,7 @@ export async function createDriveServiceToken(
     userId,
     resourceType: 'drive',
     resourceId: driveId,
+    driveId, // Pass driveId as claim for processor validation
     requestedScopes: scopes,
     expiresIn,
   });

@@ -292,6 +292,121 @@ export async function getUserDriveAccess(
 }
 
 /**
+ * Granular drive permission level for service token validation
+ */
+export interface DrivePermissionLevel {
+  hasAccess: boolean;
+  isOwner: boolean;
+  isAdmin: boolean;
+  isMember: boolean;
+  canEdit: boolean; // Owner, Admin, or Editor role
+}
+
+/**
+ * Get user's granular permissions for a drive (for service token validation)
+ *
+ * Unlike getUserDriveAccess (which returns boolean for any access including page-level),
+ * this function returns detailed role information. Page-level collaborators are NOT
+ * considered to have drive-wide access - they must use page-scoped tokens instead.
+ *
+ * Use this for service token scope validation where we need to distinguish between:
+ * - Drive owners (full access)
+ * - Drive admins (full access)
+ * - Drive editors (view + edit)
+ * - Drive viewers (view only)
+ * - Page collaborators (NO drive-wide access)
+ */
+export async function getUserDrivePermissions(
+  userId: string,
+  driveId: string,
+  options: { silent?: boolean } = {}
+): Promise<DrivePermissionLevel | null> {
+  const { silent = true } = options;
+
+  try {
+    // Check drive exists
+    const drive = await db
+      .select({ id: drives.id, ownerId: drives.ownerId })
+      .from(drives)
+      .where(eq(drives.id, driveId))
+      .limit(1);
+
+    if (drive.length === 0) {
+      if (!silent) {
+        loggers.api.debug(`[DRIVE_PERMISSIONS] Drive not found: ${driveId}`);
+      }
+      return null;
+    }
+
+    const driveData = drive[0];
+    const isOwner = driveData.ownerId === userId;
+
+    // Drive owners have full permissions
+    if (isOwner) {
+      if (!silent) {
+        loggers.api.debug(`[DRIVE_PERMISSIONS] User is drive owner`);
+      }
+      return {
+        hasAccess: true,
+        isOwner: true,
+        isAdmin: false,
+        isMember: false,
+        canEdit: true,
+      };
+    }
+
+    // Check drive membership with role
+    const membership = await db
+      .select({ role: driveMembers.role })
+      .from(driveMembers)
+      .where(
+        and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId))
+      )
+      .limit(1);
+
+    if (membership.length > 0) {
+      const role = membership[0].role;
+      const isAdmin = role === 'ADMIN';
+      // Drive members (ADMIN or MEMBER) can edit drive content
+      // MEMBERs can upload files, create pages, etc.
+      const canEdit = isAdmin || role === 'MEMBER';
+
+      if (!silent) {
+        loggers.api.debug(
+          `[DRIVE_PERMISSIONS] User is drive member with role: ${role}`
+        );
+      }
+
+      return {
+        hasAccess: true,
+        isOwner: false,
+        isAdmin,
+        isMember: true,
+        canEdit,
+      };
+    }
+
+    // Page-level collaborators have NO drive-wide permissions
+    // They must use page-scoped tokens instead
+    if (!silent) {
+      loggers.api.debug(
+        `[DRIVE_PERMISSIONS] User has no drive-level membership (page collaborator or no access)`
+      );
+    }
+    return null;
+  } catch (error) {
+    loggers.api.error('[DRIVE_PERMISSIONS] Error checking drive permissions', {
+      userId,
+      driveId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+
+    // Return null on error (deny access)
+    return null;
+  }
+}
+
+/**
  * Batch get permissions for multiple pages (eliminates N+1 queries)
  *
  * This is a new function that enables efficient bulk permission checking

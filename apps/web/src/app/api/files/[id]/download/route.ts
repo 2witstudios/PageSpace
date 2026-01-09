@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
 import { db, pages, eq } from '@pagespace/db';
-import { PageType, canUserViewPage, isFilePage } from '@pagespace/lib';
-import { createServiceToken } from '@pagespace/lib/auth-utils';
+import { PageType, canUserViewPage, isFilePage, createPageServiceToken } from '@pagespace/lib';
 import { sanitizeFilenameForHeader } from '@pagespace/lib/utils/file-security';
 
 interface RouteParams {
@@ -59,13 +58,13 @@ export async function GET(
     });
 
     try {
-      // Create service JWT token for processor authentication
-      const serviceToken = await createServiceToken('web', ['files:read'], {
-        userId: user.id,
-        tenantId: page.id,
-        driveIds: page.driveId ? [page.driveId] : undefined,
-        expirationTime: '5m'
-      });
+      // Create service JWT token for processor authentication (validates page permissions)
+      const { token: serviceToken } = await createPageServiceToken(
+        user.id,
+        page.id,
+        ['files:read'],
+        '5m'
+      );
 
       // Request the original file from processor service
       const fileResponse = await fetch(`${PROCESSOR_URL}/cache/${contentHash}/original`, {

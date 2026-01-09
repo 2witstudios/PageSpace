@@ -9,9 +9,7 @@ import {
 // Mock the permissions module
 vi.mock('../../permissions/permissions-cached', () => ({
   getUserAccessLevel: vi.fn(),
-  canUserViewPage: vi.fn(),
-  canUserEditPage: vi.fn(),
-  getUserDriveAccess: vi.fn(),
+  getUserDrivePermissions: vi.fn(),
 }));
 
 // Mock the service-auth module
@@ -31,7 +29,7 @@ vi.mock('../../logging/logger-config', () => ({
   },
 }));
 
-import { getUserAccessLevel, getUserDriveAccess } from '../../permissions/permissions-cached';
+import { getUserAccessLevel, getUserDrivePermissions } from '../../permissions/permissions-cached';
 import { createServiceToken } from '../service-auth';
 import { loggers } from '../../logging/logger-config';
 
@@ -208,9 +206,37 @@ describe('createValidatedServiceToken', () => {
   });
 
   describe('drive resource type', () => {
-    it('grants scopes when user has drive access', async () => {
-      // Arrange
-      (getUserDriveAccess as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    it('grants scopes when user is drive owner', async () => {
+      // Arrange - user is drive owner
+      (getUserDrivePermissions as ReturnType<typeof vi.fn>).mockResolvedValue({
+        hasAccess: true,
+        isOwner: true,
+        isAdmin: false,
+        isMember: false,
+        canEdit: true,
+      });
+
+      // Act
+      const result = await createValidatedServiceToken({
+        userId: 'user-1',
+        resourceType: 'drive',
+        resourceId: 'drive-1',
+        requestedScopes: ['files:read', 'files:write', '*'],
+      });
+
+      // Assert - all scopes granted including wildcard for owner
+      expect(result.grantedScopes).toEqual(['files:read', 'files:write', '*']);
+    });
+
+    it('grants edit scopes when user is drive member', async () => {
+      // Arrange - user is drive member (can edit)
+      (getUserDrivePermissions as ReturnType<typeof vi.fn>).mockResolvedValue({
+        hasAccess: true,
+        isOwner: false,
+        isAdmin: false,
+        isMember: true,
+        canEdit: true,
+      });
 
       // Act
       const result = await createValidatedServiceToken({
@@ -220,13 +246,13 @@ describe('createValidatedServiceToken', () => {
         requestedScopes: ['files:read', 'files:write'],
       });
 
-      // Assert
+      // Assert - read and write granted
       expect(result.grantedScopes).toEqual(['files:read', 'files:write']);
     });
 
-    it('throws when user has no drive access', async () => {
-      // Arrange
-      (getUserDriveAccess as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+    it('throws when user has no drive-level access', async () => {
+      // Arrange - page collaborator returns null (no drive-level access)
+      (getUserDrivePermissions as ReturnType<typeof vi.fn>).mockResolvedValue(null);
 
       // Act & Assert
       await expect(
@@ -240,8 +266,14 @@ describe('createValidatedServiceToken', () => {
     });
 
     it('does not grant owner scopes for non-owner drive access', async () => {
-      // Arrange - has access but not owner
-      (getUserDriveAccess as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+      // Arrange - has access but not owner (member)
+      (getUserDrivePermissions as ReturnType<typeof vi.fn>).mockResolvedValue({
+        hasAccess: true,
+        isOwner: false,
+        isAdmin: false,
+        isMember: true,
+        canEdit: true,
+      });
 
       // Act
       const result = await createValidatedServiceToken({
@@ -251,8 +283,57 @@ describe('createValidatedServiceToken', () => {
         requestedScopes: ['files:read', '*'],
       });
 
-      // Assert - wildcard not granted
+      // Assert - wildcard not granted (requires owner)
       expect(result.grantedScopes).toEqual(['files:read']);
+    });
+
+    it('admin can delete but not get wildcard scope', async () => {
+      // Arrange - user is drive admin
+      (getUserDrivePermissions as ReturnType<typeof vi.fn>).mockResolvedValue({
+        hasAccess: true,
+        isOwner: false,
+        isAdmin: true,
+        isMember: true,
+        canEdit: true,
+      });
+
+      // Act
+      const result = await createValidatedServiceToken({
+        userId: 'user-1',
+        resourceType: 'drive',
+        resourceId: 'drive-1',
+        requestedScopes: ['files:read', 'files:write', 'files:delete', '*'],
+      });
+
+      // Assert - delete granted (admin), but not wildcard (requires owner)
+      expect(result.grantedScopes).toEqual(['files:read', 'files:write', 'files:delete']);
+    });
+
+    it('passes driveId claim when provided', async () => {
+      // Arrange
+      (getUserDrivePermissions as ReturnType<typeof vi.fn>).mockResolvedValue({
+        hasAccess: true,
+        isOwner: false,
+        isAdmin: false,
+        isMember: true,
+        canEdit: true,
+      });
+
+      // Act
+      await createValidatedServiceToken({
+        userId: 'user-1',
+        resourceType: 'drive',
+        resourceId: 'drive-1',
+        driveId: 'drive-1',
+        requestedScopes: ['files:write'],
+      });
+
+      // Assert
+      expect(createServiceToken).toHaveBeenCalledWith(
+        expect.objectContaining({
+          driveId: 'drive-1',
+        })
+      );
     });
   });
 
@@ -307,7 +388,13 @@ describe('createValidatedServiceToken', () => {
 
     it('createDriveServiceToken creates drive-scoped token', async () => {
       // Arrange
-      (getUserDriveAccess as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+      (getUserDrivePermissions as ReturnType<typeof vi.fn>).mockResolvedValue({
+        hasAccess: true,
+        isOwner: false,
+        isAdmin: false,
+        isMember: true,
+        canEdit: true,
+      });
 
       // Act
       const result = await createDriveServiceToken('user-1', 'drive-1', ['files:write']);
@@ -317,6 +404,7 @@ describe('createValidatedServiceToken', () => {
       expect(createServiceToken).toHaveBeenCalledWith(
         expect.objectContaining({
           resource: 'drive-1',
+          driveId: 'drive-1',
         })
       );
     });

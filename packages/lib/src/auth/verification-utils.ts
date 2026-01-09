@@ -47,20 +47,13 @@ export async function createVerificationToken(options: CreateTokenOptions): Prom
 }
 
 export async function verifyToken(token: string, expectedType: VerificationType): Promise<string | null> {
-  // SECURITY: Dual-mode lookup - hash first, plaintext fallback for migration
+  // SECURITY: Hash-only lookup - plaintext tokens are never stored
   const tokenHashValue = hashToken(token);
 
-  // Try hash lookup first (new tokens store hash in tokenHash column)
-  let record = await db.query.verificationTokens.findFirst({
+  // Look up by hash only - no plaintext fallback
+  const record = await db.query.verificationTokens.findFirst({
     where: eq(verificationTokens.tokenHash, tokenHashValue),
   });
-
-  // Fallback: try plaintext lookup for legacy tokens during migration
-  if (!record) {
-    record = await db.query.verificationTokens.findFirst({
-      where: eq(verificationTokens.token, token),
-    });
-  }
 
   if (!record) {
     return null; // Token not found
