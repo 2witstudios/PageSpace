@@ -1,5 +1,6 @@
 import { refreshTokens } from '@pagespace/db';
 import { db, eq } from '@pagespace/db';
+import { hashToken } from '@pagespace/lib/auth';
 import { parse, serialize } from 'cookie';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
@@ -63,10 +64,19 @@ export async function POST(req: Request) {
     }
   }
 
-  // Revoke refresh token
+  // Revoke refresh token - dual-mode deletion (hash first, plaintext fallback for migration)
   if (refreshTokenValue) {
     try {
-      await db.delete(refreshTokens).where(eq(refreshTokens.token, refreshTokenValue));
+      const tokenHash = hashToken(refreshTokenValue);
+      // Try to delete by hash first (new tokens store hash in tokenHash column)
+      const deletedByHash = await db.delete(refreshTokens)
+        .where(eq(refreshTokens.tokenHash, tokenHash))
+        .returning();
+
+      if (deletedByHash.length === 0) {
+        // Fallback: try plaintext deletion for legacy tokens during migration
+        await db.delete(refreshTokens).where(eq(refreshTokens.token, refreshTokenValue));
+      }
     } catch (error) {
       // If the token is not found, we can ignore the error and proceed with clearing cookies.
       loggers.auth.debug('Refresh token not found in DB during logout', {

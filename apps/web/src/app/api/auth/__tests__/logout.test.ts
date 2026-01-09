@@ -1,12 +1,23 @@
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
 import { POST } from '../logout/route';
 
+// Mock hashToken to return predictable hash for testing
+// Note: The hash value is hardcoded in the factory since vi.mock is hoisted
+vi.mock('@pagespace/lib/auth', () => ({
+  hashToken: vi.fn().mockReturnValue('hashed_mock-refresh-token_sha256'),
+}));
+
+// Export for test assertions
+const mockTokenHash = 'hashed_mock-refresh-token_sha256';
+
 // Mock dependencies
 vi.mock('@pagespace/db', () => ({
-  refreshTokens: { token: 'token' },
+  refreshTokens: { token: 'token', tokenHash: 'tokenHash' },
   db: {
     delete: vi.fn().mockReturnValue({
-      where: vi.fn().mockResolvedValue(undefined),
+      where: vi.fn().mockReturnValue({
+        returning: vi.fn().mockResolvedValue([{ id: 'deleted-token-id' }]),
+      }),
     }),
   },
   eq: vi.fn((field, value) => ({ field, value })),
@@ -143,7 +154,7 @@ describe('/api/auth/logout', () => {
       );
     });
 
-    it('deletes refresh token from database', async () => {
+    it('deletes refresh token from database using hash lookup', async () => {
       // Arrange
       const request = new Request('http://localhost/api/auth/logout', {
         method: 'POST',
@@ -157,15 +168,19 @@ describe('/api/auth/logout', () => {
       // Act
       await POST(request);
 
-      // Assert - verify delete was called and eq was used with the parsed token
+      // Assert - verify delete was called with hash-based lookup
       expect(db.delete).toHaveBeenCalled();
-      // Verify eq was called with the refresh token value from cookies
       expect(eq).toHaveBeenCalled();
       const eqCalls = (eq as Mock).mock.calls;
-      const tokenDeleteCall = eqCalls.find(
-        (call) => call[1] === 'mock-refresh-token'
+
+      // Should look up by tokenHash (hash of the refresh token), NOT plaintext
+      const hashDeleteCall = eqCalls.find(
+        (call) => call[1] === mockTokenHash
       );
-      expect(tokenDeleteCall).toBeDefined();
+      expect(hashDeleteCall).toBeDefined();
+
+      // Should NOT use plaintext token for primary lookup (only as fallback if hash not found)
+      // Since our mock returns a deleted row, it should not fall back to plaintext
     });
 
     it('logs logout event', async () => {
@@ -336,9 +351,11 @@ describe('/api/auth/logout', () => {
     });
 
     it('handles refresh token not found in database gracefully', async () => {
-      // Arrange
+      // Arrange - hash lookup returns empty, fallback also returns empty
       (db.delete as unknown as Mock).mockReturnValue({
-        where: vi.fn().mockRejectedValue(new Error('Token not found')),
+        where: vi.fn().mockReturnValue({
+          returning: vi.fn().mockResolvedValue([]),
+        }),
       });
 
       const request = new Request('http://localhost/api/auth/logout', {
@@ -353,8 +370,44 @@ describe('/api/auth/logout', () => {
       // Act
       const response = await POST(request);
 
-      // Assert - logout should still succeed
+      // Assert - logout should still succeed even if token not found
       expect(response.status).toBe(200);
+    });
+
+    it('falls back to plaintext deletion for legacy tokens', async () => {
+      // Arrange - hash lookup returns empty, triggering plaintext fallback
+      const whereWithReturning = vi.fn().mockReturnValue({
+        returning: vi.fn().mockResolvedValue([]), // Hash lookup finds nothing
+      });
+      const whereWithoutReturning = vi.fn().mockResolvedValue(undefined); // Plaintext fallback
+
+      let callCount = 0;
+      (db.delete as unknown as Mock).mockReturnValue({
+        where: vi.fn().mockImplementation(() => {
+          callCount++;
+          if (callCount === 1) {
+            // First call: hash lookup with returning()
+            return { returning: vi.fn().mockResolvedValue([]) };
+          }
+          // Second call: plaintext fallback
+          return Promise.resolve(undefined);
+        }),
+      });
+
+      const request = new Request('http://localhost/api/auth/logout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: 'accessToken=mock-access-token; refreshToken=mock-refresh-token',
+          'X-CSRF-Token': 'mock-csrf-token',
+        },
+      });
+
+      // Act
+      await POST(request);
+
+      // Assert - db.delete should be called twice (hash then plaintext)
+      expect(db.delete).toHaveBeenCalledTimes(2);
     });
 
     it('handles malformed body gracefully', async () => {
