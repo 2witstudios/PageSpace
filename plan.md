@@ -667,19 +667,27 @@ describe('Token Storage Invariant', () => {
 
 **Dependencies:** P0-T3
 
-**Status:** ✅ COMPLETED (2026-01-08) - Application code done, migration pending
+**Status:** ✅ COMPLETED (2026-01-09) - All application code done, migration pending
 
 **Implementation Notes:**
-- ✅ Schema: `tokenHash` and `tokenPrefix` columns added to refresh_tokens and mcp_tokens
+- ✅ Schema: `tokenHash` and `tokenPrefix` columns added to all token tables:
+  - `refresh_tokens`
+  - `mcp_tokens`
+  - `device_tokens` (added 2026-01-09)
+  - `verification_tokens` (added 2026-01-09)
 - ✅ Migration scripts: `scripts/migrate-token-hashes.ts` and `scripts/verify-token-migration.ts`
-- ✅ Partial unique indexes on tokenHash columns
+- ✅ Partial unique indexes on tokenHash columns for all token tables
 - ✅ `packages/lib/src/auth/token-utils.ts` created with `hashToken()`, `getTokenPrefix()`, `generateToken()`
 - ✅ `packages/lib/src/auth/token-lookup.ts` created with dual-mode lookup (hash first, plaintext fallback)
 - ✅ Refresh route updated to use hash-based lookup and store hashes
 - ✅ MCP token validation updated to use hash-based lookup
 - ✅ MCP token creation stores tokenHash and tokenPrefix
-- 27 token tests passing
-- **Next step:** Run migration script to hash existing tokens, then remove plaintext fallback
+- ✅ Device token utils updated: `createDeviceTokenRecord`, `validateDeviceToken`, `revokeDeviceTokenByValue`
+- ✅ Verification token utils updated: `createVerificationToken`, `verifyToken`
+- ✅ Logout route uses hash-based deletion with plaintext fallback
+- ✅ Mobile OAuth `saveRefreshToken` hashes before storing
+- 40+ token tests passing
+- **Next step:** Run migration script in production to hash existing tokens
 
 ---
 
@@ -752,20 +760,23 @@ describe('Validated Service Token', () => {
 ```
 
 **Acceptance Criteria:**
-- [ ] All service token creation uses validatePermissions
-- [ ] Scopes match actual user permissions
-- [ ] Cross-tenant scope requests fail
-- [ ] Audit log records scope grants
+- [ ] All service token creation uses validatePermissions (route migration pending)
+- [x] Scopes match actual user permissions
+- [x] Cross-tenant scope requests fail
+- [x] Audit log records scope grants
 
 **Dependencies:** P1-T2
 
-**Status:** ⏳ NOT STARTED
+**Status:** ✅ CORE COMPLETE (2026-01-09) - Function implemented, route migration pending
 
 **Implementation Notes:**
-- No `packages/lib/src/auth/validated-service-token.ts` exists yet
-- No `createValidatedServiceToken` function found
-- Service tokens created without permission validation
-- This is a genuine remaining P1 task
+- ✅ `packages/lib/src/services/validated-service-token.ts` created
+- ✅ `createValidatedServiceToken` function with permission-based scope filtering
+- ✅ Convenience functions: `createPageServiceToken`, `createDriveServiceToken`, `createUserServiceToken`
+- ✅ 17 unit tests passing
+- ✅ Audit logging for scope grants
+- ⏳ Routes currently check permissions manually before calling `createServiceToken`
+- ⏳ Route migration to use centralized function is incremental follow-up work
 
 ---
 

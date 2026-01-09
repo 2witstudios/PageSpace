@@ -61,6 +61,16 @@ export {
   type ServiceTokenOptions,
   type ServiceScope,
 } from './services/service-auth';
+export {
+  createValidatedServiceToken,
+  createPageServiceToken,
+  createDriveServiceToken,
+  createUserServiceToken,
+  type ValidatedTokenOptions,
+  type ValidatedTokenResult,
+  type PermissionSet,
+  type ResourceType,
+} from './services/validated-service-token';
 export * from './auth/csrf-utils';
 export * from './encryption';
 export * from './auth/rate-limit-utils';
