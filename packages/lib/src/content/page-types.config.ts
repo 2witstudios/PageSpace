@@ -183,13 +183,13 @@ export function canPageTypeAcceptUploads(type: PageType): boolean {
   return PAGE_TYPE_CONFIGS[type]?.capabilities.canAcceptUploads || false;
 }
 
-export function getDefaultContent(type: PageType): any {
+export function getDefaultContent(type: PageType): string {
   const config = PAGE_TYPE_CONFIGS[type];
   if (!config) return '';
-  
+
   const content = config.defaultContent();
-  // For CHANNEL and AI_CHAT, return stringified JSON for consistency
-  if (type === PageType.CHANNEL || type === PageType.AI_CHAT) {
+  // Stringify JSON content for types that return objects
+  if (type === PageType.FOLDER || type === PageType.CHANNEL || type === PageType.AI_CHAT) {
     return JSON.stringify(content);
   }
   return content;
