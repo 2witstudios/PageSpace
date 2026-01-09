@@ -152,7 +152,7 @@ async function getPermissionsForResource(
         canView: perms.canView,
         canEdit: perms.canEdit,
         canDelete: perms.canDelete,
-        isOwner: perms.canDelete && perms.canShare, // Owners have both delete and share
+        isOwner: perms.canDelete && perms.canShare, // Owners and admins both have delete+share
       };
     }
 

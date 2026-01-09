@@ -196,7 +196,7 @@ export async function revokeExpiredDeviceTokens(
 /**
  * Validate device token against database
  * SECURITY: Also validates tokenVersion to prevent use after tokenVersion bump
- * Uses dual-mode lookup: hash first, plaintext fallback for migration
+ * Uses hash-only lookup (no plaintext fallback)
  */
 export async function validateDeviceToken(token: string): Promise<DeviceToken | null> {
   try {
