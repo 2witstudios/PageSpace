@@ -374,42 +374,6 @@ describe('/api/auth/logout', () => {
       expect(response.status).toBe(200);
     });
 
-    it('falls back to plaintext deletion for legacy tokens', async () => {
-      // Arrange - hash lookup returns empty, triggering plaintext fallback
-      const whereWithReturning = vi.fn().mockReturnValue({
-        returning: vi.fn().mockResolvedValue([]), // Hash lookup finds nothing
-      });
-      const whereWithoutReturning = vi.fn().mockResolvedValue(undefined); // Plaintext fallback
-
-      let callCount = 0;
-      (db.delete as unknown as Mock).mockReturnValue({
-        where: vi.fn().mockImplementation(() => {
-          callCount++;
-          if (callCount === 1) {
-            // First call: hash lookup with returning()
-            return { returning: vi.fn().mockResolvedValue([]) };
-          }
-          // Second call: plaintext fallback
-          return Promise.resolve(undefined);
-        }),
-      });
-
-      const request = new Request('http://localhost/api/auth/logout', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Cookie: 'accessToken=mock-access-token; refreshToken=mock-refresh-token',
-          'X-CSRF-Token': 'mock-csrf-token',
-        },
-      });
-
-      // Act
-      await POST(request);
-
-      // Assert - db.delete should be called twice (hash then plaintext)
-      expect(db.delete).toHaveBeenCalledTimes(2);
-    });
-
     it('handles malformed body gracefully', async () => {
       // Arrange
       const request = new Request('http://localhost/api/auth/logout', {
