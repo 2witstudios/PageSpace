@@ -81,48 +81,31 @@ export const authRepository = {
 
   /**
    * Find a refresh token with its associated user (for refresh flow)
-   * Uses dual-mode lookup: hash first (new tokens), plaintext fallback (legacy migration)
+   * Uses hash-only lookup (no plaintext fallback)
    */
   async findRefreshTokenWithUser(
     token: string
   ): Promise<RefreshTokenWithUser | null> {
     const tokenHash = hashToken(token);
 
-    // Try hash lookup first (new tokens)
-    let record = await db.query.refreshTokens.findFirst({
+    const record = await db.query.refreshTokens.findFirst({
       where: eq(refreshTokens.tokenHash, tokenHash),
       with: {
         user: true,
       },
     });
 
-    // Fall back to plaintext lookup (legacy tokens during migration)
-    if (!record) {
-      record = await db.query.refreshTokens.findFirst({
-        where: eq(refreshTokens.token, token),
-        with: {
-          user: true,
-        },
-      });
-    }
-
     return record ?? null;
   },
 
   /**
    * Delete a refresh token by its value (for token rotation)
-   * Uses dual-mode lookup: hash first (new tokens), plaintext fallback (legacy migration)
+   * Uses hash-only lookup (no plaintext fallback)
    */
   async deleteRefreshToken(token: string): Promise<void> {
     const tokenHash = hashToken(token);
 
-    // Try to delete by hash first
-    const result = await db.delete(refreshTokens).where(eq(refreshTokens.tokenHash, tokenHash)).returning();
-
-    // If no rows deleted by hash, try plaintext (legacy tokens)
-    if (result.length === 0) {
-      await db.delete(refreshTokens).where(eq(refreshTokens.token, token));
-    }
+    await db.delete(refreshTokens).where(eq(refreshTokens.tokenHash, tokenHash));
   },
 
   /**

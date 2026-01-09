@@ -206,28 +206,15 @@ export async function validateDeviceToken(token: string): Promise<DeviceToken | 
       return null;
     }
 
-    // SECURITY: Dual-mode lookup - hash first, plaintext fallback for migration
+    // SECURITY: Hash-only lookup (no plaintext fallback)
     const tokenHashValue = hashToken(token);
-
-    // Try hash lookup first (new tokens store hash in tokenHash column)
-    let deviceToken = await db.query.deviceTokens.findFirst({
+    const deviceToken = await db.query.deviceTokens.findFirst({
       where: and(
         eq(deviceTokens.tokenHash, tokenHashValue),
         isNull(deviceTokens.revokedAt),
         gt(deviceTokens.expiresAt, new Date())
       ),
     });
-
-    // Fallback: try plaintext lookup for legacy tokens during migration
-    if (!deviceToken) {
-      deviceToken = await db.query.deviceTokens.findFirst({
-        where: and(
-          eq(deviceTokens.token, token),
-          isNull(deviceTokens.revokedAt),
-          gt(deviceTokens.expiresAt, new Date())
-        ),
-      });
-    }
 
     if (!deviceToken) {
       return null;
@@ -307,17 +294,16 @@ export async function revokeDeviceToken(
 
 /**
  * Revoke a device token by its token value (used during logout)
- * Uses dual-mode lookup: hash first, plaintext fallback for migration
+ * Uses hash-only lookup (no plaintext fallback)
  */
 export async function revokeDeviceTokenByValue(
   token: string,
   reason: 'logout' | 'user_action' = 'logout'
 ): Promise<boolean> {
-  // SECURITY: Dual-mode lookup - try hash first, fallback to plaintext for migration
+  // SECURITY: Hash-only lookup (no plaintext fallback)
   const tokenHashValue = hashToken(token);
 
-  // Try to revoke by hash first (new tokens store hash in tokenHash column)
-  const hashResult = await db.update(deviceTokens)
+  const result = await db.update(deviceTokens)
     .set({
       revokedAt: new Date(),
       revokedReason: reason,
@@ -327,24 +313,8 @@ export async function revokeDeviceTokenByValue(
       isNull(deviceTokens.revokedAt)
     ));
 
-  const hashRowCount = (hashResult as any).rowCount ?? 0;
-  if (hashRowCount > 0) {
-    return true;
-  }
-
-  // Fallback: try plaintext revocation for legacy tokens during migration
-  const plaintextResult = await db.update(deviceTokens)
-    .set({
-      revokedAt: new Date(),
-      revokedReason: reason,
-    })
-    .where(and(
-      eq(deviceTokens.token, token),
-      isNull(deviceTokens.revokedAt)
-    ));
-
-  const plaintextRowCount = (plaintextResult as any).rowCount ?? 0;
-  return plaintextRowCount > 0;
+  const rowCount = (result as any).rowCount ?? 0;
+  return rowCount > 0;
 }
 
 /**

@@ -11,14 +11,17 @@ const WINDOW_SECONDS = parseInt(process.env.PROCESSOR_UPLOAD_RATE_WINDOW ?? '360
 
 function getBucketKey(req: Request): string {
   const auth = req.serviceAuth;
-  if (auth?.tenantId) {
-    return `tenant:${auth.tenantId}`;
+  // Use userId for rate limiting (not tenantId which may be per-resource)
+  // This ensures rate limits accumulate per-user across all their uploads
+  if (auth?.userId) {
+    return `user:${auth.userId}`;
   }
 
   if (auth?.service) {
     return `service:${auth.service}`;
   }
 
+  // Fallback to IP-based limiting for unauthenticated requests
   const forwarded = req.headers['x-forwarded-for'];
   if (typeof forwarded === 'string' && forwarded.length > 0) {
     return `ip:${forwarded.split(',')[0]}`;

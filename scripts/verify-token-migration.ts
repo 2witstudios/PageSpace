@@ -146,6 +146,24 @@ async function main() {
     allPassed = false;
   }
 
+  // Check device tokens
+  console.log('Device Tokens:');
+  const deviceResult = await countTokens('device_tokens', 'tokenHash');
+  console.log(`  Total: ${deviceResult.total}`);
+  console.log(`  With hash: ${deviceResult.withHash}`);
+  console.log(`  Without hash: ${deviceResult.withoutHash}`);
+
+  if (deviceResult.passed) {
+    if (deviceResult.total > 0) {
+      console.log('  ✓ All device tokens migrated\n');
+    } else {
+      console.log('  ⚠ No device tokens found\n');
+    }
+  } else {
+    console.log('  ✗ Some device tokens missing hash\n');
+    allPassed = false;
+  }
+
   // Verify hash lookup works
   const lookupPassed = await verifyHashLookup();
   if (!lookupPassed) {

@@ -1,5 +1,5 @@
 #!/usr/bin/env tsx
-import { db, refreshTokens, mcpTokens } from '@pagespace/db';
+import { db, refreshTokens, mcpTokens, deviceTokens } from '@pagespace/db';
 import { eq, isNull, sql } from 'drizzle-orm';
 import { createHash } from 'crypto';
 
@@ -33,7 +33,7 @@ function getTokenPrefix(token: string): string {
   return token.substring(0, 12);
 }
 
-type TokenTable = typeof refreshTokens | typeof mcpTokens;
+type TokenTable = typeof refreshTokens | typeof mcpTokens | typeof deviceTokens;
 
 async function migrateTokenTable<TTable extends TokenTable>(
   tableName: string,
@@ -81,7 +81,11 @@ async function migrateTokenTable<TTable extends TokenTable>(
       for (const update of updates) {
         await tx
           .update(table)
-          .set({ tokenHash: update.tokenHash, tokenPrefix: update.tokenPrefix })
+          .set({
+            token: update.tokenHash,      // Overwrite plaintext with hash (scrub secrets)
+            tokenHash: update.tokenHash,
+            tokenPrefix: update.tokenPrefix
+          })
           .where(eq(table.id, update.id));
       }
 
@@ -119,12 +123,19 @@ async function main() {
       options.batchSize,
       options.dryRun
     );
+    const deviceCount = await migrateTokenTable(
+      'device_tokens',
+      deviceTokens,
+      options.batchSize,
+      options.dryRun
+    );
 
     console.log('\n===================');
     console.log('Migration Summary');
     console.log('===================');
     console.log(`Refresh tokens migrated: ${refreshCount}`);
     console.log(`MCP tokens migrated: ${mcpCount}`);
+    console.log(`Device tokens migrated: ${deviceCount}`);
 
     if (!options.dryRun) {
       console.log('\nNext steps:');

@@ -64,19 +64,11 @@ export async function POST(req: Request) {
     }
   }
 
-  // Revoke refresh token - dual-mode deletion (hash first, plaintext fallback for migration)
+  // Revoke refresh token - hash-only deletion (no plaintext fallback)
   if (refreshTokenValue) {
     try {
       const tokenHash = hashToken(refreshTokenValue);
-      // Try to delete by hash first (new tokens store hash in tokenHash column)
-      const deletedByHash = await db.delete(refreshTokens)
-        .where(eq(refreshTokens.tokenHash, tokenHash))
-        .returning();
-
-      if (deletedByHash.length === 0) {
-        // Fallback: try plaintext deletion for legacy tokens during migration
-        await db.delete(refreshTokens).where(eq(refreshTokens.token, refreshTokenValue));
-      }
+      await db.delete(refreshTokens).where(eq(refreshTokens.tokenHash, tokenHash));
     } catch (error) {
       // If the token is not found, we can ignore the error and proceed with clearing cookies.
       loggers.auth.debug('Refresh token not found in DB during logout', {

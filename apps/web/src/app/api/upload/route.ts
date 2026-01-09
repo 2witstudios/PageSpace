@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, pages, drives, filePages, files, eq, isNull } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
-import { PageType, canUserEditPage, getUserDriveAccess } from '@pagespace/lib/server';
+import { PageType, canUserEditPage, getUserDrivePermissions } from '@pagespace/lib/server';
 import {
   checkStorageQuota,
   updateStorageUsage,
@@ -12,7 +12,7 @@ import {
 } from '@pagespace/lib/services/storage-limits';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkMemoryMiddleware } from '@pagespace/lib/services/memory-monitor';
-import { createDriveServiceToken } from '@pagespace/lib';
+import { createServiceTokenV2 } from '@pagespace/lib';
 import { sanitizeFilenameForHeader } from '@pagespace/lib/utils/file-security';
 import { getActorInfo, logFileActivity } from '@pagespace/lib/monitoring/activity-logger';
 
@@ -74,12 +74,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    const hasDriveAccess = await getUserDriveAccess(userId, driveId);
-    if (!hasDriveAccess) {
-      return NextResponse.json({ error: 'You do not have permission to upload to this drive' }, { status: 403 });
-    }
-
+    // Permission depends on where we're uploading:
+    // - With parentId: need edit permission on parent page (allows page collaborators)
+    // - Without parentId (root): need drive membership
     if (parentId) {
+      // Verify parent exists and belongs to this drive
       const parentPage = await db.query.pages.findFirst({
         where: eq(pages.id, parentId),
       });
@@ -88,9 +87,16 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Invalid parent page' }, { status: 400 });
       }
 
+      // Page collaborators with edit access can upload to folders they can edit
       const canEditParent = await canUserEditPage(userId, parentId);
       if (!canEditParent) {
         return NextResponse.json({ error: 'You do not have permission to upload to this folder' }, { status: 403 });
+      }
+    } else {
+      // Uploading to drive root - require drive membership (not just page-level access)
+      const drivePerms = await getUserDrivePermissions(userId, driveId);
+      if (!drivePerms) {
+        return NextResponse.json({ error: 'You do not have permission to upload to this drive' }, { status: 403 });
       }
     }
 
@@ -151,13 +157,18 @@ export async function POST(request: NextRequest) {
     processorFormData.append('driveId', driveId);
 
     try {
-      // Create service JWT token for processor authentication (validates drive membership)
-      const { token: serviceToken } = await createDriveServiceToken(
-        userId,
-        driveId,
-        ['files:write'],
-        '10m'
-      );
+      // Create service JWT token for processor authentication
+      // Note: We use createServiceTokenV2 directly (not createPageServiceToken) because
+      // the page doesn't exist yet - it's being created by this upload.
+      // We've already validated permissions above (either drive membership or page edit access).
+      const serviceToken = await createServiceTokenV2({
+        service: 'web',
+        subject: userId,
+        resource: pageId,  // Processor expects pageId as resource
+        driveId: driveId,  // Include driveId for additional validation
+        scopes: ['files:write'],
+        expiresIn: '10m',
+      });
 
       const processorResponse = await fetch(`${PROCESSOR_URL}/api/upload/single`, {
         method: 'POST',

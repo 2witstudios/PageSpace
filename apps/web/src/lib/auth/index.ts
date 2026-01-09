@@ -72,11 +72,10 @@ export async function validateMCPToken(token: string): Promise<MCPAuthDetails | 
       return null;
     }
 
-    // P1-T3: Hash-based token lookup with plaintext fallback for migration
+    // P1-T3: Hash-based token lookup only (no plaintext fallback)
     const tokenHash = hashToken(token);
 
-    // Try hash lookup first (new tokens)
-    let tokenRecord = await db.query.mcpTokens.findFirst({
+    const tokenRecord = await db.query.mcpTokens.findFirst({
       where: and(eq(mcpTokens.tokenHash, tokenHash), isNull(mcpTokens.revokedAt)),
       columns: {
         id: true,
@@ -92,26 +91,6 @@ export async function validateMCPToken(token: string): Promise<MCPAuthDetails | 
         },
       },
     });
-
-    // Fall back to plaintext lookup (legacy tokens during migration)
-    if (!tokenRecord) {
-      tokenRecord = await db.query.mcpTokens.findFirst({
-        where: and(eq(mcpTokens.token, token), isNull(mcpTokens.revokedAt)),
-        columns: {
-          id: true,
-          userId: true,
-        },
-        with: {
-          user: {
-            columns: {
-              id: true,
-              role: true,
-              tokenVersion: true,
-            },
-          },
-        },
-      });
-    }
 
     const user = tokenRecord?.user;
     if (!tokenRecord || !user) {

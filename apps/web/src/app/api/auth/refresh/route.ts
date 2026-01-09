@@ -66,26 +66,15 @@ export async function POST(req: Request) {
 
   // Use database transaction to prevent race conditions
   const result = await db.transaction(async (trx) => {
-    // P1-T3: Hash-based token lookup with plaintext fallback for migration
+    // P1-T3: Hash-based token lookup only (no plaintext fallback)
     const tokenHash = hashToken(refreshTokenValue);
 
-    // Try hash lookup first (new tokens)
-    let existingToken = await trx.query.refreshTokens.findFirst({
+    const existingToken = await trx.query.refreshTokens.findFirst({
       where: eq(refreshTokens.tokenHash, tokenHash),
       with: {
         user: true,
       },
     });
-
-    // Fall back to plaintext lookup (legacy tokens during migration)
-    if (!existingToken) {
-      existingToken = await trx.query.refreshTokens.findFirst({
-        where: eq(refreshTokens.token, refreshTokenValue),
-        with: {
-          user: true,
-        },
-      });
-    }
 
     // If token doesn't exist, it might have been stolen and used.
     // For added security, we can check if the decoded token is valid and if so,
