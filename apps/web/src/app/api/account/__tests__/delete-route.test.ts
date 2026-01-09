@@ -290,7 +290,10 @@ describe('DELETE /api/account', () => {
     it('should delete user avatar via processor service', async () => {
       // Arrange
       const mockToken = 'mock-service-token';
-      vi.mocked(createUserServiceToken).mockResolvedValue({ token: mockToken });
+      vi.mocked(createUserServiceToken).mockResolvedValue({
+        token: mockToken,
+        grantedScopes: ['avatars:write'],
+      });
 
       mockAccountRepo.findById.mockResolvedValue({
         id: mockUserId,
