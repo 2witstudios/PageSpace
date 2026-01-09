@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import type { WebAuthResult, AuthError } from '@/lib/auth';
-import type { ServiceTokenClaims } from '@pagespace/lib/auth-utils';
 
 // Mock repository seams - the proper architectural boundary
 vi.mock('@pagespace/lib/server', () => ({
@@ -30,11 +29,6 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/auth-utils', () => ({
-  createServiceToken: vi.fn(),
-  verifyServiceToken: vi.fn(),
-}));
-
 vi.mock('@pagespace/lib', () => ({
   createUserServiceToken: vi.fn(),
 }));
@@ -46,7 +40,6 @@ import {
   activityLogRepository,
 } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createServiceToken, verifyServiceToken } from '@pagespace/lib/auth-utils';
 import { createUserServiceToken } from '@pagespace/lib';
 
 // Type the mocked repositories
@@ -65,19 +58,6 @@ const mockWebAuth = (userId: string, tokenVersion = 0): WebAuthResult => ({
 // Helper to create mock AuthError
 const mockAuthError = (status = 401): AuthError => ({
   error: NextResponse.json({ error: 'Unauthorized' }, { status }),
-});
-
-// Helper to create mock ServiceTokenClaims
-const mockServiceClaims = (userId: string): ServiceTokenClaims => ({
-  sub: userId,
-  service: 'web',
-  scopes: ['avatars:write'],
-  userId,
-  tenantId: userId,
-  tokenType: 'service',
-  jti: 'mock-jti',
-  iat: Math.floor(Date.now() / 1000),
-  exp: Math.floor(Date.now() / 1000) + 120,
 });
 
 describe('DELETE /api/account', () => {
