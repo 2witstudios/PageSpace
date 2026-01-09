@@ -1,6 +1,7 @@
 import * as jose from 'jose';
 import { createId } from '@paralleldrive/cuid2';
-import { db, deviceTokens, eq, and, isNull, lt, gt, sql } from '@pagespace/db';
+import { db, deviceTokens, eq, and, isNull, lt, gt, sql, or } from '@pagespace/db';
+import { hashToken, getTokenPrefix } from './token-utils';
 
 const JWT_ALGORITHM = 'HS256';
 
@@ -118,12 +119,17 @@ export async function createDeviceTokenRecord(
   const expiresAt = new Date();
   expiresAt.setDate(expiresAt.getDate() + 90);
 
+  // SECURITY: Hash the token before storing - never store plaintext
+  const tokenHashValue = hashToken(token);
+
   // Insert into database
   const [record] = await db.insert(deviceTokens).values({
     userId,
     deviceId,
     platform,
-    token,
+    token: tokenHashValue,       // Store hash, NOT plaintext
+    tokenHash: tokenHashValue,
+    tokenPrefix: getTokenPrefix(token),
     expiresAt,
     deviceName: metadata.deviceName,
     userAgent: metadata.userAgent,
@@ -136,7 +142,7 @@ export async function createDeviceTokenRecord(
 
   return {
     id: record.id,
-    token,
+    token,  // Return plaintext token to caller (client needs the JWT)
   };
 }
 
@@ -190,6 +196,7 @@ export async function revokeExpiredDeviceTokens(
 /**
  * Validate device token against database
  * SECURITY: Also validates tokenVersion to prevent use after tokenVersion bump
+ * Uses dual-mode lookup: hash first, plaintext fallback for migration
  */
 export async function validateDeviceToken(token: string): Promise<DeviceToken | null> {
   try {
@@ -199,14 +206,28 @@ export async function validateDeviceToken(token: string): Promise<DeviceToken | 
       return null;
     }
 
-    // Check if token exists in database and is valid
-    const deviceToken = await db.query.deviceTokens.findFirst({
+    // SECURITY: Dual-mode lookup - hash first, plaintext fallback for migration
+    const tokenHashValue = hashToken(token);
+
+    // Try hash lookup first (new tokens store hash in tokenHash column)
+    let deviceToken = await db.query.deviceTokens.findFirst({
       where: and(
-        eq(deviceTokens.token, token),
+        eq(deviceTokens.tokenHash, tokenHashValue),
         isNull(deviceTokens.revokedAt),
         gt(deviceTokens.expiresAt, new Date())
       ),
     });
+
+    // Fallback: try plaintext lookup for legacy tokens during migration
+    if (!deviceToken) {
+      deviceToken = await db.query.deviceTokens.findFirst({
+        where: and(
+          eq(deviceTokens.token, token),
+          isNull(deviceTokens.revokedAt),
+          gt(deviceTokens.expiresAt, new Date())
+        ),
+      });
+    }
 
     if (!deviceToken) {
       return null;
@@ -286,12 +307,33 @@ export async function revokeDeviceToken(
 
 /**
  * Revoke a device token by its token value (used during logout)
+ * Uses dual-mode lookup: hash first, plaintext fallback for migration
  */
 export async function revokeDeviceTokenByValue(
   token: string,
   reason: 'logout' | 'user_action' = 'logout'
 ): Promise<boolean> {
-  const result = await db.update(deviceTokens)
+  // SECURITY: Dual-mode lookup - try hash first, fallback to plaintext for migration
+  const tokenHashValue = hashToken(token);
+
+  // Try to revoke by hash first (new tokens store hash in tokenHash column)
+  const hashResult = await db.update(deviceTokens)
+    .set({
+      revokedAt: new Date(),
+      revokedReason: reason,
+    })
+    .where(and(
+      eq(deviceTokens.tokenHash, tokenHashValue),
+      isNull(deviceTokens.revokedAt)
+    ));
+
+  const hashRowCount = (hashResult as any).rowCount ?? 0;
+  if (hashRowCount > 0) {
+    return true;
+  }
+
+  // Fallback: try plaintext revocation for legacy tokens during migration
+  const plaintextResult = await db.update(deviceTokens)
     .set({
       revokedAt: new Date(),
       revokedReason: reason,
@@ -301,8 +343,8 @@ export async function revokeDeviceTokenByValue(
       isNull(deviceTokens.revokedAt)
     ));
 
-  const rowCount = (result as any).rowCount ?? 0;
-  return rowCount > 0;
+  const plaintextRowCount = (plaintextResult as any).rowCount ?? 0;
+  return plaintextRowCount > 0;
 }
 
 /**
@@ -499,15 +541,27 @@ export async function validateOrCreateDeviceToken(params: {
     });
 
     if (existingActiveToken) {
-      // Reuse existing active token instead of creating a duplicate
-      deviceTokenValue = existingActiveToken.token;
+      // SECURITY: Regenerate JWT when reusing record (DB stores hash, not plaintext)
+      // This maintains the same record ID but issues a fresh JWT to the client
+      const regeneratedToken = await generateDeviceToken(userId, deviceId, platform, tokenVersion);
+      const newTokenHash = hashToken(regeneratedToken);
+
+      // Update the record with the new token hash
+      await db.update(deviceTokens)
+        .set({
+          token: newTokenHash,
+          tokenHash: newTokenHash,
+          tokenPrefix: getTokenPrefix(regeneratedToken),
+          lastUsedAt: new Date(),
+          lastIpAddress: ipAddress || existingActiveToken.lastIpAddress,
+        })
+        .where(eq(deviceTokens.id, existingActiveToken.id));
+
+      deviceTokenValue = regeneratedToken;  // Return the JWT, not the hash
       deviceTokenRecordId = existingActiveToken.id;
       isNew = false;
 
-      // Update activity tracking for the reused token
-      await updateDeviceTokenActivity(existingActiveToken.id, ipAddress);
-
-      console.info('Reused existing active device token', {
+      console.info('Regenerated device token for existing record', {
         userId,
         deviceId,
         platform,

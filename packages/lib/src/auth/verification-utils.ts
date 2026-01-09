@@ -1,6 +1,7 @@
 import { db, verificationTokens, users, eq, and, isNull } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { randomBytes } from 'crypto';
+import { hashToken, getTokenPrefix } from './token-utils';
 
 export type VerificationType = 'email_verification' | 'password_reset' | 'magic_link';
 
@@ -28,22 +29,38 @@ export async function createVerificationToken(options: CreateTokenOptions): Prom
       )
     );
 
+  // SECURITY: Hash the token before storing - never store plaintext
+  const tokenHashValue = hashToken(token);
+
   // Create new token
   await db.insert(verificationTokens).values({
     id: createId(),
     userId,
-    token,
+    token: tokenHashValue,        // Store hash, NOT plaintext
+    tokenHash: tokenHashValue,
+    tokenPrefix: getTokenPrefix(token),
     type,
     expiresAt,
   });
 
-  return token;
+  return token;  // Return plaintext to caller (goes in email link)
 }
 
 export async function verifyToken(token: string, expectedType: VerificationType): Promise<string | null> {
-  const record = await db.query.verificationTokens.findFirst({
-    where: eq(verificationTokens.token, token),
+  // SECURITY: Dual-mode lookup - hash first, plaintext fallback for migration
+  const tokenHashValue = hashToken(token);
+
+  // Try hash lookup first (new tokens store hash in tokenHash column)
+  let record = await db.query.verificationTokens.findFirst({
+    where: eq(verificationTokens.tokenHash, tokenHashValue),
   });
+
+  // Fallback: try plaintext lookup for legacy tokens during migration
+  if (!record) {
+    record = await db.query.verificationTokens.findFirst({
+      where: eq(verificationTokens.token, token),
+    });
+  }
 
   if (!record) {
     return null; // Token not found

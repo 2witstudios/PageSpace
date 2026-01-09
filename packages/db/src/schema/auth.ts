@@ -59,8 +59,10 @@ export const deviceTokens = pgTable('device_tokens', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
 
-  // Token information
+  // Token information - SECURITY: token column stores hash, not plaintext
   token: text('token').unique().notNull(),
+  tokenHash: text('tokenHash'),
+  tokenPrefix: text('tokenPrefix'),
   expiresAt: timestamp('expiresAt', { mode: 'date' }).notNull(),
   lastUsedAt: timestamp('lastUsedAt', { mode: 'date' }),
 
@@ -89,6 +91,9 @@ export const deviceTokens = pgTable('device_tokens', {
     tokenIdx: index('device_tokens_token_idx').on(table.token),
     deviceIdx: index('device_tokens_device_id_idx').on(table.deviceId),
     expiresIdx: index('device_tokens_expires_at_idx').on(table.expiresAt),
+    tokenHashPartialIdx: uniqueIndex('device_tokens_token_hash_partial_idx')
+      .on(table.tokenHash)
+      .where(sql`${table.tokenHash} IS NOT NULL`),
     // Partial unique index: only enforce uniqueness for non-revoked tokens
     // Expired tokens are automatically revoked before new token creation to prevent conflicts
     activeDeviceIdx: uniqueIndex('device_tokens_active_device_idx')
@@ -120,7 +125,10 @@ export const mcpTokens = pgTable('mcp_tokens', {
 export const verificationTokens = pgTable('verification_tokens', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  // SECURITY: token column stores hash, not plaintext
   token: text('token').unique().notNull(),
+  tokenHash: text('tokenHash'),
+  tokenPrefix: text('tokenPrefix'),
   type: text('type').notNull(), // 'email_verification' | 'password_reset' | 'magic_link'
   expiresAt: timestamp('expiresAt', { mode: 'date' }).notNull(),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
@@ -130,6 +138,9 @@ export const verificationTokens = pgTable('verification_tokens', {
     userIdx: index('verification_tokens_user_id_idx').on(table.userId),
     tokenIdx: index('verification_tokens_token_idx').on(table.token),
     typeIdx: index('verification_tokens_type_idx').on(table.type),
+    tokenHashPartialIdx: uniqueIndex('verification_tokens_token_hash_partial_idx')
+      .on(table.tokenHash)
+      .where(sql`${table.tokenHash} IS NOT NULL`),
   };
 });
 
