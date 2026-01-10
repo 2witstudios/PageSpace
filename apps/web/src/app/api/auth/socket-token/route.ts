@@ -32,8 +32,14 @@ export async function GET(request: Request) {
     expiresAt,
   });
 
+  // Return with no-cache headers to prevent token reuse across sessions
   return Response.json({
     token: tokenValue,
     expiresAt: expiresAt.toISOString(),
+  }, {
+    headers: {
+      'Cache-Control': 'no-store, no-cache, must-revalidate',
+      'Vary': 'Cookie',
+    },
   });
 }
