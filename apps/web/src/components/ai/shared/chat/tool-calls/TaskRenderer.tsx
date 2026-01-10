@@ -168,10 +168,10 @@ export const TaskRenderer: React.FC<TaskRendererProps> = ({ part }) => {
   const isLoading = state === 'input-streaming' || state === 'streaming' || state === 'input-available';
 
   return (
-    <div className="py-0.5 text-[11px] max-w-full overflow-hidden">
+    <div className="py-0.5 text-[11px] max-w-full">
       <button
         onClick={() => !isLoading && setIsOpen(!isOpen)}
-        className="w-full flex items-center space-x-1.5 text-left hover:bg-muted/30 rounded py-0.5 px-1 transition-colors max-w-full overflow-hidden"
+        className="w-full flex items-center space-x-1.5 text-left hover:bg-muted/30 rounded py-0.5 px-1 transition-colors max-w-full"
         disabled={isLoading}
         aria-expanded={isOpen}
         aria-label="Task management details"
@@ -190,7 +190,7 @@ export const TaskRenderer: React.FC<TaskRendererProps> = ({ part }) => {
       </button>
 
       {isOpen && !isLoading && (
-        <div className="mt-1 p-1.5 bg-gray-50 dark:bg-gray-800/50 rounded text-[10px] space-y-1 max-w-full overflow-hidden">
+        <div className="mt-1 p-1.5 bg-gray-50 dark:bg-gray-800/50 rounded text-[10px] space-y-1 max-w-full break-words">
           {/* Error state */}
           {(state === 'output-error' || !parsedOutput?.success) && (
             <div className="text-red-600 dark:text-red-400">
