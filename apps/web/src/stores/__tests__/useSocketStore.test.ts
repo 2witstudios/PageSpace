@@ -12,20 +12,31 @@ vi.mock('socket.io-client', () => ({
   io: vi.fn(() => mockSocket),
 }));
 
-// Mock getCookieValue
-vi.mock('@/lib/utils/get-cookie-value', () => ({
-  getCookieValue: vi.fn(() => null),
-}));
-
 // Import after mocks are set up
 import { useSocketStore } from '../useSocketStore';
 import { io } from 'socket.io-client';
-import { getCookieValue } from '@/lib/utils/get-cookie-value';
 
 describe('useSocketStore', () => {
   const windowEventMock = createWindowEventMock();
   const originalWindow = { ...global.window };
   const originalFetch = global.fetch;
+
+  // Helper to create mock fetch response for socket token
+  const mockSocketTokenFetch = (token: string | null) => {
+    return vi.fn().mockImplementation((url: string) => {
+      if (url === '/api/auth/socket-token') {
+        if (token) {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ token, expiresAt: new Date(Date.now() + 300000).toISOString() }),
+          });
+        }
+        return Promise.resolve({ ok: false, status: 401 });
+      }
+      // Default response for other endpoints (e.g., /api/auth/refresh)
+      return Promise.resolve({ ok: true });
+    });
+  };
 
   beforeEach(() => {
     // Reset the store state
@@ -54,8 +65,8 @@ describe('useSocketStore', () => {
       writable: true,
     });
 
-    // Mock fetch
-    global.fetch = vi.fn().mockResolvedValue({ ok: true });
+    // Mock fetch - default to returning a valid socket token
+    global.fetch = mockSocketTokenFetch('ps_sock_test-token-123');
   });
 
   afterEach(() => {
@@ -84,22 +95,22 @@ describe('useSocketStore', () => {
   });
 
   describe('web token retrieval', () => {
-    it('given web environment with accessToken cookie, should extract token from cookie', async () => {
-      const mockToken = 'web-test-token';
-      vi.mocked(getCookieValue).mockReturnValue(mockToken);
+    it('given web environment with valid session, should fetch socket token from endpoint', async () => {
+      const mockToken = 'ps_sock_web-test-token';
+      global.fetch = mockSocketTokenFetch(mockToken);
 
       const { connect } = useSocketStore.getState();
       await connect();
 
-      expect(getCookieValue).toHaveBeenCalledWith('accessToken');
+      expect(global.fetch).toHaveBeenCalledWith('/api/auth/socket-token', { credentials: 'include' });
       const callArgs = vi.mocked(io).mock.calls[0];
       expect(callArgs[1]).toMatchObject({
         auth: { token: mockToken },
       });
     });
 
-    it('given web environment without accessToken cookie, should pass undefined token', async () => {
-      vi.mocked(getCookieValue).mockReturnValue(null);
+    it('given web environment without valid session, should pass undefined token', async () => {
+      global.fetch = mockSocketTokenFetch(null);
 
       const { connect } = useSocketStore.getState();
       await connect();
@@ -140,8 +151,8 @@ describe('useSocketStore', () => {
 
   describe('connection creation', () => {
     it('given valid token available, should create Socket.IO client with auth.token', async () => {
-      const mockToken = 'test-token';
-      vi.mocked(getCookieValue).mockReturnValue(mockToken);
+      const mockToken = 'ps_sock_test-token';
+      global.fetch = mockSocketTokenFetch(mockToken);
 
       const { connect } = useSocketStore.getState();
       await connect();
@@ -237,9 +248,22 @@ describe('useSocketStore', () => {
     it('given refresh endpoint returns 200, should update socket.auth with new token', async () => {
       vi.useFakeTimers();
 
-      const newToken = 'refreshed-token';
-      vi.mocked(getCookieValue).mockReturnValue(newToken);
-      vi.mocked(global.fetch).mockResolvedValue({ ok: true } as Response);
+      const newToken = 'ps_sock_refreshed-token';
+      // Mock fetch to return different tokens for different calls
+      let callCount = 0;
+      global.fetch = vi.fn().mockImplementation((url: string) => {
+        if (url === '/api/auth/socket-token') {
+          callCount++;
+          // First call returns initial token, subsequent calls return new token
+          const token = callCount === 1 ? 'ps_sock_initial-token' : newToken;
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ token, expiresAt: new Date(Date.now() + 300000).toISOString() }),
+          });
+        }
+        // Refresh endpoint
+        return Promise.resolve({ ok: true });
+      });
 
       const { connect } = useSocketStore.getState();
       await connect();

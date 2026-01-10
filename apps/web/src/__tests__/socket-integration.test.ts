@@ -12,10 +12,6 @@ vi.mock('socket.io-client', () => ({
   io: vi.fn(() => mockSocket),
 }));
 
-vi.mock('@/lib/utils/get-cookie-value', () => ({
-  getCookieValue: vi.fn(() => 'valid-test-token'),
-}));
-
 vi.mock('@pagespace/lib/broadcast-auth', () => ({
   createSignedBroadcastHeaders: vi.fn(() => ({
     'Content-Type': 'application/json',
@@ -46,7 +42,6 @@ vi.mock('@/lib/logging/mask', () => ({
 // Import after mocks
 import { useSocketStore } from '../stores/useSocketStore';
 import { io } from 'socket.io-client';
-import { getCookieValue } from '@/lib/utils/get-cookie-value';
 import { broadcastPageEvent, type PageEventPayload } from '@/lib/websocket';
 
 describe('Socket.IO Integration', () => {
@@ -54,6 +49,20 @@ describe('Socket.IO Integration', () => {
   const originalWindow = { ...global.window };
   const originalFetch = global.fetch;
   const originalEnv = process.env;
+
+  // Helper to create mock fetch for socket token endpoint
+  const createMockFetch = (socketToken: string) => {
+    return vi.fn().mockImplementation((url: string) => {
+      if (url === '/api/auth/socket-token') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ token: socketToken, expiresAt: new Date(Date.now() + 300000).toISOString() }),
+        });
+      }
+      // Default for other endpoints (refresh, broadcast, etc.)
+      return Promise.resolve({ ok: true });
+    });
+  };
 
   beforeEach(() => {
     // Reset store state
@@ -82,8 +91,8 @@ describe('Socket.IO Integration', () => {
       writable: true,
     });
 
-    // Mock fetch
-    global.fetch = vi.fn().mockResolvedValue({ ok: true });
+    // Mock fetch - default to valid socket token
+    global.fetch = createMockFetch('ps_sock_valid-test-token');
 
     // Set up environment
     process.env = {
@@ -103,12 +112,15 @@ describe('Socket.IO Integration', () => {
 
   describe('connect → auth → rooms lifecycle', () => {
     it('given authenticated user, should connect, authenticate via token, and be ready for room joins', async () => {
-      const mockToken = 'valid-jwt-token';
-      vi.mocked(getCookieValue).mockReturnValue(mockToken);
+      const mockToken = 'ps_sock_valid-jwt-token';
+      global.fetch = createMockFetch(mockToken);
 
       // Step 1: Connect
       const { connect } = useSocketStore.getState();
       await connect();
+
+      // Verify socket token was fetched
+      expect(global.fetch).toHaveBeenCalledWith('/api/auth/socket-token', { credentials: 'include' });
 
       // Verify socket created with auth token
       expect(io).toHaveBeenCalled();
@@ -169,6 +181,23 @@ describe('Socket.IO Integration', () => {
     it('given token expires, should refresh and reconnect seamlessly', async () => {
       vi.useFakeTimers();
 
+      const newToken = 'ps_sock_refreshed-token';
+      // Mock fetch to return different tokens for different calls
+      let socketTokenCallCount = 0;
+      global.fetch = vi.fn().mockImplementation((url: string) => {
+        if (url === '/api/auth/socket-token') {
+          socketTokenCallCount++;
+          // First call returns initial token, subsequent calls return new token
+          const token = socketTokenCallCount === 1 ? 'ps_sock_initial-token' : newToken;
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ token, expiresAt: new Date(Date.now() + 300000).toISOString() }),
+          });
+        }
+        // Refresh endpoint
+        return Promise.resolve({ ok: true });
+      });
+
       const { connect } = useSocketStore.getState();
       await connect();
 
@@ -177,11 +206,6 @@ describe('Socket.IO Integration', () => {
 
       // Verify reconnection paused
       expect(mockSocket.io.opts.reconnection).toBe(false);
-
-      // Mock successful refresh
-      const newToken = 'refreshed-token';
-      vi.mocked(getCookieValue).mockReturnValue(newToken);
-      vi.mocked(global.fetch).mockResolvedValue({ ok: true } as Response);
 
       // Advance past refresh delay
       await vi.advanceTimersByTimeAsync(2100);
