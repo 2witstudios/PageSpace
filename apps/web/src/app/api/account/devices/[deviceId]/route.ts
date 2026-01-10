@@ -1,6 +1,7 @@
 import { db, eq, deviceTokens, refreshTokens } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { secureCompare } from '@pagespace/lib/secure-compare';
+import { hashToken } from '@pagespace/lib/auth';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { revokeDeviceToken } from '@pagespace/lib/device-auth-utils';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
@@ -34,8 +35,12 @@ export async function DELETE(
     }
 
     // Check if this is the current device
+    // SECURITY: Hash the incoming token to compare with stored hash (tokens are stored hashed)
     const currentDeviceToken = req.headers.get('x-device-token');
-    const isCurrentDevice = currentDeviceToken ? secureCompare(device.token, currentDeviceToken) : false;
+    const currentDeviceTokenHash = currentDeviceToken ? hashToken(currentDeviceToken) : null;
+    const isCurrentDevice = currentDeviceTokenHash && device.tokenHash
+      ? secureCompare(device.tokenHash, currentDeviceTokenHash)
+      : false;
 
     // Revoke the device token
     await revokeDeviceToken(deviceId, 'user_action');

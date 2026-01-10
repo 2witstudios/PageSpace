@@ -6,6 +6,7 @@ import {
   type ServiceScope,
   type ServiceTokenClaims,
 } from '@pagespace/lib';
+import { validateServiceUser } from '../services/user-validator';
 
 export interface ProcessorServiceAuth {
   userId: string;
@@ -144,6 +145,21 @@ export async function authenticateService(req: Request, res: Response, next: Nex
 
     if (!claims.scopes || !Array.isArray(claims.scopes) || claims.scopes.length === 0) {
       respondForbidden(res, 'Service token missing scopes');
+      return;
+    }
+
+    // P1-T2: Validate that the user still exists
+    const userValidation = await validateServiceUser(String(claims.sub));
+
+    if (!userValidation.valid) {
+      if (process.env.NODE_ENV !== 'test') {
+        console.warn('Service token user validation failed', {
+          service: claims.service,
+          subject: claims.sub,
+          reason: userValidation.reason,
+        });
+      }
+      respondUnauthorized(res, `User validation failed: ${userValidation.reason}`);
       return;
     }
 

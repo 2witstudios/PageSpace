@@ -6,7 +6,7 @@ import {
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
-import { validateDeviceToken } from '@pagespace/lib/device-auth-utils';
+import { validateDeviceToken, hashToken, getTokenPrefix } from '@pagespace/lib/auth';
 import { serialize } from 'cookie';
 import { parse } from 'cookie';
 import { createId } from '@paralleldrive/cuid2';
@@ -66,9 +66,11 @@ export async function POST(req: Request) {
 
   // Use database transaction to prevent race conditions
   const result = await db.transaction(async (trx) => {
-    // Check if the token exists and delete it atomically
+    // P1-T3: Hash-based token lookup only (no plaintext fallback)
+    const tokenHash = hashToken(refreshTokenValue);
+
     const existingToken = await trx.query.refreshTokens.findFirst({
-      where: eq(refreshTokens.token, refreshTokenValue),
+      where: eq(refreshTokens.tokenHash, tokenHash),
       with: {
         user: true,
       },
@@ -129,10 +131,14 @@ export async function POST(req: Request) {
     ? new Date(refreshPayload.exp * 1000)
     : new Date(Date.now() + getRefreshTokenMaxAge() * 1000);
 
-  // Store the new refresh token
+  // Store the new refresh token with hash (P1-T3)
+  // SECURITY: Only the hash is stored - plaintext token goes to cookie, never persisted
+  const newRefreshTokenHash = hashToken(newRefreshToken);
   await db.insert(refreshTokens).values({
     id: createId(),
-    token: newRefreshToken,
+    token: newRefreshTokenHash, // Store hash, NOT plaintext
+    tokenHash: newRefreshTokenHash,
+    tokenPrefix: getTokenPrefix(newRefreshToken),
     userId: user.id,
     device: req.headers.get('user-agent'),
     userAgent: req.headers.get('user-agent'),

@@ -2,7 +2,7 @@ import { users, db, eq } from '@pagespace/db';
 import { createHash } from 'crypto';
 import { loggers, accountRepository, activityLogRepository } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createServiceToken, verifyServiceToken, type ServiceTokenClaims } from '@pagespace/lib/auth-utils';
+import { createUserServiceToken, type ServiceScope } from '@pagespace/lib';
 import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
@@ -126,35 +126,19 @@ function createAnonymizedActorEmail(userId: string): string {
   return `deleted_user_${hash}`;
 }
 
-interface AvatarServiceToken {
-  token: string;
-  claims: ServiceTokenClaims;
-}
+const REQUIRED_AVATAR_SCOPES: ServiceScope[] = ['avatars:write'];
 
-const REQUIRED_AVATAR_SCOPES: ServiceTokenClaims['scopes'] = ['avatars:write'];
-
-async function createAvatarServiceToken(userId: string, expirationTime: string): Promise<AvatarServiceToken> {
-  const token = await createServiceToken('web', REQUIRED_AVATAR_SCOPES, {
+async function createAvatarServiceToken(
+  userId: string,
+  expirationTime: string
+): Promise<{ token: string }> {
+  // createUserServiceToken validates that the user is accessing their own resources
+  const { token } = await createUserServiceToken(
     userId,
-    tenantId: userId,
-    expirationTime,
-  });
-
-  const claims = await verifyServiceToken(token);
-  if (!claims) {
-    throw new Error('Avatar service token verification failed');
-  }
-
-  const missingScopes = REQUIRED_AVATAR_SCOPES.filter((scope) => !claims.scopes.includes(scope));
-  if (missingScopes.length > 0) {
-    throw new Error(
-      `Avatar service token missing required scopes: ${missingScopes.join(', ')} (scopes: ${
-        claims.scopes.join(', ') || 'none'
-      })`
-    );
-  }
-
-  return { token, claims };
+    REQUIRED_AVATAR_SCOPES,
+    expirationTime
+  );
+  return { token };
 }
 
 export async function DELETE(req: Request) {

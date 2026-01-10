@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { db, pages, eq } from '@pagespace/db';
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createServiceToken } from '@pagespace/lib/auth-utils';
+import { createPageServiceToken } from '@pagespace/lib';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 import { canUserEditPage } from '@pagespace/lib/permissions';
@@ -56,12 +56,13 @@ export async function POST(
       source: 'system',
     });
     
-    // Create service JWT token for processor authentication
-    const serviceToken = await createServiceToken('web', ['files:ingest'], {
+    // Create service JWT token for processor authentication (validates page permissions)
+    const { token: serviceToken } = await createPageServiceToken(
       userId,
-      tenantId: pageId,
-      expirationTime: '2m'
-    });
+      pageId,
+      ['files:ingest'],
+      '2m'
+    );
 
     // Enqueue unified ingestion on processor
     const resp = await fetch(`${PROCESSOR_URL}/api/ingest/by-page/${pageId}`, {

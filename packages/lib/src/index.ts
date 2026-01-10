@@ -23,6 +23,7 @@ export * from './content';
 
 // Permissions (export cached version by default)
 export * from './permissions/permissions-cached'; // Server-only: cached permissions (preferred)
+export type { DrivePermissionLevel } from './permissions/permissions-cached';
 
 // Export specific functions from original permissions that aren't in cached version
 export {
@@ -61,6 +62,16 @@ export {
   type ServiceTokenOptions,
   type ServiceScope,
 } from './services/service-auth';
+export {
+  createValidatedServiceToken,
+  createPageServiceToken,
+  createDriveServiceToken,
+  createUserServiceToken,
+  type ValidatedTokenOptions,
+  type ValidatedTokenResult,
+  type PermissionSet,
+  type ResourceType,
+} from './services/validated-service-token';
 export * from './auth/csrf-utils';
 export * from './encryption';
 export * from './auth/rate-limit-utils';

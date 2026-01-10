@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { parse } from 'cookie';
 import { decodeToken } from '@pagespace/lib/server';
 import { db, mcpTokens, users, eq, and, isNull } from '@pagespace/db';
+import { hashToken } from '@pagespace/lib/auth';
 
 const BEARER_PREFIX = 'Bearer ';
 const MCP_TOKEN_PREFIX = 'mcp_';
@@ -71,8 +72,11 @@ export async function validateMCPToken(token: string): Promise<MCPAuthDetails | 
       return null;
     }
 
+    // P1-T3: Hash-based token lookup only (no plaintext fallback)
+    const tokenHash = hashToken(token);
+
     const tokenRecord = await db.query.mcpTokens.findFirst({
-      where: and(eq(mcpTokens.token, token), isNull(mcpTokens.revokedAt)),
+      where: and(eq(mcpTokens.tokenHash, tokenHash), isNull(mcpTokens.revokedAt)),
       columns: {
         id: true,
         userId: true,

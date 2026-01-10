@@ -1,5 +1,6 @@
 import { users, db, eq, deviceTokens, sql, and, isNull } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
+import { hashToken } from '@pagespace/lib/auth';
 import { secureCompare } from '@pagespace/lib/secure-compare';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getUserDeviceTokens, revokeAllUserDeviceTokens, decodeDeviceToken, createDeviceTokenRecord, revokeExpiredDeviceTokens } from '@pagespace/lib/device-auth-utils';
@@ -36,7 +37,9 @@ export async function GET(req: Request) {
     const devices = await getUserDeviceTokens(userId);
 
     // Determine current device from request headers
+    // Hash the token for comparison against stored tokenHash
     const currentDeviceToken = req.headers.get('x-device-token');
+    const currentDeviceTokenHash = currentDeviceToken ? hashToken(currentDeviceToken) : null;
 
     // Format response with isCurrent flag
     const response: DeviceResponse[] = devices.map((device) => ({
@@ -53,7 +56,8 @@ export async function GET(req: Request) {
       userAgent: device.userAgent,
       createdAt: device.createdAt.toISOString(),
       expiresAt: device.expiresAt.toISOString(),
-      isCurrent: currentDeviceToken ? secureCompare(device.token, currentDeviceToken) : false,
+      // Compare hash to hash (device.tokenHash stores the hash, currentDeviceTokenHash is hashed request token)
+      isCurrent: currentDeviceTokenHash && device.tokenHash ? secureCompare(device.tokenHash, currentDeviceTokenHash) : false,
     }));
 
     return Response.json(response);
@@ -85,17 +89,19 @@ export async function DELETE(req: Request) {
     }
 
     // Get current device token to preserve it
+    // Hash the token for database lookups
     const currentDeviceToken = req.headers.get('x-device-token');
+    const currentDeviceTokenHash = currentDeviceToken ? hashToken(currentDeviceToken) : null;
 
     // Extract device info from current token BEFORE incrementing tokenVersion
     // This is critical: we need to decode the token while it's still valid
     let currentDeviceInfo: { deviceId: string; platform: 'web' | 'desktop' | 'ios' | 'android'; deviceName: string | null } | null = null;
-    if (currentDeviceToken) {
+    if (currentDeviceToken && currentDeviceTokenHash) {
       const payload = await decodeDeviceToken(currentDeviceToken);
       if (payload) {
-        // Get device metadata from database
+        // Get device metadata from database using tokenHash
         const oldDeviceRecord = await db.query.deviceTokens.findFirst({
-          where: eq(deviceTokens.token, currentDeviceToken),
+          where: eq(deviceTokens.tokenHash, currentDeviceTokenHash),
           columns: { deviceId: true, platform: true, deviceName: true },
         });
         if (oldDeviceRecord) {
@@ -121,15 +127,16 @@ export async function DELETE(req: Request) {
 
     // Create new device token with incremented tokenVersion (if current device was valid)
     let newDeviceToken: string | undefined;
+    let newDeviceTokenHash: string | undefined;
     if (currentDeviceInfo) {
-      // Revoke the old device token
+      // Revoke the old device token using tokenHash for lookup
       await db
         .update(deviceTokens)
         .set({
           revokedAt: new Date(),
           revokedReason: 'user_action',
         })
-        .where(eq(deviceTokens.token, currentDeviceToken!));
+        .where(eq(deviceTokens.tokenHash, currentDeviceTokenHash!));
 
       // Revoke any expired tokens that would block creation
       await revokeExpiredDeviceTokens(userId, currentDeviceInfo.deviceId, currentDeviceInfo.platform);
@@ -148,12 +155,14 @@ export async function DELETE(req: Request) {
       );
 
       newDeviceToken = newTokenData.token;
+      newDeviceTokenHash = hashToken(newDeviceToken);
       loggers.auth.info(`Created new device token for user ${userId} with new tokenVersion ${newTokenVersion}`);
     }
 
     // Revoke all device tokens except the current one (which was already rotated)
-    if (currentDeviceToken) {
+    if (currentDeviceTokenHash) {
       // Revoke all except current (old token already revoked by rotation)
+      // Use tokenHash for comparisons since that's what's stored in DB
       await db
         .update(deviceTokens)
         .set({
@@ -164,9 +173,9 @@ export async function DELETE(req: Request) {
           and(
             eq(deviceTokens.userId, userId),
             isNull(deviceTokens.revokedAt),
-            sql`${deviceTokens.token} != ${currentDeviceToken}`,
+            sql`${deviceTokens.tokenHash} != ${currentDeviceTokenHash}`,
             // Also exclude the new rotated token
-            ...(newDeviceToken ? [sql`${deviceTokens.token} != ${newDeviceToken}`] : [])
+            ...(newDeviceTokenHash ? [sql`${deviceTokens.tokenHash} != ${newDeviceTokenHash}`] : [])
           )
         );
     } else {

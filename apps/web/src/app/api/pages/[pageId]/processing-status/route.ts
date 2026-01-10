@@ -1,15 +1,29 @@
 import { NextResponse } from 'next/server';
 import { db, pages, eq } from '@pagespace/db';
-import { createServiceToken } from '@pagespace/lib/auth-utils';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { createPageServiceToken, canUserViewPage } from '@pagespace/lib';
+
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
+const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: false };
 
 export async function GET(
   request: Request,
   context: { params: Promise<{ pageId: string }> }
 ) {
+  // Verify authentication
+  const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+  if (isAuthError(auth)) return auth.error;
+  const userId = auth.userId;
+
   const { pageId } = await context.params;
-  
+
   try {
+    // Verify user can view this page
+    const canView = await canUserViewPage(userId, pageId);
+    if (!canView) {
+      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+    }
+
     // Get page status
     const [page] = await db
       .select({
@@ -23,14 +37,14 @@ export async function GET(
       .from(pages)
       .where(eq(pages.id, pageId))
       .limit(1);
-    
+
     if (!page) {
       return NextResponse.json(
         { error: 'Page not found' },
         { status: 404 }
       );
     }
-    
+
     // Return final status if processing is done
     if (page.processingStatus !== 'pending' && page.processingStatus !== 'processing') {
       return NextResponse.json({
@@ -42,12 +56,14 @@ export async function GET(
         hasContent: !!page.content && page.content.length > 0
       });
     }
-    
+
     // For pending/processing, check processor queue status
-    const serviceToken = await createServiceToken('web', ['queue:read'], {
-      tenantId: pageId,
-      expirationTime: '2m'
-    });
+    const { token: serviceToken } = await createPageServiceToken(
+      userId,
+      pageId,
+      ['queue:read'],
+      '2m'
+    );
 
     const statusResp = await fetch(`${PROCESSOR_URL}/api/queue/status`, {
       headers: {
@@ -76,7 +92,7 @@ export async function GET(
       estimatedWaitTime,
       message: 'File is being processed. Please check back shortly.'
     });
-    
+
   } catch (error) {
     console.error('Error fetching status:', error);
     return NextResponse.json(

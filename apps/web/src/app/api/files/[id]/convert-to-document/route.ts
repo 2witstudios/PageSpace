@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, pages, eq } from '@pagespace/db';
-import { PageType, canConvertToType, canUserEditPage, canUserViewPage } from '@pagespace/lib';
+import { PageType, canConvertToType, canUserEditPage, canUserViewPage, createPageServiceToken } from '@pagespace/lib';
 import mammoth from 'mammoth';
 import { createId } from '@paralleldrive/cuid2';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { createServiceToken } from '@pagespace/lib/auth-utils';
 import { getActorInfo, logFileActivity, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
@@ -88,13 +87,13 @@ export async function POST(
       processorUrl: `${PROCESSOR_URL}/cache/${contentHash}/original`,
     });
 
-    // Create service JWT token for processor authentication
-    const serviceToken = await createServiceToken('web', ['files:read'], {
+    // Create service JWT token for processor authentication (validates page permissions)
+    const { token: serviceToken } = await createPageServiceToken(
       userId,
-      tenantId: filePage.id,
-      driveIds: filePage.drive ? [filePage.drive.id] : undefined,
-      expirationTime: '5m'
-    });
+      filePage.id,
+      ['files:read'],
+      '5m'
+    );
 
     // Request the original file from processor service
     const fileResponse = await fetch(`${PROCESSOR_URL}/cache/${contentHash}/original`, {

@@ -3,11 +3,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, users, eq } from '@pagespace/db';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
-import {
-  createServiceToken,
-  verifyServiceToken,
-  type ServiceTokenClaims,
-} from '@pagespace/lib/auth-utils';
+import { createUserServiceToken, type ServiceScope } from '@pagespace/lib';
 
 // Maximum file size: 5MB
 const MAX_FILE_SIZE = 5 * 1024 * 1024;
@@ -18,35 +14,19 @@ const ALLOWED_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'ima
 // Processor service URL
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
 
-interface AvatarServiceToken {
-  token: string;
-  claims: ServiceTokenClaims;
-}
+const REQUIRED_AVATAR_SCOPES: ServiceScope[] = ['avatars:write'];
 
-const REQUIRED_AVATAR_SCOPES: ServiceTokenClaims['scopes'] = ['avatars:write'];
-
-async function createAvatarServiceToken(userId: string, expirationTime: string): Promise<AvatarServiceToken> {
-  const token = await createServiceToken('web', REQUIRED_AVATAR_SCOPES, {
+async function createAvatarServiceToken(
+  userId: string,
+  expirationTime: string
+): Promise<{ token: string }> {
+  // createUserServiceToken validates that the user is accessing their own resources
+  const { token } = await createUserServiceToken(
     userId,
-    tenantId: userId,
-    expirationTime,
-  });
-
-  const claims = await verifyServiceToken(token);
-  if (!claims) {
-    throw new Error('Avatar service token verification failed');
-  }
-
-  const missingScopes = REQUIRED_AVATAR_SCOPES.filter((scope) => !claims.scopes.includes(scope));
-  if (missingScopes.length > 0) {
-    throw new Error(
-      `Avatar service token missing required scopes: ${missingScopes.join(', ')} (scopes: ${
-        claims.scopes.join(', ') || 'none'
-      })`
-    );
-  }
-
-  return { token, claims };
+    REQUIRED_AVATAR_SCOPES,
+    expirationTime
+  );
+  return { token };
 }
 
 export async function POST(request: NextRequest) {
@@ -109,7 +89,7 @@ export async function POST(request: NextRequest) {
     processorFormData.append('userId', userId);
 
     // Create service JWT token for processor authentication
-    const { token: serviceToken, claims: serviceTokenClaims } = await createAvatarServiceToken(userId, '5m');
+    const { token: serviceToken } = await createAvatarServiceToken(userId, '5m');
 
     const uploadUrl = `${PROCESSOR_URL}/api/avatar/upload`;
     console.log('Uploading avatar to processor', {
@@ -131,7 +111,6 @@ export async function POST(request: NextRequest) {
         status: processorResponse.status,
         error: errorData.error,
         requiredScope: errorData.requiredScope,
-        tokenScopes: serviceTokenClaims.scopes,
         userId: userId,
       });
       throw new Error(errorData.error || 'Failed to upload avatar to processor');

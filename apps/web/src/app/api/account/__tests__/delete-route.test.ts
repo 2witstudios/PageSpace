@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import type { WebAuthResult, AuthError } from '@/lib/auth';
-import type { ServiceTokenClaims } from '@pagespace/lib/auth-utils';
 
 // Mock repository seams - the proper architectural boundary
 vi.mock('@pagespace/lib/server', () => ({
@@ -30,9 +29,8 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/auth-utils', () => ({
-  createServiceToken: vi.fn(),
-  verifyServiceToken: vi.fn(),
+vi.mock('@pagespace/lib', () => ({
+  createUserServiceToken: vi.fn(),
 }));
 
 import { DELETE } from '../route';
@@ -42,7 +40,7 @@ import {
   activityLogRepository,
 } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createServiceToken, verifyServiceToken } from '@pagespace/lib/auth-utils';
+import { createUserServiceToken } from '@pagespace/lib';
 
 // Type the mocked repositories
 const mockAccountRepo = vi.mocked(accountRepository);
@@ -60,19 +58,6 @@ const mockWebAuth = (userId: string, tokenVersion = 0): WebAuthResult => ({
 // Helper to create mock AuthError
 const mockAuthError = (status = 401): AuthError => ({
   error: NextResponse.json({ error: 'Unauthorized' }, { status }),
-});
-
-// Helper to create mock ServiceTokenClaims
-const mockServiceClaims = (userId: string): ServiceTokenClaims => ({
-  sub: userId,
-  service: 'web',
-  scopes: ['avatars:write'],
-  userId,
-  tenantId: userId,
-  tokenType: 'service',
-  jti: 'mock-jti',
-  iat: Math.floor(Date.now() / 1000),
-  exp: Math.floor(Date.now() / 1000) + 120,
 });
 
 describe('DELETE /api/account', () => {
@@ -285,8 +270,10 @@ describe('DELETE /api/account', () => {
     it('should delete user avatar via processor service', async () => {
       // Arrange
       const mockToken = 'mock-service-token';
-      vi.mocked(createServiceToken).mockResolvedValue(mockToken);
-      vi.mocked(verifyServiceToken).mockResolvedValue(mockServiceClaims(mockUserId));
+      vi.mocked(createUserServiceToken).mockResolvedValue({
+        token: mockToken,
+        grantedScopes: ['avatars:write'],
+      });
 
       mockAccountRepo.findById.mockResolvedValue({
         id: mockUserId,
@@ -349,7 +336,7 @@ describe('DELETE /api/account', () => {
         image: '/avatars/user_123.jpg',
       });
 
-      vi.mocked(createServiceToken).mockRejectedValue(new Error('Token creation failed'));
+      vi.mocked(createUserServiceToken).mockRejectedValue(new Error('Token creation failed'));
 
       const request = new Request('https://example.com/api/account', {
         method: 'DELETE',

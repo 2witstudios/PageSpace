@@ -51,9 +51,11 @@ vi.mock('@pagespace/lib/server', () => ({
   },
 }));
 
-vi.mock('crypto', () => ({
-  randomBytes: vi.fn().mockReturnValue({
-    toString: vi.fn().mockReturnValue('randomBase64UrlString'),
+vi.mock('@pagespace/lib/auth', () => ({
+  generateToken: vi.fn().mockReturnValue({
+    token: 'mcp_randomBase64UrlString',
+    hash: 'mockTokenHash123',
+    tokenPrefix: 'mcp_randomBas',
   }),
 }));
 
@@ -143,10 +145,8 @@ describe('/api/auth/mcp-tokens', () => {
       });
 
       it('generates token with mcp_ prefix', async () => {
-        // Arrange - capture the token value
-        let capturedToken: string | undefined;
+        // Arrange - mock returns token with mcp_ prefix
         const mockValues = vi.fn().mockImplementation((vals) => {
-          capturedToken = vals.token;
           return {
             returning: vi.fn().mockResolvedValue([
               { id: 'id', name: vals.name, token: vals.token, createdAt: new Date() },
@@ -166,12 +166,13 @@ describe('/api/auth/mcp-tokens', () => {
         });
 
         // Act
-        await POST(request);
+        const response = await POST(request);
+        const body = await response.json();
 
-        // Assert - verify token has mcp_ prefix
+        // Assert - verify RESPONSE token has mcp_ prefix (DB stores hash, response returns raw token)
         expect(db.insert).toHaveBeenCalled();
-        expect(capturedToken).toBeDefined();
-        expect(capturedToken).toMatch(/^mcp_/);
+        expect(body.token).toBeDefined();
+        expect(body.token).toMatch(/^mcp_/);
       });
 
       it('associates token with authenticated user', async () => {

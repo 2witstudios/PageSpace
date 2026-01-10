@@ -11,6 +11,7 @@ import { db, eq, or, count } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { slugify } from '@pagespace/lib/server';
 import { decodeToken, getRefreshTokenMaxAge } from './auth-utils';
+import { hashToken, getTokenPrefix } from './token-utils';
 import { OAuthProvider, type OAuthUserInfo, type OAuthVerificationResult } from './oauth-types';
 
 /**
@@ -240,9 +241,13 @@ export async function saveRefreshToken(
 
   const lastUsedAt = options.lastUsedAt ?? new Date();
 
+  // SECURITY: Only hash stored, never plaintext
+  const tokenHash = hashToken(token);
   await db.insert(refreshTokens).values({
     id: createId(),
-    token,
+    token: tokenHash,        // Store hash, NOT plaintext
+    tokenHash: tokenHash,
+    tokenPrefix: getTokenPrefix(token),
     userId,
     device: options.device ?? null,
     userAgent: options.userAgent ?? options.device ?? null,
