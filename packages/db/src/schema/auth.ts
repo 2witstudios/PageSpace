@@ -144,6 +144,23 @@ export const verificationTokens = pgTable('verification_tokens', {
   };
 });
 
+// Socket tokens for cross-origin Socket.IO authentication
+// Short-lived tokens (5 min) that bypass sameSite: 'strict' cookie restrictions
+export const socketTokens = pgTable('socket_tokens', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  // SECURITY: Only store hash, never plaintext
+  tokenHash: text('tokenHash').unique().notNull(),
+  expiresAt: timestamp('expiresAt', { mode: 'date' }).notNull(),
+  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => {
+  return {
+    userIdx: index('socket_tokens_user_id_idx').on(table.userId),
+    tokenHashIdx: index('socket_tokens_token_hash_idx').on(table.tokenHash),
+    expiresAtIdx: index('socket_tokens_expires_at_idx').on(table.expiresAt),
+  };
+});
+
 import { userAiSettings } from './ai';
 import { subscriptions } from './subscriptions';
 
@@ -154,6 +171,7 @@ export const usersRelations = relations(users, ({ many }) => ({
   aiSettings: many(userAiSettings),
   mcpTokens: many(mcpTokens),
   verificationTokens: many(verificationTokens),
+  socketTokens: many(socketTokens),
   subscriptions: many(subscriptions),
 }));
 
@@ -181,6 +199,13 @@ export const mcpTokensRelations = relations(mcpTokens, ({ one }) => ({
 export const verificationTokensRelations = relations(verificationTokens, ({ one }) => ({
   user: one(users, {
     fields: [verificationTokens.userId],
+    references: [users.id],
+  }),
+}));
+
+export const socketTokensRelations = relations(socketTokens, ({ one }) => ({
+  user: one(users, {
+    fields: [socketTokens.userId],
     references: [users.id],
   }),
 }));

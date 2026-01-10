@@ -4,11 +4,47 @@ import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissio
 import { decodeToken } from '@pagespace/lib/server';
 import { verifyBroadcastSignature } from '@pagespace/lib/broadcast-auth';
 import * as dotenv from 'dotenv';
-import { db, eq, or, users, dmConversations } from '@pagespace/db';
+import { db, eq, gt, and, users, dmConversations, socketTokens } from '@pagespace/db';
 import { parse } from 'cookie';
 import { loggers } from '@pagespace/lib/logger-config';
+import { createHash } from 'crypto';
 
 dotenv.config({ path: '../../.env' });
+
+/**
+ * Validate a short-lived socket token (ps_sock_* format).
+ * These tokens are created by /api/auth/socket-token to bypass sameSite: 'strict' cookies.
+ *
+ * @param token - The socket token to validate
+ * @returns Object with userId if valid, null if invalid or expired
+ */
+async function validateSocketToken(token: string): Promise<{ userId: string } | null> {
+  if (!token.startsWith('ps_sock_')) {
+    return null;
+  }
+
+  const tokenHash = createHash('sha256').update(token).digest('hex');
+
+  try {
+    const record = await db.query.socketTokens.findFirst({
+      where: and(
+        eq(socketTokens.tokenHash, tokenHash),
+        gt(socketTokens.expiresAt, new Date())
+      ),
+    });
+
+    if (!record) {
+      loggers.realtime.debug('Socket token not found or expired', { tokenHashPrefix: tokenHash.substring(0, 8) });
+      return null;
+    }
+
+    loggers.realtime.debug('Socket token validated successfully', { userId: record.userId });
+    return { userId: record.userId };
+  } catch (error) {
+    loggers.realtime.error('Error validating socket token', error as Error);
+    return null;
+  }
+}
 
 /**
  * Origin Validation for WebSocket Connections (Defense-in-Depth Logging)
@@ -345,6 +381,19 @@ io.use(async (socket: AuthSocket, next) => {
     return next(new Error('Authentication error: No token provided.'));
   }
 
+  // Check for socket token (ps_sock_*) first - these bypass sameSite: 'strict' cookies
+  if (token.startsWith('ps_sock_')) {
+    const socketAuth = await validateSocketToken(token);
+    if (socketAuth) {
+      socket.data.user = { id: socketAuth.userId };
+      loggers.realtime.info('Socket.IO: User authenticated via socket token', { userId: socketAuth.userId });
+      return next();
+    }
+    loggers.realtime.warn('Socket.IO: Socket token validation failed');
+    return next(new Error('Authentication error: Invalid or expired socket token.'));
+  }
+
+  // Fall back to JWT validation for backward compatibility (desktop app, etc.)
   const decoded = await decodeToken(token);
   if (!decoded) {
     loggers.realtime.warn('Socket.IO: Token validation failed');
