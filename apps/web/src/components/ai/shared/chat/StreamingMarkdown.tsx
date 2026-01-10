@@ -111,10 +111,10 @@ function CustomListItem({ children, ...props }: HTMLAttributes<HTMLLIElement> & 
   );
 }
 
-// Custom span component for inline text
+// Custom span component for inline text - uses overflow-wrap only to preserve word boundaries
 function CustomSpan({ children, ...props }: HTMLAttributes<HTMLSpanElement> & { children?: ReactNode }) {
   return (
-    <span className="min-w-0 max-w-full break-all [overflow-wrap:anywhere]" {...props}>
+    <span className="min-w-0 max-w-full [overflow-wrap:anywhere]" {...props}>
       {children}
     </span>
   );
