@@ -1,9 +1,29 @@
 import { create } from 'zustand';
 import { io, Socket } from 'socket.io-client';
-import { getCookieValue } from '@/lib/utils/get-cookie-value';
 
 // Handler for auth:refreshed event - defined at module level for cleanup
 let handleAuthRefresh: (() => void) | null = null;
+
+/**
+ * Fetch a short-lived socket token from the server.
+ * This bypasses sameSite: 'strict' cookie restrictions by using same-origin fetch.
+ */
+async function getSocketToken(): Promise<string | null> {
+  try {
+    const response = await fetch('/api/auth/socket-token', {
+      credentials: 'include', // Send httpOnly cookies
+    });
+    if (!response.ok) {
+      console.warn('Failed to fetch socket token:', response.status);
+      return null;
+    }
+    const data = await response.json();
+    return data.token;
+  } catch (error) {
+    console.error('Error fetching socket token:', error);
+    return null;
+  }
+}
 
 interface SocketStore {
   socket: Socket | null;
@@ -55,8 +75,12 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
           console.error('🚨 Failed to get JWT from Electron for Socket.IO:', error);
         }
       } else {
-        // Web: Extract from cookies using safe utility
-        accessToken = getCookieValue('accessToken') ?? undefined;
+        // Web: Fetch short-lived socket token from server
+        // This bypasses sameSite: 'strict' cookie restrictions
+        accessToken = await getSocketToken() ?? undefined;
+        if (accessToken) {
+          console.log('🔌 Web: Retrieved socket token for Socket.IO');
+        }
       }
 
       // Only log when actually creating a new connection
@@ -131,12 +155,13 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
               if (response.ok) {
                 console.log('🔄 Token refreshed, reconnecting socket...');
 
-                // Re-fetch the new token from storage/cookies
+                // Re-fetch the new token from storage or socket-token endpoint
                 let newToken: string | undefined;
                 if (isDesktopNow) {
                   newToken = await window.electron?.auth.getJWT() ?? undefined;
                 } else {
-                  newToken = getCookieValue('accessToken') ?? undefined;
+                  // Fetch new socket token from server
+                  newToken = await getSocketToken() ?? undefined;
                 }
 
                 // Update socket auth with new token BEFORE reconnecting
