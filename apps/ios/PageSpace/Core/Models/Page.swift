@@ -56,6 +56,7 @@ enum PageType: String, Codable {
     case canvas = "CANVAS"
     case file = "FILE"
     case sheet = "SHEET"
+    case taskList = "TASK_LIST"
 
     /// Human-readable description for accessibility
     var accessibilityDescription: String {
@@ -74,6 +75,8 @@ enum PageType: String, Codable {
             return "File"
         case .sheet:
             return "Sheet"
+        case .taskList:
+            return "Task List"
         }
     }
 }
