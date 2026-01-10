@@ -164,6 +164,24 @@ async function main() {
     allPassed = false;
   }
 
+  // Check verification tokens
+  console.log('Verification Tokens:');
+  const verificationResult = await countTokens('verification_tokens', 'tokenHash');
+  console.log(`  Total: ${verificationResult.total}`);
+  console.log(`  With hash: ${verificationResult.withHash}`);
+  console.log(`  Without hash: ${verificationResult.withoutHash}`);
+
+  if (verificationResult.passed) {
+    if (verificationResult.total > 0) {
+      console.log('  ✓ All verification tokens migrated\n');
+    } else {
+      console.log('  ⚠ No verification tokens found\n');
+    }
+  } else {
+    console.log('  ✗ Some verification tokens missing hash\n');
+    allPassed = false;
+  }
+
   // Verify hash lookup works
   const lookupPassed = await verifyHashLookup();
   if (!lookupPassed) {

@@ -1,5 +1,5 @@
 #!/usr/bin/env tsx
-import { db, refreshTokens, mcpTokens, deviceTokens } from '@pagespace/db';
+import { db, refreshTokens, mcpTokens, deviceTokens, verificationTokens } from '@pagespace/db';
 import { eq, isNull, sql } from 'drizzle-orm';
 import { createHash } from 'crypto';
 
@@ -33,7 +33,7 @@ function getTokenPrefix(token: string): string {
   return token.substring(0, 12);
 }
 
-type TokenTable = typeof refreshTokens | typeof mcpTokens | typeof deviceTokens;
+type TokenTable = typeof refreshTokens | typeof mcpTokens | typeof deviceTokens | typeof verificationTokens;
 
 async function migrateTokenTable<TTable extends TokenTable>(
   tableName: string,
@@ -129,6 +129,12 @@ async function main() {
       options.batchSize,
       options.dryRun
     );
+    const verificationCount = await migrateTokenTable(
+      'verification_tokens',
+      verificationTokens,
+      options.batchSize,
+      options.dryRun
+    );
 
     console.log('\n===================');
     console.log('Migration Summary');
@@ -136,6 +142,7 @@ async function main() {
     console.log(`Refresh tokens migrated: ${refreshCount}`);
     console.log(`MCP tokens migrated: ${mcpCount}`);
     console.log(`Device tokens migrated: ${deviceCount}`);
+    console.log(`Verification tokens migrated: ${verificationCount}`);
 
     if (!options.dryRun) {
       console.log('\nNext steps:');
