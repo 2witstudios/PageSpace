@@ -52,7 +52,7 @@ function CustomAnchor({ href, children, ...props }: AnchorHTMLAttributes<HTMLAnc
 
   // Regular link
   return (
-    <a href={href} className="max-w-full break-words inline-block" {...props}>
+    <a href={href} className="min-w-0 max-w-full break-all [overflow-wrap:anywhere] inline-block" {...props}>
       {children}
     </a>
   );
@@ -63,13 +63,13 @@ function CustomCode({ className, children, ...props }: HTMLAttributes<HTMLElemen
   const isInline = !className?.includes('language-');
   if (isInline) {
     return (
-      <code className={`${className || ''} max-w-full`} {...props}>
+      <code className={`${className || ''} min-w-0 max-w-full break-all [overflow-wrap:anywhere]`} {...props}>
         {children}
       </code>
     );
   }
   return (
-    <code className={`${className || ''} max-w-full block`} {...props}>
+    <code className={`${className || ''} min-w-0 max-w-full block break-all [overflow-wrap:anywhere]`} {...props}>
       {children}
     </code>
   );
@@ -78,7 +78,7 @@ function CustomCode({ className, children, ...props }: HTMLAttributes<HTMLElemen
 // Custom pre component with overflow handling
 function CustomPre({ children, ...props }: HTMLAttributes<HTMLPreElement> & { children?: ReactNode }) {
   return (
-    <pre className="max-w-full overflow-x-auto" {...props}>
+    <pre className="w-full min-w-0 max-w-full overflow-x-auto" {...props}>
       {children}
     </pre>
   );
@@ -87,7 +87,7 @@ function CustomPre({ children, ...props }: HTMLAttributes<HTMLPreElement> & { ch
 // Custom paragraph component with word breaking
 function CustomParagraph({ children, ...props }: HTMLAttributes<HTMLParagraphElement> & { children?: ReactNode }) {
   return (
-    <p className="max-w-full break-words" {...props}>
+    <p className="w-full min-w-0 max-w-full break-all [overflow-wrap:anywhere]" {...props}>
       {children}
     </p>
   );
@@ -96,9 +96,27 @@ function CustomParagraph({ children, ...props }: HTMLAttributes<HTMLParagraphEle
 // Custom table component with horizontal scroll
 function CustomTable({ children, ...props }: TableHTMLAttributes<HTMLTableElement> & { children?: ReactNode }) {
   return (
-    <div className="max-w-full overflow-x-auto">
+    <div className="w-full min-w-0 max-w-full overflow-x-auto">
       <table {...props}>{children}</table>
     </div>
+  );
+}
+
+// Custom list item component with word breaking
+function CustomListItem({ children, ...props }: HTMLAttributes<HTMLLIElement> & { children?: ReactNode }) {
+  return (
+    <li className="min-w-0 max-w-full break-all [overflow-wrap:anywhere]" {...props}>
+      {children}
+    </li>
+  );
+}
+
+// Custom span component for inline text - uses overflow-wrap only to preserve word boundaries
+function CustomSpan({ children, ...props }: HTMLAttributes<HTMLSpanElement> & { children?: ReactNode }) {
+  return (
+    <span className="min-w-0 max-w-full [overflow-wrap:anywhere]" {...props}>
+      {children}
+    </span>
   );
 }
 
@@ -112,6 +130,8 @@ const streamdownComponents = {
   pre: CustomPre,
   p: CustomParagraph,
   table: CustomTable,
+  li: CustomListItem,
+  span: CustomSpan,
 };
 
 interface StreamingMarkdownProps {

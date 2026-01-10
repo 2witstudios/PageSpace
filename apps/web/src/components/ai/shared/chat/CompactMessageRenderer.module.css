@@ -11,9 +11,30 @@
 
 .compactProseContent {
   /* Base constraint - all content must respect container width */
+  width: 100%;
   max-width: 100%;
-  overflow-wrap: anywhere;  /* Break words only when necessary */
+  min-width: 0;             /* Allow shrinking in flex contexts */
+  overflow-wrap: anywhere;  /* Break words at any point when necessary */
   word-break: break-word;   /* Fallback for browsers without overflow-wrap support */
+}
+
+/* Markdown content elements need width constraints - enumerated to avoid breaking icons/UI components */
+.compactProseContent p,
+.compactProseContent li,
+.compactProseContent a,
+.compactProseContent blockquote,
+.compactProseContent ul,
+.compactProseContent ol {
+  max-width: 100%;
+}
+
+/* Flex-child elements need min-width: 0 to allow shrinking */
+.compactProseContent img,
+.compactProseContent code,
+.compactProseContent pre,
+.compactProseContent table {
+  max-width: 100%;
+  min-width: 0;
 }
 
 /**
@@ -79,6 +100,8 @@
 .compactProseContent li,
 .compactProseContent blockquote {
   max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 /**
