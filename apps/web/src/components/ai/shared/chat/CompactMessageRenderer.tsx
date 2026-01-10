@@ -55,7 +55,7 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
 
   return (
     <div
-      className={`group relative text-xs mb-1 max-w-full overflow-hidden ${role === 'user'
+      className={`group relative text-xs mb-1 w-full min-w-0 max-w-full overflow-hidden ${role === 'user'
           ? 'p-2 rounded-md bg-primary/10 dark:bg-accent/20 ml-2'
           : ''
         }`}
@@ -79,7 +79,7 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
         </div>
       ) : (
         <>
-          <div className={`text-gray-900 dark:text-gray-100 prose prose-xs dark:prose-invert max-w-full overflow-hidden ${styles.compactProseContent}`}>
+          <div className={`text-gray-900 dark:text-gray-100 prose prose-xs dark:prose-invert w-full min-w-0 max-w-full overflow-hidden ${styles.compactProseContent}`}>
             <StreamingMarkdown content={content} id={`${messageId}-text`} isStreaming={isStreaming} />
           </div>
           {/* Always show footer with buttons; timestamp only when createdAt exists */}
@@ -338,7 +338,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
 
   return (
     <>
-      <div key={message.id} className="mb-1 max-w-full overflow-hidden" style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 80px' }}>
+      <div key={message.id} className="mb-1 w-full min-w-0 max-w-full overflow-hidden" style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 80px' }}>
         {groupedParts.map((group, index) => {
           if (isTextGroupPart(group)) {
             const isLastTextBlock = index === groupedParts.length - 1;

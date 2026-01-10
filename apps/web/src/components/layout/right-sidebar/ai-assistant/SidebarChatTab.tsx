@@ -600,9 +600,9 @@ const SidebarChatTab: React.FC = () => {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 min-h-0 overflow-hidden max-w-full" style={{ contain: 'layout' }}>
-        <ScrollArea className="h-full p-3 max-w-full" ref={scrollAreaRef}>
-          <div className="space-y-1.5 max-w-full">
+      <div className="flex-1 min-h-0 min-w-0 overflow-hidden w-full max-w-full" style={{ contain: 'layout' }}>
+        <ScrollArea className="h-full p-3 w-full min-w-0 max-w-full" ref={scrollAreaRef}>
+          <div className="space-y-1.5 w-full min-w-0 max-w-full">
             {displayMessages.length === 0 ? (
               <div className="flex items-center justify-center h-20 text-muted-foreground text-xs text-center">
                 <div>
