@@ -190,10 +190,17 @@ export const TaskRenderer: React.FC<TaskRendererProps> = ({ part }) => {
         </span>
       </button>
 
-      {isOpen && !isLoading && parsedOutput?.success && (
+      {isOpen && !isLoading && (
         <div className="mt-1 p-1.5 bg-gray-50 dark:bg-gray-800/50 rounded text-[10px] space-y-1 max-w-full overflow-hidden">
+          {/* Error state */}
+          {(state === 'output-error' || (parsedOutput && !parsedOutput.success)) && (
+            <div className="text-red-600 dark:text-red-400">
+              {error || parsedOutput?.message || 'Task update failed'}
+            </div>
+          )}
+
           {/* Task list header */}
-          {taskList && (
+          {parsedOutput?.success && taskList && (
             <div className="pb-1 border-b border-border/50">
               <div className="flex items-center gap-1.5">
                 <div className="w-1.5 h-1.5 rounded-full bg-primary" />
@@ -210,7 +217,7 @@ export const TaskRenderer: React.FC<TaskRendererProps> = ({ part }) => {
           )}
 
           {/* Task list */}
-          {hasTasks && (
+          {parsedOutput?.success && hasTasks && (
             <div className="divide-y divide-border/30 max-h-40 overflow-auto">
               {sortedTasks.map((task) => {
                 const displayStatus = optimisticStatuses.get(task.id) ?? task.status;
@@ -231,7 +238,7 @@ export const TaskRenderer: React.FC<TaskRendererProps> = ({ part }) => {
           )}
 
           {/* Single task info (when no full list) */}
-          {!hasTasks && parsedOutput?.task && (
+          {parsedOutput?.success && !hasTasks && parsedOutput?.task && (
             <div className="py-1">
               <span className="text-muted-foreground">Task: </span>
               <span className="font-medium">{parsedOutput.task.title}</span>
@@ -248,7 +255,7 @@ export const TaskRenderer: React.FC<TaskRendererProps> = ({ part }) => {
           )}
 
           {/* Message footer */}
-          {parsedOutput?.message && hasTasks && (
+          {parsedOutput?.success && parsedOutput?.message && hasTasks && (
             <div className="pt-1 border-t border-border/30 text-muted-foreground">
               {parsedOutput.message}
             </div>
