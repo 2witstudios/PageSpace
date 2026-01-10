@@ -78,7 +78,7 @@ function CustomCode({ className, children, ...props }: HTMLAttributes<HTMLElemen
 // Custom pre component with overflow handling
 function CustomPre({ children, ...props }: HTMLAttributes<HTMLPreElement> & { children?: ReactNode }) {
   return (
-    <pre className="w-full min-w-0 max-w-full overflow-x-auto" {...props}>
+    <pre className="min-w-0 max-w-full overflow-x-auto" {...props}>
       {children}
     </pre>
   );
@@ -87,7 +87,7 @@ function CustomPre({ children, ...props }: HTMLAttributes<HTMLPreElement> & { ch
 // Custom paragraph component with word breaking
 function CustomParagraph({ children, ...props }: HTMLAttributes<HTMLParagraphElement> & { children?: ReactNode }) {
   return (
-    <p className="w-full min-w-0 max-w-full break-all [overflow-wrap:anywhere]" {...props}>
+    <p className="min-w-0 max-w-full [overflow-wrap:anywhere]" {...props}>
       {children}
     </p>
   );
@@ -96,7 +96,7 @@ function CustomParagraph({ children, ...props }: HTMLAttributes<HTMLParagraphEle
 // Custom table component with horizontal scroll
 function CustomTable({ children, ...props }: TableHTMLAttributes<HTMLTableElement> & { children?: ReactNode }) {
   return (
-    <div className="w-full min-w-0 max-w-full overflow-x-auto">
+    <div className="min-w-0 max-w-full overflow-x-auto">
       <table {...props}>{children}</table>
     </div>
   );
