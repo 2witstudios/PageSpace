@@ -17,6 +17,8 @@
     "test:watch": "pnpm --filter @pagespace/lib test -- --watch",
     "test:ui": "pnpm --filter @pagespace/lib test -- --ui",
     "test:coverage": "pnpm --filter @pagespace/lib test -- --coverage",
+    "test:scripts": "echo 'Script tests require isolated vitest context. Run: pnpm --filter @pagespace/db exec tsx ../../scripts/verify-token-migration.ts' && exit 1",
+    "verify:migrations": "pnpm --filter @pagespace/db exec tsx ../../scripts/verify-token-migration.ts",
     "dev:desktop": "pnpm --filter desktop dev",
     "build:desktop": "pnpm --filter desktop build",
     "package:desktop": "pnpm --filter desktop package",
