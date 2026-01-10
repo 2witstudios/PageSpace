@@ -173,6 +173,8 @@ export const TaskRenderer: React.FC<TaskRendererProps> = ({ part }) => {
         onClick={() => !isLoading && setIsOpen(!isOpen)}
         className="w-full flex items-center space-x-1.5 text-left hover:bg-muted/30 rounded py-0.5 px-1 transition-colors max-w-full overflow-hidden"
         disabled={isLoading}
+        aria-expanded={isOpen}
+        aria-label="Task management details"
       >
         {isOpen ? (
           <ChevronDown className="h-3 w-3 flex-shrink-0" />
