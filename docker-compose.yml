@@ -215,6 +215,32 @@ services:
     networks:
       - internal
 
+  redis-sessions:
+    image: redis:7.4-alpine
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_sessions_data:/data
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-pagespace_redis}
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD:-pagespace_redis}
+      --maxmemory 64mb
+      --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD:-pagespace_redis}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 96M
+    restart: unless-stopped
+    networks:
+      - internal
+
   # Test service for running unit tests with database access
   test:
     build:
@@ -276,3 +302,4 @@ volumes:
   file_storage:
   cache_storage:
   redis_data:
+  redis_sessions_data:
