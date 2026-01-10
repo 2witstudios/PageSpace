@@ -95,7 +95,7 @@ export const CompactTaskManagementRenderer: React.FC<CompactTaskManagementRender
   // Get status icon based on state
   const getStatusIcon = () => {
     const iconClass = "h-3 w-3 flex-shrink-0";
-    if (state === 'input-streaming' || state === 'input-available') {
+    if (state === 'input-streaming' || state === 'input-available' || state === 'streaming') {
       return <Loader2 className={`${iconClass} text-primary animate-spin`} />;
     }
     if (state === 'output-error') {
@@ -109,7 +109,7 @@ export const CompactTaskManagementRenderer: React.FC<CompactTaskManagementRender
 
   // Get compact summary
   const getCompactSummary = (): string => {
-    if (state === 'input-streaming' || state === 'input-available') {
+    if (state === 'input-streaming' || state === 'input-available' || state === 'streaming') {
       return 'Running...';
     }
     if (state === 'output-error') {
@@ -125,7 +125,7 @@ export const CompactTaskManagementRenderer: React.FC<CompactTaskManagementRender
     return 'Done';
   };
 
-  const isLoading = state === 'input-streaming' || state === 'input-available';
+  const isLoading = state === 'input-streaming' || state === 'input-available' || state === 'streaming';
   const isSuccess = (state === 'output-available' || state === 'done') && output?.success;
   const hasTasks = isSuccess && output.taskList && output.tasks && output.tasks.length > 0;
 

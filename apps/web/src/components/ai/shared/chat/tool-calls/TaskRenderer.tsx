@@ -143,7 +143,7 @@ export const TaskRenderer: React.FC<TaskRendererProps> = ({ part }) => {
     if (state === 'input-streaming' || state === 'streaming' || state === 'input-available') {
       return <Loader2 className={`${iconClass} text-primary animate-spin`} />;
     }
-    if (state === 'output-error' || (parsedOutput && !parsedOutput.success)) {
+    if (state === 'output-error' || !parsedOutput?.success) {
       return <AlertCircle className={`${iconClass} text-red-500`} />;
     }
     return <CheckCircle className={`${iconClass} text-green-500`} />;
@@ -154,10 +154,7 @@ export const TaskRenderer: React.FC<TaskRendererProps> = ({ part }) => {
     if (state === 'input-streaming' || state === 'streaming' || state === 'input-available') {
       return 'Running...';
     }
-    if (state === 'output-error') {
-      return 'Failed';
-    }
-    if (!parsedOutput?.success) {
+    if (state === 'output-error' || !parsedOutput?.success) {
       return 'Failed';
     }
     if (sortedTasks.length > 0) {
@@ -193,7 +190,7 @@ export const TaskRenderer: React.FC<TaskRendererProps> = ({ part }) => {
       {isOpen && !isLoading && (
         <div className="mt-1 p-1.5 bg-gray-50 dark:bg-gray-800/50 rounded text-[10px] space-y-1 max-w-full overflow-hidden">
           {/* Error state */}
-          {(state === 'output-error' || (parsedOutput && !parsedOutput.success)) && (
+          {(state === 'output-error' || !parsedOutput?.success) && (
             <div className="text-red-600 dark:text-red-400">
               {error || parsedOutput?.message || 'Task update failed'}
             </div>
