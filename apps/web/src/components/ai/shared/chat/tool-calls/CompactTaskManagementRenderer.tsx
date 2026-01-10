@@ -1,5 +1,5 @@
-import React from 'react';
-import { CheckCircle, ListTodo, Loader2, AlertCircle } from 'lucide-react';
+import React, { useState } from 'react';
+import { CheckCircle, ListTodo, Loader2, AlertCircle, ChevronRight, ChevronDown } from 'lucide-react';
 import { CompactTodoListMessage } from '../CompactTodoListMessage';
 
 interface Task {
@@ -66,13 +66,14 @@ export const CompactTaskManagementRenderer: React.FC<CompactTaskManagementRender
   part,
   onTaskUpdate
 }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
   const toolName = part.toolName || part.type?.replace('tool-', '') || '';
   const state = part.state || 'input-streaming';
   const output = part.output as TaskManagementToolOutput | undefined;
 
   // Get tool icon
-  const getToolIcon = (toolName: string) => {
-    const iconClass = "h-3 w-3";
+  const getToolIcon = () => {
+    const iconClass = "h-3 w-3 flex-shrink-0";
     switch (toolName) {
       case 'update_task':
         return <CheckCircle className={iconClass} />;
@@ -81,9 +82,8 @@ export const CompactTaskManagementRenderer: React.FC<CompactTaskManagementRender
     }
   };
 
-
   // Get tool display name
-  const getToolDisplayName = (toolName: string): string => {
+  const getToolDisplayName = (): string => {
     switch (toolName) {
       case 'update_task':
         return 'Update Task';
@@ -92,95 +92,101 @@ export const CompactTaskManagementRenderer: React.FC<CompactTaskManagementRender
     }
   };
 
-  // Handle different states
-  switch (state) {
-    case 'input-streaming':
-    case 'input-available':
-      return (
-        <div className="text-xs p-2 bg-primary/10 dark:bg-primary/20 rounded-md mb-1">
-          <div className="flex items-center gap-2 text-primary">
-            {getToolIcon(toolName)}
-            <span className="font-medium">{getToolDisplayName(toolName)}</span>
-            <Loader2 className="h-3 w-3 animate-spin ml-auto" />
-          </div>
-        </div>
-      );
+  // Get status icon based on state
+  const getStatusIcon = () => {
+    const iconClass = "h-3 w-3 flex-shrink-0";
+    if (state === 'input-streaming' || state === 'input-available' || state === 'streaming') {
+      return <Loader2 className={`${iconClass} text-primary animate-spin`} />;
+    }
+    if (state === 'output-error') {
+      return <AlertCircle className={`${iconClass} text-red-500`} />;
+    }
+    if (!output?.success) {
+      return <AlertCircle className={`${iconClass} text-yellow-500`} />;
+    }
+    return <CheckCircle className={`${iconClass} text-green-500`} />;
+  };
 
-    case 'output-error':
-      return (
-        <div className="text-xs p-2 bg-red-50 dark:bg-red-900/20 rounded-md mb-1">
-          <div className="flex items-center gap-2 text-red-700 dark:text-red-300">
-            <AlertCircle className="h-3 w-3" />
-            <span className="font-medium">Task Management Error</span>
-          </div>
-          <div className="text-red-600 dark:text-red-400 mt-1 text-[10px]">
-            {part.errorText || 'An error occurred'}
-          </div>
-        </div>
-      );
+  // Get compact summary
+  const getCompactSummary = (): string => {
+    if (state === 'input-streaming' || state === 'input-available' || state === 'streaming') {
+      return 'Running...';
+    }
+    if (state === 'output-error') {
+      return 'Failed';
+    }
+    if (!output?.success) {
+      return 'Failed';
+    }
+    if (output.tasks?.length) {
+      const completed = output.tasks.filter(t => t.status === 'completed').length;
+      return `${completed}/${output.tasks.length}`;
+    }
+    return 'Done';
+  };
 
-    case 'output-available':
-    case 'done':
-      if (!output?.success) {
-        return (
-          <div className="text-xs p-2 bg-yellow-50 dark:bg-yellow-900/20 rounded-md mb-1">
-            <div className="flex items-center gap-2 text-yellow-700 dark:text-yellow-300">
-              <AlertCircle className="h-3 w-3" />
-              <span className="font-medium">Task Operation Failed</span>
+  const isLoading = state === 'input-streaming' || state === 'input-available' || state === 'streaming';
+  const isSuccess = (state === 'output-available' || state === 'done') && output?.success;
+  const hasTasks = isSuccess && output.taskList && output.tasks && output.tasks.length > 0;
+
+  return (
+    <div className="py-0.5 text-[11px] max-w-full overflow-hidden">
+      <button
+        onClick={() => !isLoading && setIsExpanded(!isExpanded)}
+        className="w-full flex items-center space-x-1.5 text-left hover:bg-muted/30 rounded py-0.5 px-1 transition-colors max-w-full overflow-hidden"
+        disabled={isLoading}
+      >
+        {isExpanded ? (
+          <ChevronDown className="h-3 w-3 flex-shrink-0" />
+        ) : (
+          <ChevronRight className="h-3 w-3 flex-shrink-0" />
+        )}
+        {getToolIcon()}
+        <span className="font-medium truncate flex-1 min-w-0">{getToolDisplayName()}</span>
+        {getStatusIcon()}
+        <span className="text-gray-500 dark:text-gray-400 truncate max-w-[80px] min-w-0">
+          {getCompactSummary()}
+        </span>
+      </button>
+
+      {isExpanded && !isLoading && (
+        <div className="mt-1 p-1.5 bg-gray-50 dark:bg-gray-800/50 rounded text-[10px] space-y-1 max-w-full overflow-hidden">
+          {state === 'output-error' && (
+            <div className="text-red-600 dark:text-red-400">
+              {part.errorText || 'An error occurred'}
             </div>
-            <div className="text-yellow-600 dark:text-yellow-400 mt-1 text-[10px]">
+          )}
+
+          {!output?.success && state !== 'output-error' && (
+            <div className="text-yellow-600 dark:text-yellow-400">
               {output?.message || 'Operation was not successful'}
             </div>
-          </div>
-        );
-      }
+          )}
 
-      // Success case - render CompactTodoListMessage if we have task data
-      if (output.taskList && output.tasks) {
-        return (
-          <div className="mb-1">
-            <div className="text-xs p-2 bg-green-50 dark:bg-green-900/20 rounded-md mb-1">
-              <div className="flex items-center gap-2 text-green-700 dark:text-green-300">
-                <CheckCircle className="h-3 w-3" />
-                <span className="font-medium">{getToolDisplayName(toolName)} Completed</span>
-              </div>
+          {isSuccess && (
+            <>
               {output.summary && (
-                <div className="text-green-600 dark:text-green-400 mt-1 text-[10px]">
+                <div className="text-muted-foreground">
                   {output.summary}
                 </div>
               )}
-            </div>
-            <CompactTodoListMessage
-              tasks={output.tasks}
-              taskList={output.taskList}
-              createdAt={output.taskList.createdAt}
-              onTaskUpdate={onTaskUpdate}
-            />
-          </div>
-        );
-      }
-
-      // Fallback for operations that don't return full task list data
-      return (
-        <div className="text-xs p-2 bg-green-50 dark:bg-green-900/20 rounded-md mb-1">
-          <div className="flex items-center gap-2 text-green-700 dark:text-green-300">
-            <CheckCircle className="h-3 w-3" />
-            <span className="font-medium">{getToolDisplayName(toolName)} Completed</span>
-          </div>
-          {output.summary && (
-            <div className="text-green-600 dark:text-green-400 mt-1 text-[10px]">
-              {output.summary}
-            </div>
-          )}
-          {output.message && (
-            <div className="text-green-600 dark:text-green-400 mt-1 text-[10px]">
-              {output.message}
-            </div>
+              {output.message && !output.summary && (
+                <div className="text-muted-foreground">
+                  {output.message}
+                </div>
+              )}
+              {hasTasks && (
+                <CompactTodoListMessage
+                  tasks={output.tasks!}
+                  taskList={output.taskList!}
+                  createdAt={output.taskList!.createdAt}
+                  onTaskUpdate={onTaskUpdate}
+                />
+              )}
+            </>
           )}
         </div>
-      );
-
-    default:
-      return null;
-  }
+      )}
+    </div>
+  );
 };

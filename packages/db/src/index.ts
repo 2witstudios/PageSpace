@@ -34,6 +34,8 @@ export {
   mcpTokensRelations,
   verificationTokens,
   verificationTokensRelations,
+  socketTokens,
+  socketTokensRelations,
   userRole,
   authProvider,
   platformType,

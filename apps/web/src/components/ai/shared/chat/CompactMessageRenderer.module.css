@@ -11,6 +11,7 @@
 
 .compactProseContent {
   /* Base constraint - all content must respect container width */
+  width: 100%;
   max-width: 100%;
   min-width: 0;             /* Allow shrinking in flex contexts */
   overflow-wrap: anywhere;  /* Break words at any point when necessary */
