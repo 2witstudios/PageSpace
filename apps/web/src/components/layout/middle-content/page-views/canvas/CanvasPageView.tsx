@@ -20,7 +20,7 @@ interface CanvasPageViewProps {
 const MonacoEditor = dynamic(() => import('@/components/editors/MonacoEditor'), { ssr: false });
 
 const CanvasPageView = ({ page }: CanvasPageViewProps) => {
-  const { content, setContent, setDocument, setSaveCallback } = useDocumentStore();
+  const { content, setContent, updateContentFromServer, setDocument, setSaveCallback } = useDocumentStore();
   const [activeTab, setActiveTab] = useState('view');
   const containerRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
@@ -31,14 +31,19 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
     console.log(`--- Saving Page ${pageId} ---`);
     console.log('Content:', newValue);
     try {
-      await patch(`/api/pages/${pageId}`, { content: newValue });
+      // Include socket ID so server can exclude this client from broadcast
+      const headers: Record<string, string> = {};
+      if (socket?.id) {
+        headers['X-Socket-ID'] = socket.id;
+      }
+      await patch(`/api/pages/${pageId}`, { content: newValue }, { headers });
       console.log('Save successful');
       toast.success('Page saved successfully!');
     } catch (error) {
       console.error('Failed to save page content:', error);
       toast.error('Failed to save page content.');
     }
-  }, []);
+  }, [socket]);
 
   useEffect(() => {
     const initialText = typeof page.content === 'string' ? page.content : '';
@@ -66,7 +71,8 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
           if (response.ok) {
             const updatedPage = await response.json();
             const newContent = typeof updatedPage.content === 'string' ? updatedPage.content : '';
-            setContent(newContent);
+            // Use updateContentFromServer to avoid triggering auto-save loop
+            updateContentFromServer(newContent);
             toast.success('Canvas updated');
           }
         } catch (error) {
@@ -80,7 +86,7 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
     return () => {
       socket.off('page:content-updated', handleContentUpdate);
     };
-  }, [socket, page.id, setContent]);
+  }, [socket, page.id, updateContentFromServer]);
 
   const handleNavigation = useCallback(async (url: string, isExternal: boolean) => {
     if (!url) return;
