@@ -247,9 +247,9 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
     if (!isExpanded) return null;
 
     return (
-      <div className="mt-1 p-1.5 bg-gray-50 dark:bg-gray-800/50 rounded text-[10px] space-y-1 max-w-full overflow-hidden">
+      <div className="mt-1 p-1.5 bg-gray-50 dark:bg-gray-800/50 rounded text-[10px] space-y-1 max-w-full break-words">
         {input ? (
-          <div className="space-y-0.5 max-w-full overflow-hidden">
+          <div className="space-y-0.5 max-w-full break-words">
             <div className="font-medium text-gray-600 dark:text-gray-400">Input:</div>
             <pre className="text-gray-500 dark:text-gray-500 overflow-x-auto whitespace-pre-wrap break-all max-w-full">
               {JSON.stringify(typeof input === 'string' ? JSON.parse(input) : input, null, 2)}
@@ -258,7 +258,7 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
         ) : null}
 
         {output ? (
-          <div className="space-y-0.5 max-w-full overflow-hidden">
+          <div className="space-y-0.5 max-w-full break-words">
             <div className="font-medium text-gray-600 dark:text-gray-400">Result:</div>
             {(() => {
               try {
@@ -311,7 +311,7 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
         ) : null}
 
         {error ? (
-          <div className="p-1 bg-red-50 dark:bg-red-900/20 rounded max-w-full overflow-hidden">
+          <div className="p-1 bg-red-50 dark:bg-red-900/20 rounded max-w-full break-words">
             <div className="text-red-600 dark:text-red-400 break-words">{error}</div>
           </div>
         ) : null}
@@ -320,10 +320,10 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
   };
 
   return (
-    <div className="py-0.5 text-[11px] max-w-full overflow-hidden">
+    <div className="py-0.5 text-[11px] max-w-full">
       <button
         onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full flex items-center space-x-1.5 text-left hover:bg-muted/30 rounded py-0.5 px-1 transition-colors max-w-full overflow-hidden"
+        className="w-full flex items-center space-x-1.5 text-left hover:bg-muted/30 rounded py-0.5 px-1 transition-colors max-w-full"
       >
         {isExpanded ? <ChevronDown className="h-3 w-3 flex-shrink-0" /> : <ChevronRight className="h-3 w-3 flex-shrink-0" />}
         <div className="flex-shrink-0">{getToolIcon(toolName)}</div>
