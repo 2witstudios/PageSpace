@@ -57,7 +57,20 @@ CREATE UNIQUE INDEX idx_mcp_tokens_hash ON mcp_tokens("tokenHash") WHERE "tokenH
 
 ### Phase 2: Backfill Existing Tokens
 
-Run the backfill script to hash existing tokens:
+**Option A: SQL Script (Production - Recommended)**
+
+For production environments without tsx/pnpm:
+
+```bash
+# Run directly against database
+psql $DATABASE_URL -f scripts/migrate-token-hashes.sql
+```
+
+The SQL script handles all token tables and outputs verification results.
+
+**Option B: TypeScript Script (Development)**
+
+For environments with Node.js tooling:
 
 ```bash
 # Dry run first

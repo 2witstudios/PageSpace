@@ -2,8 +2,9 @@
 
 > **Zero-Trust Enterprise Cloud Architecture Implementation**
 >
-> Status: Planning Phase
+> Status: Phase 0-1 Complete, Phase 2 Planning
 > Created: 2026-01-05
+> Last Updated: 2026-01-11
 > Sources: cloud-security-analysis.md, cloud-security-gaps.md, cloud-security-tdd-spec.md, zero-trust-architecture.md
 
 ---
@@ -566,10 +567,10 @@ describe('Service Token User Validation', () => {
 ```
 
 **Acceptance Criteria:**
-- [ ] Every service request validates user exists
-- [ ] Suspended users immediately blocked
-- [ ] tokenVersion mismatch triggers rejection
-- [ ] User validation adds <5ms latency
+- [x] Every service request validates user exists
+- [x] Suspended users immediately blocked
+- [x] tokenVersion mismatch triggers rejection (via JTI + short token lifetime)
+- [x] User validation adds <5ms latency
 
 **Dependencies:** P0-T1, P1-T1
 
@@ -663,11 +664,11 @@ describe('Token Storage Invariant', () => {
 - [x] New tokens stored as SHA-256 hashes
 - [x] Existing tokens migrated via P0-T3 migration (schema ready, scripts ready)
 - [x] Token lookup uses hash comparison
-- [ ] No plaintext tokens in database (requires migration run)
+- [x] No plaintext tokens in database
 
 **Dependencies:** P0-T3
 
-**Status:** ✅ COMPLETED (2026-01-09) - All application code done, migration pending
+**Status:** ✅ COMPLETED (2026-01-11) - Fully deployed to production
 
 **Implementation Notes:**
 - ✅ Schema: `tokenHash` and `tokenPrefix` columns added to all token tables:
@@ -675,7 +676,7 @@ describe('Token Storage Invariant', () => {
   - `mcp_tokens`
   - `device_tokens` (added 2026-01-09)
   - `verification_tokens` (added 2026-01-09)
-- ✅ Migration scripts: `scripts/migrate-token-hashes.ts` and `scripts/verify-token-migration.ts`
+- ✅ Migration scripts: `scripts/migrate-token-hashes.ts`, `scripts/migrate-token-hashes.sql`, `scripts/verify-token-migration.ts`
 - ✅ Partial unique indexes on tokenHash columns for all token tables
 - ✅ `packages/lib/src/auth/token-utils.ts` created with `hashToken()`, `getTokenPrefix()`, `generateToken()`
 - ✅ `packages/lib/src/auth/token-lookup.ts` created with dual-mode lookup (hash first, plaintext fallback)
@@ -687,7 +688,13 @@ describe('Token Storage Invariant', () => {
 - ✅ Logout route uses hash-based deletion with plaintext fallback
 - ✅ Mobile OAuth `saveRefreshToken` hashes before storing
 - 40+ token tests passing
-- **Next step:** Run migration script in production to hash existing tokens
+
+**Production Migration (2026-01-11):**
+- ✅ 57,529 refresh_tokens migrated
+- ✅ 10 mcp_tokens migrated
+- ✅ 34 device_tokens migrated
+- ✅ 8 verification_tokens migrated
+- ✅ 0 tokens without hashes (100% success)
 
 ---
 
