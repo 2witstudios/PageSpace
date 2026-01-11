@@ -4,6 +4,7 @@ import {
   createPageServiceToken,
   createDriveServiceToken,
   createUserServiceToken,
+  createUploadServiceToken,
 } from '../validated-service-token';
 
 // Mock the permissions module
@@ -473,6 +474,220 @@ describe('createValidatedServiceToken', () => {
       expect(createServiceToken).toHaveBeenCalledWith(
         expect.objectContaining({
           additionalClaims: { driveId: 'drive-1' },
+        })
+      );
+    });
+  });
+
+  describe('createUploadServiceToken', () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+    });
+
+    it('grants token when user has page edit permission (parentId provided)', async () => {
+      // Arrange - user can edit parent page
+      (getUserAccessLevel as ReturnType<typeof vi.fn>).mockResolvedValue({
+        canView: true,
+        canEdit: true,
+        canShare: false,
+        canDelete: false,
+      });
+
+      // Act
+      const result = await createUploadServiceToken({
+        userId: 'user-1',
+        driveId: 'drive-1',
+        pageId: 'new-page-1',
+        parentId: 'parent-page-1',
+      });
+
+      // Assert
+      expect(result.grantedScopes).toEqual(['files:write']);
+      expect(result.token).toBe('mock-service-token');
+      expect(getUserAccessLevel).toHaveBeenCalledWith('user-1', 'parent-page-1');
+      expect(getUserDrivePermissions).not.toHaveBeenCalled();
+      expect(createServiceToken).toHaveBeenCalledWith(
+        expect.objectContaining({
+          resource: 'new-page-1',
+          driveId: 'drive-1',
+          scopes: ['files:write'],
+        })
+      );
+    });
+
+    it('grants token when user has drive membership (no parentId)', async () => {
+      // Arrange - user has drive edit permission
+      (getUserDrivePermissions as ReturnType<typeof vi.fn>).mockResolvedValue({
+        hasAccess: true,
+        isOwner: false,
+        isAdmin: false,
+        isMember: true,
+        canEdit: true,
+      });
+
+      // Act
+      const result = await createUploadServiceToken({
+        userId: 'user-1',
+        driveId: 'drive-1',
+        pageId: 'new-page-1',
+      });
+
+      // Assert
+      expect(result.grantedScopes).toEqual(['files:write']);
+      expect(result.token).toBe('mock-service-token');
+      expect(getUserDrivePermissions).toHaveBeenCalledWith('user-1', 'drive-1');
+      expect(getUserAccessLevel).not.toHaveBeenCalled();
+      expect(createServiceToken).toHaveBeenCalledWith(
+        expect.objectContaining({
+          resource: 'new-page-1',
+          driveId: 'drive-1',
+          scopes: ['files:write'],
+        })
+      );
+    });
+
+    it('throws when user lacks page edit permission', async () => {
+      // Arrange - user can view but not edit parent page
+      (getUserAccessLevel as ReturnType<typeof vi.fn>).mockResolvedValue({
+        canView: true,
+        canEdit: false,
+        canShare: false,
+        canDelete: false,
+      });
+
+      // Act & Assert
+      await expect(
+        createUploadServiceToken({
+          userId: 'user-1',
+          driveId: 'drive-1',
+          pageId: 'new-page-1',
+          parentId: 'parent-page-1',
+        })
+      ).rejects.toThrow('User lacks permission to upload to parent_page');
+
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Upload token denied: no permission',
+        expect.objectContaining({
+          userId: 'user-1',
+          permissionSource: 'parent_page',
+        })
+      );
+    });
+
+    it('throws when user lacks drive membership', async () => {
+      // Arrange - no drive access
+      (getUserDrivePermissions as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+      // Act & Assert
+      await expect(
+        createUploadServiceToken({
+          userId: 'user-1',
+          driveId: 'drive-1',
+          pageId: 'new-page-1',
+        })
+      ).rejects.toThrow('User lacks permission to upload to drive');
+
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Upload token denied: no permission',
+        expect.objectContaining({
+          userId: 'user-1',
+          permissionSource: 'drive',
+        })
+      );
+    });
+
+    it('throws when user has no access to parent page', async () => {
+      // Arrange - no access at all
+      (getUserAccessLevel as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+      // Act & Assert
+      await expect(
+        createUploadServiceToken({
+          userId: 'user-1',
+          driveId: 'drive-1',
+          pageId: 'new-page-1',
+          parentId: 'parent-page-1',
+        })
+      ).rejects.toThrow('User lacks permission to upload to parent_page');
+    });
+
+    it('logs scope grant for audit', async () => {
+      // Arrange
+      (getUserDrivePermissions as ReturnType<typeof vi.fn>).mockResolvedValue({
+        hasAccess: true,
+        isOwner: false,
+        isAdmin: false,
+        isMember: true,
+        canEdit: true,
+      });
+
+      // Act
+      await createUploadServiceToken({
+        userId: 'user-1',
+        driveId: 'drive-1',
+        pageId: 'new-page-1',
+      });
+
+      // Assert
+      expect(loggers.api.info).toHaveBeenCalledWith(
+        'Upload token scope grant',
+        expect.objectContaining({
+          userId: 'user-1',
+          driveId: 'drive-1',
+          pageId: 'new-page-1',
+          permissionSource: 'drive',
+          scopes: ['files:write'],
+        })
+      );
+    });
+
+    it('uses custom expiration when provided', async () => {
+      // Arrange
+      (getUserDrivePermissions as ReturnType<typeof vi.fn>).mockResolvedValue({
+        hasAccess: true,
+        isOwner: false,
+        isAdmin: false,
+        isMember: true,
+        canEdit: true,
+      });
+
+      // Act
+      await createUploadServiceToken({
+        userId: 'user-1',
+        driveId: 'drive-1',
+        pageId: 'new-page-1',
+        expiresIn: '15m',
+      });
+
+      // Assert
+      expect(createServiceToken).toHaveBeenCalledWith(
+        expect.objectContaining({
+          expiresIn: '15m',
+        })
+      );
+    });
+
+    it('uses default 10m expiration when not provided', async () => {
+      // Arrange
+      (getUserDrivePermissions as ReturnType<typeof vi.fn>).mockResolvedValue({
+        hasAccess: true,
+        isOwner: false,
+        isAdmin: false,
+        isMember: true,
+        canEdit: true,
+      });
+
+      // Act
+      await createUploadServiceToken({
+        userId: 'user-1',
+        driveId: 'drive-1',
+        pageId: 'new-page-1',
+      });
+
+      // Assert
+      expect(createServiceToken).toHaveBeenCalledWith(
+        expect.objectContaining({
+          expiresIn: '10m',
         })
       );
     });

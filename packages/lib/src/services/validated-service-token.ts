@@ -281,3 +281,85 @@ export async function createUserServiceToken(
     expiresIn,
   });
 }
+
+/**
+ * Options for creating an upload service token
+ */
+export interface UploadTokenOptions {
+  /** User requesting the token */
+  userId: string;
+  /** Drive where the file will be uploaded */
+  driveId: string;
+  /** New page ID being created for the upload */
+  pageId: string;
+  /** Parent page ID (if uploading to a folder) */
+  parentId?: string;
+  /** Token expiration (default '10m') */
+  expiresIn?: string;
+}
+
+/**
+ * Create a service token for file uploads with proper permission validation.
+ *
+ * This function handles the upload-specific case where:
+ * - The page being created doesn't exist yet
+ * - Permission is checked against either the parent page OR the drive
+ * - Token resource is the NEW pageId (for processor file association)
+ *
+ * @throws Error if user lacks upload permission
+ */
+export async function createUploadServiceToken(
+  options: UploadTokenOptions
+): Promise<ValidatedTokenResult> {
+  const { userId, driveId, pageId, parentId, expiresIn = '10m' } = options;
+
+  let hasPermission = false;
+  let permissionSource: 'parent_page' | 'drive';
+
+  if (parentId) {
+    // Uploading to a folder - check parent page edit permission
+    const pagePerms = await getUserAccessLevel(userId, parentId);
+    hasPermission = pagePerms?.canEdit ?? false;
+    permissionSource = 'parent_page';
+  } else {
+    // Uploading to drive root - check drive membership
+    const drivePerms = await getUserDrivePermissions(userId, driveId);
+    hasPermission = drivePerms?.canEdit ?? false;
+    permissionSource = 'drive';
+  }
+
+  if (!hasPermission) {
+    loggers.api.warn('Upload token denied: no permission', {
+      userId,
+      driveId,
+      pageId,
+      parentId,
+      permissionSource,
+    });
+    throw new Error(`User lacks permission to upload to ${permissionSource}`);
+  }
+
+  // Log scope grant for audit
+  loggers.api.info('Upload token scope grant', {
+    userId,
+    driveId,
+    pageId,
+    parentId,
+    permissionSource,
+    scopes: ['files:write'],
+  });
+
+  const token = await createServiceToken({
+    service: 'web',
+    subject: userId,
+    resource: pageId, // NEW page ID for file association
+    driveId: driveId, // Drive ID for processor validation
+    scopes: ['files:write'],
+    expiresIn,
+  });
+
+  return {
+    token,
+    grantedScopes: ['files:write'],
+  };
+}

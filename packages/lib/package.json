@@ -133,6 +133,11 @@
       "import": "./dist/services/permission-cache.js",
       "require": "./dist/services/permission-cache.js"
     },
+    "./services/validated-service-token": {
+      "types": "./dist/services/validated-service-token.d.ts",
+      "import": "./dist/services/validated-service-token.js",
+      "require": "./dist/services/validated-service-token.js"
+    },
     "./permissions-cached": {
       "types": "./dist/permissions/permissions-cached.d.ts",
       "import": "./dist/permissions/permissions-cached.js",
@@ -274,6 +279,9 @@
       ],
       "services/permission-cache": [
         "./dist/services/permission-cache.d.ts"
+      ],
+      "services/validated-service-token": [
+        "./dist/services/validated-service-token.d.ts"
       ],
       "permissions-cached": [
         "./dist/permissions/permissions-cached.d.ts"
