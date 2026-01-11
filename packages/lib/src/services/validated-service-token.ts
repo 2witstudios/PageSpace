@@ -7,12 +7,26 @@
  * @module @pagespace/lib/services/validated-service-token
  */
 
+import { db, pages, eq } from '@pagespace/db';
 import {
   getUserAccessLevel,
   getUserDrivePermissions,
 } from '../permissions/permissions-cached';
 import { createServiceToken, ServiceScope } from './service-auth';
 import { loggers } from '../logging/logger-config';
+
+/**
+ * Error thrown when permission is denied for token creation.
+ * Callers should return 403 for this error type only.
+ */
+export class PermissionDeniedError extends Error {
+  readonly code = 'PERMISSION_DENIED' as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'PermissionDeniedError';
+  }
+}
 
 export type ResourceType = 'page' | 'drive' | 'user';
 
@@ -306,7 +320,7 @@ export interface UploadTokenOptions {
  * - Permission is checked against either the parent page OR the drive
  * - Token resource is the NEW pageId (for processor file association)
  *
- * @throws Error if user lacks upload permission
+ * @throws PermissionDeniedError if user lacks upload permission or drive mismatch
  */
 export async function createUploadServiceToken(
   options: UploadTokenOptions
@@ -317,7 +331,35 @@ export async function createUploadServiceToken(
   let permissionSource: 'parent_page' | 'drive';
 
   if (parentId) {
-    // Uploading to a folder - check parent page edit permission
+    // SECURITY: Verify parent page exists and belongs to the claimed drive
+    const parentPage = await db.query.pages.findFirst({
+      where: eq(pages.id, parentId),
+      columns: { driveId: true },
+    });
+
+    if (!parentPage) {
+      loggers.api.warn('Upload token denied: parent page not found', {
+        userId,
+        driveId,
+        pageId,
+        parentId,
+      });
+      throw new PermissionDeniedError('Parent page not found');
+    }
+
+    if (parentPage.driveId !== driveId) {
+      loggers.api.warn('Upload token denied: parent page drive mismatch', {
+        userId,
+        claimedDriveId: driveId,
+        actualDriveId: parentPage.driveId,
+        parentId,
+      });
+      throw new PermissionDeniedError(
+        'Parent page does not belong to the specified drive'
+      );
+    }
+
+    // Check parent page edit permission
     const pagePerms = await getUserAccessLevel(userId, parentId);
     hasPermission = pagePerms?.canEdit ?? false;
     permissionSource = 'parent_page';
@@ -336,7 +378,9 @@ export async function createUploadServiceToken(
       parentId,
       permissionSource,
     });
-    throw new Error(`User lacks permission to upload to ${permissionSource}`);
+    throw new PermissionDeniedError(
+      `User lacks permission to upload to ${permissionSource}`
+    );
   }
 
   // Log scope grant for audit
@@ -349,11 +393,12 @@ export async function createUploadServiceToken(
     scopes: ['files:write'],
   });
 
+  // Note: createServiceToken errors (signing failures, etc.) bubble up as-is
   const token = await createServiceToken({
     service: 'web',
     subject: userId,
-    resource: pageId, // NEW page ID for file association
-    driveId: driveId, // Drive ID for processor validation
+    resource: pageId,
+    driveId: driveId,
     scopes: ['files:write'],
     expiresIn,
   });

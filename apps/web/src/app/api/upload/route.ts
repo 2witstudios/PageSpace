@@ -12,7 +12,10 @@ import {
 } from '@pagespace/lib/services/storage-limits';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkMemoryMiddleware } from '@pagespace/lib/services/memory-monitor';
-import { createUploadServiceToken } from '@pagespace/lib/services/validated-service-token';
+import {
+  createUploadServiceToken,
+  PermissionDeniedError,
+} from '@pagespace/lib/services/validated-service-token';
 import { sanitizeFilenameForHeader } from '@pagespace/lib/utils/file-security';
 import { getActorInfo, logFileActivity } from '@pagespace/lib/monitoring/activity-logger';
 
@@ -74,16 +77,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    // Verify parent page exists and belongs to this drive (if parentId provided)
-    if (parentId) {
-      const parentPage = await db.query.pages.findFirst({
-        where: eq(pages.id, parentId),
-      });
-
-      if (!parentPage || parentPage.driveId !== driveId) {
-        return NextResponse.json({ error: 'Invalid parent page' }, { status: 400 });
-      }
-    }
+    // Note: Parent page validation is handled by createUploadServiceToken()
 
     // Check memory availability first
     const memCheck = await checkMemoryMiddleware();
@@ -143,24 +137,25 @@ export async function POST(request: NextRequest) {
 
     try {
       // Create service token with centralized permission validation (P1-T4)
-      // This validates either:
-      // - Parent page edit permission (if parentId provided)
-      // - Drive membership (if uploading to root)
+      // This validates:
+      // - Parent page exists and belongs to claimed drive (cross-drive attack prevention)
+      // - Parent page edit permission OR drive membership
       // And logs scope grants for audit
       let serviceToken: string;
       try {
-        const tokenResult = await createUploadServiceToken({
+        const { token } = await createUploadServiceToken({
           userId,
           driveId,
           pageId,
           parentId: parentId || undefined,
-          expiresIn: '10m',
         });
-        serviceToken = tokenResult.token;
-      } catch (permError) {
-        // Permission denied - return appropriate error
-        const message = permError instanceof Error ? permError.message : 'Permission denied';
-        return NextResponse.json({ error: message }, { status: 403 });
+        serviceToken = token;
+      } catch (error) {
+        // Only return 403 for permission errors; rethrow others for 500 handling
+        if (error instanceof PermissionDeniedError) {
+          return NextResponse.json({ error: error.message }, { status: 403 });
+        }
+        throw error;
       }
 
       const processorResponse = await fetch(`${PROCESSOR_URL}/api/upload/single`, {
