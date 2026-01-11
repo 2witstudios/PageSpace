@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, pages, drives, filePages, files, eq, isNull } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
-import { PageType, canUserEditPage, getUserDrivePermissions } from '@pagespace/lib/server';
+import { PageType } from '@pagespace/lib/server';
 import {
   checkStorageQuota,
   updateStorageUsage,
@@ -12,7 +12,10 @@ import {
 } from '@pagespace/lib/services/storage-limits';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkMemoryMiddleware } from '@pagespace/lib/services/memory-monitor';
-import { createServiceTokenV2 } from '@pagespace/lib';
+import {
+  createUploadServiceToken,
+  isPermissionDeniedError,
+} from '@pagespace/lib/services/validated-service-token';
 import { sanitizeFilenameForHeader } from '@pagespace/lib/utils/file-security';
 import { getActorInfo, logFileActivity } from '@pagespace/lib/monitoring/activity-logger';
 
@@ -74,31 +77,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    // Permission depends on where we're uploading:
-    // - With parentId: need edit permission on parent page (allows page collaborators)
-    // - Without parentId (root): need drive membership
-    if (parentId) {
-      // Verify parent exists and belongs to this drive
-      const parentPage = await db.query.pages.findFirst({
-        where: eq(pages.id, parentId),
-      });
-
-      if (!parentPage || parentPage.driveId !== driveId) {
-        return NextResponse.json({ error: 'Invalid parent page' }, { status: 400 });
-      }
-
-      // Page collaborators with edit access can upload to folders they can edit
-      const canEditParent = await canUserEditPage(userId, parentId);
-      if (!canEditParent) {
-        return NextResponse.json({ error: 'You do not have permission to upload to this folder' }, { status: 403 });
-      }
-    } else {
-      // Uploading to drive root - require drive membership (not just page-level access)
-      const drivePerms = await getUserDrivePermissions(userId, driveId);
-      if (!drivePerms) {
-        return NextResponse.json({ error: 'You do not have permission to upload to this drive' }, { status: 403 });
-      }
-    }
+    // Note: Parent page validation is handled by createUploadServiceToken()
 
     // Check memory availability first
     const memCheck = await checkMemoryMiddleware();
@@ -157,18 +136,31 @@ export async function POST(request: NextRequest) {
     processorFormData.append('driveId', driveId);
 
     try {
-      // Create service JWT token for processor authentication
-      // Note: We use createServiceTokenV2 directly (not createPageServiceToken) because
-      // the page doesn't exist yet - it's being created by this upload.
-      // We've already validated permissions above (either drive membership or page edit access).
-      const serviceToken = await createServiceTokenV2({
-        service: 'web',
-        subject: userId,
-        resource: pageId,  // Processor expects pageId as resource
-        driveId: driveId,  // Include driveId for additional validation
-        scopes: ['files:write'],
-        expiresIn: '10m',
-      });
+      // Create service token with centralized permission validation (P1-T4)
+      // This validates:
+      // - Parent page exists and belongs to claimed drive (cross-drive attack prevention)
+      // - Parent page edit permission OR drive membership
+      // And logs scope grants for audit
+      let serviceToken: string;
+      try {
+        const { token } = await createUploadServiceToken({
+          userId,
+          driveId,
+          pageId,
+          parentId: parentId || undefined,
+        });
+        serviceToken = token;
+      } catch (error) {
+        // Only return 403 for permission errors; rethrow others for 500 handling
+        // Note: createUploadServiceToken already logs denial details
+        if (isPermissionDeniedError(error)) {
+          return NextResponse.json(
+            { error: 'Permission denied' },
+            { status: 403 }
+          );
+        }
+        throw error;
+      }
 
       const processorResponse = await fetch(`${PROCESSOR_URL}/api/upload/single`, {
         method: 'POST',

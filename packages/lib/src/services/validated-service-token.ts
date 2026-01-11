@@ -7,12 +7,43 @@
  * @module @pagespace/lib/services/validated-service-token
  */
 
+import { db, pages, eq } from '@pagespace/db';
 import {
   getUserAccessLevel,
   getUserDrivePermissions,
 } from '../permissions/permissions-cached';
 import { createServiceToken, ServiceScope } from './service-auth';
 import { loggers } from '../logging/logger-config';
+
+/**
+ * Error thrown when permission is denied for token creation.
+ * Callers should return 403 for this error type only.
+ */
+export class PermissionDeniedError extends Error {
+  readonly code = 'PERMISSION_DENIED' as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'PermissionDeniedError';
+  }
+}
+
+/**
+ * Type guard for PermissionDeniedError.
+ * Fully realm-independent: avoids instanceof checks that fail across bundles/realms.
+ */
+export function isPermissionDeniedError(
+  error: unknown
+): error is PermissionDeniedError {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { code: unknown }).code === 'PERMISSION_DENIED' &&
+    'message' in error &&
+    typeof (error as { message: unknown }).message === 'string'
+  );
+}
 
 export type ResourceType = 'page' | 'drive' | 'user';
 
@@ -280,4 +311,116 @@ export async function createUserServiceToken(
     requestedScopes: scopes,
     expiresIn,
   });
+}
+
+/** Scopes granted for file upload operations */
+const UPLOAD_SCOPES: ServiceScope[] = ['files:write'];
+
+/**
+ * Options for creating an upload service token
+ */
+export interface UploadTokenOptions {
+  /** User requesting the token */
+  userId: string;
+  /** Drive where the file will be uploaded */
+  driveId: string;
+  /** New page ID being created for the upload */
+  pageId: string;
+  /** Parent page ID (if uploading to a folder) */
+  parentId?: string;
+  /** Token expiration (default '10m') */
+  expiresIn?: string;
+}
+
+/**
+ * Create a service token for file uploads with proper permission validation.
+ *
+ * This function handles the upload-specific case where:
+ * - The page being created doesn't exist yet
+ * - Permission is checked against either the parent page OR the drive
+ * - Token resource is the NEW pageId (for processor file association)
+ *
+ * @throws PermissionDeniedError if user lacks upload permission or drive mismatch
+ */
+export async function createUploadServiceToken(
+  options: UploadTokenOptions
+): Promise<ValidatedTokenResult> {
+  const { userId, driveId, pageId, parentId, expiresIn = '10m' } = options;
+
+  let hasPermission = false;
+  let permissionSource: 'parent_page' | 'drive';
+
+  if (parentId) {
+    // SECURITY: Verify parent page exists and belongs to the claimed drive
+    const parentPage = await db.query.pages.findFirst({
+      where: eq(pages.id, parentId),
+      columns: { driveId: true },
+    });
+
+    if (!parentPage) {
+      loggers.api.warn('Upload token denied: parent page not found', {
+        userId,
+        driveId,
+        pageId,
+        parentId,
+      });
+      throw new PermissionDeniedError('Permission denied');
+    }
+
+    if (parentPage.driveId !== driveId) {
+      loggers.api.warn('Upload token denied: parent page drive mismatch', {
+        userId,
+        claimedDriveId: driveId,
+        actualDriveId: parentPage.driveId,
+        parentId,
+      });
+      throw new PermissionDeniedError('Permission denied');
+    }
+
+    // Check parent page edit permission
+    const pagePerms = await getUserAccessLevel(userId, parentId);
+    hasPermission = pagePerms?.canEdit ?? false;
+    permissionSource = 'parent_page';
+  } else {
+    // Uploading to drive root - check drive membership
+    const drivePerms = await getUserDrivePermissions(userId, driveId);
+    hasPermission = drivePerms?.canEdit ?? false;
+    permissionSource = 'drive';
+  }
+
+  if (!hasPermission) {
+    loggers.api.warn('Upload token denied: no permission', {
+      userId,
+      driveId,
+      pageId,
+      parentId,
+      permissionSource,
+    });
+    throw new PermissionDeniedError('Permission denied');
+  }
+
+  // Log scope grant for audit
+  loggers.api.info('Upload token scope grant', {
+    userId,
+    driveId,
+    pageId,
+    parentId,
+    permissionSource,
+    scopes: UPLOAD_SCOPES,
+  });
+
+  // Note: createServiceToken errors (signing failures, etc.) bubble up as-is
+  const token = await createServiceToken({
+    service: 'web',
+    subject: userId,
+    resource: pageId,
+    driveId: driveId,
+    scopes: UPLOAD_SCOPES,
+    expiresIn,
+  });
+
+  return {
+    token,
+    grantedScopes: UPLOAD_SCOPES,
+  };
 }

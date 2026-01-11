@@ -767,23 +767,26 @@ describe('Validated Service Token', () => {
 ```
 
 **Acceptance Criteria:**
-- [ ] All service token creation uses validatePermissions (route migration pending)
+- [x] All service token creation uses validatePermissions
 - [x] Scopes match actual user permissions
 - [x] Cross-tenant scope requests fail
 - [x] Audit log records scope grants
 
 **Dependencies:** P1-T2
 
-**Status:** ✅ CORE COMPLETE (2026-01-09) - Function implemented, route migration pending
+**Status:** ✅ COMPLETED (2026-01-11)
 
 **Implementation Notes:**
 - ✅ `packages/lib/src/services/validated-service-token.ts` created
 - ✅ `createValidatedServiceToken` function with permission-based scope filtering
-- ✅ Convenience functions: `createPageServiceToken`, `createDriveServiceToken`, `createUserServiceToken`
-- ✅ 17 unit tests passing
+- ✅ Convenience functions: `createPageServiceToken`, `createDriveServiceToken`, `createUserServiceToken`, `createUploadServiceToken`
+- ✅ 28 unit tests passing
 - ✅ Audit logging for scope grants
-- ⏳ Routes currently check permissions manually before calling `createServiceToken`
-- ⏳ Route migration to use centralized function is incremental follow-up work
+- ✅ All routes migrated to use centralized validation:
+  - File download/view/convert: `createPageServiceToken()`
+  - Page reprocess/processing-status: `createPageServiceToken()`
+  - Avatar operations: `createUserServiceToken()`
+  - Upload route: `createUploadServiceToken()` (added 2026-01-11)
 
 ---
 

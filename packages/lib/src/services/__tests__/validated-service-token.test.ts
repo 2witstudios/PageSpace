@@ -4,7 +4,24 @@ import {
   createPageServiceToken,
   createDriveServiceToken,
   createUserServiceToken,
+  createUploadServiceToken,
+  PermissionDeniedError,
+  isPermissionDeniedError,
 } from '../validated-service-token';
+
+// Mock the database module
+const mockFindFirst = vi.fn();
+vi.mock('@pagespace/db', () => ({
+  db: {
+    query: {
+      pages: {
+        findFirst: (...args: unknown[]) => mockFindFirst(...args),
+      },
+    },
+  },
+  pages: { id: 'pages.id' },
+  eq: vi.fn((field: string, value: unknown) => ({ field, value })),
+}));
 
 // Mock the permissions module
 vi.mock('../../permissions/permissions-cached', () => ({
@@ -475,6 +492,343 @@ describe('createValidatedServiceToken', () => {
           additionalClaims: { driveId: 'drive-1' },
         })
       );
+    });
+  });
+
+  describe('createUploadServiceToken', () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+      mockFindFirst.mockClear();
+    });
+
+    it('grants token when user has page edit permission (parentId provided)', async () => {
+      // Arrange - parent page exists in correct drive
+      mockFindFirst.mockResolvedValue({ driveId: 'drive-1' });
+      // User can edit parent page
+      (getUserAccessLevel as ReturnType<typeof vi.fn>).mockResolvedValue({
+        canView: true,
+        canEdit: true,
+        canShare: false,
+        canDelete: false,
+      });
+
+      // Act
+      const result = await createUploadServiceToken({
+        userId: 'user-1',
+        driveId: 'drive-1',
+        pageId: 'new-page-1',
+        parentId: 'parent-page-1',
+      });
+
+      // Assert
+      expect(result.grantedScopes).toEqual(['files:write']);
+      expect(result.token).toBe('mock-service-token');
+      expect(mockFindFirst).toHaveBeenCalled();
+      expect(getUserAccessLevel).toHaveBeenCalledWith('user-1', 'parent-page-1');
+      expect(getUserDrivePermissions).not.toHaveBeenCalled();
+      expect(createServiceToken).toHaveBeenCalledWith(
+        expect.objectContaining({
+          resource: 'new-page-1',
+          driveId: 'drive-1',
+          scopes: ['files:write'],
+        })
+      );
+    });
+
+    it('grants token when user has drive membership (no parentId)', async () => {
+      // Arrange - user has drive edit permission
+      (getUserDrivePermissions as ReturnType<typeof vi.fn>).mockResolvedValue({
+        hasAccess: true,
+        isOwner: false,
+        isAdmin: false,
+        isMember: true,
+        canEdit: true,
+      });
+
+      // Act
+      const result = await createUploadServiceToken({
+        userId: 'user-1',
+        driveId: 'drive-1',
+        pageId: 'new-page-1',
+      });
+
+      // Assert
+      expect(result.grantedScopes).toEqual(['files:write']);
+      expect(result.token).toBe('mock-service-token');
+      expect(getUserDrivePermissions).toHaveBeenCalledWith('user-1', 'drive-1');
+      expect(getUserAccessLevel).not.toHaveBeenCalled();
+      expect(createServiceToken).toHaveBeenCalledWith(
+        expect.objectContaining({
+          resource: 'new-page-1',
+          driveId: 'drive-1',
+          scopes: ['files:write'],
+        })
+      );
+    });
+
+    it('throws PermissionDeniedError when user lacks page edit permission', async () => {
+      // Arrange - parent page exists in correct drive
+      mockFindFirst.mockResolvedValue({ driveId: 'drive-1' });
+      // User can view but not edit parent page
+      (getUserAccessLevel as ReturnType<typeof vi.fn>).mockResolvedValue({
+        canView: true,
+        canEdit: false,
+        canShare: false,
+        canDelete: false,
+      });
+
+      // Act & Assert
+      await expect(
+        createUploadServiceToken({
+          userId: 'user-1',
+          driveId: 'drive-1',
+          pageId: 'new-page-1',
+          parentId: 'parent-page-1',
+        })
+      ).rejects.toThrow(PermissionDeniedError);
+
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Upload token denied: no permission',
+        expect.objectContaining({
+          userId: 'user-1',
+          permissionSource: 'parent_page',
+        })
+      );
+    });
+
+    it('throws PermissionDeniedError when user lacks drive membership', async () => {
+      // Arrange - no drive access
+      (getUserDrivePermissions as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+      // Act & Assert
+      await expect(
+        createUploadServiceToken({
+          userId: 'user-1',
+          driveId: 'drive-1',
+          pageId: 'new-page-1',
+        })
+      ).rejects.toThrow(PermissionDeniedError);
+
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Upload token denied: no permission',
+        expect.objectContaining({
+          userId: 'user-1',
+          permissionSource: 'drive',
+        })
+      );
+    });
+
+    it('throws PermissionDeniedError when parent page not found', async () => {
+      // Arrange - parent page doesn't exist
+      mockFindFirst.mockResolvedValue(null);
+
+      // Act & Assert
+      await expect(
+        createUploadServiceToken({
+          userId: 'user-1',
+          driveId: 'drive-1',
+          pageId: 'new-page-1',
+          parentId: 'nonexistent-parent',
+        })
+      ).rejects.toThrow(PermissionDeniedError);
+
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Upload token denied: parent page not found',
+        expect.objectContaining({
+          userId: 'user-1',
+          parentId: 'nonexistent-parent',
+        })
+      );
+    });
+
+    it('throws PermissionDeniedError when parent page drive mismatch (cross-drive attack)', async () => {
+      // Arrange - parent page exists but in a different drive
+      mockFindFirst.mockResolvedValue({ driveId: 'drive-a' });
+
+      // Act & Assert - user claims drive-b but parent is from drive-a
+      await expect(
+        createUploadServiceToken({
+          userId: 'user-1',
+          driveId: 'drive-b',
+          pageId: 'new-page-1',
+          parentId: 'page-from-drive-a',
+        })
+      ).rejects.toThrow(PermissionDeniedError);
+
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Upload token denied: parent page drive mismatch',
+        expect.objectContaining({
+          userId: 'user-1',
+          claimedDriveId: 'drive-b',
+          actualDriveId: 'drive-a',
+          parentId: 'page-from-drive-a',
+        })
+      );
+    });
+
+    it('throws PermissionDeniedError when user has no access to parent page', async () => {
+      // Arrange - parent page exists in correct drive
+      mockFindFirst.mockResolvedValue({ driveId: 'drive-1' });
+      // But user has no access
+      (getUserAccessLevel as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+      // Act & Assert
+      await expect(
+        createUploadServiceToken({
+          userId: 'user-1',
+          driveId: 'drive-1',
+          pageId: 'new-page-1',
+          parentId: 'parent-page-1',
+        })
+      ).rejects.toThrow(PermissionDeniedError);
+
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Upload token denied: no permission',
+        expect.objectContaining({
+          userId: 'user-1',
+          permissionSource: 'parent_page',
+        })
+      );
+    });
+
+    it('logs scope grant for audit', async () => {
+      // Arrange
+      (getUserDrivePermissions as ReturnType<typeof vi.fn>).mockResolvedValue({
+        hasAccess: true,
+        isOwner: false,
+        isAdmin: false,
+        isMember: true,
+        canEdit: true,
+      });
+
+      // Act
+      await createUploadServiceToken({
+        userId: 'user-1',
+        driveId: 'drive-1',
+        pageId: 'new-page-1',
+      });
+
+      // Assert
+      expect(loggers.api.info).toHaveBeenCalledWith(
+        'Upload token scope grant',
+        expect.objectContaining({
+          userId: 'user-1',
+          driveId: 'drive-1',
+          pageId: 'new-page-1',
+          permissionSource: 'drive',
+          scopes: ['files:write'],
+        })
+      );
+    });
+
+    it('uses custom expiration when provided', async () => {
+      // Arrange
+      (getUserDrivePermissions as ReturnType<typeof vi.fn>).mockResolvedValue({
+        hasAccess: true,
+        isOwner: false,
+        isAdmin: false,
+        isMember: true,
+        canEdit: true,
+      });
+
+      // Act
+      await createUploadServiceToken({
+        userId: 'user-1',
+        driveId: 'drive-1',
+        pageId: 'new-page-1',
+        expiresIn: '15m',
+      });
+
+      // Assert
+      expect(createServiceToken).toHaveBeenCalledWith(
+        expect.objectContaining({
+          expiresIn: '15m',
+        })
+      );
+    });
+
+    it('uses default 10m expiration when not provided', async () => {
+      // Arrange
+      (getUserDrivePermissions as ReturnType<typeof vi.fn>).mockResolvedValue({
+        hasAccess: true,
+        isOwner: false,
+        isAdmin: false,
+        isMember: true,
+        canEdit: true,
+      });
+
+      // Act
+      await createUploadServiceToken({
+        userId: 'user-1',
+        driveId: 'drive-1',
+        pageId: 'new-page-1',
+      });
+
+      // Assert
+      expect(createServiceToken).toHaveBeenCalledWith(
+        expect.objectContaining({
+          expiresIn: '10m',
+        })
+      );
+    });
+
+    it('bubbles token signing errors (not PermissionDeniedError)', async () => {
+      // Arrange - user has permission
+      (getUserDrivePermissions as ReturnType<typeof vi.fn>).mockResolvedValue({
+        hasAccess: true,
+        isOwner: false,
+        isAdmin: false,
+        isMember: true,
+        canEdit: true,
+      });
+      // But token signing fails
+      const signingError = new Error('Token signing failed');
+      (createServiceToken as ReturnType<typeof vi.fn>).mockRejectedValue(
+        signingError
+      );
+
+      // Act - capture the error
+      let caughtError: unknown;
+      try {
+        await createUploadServiceToken({
+          userId: 'user-1',
+          driveId: 'drive-1',
+          pageId: 'new-page-1',
+        });
+      } catch (error) {
+        caughtError = error;
+      }
+
+      // Assert - error should bubble up as regular Error, not PermissionDeniedError
+      expect(caughtError).toBeInstanceOf(Error);
+      expect(caughtError).not.toBeInstanceOf(PermissionDeniedError);
+      expect(isPermissionDeniedError(caughtError)).toBe(false);
+      expect((caughtError as Error).message).toBe('Token signing failed');
+    });
+  });
+
+  describe('isPermissionDeniedError', () => {
+    it('returns true for PermissionDeniedError instances', () => {
+      const error = new PermissionDeniedError('test error');
+      expect(isPermissionDeniedError(error)).toBe(true);
+    });
+
+    it('returns false for regular Error instances', () => {
+      const error = new Error('test error');
+      expect(isPermissionDeniedError(error)).toBe(false);
+    });
+
+    it('returns false for non-Error values', () => {
+      expect(isPermissionDeniedError(null)).toBe(false);
+      expect(isPermissionDeniedError(undefined)).toBe(false);
+      expect(isPermissionDeniedError('string error')).toBe(false);
+      expect(isPermissionDeniedError({ message: 'object' })).toBe(false);
+    });
+
+    it('returns false for Error with wrong code', () => {
+      const error = new Error('test') as Error & { code: string };
+      error.code = 'OTHER_ERROR';
+      expect(isPermissionDeniedError(error)).toBe(false);
     });
   });
 });
