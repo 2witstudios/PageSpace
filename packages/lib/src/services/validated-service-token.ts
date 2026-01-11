@@ -30,15 +30,18 @@ export class PermissionDeniedError extends Error {
 
 /**
  * Type guard for PermissionDeniedError.
- * More robust than instanceof across bundling/module boundaries.
+ * Fully realm-independent: avoids instanceof checks that fail across bundles/realms.
  */
 export function isPermissionDeniedError(
   error: unknown
 ): error is PermissionDeniedError {
   return (
-    error instanceof Error &&
+    typeof error === 'object' &&
+    error !== null &&
     'code' in error &&
-    (error as PermissionDeniedError).code === 'PERMISSION_DENIED'
+    (error as { code: unknown }).code === 'PERMISSION_DENIED' &&
+    'message' in error &&
+    typeof (error as { message: unknown }).message === 'string'
   );
 }
 
@@ -361,7 +364,7 @@ export async function createUploadServiceToken(
         pageId,
         parentId,
       });
-      throw new PermissionDeniedError('Parent page not found');
+      throw new PermissionDeniedError('Permission denied');
     }
 
     if (parentPage.driveId !== driveId) {
@@ -371,9 +374,7 @@ export async function createUploadServiceToken(
         actualDriveId: parentPage.driveId,
         parentId,
       });
-      throw new PermissionDeniedError(
-        'Parent page does not belong to the specified drive'
-      );
+      throw new PermissionDeniedError('Permission denied');
     }
 
     // Check parent page edit permission
@@ -395,9 +396,7 @@ export async function createUploadServiceToken(
       parentId,
       permissionSource,
     });
-    throw new PermissionDeniedError(
-      `User lacks permission to upload to ${permissionSource}`
-    );
+    throw new PermissionDeniedError('Permission denied');
   }
 
   // Log scope grant for audit

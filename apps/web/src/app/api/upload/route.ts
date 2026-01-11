@@ -152,9 +152,8 @@ export async function POST(request: NextRequest) {
         serviceToken = token;
       } catch (error) {
         // Only return 403 for permission errors; rethrow others for 500 handling
+        // Note: createUploadServiceToken already logs denial details
         if (isPermissionDeniedError(error)) {
-          // Log detailed error for debugging, return generic message to client
-          console.warn('Upload permission denied:', error.message);
           return NextResponse.json(
             { error: 'Permission denied' },
             { status: 403 }
