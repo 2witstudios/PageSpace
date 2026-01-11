@@ -28,6 +28,20 @@ export class PermissionDeniedError extends Error {
   }
 }
 
+/**
+ * Type guard for PermissionDeniedError.
+ * More robust than instanceof across bundling/module boundaries.
+ */
+export function isPermissionDeniedError(
+  error: unknown
+): error is PermissionDeniedError {
+  return (
+    error instanceof Error &&
+    'code' in error &&
+    (error as PermissionDeniedError).code === 'PERMISSION_DENIED'
+  );
+}
+
 export type ResourceType = 'page' | 'drive' | 'user';
 
 /**
@@ -296,6 +310,9 @@ export async function createUserServiceToken(
   });
 }
 
+/** Scopes granted for file upload operations */
+const UPLOAD_SCOPES: ServiceScope[] = ['files:write'];
+
 /**
  * Options for creating an upload service token
  */
@@ -390,7 +407,7 @@ export async function createUploadServiceToken(
     pageId,
     parentId,
     permissionSource,
-    scopes: ['files:write'],
+    scopes: UPLOAD_SCOPES,
   });
 
   // Note: createServiceToken errors (signing failures, etc.) bubble up as-is
@@ -399,12 +416,12 @@ export async function createUploadServiceToken(
     subject: userId,
     resource: pageId,
     driveId: driveId,
-    scopes: ['files:write'],
+    scopes: UPLOAD_SCOPES,
     expiresIn,
   });
 
   return {
     token,
-    grantedScopes: ['files:write'],
+    grantedScopes: UPLOAD_SCOPES,
   };
 }

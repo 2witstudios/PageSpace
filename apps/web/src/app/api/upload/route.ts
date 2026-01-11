@@ -14,7 +14,7 @@ import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkMemoryMiddleware } from '@pagespace/lib/services/memory-monitor';
 import {
   createUploadServiceToken,
-  PermissionDeniedError,
+  isPermissionDeniedError,
 } from '@pagespace/lib/services/validated-service-token';
 import { sanitizeFilenameForHeader } from '@pagespace/lib/utils/file-security';
 import { getActorInfo, logFileActivity } from '@pagespace/lib/monitoring/activity-logger';
@@ -152,8 +152,13 @@ export async function POST(request: NextRequest) {
         serviceToken = token;
       } catch (error) {
         // Only return 403 for permission errors; rethrow others for 500 handling
-        if (error instanceof PermissionDeniedError) {
-          return NextResponse.json({ error: error.message }, { status: 403 });
+        if (isPermissionDeniedError(error)) {
+          // Log detailed error for debugging, return generic message to client
+          console.warn('Upload permission denied:', error.message);
+          return NextResponse.json(
+            { error: 'Permission denied' },
+            { status: 403 }
+          );
         }
         throw error;
       }

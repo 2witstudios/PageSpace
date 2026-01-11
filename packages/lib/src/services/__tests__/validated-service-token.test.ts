@@ -6,6 +6,7 @@ import {
   createUserServiceToken,
   createUploadServiceToken,
   PermissionDeniedError,
+  isPermissionDeniedError,
 } from '../validated-service-token';
 
 // Mock the database module
@@ -19,7 +20,7 @@ vi.mock('@pagespace/db', () => ({
     },
   },
   pages: { id: 'pages.id' },
-  eq: vi.fn((a, b) => ({ field: a, value: b })),
+  eq: vi.fn((field: string, value: unknown) => ({ field, value })),
 }));
 
 // Mock the permissions module
@@ -782,20 +783,12 @@ describe('createValidatedServiceToken', () => {
       });
       // But token signing fails
       const signingError = new Error('Token signing failed');
-      (createServiceToken as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      (createServiceToken as ReturnType<typeof vi.fn>).mockRejectedValue(
         signingError
       );
 
-      // Act & Assert - error should bubble up as regular Error, not PermissionDeniedError
-      await expect(
-        createUploadServiceToken({
-          userId: 'user-1',
-          driveId: 'drive-1',
-          pageId: 'new-page-1',
-        })
-      ).rejects.toThrow('Token signing failed');
-
-      // Verify it's NOT a PermissionDeniedError
+      // Act - capture the error
+      let caughtError: unknown;
       try {
         await createUploadServiceToken({
           userId: 'user-1',
@@ -803,9 +796,39 @@ describe('createValidatedServiceToken', () => {
           pageId: 'new-page-1',
         });
       } catch (error) {
-        expect(error).not.toBeInstanceOf(PermissionDeniedError);
-        expect(error).toBeInstanceOf(Error);
+        caughtError = error;
       }
+
+      // Assert - error should bubble up as regular Error, not PermissionDeniedError
+      expect(caughtError).toBeInstanceOf(Error);
+      expect(caughtError).not.toBeInstanceOf(PermissionDeniedError);
+      expect(isPermissionDeniedError(caughtError)).toBe(false);
+      expect((caughtError as Error).message).toBe('Token signing failed');
+    });
+  });
+
+  describe('isPermissionDeniedError', () => {
+    it('returns true for PermissionDeniedError instances', () => {
+      const error = new PermissionDeniedError('test error');
+      expect(isPermissionDeniedError(error)).toBe(true);
+    });
+
+    it('returns false for regular Error instances', () => {
+      const error = new Error('test error');
+      expect(isPermissionDeniedError(error)).toBe(false);
+    });
+
+    it('returns false for non-Error values', () => {
+      expect(isPermissionDeniedError(null)).toBe(false);
+      expect(isPermissionDeniedError(undefined)).toBe(false);
+      expect(isPermissionDeniedError('string error')).toBe(false);
+      expect(isPermissionDeniedError({ message: 'object' })).toBe(false);
+    });
+
+    it('returns false for Error with wrong code', () => {
+      const error = new Error('test') as Error & { code: string };
+      error.code = 'OTHER_ERROR';
+      expect(isPermissionDeniedError(error)).toBe(false);
     });
   });
 });
