@@ -54,14 +54,21 @@ function ensureAuthSessionPath(): string {
 async function saveAuthSession(sessionData: StoredAuthSession): Promise<void> {
   try {
     const payload = JSON.stringify(sessionData);
-    const encrypted = safeStorage.isEncryptionAvailable()
+    const encryptionAvailable = safeStorage.isEncryptionAvailable();
+    const encrypted = encryptionAvailable
       ? safeStorage.encryptString(payload)
       : Buffer.from(payload, 'utf8');
 
     await fs.writeFile(ensureAuthSessionPath(), encrypted);
-    logger.info('[Auth] Session stored securely', {});
+    logger.info('[Auth] Session stored securely', {
+      encrypted: encryptionAvailable,
+      payloadSize: payload.length,
+    });
   } catch (error) {
-    logger.error('[Auth] Failed to persist session', { error });
+    logger.error('[Auth] Failed to persist session', {
+      error,
+      encryptionAvailable: safeStorage.isEncryptionAvailable(),
+    });
     throw error;
   }
 }
@@ -72,15 +79,43 @@ async function loadAuthSession(): Promise<StoredAuthSession | null> {
     const raw = await fs.readFile(filePath);
 
     let decoded: string;
-    if (safeStorage.isEncryptionAvailable()) {
+
+    // FIX: Always try decryption first, regardless of isEncryptionAvailable()
+    // On macOS, isEncryptionAvailable() can return different values at different times
+    // (Keychain lock state, app launched before login, code signing issues, etc.)
+    // If we saved encrypted but isEncryptionAvailable() returns false on load,
+    // we'd skip decryption and corrupt the data.
+    try {
+      // Try decryption first - this handles:
+      // 1. Encrypted data when safeStorage is available (normal case)
+      // 2. Encrypted data when safeStorage reports unavailable (the bug case)
+      decoded = safeStorage.decryptString(raw);
+      logger.debug('[Auth] Session decrypted successfully');
+    } catch (decryptError) {
+      // Decryption failed - could be:
+      // 1. Plain text data (saved when encryption was unavailable)
+      // 2. safeStorage truly unavailable and data was plain text
+      // 3. Corrupted data
+      logger.debug('[Auth] Decryption failed, attempting plain text parse', {
+        error: decryptError instanceof Error ? decryptError.message : String(decryptError),
+        encryptionAvailable: safeStorage.isEncryptionAvailable()
+      });
+
       try {
-        decoded = safeStorage.decryptString(raw);
-      } catch (error) {
-        logger.warn('[Auth] Failed to decrypt stored session, attempting plain text parse', { error });
         decoded = raw.toString('utf8');
+        // Validate it's actually valid JSON before proceeding
+        JSON.parse(decoded);
+        logger.debug('[Auth] Plain text session loaded successfully');
+      } catch (parseError) {
+        // Data is neither valid encrypted nor valid plain text JSON
+        logger.error('[Auth] Session file is corrupted - neither encrypted nor valid JSON', {
+          rawLength: raw.length,
+          firstBytes: raw.subarray(0, 20).toString('hex'),
+        });
+        // Delete corrupted file so user can re-login cleanly
+        await fs.unlink(filePath).catch(() => {});
+        return null;
       }
-    } else {
-      decoded = raw.toString('utf8');
     }
 
     const session = JSON.parse(decoded) as StoredAuthSession;
