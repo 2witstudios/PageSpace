@@ -25,6 +25,7 @@ export const AI_PROVIDERS = {
       'openai/gpt-5.2': 'GPT-5.2',
       'openai/gpt-5.2-codex': 'GPT-5.2 Codex',
       'openai/gpt-5.2-mini': 'GPT-5.2 Mini',
+      'openai/gpt-5.2-nano': 'GPT-5.2 Nano',
       'openai/gpt-5.1': 'GPT-5.1',
       'openai/gpt-5.1-codex': 'GPT-5.1 Codex',
       'openai/gpt-5.1-codex-mini': 'GPT-5.1 Codex Mini',
