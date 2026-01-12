@@ -41,6 +41,11 @@ export {
   platformType,
 } from './schema/auth';
 
+export {
+  sessions,
+  sessionsRelations,
+} from './schema/sessions';
+
 // Activity logging and monitoring re-exports
 export {
   activityLogs,

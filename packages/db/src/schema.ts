@@ -1,4 +1,5 @@
 export * from './schema/auth';
+export * from './schema/sessions';
 export * from './schema/core';
 export * from './schema/permissions';
 export * from './schema/members';
@@ -17,6 +18,7 @@ export * from './schema/storage';
 export * from './schema/tasks';
 
 import * as auth from './schema/auth';
+import * as sessions from './schema/sessions';
 import * as core from './schema/core';
 import * as permissions from './schema/permissions';
 import * as members from './schema/members';
@@ -36,6 +38,7 @@ import * as tasks from './schema/tasks';
 
 export const schema = {
   ...auth,
+  ...sessions,
   ...core,
   ...permissions,
   ...members,
