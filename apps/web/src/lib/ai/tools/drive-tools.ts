@@ -368,7 +368,6 @@ This context persists across conversations and helps provide better assistance. 
         await broadcastDriveEvent(
           createDriveEventPayload(updatedDrive.id, 'updated', {
             name: updatedDrive.name,
-            drivePrompt: updatedDrive.drivePrompt,
           })
         );
 
