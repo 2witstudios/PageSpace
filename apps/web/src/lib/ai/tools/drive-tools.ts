@@ -1,7 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db, pages, drives, eq, and, driveMembers, pagePermissions, ne } from '@pagespace/db';
-import { slugify, logDriveActivity, getActorInfo } from '@pagespace/lib/server';
+import { slugify, logDriveActivity, getActorInfo, getDriveAccess } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { type ToolExecutionContext } from '../core';
 
@@ -118,11 +118,12 @@ export const driveTools = {
    * Create a new workspace/drive
    */
   create_drive: tool({
-    description: 'Create a new workspace/drive. Use when user explicitly requests a new workspace or when their project clearly doesn\'t fit existing drives.',
+    description: 'Create a new workspace/drive. Use when user explicitly requests a new workspace or when their project clearly doesn\'t fit existing drives. Optionally set initial drive context to establish workspace memory.',
     inputSchema: z.object({
       name: z.string().describe('The name of the new drive/workspace'),
+      context: z.string().max(10000).optional().describe('Optional initial drive context (workspace memory) - information about the project, conventions, or preferences'),
     }),
-    execute: async ({ name }, { experimental_context: context }) => {
+    execute: async ({ name, context: driveContext }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -133,7 +134,7 @@ export const driveTools = {
         if (!name || name.trim().length === 0) {
           throw new Error('Drive name is required');
         }
-        
+
         if (name.toLowerCase() === 'personal') {
           throw new Error('Cannot create a drive named "Personal"');
         }
@@ -145,16 +146,18 @@ export const driveTools = {
           .replace(/\s+/g, '-')
           .replace(/-+/g, '-');
 
-        // Create the new drive
+        // Create the new drive with optional context
         const [newDrive] = await db.insert(drives).values({
           name: name.trim(),
           slug,
           ownerId: userId,
+          drivePrompt: driveContext || null,
           updatedAt: new Date(),
         }).returning({
           id: drives.id,
           name: drives.name,
           slug: drives.slug,
+          drivePrompt: drives.drivePrompt,
         });
 
         // Broadcast drive creation event
@@ -171,23 +174,27 @@ export const driveTools = {
           name: newDrive.name,
         }, await getAiContextWithActor(context as ToolExecutionContext));
 
+        const contextMessage = driveContext ? ` with initial context (${driveContext.length} chars)` : '';
+
         return {
           success: true,
           drive: {
             id: newDrive.id,
             name: newDrive.name,
             slug: newDrive.slug,
+            hasContext: !!driveContext,
           },
-          message: `Successfully created workspace "${newDrive.name}"`,
-          summary: `Created new workspace "${newDrive.name}" with slug "${newDrive.slug}"`,
+          message: `Successfully created workspace "${newDrive.name}"${contextMessage}`,
+          summary: `Created new workspace "${newDrive.name}" with slug "${newDrive.slug}"${contextMessage}`,
           stats: {
             driveName: newDrive.name,
             driveSlug: newDrive.slug,
+            contextLength: driveContext?.length || 0,
           },
           nextSteps: [
             `Use list_pages with driveSlug: "${newDrive.slug}" and driveId: "${newDrive.id}" to explore the new workspace`,
             'Create folders and documents to organize your content',
-            'Consider creating an AI_CHAT page for workspace-specific assistance',
+            driveContext ? 'Drive context has been set - use update_drive_context to modify it as you learn more' : 'Consider using update_drive_context to add workspace memory as you learn about the project',
           ]
         };
       } catch (error) {
@@ -297,6 +304,103 @@ export const driveTools = {
       } catch (error) {
         console.error('Error renaming drive:', error);
         throw new Error(`Failed to rename drive "${currentName}": ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+  }),
+
+  /**
+   * Update drive context - AI-managed workspace memory
+   * Similar to CLAUDE.md, allows AI to store relevant information about the drive
+   */
+  update_drive_context: tool({
+    description: `Update the drive context (workspace memory) with relevant information you've learned about this workspace. Use this to remember:
+- Project structure and conventions discovered during exploration
+- User preferences and working patterns observed
+- Important file locations and their purposes
+- Technical stack details and configurations
+- Workflow notes and best practices for this workspace
+
+This context persists across conversations and helps provide better assistance. Only owners and admins can modify drive context.`,
+    inputSchema: z.object({
+      driveId: z.string().describe('The unique ID of the drive to update'),
+      driveName: z.string().describe('Current name of the drive for display context'),
+      context: z.string().max(10000).describe('The new context content to save. This replaces the existing context, so include all relevant information.'),
+    }),
+    execute: async ({ driveId, driveName, context }, { experimental_context: execContext }) => {
+      const userId = (execContext as ToolExecutionContext)?.userId;
+      if (!userId) {
+        throw new Error('User authentication required');
+      }
+
+      try {
+        // Find the drive
+        const drive = await db.query.drives.findFirst({
+          where: eq(drives.id, driveId),
+        });
+
+        if (!drive) {
+          throw new Error('Drive not found');
+        }
+
+        // Check authorization - only owners and admins can update drive context
+        const access = await getDriveAccess(driveId, userId);
+        if (!access.isOwner && !access.isAdmin) {
+          throw new Error('Only drive owners and admins can update drive context');
+        }
+
+        const previousContext = drive.drivePrompt || '';
+
+        // Update the drive context
+        const [updatedDrive] = await db
+          .update(drives)
+          .set({
+            drivePrompt: context,
+            updatedAt: new Date(),
+          })
+          .where(eq(drives.id, drive.id))
+          .returning({
+            id: drives.id,
+            name: drives.name,
+            drivePrompt: drives.drivePrompt,
+          });
+
+        // Log activity for AI-generated context update
+        const aiContext = await getAiContextWithActor(execContext as ToolExecutionContext);
+        logDriveActivity(userId, 'update', {
+          id: updatedDrive.id,
+          name: updatedDrive.name,
+        }, {
+          ...aiContext,
+          previousValues: { drivePrompt: previousContext },
+          newValues: { drivePrompt: context },
+          metadata: {
+            ...aiContext.metadata,
+            updateType: 'driveContext',
+            contextLength: context.length,
+          },
+        });
+
+        return {
+          success: true,
+          drive: {
+            id: updatedDrive.id,
+            name: updatedDrive.name,
+          },
+          message: `Successfully updated drive context for "${updatedDrive.name}"`,
+          summary: `Updated workspace context (${context.length} characters)`,
+          stats: {
+            driveName: updatedDrive.name,
+            previousLength: previousContext.length,
+            newLength: context.length,
+          },
+          nextSteps: [
+            'This context will be included in future AI conversations in this workspace',
+            'Continue to update the context as you learn more about the workspace',
+          ]
+        };
+      } catch (error) {
+        console.error('Error updating drive context:', error);
+        throw new Error(`Failed to update drive context for "${driveName}": ${error instanceof Error ? error.message : String(error)}`);
       }
     },
   }),
