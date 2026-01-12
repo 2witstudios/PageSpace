@@ -22,7 +22,7 @@ interface StoreSchema {
 
 const store = new Store<StoreSchema>({
   defaults: {
-    windowBounds: { width: 1400, height: 900 },
+    windowBounds: { width: 1100, height: 700 },
     minimizeToTray: true,
   },
 }) as any; // Type assertion to work around electron-store v10 type definitions
@@ -211,7 +211,7 @@ function injectDesktopStyles(): void {
 
 function createWindow(): void {
   // Get saved window bounds
-  const windowBounds = store.get('windowBounds') || { width: 1400, height: 900 };
+  const windowBounds = store.get('windowBounds') || { width: 1100, height: 700 };
 
   // Create the browser window
   mainWindow = new BrowserWindow({
