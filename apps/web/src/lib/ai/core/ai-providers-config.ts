@@ -167,6 +167,7 @@ export const AI_PROVIDERS = {
       'gpt-5.2': 'GPT-5.2',
       'gpt-5.2-codex': 'GPT-5.2 Codex',
       'gpt-5.2-mini': 'GPT-5.2 Mini',
+      'gpt-5.2-nano': 'GPT-5.2 Nano',
 
       // GPT-5.1 Models (2025)
       'gpt-5.1': 'GPT-5.1',

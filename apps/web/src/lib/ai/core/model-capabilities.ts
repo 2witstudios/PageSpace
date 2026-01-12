@@ -16,9 +16,11 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'gpt-5.2': true,
   'gpt-5.2-codex': true,
   'gpt-5.2-mini': true,
+  'gpt-5.2-nano': true,
   'openai/gpt-5.2': true,
   'openai/gpt-5.2-codex': true,
   'openai/gpt-5.2-mini': true,
+  'openai/gpt-5.2-nano': true,
 
   // OpenAI GPT-5.1 Models (all have vision)
   'gpt-5.1': true,
