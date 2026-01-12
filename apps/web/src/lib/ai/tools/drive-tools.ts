@@ -364,6 +364,14 @@ This context persists across conversations and helps provide better assistance. 
             drivePrompt: drives.drivePrompt,
           });
 
+        // Broadcast drive update event for real-time sync
+        await broadcastDriveEvent(
+          createDriveEventPayload(updatedDrive.id, 'updated', {
+            name: updatedDrive.name,
+            drivePrompt: updatedDrive.drivePrompt,
+          })
+        );
+
         // Log activity for AI-generated context update
         const aiContext = await getAiContextWithActor(execContext as ToolExecutionContext);
         logDriveActivity(userId, 'update', {
