@@ -139,6 +139,18 @@ export function getContextWindowSize(model: string, provider?: string): number {
 
   // OpenAI models
   if (providerLower === 'openai' || modelLower.includes('gpt')) {
+    // GPT-5.2 models (400k/256k context)
+    if (modelLower.includes('gpt-5.2')) {
+      if (modelLower.includes('mini') || modelLower.includes('nano')) {
+        return 256_000;
+      }
+      return 400_000;
+    }
+    // GPT-5.1 models (400k context)
+    if (modelLower.includes('gpt-5.1')) {
+      return 400_000;
+    }
+    // GPT-5.0 models (272k/128k context)
     if (modelLower.includes('gpt-5')) {
       if (modelLower.includes('mini') || modelLower.includes('nano')) {
         return 128_000;
