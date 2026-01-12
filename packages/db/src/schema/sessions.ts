@@ -35,7 +35,6 @@ export const sessions = pgTable('sessions', {
 
   createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
 }, (table) => ({
-  tokenHashIdx: index('sessions_token_hash_idx').on(table.tokenHash),
   userIdIdx: index('sessions_user_id_idx').on(table.userId),
   expiresAtIdx: index('sessions_expires_at_idx').on(table.expiresAt),
   userActiveIdx: index('sessions_user_active_idx').on(table.userId, table.revokedAt, table.expiresAt),

@@ -3,6 +3,8 @@ import { eq, and, isNull, gt, lt } from 'drizzle-orm';
 import { generateOpaqueToken, isValidTokenFormat, type TokenType } from './opaque-tokens';
 import { hashToken } from './token-utils';
 
+const SESSION_CLEANUP_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
 export interface SessionClaims {
   sessionId: string;
   userId: string;
@@ -130,7 +132,7 @@ export class SessionService {
 
   async cleanupExpiredSessions(): Promise<number> {
     const result = await db.delete(sessions)
-      .where(lt(sessions.expiresAt, new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)));
+      .where(lt(sessions.expiresAt, new Date(Date.now() - SESSION_CLEANUP_RETENTION_MS)));
     return result.rowCount ?? 0;
   }
 }

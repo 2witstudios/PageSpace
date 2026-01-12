@@ -104,10 +104,10 @@ describe('Session Service', () => {
         userId: testUserId,
         type: 'user',
         scopes: ['*'],
-        expiresInMs: 1, // 1ms
+        expiresInMs: 50,
       });
 
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await new Promise(resolve => setTimeout(resolve, 100));
 
       const claims = await sessionService.validateSession(token);
       expect(claims).toBeNull();
@@ -160,13 +160,29 @@ describe('Session Service', () => {
 
       await sessionService.validateSession(token);
 
-      await new Promise(resolve => setTimeout(resolve, 200)); // Wait for non-blocking update
+      const waitForLastUsedAt = async (userId: string) => {
+        const timeoutMs = 1000;
+        const intervalMs = 50;
+        const start = Date.now();
 
-      const [session] = await db.query.sessions.findMany({
-        where: eq(sessions.userId, testUserId),
-      });
+        while (Date.now() - start < timeoutMs) {
+          const [session] = await db.query.sessions.findMany({
+            where: eq(sessions.userId, userId),
+          });
 
-      expect(session.lastUsedAt).toBeTruthy();
+          if (session?.lastUsedAt) {
+            return session;
+          }
+
+          await new Promise(resolve => setTimeout(resolve, intervalMs));
+        }
+
+        return null;
+      };
+
+      const session = await waitForLastUsedAt(testUserId);
+
+      expect(session?.lastUsedAt).toBeTruthy();
     });
   });
 

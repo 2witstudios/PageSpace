@@ -10,9 +10,10 @@ import { eq, and, isNull } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 
 describe('Sessions Schema', () => {
-  let testUserId: string;
+  let testUserId = '';
 
   beforeEach(async () => {
+    testUserId = '';
     const [user] = await db.insert(users).values({
       id: createId(),
       name: 'Test Session User',
@@ -26,8 +27,12 @@ describe('Sessions Schema', () => {
   });
 
   afterEach(async () => {
-    await db.delete(sessions).where(eq(sessions.userId, testUserId));
+    if (!testUserId) {
+      return;
+    }
+
     await db.delete(users).where(eq(users.id, testUserId));
+    await db.delete(sessions).where(eq(sessions.userId, testUserId));
   });
 
   it('creates session with required fields', async () => {
@@ -92,7 +97,7 @@ describe('Sessions Schema', () => {
     expect(remainingSessions).toHaveLength(0);
   });
 
-  it('indexes support efficient lookups', async () => {
+  it('queries by indexed fields return expected results', async () => {
     // Create multiple sessions
     await db.insert(sessions).values([
       {
