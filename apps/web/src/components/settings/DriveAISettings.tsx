@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Loader2, Save, Bot } from 'lucide-react';
+import { Loader2, Save, Brain } from 'lucide-react';
 import { useToast } from '@/hooks/useToast';
 import { fetchWithAuth, patch } from '@/lib/auth/auth-fetch';
 
@@ -13,13 +13,13 @@ interface DriveAISettingsProps {
 }
 
 export function DriveAISettings({ driveId }: DriveAISettingsProps) {
-  const [drivePrompt, setDrivePrompt] = useState('');
-  const [originalPrompt, setOriginalPrompt] = useState('');
+  const [driveContext, setDriveContext] = useState('');
+  const [originalContext, setOriginalContext] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const { toast } = useToast();
 
-  const hasChanges = drivePrompt !== originalPrompt;
+  const hasChanges = driveContext !== originalContext;
 
   useEffect(() => {
     const fetchDrive = async () => {
@@ -27,9 +27,9 @@ export function DriveAISettings({ driveId }: DriveAISettingsProps) {
         const response = await fetchWithAuth(`/api/drives/${driveId}`);
         if (!response.ok) throw new Error('Failed to fetch drive');
         const data = await response.json();
-        const prompt = data.drivePrompt || '';
-        setDrivePrompt(prompt);
-        setOriginalPrompt(prompt);
+        const context = data.drivePrompt || '';
+        setDriveContext(context);
+        setOriginalContext(context);
       } catch (error) {
         console.error('Error fetching drive:', error);
         toast({
@@ -47,17 +47,17 @@ export function DriveAISettings({ driveId }: DriveAISettingsProps) {
   const handleSave = async () => {
     setSaving(true);
     try {
-      await patch(`/api/drives/${driveId}`, { drivePrompt });
-      setOriginalPrompt(drivePrompt);
+      await patch(`/api/drives/${driveId}`, { drivePrompt: driveContext });
+      setOriginalContext(driveContext);
       toast({
         title: 'Success',
-        description: 'AI instructions saved successfully',
+        description: 'Drive context saved successfully',
       });
     } catch (error) {
-      console.error('Error saving drive prompt:', error);
+      console.error('Error saving drive context:', error);
       toast({
         title: 'Error',
-        description: 'Failed to save AI instructions',
+        description: 'Failed to save drive context',
         variant: 'destructive',
       });
     } finally {
@@ -70,8 +70,8 @@ export function DriveAISettings({ driveId }: DriveAISettingsProps) {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Bot className="w-5 h-5" />
-            AI Instructions
+            <Brain className="w-5 h-5" />
+            Drive Context
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -87,31 +87,31 @@ export function DriveAISettings({ driveId }: DriveAISettingsProps) {
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <Bot className="w-5 h-5" />
-          AI Instructions
+          <Brain className="w-5 h-5" />
+          Drive Context
         </CardTitle>
         <CardDescription>
-          Set custom instructions that will be included in all AI conversations within this drive.
-          These instructions help the AI understand your workspace context, navigation structure, and preferred behaviors.
+          Workspace memory that persists across AI conversations. The AI can also update this context
+          as it learns about your project, similar to how CLAUDE.md works in Claude Code.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <Textarea
-          value={drivePrompt}
-          onChange={(e) => setDrivePrompt(e.target.value)}
-          placeholder="Enter custom AI instructions for this drive...
+          value={driveContext}
+          onChange={(e) => setDriveContext(e.target.value)}
+          placeholder="Add context about this workspace...
 
 Examples:
-- This is a legal firm workspace. Always be precise about terminology.
-- Project documentation is in /docs, API specs in /api-specs.
-- When creating new documents, always include a summary section.
-- Prefer formal language in all responses."
+- Project structure: /docs for documentation, /api-specs for API definitions
+- Tech stack: Next.js 15, TypeScript, PostgreSQL
+- Conventions: Use PascalCase for components, camelCase for functions
+- Preferences: Prefer concise responses, always include code examples"
           className="min-h-[250px] font-mono text-sm"
           maxLength={10000}
         />
         <div className="flex items-center justify-between">
           <p className="text-xs text-muted-foreground">
-            {drivePrompt.length.toLocaleString()} / 10,000 characters
+            {driveContext.length.toLocaleString()} / 10,000 characters
           </p>
           <Button
             onClick={handleSave}
@@ -125,7 +125,7 @@ Examples:
             ) : (
               <>
                 <Save className="h-4 w-4 mr-2" />
-                Save Instructions
+                Save Context
               </>
             )}
           </Button>
@@ -133,9 +133,10 @@ Examples:
         <div className="pt-4 border-t">
           <h4 className="text-sm font-medium mb-2">How it works</h4>
           <ul className="text-sm text-muted-foreground space-y-1">
-            <li>• These instructions are added to the Global Assistant when you&apos;re working in this drive</li>
-            <li>• AI agents (AI Chat pages) can optionally include these instructions via their settings</li>
-            <li>• Instructions are visible to all drive members but only editable by owners and admins</li>
+            <li>• This context is included in AI conversations when working in this drive</li>
+            <li>• The AI can use the update_drive_context tool to add information it learns</li>
+            <li>• AI agents (AI Chat pages) can optionally include this context via their settings</li>
+            <li>• Context is visible to all drive members but only editable by owners and admins</li>
           </ul>
         </div>
       </CardContent>
