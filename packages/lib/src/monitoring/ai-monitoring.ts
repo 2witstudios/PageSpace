@@ -195,8 +195,8 @@ export const MODEL_CONTEXT_WINDOWS = {
   'anthropic/claude-opus-4.1': 200000,
 
   // OpenRouter Models - OpenAI
-  'openai/gpt-5.2': 500000,
-  'openai/gpt-5.2-codex': 500000,
+  'openai/gpt-5.2': 400000,
+  'openai/gpt-5.2-codex': 400000,
   'openai/gpt-5.2-mini': 256000,
   'openai/gpt-5.1': 400000,
   'openai/gpt-5.1-codex': 400000,
@@ -271,8 +271,8 @@ export const MODEL_CONTEXT_WINDOWS = {
   'gemini-1.5-pro': 2000000,
 
   // OpenAI Direct Models
-  'gpt-5.2': 500000,
-  'gpt-5.2-codex': 500000,
+  'gpt-5.2': 400000,
+  'gpt-5.2-codex': 400000,
   'gpt-5.2-mini': 256000,
   'gpt-5.1': 400000,
   'gpt-5.1-codex': 400000,
