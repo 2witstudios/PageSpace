@@ -21,6 +21,9 @@ export const AI_PRICING = {
   'anthropic/claude-opus-4.1': { input: 15.00, output: 75.00 },
 
   // OpenRouter Paid Models - OpenAI
+  'openai/gpt-5.2': { input: 12.00, output: 48.00 },
+  'openai/gpt-5.2-codex': { input: 12.00, output: 48.00 },
+  'openai/gpt-5.2-mini': { input: 6.00, output: 24.00 },
   'openai/gpt-5.1': { input: 10.00, output: 40.00 },
   'openai/gpt-5.1-codex': { input: 10.00, output: 40.00 },
   'openai/gpt-5.1-codex-mini': { input: 5.00, output: 20.00 },
@@ -91,6 +94,9 @@ export const AI_PRICING = {
   'gemini-1.5-pro': { input: 1.25, output: 5.00 },
 
   // OpenAI Direct Models (platform.openai.com/docs/pricing, Dec 2025)
+  'gpt-5.2': { input: 12.00, output: 48.00 },
+  'gpt-5.2-codex': { input: 12.00, output: 48.00 },
+  'gpt-5.2-mini': { input: 6.00, output: 24.00 },
   'gpt-5.1': { input: 10.00, output: 40.00 },
   'gpt-5.1-codex': { input: 10.00, output: 40.00 },
   'gpt-5': { input: 1.25, output: 10.00 },
@@ -189,6 +195,9 @@ export const MODEL_CONTEXT_WINDOWS = {
   'anthropic/claude-opus-4.1': 200000,
 
   // OpenRouter Models - OpenAI
+  'openai/gpt-5.2': 500000,
+  'openai/gpt-5.2-codex': 500000,
+  'openai/gpt-5.2-mini': 256000,
   'openai/gpt-5.1': 400000,
   'openai/gpt-5.1-codex': 400000,
   'openai/gpt-5.1-codex-mini': 400000,
@@ -262,6 +271,9 @@ export const MODEL_CONTEXT_WINDOWS = {
   'gemini-1.5-pro': 2000000,
 
   // OpenAI Direct Models
+  'gpt-5.2': 500000,
+  'gpt-5.2-codex': 500000,
+  'gpt-5.2-mini': 256000,
   'gpt-5.1': 400000,
   'gpt-5.1-codex': 400000,
   'gpt-5': 272000,

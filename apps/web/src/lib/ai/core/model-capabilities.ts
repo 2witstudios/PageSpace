@@ -12,6 +12,21 @@ const capabilityLogger = loggers.ai.child({ module: 'model-capabilities' });
  * Includes models that can process images, PDFs with images, etc.
  */
 const VISION_CAPABLE_MODELS: Record<string, boolean> = {
+  // OpenAI GPT-5.2 Models (all have vision)
+  'gpt-5.2': true,
+  'gpt-5.2-codex': true,
+  'gpt-5.2-mini': true,
+  'openai/gpt-5.2': true,
+  'openai/gpt-5.2-codex': true,
+  'openai/gpt-5.2-mini': true,
+
+  // OpenAI GPT-5.1 Models (all have vision)
+  'gpt-5.1': true,
+  'gpt-5.1-codex': true,
+  'openai/gpt-5.1': true,
+  'openai/gpt-5.1-codex': true,
+  'openai/gpt-5.1-codex-mini': true,
+
   // OpenAI GPT-5 Models (all have vision)
   'gpt-5': true,
   'gpt-5-mini': true,
