@@ -18,3 +18,6 @@ export {
 
 // Export rollback permissions
 export * from './rollback-permissions';
+
+// Export enforced auth context
+export * from './enforced-context';

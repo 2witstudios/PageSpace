@@ -10,11 +10,11 @@ const router = Router();
 // Enqueue ingestion job by pageId
 router.post('/by-page/:pageId', async (req, res) => {
   try {
-    if (!req.serviceAuth) {
+    if (!req.auth) {
       return res.status(401).json({ error: 'Service authentication required' });
     }
 
-    const userId = req.serviceAuth.userId;
+    const userId = req.auth.userId;
     if (!userId) {
       return res.status(401).json({ error: 'Service authentication required' });
     }

@@ -260,6 +260,13 @@
       "when": 1768228730754,
       "tag": "0036_amused_true_believers",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1768285686596,
+      "tag": "0037_slimy_bishop",
+      "breakpoints": true
     }
   ]
 }

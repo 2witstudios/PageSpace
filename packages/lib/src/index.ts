@@ -49,19 +49,8 @@ export * from './sheets';
 export * from './auth/auth-utils';
 export * from './auth/device-auth-utils';
 export { secureCompare } from './auth/secure-compare';
-export {
-  createServiceToken as createServiceTokenV2,
-  verifyServiceToken as verifyServiceTokenV2,
-  authenticateServiceToken,
-  decodeServiceTokenHeader,
-  hasScope,
-  assertScope,
-  hasScope as hasServiceScope,
-  assertScope as assertServiceScope,
-  type ServiceTokenClaims,
-  type ServiceTokenOptions,
-  type ServiceScope,
-} from './services/service-auth';
+export { sessionService, type SessionClaims, type CreateSessionOptions } from './auth/session-service';
+export { EnforcedAuthContext, type ResourceBinding } from './permissions/enforced-context';
 export {
   createValidatedServiceToken,
   createPageServiceToken,
@@ -71,6 +60,7 @@ export {
   type ValidatedTokenResult,
   type PermissionSet,
   type ResourceType,
+  type ServiceScope,
 } from './services/validated-service-token';
 export * from './auth/csrf-utils';
 export * from './encryption';

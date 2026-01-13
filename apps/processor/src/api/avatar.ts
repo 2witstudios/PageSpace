@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import { promises as fs } from 'fs';
 import path from 'path';
-import { hasServiceScope } from '../middleware/auth';
+import { hasAuthScope } from '../middleware/auth';
 import { processorLogger } from '../logger';
 import {
   DEFAULT_IMAGE_EXTENSION,
@@ -42,7 +42,7 @@ if (!AVATAR_ROOT) {
 // Avatar upload endpoint
 router.post('/upload', upload.single('file'), async (req: Request, res: Response) => {
   try {
-    const auth = req.serviceAuth;
+    const auth = req.auth;
     if (!auth) {
       return res.status(401).json({ error: 'Service authentication required' });
     }
@@ -64,7 +64,7 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
     if (
       auth.userId &&
       userId !== auth.userId &&
-      !hasServiceScope(auth, 'avatars:write:any')
+      !hasAuthScope(auth, 'avatars:write:any')
     ) {
       return res.status(403).json({ error: 'Cannot modify avatar for another user' });
     }
@@ -127,7 +127,7 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
 // Avatar deletion endpoint
 router.delete('/:userId', async (req: Request, res: Response) => {
   try {
-    const auth = req.serviceAuth;
+    const auth = req.auth;
     if (!auth) {
       return res.status(401).json({ error: 'Service authentication required' });
     }
@@ -144,7 +144,7 @@ router.delete('/:userId', async (req: Request, res: Response) => {
     if (
       auth.userId &&
       userId !== auth.userId &&
-      !hasServiceScope(auth, 'avatars:write:any')
+      !hasAuthScope(auth, 'avatars:write:any')
     ) {
       return res.status(403).json({ error: 'Cannot delete avatar for another user' });
     }

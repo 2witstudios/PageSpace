@@ -8,7 +8,7 @@ import path from 'path';
 import { contentStore, queueManager } from '../server';
 import { processorLogger } from '../logger';
 import { rateLimitUpload } from '../middleware/rate-limit';
-import { hasServiceScope } from '../middleware/auth';
+import { hasAuthScope } from '../middleware/auth';
 import { resolvePathWithin, sanitizeExtension } from '../utils/security';
 
 const router = Router();
@@ -83,8 +83,8 @@ const upload = multer({
 });
 
 router.use((req, res, next) => {
-  if (!req.serviceAuth) {
-    return res.status(401).json({ error: 'Service authentication required' });
+  if (!req.auth) {
+    return res.status(401).json({ error: 'Authentication required' });
   }
   return next();
 });
@@ -96,14 +96,15 @@ router.post('/single', upload.single('file'), async (req, res) => {
   let tempFilePath: string | undefined;
 
   try {
-    const auth = req.serviceAuth;
+    const auth = req.auth;
     if (!auth) {
-      return res.status(401).json({ error: 'Service authentication required' });
+      return res.status(401).json({ error: 'Authentication required' });
     }
 
-    const resourcePageId = auth.claims.resource;
+    // Get resource binding (pageId) from session
+    const resourcePageId = auth.resourceBinding?.type === 'page' ? auth.resourceBinding.id : undefined;
     if (!resourcePageId) {
-      return res.status(403).json({ error: 'Service token missing page scope' });
+      return res.status(403).json({ error: 'Token missing page resource binding' });
     }
 
     const driveId = typeof req.body?.driveId === 'string' ? req.body.driveId : undefined;
@@ -112,7 +113,7 @@ router.post('/single', upload.single('file'), async (req, res) => {
     }
 
     if (!auth.driveId || auth.driveId !== driveId) {
-      return res.status(403).json({ error: 'Service token drive does not match requested drive' });
+      return res.status(403).json({ error: 'Token drive does not match requested drive' });
     }
 
     const pageId = typeof req.body?.pageId === 'string' ? req.body.pageId : undefined;
@@ -121,7 +122,7 @@ router.post('/single', upload.single('file'), async (req, res) => {
     }
 
     if (resourcePageId && resourcePageId !== pageId) {
-      return res.status(403).json({ error: 'Service token resource does not match requested page' });
+      return res.status(403).json({ error: 'Token resource does not match requested page' });
     }
 
     const providedUserId = typeof req.body?.userId === 'string' ? req.body.userId : undefined;
@@ -129,13 +130,12 @@ router.post('/single', upload.single('file'), async (req, res) => {
       auth.userId &&
       providedUserId &&
       providedUserId !== auth.userId &&
-      !hasServiceScope(auth, 'files:write:any')
+      !hasAuthScope(auth, 'files:write:any')
     ) {
       return res.status(403).json({ error: 'Cannot upload on behalf of another user' });
     }
 
     const uploaderId = auth.userId ?? providedUserId;
-    const tenantId = auth.tenantId;
 
     if (!req.file) {
       return res.status(400).json({ error: 'No file provided' });
@@ -157,10 +157,10 @@ router.post('/single', upload.single('file'), async (req, res) => {
     const alreadyStored = await contentStore.originalExists(contentHash);
     if (alreadyStored) {
       await contentStore.appendUploadMetadata(contentHash, {
-        tenantId,
+        tenantId: auth.userId,
         driveId,
         userId: uploaderId,
-        service: auth.service
+        service: 'processor'
       });
 
       processorLogger.info('Upload deduplicated', {
@@ -194,10 +194,10 @@ router.post('/single', upload.single('file'), async (req, res) => {
       originalname,
       contentHash,
       {
-        tenantId,
+        tenantId: auth.userId,
         driveId,
         userId: uploaderId,
-        service: auth.service
+        service: 'processor'
       }
     );
     processorLogger.info('Saved original upload', {
@@ -233,7 +233,7 @@ router.post('/single', upload.single('file'), async (req, res) => {
     processorLogger.error('Upload error', error as Error, {
       tempFilePath,
       pageId: req.body?.pageId,
-      userId: req.serviceAuth?.userId ?? req.body?.userId
+      userId: req.auth?.userId ?? req.body?.userId
     });
 
     // Clean up temporary file on error
@@ -260,14 +260,15 @@ router.post('/multiple', upload.array('files', 10), async (req, res) => {
   const tempFilePaths: string[] = [];
 
   try {
-    const auth = req.serviceAuth;
+    const auth = req.auth;
     if (!auth) {
-      return res.status(401).json({ error: 'Service authentication required' });
+      return res.status(401).json({ error: 'Authentication required' });
     }
 
-    const resourcePageId = auth.claims.resource;
+    // Get resource binding (pageId) from session
+    const resourcePageId = auth.resourceBinding?.type === 'page' ? auth.resourceBinding.id : undefined;
     if (!resourcePageId) {
-      return res.status(403).json({ error: 'Service token missing page scope' });
+      return res.status(403).json({ error: 'Token missing page resource binding' });
     }
 
     const driveId = typeof req.body?.driveId === 'string' ? req.body.driveId : undefined;
@@ -276,7 +277,7 @@ router.post('/multiple', upload.array('files', 10), async (req, res) => {
     }
 
     if (!auth.driveId || auth.driveId !== driveId) {
-      return res.status(403).json({ error: 'Service token drive does not match requested drive' });
+      return res.status(403).json({ error: 'Token drive does not match requested drive' });
     }
 
     const providedUserId = typeof req.body?.userId === 'string' ? req.body.userId : undefined;
@@ -284,13 +285,12 @@ router.post('/multiple', upload.array('files', 10), async (req, res) => {
       auth.userId &&
       providedUserId &&
       providedUserId !== auth.userId &&
-      !hasServiceScope(auth, 'files:write:any')
+      !hasAuthScope(auth, 'files:write:any')
     ) {
       return res.status(403).json({ error: 'Cannot upload on behalf of another user' });
     }
 
     const uploaderId = auth.userId ?? providedUserId;
-    const tenantId = auth.tenantId;
 
     if (!req.files || !Array.isArray(req.files)) {
       return res.status(400).json({ error: 'No files provided' });
@@ -298,7 +298,7 @@ router.post('/multiple', upload.array('files', 10), async (req, res) => {
 
     const pageId = typeof req.body?.pageId === 'string' ? req.body.pageId : undefined;
     if (resourcePageId && pageId && resourcePageId !== pageId) {
-      return res.status(403).json({ error: 'Service token resource does not match requested page' });
+      return res.status(403).json({ error: 'Token resource does not match requested page' });
     }
     const results = [];
 
@@ -319,18 +319,18 @@ router.post('/multiple', upload.array('files', 10), async (req, res) => {
 
         if (!alreadyStored) {
           await contentStore.saveOriginalFromFile(tempPath, originalname, contentHash, {
-            tenantId,
+            tenantId: auth.userId,
             driveId,
             userId: uploaderId,
-            service: auth.service
+            service: 'processor'
           });
         }
         if (alreadyStored) {
           await contentStore.appendUploadMetadata(contentHash, {
-            tenantId,
+            tenantId: auth.userId,
             driveId,
             userId: uploaderId,
-            service: auth.service
+            service: 'processor'
           });
         }
 
