@@ -1,7 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db, pages, drives, eq, and, driveMembers, pagePermissions, ne } from '@pagespace/db';
-import { slugify, logDriveActivity, getActorInfo, getDriveAccess } from '@pagespace/lib/server';
+import { slugify, logDriveActivity, getActorInfo, getDriveAccessWithDrive } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { type ToolExecutionContext } from '../core';
 
@@ -333,17 +333,16 @@ This context persists across conversations and helps provide better assistance. 
       }
 
       try {
-        // Find the drive
-        const drive = await db.query.drives.findFirst({
-          where: eq(drives.id, driveId),
-        });
+        // Get drive and access info in a single operation (eliminates duplicate query)
+        const result = await getDriveAccessWithDrive(driveId, userId);
 
-        if (!drive) {
+        if (!result) {
           throw new Error('Drive not found');
         }
 
+        const { drive, access } = result;
+
         // Check authorization - only owners and admins can update drive context
-        const access = await getDriveAccess(driveId, userId);
         if (!access.isOwner && !access.isAdmin) {
           throw new Error('Only drive owners and admins can update drive context');
         }

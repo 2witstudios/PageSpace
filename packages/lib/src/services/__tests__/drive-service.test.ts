@@ -37,6 +37,7 @@ import {
   createDrive,
   getDriveById,
   getDriveAccess,
+  getDriveAccessWithDrive,
   getDriveWithAccess,
   updateDrive,
   trashDrive,
@@ -337,6 +338,103 @@ describe('getDriveAccess', () => {
       isMember: false,
       role: null,
     });
+  });
+});
+
+// ============================================================================
+// getDriveAccessWithDrive
+// ============================================================================
+
+describe('getDriveAccessWithDrive', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it('should return drive and owner access when user is drive owner', async () => {
+    const drive = createMockDrive({ id: 'drive_123', name: 'Test', ownerId: 'user_123' });
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(drive);
+
+    const result = await getDriveAccessWithDrive('drive_123', 'user_123');
+
+    expect(result).not.toBeNull();
+    expect(result?.drive).toEqual(drive);
+    expect(result?.access).toEqual({
+      isOwner: true,
+      isAdmin: true,
+      isMember: true,
+      role: 'OWNER',
+    });
+  });
+
+  it('should return drive and admin access when user is admin member', async () => {
+    const drive = createMockDrive({ id: 'drive_123', name: 'Test', ownerId: 'other_user' });
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(drive);
+
+    const limitMock = vi.fn().mockResolvedValue([{ role: 'ADMIN' }]);
+    const whereMock = vi.fn().mockReturnValue({ limit: limitMock });
+    const fromMock = vi.fn().mockReturnValue({ where: whereMock });
+    vi.mocked(db.select).mockReturnValue({ from: fromMock } as unknown as ReturnType<typeof db.select>);
+
+    const result = await getDriveAccessWithDrive('drive_123', 'user_123');
+
+    expect(result).not.toBeNull();
+    expect(result?.drive).toEqual(drive);
+    expect(result?.access).toEqual({
+      isOwner: false,
+      isAdmin: true,
+      isMember: true,
+      role: 'ADMIN',
+    });
+  });
+
+  it('should return drive and member access when user is regular member', async () => {
+    const drive = createMockDrive({ id: 'drive_123', name: 'Test', ownerId: 'other_user' });
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(drive);
+
+    const limitMock = vi.fn().mockResolvedValue([{ role: 'MEMBER' }]);
+    const whereMock = vi.fn().mockReturnValue({ limit: limitMock });
+    const fromMock = vi.fn().mockReturnValue({ where: whereMock });
+    vi.mocked(db.select).mockReturnValue({ from: fromMock } as unknown as ReturnType<typeof db.select>);
+
+    const result = await getDriveAccessWithDrive('drive_123', 'user_123');
+
+    expect(result).not.toBeNull();
+    expect(result?.drive).toEqual(drive);
+    expect(result?.access).toEqual({
+      isOwner: false,
+      isAdmin: false,
+      isMember: true,
+      role: 'MEMBER',
+    });
+  });
+
+  it('should return drive and no access when user is not owner or member', async () => {
+    const drive = createMockDrive({ id: 'drive_123', name: 'Test', ownerId: 'other_user' });
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(drive);
+
+    const limitMock = vi.fn().mockResolvedValue([]);
+    const whereMock = vi.fn().mockReturnValue({ limit: limitMock });
+    const fromMock = vi.fn().mockReturnValue({ where: whereMock });
+    vi.mocked(db.select).mockReturnValue({ from: fromMock } as unknown as ReturnType<typeof db.select>);
+
+    const result = await getDriveAccessWithDrive('drive_123', 'user_123');
+
+    expect(result).not.toBeNull();
+    expect(result?.drive).toEqual(drive);
+    expect(result?.access).toEqual({
+      isOwner: false,
+      isAdmin: false,
+      isMember: false,
+      role: null,
+    });
+  });
+
+  it('should return null when drive not found', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(undefined);
+
+    const result = await getDriveAccessWithDrive('nonexistent', 'user_123');
+
+    expect(result).toBeNull();
   });
 });
 

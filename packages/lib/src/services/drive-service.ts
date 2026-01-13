@@ -224,6 +224,60 @@ export async function getDriveAccess(
   return { isOwner: false, isAdmin: false, isMember: false, role: null };
 }
 
+export interface DriveAccessWithDrive {
+  drive: typeof drives.$inferSelect;
+  access: DriveAccessInfo;
+}
+
+/**
+ * Get drive and access info in a single operation
+ * More efficient than calling getDriveById and getDriveAccess separately
+ */
+export async function getDriveAccessWithDrive(
+  driveId: string,
+  userId: string
+): Promise<DriveAccessWithDrive | null> {
+  const drive = await getDriveById(driveId);
+
+  if (!drive) {
+    return null;
+  }
+
+  const isOwner = drive.ownerId === userId;
+
+  if (isOwner) {
+    return {
+      drive,
+      access: { isOwner: true, isAdmin: true, isMember: true, role: 'OWNER' },
+    };
+  }
+
+  // Check membership
+  const membership = await db
+    .select({ role: driveMembers.role })
+    .from(driveMembers)
+    .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId)))
+    .limit(1);
+
+  if (membership.length > 0) {
+    const role = membership[0].role as 'ADMIN' | 'MEMBER';
+    return {
+      drive,
+      access: {
+        isOwner: false,
+        isAdmin: role === 'ADMIN',
+        isMember: true,
+        role,
+      },
+    };
+  }
+
+  return {
+    drive,
+    access: { isOwner: false, isAdmin: false, isMember: false, role: null },
+  };
+}
+
 /**
  * Get drive with access info for a user
  */
