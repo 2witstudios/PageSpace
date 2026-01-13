@@ -210,6 +210,13 @@ export const globalConversationRepository = {
             sql`(${conversations.lastMessageAt} > ${cursorConv.lastMessageAt} OR (${conversations.lastMessageAt} = ${cursorConv.lastMessageAt} AND ${conversations.id} > ${cursorConv.id}))`
           );
         }
+      } else if (cursorConv) {
+        // Cursor conversation exists but has null lastMessageAt - use id-only comparison
+        if (direction === 'before') {
+          conditions.push(sql`${conversations.id} < ${cursorConv.id}`);
+        } else {
+          conditions.push(sql`${conversations.id} > ${cursorConv.id}`);
+        }
       }
     }
 

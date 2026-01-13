@@ -202,8 +202,8 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
         await del(`/api/ai/global/${conversationId}`);
       }
 
-      // Remove from local state
-      setConversations(conversations.filter(conv => conv.id !== conversationId));
+      // Remove from local state using functional update to avoid stale closure
+      setConversations(prev => prev.filter(conv => conv.id !== conversationId));
 
       // If deleted conversation was active, create a new conversation
       if (conversationId === activeConversationId) {
@@ -220,7 +220,7 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
     } catch (error) {
       console.error('Failed to delete conversation:', error);
     }
-  }, [selectedAgent, conversations, activeConversationId, isDashboardContext, agentStore, createNewSidebarAgentConversation, createNewGlobalConversation]);
+  }, [selectedAgent, activeConversationId, isDashboardContext, agentStore, createNewSidebarAgentConversation, createNewGlobalConversation]);
 
   // Determine if we should virtualize based on conversation count
   const shouldVirtualize = filteredConversations.length >= VIRTUALIZATION_THRESHOLD;
