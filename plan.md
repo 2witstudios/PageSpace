@@ -1006,6 +1006,8 @@ describe('Codebase Secret Comparison Audit', () => {
 
 **Objective:** Replace JWT-based service auth with opaque tokens and centralized session store.
 
+**Note:** Service-token migration does not remove user JWT auth. Web auth/refresh, realtime JWT fallback, and desktop WS auth remain JWT-based until legacy deprecation (P5-T5).
+
 ### P2-T1: Sessions Database Schema
 
 **Description:** Create the sessions table for centralized token management.
@@ -2664,6 +2666,26 @@ jobs:
 - [ ] Secret scanning enabled
 
 **Dependencies:** P0-T2
+
+---
+
+### P5-T5: Legacy JWT Deprecation
+
+**Description:** Remove remaining JWT-based user auth paths after opaque session rollout is verified.
+
+**Scope:**
+- Web access + refresh flows
+- Realtime JWT fallback
+- Desktop WS auth
+- Device token JWTs (replace with sessions)
+
+**Acceptance Criteria:**
+- [ ] No JWT tokens issued for user auth
+- [ ] Realtime only accepts opaque/session tokens or socket tokens
+- [ ] Desktop uses opaque sessions
+- [ ] Audit confirms zero legacy JWT usage for 30 days
+
+**Dependencies:** P2-T4, P5-T1
 
 ---
 
