@@ -62,13 +62,22 @@ export function useMCPTools({ conversationId }: UseMCPToolsOptions): UseMCPTools
   // All MCP tool schemas from running servers (unfiltered)
   const [allMcpToolSchemas, setAllMcpToolSchemas] = useState<MCPToolSchema[]>([]);
 
-  // Get names of running servers
+  // Get names of running servers - memoize to prevent unnecessary re-renders
   const runningServerNames = useMemo(() => {
-    if (!mcp.isDesktop) return [];
-    return Object.entries(mcp.serverStatuses)
+    if (!mcp.isDesktop) {
+      return [];
+    }
+    const running = Object.entries(mcp.serverStatuses)
       .filter(([, status]) => status.status === 'running')
       .map(([name]) => name);
+    return running;
   }, [mcp.isDesktop, mcp.serverStatuses]);
+
+  // Serialize running server names for stable dependency comparison
+  const runningServerNamesKey = useMemo(
+    () => runningServerNames.join(','),
+    [runningServerNames]
+  );
 
   // Count running MCP servers
   const runningServers = runningServerNames.length;
@@ -105,33 +114,66 @@ export function useMCPTools({ conversationId }: UseMCPToolsOptions): UseMCPTools
   );
 
   // Fetch MCP tools when servers are running
-  // Depend on runningServerNames (not count) to refetch when specific servers change
+  // Use runningServerNamesKey for stable dependency comparison (prevents unnecessary refetches)
   useEffect(() => {
     const fetchMCPTools = async () => {
+      // Debug logging to help diagnose MCP tools visibility issues
+      console.log('[useMCPTools] Fetch effect triggered:', {
+        isDesktop: mcp.isDesktop,
+        runningServerCount: runningServerNames.length,
+        runningServers: runningServerNames,
+        hasElectronAPI: typeof window !== 'undefined' && !!window.electron,
+      });
+
       if (mcp.isDesktop && runningServerNames.length > 0 && window.electron) {
         try {
+          console.log('[useMCPTools] Fetching tools from Electron...');
           const tools = await window.electron.mcp.getAvailableTools();
+          console.log('[useMCPTools] Received tools from Electron:', {
+            toolCount: tools.length,
+            tools: tools.map((t) => `${t.serverName}:${t.name}`),
+          });
           setAllMcpToolSchemas(tools);
         } catch (error) {
-          console.error('Failed to fetch MCP tools:', error);
+          console.error('[useMCPTools] Failed to fetch MCP tools:', error);
           setAllMcpToolSchemas([]);
           toast.error('Failed to load MCP tools');
         }
       } else {
         // Clear MCP tools when no servers running
+        if (mcp.isDesktop) {
+          console.log('[useMCPTools] No running servers, clearing tools');
+        }
         setAllMcpToolSchemas([]);
       }
     };
 
     fetchMCPTools();
-  }, [mcp.isDesktop, runningServerNames]);
+  }, [mcp.isDesktop, runningServerNamesKey, runningServerNames]);
 
   // Filter tools to only include those from enabled servers
   const mcpToolSchemas = useMemo(() => {
-    if (enabledServerNames.length === 0) return [];
+    console.log('[useMCPTools] Computing mcpToolSchemas:', {
+      enabledServerCount: enabledServerNames.length,
+      enabledServers: enabledServerNames,
+      allToolCount: allMcpToolSchemas.length,
+      chatId,
+    });
+
+    if (enabledServerNames.length === 0) {
+      console.log('[useMCPTools] No enabled servers, returning empty tools');
+      return [];
+    }
     const enabledSet = new Set(enabledServerNames);
-    return allMcpToolSchemas.filter((tool) => enabledSet.has(tool.serverName));
-  }, [allMcpToolSchemas, enabledServerNames]);
+    const filtered = allMcpToolSchemas.filter((tool) => enabledSet.has(tool.serverName));
+
+    console.log('[useMCPTools] Filtered tools:', {
+      filteredCount: filtered.length,
+      tools: filtered.map((t) => `${t.serverName}:${t.name}`),
+    });
+
+    return filtered;
+  }, [allMcpToolSchemas, enabledServerNames, chatId]);
 
   return {
     isDesktop: mcp.isDesktop,

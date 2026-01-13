@@ -15,7 +15,18 @@ export function useMCP() {
   // Check if running in desktop app
   useEffect(() => {
     const checkDesktop = () => {
-      if (typeof window !== 'undefined' && window.electron?.isDesktop) {
+      const hasWindow = typeof window !== 'undefined';
+      const hasElectron = hasWindow && !!window.electron;
+      const isDesktopFlag = hasElectron && window.electron?.isDesktop;
+
+      console.log('[useMCP] Desktop detection:', {
+        hasWindow,
+        hasElectron,
+        isDesktopFlag,
+        electronAPI: hasElectron ? Object.keys(window.electron) : [],
+      });
+
+      if (isDesktopFlag) {
         setIsDesktop(true);
       } else {
         setIsDesktop(false);
@@ -52,13 +63,25 @@ export function useMCP() {
 
   // Load server statuses
   const loadStatuses = useCallback(async () => {
-    if (!isDesktop || !window.electron) return;
+    if (!isDesktop || !window.electron) {
+      console.log('[useMCP] loadStatuses skipped - not desktop or no electron API');
+      return;
+    }
 
     try {
+      console.log('[useMCP] Loading server statuses from Electron...');
       const statuses = await window.electron.mcp.getServerStatuses();
+      console.log('[useMCP] Received server statuses:', {
+        serverCount: Object.keys(statuses).length,
+        servers: Object.entries(statuses).map(([name, info]) => ({
+          name,
+          status: info.status,
+          enabled: info.enabled,
+        })),
+      });
       setServerStatuses(statuses);
     } catch (error) {
-      console.error('Failed to load server statuses:', error);
+      console.error('[useMCP] Failed to load server statuses:', error);
     } finally {
       setLoading(false);
     }
@@ -66,7 +89,12 @@ export function useMCP() {
 
   // Subscribe to status changes
   useEffect(() => {
-    if (!isDesktop || !window.electron) return;
+    if (!isDesktop || !window.electron) {
+      console.log('[useMCP] Status subscription skipped - not desktop or no electron API');
+      return;
+    }
+
+    console.log('[useMCP] Initializing MCP status subscription...');
 
     // Initial load
     loadConfig();
@@ -74,10 +102,21 @@ export function useMCP() {
 
     // Subscribe to status change events
     const unsubscribe = window.electron.mcp.onStatusChange((statuses) => {
+      console.log('[useMCP] Status change event received:', {
+        serverCount: Object.keys(statuses).length,
+        servers: Object.entries(statuses).map(([name, info]) => ({
+          name,
+          status: info.status,
+          enabled: info.enabled,
+        })),
+      });
       setServerStatuses(statuses);
     });
 
-    return unsubscribe;
+    return () => {
+      console.log('[useMCP] Unsubscribing from status changes');
+      unsubscribe();
+    };
   }, [isDesktop, loadConfig, loadStatuses]);
 
   // Start server
