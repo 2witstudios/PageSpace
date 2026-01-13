@@ -1,13 +1,18 @@
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
-import { DefaultChatTransport } from 'ai';
+import { DefaultChatTransport, UIMessage } from 'ai';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Loader2, Plus } from 'lucide-react';
 import { ProviderModelSelector } from '@/components/ai/chat/input/ProviderModelSelector';
 import { CompactMessageRenderer, AISelector, AiUsageMonitor, TasksDropdown } from '@/components/ai/shared';
-import { UndoAiChangesDialog } from '@/components/ai/shared/chat';
+import { UndoAiChangesDialog, VirtualizedMessageList } from '@/components/ai/shared/chat';
+import {
+  Conversation,
+  ConversationContent,
+  ConversationScrollButton,
+  useConversationScrollRef
+} from '@/components/ai/ui/conversation';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth, patch, del } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
@@ -17,6 +22,103 @@ import { usePageAgentSidebarState, usePageAgentSidebarChat, type SidebarAgentInf
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
 import { toast } from 'sonner';
 import { LocationContext } from '@/lib/ai/shared';
+
+// Threshold for enabling virtualization in sidebar (lower than main chat due to compact items)
+const SIDEBAR_VIRTUALIZATION_THRESHOLD = 30;
+
+/**
+ * Inner component for rendering messages with access to stick-to-bottom context
+ */
+interface SidebarMessagesContentProps {
+  messages: UIMessage[];
+  assistantName: string;
+  locationContext: LocationContext | null;
+  handleEdit: (messageId: string, newContent: string) => Promise<void>;
+  handleDelete: (messageId: string) => Promise<void>;
+  handleRetry: () => Promise<void>;
+  handleUndoFromHere: (messageId: string) => void;
+  lastAssistantMessageId: string | undefined;
+  lastUserMessageId: string | undefined;
+  displayIsStreaming: boolean;
+}
+
+const SidebarMessagesContent: React.FC<SidebarMessagesContentProps> = ({
+  messages,
+  assistantName,
+  locationContext,
+  handleEdit,
+  handleDelete,
+  handleRetry,
+  handleUndoFromHere,
+  lastAssistantMessageId,
+  lastUserMessageId,
+  displayIsStreaming,
+}) => {
+  const scrollRef = useConversationScrollRef();
+  const shouldVirtualize = messages.length >= SIDEBAR_VIRTUALIZATION_THRESHOLD;
+
+  // Memoized render function for virtualized list
+  const renderMessage = useCallback((message: UIMessage) => (
+    <CompactMessageRenderer
+      key={message.id}
+      message={message}
+      onEdit={handleEdit}
+      onDelete={handleDelete}
+      onRetry={handleRetry}
+      onUndoFromHere={handleUndoFromHere}
+      isLastAssistantMessage={message.id === lastAssistantMessageId}
+      isLastUserMessage={message.id === lastUserMessageId}
+      isStreaming={displayIsStreaming && message.id === lastAssistantMessageId && message.role === 'assistant'}
+    />
+  ), [
+    handleEdit,
+    handleDelete,
+    handleRetry,
+    handleUndoFromHere,
+    lastAssistantMessageId,
+    lastUserMessageId,
+    displayIsStreaming
+  ]);
+
+  return (
+    <ConversationContent className="p-3 min-w-0 gap-1.5">
+      {messages.length === 0 ? (
+        <div className="flex items-center justify-center h-20 text-muted-foreground text-xs text-center overflow-hidden">
+          <div className="max-w-full px-2">
+            <p className="font-medium truncate">{assistantName}</p>
+            <p className="text-xs truncate">
+              {locationContext
+                ? `Context-aware help for ${locationContext.currentPage?.title || locationContext.currentDrive?.name}`
+                : 'Ask me anything about your workspace'}
+            </p>
+          </div>
+        </div>
+      ) : shouldVirtualize ? (
+        // Virtualized rendering for large conversations
+        <VirtualizedMessageList
+          messages={messages}
+          renderMessage={renderMessage}
+          scrollRef={scrollRef}
+          estimatedRowHeight={60}
+          overscan={5}
+          gap={6}
+        />
+      ) : (
+        // Regular rendering for smaller conversations
+        messages.map(message => renderMessage(message))
+      )}
+
+      {displayIsStreaming && (
+        <div className="mb-1">
+          <div className="flex items-center space-x-2 text-gray-500 text-xs">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            <span>Thinking...</span>
+          </div>
+        </div>
+      )}
+    </ConversationContent>
+  );
+};
 
 /**
  * Assistant chat tab for the right sidebar.
@@ -140,19 +242,8 @@ const SidebarChatTab: React.FC = () => {
   const writeMode = useAssistantSettingsStore((state) => state.writeMode);
 
   // Refs
-  const scrollAreaRef = useRef<HTMLDivElement>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<ChatInputRef>(null);
   const prevGlobalStatusRef = useRef<string>('ready');
-
-  // ============================================
-  // Helper Functions
-  // ============================================
-  const scrollToBottom = useCallback(() => {
-    if (scrollAreaRef.current) {
-      scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight;
-    }
-  }, []);
 
   // ============================================
   // Effects: Drive Loading
@@ -323,10 +414,9 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   // Effects: UI State
   // ============================================
-  // Scroll to bottom when messages change (using individual deps to satisfy exhaustive-deps)
-  useEffect(() => {
-    scrollToBottom();
-  }, [selectedAgent, messages.length, contextMessages.length, status, scrollToBottom]);
+  // Note: Removed unconditional scroll on every message change
+  // The sidebar will be updated with use-stick-to-bottom in a future iteration
+  // For now, scroll is called explicitly after sending messages
 
   useEffect(() => {
     if (error) setShowError(true);
@@ -386,7 +476,7 @@ const SidebarChatTab: React.FC = () => {
 
     sendMessage({ text: input }, { body });
     setInput('');
-    setTimeout(scrollToBottom, 100);
+    // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
   }, [
     input,
     currentConversationId,
@@ -399,7 +489,6 @@ const SidebarChatTab: React.FC = () => {
     currentProvider,
     currentModel,
     sendMessage,
-    scrollToBottom,
   ]);
 
   const handleEdit = useCallback(async (messageId: string, newContent: string) => {
@@ -599,51 +688,24 @@ const SidebarChatTab: React.FC = () => {
         )}
       </div>
 
-      {/* Messages */}
+      {/* Messages - using use-stick-to-bottom for pinned scrolling */}
       <div className="flex-1 min-h-0 min-w-0 overflow-hidden" style={{ contain: 'layout' }}>
-        <ScrollArea className="h-full" ref={scrollAreaRef}>
-          <div className="p-3 min-w-0 overflow-x-hidden">
-            <div className="space-y-1.5 min-w-0 max-w-full break-words">
-            {displayMessages.length === 0 ? (
-              <div className="flex items-center justify-center h-20 text-muted-foreground text-xs text-center overflow-hidden">
-                <div className="max-w-full px-2">
-                  <p className="font-medium truncate">{assistantName}</p>
-                  <p className="text-xs truncate">
-                    {locationContext
-                      ? `Context-aware help for ${locationContext.currentPage?.title || locationContext.currentDrive?.name}`
-                      : 'Ask me anything about your workspace'}
-                  </p>
-                </div>
-              </div>
-            ) : (
-              displayMessages.map(message => (
-                <CompactMessageRenderer
-                  key={message.id}
-                  message={message}
-                  onEdit={handleEdit}
-                  onDelete={handleDelete}
-                  onRetry={handleRetry}
-                  onUndoFromHere={handleUndoFromHere}
-                  isLastAssistantMessage={message.id === lastAssistantMessageId}
-                  isLastUserMessage={message.id === lastUserMessageId}
-                  isStreaming={displayIsStreaming && message.id === lastAssistantMessageId && message.role === 'assistant'}
-                />
-              ))
-            )}
-
-            {displayIsStreaming && (
-              <div className="mb-1">
-                <div className="flex items-center space-x-2 text-gray-500 text-xs">
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  <span>Thinking...</span>
-                </div>
-              </div>
-            )}
-
-            <div ref={messagesEndRef} />
-            </div>
-          </div>
-        </ScrollArea>
+        <Conversation className="h-full">
+          <SidebarMessagesContent
+            messages={displayMessages}
+            assistantName={assistantName}
+            locationContext={locationContext}
+            handleEdit={handleEdit}
+            handleDelete={handleDelete}
+            handleRetry={handleRetry}
+            handleUndoFromHere={handleUndoFromHere}
+            lastAssistantMessageId={lastAssistantMessageId}
+            lastUserMessageId={lastUserMessageId}
+            displayIsStreaming={displayIsStreaming}
+          />
+          {/* Scroll-to-bottom button - visible when user scrolls up */}
+          <ConversationScrollButton className="z-10" />
+        </Conversation>
       </div>
 
       {/* Input */}

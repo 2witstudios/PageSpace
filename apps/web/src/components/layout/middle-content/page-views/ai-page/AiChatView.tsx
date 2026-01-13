@@ -289,7 +289,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     );
     setInput('');
     inputRef.current?.clear();
-    setTimeout(() => chatLayoutRef.current?.scrollToBottom(), 100);
+    // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
   }, [
     isReadOnly,
     input,

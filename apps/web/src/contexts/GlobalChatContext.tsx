@@ -202,6 +202,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
           return fetchWithAuth(urlString, options);
         },
       }),
+      experimental_throttle: 100, // Match agent mode throttle for consistent streaming feel
       onError: (error: Error) => {
         console.error('❌ Global Chat Error:', error);
         if (error.message?.includes('Unauthorized') || error.message?.includes('401')) {

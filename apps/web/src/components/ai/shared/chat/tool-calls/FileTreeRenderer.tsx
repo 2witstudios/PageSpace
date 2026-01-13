@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { PageType, isFolderPage } from '@pagespace/lib/client-safe';
 import { FolderOpen, FileText } from 'lucide-react';
 
@@ -13,7 +13,7 @@ interface FileTreeRendererProps {
     tree: TreeItem[];
 }
 
-export const FileTreeRenderer: React.FC<FileTreeRendererProps> = ({ tree }) => {
+export const FileTreeRenderer: React.FC<FileTreeRendererProps> = memo(function FileTreeRenderer({ tree }) {
     const renderTreeItems = (items: TreeItem[], depth = 0): React.ReactNode => {
         return items.map((item, index) => (
             <div key={index} style={{ paddingLeft: `${depth * 16}px` }} className="py-1">
@@ -40,4 +40,4 @@ export const FileTreeRenderer: React.FC<FileTreeRendererProps> = ({ tree }) => {
             </div>
         </div>
     );
-};
+});

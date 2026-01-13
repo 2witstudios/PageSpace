@@ -241,12 +241,12 @@ export function usePageAgentSidebarState(): UseSidebarAgentStateReturn {
         if (loadingAgentIdRef.current !== currentAgentId) return;
 
         if (mostRecent) {
-          const messages = await fetchAgentConversationMessages(selectedAgent.id, mostRecent.id);
+          const result = await fetchAgentConversationMessages(selectedAgent.id, mostRecent.id, { limit: 50 });
 
           // Abort if agent changed during fetch
           if (loadingAgentIdRef.current !== currentAgentId) return;
 
-          setConversationLoaded(mostRecent.id, messages, selectedAgent.id);
+          setConversationLoaded(mostRecent.id, result.messages, selectedAgent.id);
           return;
         }
       } catch (error) {
@@ -313,8 +313,8 @@ export function usePageAgentSidebarState(): UseSidebarAgentStateReturn {
     if (!agent || !conversationId) return;
 
     try {
-      const messages = await fetchAgentConversationMessages(agent.id, conversationId);
-      store.updateMessages(messages);
+      const result = await fetchAgentConversationMessages(agent.id, conversationId, { limit: 50 });
+      store.updateMessages(result.messages);
     } catch (error) {
       console.error('Failed to refresh agent conversation:', error);
     }

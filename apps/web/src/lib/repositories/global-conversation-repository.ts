@@ -3,7 +3,7 @@
  * Isolates database operations from route handlers for testability.
  */
 
-import { db, conversations, messages, aiUsageLogs, eq, and, desc } from '@pagespace/db';
+import { db, conversations, messages, aiUsageLogs, eq, and, desc, sql } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 
 // Types
@@ -132,9 +132,26 @@ export function calculateUsageSummary(
   };
 }
 
+export interface ListConversationsPaginatedInput {
+  limit?: number;
+  cursor?: string;
+  direction?: 'before' | 'after';
+}
+
+export interface PaginatedConversationsResult {
+  conversations: ConversationSummary[];
+  pagination: {
+    hasMore: boolean;
+    nextCursor: string | null;
+    prevCursor: string | null;
+    limit: number;
+  };
+}
+
 export const globalConversationRepository = {
   /**
    * List all active conversations for a user, ordered by lastMessageAt
+   * @deprecated Use listConversationsPaginated for better performance
    */
   async listConversations(userId: string): Promise<ConversationSummary[]> {
     return db
@@ -152,6 +169,93 @@ export const globalConversationRepository = {
         eq(conversations.isActive, true)
       ))
       .orderBy(desc(conversations.lastMessageAt));
+  },
+
+  /**
+   * List active conversations for a user with cursor-based pagination
+   */
+  async listConversationsPaginated(
+    userId: string,
+    options: ListConversationsPaginatedInput = {}
+  ): Promise<PaginatedConversationsResult> {
+    const { limit = 20, cursor, direction = 'before' } = options;
+    const maxLimit = Math.min(limit, 100);
+
+    // Build query conditions
+    const conditions = [
+      eq(conversations.userId, userId),
+      eq(conversations.isActive, true)
+    ];
+
+    // Add cursor condition if provided - use compound cursor (lastMessageAt + id) for stable ordering
+    if (cursor) {
+      // Get the cursor conversation's lastMessageAt and id
+      const [cursorConv] = await db
+        .select({ lastMessageAt: conversations.lastMessageAt, id: conversations.id })
+        .from(conversations)
+        .where(eq(conversations.id, cursor))
+        .limit(1);
+
+      if (cursorConv?.lastMessageAt) {
+        if (direction === 'before') {
+          // Get conversations older than cursor (earlier lastMessageAt)
+          // Use compound condition: either earlier timestamp, or same timestamp but smaller id
+          conditions.push(
+            sql`(${conversations.lastMessageAt} < ${cursorConv.lastMessageAt} OR (${conversations.lastMessageAt} = ${cursorConv.lastMessageAt} AND ${conversations.id} < ${cursorConv.id}))`
+          );
+        } else {
+          // Get conversations newer than cursor (later lastMessageAt)
+          // Use compound condition: either later timestamp, or same timestamp but larger id
+          conditions.push(
+            sql`(${conversations.lastMessageAt} > ${cursorConv.lastMessageAt} OR (${conversations.lastMessageAt} = ${cursorConv.lastMessageAt} AND ${conversations.id} > ${cursorConv.id}))`
+          );
+        }
+      } else if (cursorConv) {
+        // Cursor conversation exists but has null lastMessageAt - use id-only comparison
+        if (direction === 'before') {
+          conditions.push(sql`${conversations.id} < ${cursorConv.id}`);
+        } else {
+          conditions.push(sql`${conversations.id} > ${cursorConv.id}`);
+        }
+      }
+    }
+
+    // Query with limit + 1 to check for more
+    const results = await db
+      .select({
+        id: conversations.id,
+        title: conversations.title,
+        type: conversations.type,
+        contextId: conversations.contextId,
+        lastMessageAt: conversations.lastMessageAt,
+        createdAt: conversations.createdAt,
+      })
+      .from(conversations)
+      .where(and(...conditions))
+      .orderBy(desc(conversations.lastMessageAt), desc(conversations.id))
+      .limit(maxLimit + 1);
+
+    const hasMore = results.length > maxLimit;
+    const conversationsToReturn = hasMore ? results.slice(0, maxLimit) : results;
+
+    // Determine cursors
+    const nextCursor = hasMore && conversationsToReturn.length > 0
+      ? conversationsToReturn[conversationsToReturn.length - 1].id
+      : null;
+
+    const prevCursor = conversationsToReturn.length > 0 && cursor
+      ? conversationsToReturn[0].id
+      : null;
+
+    return {
+      conversations: conversationsToReturn,
+      pagination: {
+        hasMore,
+        nextCursor,
+        prevCursor,
+        limit: maxLimit,
+      },
+    };
   },
 
   /**

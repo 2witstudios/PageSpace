@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo, useMemo } from 'react';
 
 import {
   Tool,
@@ -28,10 +28,6 @@ interface ToolCallRendererProps {
   part: ToolPart;
 }
 
-/**
- * Renders PageSpace tool calls using a standardized Tool UI.
- * Addresses ambiguity by extracting target filenames/titles from input.
- */
 // Helper for safe JSON parsing
 const safeJsonParse = (value: unknown): Record<string, unknown> | null => {
   if (typeof value === 'string') {
@@ -66,158 +62,151 @@ const inferLanguage = (path?: string): string => {
   return langMap[ext || ''] || 'plaintext';
 };
 
+// Tool name mapping (moved outside component)
+const TOOL_NAME_MAP: Record<string, string> = {
+  'ask_agent': 'Ask Agent',
+  'list_drives': 'List Drives',
+  'list_pages': 'List Pages',
+  'read_page': 'Read Page',
+  'replace_lines': 'Replace Lines',
+  'create_page': 'Create Page',
+  'rename_page': 'Rename Page',
+  'trash': 'Trash',
+  'restore': 'Restore',
+  'move_page': 'Move Page',
+  'list_trash': 'List Trash'
+};
+
 type ToolOutputType = React.ReactNode | string | Record<string, unknown>;
 
-export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
-  const toolName = part.toolName || part.type?.replace('tool-', '') || 'unknown_tool';
+// Internal renderer component with hooks
+const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> = memo(function ToolCallRendererInternal({ part, toolName }) {
   const state = part.state || 'input-available';
   const input = part.input;
   const output = part.output;
   const error = part.errorText;
 
   // Map state to ToolHeader valid states
-  const getToolState = (): "input-streaming" | "input-available" | "output-available" | "output-error" => {
+  const toolState = useMemo((): "input-streaming" | "input-available" | "output-available" | "output-error" => {
     switch (state) {
       case 'input-streaming': return 'input-streaming';
       case 'input-available': return 'input-available';
       case 'output-available': return 'output-available';
       case 'output-error': return 'output-error';
-      case 'done': return 'output-available'; // Map done to output-available
-      case 'streaming': return 'input-streaming'; // Map streaming to input-streaming
+      case 'done': return 'output-available';
+      case 'streaming': return 'input-streaming';
       default: return 'input-available';
     }
-  };
+  }, [state]);
 
-  // Task management tools - render with expandable summary
-  if (toolName === 'update_task') {
-    return <TaskRenderer part={part} />;
-  }
+  // Memoize parsed input to avoid re-parsing on each render
+  const parsedInput = useMemo(() => safeJsonParse(input), [input]);
 
-  // Ask Agent tool - render with dedicated conversation UI
-  if (toolName === 'ask_agent') {
-    return <PageAgentConversationRenderer part={part} />;
-  }
+  // Memoize formatted tool name
+  const formattedToolName = useMemo(() => {
+    return TOOL_NAME_MAP[toolName] || toolName.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+  }, [toolName]);
 
-  // Helper: Format Tool Name
-  const formatToolName = () => {
-    const nameMap: Record<string, string> = {
-      'ask_agent': 'Ask Agent',
-      'list_drives': 'List Drives',
-      'list_pages': 'List Pages',
-      'read_page': 'Read Page',
-      'replace_lines': 'Replace Lines',
-      'create_page': 'Create Page',
-      'rename_page': 'Rename Page',
-      'trash': 'Trash',
-      'restore': 'Restore',
-      'move_page': 'Move Page',
-      'list_trash': 'List Trash'
-    };
-    return nameMap[toolName] || toolName.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-  };
+  // Memoize descriptive title to avoid re-parsing input
+  const descriptiveTitle = useMemo(() => {
+    if (!parsedInput) return formattedToolName;
 
-  // AMBIGUITY FIX: Parse input to get a descriptive header title
-  const getDescriptiveTitle = () => {
-    const base = formatToolName();
-    if (!input) return base;
+    const params = parsedInput as Record<string, unknown>;
 
+    // File-based tools
+    if (['read_page', 'replace_lines', 'list_pages'].includes(toolName)) {
+      if (params.title) return `${formattedToolName}: "${params.title}"`;
+      if (params.dir) return `${formattedToolName}: ${params.dir}`;
+    }
+
+    // Title-based tools
+    if (['create_page', 'move_page'].includes(toolName)) {
+      if (params.title) return `${formattedToolName}: "${params.title}"`;
+      if (params.name) return `${formattedToolName}: "${params.name}"`;
+    }
+
+    // Rename uses currentTitle for display (title is the new name)
+    if (toolName === 'rename_page') {
+      if (params.currentTitle) return `${formattedToolName}: "${params.currentTitle}"`;
+    }
+
+    // Trash/Restore
+    if (['trash', 'restore'].includes(toolName)) {
+      if (params.title || params.name) return `${formattedToolName}: "${params.title || params.name}"`;
+    }
+
+    // Drive-based tools - show which drive
+    if (['list_pages', 'list_trash'].includes(toolName)) {
+      if (params.driveSlug) return `${formattedToolName}: "${params.driveSlug}"`;
+    }
+
+    // Drive creation
+    if (toolName === 'create_drive') {
+      if (params.name) return `${formattedToolName}: "${params.name}"`;
+    }
+
+    // Drive rename - show current name
+    if (toolName === 'rename_drive') {
+      if (params.currentName) return `${formattedToolName}: "${params.currentName}"`;
+    }
+
+    return formattedToolName;
+  }, [parsedInput, formattedToolName, toolName]);
+
+  // Memoize parsed output to avoid re-parsing on each render
+  const parsedOutput = useMemo(() => {
+    if (!output) return null;
     try {
-      const params = typeof input === 'string' ? JSON.parse(input) : input;
-
-      // File-based tools
-      if (['read_page', 'replace_lines', 'list_pages'].includes(toolName)) {
-        if (params.title) return `${base}: "${params.title}"`;
-        if (params.dir) return `${base}: ${params.dir}`;
-      }
-
-      // Title-based tools
-      if (['create_page', 'move_page'].includes(toolName)) {
-        if (params.title) return `${base}: "${params.title}"`;
-        if (params.name) return `${base}: "${params.name}"`;
-      }
-
-      // Rename uses currentTitle for display (title is the new name)
-      if (toolName === 'rename_page') {
-        if (params.currentTitle) return `${base}: "${params.currentTitle}"`;
-      }
-
-      // Trash/Restore
-      if (['trash', 'restore'].includes(toolName)) {
-        if (params.title || params.name) return `${base}: "${params.title || params.name}"`;
-      }
-
-      // Drive-based tools - show which drive
-      if (['list_pages', 'list_trash'].includes(toolName)) {
-        if (params.driveSlug) return `${base}: "${params.driveSlug}"`;
-      }
-
-      // Drive creation
-      if (toolName === 'create_drive') {
-        if (params.name) return `${base}: "${params.name}"`;
-      }
-
-      // Drive rename - show current name
-      if (toolName === 'rename_drive') {
-        if (params.currentName) return `${base}: "${params.currentName}"`;
-      }
-
-      return base;
+      return typeof output === 'string' ? JSON.parse(output) : output;
     } catch {
-      return base;
+      return null;
     }
-  };
+  }, [output]);
 
-  // Render content based on tool type and completion status
-  const getOutputContent = () => {
-    // If we have output, render the result view
-    if (output) {
-      try {
-        const result = typeof output === 'string' ? JSON.parse(output) : output;
+  // Memoize output content to avoid recreating JSX on each render
+  const outputContent = useMemo((): ToolOutputType | null => {
+    if (!output) return null;
 
-        if (toolName === 'list_pages' && result.tree) {
-          return <FileTreeRenderer tree={result.tree} />;
-        }
-
-        if (toolName === 'read_page' && result.content) {
-          return (
-            <DocumentRenderer
-              title={result.title || result.path || 'Document'}
-              content={result.content}
-              language={inferLanguage(result.path)}
-              description={result.lineCount !== undefined ? `${result.lineCount} lines` : undefined}
-            />
-          );
-        }
-
-        if (toolName === 'replace_lines' && result.content) {
-          return (
-            <DocumentRenderer
-              title={result.title || result.path || "Modified File"}
-              content={result.content}
-              language={inferLanguage(result.path)}
-              description={result.lineCount !== undefined ? `${result.lineCount} lines` : "Updated Content"}
-            />
-          );
-        }
-
-        // Generic JSON output for others
-        return typeof output === 'string' ? output : JSON.stringify(result, null, 2);
-      } catch {
-        return String(output);
+    if (parsedOutput) {
+      if (toolName === 'list_pages' && parsedOutput.tree) {
+        return <FileTreeRenderer tree={parsedOutput.tree} />;
       }
-    }
-    return null;
-  };
 
-  const outputContent = getOutputContent();
-  const parsedInput = safeJsonParse(input);
+      if (toolName === 'read_page' && parsedOutput.content) {
+        return (
+          <DocumentRenderer
+            title={parsedOutput.title || parsedOutput.path || 'Document'}
+            content={parsedOutput.content}
+            language={inferLanguage(parsedOutput.path)}
+            description={parsedOutput.lineCount !== undefined ? `${parsedOutput.lineCount} lines` : undefined}
+          />
+        );
+      }
+
+      if (toolName === 'replace_lines' && parsedOutput.content) {
+        return (
+          <DocumentRenderer
+            title={parsedOutput.title || parsedOutput.path || "Modified File"}
+            content={parsedOutput.content}
+            language={inferLanguage(parsedOutput.path)}
+            description={parsedOutput.lineCount !== undefined ? `${parsedOutput.lineCount} lines` : "Updated Content"}
+          />
+        );
+      }
+
+      // Generic JSON output for others
+      return typeof output === 'string' ? output : JSON.stringify(parsedOutput, null, 2);
+    }
+
+    return String(output);
+  }, [output, parsedOutput, toolName]);
 
   return (
     <Tool className="my-2">
       <ToolHeader
-        title={getDescriptiveTitle()}
+        title={descriptiveTitle}
         type={`tool-${toolName}`}
-        state={getToolState()}
+        state={toolState}
       />
       <ToolContent>
         {!!input && parsedInput && (
@@ -229,4 +218,20 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = ({ part }) => {
       </ToolContent>
     </Tool>
   );
-};
+});
+
+export const ToolCallRenderer: React.FC<ToolCallRendererProps> = memo(function ToolCallRenderer({ part }) {
+  const toolName = part.toolName || part.type?.replace('tool-', '') || 'unknown_tool';
+
+  // Task management tools - render with expandable summary
+  if (toolName === 'update_task') {
+    return <TaskRenderer part={part} />;
+  }
+
+  // Ask Agent tool - render with dedicated conversation UI
+  if (toolName === 'ask_agent') {
+    return <PageAgentConversationRenderer part={part} />;
+  }
+
+  return <ToolCallRendererInternal part={part} toolName={toolName} />;
+});

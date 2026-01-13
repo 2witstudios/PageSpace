@@ -1,8 +1,8 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { usePathname } from 'next/navigation';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Trash2, Search, MessageSquare, Bot } from 'lucide-react';
+import { Trash2, Search, MessageSquare, Bot, Loader2 } from 'lucide-react';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -15,7 +15,11 @@ import { useGlobalChat } from '@/contexts/GlobalChatContext';
 import { usePageAgentSidebarState } from '@/hooks/page-agents';
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
 import { setConversationId } from '@/lib/url-state';
+import { VirtualizedConversationList } from '@/components/ai/shared/chat';
 import type { AgentInfo } from '@/types/agent';
+
+// Threshold for enabling virtualization
+const VIRTUALIZATION_THRESHOLD = 30;
 
 interface Conversation {
   id: string;
@@ -69,6 +73,10 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
+  const [hasMore, setHasMore] = useState(false);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Determine active conversation ID based on context
   const activeConversationId = useMemo(() => {
@@ -90,21 +98,35 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
     );
   }, [searchQuery, conversations]);
 
-  // Load conversations based on mode (global or agent)
+  // Load conversations based on mode (global or agent) with pagination
   useEffect(() => {
     const loadConversations = async () => {
+      // Reset state for new loads
       setLoading(true);
+      setConversations([]);
+      setNextCursor(null);
+      setHasMore(false);
+
       try {
         // Switch endpoint based on whether an agent is selected
+        // Global mode uses pagination, agent mode uses array format
         const endpoint = selectedAgent
           ? `/api/ai/page-agents/${selectedAgent.id}/conversations`
-          : '/api/ai/global';
+          : '/api/ai/global?paginated=true&limit=30';
 
         const response = await fetchWithAuth(endpoint);
         if (response.ok) {
           const data = await response.json();
-          // Agent endpoint returns { conversations: [...] }, global returns array directly
-          setConversations(selectedAgent ? data.conversations || [] : data);
+          if (selectedAgent) {
+            // Agent endpoint returns { conversations: [...] }
+            setConversations(data.conversations || []);
+            setHasMore(false);
+          } else {
+            // Global endpoint with pagination
+            setConversations(data.conversations || []);
+            setHasMore(data.pagination?.hasMore ?? false);
+            setNextCursor(data.pagination?.nextCursor ?? null);
+          }
         }
       } catch (error) {
         console.error('Failed to load conversations:', error);
@@ -117,7 +139,29 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
     loadConversations();
   }, [selectedAgent, globalConversationId, activeConversationId, pathname]); // Refetch when agent, conversation, or navigation changes
 
-  const handleConversationClick = async (conversationId: string) => {
+  // Load more conversations (for pagination)
+  const handleLoadMore = useCallback(async () => {
+    if (!hasMore || loadingMore || !nextCursor || selectedAgent) return;
+
+    setLoadingMore(true);
+    try {
+      const response = await fetchWithAuth(
+        `/api/ai/global?paginated=true&limit=30&cursor=${nextCursor}&direction=before`
+      );
+      if (response.ok) {
+        const data = await response.json();
+        setConversations(prev => [...prev, ...(data.conversations || [])]);
+        setHasMore(data.pagination?.hasMore ?? false);
+        setNextCursor(data.pagination?.nextCursor ?? null);
+      }
+    } catch (error) {
+      console.error('Failed to load more conversations:', error);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [hasMore, loadingMore, nextCursor, selectedAgent]);
+
+  const handleConversationClick = useCallback(async (conversationId: string) => {
     if (selectedAgent) {
       if (isDashboardContext) {
         // Dashboard context: load into shared agent store (GlobalAssistantView will react)
@@ -143,9 +187,9 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
       // Update URL for browser history
       setConversationId(conversationId, 'push');
     }
-  };
+  }, [selectedAgent, isDashboardContext, agentStore, refreshSidebarAgentConversation, loadGlobalConversation]);
 
-  const handleDeleteConversation = async (conversationId: string) => {
+  const handleDeleteConversation = useCallback(async (conversationId: string) => {
     if (!confirm('Are you sure you want to delete this conversation?')) {
       return;
     }
@@ -158,8 +202,8 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
         await del(`/api/ai/global/${conversationId}`);
       }
 
-      // Remove from local state
-      setConversations(conversations.filter(conv => conv.id !== conversationId));
+      // Remove from local state using functional update to avoid stale closure
+      setConversations(prev => prev.filter(conv => conv.id !== conversationId));
 
       // If deleted conversation was active, create a new conversation
       if (conversationId === activeConversationId) {
@@ -176,7 +220,49 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
     } catch (error) {
       console.error('Failed to delete conversation:', error);
     }
-  };
+  }, [selectedAgent, activeConversationId, isDashboardContext, agentStore, createNewSidebarAgentConversation, createNewGlobalConversation]);
+
+  // Determine if we should virtualize based on conversation count
+  const shouldVirtualize = filteredConversations.length >= VIRTUALIZATION_THRESHOLD;
+
+  // Memoized render function for conversation items
+  const renderConversation = useCallback((conversation: Conversation) => (
+    <ContextMenu key={conversation.id}>
+      <ContextMenuTrigger asChild>
+        <div
+          onClick={() => handleConversationClick(conversation.id)}
+          className={`py-1 px-3 cursor-pointer hover:bg-accent/50 transition-colors relative ${
+            conversation.id === activeConversationId
+              ? 'bg-accent/50 before:absolute before:left-0 before:top-0 before:bottom-0 before:w-0.5 before:bg-primary'
+              : ''
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <span className="flex-grow truncate text-sm">
+              {conversation.title || 'New Conversation'}
+            </span>
+            <span className="text-xs text-muted-foreground flex-shrink-0">
+              {formatDistanceToNow(new Date(conversation.lastMessageAt || conversation.createdAt), {
+                addSuffix: true,
+              })}
+            </span>
+          </div>
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-40">
+        <ContextMenuItem
+          onSelect={() => handleDeleteConversation(conversation.id)}
+          className="text-red-500 focus:text-red-500"
+        >
+          <Trash2 className="mr-2 h-4 w-4" />
+          <span>Delete</span>
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  ), [activeConversationId, handleConversationClick, handleDeleteConversation]);
+
+  // Get key for virtualization
+  const getConversationKey = useCallback((conversation: Conversation) => conversation.id, []);
 
   if (loading) {
     return (
@@ -231,55 +317,51 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
         </div>
       </div>
 
-      {/* Conversations List - with native scrolling */}
-      <div className="flex-grow overflow-y-auto">
-        <div>
-          {filteredConversations.length === 0 ? (
-            <div className="text-center py-8">
-              <MessageSquare className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
-              <p className="text-sm text-muted-foreground">
-                {searchQuery ? 'No conversations found' : 'No conversations yet'}
-              </p>
-            </div>
-          ) : (
-            <div>
-              {filteredConversations.map((conversation) => (
-                <ContextMenu key={conversation.id}>
-                  <ContextMenuTrigger asChild>
-                    <div
-                      onClick={() => handleConversationClick(conversation.id)}
-                      className={`py-1 px-3 cursor-pointer hover:bg-accent/50 transition-colors relative ${
-                        conversation.id === activeConversationId
-                          ? 'bg-accent/50 before:absolute before:left-0 before:top-0 before:bottom-0 before:w-0.5 before:bg-primary'
-                          : ''
-                      }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        <span className="flex-grow truncate text-sm">
-                          {conversation.title || 'New Conversation'}
-                        </span>
-                        <span className="text-xs text-muted-foreground flex-shrink-0">
-                          {formatDistanceToNow(new Date(conversation.lastMessageAt || conversation.createdAt), {
-                            addSuffix: true,
-                          })}
-                        </span>
-                      </div>
-                    </div>
-                  </ContextMenuTrigger>
-                  <ContextMenuContent className="w-40">
-                    <ContextMenuItem
-                      onSelect={() => handleDeleteConversation(conversation.id)}
-                      className="text-red-500 focus:text-red-500"
-                    >
-                      <Trash2 className="mr-2 h-4 w-4" />
-                      <span>Delete</span>
-                    </ContextMenuItem>
-                  </ContextMenuContent>
-                </ContextMenu>
-              ))}
-            </div>
-          )}
-        </div>
+      {/* Conversations List */}
+      <div className="flex-grow min-h-0 overflow-hidden">
+        {filteredConversations.length === 0 ? (
+          <div className="text-center py-8">
+            <MessageSquare className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
+            <p className="text-sm text-muted-foreground">
+              {searchQuery ? 'No conversations found' : 'No conversations yet'}
+            </p>
+          </div>
+        ) : shouldVirtualize ? (
+          // Virtualized rendering for large lists
+          <VirtualizedConversationList
+            conversations={filteredConversations}
+            renderConversation={renderConversation}
+            getKey={getConversationKey}
+            onScrollNearBottom={hasMore ? handleLoadMore : undefined}
+            isLoadingMore={loadingMore}
+            estimatedRowHeight={32}
+            overscan={5}
+            gap={0}
+          />
+        ) : (
+          // Regular rendering for smaller lists
+          <div
+            ref={scrollContainerRef}
+            className="overflow-y-auto h-full"
+            onScroll={() => {
+              // Check if scrolled near bottom to load more
+              const container = scrollContainerRef.current;
+              if (!container || !hasMore || loadingMore) return;
+              const { scrollTop, scrollHeight, clientHeight } = container;
+              if (scrollHeight - scrollTop - clientHeight < 100) {
+                handleLoadMore();
+              }
+            }}
+          >
+            {filteredConversations.map(conversation => renderConversation(conversation))}
+            {loadingMore && (
+              <div className="flex items-center justify-center py-2">
+                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                <span className="text-xs text-muted-foreground">Loading more...</span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Footer - for consistent structure */}

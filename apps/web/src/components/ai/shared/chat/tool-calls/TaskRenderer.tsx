@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, memo } from 'react';
 import {
   ChevronDown,
   ChevronRight,
@@ -41,7 +41,7 @@ const STATUS_CONFIG = {
   blocked: { label: 'Blocked', color: 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300' },
 };
 
-export const TaskRenderer: React.FC<TaskRendererProps> = ({ part }) => {
+export const TaskRenderer: React.FC<TaskRendererProps> = memo(function TaskRenderer({ part }) {
   const [isOpen, setIsOpen] = useState(false);
   const [optimisticStatuses, setOptimisticStatuses] = useState<Map<string, Task['status']>>(new Map());
   const state = part.state || 'input-streaming';
@@ -263,4 +263,4 @@ export const TaskRenderer: React.FC<TaskRendererProps> = ({ part }) => {
       )}
     </div>
   );
-};
+});

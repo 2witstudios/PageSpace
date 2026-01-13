@@ -51,6 +51,7 @@
     "@radix-ui/react-use-controllable-state": "^1.2.2",
     "@stripe/react-stripe-js": "^5.4.1",
     "@stripe/stripe-js": "^8.5.3",
+    "@tanstack/react-virtual": "^3.13.18",
     "@tiptap/core": "^3.7.2",
     "@tiptap/extension-mention": "^3.0.7",
     "@tiptap/extension-table": "^3.0.7",

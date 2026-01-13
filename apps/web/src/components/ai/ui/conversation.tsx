@@ -3,7 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils/index";
 import { ArrowDownIcon } from "lucide-react";
-import { useCallback, type ComponentProps, type ReactNode } from "react";
+import { useCallback, type ComponentProps, type ReactNode, useRef, useEffect, useState, type RefObject } from "react";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 
 export type ConversationProps = ComponentProps<typeof StickToBottom>;
@@ -97,3 +97,26 @@ export const ConversationScrollButton = ({
     )
   );
 };
+
+/**
+ * Hook to access the scroll element ref from use-stick-to-bottom context.
+ * Used for integrating virtualized lists with the pinned scroll behavior.
+ *
+ * Note: The scrollRef may not be immediately available on first render,
+ * so consumers should handle null cases gracefully.
+ */
+export function useConversationScrollRef(): RefObject<HTMLElement | null> {
+  const { scrollRef } = useStickToBottomContext();
+  const fallbackRef = useRef<HTMLElement | null>(null);
+  const [, forceUpdate] = useState({});
+
+  // Force re-render when scrollRef becomes available
+  useEffect(() => {
+    if (scrollRef?.current && !fallbackRef.current) {
+      fallbackRef.current = scrollRef.current;
+      forceUpdate({});
+    }
+  }, [scrollRef]);
+
+  return scrollRef ?? fallbackRef;
+}

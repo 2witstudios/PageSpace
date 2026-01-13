@@ -479,7 +479,7 @@ const GlobalAssistantView: React.FC = () => {
 
     sendMessage({ text: input }, { body: requestBody });
     setInput('');
-    setTimeout(() => chatLayoutRef.current?.scrollToBottom(), 100);
+    // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
   };
 
   // ============================================
