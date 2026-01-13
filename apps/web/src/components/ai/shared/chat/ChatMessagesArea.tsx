@@ -11,6 +11,7 @@ import { Loader2 } from 'lucide-react';
 import { MessageRenderer } from './MessageRenderer';
 import { StreamingIndicator } from './StreamingIndicator';
 import { UndoAiChangesDialog } from './UndoAiChangesDialog';
+import { ScrollToBottomButton } from './ScrollToBottomButton';
 
 interface ChatMessagesAreaProps {
   /** Messages to display */
@@ -121,7 +122,7 @@ export const ChatMessagesArea = forwardRef<ChatMessagesAreaRef, ChatMessagesArea
     );
 
     return (
-      <div className="flex-1 min-h-0 overflow-hidden">
+      <div className="flex-1 min-h-0 overflow-hidden relative">
         <ScrollArea className="h-full" ref={scrollAreaRef}>
           <div className="max-w-4xl mx-auto w-full px-4">
             <div className="space-y-2 pt-3 pb-34">
@@ -154,6 +155,8 @@ export const ChatMessagesArea = forwardRef<ChatMessagesAreaRef, ChatMessagesArea
             </div>
           </div>
         </ScrollArea>
+
+        <ScrollToBottomButton scrollRef={scrollAreaRef} />
 
         <UndoAiChangesDialog
           open={!!undoDialogMessageId}
