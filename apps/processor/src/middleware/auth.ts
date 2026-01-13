@@ -108,6 +108,12 @@ export async function authenticateService(req: Request, res: Response, next: Nex
       return;
     }
 
+    // Reject non-service session types - processor is for service-to-service only
+    if (claims.type !== 'service') {
+      respondForbidden(res, 'Service token required');
+      return;
+    }
+
     // Build enforced auth context from validated session
     const context = EnforcedAuthContext.fromSession(claims);
     req.auth = context;

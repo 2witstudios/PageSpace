@@ -13,26 +13,41 @@ describe('Sessions Schema', () => {
   let testUserId = '';
 
   beforeEach(async () => {
-    testUserId = '';
+    // Generate unique test ID first
+    const uniqueId = createId();
+
+    // Clean any orphaned test sessions (defensive cleanup)
+    await db.delete(sessions).where(eq(sessions.tokenHash, 'abc123hash'));
+    await db.delete(sessions).where(eq(sessions.tokenHash, 'unique-hash'));
+    await db.delete(sessions).where(eq(sessions.tokenHash, 'cascade-test'));
+    await db.delete(sessions).where(eq(sessions.tokenHash, 'hash-1'));
+    await db.delete(sessions).where(eq(sessions.tokenHash, 'hash-2'));
+
     const [user] = await db.insert(users).values({
-      id: createId(),
+      id: uniqueId,
       name: 'Test Session User',
-      email: `test-session-${Date.now()}@example.com`,
+      email: `test-session-${uniqueId}@example.com`,
       password: 'hashed_password',
       provider: 'email',
       role: 'user',
       tokenVersion: 1,
     }).returning();
+
     testUserId = user.id;
   });
 
   afterEach(async () => {
-    if (!testUserId) {
-      return;
+    if (!testUserId) return;
+
+    try {
+      // Delete sessions before user (cascade also handles this, but explicit is safer)
+      await db.delete(sessions).where(eq(sessions.userId, testUserId));
+      await db.delete(users).where(eq(users.id, testUserId));
+    } catch {
+      // User may already be deleted by "cascades delete" test
     }
 
-    await db.delete(users).where(eq(users.id, testUserId));
-    await db.delete(sessions).where(eq(sessions.userId, testUserId));
+    testUserId = '';
   });
 
   it('creates session with required fields', async () => {
