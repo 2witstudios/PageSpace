@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useCallback, useRef, useEffect, ReactNode } from "react";
+import { useState, useMemo, useCallback, useRef, ReactNode } from "react";
 import {
   DndContext,
   DragEndEvent,
@@ -110,13 +110,12 @@ export function SortableTree<T extends TreeItem>({
   }, [sortableItems, activeId, overId, offsetLeft, indentationWidth]);
 
   // Store the last valid projection in a ref to avoid race conditions
-  // where projected becomes null right before handleDragEnd is called
+  // where projected becomes null right before handleDragEnd is called.
+  // Updated synchronously during render to avoid useEffect lag.
   const projectedRef = useRef<Projection | null>(null);
-  useEffect(() => {
-    if (projected) {
-      projectedRef.current = projected;
-    }
-  }, [projected]);
+  if (projected) {
+    projectedRef.current = projected;
+  }
 
   const handleDragStart = useCallback(({ active }: DragStartEvent) => {
     setActiveId(active.id);
