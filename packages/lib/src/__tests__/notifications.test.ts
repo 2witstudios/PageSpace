@@ -7,7 +7,7 @@ import {
   deleteNotification,
   getUnreadCount
 } from '../notifications'
-import { db, sql, notifications, users } from '@pagespace/db'
+import { db, sql, notifications, users, eq } from '@pagespace/db'
 import { factories } from '@pagespace/db/test/factories'
 
 // Mock fetch for broadcast testing
@@ -20,10 +20,7 @@ describe('notifications', () => {
   let testPage: Awaited<ReturnType<typeof factories.createPage>>
 
   beforeEach(async () => {
-    // Clean up test data before each test
-    // Use DELETE to avoid TRUNCATE CASCADE deadlocks with connection pool
-    await db.delete(users)
-
+    // Create fresh test data (factories use unique IDs)
     testUser = await factories.createUser()
     otherUser = await factories.createUser()
     testDrive = await factories.createDrive(testUser.id)
@@ -34,7 +31,20 @@ describe('notifications', () => {
     ;(global.fetch as any).mockResolvedValue({ ok: true, json: async () => ({}) })
   })
 
-  afterEach(() => {
+  afterEach(async () => {
+    // Clean up test-specific data only (cascades handle related records)
+    try {
+      if (testUser?.id) {
+        await db.delete(notifications).where(eq(notifications.userId, testUser.id))
+        await db.delete(users).where(eq(users.id, testUser.id))
+      }
+      if (otherUser?.id) {
+        await db.delete(notifications).where(eq(notifications.userId, otherUser.id))
+        await db.delete(users).where(eq(users.id, otherUser.id))
+      }
+    } catch {
+      // Ignore cleanup errors (data may already be deleted)
+    }
     vi.clearAllMocks()
   })
 
