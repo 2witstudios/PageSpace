@@ -11,7 +11,7 @@ const router = Router();
 // Optimize image endpoint - synchronous if cached, async if not
 router.post('/', async (req, res) => {
   try {
-    const auth = req.serviceAuth;
+    const auth = req.auth;
     if (!auth) {
       return res.status(401).json({ error: 'Service authentication required' });
     }
@@ -107,7 +107,7 @@ router.post('/', async (req, res) => {
 // Batch optimize endpoint for multiple presets
 router.post('/batch', async (req, res) => {
   try {
-    const auth = req.serviceAuth;
+    const auth = req.auth;
     if (!auth) {
       return res.status(401).json({ error: 'Service authentication required' });
     }
@@ -190,7 +190,7 @@ router.post('/batch', async (req, res) => {
 // Prepare image for AI endpoint
 router.post('/prepare-for-ai', async (req, res) => {
   try {
-    const auth = req.serviceAuth;
+    const auth = req.auth;
     if (!auth) {
       return res.status(401).json({ error: 'Service authentication required' });
     }

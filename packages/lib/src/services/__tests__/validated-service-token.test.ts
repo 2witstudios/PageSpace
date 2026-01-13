@@ -29,9 +29,12 @@ vi.mock('../../permissions/permissions-cached', () => ({
   getUserDrivePermissions: vi.fn(),
 }));
 
-// Mock the service-auth module
-vi.mock('../service-auth', () => ({
-  createServiceToken: vi.fn().mockResolvedValue('mock-service-token'),
+// Mock the session service
+const mockCreateSession = vi.fn().mockResolvedValue('ps_svc_mock-session-token');
+vi.mock('../../auth/session-service', () => ({
+  sessionService: {
+    createSession: (...args: unknown[]) => mockCreateSession(...args),
+  },
 }));
 
 // Mock the logger
@@ -47,7 +50,7 @@ vi.mock('../../logging/logger-config', () => ({
 }));
 
 import { getUserAccessLevel, getUserDrivePermissions } from '../../permissions/permissions-cached';
-import { createServiceToken } from '../service-auth';
+import { sessionService } from '../../auth/session-service';
 import { loggers } from '../../logging/logger-config';
 
 describe('createValidatedServiceToken', () => {
@@ -75,7 +78,7 @@ describe('createValidatedServiceToken', () => {
 
       // Assert - only read scope granted
       expect(result.grantedScopes).toEqual(['files:read']);
-      expect(createServiceToken).toHaveBeenCalledWith(
+      expect(mockCreateSession).toHaveBeenCalledWith(
         expect.objectContaining({
           scopes: ['files:read'],
         })
@@ -346,7 +349,7 @@ describe('createValidatedServiceToken', () => {
       });
 
       // Assert
-      expect(createServiceToken).toHaveBeenCalledWith(
+      expect(mockCreateSession).toHaveBeenCalledWith(
         expect.objectContaining({
           driveId: 'drive-1',
         })
@@ -396,9 +399,10 @@ describe('createValidatedServiceToken', () => {
 
       // Assert
       expect(result.grantedScopes).toEqual(['files:read']);
-      expect(createServiceToken).toHaveBeenCalledWith(
+      expect(mockCreateSession).toHaveBeenCalledWith(
         expect.objectContaining({
-          resource: 'page-1',
+          resourceId: 'page-1',
+          resourceType: 'page',
         })
       );
     });
@@ -418,9 +422,10 @@ describe('createValidatedServiceToken', () => {
 
       // Assert
       expect(result.grantedScopes).toEqual(['files:write']);
-      expect(createServiceToken).toHaveBeenCalledWith(
+      expect(mockCreateSession).toHaveBeenCalledWith(
         expect.objectContaining({
-          resource: 'drive-1',
+          resourceId: 'drive-1',
+          resourceType: 'drive',
           driveId: 'drive-1',
         })
       );
@@ -432,17 +437,18 @@ describe('createValidatedServiceToken', () => {
 
       // Assert
       expect(result.grantedScopes).toEqual(['avatars:write']);
-      expect(createServiceToken).toHaveBeenCalledWith(
+      expect(mockCreateSession).toHaveBeenCalledWith(
         expect.objectContaining({
-          resource: 'user-1',
-          subject: 'user-1',
+          resourceId: 'user-1',
+          resourceType: 'user',
+          userId: 'user-1',
         })
       );
     });
   });
 
   describe('token options', () => {
-    it('passes expiresIn to createServiceToken', async () => {
+    it('converts expiresIn to expiresInMs', async () => {
       // Arrange
       (getUserAccessLevel as ReturnType<typeof vi.fn>).mockResolvedValue({
         canView: true,
@@ -460,15 +466,15 @@ describe('createValidatedServiceToken', () => {
         expiresIn: '10m',
       });
 
-      // Assert
-      expect(createServiceToken).toHaveBeenCalledWith(
+      // Assert - 10m = 600000ms
+      expect(mockCreateSession).toHaveBeenCalledWith(
         expect.objectContaining({
-          expiresIn: '10m',
+          expiresInMs: 600000,
         })
       );
     });
 
-    it('passes additionalClaims to createServiceToken', async () => {
+    it('passes driveId when specified in options', async () => {
       // Arrange
       (getUserAccessLevel as ReturnType<typeof vi.fn>).mockResolvedValue({
         canView: true,
@@ -483,13 +489,13 @@ describe('createValidatedServiceToken', () => {
         resourceType: 'page',
         resourceId: 'page-1',
         requestedScopes: ['files:read'],
-        additionalClaims: { driveId: 'drive-1' },
+        driveId: 'drive-1',
       });
 
       // Assert
-      expect(createServiceToken).toHaveBeenCalledWith(
+      expect(mockCreateSession).toHaveBeenCalledWith(
         expect.objectContaining({
-          additionalClaims: { driveId: 'drive-1' },
+          driveId: 'drive-1',
         })
       );
     });
@@ -522,13 +528,14 @@ describe('createValidatedServiceToken', () => {
 
       // Assert
       expect(result.grantedScopes).toEqual(['files:write']);
-      expect(result.token).toBe('mock-service-token');
+      expect(result.token).toBe('ps_svc_mock-session-token');
       expect(mockFindFirst).toHaveBeenCalled();
       expect(getUserAccessLevel).toHaveBeenCalledWith('user-1', 'parent-page-1');
       expect(getUserDrivePermissions).not.toHaveBeenCalled();
-      expect(createServiceToken).toHaveBeenCalledWith(
+      expect(mockCreateSession).toHaveBeenCalledWith(
         expect.objectContaining({
-          resource: 'new-page-1',
+          resourceId: 'new-page-1',
+          resourceType: 'page',
           driveId: 'drive-1',
           scopes: ['files:write'],
         })
@@ -554,12 +561,13 @@ describe('createValidatedServiceToken', () => {
 
       // Assert
       expect(result.grantedScopes).toEqual(['files:write']);
-      expect(result.token).toBe('mock-service-token');
+      expect(result.token).toBe('ps_svc_mock-session-token');
       expect(getUserDrivePermissions).toHaveBeenCalledWith('user-1', 'drive-1');
       expect(getUserAccessLevel).not.toHaveBeenCalled();
-      expect(createServiceToken).toHaveBeenCalledWith(
+      expect(mockCreateSession).toHaveBeenCalledWith(
         expect.objectContaining({
-          resource: 'new-page-1',
+          resourceId: 'new-page-1',
+          resourceType: 'page',
           driveId: 'drive-1',
           scopes: ['files:write'],
         })
@@ -739,10 +747,10 @@ describe('createValidatedServiceToken', () => {
         expiresIn: '15m',
       });
 
-      // Assert
-      expect(createServiceToken).toHaveBeenCalledWith(
+      // Assert - 15m = 900000ms
+      expect(mockCreateSession).toHaveBeenCalledWith(
         expect.objectContaining({
-          expiresIn: '15m',
+          expiresInMs: 900000,
         })
       );
     });
@@ -764,10 +772,10 @@ describe('createValidatedServiceToken', () => {
         pageId: 'new-page-1',
       });
 
-      // Assert
-      expect(createServiceToken).toHaveBeenCalledWith(
+      // Assert - 10m = 600000ms
+      expect(mockCreateSession).toHaveBeenCalledWith(
         expect.objectContaining({
-          expiresIn: '10m',
+          expiresInMs: 600000,
         })
       );
     });
@@ -783,7 +791,7 @@ describe('createValidatedServiceToken', () => {
       });
       // But token signing fails
       const signingError = new Error('Token signing failed');
-      (createServiceToken as ReturnType<typeof vi.fn>).mockRejectedValue(
+      (mockCreateSession as ReturnType<typeof vi.fn>).mockRejectedValue(
         signingError
       );
 

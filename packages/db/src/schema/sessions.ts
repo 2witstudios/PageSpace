@@ -20,6 +20,7 @@ export const sessions = pgTable('sessions', {
   // Resource binding
   resourceType: text('resource_type'),
   resourceId: text('resource_id'),
+  driveId: text('drive_id'),
 
   // Security context
   tokenVersion: integer('token_version').notNull(),

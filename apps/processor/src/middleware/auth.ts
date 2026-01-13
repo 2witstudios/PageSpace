@@ -1,26 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
-import {
-  authenticateServiceToken,
-  assertScope as assertServiceScope,
-  hasScope,
-  type ServiceScope,
-  type ServiceTokenClaims,
-} from '@pagespace/lib';
-import { validateServiceUser } from '../services/user-validator';
-
-export interface ProcessorServiceAuth {
-  userId: string;
-  service: string;
-  scopes: ServiceScope[];
-  claims: ServiceTokenClaims;
-  resource?: string;
-  driveId?: string;
-  /**
-   * Compatibility shim for legacy code paths that still expect tenantId === userId
-   * or the resource identifier. This should be removed when RBAC integration is complete.
-   */
-  tenantId?: string;
-}
+import { sessionService, type SessionClaims } from '@pagespace/lib/auth';
+import { EnforcedAuthContext } from '@pagespace/lib/permissions';
 
 export const AUTH_REQUIRED = process.env.PROCESSOR_AUTH_REQUIRED !== 'false';
 
@@ -44,7 +24,7 @@ function collectCandidateUrls(req: Request): string[] {
     .map((value) => value.toLowerCase());
 }
 
-function inferScope(req: Request): ServiceScope | null {
+function inferScope(req: Request): string | null {
   const method = req.method.toUpperCase();
   const candidateUrls = collectCandidateUrls(req);
 
@@ -95,26 +75,11 @@ function inferScope(req: Request): ServiceScope | null {
   return null;
 }
 
-function buildAuthContext(claims: ServiceTokenClaims): ProcessorServiceAuth {
-  const scopes = Array.isArray(claims.scopes) ? (claims.scopes as ServiceScope[]) : [];
-  const userId = String(claims.sub);
-
-  return {
-    userId,
-    service: claims.service,
-    scopes,
-    claims,
-    resource: claims.resource,
-    driveId: claims.driveId,
-    tenantId: claims.resource ?? userId,
-  };
-}
-
-function respondUnauthorized(res: Response, message = 'Service authentication required'): void {
+function respondUnauthorized(res: Response, message = 'Authentication required'): void {
   res.status(401).json({ error: message });
 }
 
-function respondForbidden(res: Response, message: string, scope?: ServiceScope): void {
+function respondForbidden(res: Response, message: string, scope?: string): void {
   res.status(403).json({
     error: message,
     ...(scope ? { requiredScope: scope } : {}),
@@ -136,122 +101,82 @@ export async function authenticateService(req: Request, res: Response, next: Nex
   const token = header.slice(7).trim();
 
   try {
-    const { claims } = await authenticateServiceToken(token);
+    const claims = await sessionService.validateSession(token);
 
-    if (!claims.service || typeof claims.service !== 'string') {
-      respondForbidden(res, 'Service token missing service identifier');
+    if (!claims) {
+      respondUnauthorized(res, 'Invalid or expired token');
       return;
     }
 
-    if (!claims.scopes || !Array.isArray(claims.scopes) || claims.scopes.length === 0) {
-      respondForbidden(res, 'Service token missing scopes');
-      return;
-    }
+    // Build enforced auth context from validated session
+    const context = EnforcedAuthContext.fromSession(claims);
+    req.auth = context;
 
-    // P1-T2: Validate that the user still exists
-    const userValidation = await validateServiceUser(String(claims.sub));
-
-    if (!userValidation.valid) {
-      if (process.env.NODE_ENV !== 'test') {
-        console.warn('Service token user validation failed', {
-          service: claims.service,
-          subject: claims.sub,
-          reason: userValidation.reason,
-        });
-      }
-      respondUnauthorized(res, `User validation failed: ${userValidation.reason}`);
-      return;
-    }
-
-    const context = buildAuthContext(claims);
-    req.serviceAuth = context;
-
+    // Check inferred scope if applicable
     const inferredScope = inferScope(req);
-    if (inferredScope && !hasScope(claims, inferredScope)) {
+    if (inferredScope && !context.hasScope(inferredScope)) {
       if (process.env.NODE_ENV !== 'test') {
-        console.warn('Service scope inference failed', {
-          service: claims.service,
+        console.warn('Scope inference failed', {
           required: inferredScope,
-          provided: claims.scopes,
-          subject: claims.sub,
-          resource: claims.resource,
+          userId: claims.userId,
+          resourceBinding: context.resourceBinding,
           urls: collectCandidateUrls(req),
         });
       }
-      respondForbidden(res, 'Insufficient service scopes', inferredScope);
+      respondForbidden(res, 'Insufficient scopes', inferredScope);
       return;
     }
 
     next();
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Invalid service token';
-    console.error('Service authentication failed:', message);
-    respondUnauthorized(res, 'Invalid service token');
+    const message = error instanceof Error ? error.message : 'Invalid token';
+    console.error('Authentication failed:', message);
+    respondUnauthorized(res, 'Invalid token');
   }
 }
 
-export function requireScope(scope: ServiceScope) {
+export function requireScope(scope: string) {
   return function permissionMiddleware(req: Request, res: Response, next: NextFunction): void {
     if (!AUTH_REQUIRED) {
       next();
       return;
     }
 
-    const auth = req.serviceAuth;
+    const auth = req.auth;
     if (!auth) {
       respondUnauthorized(res);
       return;
     }
 
-    try {
-      assertServiceScope(auth.claims, scope);
-      next();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Insufficient service scopes';
+    if (!auth.hasScope(scope)) {
       if (process.env.NODE_ENV !== 'test') {
-        console.warn('Service scope assertion failed', {
-          service: auth.service,
+        console.warn('Scope assertion failed', {
           required: scope,
-          provided: auth.scopes,
-          subject: auth.userId,
-          resource: auth.resource,
+          userId: auth.userId,
           urls: collectCandidateUrls(req),
         });
       }
-      respondForbidden(res, message, scope);
+      respondForbidden(res, `Missing required scope: ${scope}`, scope);
+      return;
     }
+
+    next();
   };
 }
 
-export function hasServiceScope(auth: ProcessorServiceAuth | undefined, scope: ServiceScope): boolean {
+export function hasAuthScope(auth: EnforcedAuthContext | undefined, scope: string): boolean {
   if (!auth) {
     return false;
   }
-  return hasScope(auth.claims, scope);
+  return auth.hasScope(scope);
 }
 
-export function requireTenantContext(req: Request): string | null {
-  const auth = req.serviceAuth;
+export function requireUserContext(req: Request): string | null {
+  const auth = req.auth;
   if (!auth) {
     return null;
   }
-
-  const tokenTenant = auth.tenantId ?? null;
-  const bodyTenant = typeof req.body?.tenantId === 'string' ? req.body.tenantId : null;
-
-  if (!tokenTenant) {
-    return bodyTenant;
-  }
-
-  if (bodyTenant && bodyTenant !== tokenTenant) {
-    return null;
-  }
-
-  if (!bodyTenant && typeof req.body === 'object' && req.body !== null) {
-    (req.body as Record<string, unknown>).tenantId = tokenTenant;
-  }
-
-  return tokenTenant;
+  return auth.userId;
 }
 
-export type { ServiceScope };
+export { EnforcedAuthContext };

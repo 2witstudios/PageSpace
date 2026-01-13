@@ -12,8 +12,43 @@ import {
   getUserAccessLevel,
   getUserDrivePermissions,
 } from '../permissions/permissions-cached';
-import { createServiceToken, ServiceScope } from './service-auth';
+import { sessionService } from '../auth/session-service';
 import { loggers } from '../logging/logger-config';
+
+/**
+ * Service scope types - defines allowed permission scopes
+ */
+export type ServiceScope =
+  | '*'
+  | 'files:read'
+  | 'files:write'
+  | 'files:link'
+  | 'files:delete'
+  | 'files:optimize'
+  | 'files:ingest'
+  | 'files:write:any'
+  | 'avatars:write'
+  | 'avatars:write:any'
+  | 'queue:read';
+
+/**
+ * Convert duration string to milliseconds
+ */
+function durationToMs(duration: string): number {
+  const match = duration.match(/^(\d+)([smhd])$/);
+  if (!match) return 5 * 60 * 1000; // Default 5 minutes
+
+  const value = parseInt(match[1], 10);
+  const unit = match[2];
+
+  switch (unit) {
+    case 's': return value * 1000;
+    case 'm': return value * 60 * 1000;
+    case 'h': return value * 60 * 60 * 1000;
+    case 'd': return value * 24 * 60 * 60 * 1000;
+    default: return 5 * 60 * 1000;
+  }
+}
 
 /**
  * Error thrown when permission is denied for token creation.
@@ -148,14 +183,15 @@ export async function createValidatedServiceToken(
     filtered: requestedScopes.length !== grantedScopes.length,
   });
 
-  const token = await createServiceToken({
-    service: 'web',
-    subject: userId,
-    resource: resourceId,
+  const token = await sessionService.createSession({
+    userId,
+    type: 'service',
+    scopes: grantedScopes as string[],
+    resourceType,
+    resourceId,
     driveId: options.driveId,
-    scopes: grantedScopes,
-    expiresIn,
-    additionalClaims,
+    expiresInMs: durationToMs(expiresIn),
+    createdByService: 'web',
   });
 
   return {
@@ -409,14 +445,15 @@ export async function createUploadServiceToken(
     scopes: UPLOAD_SCOPES,
   });
 
-  // Note: createServiceToken errors (signing failures, etc.) bubble up as-is
-  const token = await createServiceToken({
-    service: 'web',
-    subject: userId,
-    resource: pageId,
-    driveId: driveId,
-    scopes: UPLOAD_SCOPES,
-    expiresIn,
+  const token = await sessionService.createSession({
+    userId,
+    type: 'service',
+    scopes: UPLOAD_SCOPES as string[],
+    resourceType: 'page',
+    resourceId: pageId,
+    driveId,
+    expiresInMs: durationToMs(expiresIn),
+    createdByService: 'web',
   });
 
   return {

@@ -1,11 +1,5 @@
 import * as jose from 'jose';
 import { createId } from '@paralleldrive/cuid2';
-import {
-  createServiceToken as createServiceTokenV2,
-  verifyServiceToken as verifyServiceTokenV2,
-  type ServiceScope,
-  type ServiceTokenClaims,
-} from '../services/service-auth';
 
 const JWT_ALGORITHM = 'HS256';
 
@@ -156,38 +150,3 @@ export function requireAdminPayload(userPayload: UserPayload | null): void {
     throw new Error('Admin access required');
   }
 }
-
-// Service JWT functions (legacy interface maintained for backwards compatibility)
-export async function createServiceToken(
-  service: string,
-  permissions: string[] = ['*'],
-  options?: {
-    tenantId?: string;
-    userId?: string;
-    driveIds?: string[];
-    expirationTime?: string;
-  }
-): Promise<string> {
-  const subject = options?.userId ?? options?.tenantId ?? service;
-  const scopes = (permissions.length > 0 ? permissions : ['*']) as ServiceScope[];
-
-  return createServiceTokenV2({
-    service,
-    subject,
-    scopes,
-    resource: options?.tenantId,
-    driveId: options?.driveIds?.[0],
-    expiresIn: options?.expirationTime ?? '1h',
-  });
-}
-
-export async function verifyServiceToken(token: string): Promise<ServiceTokenClaims | null> {
-  try {
-    return await verifyServiceTokenV2(token);
-  } catch (error) {
-    console.error('Invalid service token:', error);
-    return null;
-  }
-}
-
-export type { ServiceScope, ServiceTokenClaims };
