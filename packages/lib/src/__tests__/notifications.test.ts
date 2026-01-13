@@ -18,11 +18,19 @@ describe('notifications', () => {
   let otherUser: Awaited<ReturnType<typeof factories.createUser>>
   let testDrive: Awaited<ReturnType<typeof factories.createDrive>>
   let testPage: Awaited<ReturnType<typeof factories.createPage>>
+  let testUserId = ''
+  let otherUserId = ''
 
   beforeEach(async () => {
+    // Reset IDs at start
+    testUserId = ''
+    otherUserId = ''
+
     // Create fresh test data (factories use unique IDs)
     testUser = await factories.createUser()
+    testUserId = testUser.id
     otherUser = await factories.createUser()
+    otherUserId = otherUser.id
     testDrive = await factories.createDrive(testUser.id)
     testPage = await factories.createPage(testDrive.id)
 
@@ -33,18 +41,26 @@ describe('notifications', () => {
 
   afterEach(async () => {
     // Clean up test-specific data only (cascades handle related records)
+    // Use captured IDs to avoid issues with variable reassignment
     try {
-      if (testUser?.id) {
-        await db.delete(notifications).where(eq(notifications.userId, testUser.id))
-        await db.delete(users).where(eq(users.id, testUser.id))
-      }
-      if (otherUser?.id) {
-        await db.delete(notifications).where(eq(notifications.userId, otherUser.id))
-        await db.delete(users).where(eq(users.id, otherUser.id))
+      if (testUserId) {
+        await db.delete(notifications).where(eq(notifications.userId, testUserId))
+        await db.delete(users).where(eq(users.id, testUserId))
       }
     } catch {
-      // Ignore cleanup errors (data may already be deleted)
+      // Ignore cleanup errors (data may already be deleted via cascade)
     }
+    try {
+      if (otherUserId) {
+        await db.delete(notifications).where(eq(notifications.userId, otherUserId))
+        await db.delete(users).where(eq(users.id, otherUserId))
+      }
+    } catch {
+      // Ignore cleanup errors (data may already be deleted via cascade)
+    }
+    // Reset IDs after cleanup
+    testUserId = ''
+    otherUserId = ''
     vi.clearAllMocks()
   })
 
