@@ -127,12 +127,12 @@ export async function GET(
     }
 
     // Get messages with pagination
-    // Order by createdAt DESC to get newest first, then reverse for chronological display
+    // Order by (createdAt DESC, id DESC) for stable pagination, then reverse for chronological display
     const dbMessages = await db
       .select()
       .from(chatMessages)
       .where(and(...conditions))
-      .orderBy(desc(chatMessages.createdAt))
+      .orderBy(desc(chatMessages.createdAt), desc(chatMessages.id))
       .limit(limit + 1); // Get one extra to check if there are more
 
     // Check if there are more messages

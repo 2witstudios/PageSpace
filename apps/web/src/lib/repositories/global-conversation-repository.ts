@@ -232,7 +232,7 @@ export const globalConversationRepository = {
       })
       .from(conversations)
       .where(and(...conditions))
-      .orderBy(desc(conversations.lastMessageAt))
+      .orderBy(desc(conversations.lastMessageAt), desc(conversations.id))
       .limit(maxLimit + 1);
 
     const hasMore = results.length > maxLimit;
